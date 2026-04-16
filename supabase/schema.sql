@@ -1,4 +1,4 @@
--- BYO Chat PWA — minimum viable schema.
+-- Nak — minimum viable schema.
 -- Run this once in the Supabase SQL Editor for your project.
 --
 -- Tables:

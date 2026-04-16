@@ -9,7 +9,7 @@ import { getRepoSlug, pagesUrl } from './lib/repo.mjs';
 
 let problems = 0;
 
-banner('BYO Chat — environment doctor');
+banner('Nak — environment doctor');
 
 step(1, 'Shell tools');
 for (const bin of ['node', 'git', 'pnpm']) {

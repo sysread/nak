@@ -99,7 +99,7 @@ if (chosen.kind === 'new') {
       orgs.map((o) => ({ label: `${o.name} ${style.dim(`(${o.id})`)}`, value: o.id }))
     );
   }
-  const defaultName = `byo-chat-${Date.now().toString(36)}`;
+  const defaultName = `nak-${Date.now().toString(36)}`;
   const name = await ask('Project name', { default: defaultName });
   const region = await ask('Region (see https://supabase.com/docs/guides/platform/regions)', {
     default: 'us-east-1',

@@ -6,7 +6,7 @@ export interface AppConfig {
   veniceApiKey: string;
 }
 
-const STORAGE_KEY = 'byo-chat:config:v1';
+const STORAGE_KEY = 'nak:config:v1';
 
 export class ConfigError extends Error {
   constructor(message: string) {

@@ -20,9 +20,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       injectRegister: 'auto',
       manifest: {
-        name: 'BYO Chat',
-        short_name: 'BYO Chat',
-        description: 'Bring-your-own-infra AI chat using Venice.ai and Supabase.',
+        name: 'Nak',
+        short_name: 'Nak',
+        description: 'Nak — a bring-your-own-infrastructure AI chat using Venice.ai and Supabase.',
         theme_color: '#0b0d10',
         background_color: '#0b0d10',
         display: 'standalone',

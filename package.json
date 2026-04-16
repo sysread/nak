@@ -1,7 +1,7 @@
 {
-  "name": "byo-chat-pwa",
+  "name": "nak",
   "version": "0.1.0",
-  "description": "Bring-your-own-infrastructure AI chat PWA using Venice.ai and Supabase.",
+  "description": "Nak — a bring-your-own-infrastructure AI chat PWA using Venice.ai and Supabase.",
   "license": "MIT",
   "type": "module",
   "private": true,

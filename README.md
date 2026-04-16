@@ -1,9 +1,9 @@
-# BYO Chat PWA
+# Nak
 
-A browser-only, installable chat app that talks to **Venice.ai** for completions
-and uses **your** Supabase project for auth and persistence. There is no server
-component operated by the project author — you fork, deploy to GitHub Pages,
-and own every piece of infrastructure it touches.
+Nak is a browser-only, installable chat PWA that talks to **Venice.ai** for
+completions and uses **your** Supabase project for auth and persistence. There
+is no server component operated by the project author — you fork, deploy to
+GitHub Pages, and own every piece of infrastructure it touches.
 
 ## Architecture at a glance
 

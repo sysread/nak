@@ -53,7 +53,7 @@ function runChildJson(script, args = []) {
   });
 }
 
-banner('BYO Chat — first-time setup wizard');
+banner('Nak — first-time setup wizard');
 
 console.log(
   `This wizard will:\n` +

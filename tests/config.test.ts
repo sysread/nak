@@ -65,7 +65,7 @@ describe('config', () => {
 
   it('does NOT store plaintext secrets', async () => {
     await saveConfig(VALID, 'pw');
-    const blob = localStorage.getItem('byo-chat:config:v1') ?? '';
+    const blob = localStorage.getItem('nak:config:v1') ?? '';
     expect(blob).not.toContain(VALID.supabaseAnonKey);
     expect(blob).not.toContain(VALID.veniceApiKey);
     expect(blob).not.toContain('supabase.co');
