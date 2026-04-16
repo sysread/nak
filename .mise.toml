@@ -23,18 +23,25 @@ run = "node scripts/doctor.mjs"
 [tasks.setup]
 description = "Interactive first-time setup wizard (Pages + Supabase + Venice)"
 run = "node scripts/bootstrap.mjs"
+# `raw = true` gives the task direct TTY access so gh/supabase CLI prompts,
+# device-code flows, and password inputs work the same as running the
+# script directly.
+raw = true
 
 [tasks.pages-enable]
 description = "Enable GitHub Pages on this fork with Actions as the source"
 run = "node scripts/setup-pages.mjs"
+raw = true
 
 [tasks.supabase-init]
 description = "Create or link a Supabase project, apply schema, configure auth URLs"
 run = "node scripts/setup-supabase.mjs"
+raw = true
 
 [tasks.dev]
 description = "Run the Vite dev server"
 run = "pnpm dev"
+raw = true
 
 [tasks.build]
 description = "Build the PWA for production"

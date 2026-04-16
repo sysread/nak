@@ -5,6 +5,8 @@
 // Each phase prints what it's about to do and what to do if it fails, so
 // the user can recover manually at any point.
 import { spawn } from 'node:child_process';
+import { readFile, unlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { banner, info, ok, warn, bail, ask, confirm, style } from './lib/ui.mjs';
@@ -14,43 +16,41 @@ import { getRepoSlug, pagesUrl } from './lib/repo.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Run a child script with full stdio inheritance so interactive CLIs (gh,
+ * supabase) get real TTYs for device-code flows, password prompts, etc.
+ */
 function runChild(script, args = []) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [join(__dirname, script), ...args], {
-      stdio: ['inherit', 'pipe', 'inherit'],
+      stdio: 'inherit',
     });
-    let stdout = '';
-    child.stdout.on('data', (d) => {
-      stdout += d.toString();
-      process.stdout.write(d);
-    });
+    child.on('error', reject);
     child.on('close', (code) =>
       code === 0
-        ? resolve(stdout)
+        ? resolve()
         : reject(new Error(`${script} exited with code ${code}`))
     );
   });
 }
 
-function runChildJson(script, args = []) {
-  // Captures stdout silently; the child should emit a single JSON line
-  // at the end when invoked with --json.
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [join(__dirname, script), ...args, '--json'], {
-      stdio: ['inherit', 'pipe', 'inherit'],
-    });
-    let stdout = '';
-    child.stdout.on('data', (d) => (stdout += d.toString()));
-    child.on('close', (code) => {
-      if (code !== 0) return reject(new Error(`${script} exited with code ${code}`));
-      const lastLine = stdout.trim().split('\n').pop() || '';
-      try {
-        resolve(JSON.parse(lastLine));
-      } catch (e) {
-        reject(new Error(`${script} did not emit JSON: ${lastLine}`));
-      }
-    });
-  });
+/**
+ * Run a child script interactively and read its JSON result from a tempfile.
+ * We use a tempfile (not stdout piping) so the child inherits a real TTY.
+ */
+async function runChildWithResult(script, args = []) {
+  const resultPath = join(tmpdir(), `nak-setup-${process.pid}-${Date.now()}.json`);
+  try {
+    await runChild(script, [...args, '--output', resultPath]);
+    const raw = await readFile(resultPath, 'utf8');
+    return JSON.parse(raw);
+  } finally {
+    try {
+      await unlink(resultPath);
+    } catch {
+      // best-effort cleanup
+    }
+  }
 }
 
 banner('Nak — first-time setup wizard');
@@ -96,7 +96,7 @@ await runChild('setup-pages.mjs');
 
 // --- Phase 2: Supabase -------------------------------------------------------
 console.log(`\n${style.magenta('━━ Phase 2: Supabase ━━')}`);
-const supa = await runChildJson('setup-supabase.mjs');
+const supa = await runChildWithResult('setup-supabase.mjs');
 
 // --- Phase 3: Venice ---------------------------------------------------------
 console.log(`\n${style.magenta('━━ Phase 3: Venice ━━')}`);

@@ -16,13 +16,24 @@ export async function ghAuthStatus() {
   };
 }
 
+const GH_HOSTNAME = 'github.com';
+
 export async function ghLoginInteractive() {
-  // Inherit stdio — gh drives the browser + keypad flow itself.
-  await runInherit('gh', ['auth', 'login', '--web', '--git-protocol', 'https']);
+  // Inherit stdio — gh drives the browser + device-code flow itself.
+  // --hostname is explicit so gh doesn't try to prompt when stdio is wrapped.
+  await runInherit('gh', [
+    'auth',
+    'login',
+    '--web',
+    '--hostname',
+    GH_HOSTNAME,
+    '--git-protocol',
+    'https',
+  ]);
 }
 
 export async function ghRefreshScopes(scopes) {
-  const args = ['auth', 'refresh'];
+  const args = ['auth', 'refresh', '--hostname', GH_HOSTNAME];
   for (const s of scopes) args.push('-s', s);
   await runInherit('gh', args);
 }
