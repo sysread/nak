@@ -23,8 +23,20 @@ describe('parseGitHubRemote', () => {
       repo: 'nak',
     });
   });
-  it('throws on non-github remotes', () => {
-    expect(() => parseGitHubRemote('https://gitlab.com/alice/nak.git')).toThrow();
+  it('parses ssh remotes with a host alias from ~/.ssh/config', () => {
+    expect(parseGitHubRemote('git@github-truffle:alice/nak')).toEqual({
+      owner: 'alice',
+      repo: 'nak',
+    });
+  });
+  it('parses ssh:// form', () => {
+    expect(parseGitHubRemote('ssh://git@github.com/alice/nak.git')).toEqual({
+      owner: 'alice',
+      repo: 'nak',
+    });
+  });
+  it('throws on unparseable remotes', () => {
+    expect(() => parseGitHubRemote('not a url at all')).toThrow();
   });
 });
 

@@ -10,12 +10,27 @@ export async function getOriginRemote() {
 }
 
 export function parseGitHubRemote(url) {
-  // Accepts https://github.com/<owner>/<repo>(.git) and git@github.com:<owner>/<repo>(.git)
-  const httpsRe = /^https?:\/\/github\.com\/([^/]+)\/([^/.]+?)(?:\.git)?\/?$/;
-  const sshRe = /^git@github\.com:([^/]+)\/([^/.]+?)(?:\.git)?\/?$/;
-  const m = url.match(httpsRe) ?? url.match(sshRe);
-  if (!m) throw new Error(`Could not parse GitHub owner/repo from: ${url}`);
-  return { owner: m[1], repo: m[2] };
+  // Accepts the four common remote shapes. The hostname can be a real
+  // github.com or an SSH host alias from ~/.ssh/config (e.g.
+  // `git@github-truffle:owner/repo`). We don't enforce the hostname
+  // because the wizard talks to api.github.com via `gh` regardless —
+  // the remote URL is just where we scrape owner/repo from.
+  //
+  //   https://[user@]<host>/<owner>/<repo>[.git][/]
+  //   <user>@<host>:<owner>/<repo>[.git][/]          (SSH short form)
+  //   ssh://<user>@<host>[:<port>]/<owner>/<repo>[.git][/]
+  //   git://<host>/<owner>/<repo>[.git][/]
+  const patterns = [
+    /^https?:\/\/(?:[^@/]+@)?[^/]+\/([^/]+)\/([^/.]+?)(?:\.git)?\/?$/,
+    /^[^@\s]+@[^:\s]+:([^/]+)\/([^/.]+?)(?:\.git)?\/?$/,
+    /^ssh:\/\/[^/]+\/([^/]+)\/([^/.]+?)(?:\.git)?\/?$/,
+    /^git:\/\/[^/]+\/([^/]+)\/([^/.]+?)(?:\.git)?\/?$/,
+  ];
+  for (const re of patterns) {
+    const m = url.match(re);
+    if (m) return { owner: m[1], repo: m[2] };
+  }
+  throw new Error(`Could not parse owner/repo from: ${url}`);
 }
 
 export async function getRepoSlug() {
