@@ -23,30 +23,73 @@ and own every piece of infrastructure it touches.
 The author of this repo does not run any infrastructure for you. There is no
 shared backend, no database, and no API proxy.
 
-## Setup
+## Quick start (the wizard)
 
-1. **Fork** this repository to your own GitHub account.
-2. **Create a Supabase project** at <https://supabase.com>. Note the project
-   URL and the `anon` public API key from Project Settings → API.
-3. **Apply the schema**: open the Supabase SQL Editor and paste the contents
-   of [`supabase/schema.sql`](supabase/schema.sql). This creates `profiles`,
-   `threads`, and `messages` tables with RLS policies so users can only see
-   their own rows.
-4. **Allow your deployment origin** in Supabase:
-   - Authentication → URL Configuration → add `https://<your-user>.github.io`
-     (and `https://<your-user>.github.io/<repo>/` if serving from a project
-     subpath) to the **Site URL** and **Redirect URLs**.
+Three commands, plus two accounts you probably already have.
+
+```sh
+# 1. Fork this repo on github.com, then clone your fork.
+git clone https://github.com/<you>/nak && cd nak
+
+# 2. Install all tools (Node, pnpm, gh, supabase) via mise.
+mise install
+
+# 3. Run the interactive wizard.
+mise run setup
+```
+
+The wizard will:
+
+1. Log you into `gh` (opens a browser for the OAuth dance).
+2. Enable **GitHub Pages** on your fork with Actions as the source.
+3. Flip the repo to **read+write workflow permissions**.
+4. Log you into `supabase` (opens a browser).
+5. Let you **create or link a Supabase project** and apply `schema.sql`.
+6. **Whitelist your Pages URL** in Supabase Auth URL config.
+7. Prompt for your **Venice API key** (get one at <https://venice.ai/settings/api>).
+8. Print a one-shot setup link like
+   `https://<you>.github.io/nak/#setup=<blob>`.
+
+Open the link, set a master password, and you're in. That's it.
+
+> The `#setup=…` value is a URL **fragment**, which browsers do not send in
+> HTTP requests. The app reads it locally, pre-fills the form, and then
+> immediately clears it from the address bar. Still — treat it like a
+> password until you've set your master password.
+
+### Useful individual tasks
+
+The wizard chains these together, but each one is runnable on its own and is
+idempotent (safe to rerun). Run `mise tasks` to see the full list.
+
+| Command                   | What it does                                                  |
+| ------------------------- | ------------------------------------------------------------- |
+| `mise run doctor`         | Verify prerequisites without changing anything                |
+| `mise run pages-enable`   | Enable Pages + flip workflow perms for the current fork       |
+| `mise run supabase-init`  | Create/link a Supabase project, apply schema, whitelist URL   |
+| `mise run dev`            | Vite dev server (http://localhost:5173)                       |
+| `mise run build`          | Production PWA build                                          |
+| `mise run test`           | Vitest unit tests                                             |
+
+### Manual fallback (no wizard)
+
+If automation fails or you prefer clicking buttons, everything can be done
+by hand:
+
+1. **Fork** this repository.
+2. **Create a Supabase project** at <https://supabase.com> and note the
+   project URL + `anon` key from Project Settings → API.
+3. **Apply the schema** by pasting [`supabase/schema.sql`](supabase/schema.sql)
+   into the Supabase SQL Editor.
+4. **Whitelist** your `https://<you>.github.io/<repo>/` URL in Supabase
+   Authentication → URL Configuration.
 5. **Get a Venice API key** at <https://venice.ai/settings/api>.
-6. **Enable GitHub Pages** in your fork: Settings → Pages → Source =
-   "GitHub Actions".
-7. **Push to `main`** (or run the `Deploy` workflow manually). The workflow
-   builds with the correct `base` path for your fork automatically and
-   publishes to `https://<your-user>.github.io/<repo>/`.
-8. **Open the app**, enter your Supabase URL, Supabase anon key, and Venice
-   API key, and set a master password. These are encrypted locally — they
-   never leave your browser except when calling Supabase or Venice directly.
-9. **Sign up** inside the app using any email/password. Supabase handles the
-   auth flow.
+6. **Enable GitHub Pages** in Settings → Pages → Source = "GitHub Actions".
+7. **Allow workflow writes** in Settings → Actions → General → Workflow
+   permissions → "Read and write permissions".
+8. **Push to `main`** (or dispatch the `Deploy` workflow manually).
+9. Open `https://<you>.github.io/<repo>/`, paste the three values into the
+   Setup screen, and pick a master password.
 
 ## Security model
 
@@ -130,14 +173,20 @@ src/
     supabase.ts       auth and thread/message CRUD
     state.svelte.ts   top-level reactive app state
   screens/
-    Setup.svelte      initial key entry + password creation
+    Setup.svelte      initial key entry + password creation (reads #setup= hash)
     Unlock.svelte     master-password prompt on subsequent loads
     Auth.svelte       Supabase email/password sign in/up
     Chat.svelte       thread list + streaming message view
     Settings.svelte   key rotation + password change
   App.svelte          phase router
   main.ts             entry
-supabase/schema.sql   one-time SQL to run in your Supabase project
+scripts/
+  bootstrap.mjs       the wizard (mise run setup)
+  doctor.mjs          prerequisite checks
+  setup-pages.mjs     enable GitHub Pages
+  setup-supabase.mjs  create/link Supabase project + schema + URL config
+  lib/                shared helpers (ui, shell, github, supabase, repo)
+supabase/schema.sql   RLS schema applied by the wizard
 .github/workflows/    CI and Pages deploy
 tests/                Vitest unit tests
 e2e/                  Playwright E2E tests

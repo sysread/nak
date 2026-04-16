@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { saveConfig, type AppConfig } from '$lib/config';
   import { activate } from '$lib/state.svelte';
 
@@ -9,6 +10,34 @@
   let confirmPassword = $state('');
   let error = $state<string | null>(null);
   let busy = $state(false);
+  let prefilled = $state(false);
+
+  /**
+   * If the URL carries `#setup=<base64>`, decode and pre-fill. The fragment
+   * is produced by `mise run setup` and never traverses the network.
+   */
+  onMount(() => {
+    const hash = location.hash;
+    if (!hash.startsWith('#setup=')) return;
+    try {
+      const raw = hash.slice('#setup='.length);
+      // Support both base64url and standard base64.
+      const normalized = raw.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+      const json = atob(padded);
+      const obj = JSON.parse(json);
+      if (typeof obj.supabaseUrl === 'string') supabaseUrl = obj.supabaseUrl;
+      if (typeof obj.supabaseAnonKey === 'string') supabaseAnonKey = obj.supabaseAnonKey;
+      if (typeof obj.veniceApiKey === 'string') veniceApiKey = obj.veniceApiKey;
+      prefilled = true;
+    } catch {
+      // Ignore malformed hash — user will just fill in manually.
+    } finally {
+      // Strip the fragment from the address bar + history so a later refresh
+      // or sharing the tab doesn't re-expose secrets.
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  });
 
   async function onSubmit(e: SubmitEvent): Promise<void> {
     e.preventDefault();
@@ -41,10 +70,17 @@
 <div class="center">
   <form class="card" onsubmit={onSubmit}>
     <h1>Initial setup</h1>
-    <p class="subtle">
-      Paste your Supabase and Venice credentials. They will be encrypted with your master
-      password and stored only in this browser's localStorage.
-    </p>
+    {#if prefilled}
+      <p class="subtle">
+        Keys were pre-filled from your <code>mise run setup</code> link. Pick a master password
+        to encrypt them locally, then continue.
+      </p>
+    {:else}
+      <p class="subtle">
+        Paste your Supabase and Venice credentials. They will be encrypted with your master
+        password and stored only in this browser's localStorage.
+      </p>
+    {/if}
     <div class="form-row">
       <label for="supabase-url">Supabase URL</label>
       <input id="supabase-url" type="url" bind:value={supabaseUrl}

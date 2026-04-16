@@ -1,6 +1,44 @@
 [tools]
 node = "20.11.1"
 pnpm = "9.12.0"
+# gh and supabase are installed via mise's `ubi` backend (downloads release
+# binaries from GitHub). If ubi fails on your platform, comment these out
+# and install the binaries yourself — the wizard detects them on PATH.
+"ubi:cli/cli"      = "latest"
+"ubi:supabase/cli" = "latest"
 
 [env]
 NODE_ENV = "development"
+
+# ----------------------------------------------------------------------------
+# Tasks — run with `mise run <name>` (or `mise run` to pick interactively).
+# `mise tasks` lists them with descriptions.
+# ----------------------------------------------------------------------------
+
+[tasks.doctor]
+description = "Check that all prerequisites are installed and authenticated"
+run = "node scripts/doctor.mjs"
+
+[tasks.setup]
+description = "Interactive first-time setup wizard (Pages + Supabase + Venice)"
+run = "node scripts/bootstrap.mjs"
+
+[tasks.pages-enable]
+description = "Enable GitHub Pages on this fork with Actions as the source"
+run = "node scripts/setup-pages.mjs"
+
+[tasks.supabase-init]
+description = "Create or link a Supabase project, apply schema, configure auth URLs"
+run = "node scripts/setup-supabase.mjs"
+
+[tasks.dev]
+description = "Run the Vite dev server"
+run = "pnpm dev"
+
+[tasks.build]
+description = "Build the PWA for production"
+run = "pnpm build"
+
+[tasks.test]
+description = "Run unit tests"
+run = "pnpm test"
