@@ -20,6 +20,7 @@ import {
   ghRefreshScopes,
   ghApi,
   ghApiJson,
+  REQUIRED_SCOPES,
 } from './lib/github.mjs';
 import { getRepoSlug, pagesUrl } from './lib/repo.mjs';
 
@@ -42,16 +43,19 @@ if (!status.ok) {
 }
 ok('gh is authenticated.');
 
-if (!status.hasPagesScope) {
-  info('Your gh token is missing the `pages` scope — refreshing.');
-  hint('This opens a browser so GitHub can grant the extra scope.');
-  await ghRefreshScopes(['pages', 'workflow']);
+if (!status.hasAllScopes) {
+  info(`gh token is missing required scope(s): ${style.bold(status.missingScopes.join(', '))}`);
+  hint('Opening a browser so GitHub can grant them.');
+  await ghRefreshScopes(status.missingScopes);
   const after = await ghAuthStatus();
-  if (!after.hasPagesScope) {
-    bail('Pages scope still missing after refresh.', 'Try `gh auth refresh -s pages`.');
+  if (!after.hasAllScopes) {
+    bail(
+      `Still missing: ${after.missingScopes.join(', ')}.`,
+      `Try \`gh auth refresh -s ${after.missingScopes.join(' -s ')}\` manually.`
+    );
   }
 }
-ok('gh token has the `pages` scope.');
+ok(`gh token has required scopes: ${style.dim(REQUIRED_SCOPES.join(', '))}`);
 
 const { owner, repo } = await getRepoSlug();
 info(`Target repository: ${style.bold(`${owner}/${repo}`)}`);

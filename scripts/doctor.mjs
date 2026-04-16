@@ -8,7 +8,7 @@
 //   1 — at least one hard blocker the wizard can't fix on its own.
 import { banner, step, info, ok, warn, hint, fail, style } from './lib/ui.mjs';
 import { which } from './lib/shell.mjs';
-import { ghAvailable, ghAuthStatus } from './lib/github.mjs';
+import { ghAvailable, ghAuthStatus, REQUIRED_SCOPES } from './lib/github.mjs';
 import { supaAvailable, readAccessToken } from './lib/supabase.mjs';
 import { getRepoSlug, pagesUrl } from './lib/repo.mjs';
 
@@ -41,12 +41,14 @@ if (!(await ghAvailable())) {
     wizardWillFix++;
   } else {
     ok('gh is authenticated');
-    if (!status.hasPagesScope) {
-      info('gh token is missing the `pages` scope.');
-      hint('The wizard will refresh it. Or run `gh auth refresh -s pages` now.');
+    if (!status.hasAllScopes) {
+      info(`gh token is missing scope(s): ${status.missingScopes.join(', ')}`);
+      hint(
+        `The wizard will refresh them. Or run \`gh auth refresh -s ${status.missingScopes.join(' -s ')}\` now.`
+      );
       wizardWillFix++;
     } else {
-      ok('gh token has the `pages` scope');
+      ok(`gh token has required scopes (${REQUIRED_SCOPES.join(', ')})`);
     }
   }
 }

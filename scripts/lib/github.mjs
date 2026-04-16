@@ -2,25 +2,44 @@
 // works with any gh version that supports `api`.
 import { runCapture, runInherit, which } from './shell.mjs';
 
+const GH_HOSTNAME = 'github.com';
+
+// Scopes the wizard needs:
+//   - `repo`     — admin access to the repo, which covers Pages management.
+//                  Every default `gh auth login` already has this.
+//   - `workflow` — required to dispatch the Deploy workflow via the API.
+//                  Default login usually includes it; refresh if missing.
+// There is no standalone `pages` OAuth scope — Pages is part of `repo`.
+export const REQUIRED_SCOPES = ['repo', 'workflow'];
+
 export async function ghAvailable() {
   return (await which('gh')) !== null;
 }
 
+function extractScopes(text) {
+  // `gh auth status` prints a line like:
+  //   - Token scopes: 'gist', 'read:org', 'repo', 'workflow'
+  const m = text.match(/Token scopes:\s*([^\n]+)/);
+  if (!m) return [];
+  return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
+}
+
 export async function ghAuthStatus() {
-  // `gh auth status` exits 0 when authed.
+  // `gh auth status` exits 0 when authed; it writes scope info to stderr.
   const res = await runCapture('gh', ['auth', 'status']);
+  const blob = `${res.stderr}\n${res.stdout}`;
+  const scopes = extractScopes(blob);
+  const missing = REQUIRED_SCOPES.filter((s) => !scopes.includes(s));
   return {
     ok: res.code === 0,
-    hasPagesScope: /pages/.test(res.stderr) || /pages/.test(res.stdout),
-    raw: res.stderr || res.stdout,
+    scopes,
+    missingScopes: missing,
+    hasAllScopes: missing.length === 0,
+    raw: blob,
   };
 }
 
-const GH_HOSTNAME = 'github.com';
-
 export async function ghLoginInteractive() {
-  // Inherit stdio — gh drives the browser + device-code flow itself.
-  // --hostname is explicit so gh doesn't try to prompt when stdio is wrapped.
   await runInherit('gh', [
     'auth',
     'login',
