@@ -740,14 +740,114 @@ h1 {
   font-style: italic;
 }
 
+/* ---------- highlight.js token colors ----------
+   Tuned to sit well on `--bg-2` (our code-block fill) in both the dark
+   and light themes. We map hljs's token families to stable color
+   variables so the palette follows theme changes. */
+
+:root[data-theme='dark'] {
+  --tok-comment:  #8b94a3;
+  --tok-keyword:  #c4b5fd;
+  --tok-string:   #86efac;
+  --tok-number:   #fdba74;
+  --tok-fn:       #8ab4ff;
+  --tok-variable: #e6e9ee;
+  --tok-punc:     #8b94a3;
+  --tok-tag:      #f9a8d4;
+  --tok-attr:     #5eead4;
+  --tok-regex:    #fdba74;
+  --tok-deleted:  #fda4af;
+  --tok-inserted: #86efac;
+}
+
+:root[data-theme='light'] {
+  --tok-comment:  #75695a;
+  --tok-keyword:  #7e22ce;
+  --tok-string:   #15803d;
+  --tok-number:   #c2410c;
+  --tok-fn:       #1d4ed8;
+  --tok-variable: #2b2620;
+  --tok-punc:     #75695a;
+  --tok-tag:      #be185d;
+  --tok-attr:     #0f766e;
+  --tok-regex:    #c2410c;
+  --tok-deleted:  #b91c1c;
+  --tok-inserted: #15803d;
+}
+
+.md pre code.hljs {
+  color: var(--text);
+  background: transparent;
+  padding: 0;
+}
+
+.md .hljs-comment,
+.md .hljs-quote                 { color: var(--tok-comment); font-style: italic; }
+
+.md .hljs-keyword,
+.md .hljs-selector-tag,
+.md .hljs-literal,
+.md .hljs-section,
+.md .hljs-link,
+.md .hljs-doctag,
+.md .hljs-meta-keyword          { color: var(--tok-keyword); }
+
+.md .hljs-string,
+.md .hljs-regexp,
+.md .hljs-addition,
+.md .hljs-attribute,
+.md .hljs-meta-string           { color: var(--tok-string); }
+
+.md .hljs-number,
+.md .hljs-symbol,
+.md .hljs-bullet,
+.md .hljs-built_in,
+.md .hljs-literal               { color: var(--tok-number); }
+
+.md .hljs-title,
+.md .hljs-title.function_,
+.md .hljs-title.class_,
+.md .hljs-name,
+.md .hljs-type                  { color: var(--tok-fn); }
+
+.md .hljs-variable,
+.md .hljs-template-variable     { color: var(--tok-variable); }
+
+.md .hljs-selector-id,
+.md .hljs-selector-class,
+.md .hljs-selector-attr,
+.md .hljs-selector-pseudo       { color: var(--tok-attr); }
+
+.md .hljs-tag,
+.md .hljs-meta                  { color: var(--tok-tag); }
+
+.md .hljs-deletion              { color: var(--tok-deleted); }
+.md .hljs-addition              { color: var(--tok-inserted); }
+
+.md .hljs-emphasis              { font-style: italic; }
+.md .hljs-strong                { font-weight: bold; }
+
+/* KaTeX renders a handful of spans with explicit `line-height: 0` which
+   collides with our mono stack's default leading. Nudge it so block
+   equations don't overflow their container. */
+.md .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25rem 0;
+}
+.md .katex { font-size: 1.05em; }
+
 /* Role-specific layout. Each bubble occupies a fixed fraction of the
    messages container so the column feels structured regardless of
    reply length — assistant 80% centered, user 65% right-anchored.
    These override the base `.msg` max-width. */
+/* User and assistant messages render as equal-width, horizontally-centered
+   cards. They're distinguished only by color: user in a subtle accent
+   tint, assistant in a surface tone. */
 .msg.user {
-  align-self: flex-end;
-  width: 65%;
-  max-width: 65%;
+  align-self: center;
+  width: 80%;
+  max-width: 80%;
   background: var(--accent-weak);
 }
 
@@ -760,14 +860,24 @@ h1 {
 }
 
 .composer {
-  border-top: 1px solid var(--border);
-  padding: 0.75rem;
+  /* No top divider — the textarea's own brighter border marks the edge. */
+  padding: 1rem 1.25rem 1.25rem;
   display: flex;
   gap: 0.5rem;
   /* Top-align so the Send button's top edge lines up with the textarea's
      top edge — matches the expand button sitting at the top-right corner
      of the textarea. */
   align-items: flex-start;
+}
+
+/* Brighter border on the textarea itself so the composer is visually
+   anchored without needing a divider above it. */
+.composer textarea {
+  border-color: var(--muted);
+}
+.composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .textarea-wrap {

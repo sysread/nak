@@ -30,9 +30,26 @@ describe('renderMarkdown — happy paths', () => {
 
   it('renders inline code and fenced code blocks', () => {
     expect(renderMarkdown('use `foo` here')).toMatch(/<code>foo<\/code>/);
+    // `js` normalizes to `javascript` via the highlight alias table.
     const fenced = renderMarkdown('```js\nconst x = 1;\n```');
-    expect(fenced).toMatch(/<pre><code[^>]*class="[^"]*language-js[^"]*"[^>]*>/);
-    expect(fenced).toMatch(/const x = 1;/);
+    expect(fenced).toMatch(/<pre><code[^>]*class="[^"]*language-javascript[^"]*"[^>]*>/);
+    expect(fenced).toMatch(/const/);
+  });
+
+  it('applies hljs token spans for supported languages', () => {
+    const html = renderMarkdown('```python\ndef hello(): return 1\n```');
+    // highlight.js emits <span class="hljs-keyword">def</span> etc.
+    expect(html).toMatch(/class="hljs-keyword"/);
+    // And tags the code block with `hljs` so CSS can theme it.
+    expect(html).toMatch(/<code[^>]*class="[^"]*\bhljs\b[^"]*"/);
+  });
+
+  it('leaves unknown languages as plain escaped code', () => {
+    const html = renderMarkdown('```mystery\nfoo bar\n```');
+    // Unknown langs get no language-/hljs class and no token spans.
+    expect(html).not.toMatch(/class="[^"]*hljs/);
+    expect(html).not.toMatch(/class="[^"]*language-/);
+    expect(html).toMatch(/foo bar/);
   });
 
   it('renders GFM tables', () => {
@@ -50,6 +67,29 @@ describe('renderMarkdown — happy paths', () => {
   it('autolinks bare URLs under GFM', () => {
     const html = renderMarkdown('see https://example.com for more');
     expect(html).toMatch(/<a [^>]*href="https:\/\/example\.com"/);
+  });
+
+  it('renders inline math via $...$', () => {
+    const html = renderMarkdown('Einstein said $E = mc^2$.');
+    // KaTeX emits a `<span class="katex">…</span>` wrapper.
+    expect(html).toMatch(/<span class="katex/);
+    // The E symbol should survive the transform.
+    expect(html).toContain('mord');
+  });
+
+  it('renders block math via $$...$$', () => {
+    const html = renderMarkdown('$$\\int_0^1 x^2 dx$$');
+    expect(html).toMatch(/<span class="katex/);
+    // Block-form emits an extra wrapper.
+    expect(html).toMatch(/katex-display/);
+  });
+
+  it('tolerates malformed math without throwing', () => {
+    // `throwOnError: false` should inline-render the error rather than
+    // blow up the whole message.
+    const html = renderMarkdown('broken: $\\frac{1}{$');
+    expect(typeof html).toBe('string');
+    expect(html.length).toBeGreaterThan(0);
   });
 });
 

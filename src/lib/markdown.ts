@@ -2,42 +2,64 @@
  * Markdown → sanitized HTML.
  *
  * Pipeline:
- *   marked(src) → DOMPurify(html, ALLOWLIST) → string safe to {@html}.
+ *   marked(src, extensions) → DOMPurify(html, ALLOWLIST) → string safe to {@html}.
+ *
+ * Extensions in play:
+ *   - GFM (tables, autolinks, strikethrough) via marked's built-in flag.
+ *   - Fenced code blocks run through Prism for syntax highlighting when a
+ *     language tag is present and supported.
+ *   - `$inline$` / `$$block$$` math runs through KaTeX (HTML output).
  *
  * Security stance:
- *   - Raw HTML in the source is dropped by marked's token stream when
- *     `html: false`, and anything that slips through is scrubbed by
- *     DOMPurify's element/attribute allowlist.
+ *   - Raw HTML in source is scrubbed by DOMPurify's element/attribute
+ *     allowlist.
  *   - Images are disabled (no network fetch triggered by model output).
  *   - Links are rewritten with `rel="noopener noreferrer nofollow"` and
- *     `target="_blank"` via a post-sanitize hook. `javascript:` /
- *     `data:` URLs are rejected by DOMPurify's built-in URI filter.
+ *     `target="_blank"` via a post-sanitize hook. `javascript:`/`data:`
+ *     URLs are rejected by DOMPurify's URI regex.
+ *   - KaTeX runs in `trust: false, strict: false` mode (default) so it
+ *     won't emit `\href` links or other side-channel content.
  */
 
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import markedKatex from 'marked-katex-extension';
+import { highlight, isSupported, normalizeLang } from './highlight';
 
 // ---------------------------------------------------------------------------
 // marked configuration
 // ---------------------------------------------------------------------------
 
 marked.setOptions({
-  gfm: true,          // GitHub-flavored markdown: autolinks, tables, strikethrough
-  breaks: false,      // don't convert single newlines inside paragraphs to <br>
-  // Explicit: treat the source as untrusted. marked doesn't have a flag to
-  // strip inline HTML the way some libs do, but DOMPurify handles it on the
-  // output side.
+  gfm: true,
+  breaks: false,
 });
 
-// Disable image rendering entirely — swap the renderer so `![alt](src)` is
-// turned into a plain text fallback. This prevents the browser from making
-// outbound requests to model-supplied URLs just because a message rendered.
+// Override the renderer:
+//   - image: replace with an inline text stub so the browser never fetches
+//     the URL a model output.
+//   - code: Prism-highlight and wrap in <pre><code class="language-...">.
 const renderer = new marked.Renderer();
+
 renderer.image = ({ text, title }: { text: string; title?: string | null }) => {
   const label = (title || text || 'image').replace(/[<>]/g, '');
   return `<span class="md-image-stub">[image: ${label}]</span>`;
 };
+
+renderer.code = ({ text, lang }: { text: string; lang?: string }) => {
+  const normalized = normalizeLang(lang ?? '');
+  const highlighted = normalized && isSupported(normalized);
+  const body = highlighted ? highlight(text, normalized) : escapeHtml(text);
+  const classes: string[] = [];
+  if (highlighted) classes.push('hljs', `language-${escapeAttr(normalized)}`);
+  const cls = classes.length ? ` class="${classes.join(' ')}"` : '';
+  return `<pre><code${cls}>${body}\n</code></pre>\n`;
+};
+
 marked.use({ renderer });
+// `$...$` for inline, `$$...$$` for block math. Output stays as inline HTML
+// so DOMPurify can scrub it along with the rest.
+marked.use(markedKatex({ throwOnError: false, output: 'html' }));
 
 // ---------------------------------------------------------------------------
 // DOMPurify configuration
@@ -64,7 +86,7 @@ const ALLOWED_TAGS = [
   'p',
   'pre',
   's',
-  'span',       // used by our image stub
+  'span',
   'strong',
   'sub',
   'sup',
@@ -78,10 +100,11 @@ const ALLOWED_TAGS = [
   'ul',
 ];
 
-const ALLOWED_ATTR = ['href', 'title', 'class', 'lang', 'align', 'start'];
+// `style` is needed for KaTeX's layout (font-size, padding, transforms on
+// individual glyph spans). DOMPurify sanitizes the value, rejecting url()
+// and other attack vectors, so allowing the attribute here is safe.
+const ALLOWED_ATTR = ['href', 'title', 'class', 'lang', 'align', 'start', 'style'];
 
-// Harden external links: open in a new tab, strip referrer and opener.
-// Registered lazily (on first render) so SSR / non-DOM test envs don't crash.
 let hookRegistered = false;
 function registerLinkHardening(): void {
   if (hookRegistered) return;
@@ -98,17 +121,24 @@ function registerLinkHardening(): void {
 export function renderMarkdown(src: string): string {
   if (typeof src !== 'string' || src.length === 0) return '';
   registerLinkHardening();
-  // marked.parse is sync when no async extensions are registered.
   const html = marked.parse(src, { async: false }) as string;
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS,
     ALLOWED_ATTR,
-    // Keep text content of disallowed tags so we don't lose the model's
-    // words when it emits something unexpected.
     KEEP_CONTENT: true,
-    // Disallow `javascript:` / `data:` / `vbscript:` URIs explicitly.
     ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|#|\/|\.\/|\.\.\/)/i,
   });
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/[^a-zA-Z0-9_\-+]/g, '');
 }
 
 export const __test = {

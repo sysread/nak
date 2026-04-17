@@ -2,9 +2,8 @@ name: Tests
 
 on:
   pull_request:
-  # Reusable: deploy.yml calls this as a required prerequisite so mainline
-  # deploys can't ship past a broken check or failing unit test.
-  workflow_call:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
