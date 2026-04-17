@@ -14,6 +14,7 @@
   } from '$lib/models';
   import Auth from './Auth.svelte';
   import Settings from './Settings.svelte';
+  import Markdown from '../components/Markdown.svelte';
 
   const DEFAULT_TITLE = 'New conversation';
 
@@ -572,10 +573,14 @@
       </div>
       <div class="messages">
         {#each messages as m (m.id)}
-          <div class="msg {m.role}">{m.content}</div>
+          <div class="msg {m.role}">
+            <Markdown content={m.content} />
+          </div>
         {/each}
         {#if streamingText}
-          <div class="msg assistant">{streamingText}</div>
+          <div class="msg assistant">
+            <Markdown content={streamingText} />
+          </div>
         {/if}
         {#if messages.length === 0 && !streamingText}
           <div class="empty">Type a message to begin.</div>

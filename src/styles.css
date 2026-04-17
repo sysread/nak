@@ -600,12 +600,113 @@ h1 {
   padding: 0.7rem 0.9rem;
   border-radius: 12px;
   line-height: 1.45;
-  white-space: pre-wrap;
-  word-wrap: break-word;
   /* Break genuinely unbreakable tokens (long URLs, hashes, code) rather
-     than let them blow out the container width. */
+     than let them blow out the container width. Whitespace is handled by
+     the markdown renderer; we don't need pre-wrap on the container. */
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* ---------- Markdown content inside a message ----------
+   Scoped under .md (emitted by the Markdown component) so the rules apply
+   to rendered markdown wherever we mount it. */
+
+.md > :first-child { margin-top: 0; }
+.md > :last-child  { margin-bottom: 0; }
+
+.md p {
+  margin: 0 0 0.6em;
+}
+
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
+  margin: 0.8em 0 0.4em;
+  line-height: 1.25;
+  font-weight: 600;
+}
+.md h1 { font-size: 1.35rem; }
+.md h2 { font-size: 1.2rem; }
+.md h3 { font-size: 1.08rem; }
+.md h4, .md h5, .md h6 { font-size: 1rem; }
+
+.md ul, .md ol {
+  margin: 0 0 0.6em;
+  padding-left: 1.6em;
+}
+.md li + li { margin-top: 0.15em; }
+.md li > ul, .md li > ol { margin-bottom: 0.2em; }
+
+.md blockquote {
+  margin: 0 0 0.6em;
+  padding: 0.2em 0.9em;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+  background: var(--bg-2);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.md blockquote > :last-child { margin-bottom: 0; }
+
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 1em 0;
+}
+
+.md a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md a:hover {
+  text-decoration-thickness: 2px;
+}
+
+.md code {
+  font-family: 'ProggyDotted', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  background: var(--bg-2);
+  padding: 0.05em 0.35em;
+  border-radius: 4px;
+  font-size: 0.95em;
+}
+
+.md pre {
+  margin: 0 0 0.6em;
+  padding: 0.7em 0.9em;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  /* Code blocks preserve whitespace; the container scrolls. */
+  white-space: pre;
+}
+.md pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: 0.9rem;
+  /* Undo the outer overflow-wrap so code lines don't break mid-token. */
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.md table {
+  border-collapse: collapse;
+  margin: 0 0 0.6em;
+  font-size: 0.95em;
+}
+.md th, .md td {
+  border: 1px solid var(--border);
+  padding: 0.25em 0.55em;
+  text-align: left;
+  vertical-align: top;
+}
+.md th {
+  background: var(--bg-2);
+  font-weight: 600;
+}
+
+.md .md-image-stub {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .msg.user {
