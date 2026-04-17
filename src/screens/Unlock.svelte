@@ -1,8 +1,10 @@
 <script lang="ts">
   import { loadConfig, clearStoredConfig } from '$lib/config';
-  import { activate, app } from '$lib/state.svelte';
+  import { activate, enterEditConfig, app } from '$lib/state.svelte';
 
   import { tick } from 'svelte';
+
+  type Intent = 'unlock' | 'edit';
 
   let password = $state('');
   let error = $state<string | null>(null);
@@ -13,8 +15,7 @@
     void tick().then(() => passwordEl?.focus());
   });
 
-  async function onSubmit(e: SubmitEvent): Promise<void> {
-    e.preventDefault();
+  async function submit(intent: Intent): Promise<void> {
     error = null;
     busy = true;
     try {
@@ -23,13 +24,30 @@
         app.phase = 'setup';
         return;
       }
-      activate(config);
+      if (intent === 'edit') {
+        enterEditConfig(config);
+      } else {
+        activate(config);
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
       busy = false;
       password = '';
     }
+  }
+
+  async function onSubmit(e: SubmitEvent): Promise<void> {
+    e.preventDefault();
+    await submit('unlock');
+  }
+
+  async function onEdit(): Promise<void> {
+    if (!password) {
+      error = 'Enter your master password to decrypt before editing.';
+      return;
+    }
+    await submit('edit');
   }
 
   function onReset(): void {
@@ -57,7 +75,17 @@
       <button type="submit" class="grow" disabled={busy}>
         {busy ? 'Unlocking…' : 'Unlock'}
       </button>
-      <button type="button" class="secondary" onclick={onReset}>Reset</button>
+      <button type="button" class="secondary" onclick={onEdit} disabled={busy}>
+        Edit keys
+      </button>
     </div>
+    <button type="button" class="secondary"
+            style="width:100%;margin-top:0.5rem" onclick={onReset}>
+      Reset (erase config)
+    </button>
+    <p class="subtle" style="font-size:0.78rem;margin-top:0.7rem">
+      Mistyped a key? Type your master password and hit <strong>Edit keys</strong>
+      to fix values without starting over.
+    </p>
   </form>
 </div>

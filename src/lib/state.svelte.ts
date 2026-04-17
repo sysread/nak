@@ -13,7 +13,7 @@ import {
   type ColorMode,
 } from './theme';
 
-export type AppPhase = 'loading' | 'setup' | 'locked' | 'unlocked';
+export type AppPhase = 'loading' | 'setup' | 'locked' | 'unlocked' | 'edit-config';
 
 interface AppState {
   phase: AppPhase;
@@ -86,4 +86,19 @@ export function lock(): void {
   app.defaultModel = DEFAULT_TIER;
   app.phase = 'locked';
   clearSession();
+}
+
+/**
+ * Enter the "edit keys" flow with a decrypted config. Used by the Unlock
+ * screen when the user wants to fix a mistyped key without first having to
+ * get past the chat auth flow. The config is held in app.config but no
+ * Supabase / Venice service is instantiated yet — those spin up via
+ * activate() once the user commits.
+ */
+export function enterEditConfig(config: AppConfig): void {
+  app.config = config;
+  app.supabase = null;
+  app.venice = null;
+  app.phase = 'edit-config';
+  app.error = null;
 }

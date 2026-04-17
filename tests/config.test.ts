@@ -71,6 +71,36 @@ describe('config', () => {
     expect(blob).not.toContain('supabase.co');
   });
 
+  it('round-trips via toExportedConfig / parseExportedConfig', async () => {
+    const { toExportedConfig, parseExportedConfig } = await import('../src/lib/config');
+    const exported = toExportedConfig(VALID);
+    const json = JSON.stringify(exported);
+    expect(parseExportedConfig(json)).toEqual(VALID);
+  });
+
+  it('parseExportedConfig rejects a file missing the kind marker', async () => {
+    const { parseExportedConfig } = await import('../src/lib/config');
+    const bad = JSON.stringify({ version: 1, ...VALID });
+    expect(() => parseExportedConfig(bad)).toThrow(/Nak config/i);
+  });
+
+  it('parseExportedConfig rejects a future version', async () => {
+    const { parseExportedConfig } = await import('../src/lib/config');
+    const bad = JSON.stringify({ kind: 'nak-config', version: 9999, ...VALID });
+    expect(() => parseExportedConfig(bad)).toThrow(/version/i);
+  });
+
+  it('parseExportedConfig rejects malformed JSON', async () => {
+    const { parseExportedConfig } = await import('../src/lib/config');
+    expect(() => parseExportedConfig('{ not json')).toThrow(/JSON/i);
+  });
+
+  it('parseExportedConfig rejects a missing supabaseUrl', async () => {
+    const { parseExportedConfig } = await import('../src/lib/config');
+    const bad = JSON.stringify({ kind: 'nak-config', version: 1, supabaseAnonKey: 'a', veniceApiKey: 'b' });
+    expect(() => parseExportedConfig(bad)).toThrow(/supabaseUrl/i);
+  });
+
   it('ignores unknown fields in a legacy blob on read', async () => {
     // Simulate a blob written by an earlier build that carried a
     // `defaultModel` field. The current validator should drop it and still

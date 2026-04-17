@@ -104,6 +104,65 @@ export async function changePassword(
   await saveConfig(existing, newPassword);
 }
 
+// ---------------------------------------------------------------------------
+// Export / import of the PLAINTEXT local config — the three keys only.
+// Used so users can move credentials to a new browser without re-typing.
+// The produced file contains secrets; callers should warn the user.
+// ---------------------------------------------------------------------------
+
+const EXPORT_KIND = 'nak-config';
+const EXPORT_VERSION = 1;
+
+export interface ExportedConfig {
+  kind: typeof EXPORT_KIND;
+  version: typeof EXPORT_VERSION;
+  supabaseUrl: string;
+  supabaseAnonKey: string;
+  veniceApiKey: string;
+}
+
+export function toExportedConfig(config: AppConfig): ExportedConfig {
+  return {
+    kind: EXPORT_KIND,
+    version: EXPORT_VERSION,
+    supabaseUrl: config.supabaseUrl,
+    supabaseAnonKey: config.supabaseAnonKey,
+    veniceApiKey: config.veniceApiKey,
+  };
+}
+
+export function parseExportedConfig(raw: string): AppConfig {
+  let obj: unknown;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    throw new ConfigError('File is not valid JSON.');
+  }
+  if (typeof obj !== 'object' || obj === null) {
+    throw new ConfigError('File is not a JSON object.');
+  }
+  const r = obj as Record<string, unknown>;
+  if (r.kind !== EXPORT_KIND) {
+    throw new ConfigError('Not a Nak config file (wrong `kind`).');
+  }
+  if (r.version !== EXPORT_VERSION) {
+    throw new ConfigError(
+      `Unsupported config file version: ${String(r.version)}. Expected ${EXPORT_VERSION}.`
+    );
+  }
+  const supabaseUrl = typeof r.supabaseUrl === 'string' ? r.supabaseUrl.trim() : '';
+  const supabaseAnonKey = typeof r.supabaseAnonKey === 'string' ? r.supabaseAnonKey.trim() : '';
+  const veniceApiKey = typeof r.veniceApiKey === 'string' ? r.veniceApiKey.trim() : '';
+  if (!/^https?:\/\//.test(supabaseUrl)) {
+    throw new ConfigError('Missing or invalid supabaseUrl.');
+  }
+  if (!supabaseAnonKey) throw new ConfigError('Missing supabaseAnonKey.');
+  if (!veniceApiKey) throw new ConfigError('Missing veniceApiKey.');
+  return { supabaseUrl, supabaseAnonKey, veniceApiKey };
+}
+
 export const __storage = {
   STORAGE_KEY,
+  EXPORT_KIND,
+  EXPORT_VERSION,
 };

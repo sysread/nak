@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { changePassword, saveConfig } from '$lib/config';
+  import { changePassword, saveConfig, toExportedConfig } from '$lib/config';
   import { app, activate, setDefaultModel, setTheme } from '$lib/state.svelte';
   import { MODELS, TIERS, type ModelTier } from '$lib/models';
   import {
@@ -19,11 +19,12 @@
   }
   let { onClose }: Props = $props();
 
-  type Group = 'keys' | 'model' | 'appearance' | 'security';
+  type Group = 'keys' | 'model' | 'appearance' | 'export' | 'security';
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'keys', label: 'API keys' },
     { id: 'model', label: 'Model' },
     { id: 'appearance', label: 'Appearance' },
+    { id: 'export', label: 'Export' },
     { id: 'security', label: 'Security' },
   ];
   let group = $state<Group>('keys');
@@ -72,6 +73,36 @@
       appearanceInfo = 'Saved.';
     } catch (err) {
       appearanceError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // --- Export pane ---
+  let exportInfo = $state<string | null>(null);
+  let exportError = $state<string | null>(null);
+
+  function onExportConfig(): void {
+    exportInfo = null;
+    exportError = null;
+    if (!app.config) {
+      exportError = 'No active config — please unlock first.';
+      return;
+    }
+    try {
+      const blob = new Blob([JSON.stringify(toExportedConfig(app.config), null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      a.download = `nak-config-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      exportInfo = 'Download started.';
+    } catch (err) {
+      exportError = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -284,6 +315,26 @@
 
         {#if appearanceError}<p class="error">{appearanceError}</p>{/if}
         {#if appearanceInfo}<p class="subtle">{appearanceInfo}</p>{/if}
+      {:else if group === 'export'}
+        <h2>Export</h2>
+        <p class="subtle">
+          Download your Supabase and Venice credentials as a JSON file so you
+          can reimport them when setting up Nak on another browser. This is a
+          local-only feature — the file is generated in your browser and
+          never uploaded.
+        </p>
+        <p class="subtle" style="color:var(--warn);font-size:0.85rem">
+          ⚠ The exported file contains your API keys in plaintext. Store it
+          with the same care as any other secret (e.g. your password
+          manager). Deleting it afterward is a fine choice.
+        </p>
+        <p class="subtle" style="font-size:0.85rem">
+          Import happens on the Setup screen of a fresh install — the
+          "Import from JSON" button pre-fills the credentials for you.
+        </p>
+        <button type="button" onclick={onExportConfig}>Export config as JSON</button>
+        {#if exportError}<p class="error">{exportError}</p>{/if}
+        {#if exportInfo}<p class="subtle">{exportInfo}</p>{/if}
       {:else if group === 'security'}
         <h2>Change master password</h2>
         <p class="subtle">

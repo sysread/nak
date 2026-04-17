@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { saveConfig, type AppConfig } from '$lib/config';
+  import { saveConfig, parseExportedConfig, type AppConfig } from '$lib/config';
   import { activate } from '$lib/state.svelte';
+  import SecretInput from '../components/SecretInput.svelte';
 
   let supabaseUrl = $state('');
   let supabaseAnonKey = $state('');
@@ -11,6 +12,8 @@
   let error = $state<string | null>(null);
   let busy = $state(false);
   let prefilled = $state(false);
+  let importInfo = $state<string | null>(null);
+  let fileEl: HTMLInputElement | undefined = $state();
 
   /**
    * If the URL carries `#setup=<base64>`, decode and pre-fill. The fragment
@@ -38,6 +41,28 @@
       history.replaceState(null, '', location.pathname + location.search);
     }
   });
+
+  async function onPickFile(e: Event): Promise<void> {
+    error = null;
+    importInfo = null;
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const cfg = parseExportedConfig(text);
+      supabaseUrl = cfg.supabaseUrl;
+      supabaseAnonKey = cfg.supabaseAnonKey;
+      veniceApiKey = cfg.veniceApiKey;
+      prefilled = true;
+      importInfo = `Imported from ${file.name}. Pick a master password below to continue.`;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      // Reset the file input so the user can re-pick the same file if needed.
+      input.value = '';
+    }
+  }
 
   async function onSubmit(e: SubmitEvent): Promise<void> {
     e.preventDefault();
@@ -72,8 +97,8 @@
     <h1>Initial setup</h1>
     {#if prefilled}
       <p class="subtle">
-        Keys were pre-filled from your <code>mise run setup</code> link. Pick a master password
-        to encrypt them locally, then continue.
+        Keys were pre-filled. Pick a master password to encrypt them locally,
+        then continue.
       </p>
     {:else}
       <p class="subtle">
@@ -81,6 +106,22 @@
         password and stored only in this browser's localStorage.
       </p>
     {/if}
+
+    <button
+      type="button"
+      class="secondary"
+      style="width:100%;margin-bottom:0.9rem"
+      onclick={() => fileEl?.click()}
+    >Import from JSON…</button>
+    <input
+      type="file"
+      accept="application/json,.json"
+      bind:this={fileEl}
+      onchange={onPickFile}
+      style="display:none"
+    />
+    {#if importInfo}<p class="subtle">{importInfo}</p>{/if}
+
     <div class="form-row">
       <label for="supabase-url">Supabase URL</label>
       <input id="supabase-url" type="url" bind:value={supabaseUrl}
@@ -88,19 +129,19 @@
     </div>
     <div class="form-row">
       <label for="supabase-anon">Supabase anon key</label>
-      <input id="supabase-anon" type="password" bind:value={supabaseAnonKey} required />
+      <SecretInput id="supabase-anon" bind:value={supabaseAnonKey} required />
     </div>
     <div class="form-row">
       <label for="venice-key">Venice API key</label>
-      <input id="venice-key" type="password" bind:value={veniceApiKey} required />
+      <SecretInput id="venice-key" bind:value={veniceApiKey} required />
     </div>
     <div class="form-row">
       <label for="password">Master password</label>
-      <input id="password" type="password" bind:value={password} required minlength="8" />
+      <SecretInput id="password" bind:value={password} required minlength={8} />
     </div>
     <div class="form-row">
       <label for="password-confirm">Confirm master password</label>
-      <input id="password-confirm" type="password" bind:value={confirmPassword} required />
+      <SecretInput id="password-confirm" bind:value={confirmPassword} required />
     </div>
     {#if error}<p class="error">{error}</p>{/if}
     <button type="submit" disabled={busy}>

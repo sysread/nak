@@ -12,6 +12,7 @@
   import Setup from './screens/Setup.svelte';
   import Unlock from './screens/Unlock.svelte';
   import Chat from './screens/Chat.svelte';
+  import EditConfig from './screens/EditConfig.svelte';
 
   // Throttle activity writes to sessionStorage to once per TOUCH_THROTTLE_MS.
   const TOUCH_THROTTLE_MS = 30_000;
@@ -82,6 +83,8 @@
   <Setup />
 {:else if app.phase === 'locked'}
   <Unlock />
+{:else if app.phase === 'edit-config'}
+  <EditConfig />
 {:else}
   <Chat />
 {/if}
