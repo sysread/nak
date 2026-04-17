@@ -135,3 +135,73 @@ export async function applySchemaViaCli(sqlPath) {
 export async function runSql(ref, sql) {
   return mgmt('POST', `/v1/projects/${ref}/database/query`, { query: sql });
 }
+
+// ---------------------------------------------------------------------------
+// Admin user helpers — these hit the project's own GoTrue endpoint, not the
+// Management API, and require the project's service_role key. That key is
+// extremely sensitive; callers must keep it in memory only for the duration
+// of the wizard and never persist it.
+// ---------------------------------------------------------------------------
+
+async function gotrueAdmin(method, supabaseUrl, serviceRoleKey, path, body = null) {
+  const res = await fetch(`${supabaseUrl}/auth/v1/admin${path}`, {
+    method,
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = text.length > 0 ? JSON.parse(text) : null;
+  } catch {
+    // non-JSON body
+  }
+  if (!res.ok) {
+    const err = new Error(
+      `GoTrue admin ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`
+    );
+    err.status = res.status;
+    err.body = json ?? text;
+    throw err;
+  }
+  return json;
+}
+
+/**
+ * Create a user with `email_confirm: true` so they can sign in immediately
+ * without an email round-trip. Throws with `err.status === 422` if a user
+ * with this email already exists — callers typically catch that to prompt
+ * for a password reset instead.
+ */
+export async function adminCreateUser(supabaseUrl, serviceRoleKey, { email, password }) {
+  return gotrueAdmin('POST', supabaseUrl, serviceRoleKey, '/users', {
+    email,
+    password,
+    email_confirm: true,
+  });
+}
+
+/**
+ * List users. Used to find an existing user's id when we hit 422 on create.
+ */
+export async function adminListUsers(supabaseUrl, serviceRoleKey) {
+  const res = await gotrueAdmin('GET', supabaseUrl, serviceRoleKey, '/users');
+  // GoTrue returns either { users: [...] } or a bare array depending on version.
+  if (Array.isArray(res)) return res;
+  return res?.users ?? [];
+}
+
+/**
+ * Reset a user's password by id. Used when the email already exists and the
+ * user wants to re-seed credentials.
+ */
+export async function adminUpdateUserPassword(supabaseUrl, serviceRoleKey, userId, password) {
+  return gotrueAdmin('PUT', supabaseUrl, serviceRoleKey, `/users/${userId}`, {
+    password,
+    email_confirm: true,
+  });
+}

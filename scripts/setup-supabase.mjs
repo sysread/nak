@@ -18,6 +18,7 @@ import {
   hint,
   bail,
   ask,
+  confirm,
   choose,
   style,
 } from './lib/ui.mjs';
@@ -33,7 +34,11 @@ import {
   updateAuthConfig,
   waitForProject,
   runSql,
+  adminCreateUser,
+  adminListUsers,
+  adminUpdateUserPassword,
 } from './lib/supabase.mjs';
+import { buildAuthConfigPatch } from './lib/auth-config.mjs';
 import { getRepoSlug, pagesUrl } from './lib/repo.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -128,35 +133,142 @@ try {
   console.error(`    ${style.dim(err.message)}`);
 }
 
-step(4, 'Whitelist your Pages URL in auth settings');
+step(4, 'Configure auth');
 const slug = await getRepoSlug();
 const url = pagesUrl(slug);
-try {
-  const current = await getAuthConfig(project.id);
-  const existingAllow = (current.uri_allow_list || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const wanted = [url, `${url}*`];
-  const merged = Array.from(new Set([...existingAllow, ...wanted]));
-  await updateAuthConfig(project.id, {
-    site_url: current.site_url || url,
-    uri_allow_list: merged.join(','),
-  });
-  ok(`Site URL and redirect allowlist now include ${style.bold(url)}`);
-} catch (err) {
-  warn(`Could not update auth URL config automatically: ${err.message}`);
-  hint(
-    `Open Supabase Dashboard → Authentication → URL Configuration and add "${url}" to Site URL and Redirect URLs.`
+info(
+  'Pick a sign-up policy for this project. You can change it later in ' +
+    'Supabase → Authentication → Providers → Email.'
+);
+const allowSignups = await choose('Allow public sign-ups for this project?', [
+  {
+    label:
+      style.bold('No') +
+      ' — only admin-created accounts can sign in (recommended for personal use)',
+    value: false,
+  },
+  {
+    label:
+      style.bold('Yes') +
+      ' — anyone who knows the URL can create an account',
+    value: true,
+  },
+]);
+let requireConfirmation = false;
+if (allowSignups) {
+  requireConfirmation = await confirm(
+    'Require email confirmation on sign-up? (needs working SMTP)',
+    { default: false }
   );
 }
 
-step(5, 'Fetch anon key');
+const supabaseUrl = `https://${project.id}.supabase.co`;
+
+try {
+  const current = await getAuthConfig(project.id);
+  const patch = buildAuthConfigPatch({
+    currentConfig: current,
+    pagesUrl: url,
+    allowSignups,
+    requireConfirmation,
+  });
+  await updateAuthConfig(project.id, patch);
+  ok(
+    `Auth configured: sign-ups ${style.bold(allowSignups ? 'enabled' : 'disabled')}, ` +
+      `email confirmation ${style.bold(patch.mailer_autoconfirm ? 'off' : 'on')}.`
+  );
+  info(`Site URL and redirect allowlist now include ${style.bold(url)}`);
+} catch (err) {
+  warn(`Could not update auth config automatically: ${err.message}`);
+  hint(
+    `Open Supabase Dashboard → Authentication → URL Configuration and add "${url}" to Site URL and Redirect URLs.`
+  );
+  hint(
+    'Also toggle "Confirm email" and "Enable sign-ups" in Authentication → Providers → Email.'
+  );
+}
+
+step(5, 'Create the main user account');
+info(
+  'This seeds your login directly on the Supabase project using the ' +
+    'service-role key. The email is auto-confirmed, so you can sign in ' +
+    'immediately with no email round-trip.'
+);
+info(
+  `${style.dim('Tip:')} the service-role key stays on your machine — it is never ` +
+    'written to the app or the setup link.'
+);
+
 const keys = await getProjectApiKeys(project.id);
 const anon = keys.find((k) => k.name === 'anon' || k.tags?.includes('anon'));
+const serviceRole = keys.find(
+  (k) => k.name === 'service_role' || k.tags?.includes('service_role')
+);
 if (!anon) bail('Could not locate the anon API key for this project.');
-const supabaseUrl = `https://${project.id}.supabase.co`;
-ok('Got the anon key.');
+
+const wantsUser = await confirm('Create a main user account now?', { default: true });
+if (wantsUser) {
+  if (!serviceRole) {
+    warn('Could not locate the service_role key — skipping user creation.');
+    hint(
+      'Create a user manually in Supabase → Authentication → Users, or rerun the wizard later.'
+    );
+  } else {
+    const email = await ask('Email');
+    if (!email || !email.includes('@')) bail('Email is required.');
+    const password = await ask('Password (min 8 chars)', { secret: true });
+    if ((password || '').length < 8) bail('Password is too short.');
+
+    try {
+      await adminCreateUser(supabaseUrl, serviceRole.api_key, { email, password });
+      ok(`User ${style.bold(email)} created. You can sign in immediately.`);
+    } catch (err) {
+      if (err.status === 422) {
+        info(`A user with email ${style.bold(email)} already exists.`);
+        const reset = await confirm('Reset their password to the value you just typed?', {
+          default: false,
+        });
+        if (reset) {
+          try {
+            const users = await adminListUsers(supabaseUrl, serviceRole.api_key);
+            const existingUser = users.find(
+              (u) => u.email?.toLowerCase() === email.toLowerCase()
+            );
+            if (!existingUser) {
+              warn('Could not locate the existing user to reset.');
+            } else {
+              await adminUpdateUserPassword(
+                supabaseUrl,
+                serviceRole.api_key,
+                existingUser.id,
+                password
+              );
+              ok(`Password reset for ${style.bold(email)}.`);
+            }
+          } catch (e) {
+            warn(`Password reset failed: ${e.message}`);
+            hint('Reset the password manually in Supabase → Authentication → Users.');
+          }
+        } else {
+          info('Leaving the existing user untouched.');
+        }
+      } else {
+        warn(`Could not create the user automatically: ${err.message}`);
+        hint('Create one manually in Supabase → Authentication → Users.');
+      }
+    }
+  }
+} else {
+  info('Skipping user creation.');
+  if (!allowSignups) {
+    warn(
+      'Heads up: you disabled sign-ups but did not create a user. ' +
+        'Re-run this task or add a user manually before you can sign in.'
+    );
+  } else {
+    hint('You can sign up from the app once it is deployed.');
+  }
+}
 
 const result = {
   supabaseUrl,

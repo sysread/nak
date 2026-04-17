@@ -45,12 +45,20 @@ The wizard will:
 3. Flip the repo to **read+write workflow permissions**.
 4. Log you into `supabase` (opens a browser).
 5. Let you **create or link a Supabase project** and apply `schema.sql`.
-6. **Whitelist your Pages URL** in Supabase Auth URL config.
-7. Prompt for your **Venice API key** (get one at <https://venice.ai/settings/api>).
-8. Print a one-shot setup link like
+6. **Configure auth**: ask whether public sign-ups should be allowed and
+   (if so) whether to require email confirmation, then whitelist your
+   Pages URL in Supabase Auth URL config. The default — sign-ups **off**,
+   confirmation **off** — is the right choice for a personal deployment.
+7. **Create the main user** directly on the project via Supabase's admin
+   API. The email is pre-confirmed, so you can sign in immediately with
+   no email round-trip. (You can skip this if you prefer to manage users
+   yourself.)
+8. Prompt for your **Venice API key** (get one at <https://venice.ai/settings/api>).
+9. Print a one-shot setup link like
    `https://<you>.github.io/nak/#setup=<blob>`.
 
-Open the link, set a master password, and you're in. That's it.
+Open the link, set a master password, then sign in with the email and
+password you just seeded. That's it.
 
 > The `#setup=…` value is a URL **fragment**, which browsers do not send in
 > HTTP requests. The app reads it locally, pre-fills the form, and then
@@ -82,14 +90,20 @@ by hand:
 3. **Apply the schema** by pasting [`supabase/schema.sql`](supabase/schema.sql)
    into the Supabase SQL Editor.
 4. **Whitelist** your `https://<you>.github.io/<repo>/` URL in Supabase
-   Authentication → URL Configuration.
-5. **Get a Venice API key** at <https://venice.ai/settings/api>.
-6. **Enable GitHub Pages** in Settings → Pages → Source = "GitHub Actions".
-7. **Allow workflow writes** in Settings → Actions → General → Workflow
+   Authentication → URL Configuration (both Site URL and Redirect URLs).
+5. **Configure email auth** in Authentication → Providers → Email:
+   - Toggle **Enable sign-ups** off if you're the only user.
+   - Toggle **Confirm email** off unless you've configured SMTP.
+6. **Create your user** in Authentication → Users → *Add user* →
+   *Create new user*. Enter your email and password and tick
+   **Auto Confirm User** so you can sign in without an email round-trip.
+7. **Get a Venice API key** at <https://venice.ai/settings/api>.
+8. **Enable GitHub Pages** in Settings → Pages → Source = "GitHub Actions".
+9. **Allow workflow writes** in Settings → Actions → General → Workflow
    permissions → "Read and write permissions".
-8. **Push to `main`** (or dispatch the `Deploy` workflow manually).
-9. Open `https://<you>.github.io/<repo>/`, paste the three values into the
-   Setup screen, and pick a master password.
+10. **Push to `main`** (or dispatch the `Deploy` workflow manually).
+11. Open `https://<you>.github.io/<repo>/`, paste the three values into the
+    Setup screen, and pick a master password.
 
 ## Security model
 
@@ -127,8 +141,16 @@ Additionally:
 - Supabase RLS is the line of defense for data. The anon key does not grant
   access to other users' rows — RLS policies in `schema.sql` enforce this.
 - The app never contacts the Supabase Management API from the browser.
-  Schema changes are an explicit, manual action you perform in the SQL
-  Editor.
+  Schema changes, auth-config updates, and main-user creation all happen
+  from `mise run setup` on your local machine, not from the deployed PWA.
+- The Supabase **service-role key** (which bypasses RLS) is used by the
+  wizard only long enough to seed the main user, then discarded. It is
+  never written to `localStorage`, the `#setup=` hand-off link, the
+  encrypted config blob, or anywhere else in the app. Only the anon key
+  ever reaches the browser.
+- If you picked "sign-ups disabled" during setup, anyone who finds the
+  deployed URL cannot create an account — they'd need access to your
+  Supabase project to add a user.
 
 ## Development
 
