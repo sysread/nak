@@ -853,7 +853,7 @@ h1 {
   border-right: 1px solid var(--border);
   border-radius: 0;
   padding: 0.3rem 0.55rem;
-  font-size: 1rem;
+  font-size: 1.1rem;
   line-height: 1;
   min-width: 2rem;
   display: inline-flex;

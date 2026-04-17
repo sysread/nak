@@ -34,10 +34,11 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     tier: 'balanced',
     id: 'arcee-trinity-large-thinking',
     label: 'Balanced',
-    // U+FE0F forces emoji-style presentation — without it, U+2696 SCALES
-    // renders as a thin text glyph that reads as near-invisible against
-    // the toggle background.
-    icon: '\u2696\uFE0F',
+    // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
+    // SCALES because the scales glyph is all thin strokes in every major
+    // emoji font, and it vanishes against the toggle background in both
+    // themes; yin-yang is a solid bi-tonal disc that reads at any size.
+    icon: '\u262F\uFE0F',
     description: 'Good quality, moderate speed.',
     contextWindow: 256_000,
   },
