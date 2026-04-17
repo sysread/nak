@@ -41,6 +41,7 @@ import {
 } from './lib/supabase.mjs';
 import { buildAuthConfigPatch } from './lib/auth-config.mjs';
 import { getRepoSlug, pagesUrl } from './lib/repo.mjs';
+import { loadState, saveState } from './lib/state-file.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = join(__dirname, '..', 'supabase', 'schema.sql');
@@ -122,6 +123,10 @@ if (chosen.kind === 'new') {
   project = chosen.project;
   info(`Using existing project: ${style.bold(project.name)} (${project.id})`);
 }
+
+// Persist the linked project so `mise run sync` doesn't have to re-ask.
+const priorState = await loadState();
+await saveState({ ...(priorState ?? {}), supabase: { projectRef: project.id } });
 
 step(3, 'Apply schema.sql');
 const schema = await readFile(SCHEMA_PATH, 'utf8');

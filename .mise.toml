@@ -34,8 +34,13 @@ run = "node scripts/setup-pages.mjs"
 raw = true
 
 [tasks.supabase-init]
-description = "Create or link a Supabase project, apply schema, configure auth URLs"
+description = "First-time Supabase setup: create/link project, apply schema, configure auth URLs, seed main user"
 run = "node scripts/setup-supabase.mjs"
+raw = true
+
+[tasks.sync]
+description = "Re-apply schema and Pages URL allowlist to the linked Supabase project. Idempotent; no prompts."
+run = "node scripts/sync.mjs"
 raw = true
 
 [tasks.dev]
