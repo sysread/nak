@@ -5,6 +5,8 @@ import {
   touchSession,
   clearSession,
   sessionRemainingMs,
+  getSessionThreadId,
+  setSessionThreadId,
   DEFAULT_TTL_MS,
   __test,
 } from '../src/lib/session';
@@ -93,5 +95,39 @@ describe('session', () => {
 
   it('DEFAULT_TTL_MS is an hour', () => {
     expect(DEFAULT_TTL_MS).toBe(60 * 60 * 1000);
+  });
+
+  it('round-trips an activeThreadId on the session blob', () => {
+    saveSession(CONFIG);
+    setSessionThreadId('thread-123');
+    expect(getSessionThreadId()).toBe('thread-123');
+  });
+
+  it('setSessionThreadId(null) clears the id but keeps the session', () => {
+    saveSession(CONFIG);
+    setSessionThreadId('thread-123');
+    setSessionThreadId(null);
+    expect(getSessionThreadId()).toBeNull();
+    // The underlying session should still be valid.
+    expect(loadSession()).toEqual(CONFIG);
+  });
+
+  it('setSessionThreadId is a no-op without an existing session', () => {
+    setSessionThreadId('thread-123');
+    expect(getSessionThreadId()).toBeNull();
+  });
+
+  it('getSessionThreadId returns null once the session has expired', () => {
+    saveSession(CONFIG, 60_000);
+    setSessionThreadId('thread-abc');
+    vi.setSystemTime(Date.now() + 61_000);
+    expect(getSessionThreadId()).toBeNull();
+  });
+
+  it('clearSession also drops the active-thread id', () => {
+    saveSession(CONFIG);
+    setSessionThreadId('thread-xyz');
+    clearSession();
+    expect(getSessionThreadId()).toBeNull();
   });
 });

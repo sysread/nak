@@ -21,6 +21,8 @@ interface SessionBlob {
   config: AppConfig;
   /** Epoch ms at which this session is no longer valid. */
   expiresAt: number;
+  /** UUID of the thread the user last had open. Restored on reload. */
+  activeThreadId?: string;
 }
 
 function storage(): Storage | null {
@@ -83,6 +85,46 @@ export function clearSession(): void {
   const s = storage();
   if (!s) return;
   s.removeItem(KEY);
+}
+
+/**
+ * Read the persisted active-thread id, if any. Returns null when there's
+ * no session, no saved id, or the session has expired (matches loadSession).
+ */
+export function getSessionThreadId(): string | null {
+  const s = storage();
+  if (!s) return null;
+  const raw = s.getItem(KEY);
+  if (!raw) return null;
+  try {
+    const blob = JSON.parse(raw) as SessionBlob;
+    if (typeof blob.expiresAt !== 'number' || Date.now() >= blob.expiresAt) {
+      return null;
+    }
+    return typeof blob.activeThreadId === 'string' ? blob.activeThreadId : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist the active-thread id onto the existing session blob. No-op if
+ * there's no session (nothing to attach it to). Passing null clears the
+ * stored id without touching the rest of the session.
+ */
+export function setSessionThreadId(id: string | null): void {
+  const s = storage();
+  if (!s) return;
+  const raw = s.getItem(KEY);
+  if (!raw) return;
+  try {
+    const blob = JSON.parse(raw) as SessionBlob;
+    if (id === null) delete blob.activeThreadId;
+    else blob.activeThreadId = id;
+    s.setItem(KEY, JSON.stringify(blob));
+  } catch {
+    // Malformed — leave it alone so session.ts's other paths can clean up.
+  }
 }
 
 /**

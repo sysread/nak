@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import type { Session } from '@supabase/supabase-js';
   import { app, lock, setDefaultModel, setTheme } from '$lib/state.svelte';
-  import { clearSession } from '$lib/session';
+  import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
   import type { Thread, Message } from '$lib/supabase';
   import {
     MODELS,
@@ -75,13 +75,29 @@
     }
   }
 
+  // True once we've attempted to restore the last-open thread from the
+  // session blob — ensures we only do it on the first threads fetch.
+  let threadRestoreAttempted = false;
+
   async function refreshThreads(): Promise<void> {
     if (!app.supabase) return;
     try {
       threads = await app.supabase.listThreads();
+      if (!threadRestoreAttempted) {
+        threadRestoreAttempted = true;
+        // On first load within a tab, restore whichever conversation was
+        // open last time. Only kicks in if the id still exists (the thread
+        // may have been deleted in another tab since).
+        const restored = getSessionThreadId();
+        if (restored && threads.some((t) => t.id === restored)) {
+          void selectThread(restored);
+          return;
+        }
+      }
       if (activeThreadId && !threads.find((t) => t.id === activeThreadId)) {
         activeThreadId = null;
         messages = [];
+        setSessionThreadId(null);
       }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
@@ -91,6 +107,7 @@
   async function selectThread(id: string): Promise<void> {
     if (!app.supabase) return;
     activeThreadId = id;
+    setSessionThreadId(id);
     messages = [];
     streamingText = '';
     // On mobile the drawer is modal, so dismiss it once a thread is chosen.
@@ -232,6 +249,7 @@
       if (activeThreadId === id) {
         activeThreadId = null;
         messages = [];
+        setSessionThreadId(null);
       }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
@@ -252,6 +270,7 @@
       threads = [t, ...threads];
       threadId = t.id;
       activeThreadId = t.id;
+      setSessionThreadId(t.id);
       isFirstExchange = true;
     } else {
       isFirstExchange =
