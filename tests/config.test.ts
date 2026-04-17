@@ -70,4 +70,35 @@ describe('config', () => {
     expect(blob).not.toContain(VALID.veniceApiKey);
     expect(blob).not.toContain('supabase.co');
   });
+
+  it('round-trips a defaultModel tier', async () => {
+    await saveConfig({ ...VALID, defaultModel: 'smart' }, 'pw');
+    const loaded = await loadConfig('pw');
+    expect(loaded?.defaultModel).toBe('smart');
+  });
+
+  it('tolerates old blobs without a defaultModel field', async () => {
+    // Stand in for the pre-models-era shape — saveConfig accepts configs
+    // with no defaultModel and loadConfig returns undefined for that field.
+    await saveConfig(VALID, 'pw');
+    const loaded = await loadConfig('pw');
+    expect(loaded?.defaultModel).toBeUndefined();
+    expect(loaded).toMatchObject({
+      supabaseUrl: VALID.supabaseUrl,
+      supabaseAnonKey: VALID.supabaseAnonKey,
+      veniceApiKey: VALID.veniceApiKey,
+    });
+  });
+
+  it('silently drops an invalid defaultModel instead of failing', async () => {
+    // Simulate a blob that somehow has a bogus tier stored. We do this by
+    // saving with a cast, then reloading — the validator should treat the
+    // bad value as absent rather than throwing.
+    await saveConfig(
+      { ...VALID, defaultModel: 'not-a-tier' as unknown as 'smart' },
+      'pw'
+    );
+    const loaded = await loadConfig('pw');
+    expect(loaded?.defaultModel).toBeUndefined();
+  });
 });

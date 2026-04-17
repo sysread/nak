@@ -63,6 +63,14 @@ create table if not exists public.threads (
   updated_at timestamptz not null default now()
 );
 
+-- Optional per-thread model tier override. Null means "use user default".
+-- The app stores the tier name ('smart' | 'balanced' | 'fast') and resolves
+-- it to a concrete Venice model id at send-time, so the column stays schema-
+-- compatible even as tiers are retuned. No CHECK constraint on purpose —
+-- garbage values are scrubbed by the app on read.
+alter table public.threads
+  add column if not exists model text;
+
 create index if not exists threads_user_updated_idx
   on public.threads (user_id, updated_at desc);
 

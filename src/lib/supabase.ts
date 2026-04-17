@@ -1,12 +1,31 @@
 import { createClient, type SupabaseClient, type Session } from '@supabase/supabase-js';
 import type { AppConfig } from './config';
+import { isModelTier, type ModelTier } from './models';
 
 export interface Thread {
   id: string;
   user_id: string;
   title: string;
+  /** Per-thread model tier override. Null/absent means use user default. */
+  model: ModelTier | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Coerce the raw row from Supabase. The `model` column is `text` without a
+ * CHECK constraint, so scrub unexpected values to null.
+ */
+function coerceThread(row: Record<string, unknown>): Thread {
+  const model = isModelTier(row.model) ? row.model : null;
+  return {
+    id: String(row.id),
+    user_id: String(row.user_id),
+    title: String(row.title ?? ''),
+    model,
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  };
 }
 
 export interface Message {
@@ -77,7 +96,7 @@ export class SupabaseService {
       .select('*')
       .order('updated_at', { ascending: false });
     if (error) throw new SupabaseError(error.message);
-    return (data ?? []) as Thread[];
+    return (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
   }
 
   async createThread(title: string): Promise<Thread> {
@@ -89,13 +108,21 @@ export class SupabaseService {
       .select()
       .single();
     if (error) throw new SupabaseError(error.message);
-    return data as Thread;
+    return coerceThread(data as Record<string, unknown>);
   }
 
   async renameThread(threadId: string, title: string): Promise<void> {
     const { error } = await this.client
       .from('threads')
       .update({ title, updated_at: new Date().toISOString() })
+      .eq('id', threadId);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  async setThreadModel(threadId: string, model: ModelTier | null): Promise<void> {
+    const { error } = await this.client
+      .from('threads')
+      .update({ model, updated_at: new Date().toISOString() })
       .eq('id', threadId);
     if (error) throw new SupabaseError(error.message);
   }

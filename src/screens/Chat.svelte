@@ -1,11 +1,22 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import type { Session } from '@supabase/supabase-js';
   import { app, lock } from '$lib/state.svelte';
   import { clearSession } from '$lib/session';
   import type { Thread, Message } from '$lib/supabase';
+  import {
+    MODELS,
+    TIERS,
+    DEFAULT_TIER,
+    UTILITY_TIER,
+    resolveTier,
+    isModelTier,
+    type ModelTier,
+  } from '$lib/models';
   import Auth from './Auth.svelte';
   import Settings from './Settings.svelte';
+
+  const DEFAULT_TITLE = 'New conversation';
 
   let session = $state<Session | null>(null);
   let sessionLoaded = $state(false);
@@ -20,7 +31,10 @@
   let error = $state<string | null>(null);
   let abortCtl: AbortController | null = null;
 
-  const DEFAULT_MODEL = 'llama-3.3-70b';
+  // Inline title rename state.
+  let renaming = $state(false);
+  let renameBuffer = $state('');
+  let titleInputEl: HTMLInputElement | undefined = $state();
 
   onMount(() => {
     if (!app.supabase) return;
@@ -67,6 +81,110 @@
   // in this state would produce a second empty thread, so we disable it.
   const currentIsEmpty = $derived(activeThreadId !== null && messages.length === 0);
 
+  const currentThread = $derived(
+    activeThreadId ? threads.find((t) => t.id === activeThreadId) ?? null : null
+  );
+
+  const defaultTier = $derived<ModelTier>(app.config?.defaultModel ?? DEFAULT_TIER);
+  const currentTier = $derived<ModelTier>(
+    resolveTier(currentThread?.model ?? null, defaultTier)
+  );
+  const selectValue = $derived<'default' | ModelTier>(
+    currentThread?.model ?? 'default'
+  );
+
+  async function startRename(): Promise<void> {
+    if (!currentThread) return;
+    renameBuffer = currentThread.title;
+    renaming = true;
+    await tick();
+    titleInputEl?.focus();
+    titleInputEl?.select();
+  }
+
+  async function commitRename(): Promise<void> {
+    if (!renaming) return;
+    renaming = false;
+    const next = renameBuffer.trim();
+    if (!app.supabase || !currentThread) return;
+    if (!next || next === currentThread.title) return;
+    const threadId = currentThread.id;
+    try {
+      await app.supabase.renameThread(threadId, next);
+      threads = threads.map((t) => (t.id === threadId ? { ...t, title: next } : t));
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  function cancelRename(): void {
+    renaming = false;
+    renameBuffer = '';
+  }
+
+  function onTitleKey(e: KeyboardEvent): void {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      void commitRename();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelRename();
+    }
+  }
+
+  async function onModelChange(e: Event): Promise<void> {
+    const raw = (e.target as HTMLSelectElement).value;
+    const next: ModelTier | null = isModelTier(raw) ? raw : null;
+    if (!app.supabase || !currentThread) return;
+    const threadId = currentThread.id;
+    try {
+      await app.supabase.setThreadModel(threadId, next);
+      threads = threads.map((t) => (t.id === threadId ? { ...t, model: next } : t));
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  /**
+   * Best-effort: ask the fast model for a short title for this thread. Runs
+   * after the first user+assistant round-trip. Any failure is swallowed —
+   * the thread simply keeps the default title.
+   */
+  async function autoTitle(threadId: string, firstUserMsg: string): Promise<void> {
+    if (!app.venice || !app.supabase) return;
+    let raw = '';
+    try {
+      for await (const d of app.venice.streamChat({
+        model: MODELS[UTILITY_TIER].id,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Return a 3–6 word title summarizing this conversation. No trailing punctuation. No quotes. Plain text.',
+          },
+          { role: 'user', content: firstUserMsg.slice(0, 1000) },
+        ],
+        maxTokens: 24,
+      })) {
+        raw += d;
+      }
+    } catch {
+      return;
+    }
+    const title = raw
+      .trim()
+      .replace(/^["'“”‘’]+|["'“”‘’.!?]+$/g, '')
+      .trim()
+      .slice(0, 80);
+    if (!title) return;
+    try {
+      await app.supabase.renameThread(threadId, title);
+      threads = threads.map((t) => (t.id === threadId ? { ...t, title } : t));
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function newThread(): Promise<void> {
     if (!app.supabase) return;
     if (currentIsEmpty) return;
@@ -100,13 +218,23 @@
     error = null;
 
     let threadId = activeThreadId;
+    let isFirstExchange = false;
     if (!threadId) {
-      const title = text.slice(0, 48);
-      const t = await app.supabase.createThread(title);
+      // Leave the title as the default so autoTitle() can replace it once
+      // the assistant finishes responding.
+      const t = await app.supabase.createThread(DEFAULT_TITLE);
       threads = [t, ...threads];
       threadId = t.id;
       activeThreadId = t.id;
+      isFirstExchange = true;
+    } else {
+      isFirstExchange =
+        messages.length === 0 &&
+        (currentThread?.title ?? '') === DEFAULT_TITLE;
     }
+
+    const tier = resolveTier(currentThread?.model ?? null, defaultTier);
+    const modelId = MODELS[tier].id;
 
     composer = '';
     sending = true;
@@ -118,7 +246,7 @@
       const history = messages.map((m) => ({ role: m.role, content: m.content }));
       let full = '';
       for await (const delta of app.venice.streamChat({
-        model: DEFAULT_MODEL,
+        model: modelId,
         messages: history,
         signal: abortCtl.signal,
       })) {
@@ -128,6 +256,10 @@
       if (full.length > 0) {
         const assistantMsg = await app.supabase.addMessage(threadId, 'assistant', full);
         messages = [...messages, assistantMsg];
+        if (isFirstExchange) {
+          // Fire-and-forget: don't block the UI on title generation.
+          void autoTitle(threadId, text);
+        }
       }
       streamingText = '';
       await refreshThreads();
@@ -204,9 +336,39 @@
 
     <main class="chat">
       <div class="top-bar">
-        <div class="subtle">
-          {activeThreadId ? threads.find((t) => t.id === activeThreadId)?.title : 'Start a new conversation'}
+        <div class="title-wrap">
+          {#if !currentThread}
+            <div class="subtle">Start a new conversation</div>
+          {:else if renaming}
+            <input
+              class="title-input"
+              bind:this={titleInputEl}
+              bind:value={renameBuffer}
+              onkeydown={onTitleKey}
+              onblur={commitRename}
+              maxlength="80"
+            />
+          {:else}
+            <button
+              class="title-btn"
+              title="Click to rename"
+              onclick={startRename}
+            >{currentThread.title || 'Untitled'}</button>
+          {/if}
         </div>
+        {#if currentThread}
+          <select
+            class="model-select"
+            value={selectValue}
+            onchange={onModelChange}
+            title={`Active: ${MODELS[currentTier].label} (${MODELS[currentTier].id})`}
+          >
+            <option value="default">Default ({MODELS[defaultTier].label})</option>
+            {#each TIERS as tier (tier)}
+              <option value={tier}>{MODELS[tier].label} — {MODELS[tier].id}</option>
+            {/each}
+          </select>
+        {/if}
       </div>
       <div class="messages">
         {#each messages as m (m.id)}

@@ -165,6 +165,35 @@ Additionally:
   deployed URL cannot create an account — they'd need access to your
   Supabase project to add a user.
 
+## Models
+
+Nak routes requests through Venice's OpenAI-compatible API, with three
+pre-configured tiers so you don't have to memorize model names:
+
+| Tier         | Venice model id                  | Context | When to use                                 |
+| ------------ | -------------------------------- | ------- | ------------------------------------------- |
+| **Smart**    | `kimi-k2-5`                      | 256k    | Best quality; harder questions, longer answers. |
+| **Balanced** | `arcee-trinity-large-thinking`   | 256k    | Default — solid quality at reasonable speed.     |
+| **Fast**     | `grok-41-fast`                   | 1M      | Snappy answers, big context windows.             |
+
+- Pick your **default tier** in Settings → *Default AI model*. Any thread
+  that hasn't set its own model uses this.
+- Override **per thread** from the dropdown at the top of the chat view.
+  The choice is sticky — it's saved on the thread row in Supabase, so it
+  survives refreshes and carries across devices.
+- **Auto-titling**: the first reply in a new thread triggers a one-shot
+  call to the Fast tier to generate a short title (3–6 words). It's
+  best-effort — if the call fails, the thread keeps its placeholder name.
+  You can always click the title in the top bar to rename it by hand.
+
+### Upgrading an existing install
+
+The `threads.model` column was added after the initial schema. If you
+set Nak up before this feature landed, re-run `mise run supabase-init`
+once — the wizard re-applies `schema.sql` idempotently (the `ALTER
+TABLE` uses `IF NOT EXISTS`), which adds the column without touching
+your existing threads.
+
 ## Development
 
 This project uses [mise](https://mise.jdx.dev/) to pin Node and pnpm.
