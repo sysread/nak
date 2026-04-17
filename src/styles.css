@@ -514,6 +514,17 @@ h1 {
     padding: 0.75rem 0.75rem;
   }
 
+  /* On phones there isn't enough width to waste on the 80%/65% column
+     layout — let both roles fill the width. The role bubbles still
+     read distinctly via background color; alignment collapses to the
+     default stretch so the column reads top-to-bottom. */
+  .msg.user,
+  .msg.assistant {
+    width: 100%;
+    max-width: 100%;
+    align-self: stretch;
+  }
+
   .composer {
     padding: 0.5rem;
   }
@@ -709,13 +720,21 @@ h1 {
   font-style: italic;
 }
 
+/* Role-specific layout. Each bubble occupies a fixed fraction of the
+   messages container so the column feels structured regardless of
+   reply length — assistant 80% centered, user 65% right-anchored.
+   These override the base `.msg` max-width. */
 .msg.user {
   align-self: flex-end;
+  width: 65%;
+  max-width: 65%;
   background: var(--accent-weak);
 }
 
 .msg.assistant {
-  align-self: flex-start;
+  align-self: center;
+  width: 80%;
+  max-width: 80%;
   background: var(--surface);
   border: 1px solid var(--border);
 }
