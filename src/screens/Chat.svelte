@@ -760,12 +760,21 @@
               <Markdown content={m.content} />
             </div>
           {/each}
-          {#if streamingText}
+          {#if sending || streamingText}
             <div class="msg assistant">
-              <Markdown content={streamingText} />
+              {#if streamingText}
+                <Markdown content={streamingText} />
+              {:else}
+                <!-- Placeholder shown between "user hit send" and "first
+                     token arrived" — gives the composer submit some
+                     immediate feedback that something is happening. -->
+                <span class="typing-dots" aria-label="Thinking">
+                  <span></span><span></span><span></span>
+                </span>
+              {/if}
             </div>
           {/if}
-          {#if messages.length === 0 && !streamingText}
+          {#if messages.length === 0 && !streamingText && !sending}
             <div class="empty">Type a message to begin.</div>
           {/if}
         </div>

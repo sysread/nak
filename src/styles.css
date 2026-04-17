@@ -1290,3 +1290,43 @@ h1 {
   height: 100%;
   color: var(--muted);
 }
+
+/* Typing indicator shown in an assistant bubble while we're waiting for
+   the first streaming chunk. The three child spans reveal in sequence
+   (. → .. → ...) then all reset together on the next cycle. Staggered
+   animation-delay plus a tight keyframe keeps the rhythm visible. */
+.typing-dots {
+  display: inline-flex;
+  gap: 0.08em;
+  color: var(--muted);
+  font-size: 1.2em;
+  line-height: 1;
+}
+.typing-dots span {
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: currentColor;
+  animation: typing-dot-pulse 1.2s infinite;
+}
+.typing-dots span:nth-child(1) { animation-delay: 0s; }
+.typing-dots span:nth-child(2) { animation-delay: 0.4s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.8s; }
+
+/* Each dot is hidden from the cycle's start until its staggered delay
+   hits ~1% of its own timeline; the delays (0/0.4/0.8s) offset when
+   each transitions to visible. All three hide again at 100%, so the
+   loop restarts cleanly with the sequence ". → .. → ...". */
+@keyframes typing-dot-pulse {
+  0%, 1%     { opacity: 0; transform: translateY(0); }
+  2%, 99%    { opacity: 1; transform: translateY(-1px); }
+  100%       { opacity: 0; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-dots span {
+    animation: none;
+    opacity: 1;
+  }
+}
