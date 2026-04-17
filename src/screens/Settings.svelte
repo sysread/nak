@@ -1,7 +1,7 @@
 <script lang="ts">
   import { changePassword, saveConfig } from '$lib/config';
-  import { app, activate } from '$lib/state.svelte';
-  import { MODELS, TIERS, DEFAULT_TIER, type ModelTier } from '$lib/models';
+  import { app, activate, setDefaultModel } from '$lib/state.svelte';
+  import { MODELS, TIERS, type ModelTier } from '$lib/models';
 
   interface Props {
     onClose: () => void;
@@ -25,8 +25,9 @@
   let keysInfo = $state<string | null>(null);
 
   // --- Model pane ---
-  let defaultModel = $state<ModelTier>(app.config?.defaultModel ?? DEFAULT_TIER);
-  let modelPassword = $state('');
+  // Lives in Supabase `profiles.settings.defaultModel` (synced across
+  // browsers), so no master password is needed to change it.
+  let defaultModel = $state<ModelTier>(app.defaultModel);
   let modelError = $state<string | null>(null);
   let modelInfo = $state<string | null>(null);
 
@@ -52,7 +53,6 @@
         supabaseUrl: supabaseUrl.trim(),
         supabaseAnonKey: supabaseAnonKey.trim(),
         veniceApiKey: veniceApiKey.trim(),
-        defaultModel: app.config?.defaultModel,
       };
       await saveConfig(config, keysPassword);
       activate(config);
@@ -69,21 +69,15 @@
     e.preventDefault();
     modelError = null;
     modelInfo = null;
-    if (!modelPassword) {
-      modelError = 'Enter your current master password to re-encrypt.';
-      return;
-    }
-    if (!app.config) {
-      modelError = 'No active config — please unlock first.';
+    if (!app.supabase) {
+      modelError = 'Not connected to Supabase yet.';
       return;
     }
     busy = true;
     try {
-      const config = { ...app.config, defaultModel };
-      await saveConfig(config, modelPassword);
-      activate(config);
-      modelInfo = `Default model set to ${MODELS[defaultModel].label}.`;
-      modelPassword = '';
+      await app.supabase.updateSettings({ defaultModel });
+      setDefaultModel(defaultModel);
+      modelInfo = `Default model set to ${MODELS[defaultModel].label} (synced to Supabase).`;
     } catch (err) {
       modelError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -191,10 +185,10 @@
               </label>
             {/each}
           </div>
-          <div class="form-row">
-            <label for="mp">Current master password</label>
-            <input id="mp" type="password" bind:value={modelPassword} required />
-          </div>
+          <p class="subtle" style="font-size:0.8rem">
+            Stored on your Supabase profile so the choice follows you across browsers.
+            No master password needed.
+          </p>
           {#if modelError}<p class="error">{modelError}</p>{/if}
           {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
           <button type="submit" disabled={busy}>Save default model</button>

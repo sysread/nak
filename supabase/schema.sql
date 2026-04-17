@@ -20,6 +20,12 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
+-- Per-user preferences (default model tier, future UI bits). The app only
+-- writes known keys, but we use jsonb so additions don't require a schema
+-- change. Defaults to an empty object so row-inserts don't need to set it.
+alter table public.profiles
+  add column if not exists settings jsonb not null default '{}'::jsonb;
+
 alter table public.profiles enable row level security;
 
 drop policy if exists "profiles are self-visible" on public.profiles;

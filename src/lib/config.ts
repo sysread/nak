@@ -1,12 +1,9 @@
 import { encrypt, decrypt } from './crypto';
-import { isModelTier, type ModelTier } from './models';
 
 export interface AppConfig {
   supabaseUrl: string;
   supabaseAnonKey: string;
   veniceApiKey: string;
-  /** User-picked default model tier. When absent, app uses DEFAULT_TIER. */
-  defaultModel?: ModelTier;
 }
 
 const STORAGE_KEY = 'nak:config:v1';
@@ -51,19 +48,9 @@ function validateConfig(candidate: unknown): AppConfig {
   if (!/^https?:\/\//.test(url)) {
     throw new ConfigError('supabaseUrl must start with http(s)://');
   }
-  const out: AppConfig = {
-    supabaseUrl: url,
-    supabaseAnonKey: anon,
-    veniceApiKey: venice,
-  };
-  // defaultModel is optional. If present and valid, keep it. If present and
-  // invalid (e.g. a tier name from an older build that no longer exists),
-  // drop it silently — a bad tier should fall back to the app default, not
-  // prevent the user from unlocking their config.
-  if (isModelTier(c.defaultModel)) {
-    out.defaultModel = c.defaultModel;
-  }
-  return out;
+  // Any unknown fields (including the legacy `defaultModel` from before
+  // settings moved to Supabase) are dropped silently on read.
+  return { supabaseUrl: url, supabaseAnonKey: anon, veniceApiKey: venice };
 }
 
 /**

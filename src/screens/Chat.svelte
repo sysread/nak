@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import type { Session } from '@supabase/supabase-js';
-  import { app, lock } from '$lib/state.svelte';
+  import { app, lock, setDefaultModel } from '$lib/state.svelte';
   import { clearSession } from '$lib/session';
   import type { Thread, Message } from '$lib/supabase';
   import {
@@ -41,16 +41,33 @@
     const unsubscribe = app.supabase.onAuthChange((s) => {
       session = s;
       sessionLoaded = true;
-      if (s) void refreshThreads();
-      else threads = [];
+      if (s) {
+        void refreshThreads();
+        void refreshSettings();
+      } else {
+        threads = [];
+      }
     });
     void app.supabase.getSession().then((s) => {
       session = s;
       sessionLoaded = true;
-      if (s) void refreshThreads();
+      if (s) {
+        void refreshThreads();
+        void refreshSettings();
+      }
     });
     return unsubscribe;
   });
+
+  async function refreshSettings(): Promise<void> {
+    if (!app.supabase) return;
+    try {
+      const s = await app.supabase.getSettings();
+      if (s.defaultModel) setDefaultModel(s.defaultModel);
+    } catch {
+      // Best-effort: fall back to DEFAULT_TIER that activate() seeded.
+    }
+  }
 
   async function refreshThreads(): Promise<void> {
     if (!app.supabase) return;
@@ -85,7 +102,7 @@
     activeThreadId ? threads.find((t) => t.id === activeThreadId) ?? null : null
   );
 
-  const defaultTier = $derived<ModelTier>(app.config?.defaultModel ?? DEFAULT_TIER);
+  const defaultTier = $derived<ModelTier>(app.defaultModel ?? DEFAULT_TIER);
   const currentTier = $derived<ModelTier>(
     resolveTier(currentThread?.model ?? null, defaultTier)
   );

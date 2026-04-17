@@ -186,13 +186,32 @@ pre-configured tiers so you don't have to memorize model names:
   best-effort — if the call fails, the thread keeps its placeholder name.
   You can always click the title in the top bar to rename it by hand.
 
+### What syncs vs what stays local
+
+| Item | Lives where | Shared across devices? |
+| ---- | ----------- | ---------------------- |
+| Supabase URL / anon key / Venice API key | local `localStorage` (AES-GCM encrypted) | No — needed to reach Supabase, and staying local is the whole point of the encryption |
+| Master password | derived per-device | No — it's the KDF input; nothing is stored |
+| **Default model tier** | Supabase `profiles.settings` | **Yes** |
+| Per-thread model override | Supabase `threads.model` | Yes |
+| Threads and messages | Supabase | Yes |
+
+So when you sign into Nak from a second browser, you'll have to re-enter
+your API keys and pick a master password — but your default model, your
+threads, and your per-thread model overrides will all already be there.
+
 ### Upgrading an existing install
 
-The `threads.model` column was added after the initial schema. If you
-set Nak up before this feature landed, re-run `mise run supabase-init`
-once — the wizard re-applies `schema.sql` idempotently (the `ALTER
-TABLE` uses `IF NOT EXISTS`), which adds the column without touching
-your existing threads.
+Two new columns have been added since the initial schema:
+
+- `threads.model text` (per-thread model override)
+- `profiles.settings jsonb` (per-user preferences, currently just the
+  default model tier)
+
+Both use `ADD COLUMN IF NOT EXISTS`, so re-running `mise run supabase-init`
+once picks them up without touching your existing rows. The model pref you
+may have stored locally before this change is harmless — the new code
+ignores the old field on read.
 
 ## Development
 

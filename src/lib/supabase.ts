@@ -43,6 +43,28 @@ export class SupabaseError extends Error {
   }
 }
 
+/**
+ * Per-user preferences persisted on `profiles.settings` (jsonb). Keeps
+ * prefs that should follow the account across browsers — API keys and
+ * the master-password KDF remain per-device by design.
+ */
+export interface UserSettings {
+  defaultModel?: ModelTier;
+}
+
+/**
+ * Scrub an unknown jsonb blob from Supabase into a well-typed UserSettings.
+ * Drops unknown / malformed fields silently so a bad value written by an
+ * older build can't break the app.
+ */
+export function coerceSettings(raw: unknown): UserSettings {
+  if (typeof raw !== 'object' || raw === null) return {};
+  const r = raw as Record<string, unknown>;
+  const out: UserSettings = {};
+  if (isModelTier(r.defaultModel)) out.defaultModel = r.defaultModel;
+  return out;
+}
+
 export class SupabaseService {
   readonly client: SupabaseClient;
 
@@ -88,6 +110,41 @@ export class SupabaseService {
   async signOut(): Promise<void> {
     const { error } = await this.client.auth.signOut();
     if (error) throw new SupabaseError(error.message);
+  }
+
+  async getSettings(): Promise<UserSettings> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const { data, error } = await this.client
+      .from('profiles')
+      .select('settings')
+      .eq('user_id', session.user.id)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    return coerceSettings((data as { settings?: unknown } | null)?.settings);
+  }
+
+  /**
+   * Merge a partial settings patch into the profiles.settings jsonb. Does a
+   * read-then-write — fine for a single-user app but not safe under
+   * concurrent writes from multiple tabs.
+   */
+  async updateSettings(patch: Partial<UserSettings>): Promise<UserSettings> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const current = await this.getSettings();
+    // Scrub: only allow known keys through, and validate each.
+    const merged: UserSettings = { ...current };
+    if ('defaultModel' in patch) {
+      if (patch.defaultModel === undefined) delete merged.defaultModel;
+      else if (isModelTier(patch.defaultModel)) merged.defaultModel = patch.defaultModel;
+    }
+    const { error } = await this.client
+      .from('profiles')
+      .update({ settings: merged })
+      .eq('user_id', session.user.id);
+    if (error) throw new SupabaseError(error.message);
+    return merged;
   }
 
   async listThreads(): Promise<Thread[]> {
