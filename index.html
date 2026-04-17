@@ -6,6 +6,34 @@
     <meta name="theme-color" content="#0b0d10" />
     <meta name="description" content="Nak — a bring-your-own-infrastructure AI chat PWA using Venice.ai and Supabase." />
     <title>Nak</title>
+    <script>
+      // Apply the cached theme before CSS paints to avoid a flash of
+      // wrong-theme. Runs in <head>, so it has to be ES5-compatible
+      // (Vite doesn't transform inline scripts). See src/lib/theme.ts for
+      // the matching writer.
+      (function () {
+        try {
+          var raw = localStorage.getItem('nak:theme:v1');
+          var mode = 'system';
+          var accent = 'blue';
+          if (raw) {
+            var parts = raw.split('|');
+            if (parts[0] === 'light' || parts[0] === 'dark' || parts[0] === 'system') mode = parts[0];
+            if (parts[1]) accent = parts[1];
+          }
+          var effective = mode;
+          if (mode === 'system') {
+            effective = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+          var root = document.documentElement;
+          root.setAttribute('data-theme', effective);
+          root.setAttribute('data-accent', accent);
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+          document.documentElement.setAttribute('data-accent', 'blue');
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

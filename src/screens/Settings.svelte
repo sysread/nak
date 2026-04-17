@@ -1,7 +1,17 @@
 <script lang="ts">
   import { changePassword, saveConfig } from '$lib/config';
-  import { app, activate, setDefaultModel } from '$lib/state.svelte';
+  import { app, activate, setDefaultModel, setTheme } from '$lib/state.svelte';
   import { MODELS, TIERS, type ModelTier } from '$lib/models';
+  import {
+    ACCENTS,
+    MODES,
+    ACCENT_LABELS,
+    ACCENT_SWATCHES,
+    MODE_LABELS,
+    effectiveMode,
+    type Accent,
+    type ColorMode,
+  } from '$lib/theme';
   import SecretInput from '../components/SecretInput.svelte';
 
   interface Props {
@@ -9,10 +19,11 @@
   }
   let { onClose }: Props = $props();
 
-  type Group = 'keys' | 'model' | 'security';
+  type Group = 'keys' | 'model' | 'appearance' | 'security';
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'keys', label: 'API keys' },
     { id: 'model', label: 'Model' },
+    { id: 'appearance', label: 'Appearance' },
     { id: 'security', label: 'Security' },
   ];
   let group = $state<Group>('keys');
@@ -31,6 +42,38 @@
   let defaultModel = $state<ModelTier>(app.defaultModel);
   let modelError = $state<string | null>(null);
   let modelInfo = $state<string | null>(null);
+
+  // --- Appearance pane ---
+  let colorMode = $state<ColorMode>(app.colorMode);
+  let accent = $state<Accent>(app.accent);
+  let appearanceError = $state<string | null>(null);
+  let appearanceInfo = $state<string | null>(null);
+
+  // Apply selection live as the user clicks — no Save button needed.
+  async function onPickMode(next: ColorMode): Promise<void> {
+    colorMode = next;
+    setTheme(next, accent);
+    await persistTheme();
+  }
+  async function onPickAccent(next: Accent): Promise<void> {
+    accent = next;
+    setTheme(colorMode, next);
+    await persistTheme();
+  }
+  async function persistTheme(): Promise<void> {
+    appearanceError = null;
+    appearanceInfo = null;
+    if (!app.supabase) {
+      appearanceError = 'Not connected to Supabase — theme saved locally only.';
+      return;
+    }
+    try {
+      await app.supabase.updateSettings({ colorMode, accent });
+      appearanceInfo = 'Saved.';
+    } catch (err) {
+      appearanceError = err instanceof Error ? err.message : String(err);
+    }
+  }
 
   // --- Security pane ---
   let pwCurrent = $state('');
@@ -194,6 +237,53 @@
           {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
           <button type="submit" disabled={busy}>Save default model</button>
         </form>
+      {:else if group === 'appearance'}
+        <h2>Appearance</h2>
+        <p class="subtle">
+          Pick a color scheme and accent. Your choice syncs via Supabase so it
+          follows you to other browsers, and is cached locally so the right
+          theme appears instantly on next load.
+        </p>
+
+        <h3 class="pane-section">Mode</h3>
+        <div class="form-row mode-picker">
+          {#each MODES as m (m)}
+            <button
+              type="button"
+              class="mode-option"
+              class:selected={colorMode === m}
+              onclick={() => onPickMode(m)}
+            >
+              <strong>{MODE_LABELS[m]}</strong>
+              {#if m === 'system'}
+                <span class="subtle" style="display:block;font-size:0.78rem">
+                  follows your OS (currently {effectiveMode('system')})
+                </span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+
+        <h3 class="pane-section">Accent</h3>
+        <div class="form-row accent-picker">
+          {#each ACCENTS as a (a)}
+            <button
+              type="button"
+              class="accent-option"
+              class:selected={accent === a}
+              onclick={() => onPickAccent(a)}
+              title={ACCENT_LABELS[a]}
+              aria-label={ACCENT_LABELS[a]}
+              aria-pressed={accent === a}
+            >
+              <span class="swatch" style="--sw-dark:{ACCENT_SWATCHES[a].dark};--sw-light:{ACCENT_SWATCHES[a].light}"></span>
+              <span class="swatch-label">{ACCENT_LABELS[a]}</span>
+            </button>
+          {/each}
+        </div>
+
+        {#if appearanceError}<p class="error">{appearanceError}</p>{/if}
+        {#if appearanceInfo}<p class="subtle">{appearanceInfo}</p>{/if}
       {:else if group === 'security'}
         <h2>Change master password</h2>
         <p class="subtle">

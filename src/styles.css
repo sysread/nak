@@ -1,4 +1,28 @@
+/* ProggyDotted — MIT-licensed pixel-style mono font with dotted zero.
+   Shipped locally (see src/assets/fonts/ProggyDotted_LICENSE.txt). */
+@font-face {
+  font-family: 'ProggyDotted';
+  src: url('./assets/fonts/ProggyDotted-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ---------- Theme tokens ----------
+   Two independent axes:
+     [data-theme='dark' | 'light']        → background / text / chrome
+     [data-accent='blue' | 'green' | ...] → accent + accent-weak
+   The inline script in index.html sets both attributes before first paint
+   to avoid a flash of wrong theme. See src/lib/theme.ts for the writer.
+*/
+
 :root {
+  --radius: 8px;
+  font-family: 'ProggyDotted', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 15px;
+}
+
+:root[data-theme='dark'] {
   color-scheme: dark;
   --bg: #0b0d10;
   --bg-2: #13171c;
@@ -6,13 +30,53 @@
   --border: #2a313b;
   --text: #e6e9ee;
   --muted: #8b94a3;
-  --accent: #4aa8ff;
+  --danger: #dc2626;
+  --ok: #22c55e;
+  --warn: #eab308;
+  /* Text/icon color that sits on `--accent` or `--danger` fills.
+     Dark-mode accents are light pastels, so dark ink reads best. */
+  --ink-on-accent: #0b0d10;
+  --ink-on-danger: #ffffff;
+  /* sensible fallbacks when no data-accent is set yet */
+  --accent: #8ab4ff;
   --accent-weak: #1f3a55;
-  --danger: #ef4444;
-  --radius: 8px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 15px;
 }
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f7f2e4;       /* warm cream / latte */
+  --bg-2: #efe8d2;
+  --surface: #ffffff;
+  --border: #d9cfb8;
+  --text: #2b2620;
+  --muted: #75695a;
+  --danger: #b91c1c;
+  --ok: #15803d;
+  --warn: #b45309;
+  /* Light-mode accents are saturated, so white ink reads best. */
+  --ink-on-accent: #ffffff;
+  --ink-on-danger: #ffffff;
+  --accent: #1d4ed8;
+  --accent-weak: #dbeafe;
+}
+
+/* Accent pairings. Each name maps to a pastel on dark (>= 9:1 on #0b0d10)
+   and a sharp hue on light (>= 5:1 on #f7f2e4). `--accent-weak` is a
+   same-hue tint for selected-row backgrounds, quote bubbles, etc. */
+
+:root[data-theme='dark'][data-accent='blue']   { --accent: #8ab4ff; --accent-weak: #1f3a55; }
+:root[data-theme='dark'][data-accent='green']  { --accent: #86efac; --accent-weak: #1f3d2b; }
+:root[data-theme='dark'][data-accent='purple'] { --accent: #c4b5fd; --accent-weak: #35295c; }
+:root[data-theme='dark'][data-accent='pink']   { --accent: #f9a8d4; --accent-weak: #4a1f36; }
+:root[data-theme='dark'][data-accent='orange'] { --accent: #fdba74; --accent-weak: #4a331c; }
+:root[data-theme='dark'][data-accent='teal']   { --accent: #5eead4; --accent-weak: #113d39; }
+
+:root[data-theme='light'][data-accent='blue']   { --accent: #1d4ed8; --accent-weak: #dbeafe; }
+:root[data-theme='light'][data-accent='green']  { --accent: #15803d; --accent-weak: #dcfce7; }
+:root[data-theme='light'][data-accent='purple'] { --accent: #7e22ce; --accent-weak: #f3e8ff; }
+:root[data-theme='light'][data-accent='pink']   { --accent: #be185d; --accent-weak: #fce7f3; }
+:root[data-theme='light'][data-accent='orange'] { --accent: #c2410c; --accent-weak: #ffedd5; }
+:root[data-theme='light'][data-accent='teal']   { --accent: #0f766e; --accent-weak: #ccfbf1; }
 
 * {
   box-sizing: border-box;
@@ -30,7 +94,7 @@ body {
 
 button {
   background: var(--accent);
-  color: #fff;
+  color: var(--ink-on-accent);
   border: 0;
   padding: 0.55rem 0.9rem;
   border-radius: var(--radius);
@@ -91,9 +155,9 @@ button.icon-btn {
    ("the app is currently unlocked — this is safe"). On hover, the icon
    swaps to a closed padlock in yellow to signal the imminent action
    ("click to lock"). Colors affect the stroke only, not the background. */
-.lock-btn { color: #22c55e; }
+.lock-btn { color: var(--ok); }
 .lock-btn:hover,
-.lock-btn:focus-visible { color: #eab308; }
+.lock-btn:focus-visible { color: var(--warn); }
 .lock-btn .lock-closed { display: none; }
 .lock-btn:hover .lock-open,
 .lock-btn:focus-visible .lock-open { display: none; }
@@ -102,6 +166,7 @@ button.icon-btn {
 
 button.danger {
   background: var(--danger);
+  color: var(--ink-on-danger);
 }
 
 button:disabled {
@@ -237,6 +302,82 @@ label {
 .model-choice input[type='radio'] {
   margin-top: 0.25rem;
   width: auto;
+}
+
+.pane-section {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 1rem 0 0.5rem;
+}
+
+.mode-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+
+.mode-option {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mode-option:hover {
+  background: var(--bg-2);
+}
+
+.mode-option.selected {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+}
+
+.accent-picker {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.4rem;
+}
+
+.accent-option {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.25rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+
+.accent-option:hover {
+  background: var(--bg-2);
+}
+
+.accent-option.selected {
+  border-color: var(--text);
+  outline: 2px solid var(--accent);
+  outline-offset: -4px;
+}
+
+.swatch {
+  display: block;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--sw-dark) 0 50%, var(--sw-light) 50% 100%);
+  border: 1px solid var(--border);
+}
+
+.swatch-label {
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 
 @media (max-width: 48rem) {

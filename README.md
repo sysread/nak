@@ -74,7 +74,8 @@ idempotent (safe to rerun). Run `mise tasks` to see the full list.
 | ------------------------- | ------------------------------------------------------------- |
 | `mise run doctor`         | Verify prerequisites without changing anything                |
 | `mise run pages-enable`   | Enable Pages + flip workflow perms for the current fork       |
-| `mise run supabase-init`  | Create/link a Supabase project, apply schema, whitelist URL   |
+| `mise run supabase-init`  | First-time Supabase flow: create/link project, apply schema, configure auth, seed user |
+| `mise run sync`           | Re-apply schema + allowlist to the linked project. Prompt-free after first setup. |
 | `mise run dev`            | Vite dev server (http://localhost:5173)                       |
 | `mise run build`          | Production PWA build                                          |
 | `mise run test`           | Vitest unit tests                                             |
@@ -193,25 +194,53 @@ pre-configured tiers so you don't have to memorize model names:
 | Supabase URL / anon key / Venice API key | local `localStorage` (AES-GCM encrypted) | No — needed to reach Supabase, and staying local is the whole point of the encryption |
 | Master password | derived per-device | No — it's the KDF input; nothing is stored |
 | **Default model tier** | Supabase `profiles.settings` | **Yes** |
+| **Color mode + accent** | Supabase `profiles.settings` + local cache for flash-free boot | **Yes** |
 | Per-thread model override | Supabase `threads.model` | Yes |
 | Threads and messages | Supabase | Yes |
+| Linked Supabase project (wizard) | gitignored `.nak/state.json` | No |
 
 So when you sign into Nak from a second browser, you'll have to re-enter
-your API keys and pick a master password — but your default model, your
-threads, and your per-thread model overrides will all already be there.
+your API keys and pick a master password — but your default model,
+color scheme, threads, and per-thread overrides will all already be there.
 
-### Upgrading an existing install
+### Appearance
 
-Two new columns have been added since the initial schema:
+Settings → Appearance has two axes:
 
-- `threads.model text` (per-thread model override)
-- `profiles.settings jsonb` (per-user preferences, currently just the
-  default model tier)
+- **Mode**: Light, Dark, or System (follows your OS's `prefers-color-scheme`).
+  Dark is a near-black canvas; light is a cream/latte.
+- **Accent**: six choices — blue, green, purple, pink, orange, teal. Each
+  name has a dark-mode pastel variant and a light-mode sharp variant, so
+  switching modes keeps the same color identity. All pairings clear WCAG
+  AA contrast.
 
-Both use `ADD COLUMN IF NOT EXISTS`, so re-running `mise run supabase-init`
-once picks them up without touching your existing rows. The model pref you
-may have stored locally before this change is harmless — the new code
-ignores the old field on read.
+The choice is cached to `localStorage` for an instant next-load (a small
+inline script in `index.html` applies it before first paint), and mirrored
+to `profiles.settings` so it follows you to other devices.
+
+### Typography
+
+The UI uses [ProggyDotted](https://github.com/bluescan/proggyfonts), a
+mono pixel-style font with a dotted zero. Shipped locally under
+`src/assets/fonts/` (MIT-licensed; see the bundled LICENSE file).
+
+### Keeping a project in sync
+
+- `mise run setup` — full first-time wizard. Walks you through Pages,
+  Supabase, auth policy, and the main user.
+- `mise run sync` — idempotent re-application for **later**. Re-applies
+  `schema.sql` and merges the current Pages URL into Supabase's auth
+  allowlist. No prompts; it remembers the linked project in
+  `.nak/state.json`. Use this whenever you pull new code that added
+  schema changes.
+
+### Schema columns added over time
+
+All use `ADD COLUMN IF NOT EXISTS`, so `mise run sync` is always safe:
+
+- `threads.model text` — per-thread model override.
+- `profiles.settings jsonb` — per-user preferences (default model tier,
+  color mode, accent).
 
 ## Development
 

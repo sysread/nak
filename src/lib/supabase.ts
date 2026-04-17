@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient, type Session } from '@supabase/supabase-js';
 import type { AppConfig } from './config';
 import { isModelTier, type ModelTier } from './models';
+import { isAccent, isColorMode, type Accent, type ColorMode } from './theme';
 
 export interface Thread {
   id: string;
@@ -50,6 +51,8 @@ export class SupabaseError extends Error {
  */
 export interface UserSettings {
   defaultModel?: ModelTier;
+  colorMode?: ColorMode;
+  accent?: Accent;
 }
 
 /**
@@ -62,6 +65,8 @@ export function coerceSettings(raw: unknown): UserSettings {
   const r = raw as Record<string, unknown>;
   const out: UserSettings = {};
   if (isModelTier(r.defaultModel)) out.defaultModel = r.defaultModel;
+  if (isColorMode(r.colorMode)) out.colorMode = r.colorMode;
+  if (isAccent(r.accent)) out.accent = r.accent;
   return out;
 }
 
@@ -138,6 +143,14 @@ export class SupabaseService {
     if ('defaultModel' in patch) {
       if (patch.defaultModel === undefined) delete merged.defaultModel;
       else if (isModelTier(patch.defaultModel)) merged.defaultModel = patch.defaultModel;
+    }
+    if ('colorMode' in patch) {
+      if (patch.colorMode === undefined) delete merged.colorMode;
+      else if (isColorMode(patch.colorMode)) merged.colorMode = patch.colorMode;
+    }
+    if ('accent' in patch) {
+      if (patch.accent === undefined) delete merged.accent;
+      else if (isAccent(patch.accent)) merged.accent = patch.accent;
     }
     const { error } = await this.client
       .from('profiles')

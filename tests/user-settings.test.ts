@@ -31,4 +31,23 @@ describe('coerceSettings', () => {
   it('tolerates an empty object', () => {
     expect(coerceSettings({})).toEqual({});
   });
+
+  it('passes through valid theme fields', () => {
+    expect(coerceSettings({ colorMode: 'light', accent: 'teal' })).toEqual({
+      colorMode: 'light',
+      accent: 'teal',
+    });
+    expect(coerceSettings({ colorMode: 'system' })).toEqual({ colorMode: 'system' });
+  });
+
+  it('drops bad theme values', () => {
+    expect(coerceSettings({ colorMode: 'neon', accent: 'chartreuse' })).toEqual({});
+    expect(coerceSettings({ colorMode: null, accent: 123 })).toEqual({});
+  });
+
+  it('mixes model + theme fields correctly', () => {
+    expect(
+      coerceSettings({ defaultModel: 'smart', colorMode: 'dark', accent: 'pink' })
+    ).toEqual({ defaultModel: 'smart', colorMode: 'dark', accent: 'pink' });
+  });
 });

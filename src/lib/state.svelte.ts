@@ -3,6 +3,15 @@ import { SupabaseService } from './supabase';
 import { VeniceClient } from './venice';
 import { saveSession, clearSession } from './session';
 import { DEFAULT_TIER, type ModelTier } from './models';
+import {
+  DEFAULT_MODE,
+  DEFAULT_ACCENT,
+  applyTheme,
+  cacheTheme,
+  readCachedTheme,
+  type Accent,
+  type ColorMode,
+} from './theme';
 
 export type AppPhase = 'loading' | 'setup' | 'locked' | 'unlocked';
 
@@ -17,8 +26,13 @@ interface AppState {
    * in. Written back via setDefaultModel() from Settings.
    */
   defaultModel: ModelTier;
+  /** UI theme — seeded from localStorage cache, then from Supabase. */
+  colorMode: ColorMode;
+  accent: Accent;
   error: string | null;
 }
+
+const cachedTheme = readCachedTheme();
 
 export const app = $state<AppState>({
   phase: 'loading',
@@ -26,11 +40,26 @@ export const app = $state<AppState>({
   supabase: null,
   venice: null,
   defaultModel: DEFAULT_TIER,
+  colorMode: cachedTheme?.mode ?? DEFAULT_MODE,
+  accent: cachedTheme?.accent ?? DEFAULT_ACCENT,
   error: null,
 });
 
 export function setDefaultModel(tier: ModelTier): void {
   app.defaultModel = tier;
+}
+
+/**
+ * Update color mode / accent in memory, apply to the DOM, and cache the
+ * choice so the boot script can restore it instantly next load. Does NOT
+ * write to Supabase — callers that want server-side persistence should
+ * call app.supabase.updateSettings separately (typically in Settings.svelte).
+ */
+export function setTheme(mode: ColorMode, accent: Accent): void {
+  app.colorMode = mode;
+  app.accent = accent;
+  applyTheme(mode, accent);
+  cacheTheme(mode, accent);
 }
 
 /**

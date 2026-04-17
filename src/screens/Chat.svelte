@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import type { Session } from '@supabase/supabase-js';
-  import { app, lock, setDefaultModel } from '$lib/state.svelte';
+  import { app, lock, setDefaultModel, setTheme } from '$lib/state.svelte';
   import { clearSession } from '$lib/session';
   import type { Thread, Message } from '$lib/supabase';
   import {
@@ -64,8 +64,13 @@
     try {
       const s = await app.supabase.getSettings();
       if (s.defaultModel) setDefaultModel(s.defaultModel);
+      // If the server has a theme choice and it differs from the cached one,
+      // apply it now. setTheme also re-caches, so subsequent loads are fast.
+      if (s.colorMode || s.accent) {
+        setTheme(s.colorMode ?? app.colorMode, s.accent ?? app.accent);
+      }
     } catch {
-      // Best-effort: fall back to DEFAULT_TIER that activate() seeded.
+      // Best-effort: fall back to DEFAULT_TIER / cached theme from activate().
     }
   }
 
