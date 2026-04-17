@@ -81,7 +81,11 @@
     app.systemPrompts.map((p) => ({ ...p }))
   );
   let promptsError = $state<string | null>(null);
-  let promptsInfo = $state<string | null>(null);
+  // A three-state save indicator for the floating status badge in the
+  // Prompts pane footer. `idle` renders nothing; `saving` is shown as
+  // soon as the user edits (covering both the debounce window and the
+  // in-flight request); `saved` sticks around until the next edit.
+  let promptsSaveState = $state<'idle' | 'saving' | 'saved'>('idle');
   let promptsSaving = $state(false);
   let promptsDebounce: ReturnType<typeof setTimeout> | null = null;
 
@@ -131,6 +135,10 @@
   }
 
   function schedulePromptsSave(): void {
+    // Transition to 'saving' immediately on edit so the icon reflects
+    // intent even during the debounce window — otherwise the user might
+    // see 'saved' during the pause between last keystroke and flush.
+    promptsSaveState = 'saving';
     if (promptsDebounce) clearTimeout(promptsDebounce);
     promptsDebounce = setTimeout(() => {
       promptsDebounce = null;
@@ -140,9 +148,9 @@
 
   async function savePrompts(): Promise<void> {
     promptsError = null;
-    promptsInfo = null;
     if (!app.supabase) {
       promptsError = 'Not connected to Supabase yet.';
+      promptsSaveState = 'idle';
       return;
     }
     promptsSaving = true;
@@ -151,9 +159,10 @@
         systemPrompts: promptsDraft,
       });
       setSystemPrompts(merged.systemPrompts ?? []);
-      promptsInfo = 'Saved.';
+      promptsSaveState = 'saved';
     } catch (err) {
       promptsError = err instanceof Error ? err.message : String(err);
+      promptsSaveState = 'idle';
     } finally {
       promptsSaving = false;
     }
@@ -440,9 +449,31 @@
             <p class="subtle" style="padding:0.5rem 0">No prompts yet.</p>
           {/if}
         </div>
-        <button type="button" onclick={addPrompt}>+ Add prompt</button>
+        <div class="prompts-footer">
+          <button type="button" onclick={addPrompt}>+ Add prompt</button>
+          <!-- Floating save-state indicator. Reserves its slot so it
+               never shifts the footer layout; only the icon inside
+               toggles. aria-live keeps screen readers in sync. -->
+          <div class="save-status" aria-live="polite">
+            {#if promptsSaveState === 'saving'}
+              <svg class="save-icon" width="16" height="16" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              <span class="sr-only">Saving…</span>
+            {:else if promptsSaveState === 'saved'}
+              <svg class="save-icon saved" width="16" height="16" viewBox="0 0 24 24"
+                   fill="none" stroke="currentColor" stroke-width="2.5"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <span class="sr-only">Saved</span>
+            {/if}
+          </div>
+        </div>
         {#if promptsError}<p class="error">{promptsError}</p>{/if}
-        {#if promptsInfo}<p class="subtle" style="font-size:0.8rem">{promptsInfo}</p>{/if}
       {:else if group === 'appearance'}
         <h2>Appearance</h2>
         <p class="subtle">

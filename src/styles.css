@@ -377,6 +377,43 @@ label {
   resize: vertical;
 }
 
+/* Prompts pane footer: "+ Add prompt" on the left, a fixed-size save-
+   status slot on the right. The slot is always present (width 1.5rem)
+   so the icon appearing/disappearing never shifts the add button. */
+.prompts-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.save-status {
+  width: 1.5rem;
+  height: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.save-status .save-icon.saved {
+  color: var(--ok);
+}
+
+/* Screen-reader-only label pattern. Keeps the visual footer clean while
+   announcing state changes via aria-live on the wrapper. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .pane-section {
   font-size: 0.85rem;
   text-transform: uppercase;
