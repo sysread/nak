@@ -85,6 +85,12 @@
 html, body, #app {
   height: 100%;
   margin: 0;
+  /* Prevent any stray wide content (long URLs, wide messages, the fixed
+     drawer during animation) from pushing the document wider than the
+     viewport — on mobile that triggers an auto-shrink-to-fit that looks
+     like a persistent zoom. */
+  overflow-x: hidden;
+  max-width: 100vw;
 }
 
 body {
@@ -499,11 +505,15 @@ h1 {
     padding: 0.5rem;
   }
 
-  /* Model select is wide by default; shrink to fit on small screens. */
+  /* Model select is wide by default; fix its width on small screens so
+     the long "Balanced — arcee-trinity-large-thinking" option can't push
+     the top bar past the viewport edge. */
   .model-select {
     min-width: 0;
-    max-width: 10rem;
+    width: 9rem;
+    max-width: 9rem;
     font-size: 0.75rem;
+    text-overflow: ellipsis;
   }
 }
 
@@ -576,12 +586,16 @@ h1 {
 }
 
 .msg {
-  max-width: 42rem;
+  max-width: min(42rem, 100%);
   padding: 0.7rem 0.9rem;
   border-radius: 12px;
   line-height: 1.45;
   white-space: pre-wrap;
   word-wrap: break-word;
+  /* Break genuinely unbreakable tokens (long URLs, hashes, code) rather
+     than let them blow out the container width. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .msg.user {
