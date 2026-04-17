@@ -92,6 +92,9 @@
     activeThreadId = id;
     messages = [];
     streamingText = '';
+    // On mobile the drawer is modal, so dismiss it once a thread is chosen.
+    // On desktop, this is ignored (the sidebar is always visible by CSS).
+    drawerOpen = false;
     try {
       messages = await app.supabase.listMessages(id);
     } catch (err) {
@@ -307,6 +310,17 @@
     clearSession();
     await app.supabase?.signOut();
   }
+
+  // Mobile drawer. Hidden by default on narrow viewports via CSS, which
+  // keys off `.shell.drawer-open`. On desktop the sidebar is always
+  // visible; this state is a no-op there.
+  let drawerOpen = $state(false);
+  function openDrawer(): void {
+    drawerOpen = true;
+  }
+  function closeDrawer(): void {
+    drawerOpen = false;
+  }
 </script>
 
 {#if !sessionLoaded}
@@ -316,7 +330,16 @@
 {:else if showSettings}
   <Settings onClose={() => (showSettings = false)} />
 {:else}
-  <div class="shell">
+  <div class="shell" class:drawer-open={drawerOpen}>
+    <div
+      class="drawer-backdrop"
+      onclick={closeDrawer}
+      onkeydown={(e) => { if (e.key === 'Escape') closeDrawer(); }}
+      role="button"
+      tabindex={drawerOpen ? 0 : -1}
+      aria-label="Close thread drawer"
+      aria-hidden={!drawerOpen}
+    ></div>
     <aside class="sidebar">
       <header>
         <button
@@ -387,6 +410,19 @@
 
     <main class="chat">
       <div class="top-bar">
+        <button
+          class="secondary icon-btn hamburger"
+          onclick={openDrawer}
+          title="Show threads"
+          aria-label="Show threads"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
         <div class="title-wrap">
           {#if !currentThread}
             <div class="subtle">Start a new conversation</div>
