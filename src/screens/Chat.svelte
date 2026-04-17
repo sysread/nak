@@ -81,12 +81,16 @@
   async function refreshThreads(): Promise<void> {
     if (!app.supabase) return;
     try {
-      threads = await app.supabase.listThreads();
+      const fresh = await app.supabase.listThreads();
+      // Preserve any in-memory drafts — they don't round-trip through
+      // Supabase until the user sends or renames.
+      const drafts = threads.filter((t) => t.isDraft);
+      threads = [...drafts, ...fresh];
       if (!threadRestoreAttempted) {
         threadRestoreAttempted = true;
         // On first load within a tab, restore whichever conversation was
         // open last time. Only kicks in if the id still exists (the thread
-        // may have been deleted in another tab since).
+        // may have been deleted, or it was an abandoned draft).
         const restored = getSessionThreadId();
         if (restored && threads.some((t) => t.id === restored)) {
           void selectThread(restored);
@@ -103,6 +107,24 @@
     }
   }
 
+  /**
+   * Turn an in-memory draft thread into a real Supabase row. Returns the
+   * materialized Thread. Safe to call when the thread is already real —
+   * in that case it's a no-op and just returns the thread as-is.
+   */
+  async function materializeIfDraft(draft: Thread, title?: string): Promise<Thread> {
+    if (!draft.isDraft || !app.supabase) return draft;
+    const real = await app.supabase.createThread(title ?? draft.title, draft.model);
+    // Swap the draft for the real thread in local state; keep the new id
+    // in the session so a reload sticks to the now-persisted conversation.
+    threads = threads.map((t) => (t.id === draft.id ? real : t));
+    if (activeThreadId === draft.id) {
+      activeThreadId = real.id;
+      setSessionThreadId(real.id);
+    }
+    return real;
+  }
+
   async function selectThread(id: string): Promise<void> {
     if (!app.supabase) return;
     activeThreadId = id;
@@ -112,6 +134,9 @@
     // On mobile the drawer is modal, so dismiss it once a thread is chosen.
     // On desktop, this is ignored (the sidebar is always visible by CSS).
     drawerOpen = false;
+    // Drafts aren't in Supabase yet — no messages to fetch.
+    const t = threads.find((x) => x.id === id);
+    if (t?.isDraft) return;
     try {
       messages = await app.supabase.listMessages(id);
     } catch (err) {
@@ -150,8 +175,14 @@
     const next = renameBuffer.trim();
     if (!app.supabase || !currentThread) return;
     if (!next || next === currentThread.title) return;
-    const threadId = currentThread.id;
     try {
+      if (currentThread.isDraft) {
+        // Manual rename is a save signal: materialize with the new title
+        // in a single round-trip rather than create-then-rename.
+        await materializeIfDraft(currentThread, next);
+        return;
+      }
+      const threadId = currentThread.id;
       await app.supabase.renameThread(threadId, next);
       threads = threads.map((t) => (t.id === threadId ? { ...t, title: next } : t));
     } catch (err) {
@@ -179,9 +210,14 @@
     const next: ModelTier | null = isModelTier(raw) ? raw : null;
     if (!app.supabase || !currentThread) return;
     const threadId = currentThread.id;
+    // Update local state immediately so the UI reflects the choice.
+    threads = threads.map((t) => (t.id === threadId ? { ...t, model: next } : t));
+    // For drafts, the choice rides along in memory and gets persisted when
+    // the draft materializes (on send or manual rename). Changing the
+    // model alone shouldn't create a Supabase row.
+    if (currentThread.isDraft) return;
     try {
       await app.supabase.setThreadModel(threadId, next);
-      threads = threads.map((t) => (t.id === threadId ? { ...t, model: next } : t));
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
@@ -230,21 +266,34 @@
   async function newThread(): Promise<void> {
     if (!app.supabase) return;
     if (currentIsEmpty) return;
-    try {
-      const t = await app.supabase.createThread('New conversation');
-      threads = [t, ...threads];
-      await selectThread(t.id);
-    } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-    }
+    // Create a local-only draft. It materializes in Supabase only when the
+    // user sends a message or renames the thread; an abandoned draft just
+    // disappears on refresh.
+    const session = await app.supabase.getSession();
+    if (!session) return;
+    const now = new Date().toISOString();
+    const draft: Thread = {
+      id: crypto.randomUUID(),
+      user_id: session.user.id,
+      title: DEFAULT_TITLE,
+      model: null,
+      created_at: now,
+      updated_at: now,
+      isDraft: true,
+    };
+    threads = [draft, ...threads];
+    await selectThread(draft.id);
   }
 
   async function deleteThread(id: string): Promise<void> {
     if (!app.supabase) return;
+    const t = threads.find((x) => x.id === id);
+    if (!t) return;
     if (!confirm('Delete this thread and all its messages?')) return;
     try {
-      await app.supabase.deleteThread(id);
-      threads = threads.filter((t) => t.id !== id);
+      // Drafts only exist in memory — just drop them locally.
+      if (!t.isDraft) await app.supabase.deleteThread(id);
+      threads = threads.filter((x) => x.id !== id);
       if (activeThreadId === id) {
         activeThreadId = null;
         messages = [];
@@ -260,25 +309,34 @@
     if (!text || !app.supabase || !app.venice) return;
     error = null;
 
-    let threadId = activeThreadId;
+    const active = activeThreadId
+      ? threads.find((t) => t.id === activeThreadId) ?? null
+      : null;
+    // Capture the tier BEFORE materializing, since materialize mutates
+    // `threads` and could make `currentThread` briefly null.
+    const tier = resolveTier(active?.model ?? null, defaultTier);
+    const modelId = MODELS[tier].id;
+
+    let threadId: string;
     let isFirstExchange = false;
-    if (!threadId) {
-      // Leave the title as the default so autoTitle() can replace it once
-      // the assistant finishes responding.
+    if (!active) {
+      // No thread selected — create one on the fly.
       const t = await app.supabase.createThread(DEFAULT_TITLE);
       threads = [t, ...threads];
       threadId = t.id;
       activeThreadId = t.id;
       setSessionThreadId(t.id);
       isFirstExchange = true;
+    } else if (active.isDraft) {
+      // First send on a draft — materialize it now, preserving any model
+      // choice the user already made from the dropdown.
+      const real = await materializeIfDraft(active);
+      threadId = real.id;
+      isFirstExchange = true;
     } else {
-      isFirstExchange =
-        messages.length === 0 &&
-        (currentThread?.title ?? '') === DEFAULT_TITLE;
+      threadId = active.id;
+      isFirstExchange = messages.length === 0 && active.title === DEFAULT_TITLE;
     }
-
-    const tier = resolveTier(currentThread?.model ?? null, defaultTier);
-    const modelId = MODELS[tier].id;
 
     composer = '';
     sending = true;

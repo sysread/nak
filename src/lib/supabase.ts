@@ -11,6 +11,12 @@ export interface Thread {
   model: ModelTier | null;
   created_at: string;
   updated_at: string;
+  /**
+   * App-local flag: true when this thread exists only in memory (the user
+   * clicked "new thread" but hasn't sent a message or renamed it yet).
+   * Drafts are never sent to Supabase — they materialize on first save.
+   */
+  isDraft?: boolean;
 }
 
 /**
@@ -169,12 +175,12 @@ export class SupabaseService {
     return (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
   }
 
-  async createThread(title: string): Promise<Thread> {
+  async createThread(title: string, model: ModelTier | null = null): Promise<Thread> {
     const session = await this.getSession();
     if (!session) throw new SupabaseError('Not authenticated.');
     const { data, error } = await this.client
       .from('threads')
-      .insert({ title, user_id: session.user.id })
+      .insert({ title, user_id: session.user.id, model })
       .select()
       .single();
     if (error) throw new SupabaseError(error.message);
