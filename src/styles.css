@@ -44,6 +44,15 @@ button.secondary {
   border: 1px solid var(--border);
 }
 
+button.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.45rem;
+  width: 2.2rem;
+  flex-shrink: 0;
+}
+
 button.danger {
   background: var(--danger);
 }
