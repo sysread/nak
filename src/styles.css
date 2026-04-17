@@ -19,7 +19,7 @@
 :root {
   --radius: 8px;
   font-family: 'ProggyDotted', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 15px;
+  font-size: 13.5px;
 }
 
 :root[data-theme='dark'] {
