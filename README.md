@@ -223,9 +223,11 @@ to `profiles.settings` so it follows you to other devices.
 
 ### Typography
 
-The UI uses [ProggyDotted](https://github.com/bluescan/proggyfonts), a
-mono pixel-style font with a dotted zero. Shipped locally under
-`src/assets/fonts/` (MIT-licensed; see the bundled LICENSE file).
+The UI uses [Lekton](https://github.com/ryanoasis/nerd-fonts/releases)
+(Nerd Fonts Mono build), a humanist monospace with a lighter visual
+weight than a typical code font. Regular, Italic, and Bold TTFs are
+shipped locally under `src/assets/fonts/` (SIL Open Font License; see
+the bundled `Lekton_LICENSE.txt`).
 
 ### Keeping a project in sync
 

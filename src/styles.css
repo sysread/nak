@@ -1,9 +1,27 @@
-/* ProggyDotted — MIT-licensed pixel-style mono font with dotted zero.
-   Shipped locally (see src/assets/fonts/ProggyDotted_LICENSE.txt). */
+/* Lekton — a humanist monospace; the Nerd Fonts build includes the icon
+   glyph range but we don't lean on that yet. Shipped locally under the
+   SIL OFL (see src/assets/fonts/Lekton_LICENSE.txt). Unlike the prior
+   pixel-bitmap face, Lekton is a real vector font with separate Italic
+   and Bold files, so markdown emphasis renders natively rather than
+   via the browser's (ugly) synthesized faux weights. */
 @font-face {
-  font-family: 'ProggyDotted';
-  src: url('./assets/fonts/ProggyDotted-Regular.ttf') format('truetype');
+  font-family: 'Lekton';
+  src: url('./assets/fonts/LektonNerdFontMono-Regular.ttf') format('truetype');
   font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Lekton';
+  src: url('./assets/fonts/LektonNerdFontMono-Italic.ttf') format('truetype');
+  font-weight: normal;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Lekton';
+  src: url('./assets/fonts/LektonNerdFontMono-Bold.ttf') format('truetype');
+  font-weight: bold;
   font-style: normal;
   font-display: swap;
 }
@@ -18,7 +36,7 @@
 
 :root {
   --radius: 8px;
-  font-family: 'ProggyDotted', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: 'Lekton', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: 13.5px;
 }
 
@@ -692,7 +710,7 @@ h1 {
 }
 
 .md code {
-  font-family: 'ProggyDotted', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: 'Lekton', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   background: var(--bg-2);
   padding: 0.05em 0.35em;
   border-radius: 4px;
