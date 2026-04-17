@@ -518,14 +518,12 @@ h1 {
     padding: 0.5rem;
   }
 
-  /* Model select is wide by default; fix its width on small screens so
-     the long "Balanced — arcee-trinity-large-thinking" option can't push
-     the top bar past the viewport edge. */
+  /* Keep the selector from stretching the top bar on narrow viewports. */
   .model-select {
     min-width: 0;
-    width: 9rem;
-    max-width: 9rem;
-    font-size: 0.75rem;
+    width: 8rem;
+    max-width: 8rem;
+    font-size: 0.7rem;
     text-overflow: ellipsis;
   }
 }
@@ -734,9 +732,9 @@ h1 {
 
 .model-select {
   width: auto;
-  min-width: 14rem;
-  padding: 0.35rem 0.5rem;
-  font-size: 0.85rem;
+  min-width: 9rem;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.7rem;
 }
 
 .empty {

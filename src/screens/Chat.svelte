@@ -517,9 +517,9 @@
             onchange={onModelChange}
             title={`Active: ${MODELS[currentTier].label} (${MODELS[currentTier].id})`}
           >
-            <option value="default">Default ({MODELS[defaultTier].label})</option>
+            <option value="default">Default ({MODELS[defaultTier].icon} {MODELS[defaultTier].label})</option>
             {#each TIERS as tier (tier)}
-              <option value={tier}>{MODELS[tier].label} — {MODELS[tier].id}</option>
+              <option value={tier}>{MODELS[tier].icon} {MODELS[tier].label}</option>
             {/each}
           </select>
         {/if}

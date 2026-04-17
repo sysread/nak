@@ -13,6 +13,8 @@ export interface ModelSpec {
   id: string;
   /** Human label for UI. */
   label: string;
+  /** Tier glyph — a single unicode character suitable as a tiny prefix icon. */
+  icon: string;
   /** One-line tradeoff copy shown under the label. */
   description: string;
   /** Context window (tokens), for display. */
@@ -24,6 +26,7 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     tier: 'smart',
     id: 'kimi-k2-5',
     label: 'Smart',
+    icon: '🧠',
     description: 'Best quality, slower.',
     contextWindow: 256_000,
   },
@@ -31,6 +34,7 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     tier: 'balanced',
     id: 'arcee-trinity-large-thinking',
     label: 'Balanced',
+    icon: '⚖',
     description: 'Good quality, moderate speed.',
     contextWindow: 256_000,
   },
@@ -38,6 +42,7 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     tier: 'fast',
     id: 'grok-41-fast',
     label: 'Fast',
+    icon: '⚡',
     description: 'Fastest; ~1M-token context.',
     contextWindow: 1_000_000,
   },
