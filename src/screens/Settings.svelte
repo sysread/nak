@@ -2,6 +2,7 @@
   import { changePassword, saveConfig } from '$lib/config';
   import { app, activate, setDefaultModel } from '$lib/state.svelte';
   import { MODELS, TIERS, type ModelTier } from '$lib/models';
+  import SecretInput from '../components/SecretInput.svelte';
 
   interface Props {
     onClose: () => void;
@@ -144,15 +145,15 @@
           </div>
           <div class="form-row">
             <label for="sa">Supabase anon key</label>
-            <input id="sa" type="password" bind:value={supabaseAnonKey} required />
+            <SecretInput id="sa" bind:value={supabaseAnonKey} required />
           </div>
           <div class="form-row">
             <label for="vk">Venice API key</label>
-            <input id="vk" type="password" bind:value={veniceApiKey} required />
+            <SecretInput id="vk" bind:value={veniceApiKey} required />
           </div>
           <div class="form-row">
             <label for="cp">Current master password</label>
-            <input id="cp" type="password" bind:value={keysPassword} required />
+            <SecretInput id="cp" bind:value={keysPassword} required />
           </div>
           {#if keysError}<p class="error">{keysError}</p>{/if}
           {#if keysInfo}<p class="subtle">{keysInfo}</p>{/if}
@@ -201,11 +202,11 @@
         <form onsubmit={onChangePassword}>
           <div class="form-row">
             <label for="pw-current">Current master password</label>
-            <input id="pw-current" type="password" bind:value={pwCurrent} required />
+            <SecretInput id="pw-current" bind:value={pwCurrent} required />
           </div>
           <div class="form-row">
             <label for="pw-new">New master password</label>
-            <input id="pw-new" type="password" bind:value={pwNew} minlength="8" required />
+            <SecretInput id="pw-new" bind:value={pwNew} minlength={8} required />
           </div>
           {#if pwError}<p class="error">{pwError}</p>{/if}
           {#if pwInfo}<p class="subtle">{pwInfo}</p>{/if}

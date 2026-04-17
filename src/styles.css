@@ -53,6 +53,40 @@ button.icon-btn {
   flex-shrink: 0;
 }
 
+/* SecretInput — password field with an eye-toggle reveal button. */
+.secret-wrap {
+  position: relative;
+}
+
+.secret-wrap > input {
+  padding-right: 2.4rem;
+}
+
+.reveal-btn {
+  position: absolute;
+  top: 50%;
+  right: 0.35rem;
+  transform: translateY(-50%);
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.reveal-btn:hover,
+.reveal-btn:focus-visible {
+  color: var(--text);
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+
 /* Lock toggle. The idle state shows an open padlock in green
    ("the app is currently unlocked — this is safe"). On hover, the icon
    swaps to a closed padlock in yellow to signal the imminent action
