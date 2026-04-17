@@ -448,7 +448,8 @@ h1 {
   display: none;
 }
 
-.hamburger {
+.hamburger,
+.new-thread-mini {
   display: none;
 }
 
@@ -488,8 +489,20 @@ h1 {
     pointer-events: auto;
   }
 
-  .hamburger {
+  .hamburger,
+  .new-thread-mini {
     display: inline-flex;
+  }
+
+  /* Subtle "this will open a new chat" hint — a softer outline than the
+     hamburger so it visually reads as a secondary, adjacent affordance. */
+  .new-thread-mini {
+    color: var(--accent);
+    border-color: var(--accent-weak);
+  }
+  .new-thread-mini:hover:not(:disabled),
+  .new-thread-mini:focus-visible:not(:disabled) {
+    background: var(--accent-weak);
   }
 
   /* The chat column owns the full viewport on mobile. Tighten the chrome. */

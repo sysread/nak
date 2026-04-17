@@ -478,6 +478,18 @@
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
+        <button
+          class="secondary icon-btn new-thread-mini"
+          onclick={newThread}
+          disabled={currentIsEmpty}
+          title={currentIsEmpty ? "You're already on an empty thread." : 'Start a new conversation'}
+          aria-label="Start a new conversation"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+        </button>
         <div class="title-wrap">
           {#if !currentThread}
             <div class="subtle">Start a new conversation</div>
