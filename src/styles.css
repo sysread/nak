@@ -625,7 +625,10 @@ h1 {
   padding: 0.75rem;
   display: flex;
   gap: 0.5rem;
-  align-items: flex-end;
+  /* Top-align so the Send button's top edge lines up with the textarea's
+     top edge — matches the expand button sitting at the top-right corner
+     of the textarea. */
+  align-items: flex-start;
 }
 
 .textarea-wrap {
@@ -672,14 +675,13 @@ h1 {
   border-color: var(--border);
 }
 
-.send-btn.glyph {
+.send-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 2.4rem;
   height: 2.4rem;
   padding: 0;
-  font-size: 1.1rem;
   line-height: 1;
   flex-shrink: 0;
 }

@@ -37,7 +37,6 @@
   let titleInputEl: HTMLInputElement | undefined = $state();
 
   onMount(() => {
-    enterGlyphAvailable = hasGlyph('\u23CE');
     if (!app.supabase) return;
     const unsubscribe = app.supabase.onAuthChange((s) => {
       session = s;
@@ -347,25 +346,6 @@
   // ~12rem max-height.
   let composerExpanded = $state(false);
 
-  // The U+23CE RETURN SYMBOL (⏎) — the hook-arrow Enter glyph from older
-  // keyboards — is only rendered as a label if the user's font stack
-  // actually has a glyph for it; otherwise we fall back to the word "Send"
-  // so the button doesn't turn into a tofu box.
-  let enterGlyphAvailable = $state(false);
-
-  function hasGlyph(ch: string): boolean {
-    if (typeof document === 'undefined') return false;
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return false;
-    ctx.font = '16px sans-serif';
-    const probe = ctx.measureText(ch).width;
-    // U+E000 sits in the Private Use Area, so no standard font ships a
-    // glyph for it — its measured width is the browser's "tofu" width.
-    const tofu = ctx.measureText('\uE000').width;
-    return probe > 0 && probe !== tofu;
-  }
-
 </script>
 
 {#if !sessionLoaded}
@@ -570,19 +550,15 @@
         </div>
         <button
           class="send-btn"
-          class:glyph={enterGlyphAvailable && !sending}
           onclick={send}
           disabled={sending || composer.trim().length === 0}
-          title="Send"
-          aria-label="Send"
+          title={sending ? 'Sending…' : 'Send'}
+          aria-label={sending ? 'Sending' : 'Send'}
         >
-          {#if sending}
-            Sending…
-          {:else if enterGlyphAvailable}
-            <span aria-hidden="true">⏎</span>
-          {:else}
-            Send
-          {/if}
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"
+               aria-hidden="true">
+            <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
+          </svg>
         </button>
       </div>
     </main>
