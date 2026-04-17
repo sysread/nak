@@ -141,8 +141,13 @@
     messages = [];
     streamingText = '';
     // On mobile the drawer is modal, so dismiss it once a thread is chosen.
-    // On desktop, this is ignored (the sidebar is always visible by CSS).
-    drawerOpen = false;
+    // On desktop the sidebar is a persistent column — leave it open.
+    if (
+      typeof window !== 'undefined' &&
+      window.matchMedia('(max-width: 720px)').matches
+    ) {
+      drawerOpen = false;
+    }
     // Drafts aren't in Supabase yet — no messages to fetch.
     const t = threads.find((x) => x.id === id);
     if (t?.isDraft) return;
@@ -417,14 +422,18 @@
   }
 
   // Mobile drawer. Hidden by default on narrow viewports via CSS, which
-  // keys off `.shell.drawer-open`. On desktop the sidebar is always
-  // visible; this state is a no-op there.
-  let drawerOpen = $state(false);
-  function openDrawer(): void {
-    drawerOpen = true;
-  }
+  // Sidebar visibility — doubles as the mobile drawer toggle and the
+  // desktop "hide sidebar" toggle. Initial value is viewport-aware so
+  // desktop loads with the sidebar open and mobile loads with it closed,
+  // without a layout flash.
+  let drawerOpen = $state(
+    typeof window !== 'undefined' && window.innerWidth > 720
+  );
   function closeDrawer(): void {
     drawerOpen = false;
+  }
+  function toggleDrawer(): void {
+    drawerOpen = !drawerOpen;
   }
 
   // Composer expand toggle. When true, the textarea grows to 40vh so the
@@ -533,9 +542,10 @@
       <div class="top-bar">
         <button
           class="secondary icon-btn hamburger"
-          onclick={openDrawer}
-          title="Show threads"
-          aria-label="Show threads"
+          onclick={toggleDrawer}
+          title={drawerOpen ? 'Hide threads' : 'Show threads'}
+          aria-label={drawerOpen ? 'Hide threads' : 'Show threads'}
+          aria-expanded={drawerOpen}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

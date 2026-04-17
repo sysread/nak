@@ -436,25 +436,40 @@ h1 {
   grid-template-columns: 260px 1fr;
   height: 100%;
   position: relative;
+  transition: grid-template-columns 180ms ease-out;
 }
 
-/* ---------- Mobile drawer ----------
-   On desktop (default), the sidebar is always visible as the left column.
-   On narrow viewports the sidebar becomes a slide-over drawer; `drawerOpen`
-   is toggled by a hamburger button in the top bar and by the backdrop.
-*/
+/* On desktop the sidebar is a normal grid column; the hamburger
+   collapses it to zero width for more chat real estate. On mobile it's
+   a slide-over drawer (see the media query below). Either way, the
+   `.drawer-open` modifier marks the "visible" state. */
+
+.shell:not(.drawer-open) {
+  grid-template-columns: 0 1fr;
+}
+
+.shell:not(.drawer-open) .sidebar {
+  overflow: hidden;
+  border-right-width: 0;
+}
 
 .drawer-backdrop {
   display: none;
 }
 
-.hamburger,
+.hamburger {
+  display: inline-flex;
+}
+
 .new-thread-mini {
   display: none;
 }
 
 @media (max-width: 720px) {
-  .shell {
+  .shell,
+  .shell:not(.drawer-open) {
+    /* On mobile the sidebar overlays the chat instead of taking a
+       grid column, so the column template never changes with state. */
     grid-template-columns: 1fr;
   }
 
@@ -468,6 +483,12 @@ h1 {
     transform: translateX(-100%);
     transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
     box-shadow: 0 0 28px rgba(0, 0, 0, 0.45);
+  }
+
+  .shell:not(.drawer-open) .sidebar {
+    /* Undo the desktop collapse rules — mobile uses the transform. */
+    overflow: auto;
+    border-right-width: 1px;
   }
 
   .shell.drawer-open .sidebar {
@@ -489,7 +510,6 @@ h1 {
     pointer-events: auto;
   }
 
-  .hamburger,
   .new-thread-mini {
     display: inline-flex;
   }
