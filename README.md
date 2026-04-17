@@ -124,9 +124,12 @@ malicious extension. Concretely:
 **What it does NOT protect against:**
 
 - Active in-page JavaScript: once unlocked, the decrypted config is held in
-  memory so the app can make API calls. Any script running in the same
-  origin can read it. Don't paste third-party code into DevTools and don't
-  install untrusted browser extensions with access to this origin.
+  memory (and, during an active browser tab, a copy also lives in
+  `sessionStorage` so a refresh within an hour of your last interaction
+  doesn't reprompt — see "Session persistence" below). Any script running
+  in the same origin can read it. Don't paste third-party code into
+  DevTools and don't install untrusted browser extensions with access to
+  this origin.
 - Supply-chain compromise of the deployed JavaScript: you're trusting the
   code you deployed. Pin dependencies and review diffs before deploying.
 - Physical access to an unlocked device: an attacker who can use the browser
@@ -135,6 +138,16 @@ malicious extension. Concretely:
   it does not replace a strong passphrase.
 - Network adversaries: TLS to Supabase and Venice protects requests in
   flight. Make sure your OS/browser has current roots.
+
+**Session persistence (auto-unlock):** after you type the master password,
+the decrypted config is also kept in `sessionStorage` with a 1-hour
+inactivity TTL. Any page interaction (key, click, scroll, tab focus) bumps
+the TTL. A refresh within that window skips the unlock screen. Closing the
+tab or window clears the session immediately (per the `sessionStorage`
+scope), as does clicking **Lock** in the sidebar. This means the only
+thing protecting the in-memory config during the TTL is the same origin
+boundary that protects the app while it's actively running — there is no
+additional encryption for the sessionStorage blob.
 
 Additionally:
 
