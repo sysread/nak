@@ -53,6 +53,19 @@ button.icon-btn {
   flex-shrink: 0;
 }
 
+/* Lock toggle. The idle state shows an open padlock in green
+   ("the app is currently unlocked — this is safe"). On hover, the icon
+   swaps to a closed padlock in yellow to signal the imminent action
+   ("click to lock"). Colors affect the stroke only, not the background. */
+.lock-btn { color: #22c55e; }
+.lock-btn:hover,
+.lock-btn:focus-visible { color: #eab308; }
+.lock-btn .lock-closed { display: none; }
+.lock-btn:hover .lock-open,
+.lock-btn:focus-visible .lock-open { display: none; }
+.lock-btn:hover .lock-closed,
+.lock-btn:focus-visible .lock-closed { display: inline; }
+
 button.danger {
   background: var(--danger);
 }
@@ -103,6 +116,111 @@ label {
   padding: 1.5rem;
   width: 100%;
   max-width: 28rem;
+}
+
+.settings-shell {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 52rem;
+  display: grid;
+  grid-template-columns: 12rem 1fr;
+  min-height: 28rem;
+  overflow: hidden;
+}
+
+.settings-nav {
+  background: var(--bg-2);
+  border-right: 1px solid var(--border);
+  padding: 1rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.settings-nav h1 {
+  font-size: 1rem;
+  margin: 0 0 0.75rem;
+  padding: 0 0.5rem;
+}
+
+.settings-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.settings-tab {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-tab:hover {
+  background: var(--surface);
+}
+
+.settings-tab.active {
+  background: var(--accent-weak);
+  border-color: var(--border);
+}
+
+.settings-pane {
+  padding: 1.25rem 1.5rem;
+  overflow: auto;
+  min-width: 0;
+}
+
+.settings-pane h2 {
+  font-size: 1.1rem;
+  margin: 0 0 0.25rem;
+}
+
+.settings-pane .subtle {
+  margin: 0 0 1rem;
+}
+
+.model-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.model-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+  margin-bottom: 0;
+}
+
+.model-choice input[type='radio'] {
+  margin-top: 0.25rem;
+  width: auto;
+}
+
+@media (max-width: 48rem) {
+  .settings-shell {
+    grid-template-columns: 1fr;
+  }
+  .settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-nav h1 {
+    display: none;
+  }
+  .settings-nav-list {
+    flex-direction: row;
+  }
 }
 
 h1 {
