@@ -10,7 +10,6 @@
     DEFAULT_TIER,
     UTILITY_TIER,
     resolveTier,
-    isModelTier,
     type ModelTier,
   } from '$lib/models';
   import Auth from './Auth.svelte';
@@ -156,9 +155,6 @@
   const currentTier = $derived<ModelTier>(
     resolveTier(currentThread?.model ?? null, defaultTier)
   );
-  const selectValue = $derived<'default' | ModelTier>(
-    currentThread?.model ?? 'default'
-  );
 
   async function startRename(): Promise<void> {
     if (!currentThread) return;
@@ -205,10 +201,13 @@
     }
   }
 
-  async function onModelChange(e: Event): Promise<void> {
-    const raw = (e.target as HTMLSelectElement).value;
-    const next: ModelTier | null = isModelTier(raw) ? raw : null;
+  async function setTier(tier: ModelTier): Promise<void> {
     if (!app.supabase || !currentThread) return;
+    // If the chosen tier matches the user's default, clear the per-thread
+    // override so the thread keeps tracking future default changes; only
+    // pin an explicit tier when it actually differs from the default.
+    const next: ModelTier | null = tier === defaultTier ? null : tier;
+    if ((currentThread.model ?? null) === next) return;
     const threadId = currentThread.id;
     // Update local state immediately so the UI reflects the choice.
     threads = threads.map((t) => (t.id === threadId ? { ...t, model: next } : t));
@@ -549,17 +548,26 @@
           {/if}
         </div>
         {#if currentThread}
-          <select
-            class="model-select"
-            value={selectValue}
-            onchange={onModelChange}
+          <div
+            class="model-toggle"
+            role="group"
+            aria-label="Model tier"
             title={`Active: ${MODELS[currentTier].label} (${MODELS[currentTier].id})`}
           >
-            <option value="default">Default ({MODELS[defaultTier].icon} {MODELS[defaultTier].label})</option>
             {#each TIERS as tier (tier)}
-              <option value={tier}>{MODELS[tier].icon} {MODELS[tier].label}</option>
+              <button
+                type="button"
+                class="model-toggle-btn"
+                class:selected={currentTier === tier}
+                aria-pressed={currentTier === tier}
+                onclick={() => setTier(tier)}
+                title={MODELS[tier].label}
+                aria-label={MODELS[tier].label}
+              >
+                <span aria-hidden="true">{MODELS[tier].icon}</span>
+              </button>
             {/each}
-          </select>
+          </div>
         {/if}
       </div>
       <div class="messages">

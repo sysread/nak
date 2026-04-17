@@ -34,7 +34,10 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     tier: 'balanced',
     id: 'arcee-trinity-large-thinking',
     label: 'Balanced',
-    icon: '⚖',
+    // U+FE0F forces emoji-style presentation — without it, U+2696 SCALES
+    // renders as a thin text glyph that reads as near-invisible against
+    // the toggle background.
+    icon: '\u2696\uFE0F',
     description: 'Good quality, moderate speed.',
     contextWindow: 256_000,
   },
@@ -42,7 +45,7 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     tier: 'fast',
     id: 'grok-41-fast',
     label: 'Fast',
-    icon: '⚡',
+    icon: '\u26A1\uFE0F',
     description: 'Fastest; ~1M-token context.',
     contextWindow: 1_000_000,
   },
