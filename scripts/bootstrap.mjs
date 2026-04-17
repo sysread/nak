@@ -102,7 +102,22 @@ const supa = await runChildWithResult('setup-supabase.mjs');
 console.log(`\n${style.magenta('━━ Phase 3: Venice ━━')}`);
 info('We need your Venice API key to call chat completions.');
 info('Get one at: https://venice.ai/settings/api');
-const veniceApiKey = await ask('Paste your Venice API key', { secret: true });
+
+let veniceApiKey;
+const envKey = (process.env.VENICE_API_KEY || '').trim();
+if (envKey) {
+  const useEnv = await confirm(
+    `Found ${style.bold('VENICE_API_KEY')} in your environment (starts with ${style.dim(envKey.slice(0, 6))}…). Use it?`,
+    { default: true }
+  );
+  if (useEnv) {
+    veniceApiKey = envKey;
+    ok('Using VENICE_API_KEY from environment.');
+  }
+}
+if (!veniceApiKey) {
+  veniceApiKey = await ask('Paste your Venice API key', { secret: true });
+}
 if (!veniceApiKey) bail('Venice API key is required.');
 
 // --- Phase 4: build setup link -----------------------------------------------

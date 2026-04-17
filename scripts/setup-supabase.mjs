@@ -18,6 +18,7 @@ import {
   hint,
   bail,
   ask,
+  askSecretTwice,
   confirm,
   choose,
   style,
@@ -107,10 +108,10 @@ if (chosen.kind === 'new') {
   const region = await ask('Region (see https://supabase.com/docs/guides/platform/regions)', {
     default: 'us-east-1',
   });
-  const dbPassword = await ask('Database password (min 12 chars, save this somewhere!)', {
-    secret: true,
-  });
-  if ((dbPassword || '').length < 12) bail('Database password too short.');
+  const dbPassword = await askSecretTwice(
+    'Database password (min 12 chars, save this somewhere!)',
+    { minLength: 12 }
+  ).catch((err) => bail(err.message));
 
   info('Creating the project — this can take 60-90 seconds...');
   const created = await createProject({ name, orgId, region, dbPassword });
@@ -216,8 +217,9 @@ if (wantsUser) {
   } else {
     const email = await ask('Email');
     if (!email || !email.includes('@')) bail('Email is required.');
-    const password = await ask('Password (min 8 chars)', { secret: true });
-    if ((password || '').length < 8) bail('Password is too short.');
+    const password = await askSecretTwice('Password (min 8 chars)', {
+      minLength: 8,
+    }).catch((err) => bail(err.message));
 
     try {
       await adminCreateUser(supabaseUrl, serviceRole.api_key, { email, password });

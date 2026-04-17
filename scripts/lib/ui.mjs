@@ -59,20 +59,31 @@ export async function ask(question, { default: def, secret = false } = {}) {
   const prompt = `  ${style.cyan('?')} ${question}${suffix} `;
   try {
     if (secret) {
-      // Mute output while the user types. readline doesn't natively support
-      // this, so swap output.write with a no-op until newline.
-      const origWrite = output.write.bind(output);
-      rl.output = {
-        ...output,
-        write: (chunk, enc, cb) => {
-          const s = typeof chunk === 'string' ? chunk : chunk.toString(enc || 'utf8');
-          if (s.includes('\n')) origWrite('\n', enc, cb);
-          else if (cb) cb();
-          return true;
-        },
+      // Echo '*' for each typed char. We write the prompt ourselves first
+      // so readline's own prompt output doesn't get masked, then override
+      // the Interface's _writeToOutput for everything that follows.
+      output.write(prompt);
+      const originalWriteToOutput = rl._writeToOutput.bind(rl);
+      rl._writeToOutput = (chunk) => {
+        if (typeof chunk !== 'string' || chunk.length === 0) {
+          originalWriteToOutput(chunk);
+          return;
+        }
+        // Newlines end the input — pass through untouched.
+        if (chunk === '\n' || chunk === '\r' || chunk === '\r\n') {
+          originalWriteToOutput(chunk);
+          return;
+        }
+        // Backspace sequences (readline uses '\b \b' to erase a char).
+        // Pass through so the visual cursor moves back and erases the *.
+        if (chunk.charCodeAt(0) === 0x08) {
+          originalWriteToOutput(chunk);
+          return;
+        }
+        // Everything else is treated as one-or-more printable chars;
+        // show the same number of asterisks.
+        originalWriteToOutput('*'.repeat(chunk.length));
       };
-      // Write the prompt once, un-muted.
-      origWrite(prompt);
       const answer = (await rl.question('')).trim();
       return answer || (def ?? '');
     }
@@ -81,6 +92,24 @@ export async function ask(question, { default: def, secret = false } = {}) {
   } finally {
     rl.close();
   }
+}
+
+/**
+ * Prompt twice for a secret and verify the two entries match. Retries up to
+ * `attempts` times. Returns the matching value, or throws if exhausted.
+ */
+export async function askSecretTwice(question, { minLength = 0, attempts = 3 } = {}) {
+  for (let i = 0; i < attempts; i++) {
+    const a = await ask(question, { secret: true });
+    if (a.length < minLength) {
+      fail(`Must be at least ${minLength} characters.`);
+      continue;
+    }
+    const b = await ask('Re-enter to confirm', { secret: true });
+    if (a === b) return a;
+    fail("Passwords don't match. Try again.");
+  }
+  throw new Error(`Gave up after ${attempts} mismatched attempts.`);
 }
 
 export async function confirm(question, { default: def = true } = {}) {
