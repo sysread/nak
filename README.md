@@ -1,5 +1,8 @@
 # Nak
 
+[![Tests](https://github.com/sysread/nak/actions/workflows/tests.yml/badge.svg)](https://github.com/sysread/nak/actions/workflows/tests.yml)
+[![Deploy](https://github.com/sysread/nak/actions/workflows/deploy.yml/badge.svg)](https://github.com/sysread/nak/actions/workflows/deploy.yml)
+
 Nak is a browser-only, installable chat PWA that talks to **Venice.ai** for
 completions and uses **your** Supabase project for auth and persistence. There
 is no server component operated by the project author — you fork, deploy to
