@@ -75,6 +75,32 @@ export interface UserSettings {
   defaultModel?: ModelTier;
   colorMode?: ColorMode;
   accent?: Accent;
+  /** Library of named system prompts the user can toggle per-thread. */
+  systemPrompts?: SystemPrompt[];
+}
+
+/**
+ * A named system prompt. `enabledByDefault` is the "ride along on every new
+ * conversation" flag; per-thread enablement lives in component state (it
+ * isn't persisted — see the note on Chat.svelte). Ids are client-generated
+ * UUIDs so new prompts can be created offline and referenced immediately.
+ */
+export interface SystemPrompt {
+  id: string;
+  name: string;
+  body: string;
+  enabledByDefault: boolean;
+}
+
+function coerceSystemPrompt(raw: unknown): SystemPrompt | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const id = typeof r.id === 'string' && r.id.length > 0 ? r.id : null;
+  const name = typeof r.name === 'string' ? r.name : null;
+  const body = typeof r.body === 'string' ? r.body : null;
+  const enabledByDefault = r.enabledByDefault === true;
+  if (id === null || name === null || body === null) return null;
+  return { id, name, body, enabledByDefault };
 }
 
 /**
@@ -89,6 +115,14 @@ export function coerceSettings(raw: unknown): UserSettings {
   if (isModelTier(r.defaultModel)) out.defaultModel = r.defaultModel;
   if (isColorMode(r.colorMode)) out.colorMode = r.colorMode;
   if (isAccent(r.accent)) out.accent = r.accent;
+  if (Array.isArray(r.systemPrompts)) {
+    const prompts: SystemPrompt[] = [];
+    for (const item of r.systemPrompts) {
+      const p = coerceSystemPrompt(item);
+      if (p) prompts.push(p);
+    }
+    if (prompts.length > 0) out.systemPrompts = prompts;
+  }
   return out;
 }
 
@@ -175,6 +209,17 @@ export class SupabaseService {
     if ('accent' in patch) {
       if (patch.accent === undefined) delete merged.accent;
       else if (isAccent(patch.accent)) merged.accent = patch.accent;
+    }
+    if ('systemPrompts' in patch) {
+      if (patch.systemPrompts === undefined) delete merged.systemPrompts;
+      else if (Array.isArray(patch.systemPrompts)) {
+        // Run each prompt through the coercer so the stored shape is
+        // always well-formed, regardless of caller sloppiness.
+        const cleaned = patch.systemPrompts
+          .map((p) => coerceSystemPrompt(p))
+          .filter((p): p is SystemPrompt => p !== null);
+        merged.systemPrompts = cleaned;
+      }
     }
     const { error } = await this.client
       .from('profiles')

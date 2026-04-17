@@ -33,7 +33,7 @@
    */
   import { onMount, tick } from 'svelte';
   import type { Session } from '@supabase/supabase-js';
-  import { app, lock, setDefaultModel, setTheme } from '$lib/state.svelte';
+  import { app, lock, setDefaultModel, setSystemPrompts, setTheme } from '$lib/state.svelte';
   import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
   import type { Thread, Message } from '$lib/supabase';
   import {
@@ -101,6 +101,11 @@
       if (s.colorMode || s.accent) {
         setTheme(s.colorMode ?? app.colorMode, s.accent ?? app.accent);
       }
+      setSystemPrompts(s.systemPrompts ?? []);
+      // Only (re)seed the active set if the user hasn't already started
+      // toggling prompts on the current thread. Avoids clobbering their
+      // per-thread selection when settings arrive late.
+      if (activePromptIds.size === 0) resetActivePromptsToDefaults();
     } catch {
       // Best-effort: fall back to DEFAULT_TIER / cached theme from activate().
     }
@@ -172,6 +177,10 @@
     setSessionThreadId(id);
     messages = [];
     streamingText = '';
+    // Re-seed the active prompt set from defaults whenever the user
+    // switches threads — per-thread toggles are not persisted, so a
+    // thread switch is effectively a fresh start for this UI state.
+    resetActivePromptsToDefaults();
     // On mobile the drawer is modal, so dismiss it once a thread is chosen.
     // On desktop the sidebar is a persistent column — leave it open.
     if (
@@ -391,7 +400,17 @@
       messages = [...messages, userMsg];
       streamingText = '';
       abortCtl = new AbortController();
-      const history = messages.map((m) => ({ role: m.role, content: m.content }));
+      // Build the request payload: active system prompts first (in library
+      // order, skipping empties), then the stored conversation history.
+      // Prompts aren't stored on the thread — we re-apply whatever the user
+      // has toggled on at send time.
+      const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
+        .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
+        .map((p) => ({ role: 'system' as const, content: p.body }));
+      const history = [
+        ...systemMessages,
+        ...messages.map((m) => ({ role: m.role, content: m.content })),
+      ];
       let full = '';
       for await (const delta of app.venice.streamChat({
         model: modelId,
@@ -469,9 +488,62 @@
   }
 
   // Composer expand toggle. When true, the textarea grows to 40vh so the
-  // user has room for longer prompts; otherwise it sticks to the compact
-  // ~12rem max-height.
-  let composerExpanded = $state(false);
+  // The composer textarea resizes naturally up to max-height and is
+  // user-resizable via the native drag handle (see .composer-textarea).
+
+  // Composer popovers (prompts list + model picker). Only one is open at
+  // a time. Click-outside closes; Escape too.
+  let promptsMenuOpen = $state(false);
+  let modelMenuOpen = $state(false);
+  let composerBarEl: HTMLDivElement | undefined = $state();
+
+  // IDs of system prompts active for the current thread. Seeded from
+  // `enabledByDefault` when a thread is opened, not persisted. Swapping
+  // threads resets this to the current defaults — per-thread toggles do
+  // not carry across conversations.
+  let activePromptIds = $state<Set<string>>(new Set());
+
+  function resetActivePromptsToDefaults(): void {
+    activePromptIds = new Set(
+      app.systemPrompts.filter((p) => p.enabledByDefault).map((p) => p.id)
+    );
+  }
+
+  function togglePrompt(id: string): void {
+    const next = new Set(activePromptIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    activePromptIds = next;
+  }
+
+  const activePromptCount = $derived(
+    app.systemPrompts.filter((p) => activePromptIds.has(p.id)).length
+  );
+
+  function closeMenus(): void {
+    promptsMenuOpen = false;
+    modelMenuOpen = false;
+  }
+
+  function onDocClick(e: MouseEvent): void {
+    if (!promptsMenuOpen && !modelMenuOpen) return;
+    if (composerBarEl && composerBarEl.contains(e.target as Node)) return;
+    closeMenus();
+  }
+
+  function onDocKey(e: KeyboardEvent): void {
+    if (e.key === 'Escape') closeMenus();
+  }
+
+  $effect(() => {
+    if (!promptsMenuOpen && !modelMenuOpen) return;
+    document.addEventListener('click', onDocClick);
+    document.addEventListener('keydown', onDocKey);
+    return () => {
+      document.removeEventListener('click', onDocClick);
+      document.removeEventListener('keydown', onDocKey);
+    };
+  });
 
 </script>
 
@@ -618,28 +690,6 @@
             >{currentThread.title || 'Untitled'}</button>
           {/if}
         </div>
-        {#if currentThread}
-          <div
-            class="model-toggle"
-            role="group"
-            aria-label="Model tier"
-            title={`Active: ${MODELS[currentTier].label} (${MODELS[currentTier].id})`}
-          >
-            {#each TIERS as tier (tier)}
-              <button
-                type="button"
-                class="model-toggle-btn"
-                class:selected={currentTier === tier}
-                aria-pressed={currentTier === tier}
-                onclick={() => setTier(tier)}
-                title={MODELS[tier].label}
-                aria-label={MODELS[tier].label}
-              >
-                <span aria-hidden="true">{MODELS[tier].icon}</span>
-              </button>
-            {/each}
-          </div>
-        {/if}
       </div>
       <div class="messages">
         {#each messages as m (m.id)}
@@ -658,49 +708,132 @@
       </div>
       {#if error}<p class="error" style="padding:0 1rem">{error}</p>{/if}
       <div class="composer">
-        <div class="textarea-wrap">
+        <div class="composer-shell">
           <textarea
-            class:expanded={composerExpanded}
+            class="composer-textarea"
             bind:value={composer}
             onkeydown={onKeydown}
             placeholder={`Message… (${sendHint})`}
             disabled={sending}
           ></textarea>
-          <button
-            type="button"
-            class="composer-expand"
-            onclick={() => (composerExpanded = !composerExpanded)}
-            title={composerExpanded ? 'Shrink composer' : 'Expand composer'}
-            aria-label={composerExpanded ? 'Shrink composer' : 'Expand composer'}
-            aria-pressed={composerExpanded}
-          >
-            {#if composerExpanded}
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                   stroke-linejoin="round" aria-hidden="true">
-                <polyline points="6 9 12 15 18 9" />
+          <div class="composer-bar" bind:this={composerBarEl}>
+            <div class="composer-bar-left">
+              <!-- Prompts: toggles which system prompts ride along on
+                   every future send in this conversation. -->
+              <button
+                type="button"
+                class="secondary icon-btn"
+                class:active={activePromptCount > 0}
+                onclick={() => {
+                  modelMenuOpen = false;
+                  promptsMenuOpen = !promptsMenuOpen;
+                }}
+                title="System prompts"
+                aria-label="System prompts"
+                aria-haspopup="true"
+                aria-expanded={promptsMenuOpen}
+                disabled={app.systemPrompts.length === 0}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="4" y1="21" x2="4" y2="14" />
+                  <line x1="4" y1="10" x2="4" y2="3" />
+                  <line x1="12" y1="21" x2="12" y2="12" />
+                  <line x1="12" y1="8" x2="12" y2="3" />
+                  <line x1="20" y1="21" x2="20" y2="16" />
+                  <line x1="20" y1="12" x2="20" y2="3" />
+                  <line x1="1" y1="14" x2="7" y2="14" />
+                  <line x1="9" y1="8" x2="15" y2="8" />
+                  <line x1="17" y1="16" x2="23" y2="16" />
+                </svg>
+                {#if activePromptCount > 0}
+                  <span class="badge" aria-hidden="true">{activePromptCount}</span>
+                {/if}
+              </button>
+
+              <!-- Model picker: per-thread override, stored on threads.model. -->
+              {#if currentThread}
+                <button
+                  type="button"
+                  class="secondary model-picker-btn"
+                  onclick={() => {
+                    promptsMenuOpen = false;
+                    modelMenuOpen = !modelMenuOpen;
+                  }}
+                  aria-haspopup="true"
+                  aria-expanded={modelMenuOpen}
+                  title={`Model: ${MODELS[currentTier].label} (${MODELS[currentTier].id})`}
+                >
+                  <span class="model-picker-icon" aria-hidden="true">{MODELS[currentTier].icon}</span>
+                  <span class="model-picker-label">{MODELS[currentTier].label}</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+              {/if}
+            </div>
+
+            <button
+              class="send-btn composer-send"
+              onclick={send}
+              disabled={sending || composer.trim().length === 0}
+              title={sending ? 'Sending…' : 'Send'}
+              aria-label={sending ? 'Sending' : 'Send'}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"
+                   aria-hidden="true">
+                <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
               </svg>
-            {:else}
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                   stroke-linejoin="round" aria-hidden="true">
-                <polyline points="18 15 12 9 6 15" />
-              </svg>
+            </button>
+
+            {#if promptsMenuOpen}
+              <div class="composer-menu composer-menu-left" role="menu">
+                <div class="menu-header">Active for this conversation</div>
+                {#each app.systemPrompts as p (p.id)}
+                  <label class="menu-item">
+                    <input
+                      type="checkbox"
+                      checked={activePromptIds.has(p.id)}
+                      onchange={() => togglePrompt(p.id)}
+                    />
+                    <span class="menu-item-label">{p.name || '(unnamed)'}</span>
+                    {#if p.enabledByDefault}<span class="menu-item-badge">default</span>{/if}
+                  </label>
+                {/each}
+                {#if app.systemPrompts.length === 0}
+                  <div class="menu-empty">No prompts — add some in Settings.</div>
+                {/if}
+              </div>
             {/if}
-          </button>
+
+            {#if modelMenuOpen && currentThread}
+              <div class="composer-menu composer-menu-left" role="menu">
+                <div class="menu-header">Model for this conversation</div>
+                {#each TIERS as tier (tier)}
+                  <button
+                    type="button"
+                    class="menu-item menu-item-btn"
+                    class:selected={currentTier === tier}
+                    onclick={() => {
+                      void setTier(tier);
+                      modelMenuOpen = false;
+                    }}
+                    role="menuitemradio"
+                    aria-checked={currentTier === tier}
+                  >
+                    <span class="menu-item-icon" aria-hidden="true">{MODELS[tier].icon}</span>
+                    <span class="menu-item-label">
+                      <strong>{MODELS[tier].label}</strong>
+                      <span class="subtle" style="display:block;font-size:0.75rem">{MODELS[tier].id}</span>
+                    </span>
+                    {#if tier === defaultTier}<span class="menu-item-badge">default</span>{/if}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
         </div>
-        <button
-          class="send-btn"
-          onclick={send}
-          disabled={sending || composer.trim().length === 0}
-          title={sending ? 'Sending…' : 'Send'}
-          aria-label={sending ? 'Sending' : 'Send'}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"
-               aria-hidden="true">
-            <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
-          </svg>
-        </button>
       </div>
     </main>
   </div>

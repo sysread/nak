@@ -50,4 +50,48 @@ describe('coerceSettings', () => {
       coerceSettings({ defaultModel: 'smart', colorMode: 'dark', accent: 'pink' })
     ).toEqual({ defaultModel: 'smart', colorMode: 'dark', accent: 'pink' });
   });
+
+  it('passes through well-formed systemPrompts', () => {
+    const prompts = [
+      { id: 'a', name: 'Rude reviewer', body: 'Be curt.', enabledByDefault: true },
+      { id: 'b', name: 'Haiku', body: 'Reply in haiku.', enabledByDefault: false },
+    ];
+    expect(coerceSettings({ systemPrompts: prompts })).toEqual({ systemPrompts: prompts });
+  });
+
+  it('drops malformed systemPrompts entries without dropping the valid ones', () => {
+    const result = coerceSettings({
+      systemPrompts: [
+        { id: 'good', name: 'Ok', body: 'ok', enabledByDefault: true },
+        { id: '', name: 'missing id', body: 'x', enabledByDefault: false },
+        { name: 'no id', body: 'x', enabledByDefault: false },
+        { id: 'bad', name: null, body: 'x', enabledByDefault: false },
+        'not an object',
+        42,
+      ],
+    });
+    expect(result.systemPrompts).toEqual([
+      { id: 'good', name: 'Ok', body: 'ok', enabledByDefault: true },
+    ]);
+  });
+
+  it('coerces enabledByDefault to strict true (truthy strings stay false)', () => {
+    const result = coerceSettings({
+      systemPrompts: [
+        { id: 'a', name: 'a', body: '', enabledByDefault: 'yes' },
+        { id: 'b', name: 'b', body: '', enabledByDefault: true },
+      ],
+    });
+    expect(result.systemPrompts).toEqual([
+      { id: 'a', name: 'a', body: '', enabledByDefault: false },
+      { id: 'b', name: 'b', body: '', enabledByDefault: true },
+    ]);
+  });
+
+  it('omits systemPrompts when the input array is empty or all-invalid', () => {
+    expect(coerceSettings({ systemPrompts: [] }).systemPrompts).toBeUndefined();
+    expect(
+      coerceSettings({ systemPrompts: ['nope', 123, null] }).systemPrompts
+    ).toBeUndefined();
+  });
 });

@@ -21,8 +21,15 @@
    * in-flight save are harmless.
    */
   import { changePassword, saveConfig, toExportedConfig } from '$lib/config';
-  import { app, activate, setDefaultModel, setTheme } from '$lib/state.svelte';
+  import {
+    app,
+    activate,
+    setDefaultModel,
+    setSystemPrompts,
+    setTheme,
+  } from '$lib/state.svelte';
   import { MODELS, TIERS, type ModelTier } from '$lib/models';
+  import type { SystemPrompt } from '$lib/supabase';
   import {
     ACCENTS,
     MODES,
@@ -40,10 +47,11 @@
   }
   let { onClose }: Props = $props();
 
-  type Group = 'keys' | 'model' | 'appearance' | 'export' | 'security';
+  type Group = 'keys' | 'model' | 'prompts' | 'appearance' | 'export' | 'security';
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'keys', label: 'API keys' },
     { id: 'model', label: 'Model' },
+    { id: 'prompts', label: 'Prompts' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'export', label: 'Export' },
     { id: 'security', label: 'Security' },
@@ -64,6 +72,92 @@
   let defaultModel = $state<ModelTier>(app.defaultModel);
   let modelError = $state<string | null>(null);
   let modelInfo = $state<string | null>(null);
+
+  // --- Prompts pane ---
+  // Local working copy of the prompt library. We edit this in memory and
+  // push the full updated array to Supabase on every change so the UX is
+  // as simple as "type and it saves". Debouncing could come later.
+  let promptsDraft = $state<SystemPrompt[]>(
+    app.systemPrompts.map((p) => ({ ...p }))
+  );
+  let promptsError = $state<string | null>(null);
+  let promptsInfo = $state<string | null>(null);
+  let promptsSaving = $state(false);
+  let promptsDebounce: ReturnType<typeof setTimeout> | null = null;
+
+  // If Chat.svelte updates app.systemPrompts (from a fresh Supabase pull
+  // on auth settle), re-sync the draft so the Prompts tab shows the
+  // server-side truth instead of a stale local array.
+  $effect(() => {
+    // Only resync when we aren't actively editing — otherwise every
+    // keystroke would nuke the user's in-progress edit.
+    if (promptsDebounce !== null || promptsSaving) return;
+    const live = app.systemPrompts;
+    const same =
+      live.length === promptsDraft.length &&
+      live.every((p, i) => {
+        const local = promptsDraft[i];
+        return (
+          local.id === p.id &&
+          local.name === p.name &&
+          local.body === p.body &&
+          local.enabledByDefault === p.enabledByDefault
+        );
+      });
+    if (!same) promptsDraft = live.map((p) => ({ ...p }));
+  });
+
+  function addPrompt(): void {
+    promptsDraft = [
+      ...promptsDraft,
+      {
+        id: crypto.randomUUID(),
+        name: 'New prompt',
+        body: '',
+        enabledByDefault: false,
+      },
+    ];
+    schedulePromptsSave();
+  }
+
+  function updatePrompt(id: string, patch: Partial<SystemPrompt>): void {
+    promptsDraft = promptsDraft.map((p) => (p.id === id ? { ...p, ...patch } : p));
+    schedulePromptsSave();
+  }
+
+  function deletePrompt(id: string): void {
+    promptsDraft = promptsDraft.filter((p) => p.id !== id);
+    schedulePromptsSave();
+  }
+
+  function schedulePromptsSave(): void {
+    if (promptsDebounce) clearTimeout(promptsDebounce);
+    promptsDebounce = setTimeout(() => {
+      promptsDebounce = null;
+      void savePrompts();
+    }, 500);
+  }
+
+  async function savePrompts(): Promise<void> {
+    promptsError = null;
+    promptsInfo = null;
+    if (!app.supabase) {
+      promptsError = 'Not connected to Supabase yet.';
+      return;
+    }
+    promptsSaving = true;
+    try {
+      const merged = await app.supabase.updateSettings({
+        systemPrompts: promptsDraft,
+      });
+      setSystemPrompts(merged.systemPrompts ?? []);
+      promptsInfo = 'Saved.';
+    } catch (err) {
+      promptsError = err instanceof Error ? err.message : String(err);
+    } finally {
+      promptsSaving = false;
+    }
+  }
 
   // --- Appearance pane ---
   let colorMode = $state<ColorMode>(app.colorMode);
@@ -289,6 +383,66 @@
           {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
           <button type="submit" disabled={busy}>Save default model</button>
         </form>
+      {:else if group === 'prompts'}
+        <h2>System prompts</h2>
+        <p class="subtle">
+          Named prompts you can toggle on or off from the chat composer. The
+          "Default" checkbox seeds the active set for new conversations.
+          Per-conversation toggles aren't saved — they only affect the
+          current thread.
+        </p>
+        <div class="prompt-list">
+          {#each promptsDraft as p (p.id)}
+            <div class="prompt-card">
+              <div class="prompt-row">
+                <input
+                  type="text"
+                  class="prompt-name"
+                  value={p.name}
+                  placeholder="Name"
+                  oninput={(e) => updatePrompt(p.id, { name: (e.currentTarget as HTMLInputElement).value })}
+                />
+                <label class="prompt-default">
+                  <input
+                    type="checkbox"
+                    checked={p.enabledByDefault}
+                    onchange={(e) =>
+                      updatePrompt(p.id, {
+                        enabledByDefault: (e.currentTarget as HTMLInputElement).checked,
+                      })}
+                  />
+                  <span>Default</span>
+                </label>
+                <button
+                  type="button"
+                  class="secondary icon-btn"
+                  title="Delete prompt"
+                  aria-label="Delete prompt"
+                  onclick={() => deletePrompt(p.id)}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6" />
+                    <path d="M10 11v6M14 11v6" />
+                  </svg>
+                </button>
+              </div>
+              <textarea
+                class="prompt-body"
+                value={p.body}
+                placeholder="The system prompt text… (e.g. 'Be concise.')"
+                oninput={(e) => updatePrompt(p.id, { body: (e.currentTarget as HTMLTextAreaElement).value })}
+              ></textarea>
+            </div>
+          {/each}
+          {#if promptsDraft.length === 0}
+            <p class="subtle" style="padding:0.5rem 0">No prompts yet.</p>
+          {/if}
+        </div>
+        <button type="button" onclick={addPrompt}>+ Add prompt</button>
+        {#if promptsError}<p class="error">{promptsError}</p>{/if}
+        {#if promptsInfo}<p class="subtle" style="font-size:0.8rem">{promptsInfo}</p>{/if}
       {:else if group === 'appearance'}
         <h2>Appearance</h2>
         <p class="subtle">

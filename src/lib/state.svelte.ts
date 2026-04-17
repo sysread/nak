@@ -21,7 +21,7 @@
  * easier to read than a constellation of stores with the same lifetime.
  */
 import type { AppConfig } from './config';
-import { SupabaseService } from './supabase';
+import { SupabaseService, type SystemPrompt } from './supabase';
 import { VeniceClient } from './venice';
 import { saveSession, clearSession } from './session';
 import { DEFAULT_TIER, type ModelTier } from './models';
@@ -51,6 +51,13 @@ interface AppState {
   /** UI theme — seeded from localStorage cache, then from Supabase. */
   colorMode: ColorMode;
   accent: Accent;
+  /**
+   * System-prompt library, loaded from Supabase `profiles.settings`. A
+   * prompt's `enabledByDefault` flag seeds the per-thread active set in
+   * Chat.svelte; the active set itself is not stored here because it's
+   * conversation-scoped.
+   */
+  systemPrompts: SystemPrompt[];
   error: string | null;
 }
 
@@ -64,11 +71,16 @@ export const app = $state<AppState>({
   defaultModel: DEFAULT_TIER,
   colorMode: cachedTheme?.mode ?? DEFAULT_MODE,
   accent: cachedTheme?.accent ?? DEFAULT_ACCENT,
+  systemPrompts: [],
   error: null,
 });
 
 export function setDefaultModel(tier: ModelTier): void {
   app.defaultModel = tier;
+}
+
+export function setSystemPrompts(prompts: SystemPrompt[]): void {
+  app.systemPrompts = prompts;
 }
 
 /**
@@ -106,6 +118,7 @@ export function lock(): void {
   app.supabase = null;
   app.venice = null;
   app.defaultModel = DEFAULT_TIER;
+  app.systemPrompts = [];
   app.phase = 'locked';
   clearSession();
 }

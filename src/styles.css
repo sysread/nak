@@ -328,6 +328,55 @@ label {
   width: auto;
 }
 
+/* Prompts settings pane. Each prompt is a small card with a name input,
+   default checkbox, delete button, and a resizable body textarea. Edits
+   autosave to Supabase (debounced in Settings.svelte). */
+.prompt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-bottom: 0.75rem;
+}
+.prompt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+}
+.prompt-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.prompt-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+}
+.prompt-default {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  margin-bottom: 0;
+}
+.prompt-default input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+}
+.prompt-body {
+  width: 100%;
+  min-height: 4.5rem;
+  font-family: inherit;
+  resize: vertical;
+}
+
 .pane-section {
   font-size: 0.85rem;
   text-transform: uppercase;
@@ -877,84 +926,200 @@ h1 {
   border: 1px solid var(--border);
 }
 
+/* ---------- Composer ----------
+   One rounded shell containing the textarea stacked on top of a button
+   bar: [prompts] [model] ...............................[ send ].
+   The shell shares a single border so the controls "dovetail" visually
+   with the input. Focus-within lights up the border in --accent. */
+
 .composer {
-  /* No top divider — the textarea's own brighter border marks the edge. */
-  padding: 1rem 1.25rem 1.25rem;
-  display: flex;
-  gap: 0.5rem;
-  /* Top-align so the Send button's top edge lines up with the textarea's
-     top edge — matches the expand button sitting at the top-right corner
-     of the textarea. */
-  align-items: flex-start;
+  padding: 0.75rem 1rem 1rem;
 }
 
-/* Brighter border on the textarea itself so the composer is visually
-   anchored without needing a divider above it. */
-.composer textarea {
-  border-color: var(--muted);
+.composer-shell {
+  background: var(--bg-2);
+  border: 1px solid var(--muted);
+  border-radius: 14px;
+  padding: 0.5rem 0.6rem 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  transition: border-color 120ms ease-out;
 }
-.composer textarea:focus {
-  outline: none;
+
+.composer-shell:focus-within {
   border-color: var(--accent);
 }
 
-.textarea-wrap {
-  flex: 1;
-  position: relative;
-  min-width: 0;
-}
-
-.composer textarea {
+.composer-textarea {
+  /* The textarea is borderless inside the shell — the shell owns the
+     outline and focus ring. Keep resize: vertical so users can still
+     drag the handle for a taller composer on the fly. */
   width: 100%;
   min-height: 2.6rem;
-  max-height: 12rem;
-  padding-right: 2.4rem; /* room for the expand button */
-  transition: max-height 160ms ease-out, height 160ms ease-out;
-}
-
-.composer textarea.expanded {
-  min-height: 40vh;
-  max-height: 40vh;
-  height: 40vh;
-}
-
-.composer-expand {
-  position: absolute;
-  top: 0.35rem;
-  right: 0.35rem;
-  width: 1.9rem;
-  height: 1.9rem;
-  padding: 0;
+  max-height: 24rem;
+  border: 0;
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
-  color: var(--muted);
+  padding: 0.35rem 0.4rem 0.15rem;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+.composer-textarea:focus {
+  outline: none;
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  position: relative;
+}
+
+.composer-bar-left {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+/* Prompts icon button gets a subtle tint + count badge when any prompt
+   is active for the current conversation — a passive "heads up" that
+   system prompts are in play. */
+.composer-bar-left .icon-btn.active {
+  color: var(--accent);
+  border-color: var(--accent-weak);
+  position: relative;
+}
+.composer-bar-left .badge {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.35rem;
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--ink-on-accent);
+  font-size: 0.65rem;
+  line-height: 1rem;
+  text-align: center;
+  font-weight: 600;
+}
+
+.model-picker-btn {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  cursor: pointer;
+  gap: 0.4rem;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.model-picker-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.model-picker-label {
+  white-space: nowrap;
 }
 
-.composer-expand:hover,
-.composer-expand:focus-visible {
-  color: var(--text);
+/* Popover menus. Positioned absolutely inside the composer-bar (which is
+   position: relative). Anchored to the bottom of the shell so they float
+   ABOVE the bar, which reads as "rising out of" the button. */
+.composer-menu {
+  position: absolute;
+  bottom: calc(100% + 0.5rem);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.35rem;
+  min-width: 16rem;
+  max-width: 22rem;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.composer-menu-left {
+  left: 0;
+}
+.menu-header {
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 0.25rem 0.45rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.45rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.88rem;
+}
+.menu-item:hover {
   background: var(--bg-2);
+}
+.menu-item input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+}
+.menu-item-btn {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  text-align: left;
+  width: 100%;
+}
+.menu-item-btn.selected {
+  background: var(--accent-weak);
   border-color: var(--border);
+}
+.menu-item-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+  width: 1.1rem;
+  text-align: center;
+}
+.menu-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.menu-item-badge {
+  font-size: 0.65rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.menu-empty {
+  padding: 0.45rem;
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 
 .send-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2.4rem;
-  height: 2.4rem;
+  width: 2.2rem;
+  height: 2.2rem;
   padding: 0;
   line-height: 1;
   flex-shrink: 0;
+  border-radius: 999px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .composer textarea {
+  .composer-shell {
     transition: none;
   }
 }
