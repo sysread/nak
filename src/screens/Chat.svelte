@@ -135,7 +135,7 @@
   }
 
   function onKeydown(e: KeyboardEvent): void {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && e.shiftKey) {
       e.preventDefault();
       void send();
     }
@@ -210,7 +210,7 @@
         <textarea
           bind:value={composer}
           onkeydown={onKeydown}
-          placeholder="Message… (Enter to send, Shift+Enter for newline)"
+          placeholder="Message… (Shift+Enter to send, Enter for newline)"
           disabled={sending}
         ></textarea>
         <button onclick={send} disabled={sending || composer.trim().length === 0}>
