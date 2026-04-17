@@ -24,7 +24,7 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import markedKatex from 'marked-katex-extension';
-import { highlight, isSupported, normalizeLang } from './highlight';
+import { canLoad, ensureLanguage, highlight, isSupported, normalizeLang } from './highlight';
 
 // ---------------------------------------------------------------------------
 // marked configuration
@@ -49,6 +49,14 @@ renderer.image = ({ text, title }: { text: string; title?: string | null }) => {
 renderer.code = ({ text, lang }: { text: string; lang?: string }) => {
   const normalized = normalizeLang(lang ?? '');
   const highlighted = normalized && isSupported(normalized);
+  // If the grammar hasn't been registered yet but we know how to fetch it,
+  // kick off the import as a side effect. This render falls back to
+  // unhighlighted escaped text; once the module lands, <Markdown>'s
+  // `onLanguageLoaded` subscriber re-renders and this branch takes the
+  // highlighted path. Fire-and-forget is safe — `ensureLanguage` dedupes.
+  if (!highlighted && normalized && canLoad(normalized)) {
+    void ensureLanguage(normalized);
+  }
   const body = highlighted ? highlight(text, normalized) : escapeHtml(text);
   const classes: string[] = [];
   if (highlighted) classes.push('hljs', `language-${escapeAttr(normalized)}`);

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { renderMarkdown } from '../src/lib/markdown';
+import { canLoad, ensureLanguage, isSupported } from '../src/lib/highlight';
 
 describe('renderMarkdown — happy paths', () => {
   it('returns empty string for empty or non-string input', () => {
@@ -135,5 +136,45 @@ describe('renderMarkdown — security', () => {
   it('drops raw HTML elements from the source', () => {
     const html = renderMarkdown('<iframe src="https://evil.example"></iframe>');
     expect(html).not.toMatch(/<iframe/);
+  });
+});
+
+describe('renderMarkdown — dynamic language loading', () => {
+  it('reports ocaml as loadable but not statically supported', () => {
+    // `ocaml` isn't in the eager-register list — it should arrive via the
+    // dynamic loader instead.
+    expect(isSupported('ocaml')).toBe(false);
+    expect(canLoad('ocaml')).toBe(true);
+  });
+
+  it('first render of a ```ocaml fence falls back to plain escaped text', () => {
+    // Module state is shared across tests in this file; run this before
+    // awaiting `ensureLanguage('ocaml')` so we observe the pre-load render.
+    const html = renderMarkdown('```ocaml\nlet x = 1\n```');
+    expect(html).not.toMatch(/class="[^"]*hljs/);
+    expect(html).not.toMatch(/class="[^"]*language-ocaml/);
+    expect(html).toMatch(/let x = 1/);
+  });
+
+  it('registers the grammar after ensureLanguage resolves, and subsequent renders are highlighted', async () => {
+    const ok = await ensureLanguage('ocaml');
+    expect(ok).toBe(true);
+    expect(isSupported('ocaml')).toBe(true);
+
+    const html = renderMarkdown('```ocaml\nlet x = 1\n```');
+    expect(html).toMatch(/<code[^>]*class="[^"]*\bhljs\b[^"]*"/);
+    expect(html).toMatch(/class="[^"]*language-ocaml/);
+  });
+
+  it('alias `hs` resolves through to the haskell loader', async () => {
+    const ok = await ensureLanguage('hs');
+    expect(ok).toBe(true);
+    expect(isSupported('haskell')).toBe(true);
+    const html = renderMarkdown('```hs\nmain = putStrLn "hi"\n```');
+    expect(html).toMatch(/class="[^"]*language-haskell/);
+  });
+
+  it('ensureLanguage for a truly unknown language resolves to false', async () => {
+    expect(await ensureLanguage('not-a-real-language-xyz')).toBe(false);
   });
 });
