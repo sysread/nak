@@ -181,6 +181,9 @@
     // switches threads — per-thread toggles are not persisted, so a
     // thread switch is effectively a fresh start for this UI state.
     resetActivePromptsToDefaults();
+    // Opening a thread starts in follow-bottom mode; the autoscroll
+    // effect lands the view on the newest messages once they load.
+    followBottom = true;
     // On mobile the drawer is modal, so dismiss it once a thread is chosen.
     // On desktop the sidebar is a persistent column — leave it open.
     if (
@@ -395,6 +398,10 @@
 
     composer = '';
     sending = true;
+    // Sending is an explicit "pay attention to the bottom" signal — even
+    // if the user had scrolled up before hitting send, we want their new
+    // message (and the impending streaming response) in view.
+    followBottom = true;
     try {
       const userMsg = await app.supabase.addMessage(threadId, 'user', text);
       messages = [...messages, userMsg];
@@ -490,6 +497,57 @@
   // Composer expand toggle. When true, the textarea grows to 40vh so the
   // The composer textarea resizes naturally up to max-height and is
   // user-resizable via the native drag handle (see .composer-textarea).
+
+  // Scroll behavior for the messages list.
+  //
+  //   followBottom = true  → stream deltas and user sends pin the view
+  //                          to the bottom.
+  //   followBottom = false → the user has scrolled upward while content
+  //                          was arriving; stop auto-scrolling. The
+  //                          floating "↓" button re-engages follow mode.
+  //
+  // The scroll handler derives `followBottom` from the current
+  // position, so programmatic scrolls (streaming appends) and user
+  // scrolls go through the same code path — we just react to "is the
+  // view still near the bottom?" and set the flag accordingly. No
+  // ignore-next-event plumbing needed.
+  const NEAR_BOTTOM_PX = 48;
+  let messagesEl: HTMLDivElement | undefined = $state();
+  let followBottom = $state(true);
+  let hasOverflow = $state(false);
+
+  function isNearBottom(el: HTMLElement): boolean {
+    return el.scrollTop + el.clientHeight >= el.scrollHeight - NEAR_BOTTOM_PX;
+  }
+
+  function scrollToBottom(smooth = false): void {
+    const el = messagesEl;
+    if (!el) return;
+    el.scrollTo({
+      top: el.scrollHeight,
+      behavior: smooth ? 'smooth' : 'auto',
+    });
+  }
+
+  function onMessagesScroll(): void {
+    const el = messagesEl;
+    if (!el) return;
+    followBottom = isNearBottom(el);
+    hasOverflow = el.scrollHeight > el.clientHeight + 1;
+  }
+
+  // Whenever the visible content changes (new messages or streaming
+  // tokens), pin to the bottom if we're following. Also refresh
+  // hasOverflow so the ↓ button shows up promptly.
+  $effect(() => {
+    // Touch the dependencies so Svelte knows to rerun on change.
+    void messages;
+    void streamingText;
+    const el = messagesEl;
+    if (!el) return;
+    hasOverflow = el.scrollHeight > el.clientHeight + 1;
+    if (followBottom) scrollToBottom(false);
+  });
 
   // Composer popovers (prompts list + model picker). Only one is open at
   // a time. Click-outside closes; Escape too.
@@ -691,19 +749,43 @@
           {/if}
         </div>
       </div>
-      <div class="messages">
-        {#each messages as m (m.id)}
-          <div class="msg {m.role}">
-            <Markdown content={m.content} />
-          </div>
-        {/each}
-        {#if streamingText}
-          <div class="msg assistant">
-            <Markdown content={streamingText} />
-          </div>
-        {/if}
-        {#if messages.length === 0 && !streamingText}
-          <div class="empty">Type a message to begin.</div>
+      <div class="messages-wrap">
+        <div
+          class="messages"
+          bind:this={messagesEl}
+          onscroll={onMessagesScroll}
+        >
+          {#each messages as m (m.id)}
+            <div class="msg {m.role}">
+              <Markdown content={m.content} />
+            </div>
+          {/each}
+          {#if streamingText}
+            <div class="msg assistant">
+              <Markdown content={streamingText} />
+            </div>
+          {/if}
+          {#if messages.length === 0 && !streamingText}
+            <div class="empty">Type a message to begin.</div>
+          {/if}
+        </div>
+        {#if !followBottom && hasOverflow}
+          <button
+            type="button"
+            class="scroll-to-bottom"
+            onclick={() => {
+              followBottom = true;
+              scrollToBottom(true);
+            }}
+            title="Scroll to latest"
+            aria-label="Scroll to latest"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                 stroke-linejoin="round" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
         {/if}
       </div>
       {#if error}<p class="error" style="padding:0 1rem">{error}</p>{/if}
