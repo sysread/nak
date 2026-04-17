@@ -63,8 +63,13 @@
     }
   }
 
+  // True when the active thread has no messages yet — clicking "New thread"
+  // in this state would produce a second empty thread, so we disable it.
+  const currentIsEmpty = $derived(activeThreadId !== null && messages.length === 0);
+
   async function newThread(): Promise<void> {
     if (!app.supabase) return;
+    if (currentIsEmpty) return;
     try {
       const t = await app.supabase.createThread('New conversation');
       threads = [t, ...threads];
@@ -160,7 +165,12 @@
   <div class="shell">
     <aside class="sidebar">
       <header>
-        <button style="width:100%" onclick={newThread}>+ New thread</button>
+        <button
+          style="width:100%"
+          onclick={newThread}
+          disabled={currentIsEmpty}
+          title={currentIsEmpty ? "You're already on an empty thread." : 'Start a new conversation'}
+        >+ New thread</button>
       </header>
       <div class="thread-list">
         {#each threads as t (t.id)}
