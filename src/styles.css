@@ -661,6 +661,18 @@ h1 {
   border-color: var(--border);
 }
 
+.send-btn.glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.4rem;
+  height: 2.4rem;
+  padding: 0;
+  font-size: 1.1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .composer textarea {
     transition: none;

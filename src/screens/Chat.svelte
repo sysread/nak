@@ -37,6 +37,7 @@
   let titleInputEl: HTMLInputElement | undefined = $state();
 
   onMount(() => {
+    enterGlyphAvailable = hasGlyph('\u23CE');
     if (!app.supabase) return;
     const unsubscribe = app.supabase.onAuthChange((s) => {
       session = s;
@@ -326,6 +327,26 @@
   // user has room for longer prompts; otherwise it sticks to the compact
   // ~12rem max-height.
   let composerExpanded = $state(false);
+
+  // The U+23CE RETURN SYMBOL (⏎) — the hook-arrow Enter glyph from older
+  // keyboards — is only rendered as a label if the user's font stack
+  // actually has a glyph for it; otherwise we fall back to the word "Send"
+  // so the button doesn't turn into a tofu box.
+  let enterGlyphAvailable = $state(false);
+
+  function hasGlyph(ch: string): boolean {
+    if (typeof document === 'undefined') return false;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return false;
+    ctx.font = '16px sans-serif';
+    const probe = ctx.measureText(ch).width;
+    // U+E000 sits in the Private Use Area, so no standard font ships a
+    // glyph for it — its measured width is the browser's "tofu" width.
+    const tofu = ctx.measureText('\uE000').width;
+    return probe > 0 && probe !== tofu;
+  }
+
 </script>
 
 {#if !sessionLoaded}
@@ -516,8 +537,21 @@
             {/if}
           </button>
         </div>
-        <button onclick={send} disabled={sending || composer.trim().length === 0}>
-          {sending ? 'Sending…' : 'Send'}
+        <button
+          class="send-btn"
+          class:glyph={enterGlyphAvailable && !sending}
+          onclick={send}
+          disabled={sending || composer.trim().length === 0}
+          title="Send"
+          aria-label="Send"
+        >
+          {#if sending}
+            Sending…
+          {:else if enterGlyphAvailable}
+            <span aria-hidden="true">⏎</span>
+          {:else}
+            Send
+          {/if}
         </button>
       </div>
     </main>
