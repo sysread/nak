@@ -600,12 +600,57 @@ h1 {
   padding: 0.75rem;
   display: flex;
   gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.textarea-wrap {
+  flex: 1;
+  position: relative;
+  min-width: 0;
 }
 
 .composer textarea {
-  flex: 1;
+  width: 100%;
   min-height: 2.6rem;
   max-height: 12rem;
+  padding-right: 2.4rem; /* room for the expand button */
+  transition: max-height 160ms ease-out, height 160ms ease-out;
+}
+
+.composer textarea.expanded {
+  min-height: 40vh;
+  max-height: 40vh;
+  height: 40vh;
+}
+
+.composer-expand {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.composer-expand:hover,
+.composer-expand:focus-visible {
+  color: var(--text);
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer textarea {
+    transition: none;
+  }
 }
 
 .top-bar {

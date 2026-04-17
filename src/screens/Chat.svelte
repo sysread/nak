@@ -321,6 +321,11 @@
   function closeDrawer(): void {
     drawerOpen = false;
   }
+
+  // Composer expand toggle. When true, the textarea grows to 40vh so the
+  // user has room for longer prompts; otherwise it sticks to the compact
+  // ~12rem max-height.
+  let composerExpanded = $state(false);
 </script>
 
 {#if !sessionLoaded}
@@ -480,12 +485,37 @@
       </div>
       {#if error}<p class="error" style="padding:0 1rem">{error}</p>{/if}
       <div class="composer">
-        <textarea
-          bind:value={composer}
-          onkeydown={onKeydown}
-          placeholder="Message… (Shift+Enter to send, Enter for newline)"
-          disabled={sending}
-        ></textarea>
+        <div class="textarea-wrap">
+          <textarea
+            class:expanded={composerExpanded}
+            bind:value={composer}
+            onkeydown={onKeydown}
+            placeholder="Message… (Shift+Enter to send, Enter for newline)"
+            disabled={sending}
+          ></textarea>
+          <button
+            type="button"
+            class="composer-expand"
+            onclick={() => (composerExpanded = !composerExpanded)}
+            title={composerExpanded ? 'Shrink composer' : 'Expand composer'}
+            aria-label={composerExpanded ? 'Shrink composer' : 'Expand composer'}
+            aria-pressed={composerExpanded}
+          >
+            {#if composerExpanded}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                   stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            {:else}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                   stroke-linejoin="round" aria-hidden="true">
+                <polyline points="18 15 12 9 6 15" />
+              </svg>
+            {/if}
+          </button>
+        </div>
         <button onclick={send} disabled={sending || composer.trim().length === 0}>
           {sending ? 'Sending…' : 'Send'}
         </button>
