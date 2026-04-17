@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import type { Session } from '@supabase/supabase-js';
   import { app, lock } from '$lib/state.svelte';
+  import { clearSession } from '$lib/session';
   import type { Thread, Message } from '$lib/supabase';
   import Auth from './Auth.svelte';
   import Settings from './Settings.svelte';
@@ -142,6 +143,9 @@
   }
 
   async function signOut(): Promise<void> {
+    // Clear the cached master-password session too — an explicit sign-out
+    // should reset auto-unlock so a refresh goes back to the Unlock screen.
+    clearSession();
     await app.supabase?.signOut();
   }
 </script>
