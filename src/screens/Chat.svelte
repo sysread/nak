@@ -127,6 +127,15 @@
 
   async function selectThread(id: string): Promise<void> {
     if (!app.supabase) return;
+    // Abandoned-draft cleanup: if the previously active thread was a draft
+    // (never sent, never renamed), drop it from the sidebar rather than
+    // leaving an empty placeholder behind once the user moves on.
+    if (activeThreadId && activeThreadId !== id) {
+      const prev = threads.find((t) => t.id === activeThreadId);
+      if (prev?.isDraft) {
+        threads = threads.filter((t) => t.id !== activeThreadId);
+      }
+    }
     activeThreadId = id;
     setSessionThreadId(id);
     messages = [];
