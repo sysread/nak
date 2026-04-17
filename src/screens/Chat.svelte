@@ -419,13 +419,44 @@
         ...messages.map((m) => ({ role: m.role, content: m.content })),
       ];
       let full = '';
-      for await (const delta of app.venice.streamChat({
-        model: modelId,
-        messages: history,
-        signal: abortCtl.signal,
-      })) {
-        full += delta;
-        streamingText = full;
+      // Coalesce streaming updates with requestAnimationFrame so the main
+      // thread only re-parses/sanitizes/renders the growing text at most
+      // once per paint. Without this, bursts of SSE deltas (e.g. when a
+      // whole sentence lands in one TCP chunk) would each trigger a full
+      // marked + DOMPurify re-parse, queueing behind one another and
+      // making the UI update in visible gulps instead of smoothly. It
+      // also guarantees at least one paint of the "thinking dots" state
+      // before any streamingText is written.
+      let pending: string | null = null;
+      let rafId = 0;
+      const flushPending = (): void => {
+        rafId = 0;
+        if (pending !== null) {
+          streamingText = pending;
+          pending = null;
+        }
+      };
+      try {
+        for await (const delta of app.venice.streamChat({
+          model: modelId,
+          messages: history,
+          signal: abortCtl.signal,
+        })) {
+          full += delta;
+          pending = full;
+          if (rafId === 0) rafId = requestAnimationFrame(flushPending);
+        }
+      } finally {
+        // Commit whatever's pending synchronously so post-loop code (save
+        // to Supabase, scroll, autoTitle) sees the final text in state.
+        if (rafId !== 0) {
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+        }
+        if (pending !== null) {
+          streamingText = pending;
+          pending = null;
+        }
       }
       if (full.length > 0) {
         const assistantMsg = await app.supabase.addMessage(threadId, 'assistant', full);
