@@ -1,4 +1,22 @@
 <script lang="ts">
+  /*
+   * Initial-setup screen. Shown when there's no encrypted config in
+   * localStorage (first visit, or after Reset). Collects the three API
+   * keys plus a fresh master password, writes the encrypted blob, and
+   * activates into the unlocked phase.
+   *
+   * Three entry paths into this screen:
+   *   1. Clean first visit — empty form.
+   *   2. `#setup=<base64>` fragment left by `mise run setup`. We decode
+   *      it in onMount, strip the fragment from the address bar (so a
+   *      later refresh or accidental share doesn't re-leak the keys),
+   *      and prefill the form.
+   *   3. Import from JSON — user picks a previously-exported config
+   *      file. See parseExportedConfig in $lib/config.
+   *
+   * The master password never reaches the network — it's the PBKDF2
+   * input for the local envelope crypto in $lib/crypto.
+   */
   import { onMount } from 'svelte';
   import { saveConfig, parseExportedConfig, type AppConfig } from '$lib/config';
   import { activate } from '$lib/state.svelte';

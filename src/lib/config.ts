@@ -1,3 +1,19 @@
+/**
+ * Persistent configuration blob for the three keys the app needs to talk
+ * to its external services. Encrypted with the user's master password
+ * (via `./crypto`) and kept in localStorage.
+ *
+ * The three keys here are the *only* things we persist to disk in
+ * encrypted form. Per-user preferences (default model tier, theme) live
+ * in Supabase `profiles.settings` once the user signs in — see
+ * `./supabase.ts`. In-memory app state, including the decrypted config
+ * while the app is unlocked, is owned by `./state.svelte.ts`.
+ *
+ * Also defines the plaintext export/import format (kind="nak-config",
+ * version=1) used by the Setup → Import flow and the Settings → Export
+ * panel. Export is plaintext by design — users should store the file
+ * like any other secret (password manager, etc.).
+ */
 import { encrypt, decrypt } from './crypto';
 
 export interface AppConfig {
@@ -6,6 +22,10 @@ export interface AppConfig {
   veniceApiKey: string;
 }
 
+// The `:v1` suffix is a migration escape hatch: if we ever change the
+// on-disk shape in a non-backward-compatible way, a new `nak:config:v2`
+// key lets old and new clients coexist on the same origin long enough
+// to migrate.
 const STORAGE_KEY = 'nak:config:v1';
 
 export class ConfigError extends Error {
@@ -34,6 +54,14 @@ export function clearStoredConfig(): void {
   getStorage().removeItem(STORAGE_KEY);
 }
 
+/**
+ * Defense-in-depth validator run on every load. If an older build wrote
+ * extra fields, or a malicious script managed to tamper with the JSON
+ * after decrypt, we drop unknown keys and reject anything that doesn't
+ * look like the three required strings. The HTTPS check is a sanity
+ * guard rather than a security boundary — the real URL is ultimately
+ * whatever the user typed into Setup.
+ */
 function validateConfig(candidate: unknown): AppConfig {
   if (typeof candidate !== 'object' || candidate === null) {
     throw new ConfigError('Stored config is not an object.');

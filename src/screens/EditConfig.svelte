@@ -1,4 +1,16 @@
 <script lang="ts">
+  /*
+   * "Edit keys before unlocking" screen. Reached from Unlock via the
+   * Edit keys button. Lets a user fix a mistyped API key (or rotate
+   * one) without first having to authenticate to Supabase — which they
+   * can't do if the stored URL / anon key is wrong.
+   *
+   * Pre-fill note: by the time we render here, Unlock has already
+   * decrypted the config into `app.config`, so we read the three
+   * fields from state rather than prompting for the master password
+   * again. Saving does need the password as the KDF input — we don't
+   * hold the password in memory, intentionally.
+   */
   import { saveConfig, clearStoredConfig, type AppConfig } from '$lib/config';
   import { activate, app } from '$lib/state.svelte';
   import SecretInput from '../components/SecretInput.svelte';

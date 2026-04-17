@@ -1,4 +1,25 @@
 <script lang="ts">
+  /*
+   * Settings modal. Reached from the chat sidebar's gear icon. Five
+   * panes, each with its own persistence target:
+   *
+   *   keys        — the three API keys. Re-encrypts + re-activates, so
+   *                 requires the current master password.
+   *   model       — default model tier. Writes through to Supabase
+   *                 `profiles.settings.defaultModel` so the preference
+   *                 follows the account across browsers.
+   *   appearance  — color mode + accent. Live-applies on click (no Save
+   *                 button) and mirrors to Supabase the same way as
+   *                 the default model.
+   *   export      — download the three keys as a plaintext JSON file
+   *                 for import on another browser. See config.ts for
+   *                 the file format.
+   *   security    — rotate the master password. Re-encrypts the stored
+   *                 blob under the new password; doesn't touch Supabase.
+   *
+   * The `busy` flag is shared across forms so double-submits during an
+   * in-flight save are harmless.
+   */
   import { changePassword, saveConfig, toExportedConfig } from '$lib/config';
   import { app, activate, setDefaultModel, setTheme } from '$lib/state.svelte';
   import { MODELS, TIERS, type ModelTier } from '$lib/models';

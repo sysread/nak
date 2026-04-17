@@ -3,6 +3,16 @@
  * thread row and in the user's default); the Venice model id is an
  * implementation detail that can move as the tiers are retuned without
  * invalidating stored data.
+ *
+ * Why the indirection: Venice (and AI providers generally) rotate model
+ * names aggressively. If we stored "kimi-k2-5" directly on every thread
+ * row, changing the Smart tier to a newer model would orphan every
+ * existing thread. Storing `smart | balanced | fast` means we can
+ * retarget the tier by editing this file alone.
+ *
+ * The `icon` field is an emoji codepoint used by the 3-button tier
+ * toggle in Chat.svelte. See the comment on `balanced.icon` below for
+ * why some icons need an explicit variation selector.
  */
 
 export type ModelTier = 'smart' | 'balanced' | 'fast';

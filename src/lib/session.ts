@@ -10,6 +10,18 @@ import type { AppConfig } from './config';
  * origin can read either. The incremental tradeoff is that a refresh
  * within the inactivity window will auto-unlock instead of reprompting
  * for the master password.
+ *
+ * Why sessionStorage specifically (rather than localStorage or a
+ * cookie): we want the plaintext copy to evaporate when the tab
+ * closes, without us having to listen for `beforeunload` or run a
+ * shutdown hook. sessionStorage gives us that scope for free.
+ *
+ * Adjacent responsibility split:
+ *   - `config.ts` owns the encrypted-at-rest blob.
+ *   - `state.svelte.ts` owns the in-memory decrypted copy and drives
+ *     the unlock / lock lifecycle.
+ *   - this module owns the refresh-bridging copy and the activity TTL.
+ *   - `App.svelte` owns the activity listeners that call touchSession().
  */
 
 const KEY = 'nak:session:v1';

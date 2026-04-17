@@ -6,12 +6,31 @@
  *   [ 4 bytes version ][ 16 bytes salt ][ 12 bytes iv ][ ciphertext+tag ]
  *
  * Version is a u32 big-endian integer so the format can evolve.
+ *
+ * Why these primitives:
+ *   - AES-GCM is authenticated — any tamper with the ciphertext makes
+ *     decrypt() fail rather than silently returning garbage. That matters
+ *     because the config blob sits in localStorage where a malicious
+ *     extension could modify it.
+ *   - PBKDF2-SHA256 (rather than Argon2 / scrypt) because it's what Web
+ *     Crypto ships natively in every browser. Argon2 would need a WASM
+ *     dependency we don't want to ship for this threat model.
+ *   - 600k iterations matches current OWASP / NIST guidance for
+ *     interactive flows; round-trip on a laptop is ~250ms.
+ *
+ * Consumed by `config.ts` (the only caller today). If you need to
+ * decrypt something other than AppConfig, route it through this module
+ * — don't re-roll the envelope format.
  */
 
 const VERSION = 1;
 const SALT_BYTES = 16;
 const IV_BYTES = 12;
-// NIST / OWASP 2023+ guidance for PBKDF2-SHA256 is >= 600,000 iterations.
+// OWASP "Password Storage Cheat Sheet" (2023+): PBKDF2-SHA256 should use
+// at least 600,000 iterations. Raising this number is backward-compatible
+// for new writes; existing blobs decrypt with whatever count they were
+// written at (the salt+iv are stored but the iteration count is implicit
+// in VERSION — bump VERSION if you change it).
 const PBKDF2_ITERATIONS = 600_000;
 const KEY_BITS = 256;
 

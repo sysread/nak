@@ -1,3 +1,19 @@
+/**
+ * Supabase client wrapper — owns auth, threads, messages, and per-user
+ * settings. Every call from the UI that touches the user's Supabase
+ * project goes through SupabaseService.
+ *
+ * Security posture: we connect with the project's public **anon key**,
+ * not a service-role key. Row-Level Security (see `supabase/schema.sql`)
+ * is the actual boundary — the anon key only works for the signed-in
+ * user's own rows. The service-role key never reaches the browser; it's
+ * used by `mise run setup` locally to seed the main user and then
+ * discarded.
+ *
+ * Consumed by `state.svelte.ts` (which instantiates a SupabaseService
+ * on unlock), `Chat.svelte` (threads + messages), and `Settings.svelte`
+ * (keys rotation, settings, theme).
+ */
 import { createClient, type SupabaseClient, type Session } from '@supabase/supabase-js';
 import type { AppConfig } from './config';
 import { isModelTier, type ModelTier } from './models';
@@ -138,7 +154,9 @@ export class SupabaseService {
   /**
    * Merge a partial settings patch into the profiles.settings jsonb. Does a
    * read-then-write — fine for a single-user app but not safe under
-   * concurrent writes from multiple tabs.
+   * concurrent writes from multiple tabs. If multi-tab concurrency ever
+   * becomes real (e.g. two open browsers both flipping theme), move this
+   * to a Postgres `jsonb_set` call so each field updates atomically.
    */
   async updateSettings(patch: Partial<UserSettings>): Promise<UserSettings> {
     const session = await this.getSession();
@@ -218,6 +236,14 @@ export class SupabaseService {
     return (data ?? []) as Message[];
   }
 
+  /**
+   * Insert one message row and touch the thread's updated_at in a
+   * follow-up call. The two writes aren't in a transaction — if the
+   * second call fails, we've still saved the message and the thread
+   * just keeps its old ordering timestamp until the next activity.
+   * That's intentional: losing the message would be a bigger regression
+   * than a briefly stale sort order.
+   */
   async addMessage(
     threadId: string,
     role: Message['role'],
@@ -229,7 +255,6 @@ export class SupabaseService {
       .select()
       .single();
     if (error) throw new SupabaseError(error.message);
-    // bump thread updated_at so ordering reflects activity
     await this.client
       .from('threads')
       .update({ updated_at: new Date().toISOString() })

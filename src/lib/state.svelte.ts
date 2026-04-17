@@ -1,3 +1,25 @@
+/**
+ * Central reactive app state. This is the single source of truth that
+ * every screen reads from — the `$state` rune makes updates here
+ * automatically propagate to any Svelte component that reads `app.*`.
+ *
+ * Phase state machine (driven by App.svelte's boot flow):
+ *
+ *   loading ──► setup          (no stored config found)
+ *           └─► locked         (stored config exists, no live session)
+ *               ├─► unlocked   (activate(): master password accepted)
+ *               └─► edit-config (enterEditConfig(): fix mistyped keys)
+ *   unlocked ──► locked        (lock(): user clicked Lock, or TTL expired)
+ *
+ * The setup / locked branches are decided by `hasStoredConfig()` in
+ * App.svelte. The loading ──► unlocked shortcut happens when
+ * `loadSession()` finds a valid sessionStorage blob from a previous
+ * tab-local unlock.
+ *
+ * Why a single $state object instead of per-concern stores: every screen
+ * needs phase + config + the service instances, so a single rune is
+ * easier to read than a constellation of stores with the same lifetime.
+ */
 import type { AppConfig } from './config';
 import { SupabaseService } from './supabase';
 import { VeniceClient } from './venice';

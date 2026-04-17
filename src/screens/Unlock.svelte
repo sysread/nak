@@ -1,4 +1,17 @@
 <script lang="ts">
+  /*
+   * Unlock screen. Shown when we have an encrypted config in
+   * localStorage but no active session. Takes the master password,
+   * runs it through PBKDF2 via $lib/crypto, and either activates the
+   * app or branches to EditConfig (so a user with a mistyped key can
+   * fix it without starting over).
+   *
+   * The third "Reset" button nukes the encrypted blob and routes back
+   * to Setup — an escape hatch when the user has forgotten their
+   * master password. There's no recovery path: without the password
+   * the blob is cryptographically useless, and the three keys inside
+   * it can always be re-obtained from their respective services.
+   */
   import { loadConfig, clearStoredConfig } from '$lib/config';
   import { activate, enterEditConfig, app } from '$lib/state.svelte';
 

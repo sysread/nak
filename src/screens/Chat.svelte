@@ -1,4 +1,36 @@
 <script lang="ts">
+  /*
+   * The main screen. Three concerns stacked top-to-bottom:
+   *
+   *   top-bar   — hamburger, title (inline renameable), model tier toggle
+   *   messages  — scrollable list of bubbles, plus in-flight streaming text
+   *   composer  — textarea + expand button + send button
+   *
+   * Threads come in two flavors:
+   *   - Persisted threads: live in Supabase, have real ids, load messages
+   *     on select.
+   *   - Drafts: local-only, have client-side UUIDs, flagged via
+   *     `isDraft`. Created by newThread(); materialized to Supabase on
+   *     the first `send` or manual rename (see materializeIfDraft).
+   *     Abandoned drafts disappear on refresh because they aren't stored.
+   *
+   * Streaming lifecycle:
+   *   1. User clicks send → insert user message row → clear composer.
+   *   2. Kick off `app.venice.streamChat` with an AbortController.
+   *      Deltas append into `streamingText`, which renders as an
+   *      "assistant" bubble below the persisted messages.
+   *   3. When the stream completes: insert an assistant message row,
+   *      clear streamingText, refresh the thread list so the sidebar
+   *      ordering reflects updated_at.
+   *   4. First exchange of a new thread triggers `autoTitle` in the
+   *      background — see that helper for the tradeoffs.
+   *
+   * Model selection:
+   *   - The top-right toggle sets a per-thread override (threads.model).
+   *   - Clicking the tier that matches the user's default clears the
+   *     override (writes null) so the thread keeps tracking default
+   *     changes — see setTier().
+   */
   import { onMount, tick } from 'svelte';
   import type { Session } from '@supabase/supabase-js';
   import { app, lock, setDefaultModel, setTheme } from '$lib/state.svelte';

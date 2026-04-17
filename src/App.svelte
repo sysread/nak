@@ -1,4 +1,21 @@
 <script lang="ts">
+  /*
+   * App root. Two jobs:
+   *
+   *   1. Phase routing. Which screen renders is decided by `app.phase`
+   *      in $lib/state.svelte.ts. This file just dispatches.
+   *
+   *   2. Session lifecycle. On mount we decide whether to auto-unlock
+   *      from a prior sessionStorage blob, jump to setup (no stored
+   *      config), or show the Unlock screen. While unlocked we listen
+   *      for user activity to extend the TTL, and a wall-clock timer
+   *      drops the session back to `locked` when it expires.
+   *
+   * The inline boot script in index.html already applied cached theme
+   * attributes to <html> before first paint; applyTheme() in onMount
+   * re-syncs that with the reactive state so subsequent toggles keep
+   * working.
+   */
   import { onMount } from 'svelte';
   import { app, activate, lock, setTheme } from '$lib/state.svelte';
   import { hasStoredConfig } from '$lib/config';
@@ -14,9 +31,12 @@
   import Chat from './screens/Chat.svelte';
   import EditConfig from './screens/EditConfig.svelte';
 
-  // Throttle activity writes to sessionStorage to once per TOUCH_THROTTLE_MS.
+  // Throttle activity writes to sessionStorage — sessionStorage.setItem is
+  // synchronous and we don't want to hammer it on every keystroke.
   const TOUCH_THROTTLE_MS = 30_000;
-  // How often to check whether the session has expired.
+  // How often to check whether the session has expired. Low enough that
+  // the auto-lock feels responsive (a user walking away for > 1hr sees
+  // the lock screen within 30s of expiry) without burning CPU.
   const IDLE_CHECK_MS = 30_000;
 
   onMount(() => {

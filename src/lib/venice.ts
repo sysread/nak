@@ -4,6 +4,17 @@
  * /chat/completions and /embeddings endpoints.
  *
  * Docs: https://docs.venice.ai/api-reference
+ *
+ * Why we parse SSE manually instead of using the browser's EventSource:
+ * EventSource is GET-only and cannot set custom headers (no way to send
+ * `Authorization: Bearer …`). A POST fetch() with `stream: true` and
+ * a hand-rolled frame splitter on `\n\n` is the standard workaround —
+ * this is the same pattern OpenAI's own JS SDK uses in the browser.
+ *
+ * The API key is passed on every request as an Authorization header.
+ * It lives in memory while the app is unlocked (state.svelte.ts holds
+ * the VeniceClient instance) and never touches storage except as part
+ * of the encrypted config blob.
  */
 
 export interface VeniceMessage {

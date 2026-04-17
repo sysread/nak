@@ -1,4 +1,18 @@
 <script lang="ts">
+  /*
+   * Supabase auth screen — email + password sign-in and sign-up.
+   * Distinct from the Unlock screen: Unlock gates the encrypted local
+   * config blob; this screen gates access to the user's Supabase
+   * project. A user always passes through Unlock first (or auto-unlock
+   * via sessionStorage), then sees this form only if Supabase doesn't
+   * already have a live session for them.
+   *
+   * Sign-up is conditional on the Supabase project's auth settings.
+   * When `mise run setup` disabled public sign-ups (the default), the
+   * signUp call comes back with a server-side error — which we just
+   * render as the error message. The form still shows the toggle; we
+   * don't try to probe whether sign-ups are allowed client-side.
+   */
   import { app } from '$lib/state.svelte';
 
   let email = $state('');
