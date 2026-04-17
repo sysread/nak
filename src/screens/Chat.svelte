@@ -374,12 +374,31 @@
     }
   }
 
+  // ⌘+Enter (macOS), Ctrl+Enter (everyone else), and the legacy Shift+Enter
+  // all submit. Plain Enter still inserts a newline so long-form drafts
+  // aren't interrupted. `metaKey` maps to the Command key on macOS; on
+  // Windows/Linux it's the rarely-pressed Super/Windows key, so including
+  // it there is harmless.
   function onKeydown(e: KeyboardEvent): void {
-    if (e.key === 'Enter' && e.shiftKey) {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || e.shiftKey)) {
       e.preventDefault();
       void send();
     }
   }
+
+  // Platform-aware hint in the composer placeholder. Uses the modern
+  // navigator.userAgentData.platform when available and falls back to
+  // the legacy navigator.platform string.
+  const isMac = $derived.by(() => {
+    if (typeof navigator === 'undefined') return false;
+    const p =
+      (navigator as Navigator & { userAgentData?: { platform?: string } })
+        .userAgentData?.platform ?? navigator.platform ?? '';
+    return /mac/i.test(p);
+  });
+  const sendHint = $derived(
+    isMac ? '\u2318+Enter to send, Enter for newline' : 'Ctrl+Enter to send, Enter for newline'
+  );
 
   async function signOut(): Promise<void> {
     // Clear the cached master-password session too — an explicit sign-out
@@ -593,7 +612,7 @@
             class:expanded={composerExpanded}
             bind:value={composer}
             onkeydown={onKeydown}
-            placeholder="Message… (Shift+Enter to send, Enter for newline)"
+            placeholder={`Message… (${sendHint})`}
             disabled={sending}
           ></textarea>
           <button
