@@ -49,8 +49,6 @@
     DEFAULT_REASONING_EFFORT,
     DEFAULT_TIER,
     MODELS,
-    REASONING_EFFORTS,
-    REASONING_EFFORT_LABELS,
     TIERS,
     UTILITY_TIER,
     findModelById,
@@ -64,6 +62,7 @@
   import CopyButton from '../components/CopyButton.svelte';
   import ContextRing from '../components/ContextRing.svelte';
   import Markdown from '../components/Markdown.svelte';
+  import ReasoningPicker from '../components/ReasoningPicker.svelte';
   import Scanner from '../components/Scanner.svelte';
   import ToolCalls from '../components/ToolCalls.svelte';
 
@@ -1461,27 +1460,25 @@
               <!-- Reasoning-effort picker: per-thread override, stored on
                    threads.reasoning_effort. Hidden when the resolved model
                    doesn't advertise reasoning support — no point offering
-                   a knob the provider will reject. -->
+                   a knob the provider will reject. Extracted so the
+                   picker is mountable in isolation under
+                   @testing-library/svelte; Chat.svelte itself is too
+                   coupled to the live app state to mount cleanly. -->
               {#if currentThread && currentSupportsReasoning}
-                <button
-                  type="button"
-                  class="secondary model-picker-btn"
-                  onclick={() => {
+                <ReasoningPicker
+                  value={currentReasoning}
+                  defaultEffort={defaultReasoning}
+                  open={reasoningMenuOpen}
+                  onToggle={() => {
                     promptsMenuOpen = false;
                     modelMenuOpen = false;
                     reasoningMenuOpen = !reasoningMenuOpen;
                   }}
-                  aria-haspopup="true"
-                  aria-expanded={reasoningMenuOpen}
-                  title={`Reasoning effort: ${REASONING_EFFORT_LABELS[currentReasoning]}`}
-                >
-                  <span class="model-picker-icon" aria-hidden="true">💭</span>
-                  <span class="model-picker-label">{REASONING_EFFORT_LABELS[currentReasoning]}</span>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <polyline points="6 9 12 15 18 9" />
-                  </svg>
-                </button>
+                  onSelect={(effort) => {
+                    void setReasoning(effort);
+                    reasoningMenuOpen = false;
+                  }}
+                />
               {/if}
             </div>
 
@@ -1544,29 +1541,6 @@
               </div>
             {/if}
 
-            {#if reasoningMenuOpen && currentThread && currentSupportsReasoning}
-              <div class="composer-menu composer-menu-left" role="menu">
-                <div class="menu-header">Reasoning effort for this conversation</div>
-                {#each REASONING_EFFORTS as effort (effort)}
-                  <button
-                    type="button"
-                    class="menu-item menu-item-btn"
-                    class:selected={currentReasoning === effort}
-                    onclick={() => {
-                      void setReasoning(effort);
-                      reasoningMenuOpen = false;
-                    }}
-                    role="menuitemradio"
-                    aria-checked={currentReasoning === effort}
-                  >
-                    <span class="menu-item-label">
-                      <strong>{REASONING_EFFORT_LABELS[effort]}</strong>
-                    </span>
-                    {#if effort === defaultReasoning}<span class="menu-item-badge">default</span>{/if}
-                  </button>
-                {/each}
-              </div>
-            {/if}
           </div>
         </div>
       </div>
