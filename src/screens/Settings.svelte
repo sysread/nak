@@ -5,11 +5,12 @@
    *
    *   keys        — the three API keys. Re-encrypts + re-activates, so
    *                 requires the current master password.
-   *   ai          — three AI-adjacent subsections sharing one pane:
-   *                 default model tier, system-prompt library, and
-   *                 the Venice web-search toggle. All persist to the
-   *                 Supabase `profiles.settings` blob so preferences
-   *                 follow the account across browsers.
+   *   ai          — AI-adjacent subsections sharing one pane: default
+   *                 model tier, default reasoning effort, the
+   *                 system-prompt library, and the Venice web-search
+   *                 toggle. All persist to the Supabase
+   *                 `profiles.settings` blob so preferences follow the
+   *                 account across browsers.
    *   appearance  — color mode + accent. Live-applies on click (no Save
    *                 button) and mirrors to Supabase the same way as
    *                 the default model.
@@ -324,30 +325,50 @@
     }
   }
 
-  async function onSaveModel(e: SubmitEvent): Promise<void> {
-    e.preventDefault();
+  // Picking a radio applies the choice immediately — no Save button.
+  // Optimistic in-memory flip (same pattern as onToggleWebSearch) so the
+  // radio reflects the new tier right away; on persistence failure we
+  // roll the UI and the global flag back to the previous value.
+  async function onPickModel(next: ModelTier): Promise<void> {
     modelError = null;
     modelInfo = null;
     if (!app.supabase) {
       modelError = 'Not connected to Supabase yet.';
       return;
     }
-    busy = true;
+    const prev = defaultModel;
+    defaultModel = next;
+    setDefaultModel(next);
     try {
-      await app.supabase.updateSettings({
-        defaultModel,
-        defaultReasoningEffort,
-      });
-      setDefaultModel(defaultModel);
-      setDefaultReasoningEffort(defaultReasoningEffort);
-      const reasoningNote = MODELS[defaultModel].supportsReasoning
-        ? `, reasoning ${REASONING_EFFORT_LABELS[defaultReasoningEffort].toLowerCase()}`
-        : '';
-      modelInfo = `Default set to ${MODELS[defaultModel].label}${reasoningNote} (synced to Supabase).`;
+      await app.supabase.updateSettings({ defaultModel: next });
+      modelInfo = `Default model set to ${MODELS[next].label}.`;
     } catch (err) {
+      defaultModel = prev;
+      setDefaultModel(prev);
       modelError = err instanceof Error ? err.message : String(err);
-    } finally {
-      busy = false;
+    }
+  }
+
+  // Same optimistic-then-persist pattern as onPickModel, for the
+  // reasoning-effort select. They share modelError/modelInfo so the
+  // most recent action is what the user sees.
+  async function onPickReasoning(next: ReasoningEffort): Promise<void> {
+    modelError = null;
+    modelInfo = null;
+    if (!app.supabase) {
+      modelError = 'Not connected to Supabase yet.';
+      return;
+    }
+    const prev = defaultReasoningEffort;
+    defaultReasoningEffort = next;
+    setDefaultReasoningEffort(next);
+    try {
+      await app.supabase.updateSettings({ defaultReasoningEffort: next });
+      modelInfo = `Default reasoning effort set to ${REASONING_EFFORT_LABELS[next].toLowerCase()}.`;
+    } catch (err) {
+      defaultReasoningEffort = prev;
+      setDefaultReasoningEffort(prev);
+      modelError = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -444,11 +465,13 @@
           <button type="submit" disabled={busy}>Save keys</button>
         </form>
       {:else if group === 'ai'}
-        <!-- Three AI-adjacent settings share one pane so the sidebar
-             doesn't fan out into a dedicated tab per toggle. Each
-             subsection keeps its own save mechanism: the model form
-             has an explicit Save button, prompts autosave on edit,
-             and the web-search toggle flips through on change. -->
+        <!-- AI-adjacent settings share one pane so the sidebar doesn't
+             fan out into a dedicated tab per toggle. All subsections
+             autosave — picking a model or reasoning tier flips through
+             on change, prompts debounce-save on edit, and the
+             web-search checkbox writes on toggle — so the whole pane
+             matches the Appearance pane's "touch it and it sticks"
+             behavior. -->
         <h2>AI</h2>
         <p class="subtle">Default model, system prompts, and web search.</p>
 
@@ -457,54 +480,53 @@
           Used for any thread that doesn't have its own model set. You can override
           per-thread from the chat top bar.
         </p>
-        <form onsubmit={onSaveModel}>
-          <div class="form-row model-choices">
-            {#each TIERS as tier (tier)}
-              <label class="model-choice">
-                <input
-                  type="radio"
-                  name="default-model"
-                  value={tier}
-                  checked={defaultModel === tier}
-                  onchange={() => (defaultModel = tier)}
-                />
-                <span>
-                  <strong>{MODELS[tier].label}</strong>
-                  <span class="subtle" style="margin-left:0.35rem">{MODELS[tier].description}</span>
-                  <span class="subtle" style="display:block;font-size:0.8rem;margin-top:0.1rem">
-                    {MODELS[tier].id} · {(MODELS[tier].contextWindow / 1000).toFixed(0)}k context
-                  </span>
+        <div class="form-row model-choices">
+          {#each TIERS as tier (tier)}
+            <label class="model-choice">
+              <input
+                type="radio"
+                name="default-model"
+                value={tier}
+                checked={defaultModel === tier}
+                onchange={() => onPickModel(tier)}
+              />
+              <span>
+                <strong>{MODELS[tier].label}</strong>
+                <span class="subtle" style="margin-left:0.35rem">{MODELS[tier].description}</span>
+                <span class="subtle" style="display:block;font-size:0.8rem;margin-top:0.1rem">
+                  {MODELS[tier].id} · {(MODELS[tier].contextWindow / 1000).toFixed(0)}k context
                 </span>
-              </label>
+              </span>
+            </label>
+          {/each}
+        </div>
+        <p class="subtle" style="font-size:0.8rem">
+          Stored on your Supabase profile so the choice follows you across browsers.
+        </p>
+
+        <h3 class="pane-section">Default reasoning effort</h3>
+        <p class="subtle">
+          Controls how hard the model thinks before replying on
+          reasoning-capable models. <strong>Low</strong> keeps turns
+          snappy; <strong>high</strong> trades latency for depth.
+          Ignored on non-reasoning models. Overridable per-thread from
+          the composer.
+        </p>
+        <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
+          <label for="default-reasoning" class="sr-only">Default reasoning effort</label>
+          <select
+            id="default-reasoning"
+            value={defaultReasoningEffort}
+            onchange={(e) =>
+              onPickReasoning((e.currentTarget as HTMLSelectElement).value as ReasoningEffort)}
+          >
+            {#each REASONING_EFFORTS as effort (effort)}
+              <option value={effort}>{REASONING_EFFORT_LABELS[effort]}</option>
             {/each}
-          </div>
-          <h3 class="pane-section">Default reasoning effort</h3>
-          <p class="subtle">
-            Controls how hard the model thinks before replying on
-            reasoning-capable models. <strong>Low</strong> keeps turns
-            snappy; <strong>high</strong> trades latency for depth.
-            Ignored on non-reasoning models. Overridable per-thread from
-            the composer.
-          </p>
-          <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
-            <label for="default-reasoning" class="sr-only">Default reasoning effort</label>
-            <select
-              id="default-reasoning"
-              bind:value={defaultReasoningEffort}
-            >
-              {#each REASONING_EFFORTS as effort (effort)}
-                <option value={effort}>{REASONING_EFFORT_LABELS[effort]}</option>
-              {/each}
-            </select>
-          </div>
-          <p class="subtle" style="font-size:0.8rem">
-            Stored on your Supabase profile so the choice follows you across browsers.
-            No master password needed.
-          </p>
-          {#if modelError}<p class="error">{modelError}</p>{/if}
-          {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
-          <button type="submit" disabled={busy}>Save defaults</button>
-        </form>
+          </select>
+        </div>
+        {#if modelError}<p class="error">{modelError}</p>{/if}
+        {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
 
         <h3 class="pane-section">Web search</h3>
         <p class="subtle">
