@@ -13,6 +13,13 @@ export default defineConfig({
     alias: {
       $lib: path.resolve('./src/lib'),
     },
+    // Svelte 5 ships separate server/client entry points. Under vitest
+    // we want the client runtime (jsdom + @testing-library/svelte can
+    // only mount via the browser build); the `node` condition vitest
+    // defaults to picks the server entry, which throws
+    // `lifecycle_function_unavailable` on mount. Narrow to `browser`
+    // during tests only so `pnpm build` / `pnpm dev` stay unaffected.
+    conditions: process.env.VITEST ? ['browser'] : [],
   },
   plugins: [
     svelte(),
