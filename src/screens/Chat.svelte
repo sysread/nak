@@ -1016,8 +1016,13 @@
               {:else}
                 <!-- Placeholder shown between "user hit send" and "first
                      token arrived" — gives the composer submit some
-                     immediate feedback that something is happening. -->
-                <Scanner label="Thinking" />
+                     immediate feedback that something is happening.
+                     Wrapper centers the inline-flex Scanner inside the
+                     bubble so it doesn't read as a stranded artifact in
+                     the top-left corner. -->
+                <div class="thinking">
+                  <Scanner label="Thinking" />
+                </div>
               {/if}
             </div>
           {/if}

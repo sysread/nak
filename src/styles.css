@@ -1589,3 +1589,15 @@ h1 {
   font-family: inherit;
   line-height: 1.45;
 }
+
+/* Thinking-state assistant bubble: a single Scanner sitting in an
+   otherwise-empty card. Center it so it doesn't visually anchor to the
+   top-left corner. */
+.msg.assistant > .thinking {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* A touch of vertical breathing room so the bubble has presence even
+     before the dots resolve. */
+  padding: 0.25rem 0;
+}
