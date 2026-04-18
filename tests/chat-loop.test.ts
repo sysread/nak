@@ -12,7 +12,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { runChatLoop, MAX_ROUNDS, toVeniceMessage } from '../src/lib/chat-loop';
-import type { StreamEvent } from '../src/lib/venice';
+import type { ChatRequest, StreamEvent } from '../src/lib/venice';
 import type { VeniceClient } from '../src/lib/venice';
 import type { SupabaseService, Thread, Message } from '../src/lib/supabase';
 import type { OpenAIToolCall } from '../src/lib/tools';
@@ -23,6 +23,7 @@ function mkThread(overrides: Partial<Thread> = {}): Thread {
     user_id: 'u-1',
     title: 'Test',
     model: null,
+    reasoning_effort: null,
     tools_enabled: false,
     created_at: 'now',
     updated_at: 'now',
@@ -166,6 +167,53 @@ describe('toVeniceMessage', () => {
 });
 
 describe('runChatLoop', () => {
+  it('forwards reasoningEffort to every streamChat call', async () => {
+    // The loop doesn't gate on ModelSpec.supportsReasoning — that's the
+    // caller's job. So whatever reasoningEffort is passed in rides along
+    // on every round.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      reasoningEffort: 'medium',
+    });
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0].reasoningEffort).toBe('medium');
+  });
+
+  it('leaves reasoningEffort unset on streamChat when the caller omits it', async () => {
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+    });
+    expect(seenRequests[0].reasoningEffort).toBeUndefined();
+  });
+
   it('persists a plain text response in one round', async () => {
     const venice = mockVenice([
       [{ type: 'text', delta: 'Hello' }, { type: 'text', delta: ' there' }],

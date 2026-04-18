@@ -24,7 +24,12 @@ import type { AppConfig } from './config';
 import { SupabaseService, type SystemPrompt } from './supabase';
 import { VeniceClient } from './venice';
 import { saveSession, clearSession } from './session';
-import { DEFAULT_TIER, type ModelTier } from './models';
+import {
+  DEFAULT_REASONING_EFFORT,
+  DEFAULT_TIER,
+  type ModelTier,
+  type ReasoningEffort,
+} from './models';
 import {
   DEFAULT_MODE,
   DEFAULT_ACCENT,
@@ -48,6 +53,13 @@ interface AppState {
    * in. Written back via setDefaultModel() from Settings.
    */
   defaultModel: ModelTier;
+  /**
+   * User-level default reasoning-effort. Seeded to
+   * DEFAULT_REASONING_EFFORT on activate(), then overwritten from
+   * Supabase `profiles.settings.defaultReasoningEffort` on unlock.
+   * Only consulted on reasoning-capable models.
+   */
+  defaultReasoningEffort: ReasoningEffort;
   /** UI theme — seeded from localStorage cache, then from Supabase. */
   colorMode: ColorMode;
   accent: Accent;
@@ -77,6 +89,7 @@ export const app = $state<AppState>({
   supabase: null,
   venice: null,
   defaultModel: DEFAULT_TIER,
+  defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
   colorMode: cachedTheme?.mode ?? DEFAULT_MODE,
   accent: cachedTheme?.accent ?? DEFAULT_ACCENT,
   systemPrompts: [],
@@ -88,6 +101,10 @@ export const app = $state<AppState>({
 
 export function setDefaultModel(tier: ModelTier): void {
   app.defaultModel = tier;
+}
+
+export function setDefaultReasoningEffort(effort: ReasoningEffort): void {
+  app.defaultReasoningEffort = effort;
 }
 
 export function setSystemPrompts(prompts: SystemPrompt[]): void {
@@ -123,6 +140,7 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.venice = new VeniceClient({ apiKey: config.veniceApiKey });
   // Reset to a seed value; Chat.svelte will overwrite after Supabase settles.
   app.defaultModel = DEFAULT_TIER;
+  app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
   app.phase = 'unlocked';
   app.error = null;
   if (opts.persist !== false) saveSession(config);
@@ -133,6 +151,7 @@ export function lock(): void {
   app.supabase = null;
   app.venice = null;
   app.defaultModel = DEFAULT_TIER;
+  app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
   app.systemPrompts = [];
   // Reset to the enabled-by-default seed — the next sign-in's
   // refreshSettings will overwrite with the stored preference.

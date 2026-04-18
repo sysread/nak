@@ -95,6 +95,25 @@ describe('coerceSettings', () => {
     ).toBeUndefined();
   });
 
+  it('passes through a valid defaultReasoningEffort', () => {
+    expect(coerceSettings({ defaultReasoningEffort: 'low' })).toEqual({
+      defaultReasoningEffort: 'low',
+    });
+    expect(coerceSettings({ defaultReasoningEffort: 'medium' })).toEqual({
+      defaultReasoningEffort: 'medium',
+    });
+    expect(coerceSettings({ defaultReasoningEffort: 'high' })).toEqual({
+      defaultReasoningEffort: 'high',
+    });
+  });
+
+  it('drops an unknown defaultReasoningEffort value', () => {
+    expect(coerceSettings({ defaultReasoningEffort: 'extreme' })).toEqual({});
+    expect(coerceSettings({ defaultReasoningEffort: '' })).toEqual({});
+    expect(coerceSettings({ defaultReasoningEffort: 0 })).toEqual({});
+    expect(coerceSettings({ defaultReasoningEffort: null })).toEqual({});
+  });
+
   it('preserves webSearchEnabled only for strict booleans', () => {
     expect(coerceSettings({ webSearchEnabled: true }).webSearchEnabled).toBe(true);
     expect(coerceSettings({ webSearchEnabled: false }).webSearchEnabled).toBe(false);

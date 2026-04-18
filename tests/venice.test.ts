@@ -442,6 +442,50 @@ describe('VeniceClient.streamChat', () => {
     expect(body).not.toHaveProperty('venice_parameters');
   });
 
+  it('forwards reasoningEffort as top-level reasoning_effort', async () => {
+    // OpenAI-style reasoning_effort lives at the top level of the
+    // /chat/completions body (unlike web-search, which Venice nests
+    // under venice_parameters). Venice forwards the knob to the
+    // underlying provider verbatim.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    for await (const _ of client.streamChat({
+      model: 'm',
+      messages: [],
+      reasoningEffort: 'high',
+    })) {
+      void _;
+    }
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.reasoning_effort).toBe('high');
+  });
+
+  it('omits reasoning_effort when the caller does not set it', async () => {
+    // Non-reasoning models (and utility call paths like auto-titling)
+    // should not pay for thinking time they didn't ask for. Some
+    // providers also 400 on an unknown `reasoning_effort` field — keep
+    // the body clean unless the feature was explicitly enabled.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    for await (const _ of client.streamChat({ model: 'm', messages: [] })) {
+      void _;
+    }
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
   it('omits `tools` from the body when the array is empty', async () => {
     // A present-but-empty tools array would confuse some providers —
     // better to elide it entirely.

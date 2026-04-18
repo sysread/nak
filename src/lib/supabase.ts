@@ -16,7 +16,12 @@
  */
 import { createClient, type SupabaseClient, type Session } from '@supabase/supabase-js';
 import type { AppConfig } from './config';
-import { isModelTier, type ModelTier } from './models';
+import {
+  isModelTier,
+  isReasoningEffort,
+  type ModelTier,
+  type ReasoningEffort,
+} from './models';
 import { isAccent, isColorMode, type Accent, type ColorMode } from './theme';
 import type { OpenAIToolCall } from './tools/types';
 import type { TokenUsage } from './venice';
@@ -27,6 +32,13 @@ export interface Thread {
   title: string;
   /** Per-thread model tier override. Null/absent means use user default. */
   model: ModelTier | null;
+  /**
+   * Per-thread reasoning-effort override. Null/absent means use the
+   * user default. Only consulted on reasoning-capable models; the
+   * composer dropdown is hidden (and the field cleared on re-point)
+   * when the resolved model can't reason.
+   */
+  reasoning_effort: ReasoningEffort | null;
   /**
    * Master switch for tool availability on this thread. Flipped by the
    * `toggle_tools` meta-tool (LLM-driven) or the composer toolbox button
@@ -52,11 +64,15 @@ export interface Thread {
  */
 function coerceThread(row: Record<string, unknown>): Thread {
   const model = isModelTier(row.model) ? row.model : null;
+  const reasoning_effort = isReasoningEffort(row.reasoning_effort)
+    ? row.reasoning_effort
+    : null;
   return {
     id: String(row.id),
     user_id: String(row.user_id),
     title: String(row.title ?? ''),
     model,
+    reasoning_effort,
     tools_enabled: row.tools_enabled === true,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
@@ -130,6 +146,13 @@ export class SupabaseError extends Error {
  */
 export interface UserSettings {
   defaultModel?: ModelTier;
+  /**
+   * User-level reasoning-effort default, used on reasoning-capable
+   * models when the thread hasn't overridden it. Absent means fall
+   * back to {@link DEFAULT_REASONING_EFFORT} in code (`low`) so an
+   * empty settings jsonb still produces sane behavior.
+   */
+  defaultReasoningEffort?: ReasoningEffort;
   colorMode?: ColorMode;
   accent?: Accent;
   /** Library of named system prompts the user can toggle per-thread. */
@@ -179,6 +202,9 @@ export function coerceSettings(raw: unknown): UserSettings {
   const r = raw as Record<string, unknown>;
   const out: UserSettings = {};
   if (isModelTier(r.defaultModel)) out.defaultModel = r.defaultModel;
+  if (isReasoningEffort(r.defaultReasoningEffort)) {
+    out.defaultReasoningEffort = r.defaultReasoningEffort;
+  }
   if (isColorMode(r.colorMode)) out.colorMode = r.colorMode;
   if (isAccent(r.accent)) out.accent = r.accent;
   if (Array.isArray(r.systemPrompts)) {
@@ -273,6 +299,13 @@ export class SupabaseService {
       if (patch.defaultModel === undefined) delete merged.defaultModel;
       else if (isModelTier(patch.defaultModel)) merged.defaultModel = patch.defaultModel;
     }
+    if ('defaultReasoningEffort' in patch) {
+      if (patch.defaultReasoningEffort === undefined) {
+        delete merged.defaultReasoningEffort;
+      } else if (isReasoningEffort(patch.defaultReasoningEffort)) {
+        merged.defaultReasoningEffort = patch.defaultReasoningEffort;
+      }
+    }
     if ('colorMode' in patch) {
       if (patch.colorMode === undefined) delete merged.colorMode;
       else if (isColorMode(patch.colorMode)) merged.colorMode = patch.colorMode;
@@ -315,12 +348,21 @@ export class SupabaseService {
     return (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
   }
 
-  async createThread(title: string, model: ModelTier | null = null): Promise<Thread> {
+  async createThread(
+    title: string,
+    model: ModelTier | null = null,
+    reasoningEffort: ReasoningEffort | null = null
+  ): Promise<Thread> {
     const session = await this.getSession();
     if (!session) throw new SupabaseError('Not authenticated.');
     const { data, error } = await this.client
       .from('threads')
-      .insert({ title, user_id: session.user.id, model })
+      .insert({
+        title,
+        user_id: session.user.id,
+        model,
+        reasoning_effort: reasoningEffort,
+      })
       .select()
       .single();
     if (error) throw new SupabaseError(error.message);
@@ -339,6 +381,23 @@ export class SupabaseService {
     const { error } = await this.client
       .from('threads')
       .update({ model, updated_at: new Date().toISOString() })
+      .eq('id', threadId);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Pin the reasoning-effort level for this thread, or clear the override
+   * (null) so the thread tracks the user default. Doesn't touch
+   * updated_at — flipping reasoning shouldn't promote the thread to the
+   * top of the sidebar, same rationale as setThreadToolsEnabled.
+   */
+  async setThreadReasoningEffort(
+    threadId: string,
+    reasoningEffort: ReasoningEffort | null
+  ): Promise<void> {
+    const { error } = await this.client
+      .from('threads')
+      .update({ reasoning_effort: reasoningEffort })
       .eq('id', threadId);
     if (error) throw new SupabaseError(error.message);
   }

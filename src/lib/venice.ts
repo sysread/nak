@@ -23,6 +23,7 @@
  * streams across many deltas.
  */
 
+import type { ReasoningEffort } from './models';
 import type { OpenAIToolDef, OpenAIToolCall } from './tools/types';
 
 /**
@@ -80,6 +81,15 @@ export interface ChatRequest {
    * default applies). See {@link WebSearchMode}.
    */
   webSearch?: WebSearchMode;
+  /**
+   * OpenAI-style reasoning_effort knob ('low' | 'medium' | 'high').
+   * Forwarded as the top-level `reasoning_effort` body field; omitted
+   * entirely when unset so models that don't recognize the field
+   * don't see it (some providers 400 on unknown params). Caller
+   * (chat-loop / Chat.svelte) is responsible for gating on
+   * `ModelSpec.supportsReasoning` before setting this.
+   */
+  reasoningEffort?: ReasoningEffort;
 }
 
 /**
@@ -210,6 +220,12 @@ export class VeniceClient {
     };
     if (req.tools && req.tools.length > 0) {
       body.tools = req.tools;
+    }
+    // Only send reasoning_effort when the caller opted in. Keeps the
+    // wire payload clean for non-reasoning models and for test / utility
+    // call paths (auto-titling) that shouldn't pay the latency tax.
+    if (req.reasoningEffort) {
+      body.reasoning_effort = req.reasoningEffort;
     }
     // Venice-specific: request web-search behavior via venice_parameters.
     // We send the field only when the caller passed an explicit mode so

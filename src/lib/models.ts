@@ -17,6 +17,37 @@
 
 export type ModelTier = 'smart' | 'balanced' | 'fast';
 
+/**
+ * OpenAI-style reasoning_effort knob. Passed through verbatim in the
+ * `reasoning_effort` body field on /chat/completions — Venice forwards
+ * it to the underlying provider. Only meaningful on models whose
+ * ModelSpec marks `supportsReasoning: true`; ignored on others (some
+ * providers 400 on the unknown field, so we omit it entirely when the
+ * resolved model can't reason).
+ */
+export type ReasoningEffort = 'low' | 'medium' | 'high';
+
+export const REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
+
+/**
+ * Default when the user hasn't picked anything explicitly. `low` keeps
+ * latency in the chat-turn ballpark — `medium` / `high` can stretch a
+ * simple reply into multi-second think time. Users who want more can
+ * bump per-thread or change their default in Settings.
+ */
+export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'low';
+
+export function isReasoningEffort(v: unknown): v is ReasoningEffort {
+  return v === 'low' || v === 'medium' || v === 'high';
+}
+
+/** Display labels for the three effort levels. Keep short; the dropdown is narrow. */
+export const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+};
+
 export interface ModelSpec {
   tier: ModelTier;
   /** Venice API model id sent in chat-completion requests. */
@@ -29,6 +60,14 @@ export interface ModelSpec {
   description: string;
   /** Context window (tokens), for display. */
   contextWindow: number;
+  /**
+   * True when Venice's model spec for this id accepts the
+   * `reasoning_effort` knob. Drives the per-thread dropdown in the
+   * composer: we hide it when false rather than send a field the
+   * provider will reject. Sourced from Venice's /models response —
+   * update by hand when a tier is re-pointed at a non-reasoning model.
+   */
+  supportsReasoning: boolean;
 }
 
 export const MODELS: Record<ModelTier, ModelSpec> = {
@@ -39,6 +78,7 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     icon: '🧠',
     description: 'Best quality, slower.',
     contextWindow: 256_000,
+    supportsReasoning: true,
   },
   balanced: {
     tier: 'balanced',
@@ -51,6 +91,7 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     icon: '\u262F\uFE0F',
     description: 'Good quality, moderate speed.',
     contextWindow: 256_000,
+    supportsReasoning: true,
   },
   fast: {
     tier: 'fast',
@@ -59,6 +100,7 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     icon: '\u26A1\uFE0F',
     description: 'Fastest; ~1M-token context.',
     contextWindow: 1_000_000,
+    supportsReasoning: true,
   },
 };
 
@@ -82,6 +124,19 @@ export function resolveTier(
   defaultTier: ModelTier
 ): ModelTier {
   return threadModel ?? defaultTier;
+}
+
+/**
+ * Resolve the reasoning effort to use for a given thread. Mirrors
+ * resolveTier: the per-thread override wins over the user default.
+ * Callers still have to gate on `MODELS[tier].supportsReasoning`
+ * before putting this on the wire.
+ */
+export function resolveReasoningEffort(
+  threadEffort: ReasoningEffort | null,
+  defaultEffort: ReasoningEffort
+): ReasoningEffort {
+  return threadEffort ?? defaultEffort;
 }
 
 /**

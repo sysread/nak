@@ -27,11 +27,19 @@
     app,
     activate,
     setDefaultModel,
+    setDefaultReasoningEffort,
     setSystemPrompts,
     setTheme,
     setWebSearchEnabled,
   } from '$lib/state.svelte';
-  import { MODELS, TIERS, type ModelTier } from '$lib/models';
+  import {
+    MODELS,
+    REASONING_EFFORTS,
+    REASONING_EFFORT_LABELS,
+    TIERS,
+    type ModelTier,
+    type ReasoningEffort,
+  } from '$lib/models';
   import type { SystemPrompt } from '$lib/supabase';
   import {
     ACCENTS,
@@ -77,6 +85,11 @@
   // Lives in Supabase `profiles.settings.defaultModel` (synced across
   // browsers), so no master password is needed to change it.
   let defaultModel = $state<ModelTier>(app.defaultModel);
+  // Paired with defaultModel in the same pane / form because the two
+  // always feel like one decision ("what am I asking the model to do,
+  // and how hard should it think about it?"). Persisted on
+  // `profiles.settings.defaultReasoningEffort`.
+  let defaultReasoningEffort = $state<ReasoningEffort>(app.defaultReasoningEffort);
   let modelError = $state<string | null>(null);
   let modelInfo = $state<string | null>(null);
 
@@ -321,9 +334,16 @@
     }
     busy = true;
     try {
-      await app.supabase.updateSettings({ defaultModel });
+      await app.supabase.updateSettings({
+        defaultModel,
+        defaultReasoningEffort,
+      });
       setDefaultModel(defaultModel);
-      modelInfo = `Default model set to ${MODELS[defaultModel].label} (synced to Supabase).`;
+      setDefaultReasoningEffort(defaultReasoningEffort);
+      const reasoningNote = MODELS[defaultModel].supportsReasoning
+        ? `, reasoning ${REASONING_EFFORT_LABELS[defaultReasoningEffort].toLowerCase()}`
+        : '';
+      modelInfo = `Default set to ${MODELS[defaultModel].label}${reasoningNote} (synced to Supabase).`;
     } catch (err) {
       modelError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -458,13 +478,32 @@
               </label>
             {/each}
           </div>
+          <h3 class="pane-section">Default reasoning effort</h3>
+          <p class="subtle">
+            Controls how hard the model thinks before replying on
+            reasoning-capable models. <strong>Low</strong> keeps turns
+            snappy; <strong>high</strong> trades latency for depth.
+            Ignored on non-reasoning models. Overridable per-thread from
+            the composer.
+          </p>
+          <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
+            <label for="default-reasoning" class="sr-only">Default reasoning effort</label>
+            <select
+              id="default-reasoning"
+              bind:value={defaultReasoningEffort}
+            >
+              {#each REASONING_EFFORTS as effort (effort)}
+                <option value={effort}>{REASONING_EFFORT_LABELS[effort]}</option>
+              {/each}
+            </select>
+          </div>
           <p class="subtle" style="font-size:0.8rem">
             Stored on your Supabase profile so the choice follows you across browsers.
             No master password needed.
           </p>
           {#if modelError}<p class="error">{modelError}</p>{/if}
           {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
-          <button type="submit" disabled={busy}>Save default model</button>
+          <button type="submit" disabled={busy}>Save defaults</button>
         </form>
 
         <h3 class="pane-section">Web search</h3>

@@ -37,6 +37,7 @@
     app,
     lock,
     setDefaultModel,
+    setDefaultReasoningEffort,
     setSystemPrompts,
     setTheme,
     setWebSearchEnabled,
@@ -45,13 +46,18 @@
   import type { Thread, Message } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
   import {
-    MODELS,
-    TIERS,
+    DEFAULT_REASONING_EFFORT,
     DEFAULT_TIER,
+    MODELS,
+    REASONING_EFFORTS,
+    REASONING_EFFORT_LABELS,
+    TIERS,
     UTILITY_TIER,
     findModelById,
+    resolveReasoningEffort,
     resolveTier,
     type ModelTier,
+    type ReasoningEffort,
   } from '$lib/models';
   import Auth from './Auth.svelte';
   import Settings from './Settings.svelte';
@@ -233,6 +239,7 @@
     try {
       const s = await app.supabase.getSettings();
       if (s.defaultModel) setDefaultModel(s.defaultModel);
+      if (s.defaultReasoningEffort) setDefaultReasoningEffort(s.defaultReasoningEffort);
       // If the server has a theme choice and it differs from the cached one,
       // apply it now. setTheme also re-caches, so subsequent loads are fast.
       if (s.colorMode || s.accent) {
@@ -291,7 +298,11 @@
    */
   async function materializeIfDraft(draft: Thread, title?: string): Promise<Thread> {
     if (!draft.isDraft || !app.supabase) return draft;
-    const real = await app.supabase.createThread(title ?? draft.title, draft.model);
+    const real = await app.supabase.createThread(
+      title ?? draft.title,
+      draft.model,
+      draft.reasoning_effort
+    );
     // Swap the draft for the real thread in local state; keep the new id
     // in the session so a reload sticks to the now-persisted conversation.
     threads = threads.map((t) => (t.id === draft.id ? real : t));
@@ -357,6 +368,18 @@
   const defaultTier = $derived<ModelTier>(app.defaultModel ?? DEFAULT_TIER);
   const currentTier = $derived<ModelTier>(
     resolveTier(currentThread?.model ?? null, defaultTier)
+  );
+  const defaultReasoning = $derived<ReasoningEffort>(
+    app.defaultReasoningEffort ?? DEFAULT_REASONING_EFFORT
+  );
+  // Resolved reasoning for the current thread — per-thread override wins,
+  // otherwise the user default. Only surfaced in the UI / sent on the wire
+  // when `MODELS[currentTier].supportsReasoning`.
+  const currentReasoning = $derived<ReasoningEffort>(
+    resolveReasoningEffort(currentThread?.reasoning_effort ?? null, defaultReasoning)
+  );
+  const currentSupportsReasoning = $derived<boolean>(
+    MODELS[currentTier].supportsReasoning
   );
 
   async function startRename(): Promise<void> {
@@ -425,6 +448,26 @@
     }
   }
 
+  // Mirror of setTier for reasoning effort. Clearing the override when
+  // the user picks the current default is deliberate: that way a later
+  // change to their default propagates to this thread automatically, and
+  // we don't pin a stale value just because it happened to match once.
+  async function setReasoning(effort: ReasoningEffort): Promise<void> {
+    if (!app.supabase || !currentThread) return;
+    const next: ReasoningEffort | null = effort === defaultReasoning ? null : effort;
+    if ((currentThread.reasoning_effort ?? null) === next) return;
+    const threadId = currentThread.id;
+    threads = threads.map((t) =>
+      t.id === threadId ? { ...t, reasoning_effort: next } : t
+    );
+    if (currentThread.isDraft) return;
+    try {
+      await app.supabase.setThreadReasoningEffort(threadId, next);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   /**
    * Best-effort: ask the fast model for a short title for this thread. Runs
    * after the first user+assistant round-trip. Any failure is swallowed —
@@ -487,6 +530,7 @@
       user_id: session.user.id,
       title: DEFAULT_TITLE,
       model: null,
+      reasoning_effort: null,
       tools_enabled: false,
       created_at: now,
       updated_at: now,
@@ -527,6 +571,11 @@
     // `threads` and could make `currentThread` briefly null.
     const tier = resolveTier(active?.model ?? null, defaultTier);
     const modelId = MODELS[tier].id;
+    // Only pass reasoning_effort on models that accept it; letting it
+    // ride along to a non-reasoning model produces a 400 on some providers.
+    const sendReasoning: ReasoningEffort | undefined = MODELS[tier].supportsReasoning
+      ? resolveReasoningEffort(active?.reasoning_effort ?? null, defaultReasoning)
+      : undefined;
 
     let threadId: string;
     let isFirstExchange = false;
@@ -618,6 +667,7 @@
           // so the field is pinned even against any future Venice-side
           // default change.
           webSearch: app.webSearchEnabled ? 'on' : 'off',
+          reasoningEffort: sendReasoning,
           handlers: {
             onTextUpdate: (t) => {
               pending = t;
@@ -874,10 +924,11 @@
     scheduleStreamScroll();
   });
 
-  // Composer popovers (prompts list + model picker). Only one is open at
-  // a time. Click-outside closes; Escape too.
+  // Composer popovers (prompts list + model picker + reasoning picker).
+  // Only one is open at a time. Click-outside closes; Escape too.
   let promptsMenuOpen = $state(false);
   let modelMenuOpen = $state(false);
+  let reasoningMenuOpen = $state(false);
   let composerBarEl: HTMLDivElement | undefined = $state();
 
   // IDs of system prompts active for the current thread. Seeded from
@@ -917,10 +968,11 @@
   function closeMenus(): void {
     promptsMenuOpen = false;
     modelMenuOpen = false;
+    reasoningMenuOpen = false;
   }
 
   function onDocClick(e: MouseEvent): void {
-    if (!promptsMenuOpen && !modelMenuOpen) return;
+    if (!promptsMenuOpen && !modelMenuOpen && !reasoningMenuOpen) return;
     if (composerBarEl && composerBarEl.contains(e.target as Node)) return;
     closeMenus();
   }
@@ -930,7 +982,7 @@
   }
 
   $effect(() => {
-    if (!promptsMenuOpen && !modelMenuOpen) return;
+    if (!promptsMenuOpen && !modelMenuOpen && !reasoningMenuOpen) return;
     document.addEventListener('click', onDocClick);
     document.addEventListener('keydown', onDocKey);
     return () => {
@@ -1357,6 +1409,7 @@
                 class:active={activePromptCount > 0}
                 onclick={() => {
                   modelMenuOpen = false;
+                  reasoningMenuOpen = false;
                   promptsMenuOpen = !promptsMenuOpen;
                 }}
                 title="System prompts"
@@ -1389,6 +1442,7 @@
                   class="secondary model-picker-btn"
                   onclick={() => {
                     promptsMenuOpen = false;
+                    reasoningMenuOpen = false;
                     modelMenuOpen = !modelMenuOpen;
                   }}
                   aria-haspopup="true"
@@ -1397,6 +1451,32 @@
                 >
                   <span class="model-picker-icon" aria-hidden="true">{MODELS[currentTier].icon}</span>
                   <span class="model-picker-label">{MODELS[currentTier].label}</span>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+              {/if}
+
+              <!-- Reasoning-effort picker: per-thread override, stored on
+                   threads.reasoning_effort. Hidden when the resolved model
+                   doesn't advertise reasoning support — no point offering
+                   a knob the provider will reject. -->
+              {#if currentThread && currentSupportsReasoning}
+                <button
+                  type="button"
+                  class="secondary model-picker-btn"
+                  onclick={() => {
+                    promptsMenuOpen = false;
+                    modelMenuOpen = false;
+                    reasoningMenuOpen = !reasoningMenuOpen;
+                  }}
+                  aria-haspopup="true"
+                  aria-expanded={reasoningMenuOpen}
+                  title={`Reasoning effort: ${REASONING_EFFORT_LABELS[currentReasoning]}`}
+                >
+                  <span class="model-picker-icon" aria-hidden="true">💭</span>
+                  <span class="model-picker-label">{REASONING_EFFORT_LABELS[currentReasoning]}</span>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <polyline points="6 9 12 15 18 9" />
@@ -1459,6 +1539,30 @@
                       <span class="subtle" style="display:block;font-size:0.75rem">{MODELS[tier].id}</span>
                     </span>
                     {#if tier === defaultTier}<span class="menu-item-badge">default</span>{/if}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+
+            {#if reasoningMenuOpen && currentThread && currentSupportsReasoning}
+              <div class="composer-menu composer-menu-left" role="menu">
+                <div class="menu-header">Reasoning effort for this conversation</div>
+                {#each REASONING_EFFORTS as effort (effort)}
+                  <button
+                    type="button"
+                    class="menu-item menu-item-btn"
+                    class:selected={currentReasoning === effort}
+                    onclick={() => {
+                      void setReasoning(effort);
+                      reasoningMenuOpen = false;
+                    }}
+                    role="menuitemradio"
+                    aria-checked={currentReasoning === effort}
+                  >
+                    <span class="menu-item-label">
+                      <strong>{REASONING_EFFORT_LABELS[effort]}</strong>
+                    </span>
+                    {#if effort === defaultReasoning}<span class="menu-item-badge">default</span>{/if}
                   </button>
                 {/each}
               </div>

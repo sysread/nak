@@ -25,6 +25,7 @@
  * one tool-result row per call in the order the model returned them.
  */
 
+import type { ReasoningEffort } from './models';
 import type { SupabaseService, Message, Thread } from './supabase';
 import type {
   VeniceClient,
@@ -109,6 +110,13 @@ export interface ChatLoopOptions {
    * the field" — used by tests that don't care about web-search.
    */
   webSearch?: WebSearchMode;
+  /**
+   * Optional reasoning-effort knob forwarded to every streamChat call.
+   * Caller (Chat.svelte) is expected to only set this on models whose
+   * ModelSpec marks `supportsReasoning: true` — we don't re-check here
+   * because the chat-loop only sees the concrete model id, not the spec.
+   */
+  reasoningEffort?: ReasoningEffort;
 }
 
 /** Non-error completion shape returned to the caller. */
@@ -172,7 +180,17 @@ function encodeToolContent(
  * produces a terminal response (no tool_calls) or the cap trips.
  */
 export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult> {
-  const { venice, supabase, thread, userId, modelId, signal, handlers, webSearch } = opts;
+  const {
+    venice,
+    supabase,
+    thread,
+    userId,
+    modelId,
+    signal,
+    handlers,
+    webSearch,
+    reasoningEffort,
+  } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
   let toolsEnabled = thread.tools_enabled;
@@ -207,6 +225,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       signal,
       tools: buildToolList(toolsEnabled),
       webSearch,
+      reasoningEffort,
     });
 
     let roundText = '';
