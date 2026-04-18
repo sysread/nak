@@ -685,17 +685,94 @@
     hasOverflow = el.scrollHeight > el.clientHeight + 1;
   }
 
-  // Whenever the visible content changes (new messages or streaming
-  // tokens), pin to the bottom if we're following. Also refresh
-  // hasOverflow so the ↓ button shows up promptly.
+  // Streaming deltas arrive fast enough that scrolling on every
+  // coalesced paint makes the content rocket off-screen before the
+  // eye can lock onto a word — the view feels like a slot machine.
+  // Debounce the streaming-driven scroll so bursts of tokens settle
+  // into periodic nudges instead of a continuous blur. The max-wait
+  // cap guarantees the view still keeps up with a sustained stream:
+  // no matter how fast the tokens come, a scroll fires at least once
+  // per SCROLL_MAX_WAIT_MS window. Discrete transitions (user sends,
+  // assistant-message commit, thread switch) bypass this path and
+  // scroll immediately — see the $effect below.
+  const SCROLL_DEBOUNCE_MS = 80;
+  const SCROLL_MAX_WAIT_MS = 300;
+  let scrollDebounceTimer = 0;
+  let scrollMaxWaitTimer = 0;
+
+  function cancelScrollTimers(): void {
+    if (scrollDebounceTimer !== 0) {
+      clearTimeout(scrollDebounceTimer);
+      scrollDebounceTimer = 0;
+    }
+    if (scrollMaxWaitTimer !== 0) {
+      clearTimeout(scrollMaxWaitTimer);
+      scrollMaxWaitTimer = 0;
+    }
+  }
+
+  function firePendingStreamScroll(): void {
+    cancelScrollTimers();
+    // Re-check followBottom at fire time: the user may have scrolled
+    // up while the timer was pending, and scroll-lock honors current
+    // intent rather than the intent at the moment the timer was set.
+    if (followBottom) scrollToBottom(false);
+  }
+
+  function scheduleStreamScroll(): void {
+    if (!followBottom) {
+      // Scroll-lock engaged — drop any pending scrolls so a stale
+      // timer doesn't fight the user after they scroll up.
+      cancelScrollTimers();
+      return;
+    }
+    if (scrollDebounceTimer !== 0) clearTimeout(scrollDebounceTimer);
+    scrollDebounceTimer = window.setTimeout(
+      firePendingStreamScroll,
+      SCROLL_DEBOUNCE_MS
+    );
+    // Max-wait ceiling: armed on the first scheduled scroll of a
+    // streaming burst and only reset when a scroll actually fires.
+    // Without this, a rapid-enough stream would reset the debounce
+    // timer forever and the view would never catch up.
+    if (scrollMaxWaitTimer === 0) {
+      scrollMaxWaitTimer = window.setTimeout(
+        firePendingStreamScroll,
+        SCROLL_MAX_WAIT_MS
+      );
+    }
+  }
+
+  // Two separate effects so streaming deltas and discrete message-list
+  // mutations can drive different scroll policies. Splitting them is
+  // the simplest way to get "debounce tokens, snap on commits" without
+  // prev-value bookkeeping inside a single effect.
+
+  // Message-list mutations — user send, assistant-persist, thread load,
+  // thread switch. These mark a clean transition and should land the
+  // view on the bottom immediately. Firing here also supersedes any
+  // pending streaming debounce: the commit we just observed is the
+  // latest state, so a stale late-firing timer would just flicker.
   $effect(() => {
-    // Touch the dependencies so Svelte knows to rerun on change.
     void messages;
+    const el = messagesEl;
+    if (!el) return;
+    hasOverflow = el.scrollHeight > el.clientHeight + 1;
+    cancelScrollTimers();
+    if (followBottom) scrollToBottom(false);
+  });
+
+  // Streaming deltas — debounced with a max-wait cap. `streamingText`
+  // toggling to '' at the end of a round also runs through here; the
+  // follow-up messages effect (assistant persisted) will cancel the
+  // pending timer and do the final snap-to-bottom, so we don't need
+  // a special "stream ended" signal.
+  $effect(() => {
     void streamingText;
     const el = messagesEl;
     if (!el) return;
     hasOverflow = el.scrollHeight > el.clientHeight + 1;
-    if (followBottom) scrollToBottom(false);
+    scheduleStreamScroll();
   });
 
   // Composer popovers (prompts list + model picker). Only one is open at
