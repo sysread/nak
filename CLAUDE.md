@@ -96,6 +96,30 @@ Before handing work back:
 - [ ] Every constant derived from a spec cites the spec.
 - [ ] No stale comments left pointing at removed code.
 
+## Capturing conventions
+
+Claude sessions don't share state with prior or future sessions. If
+you learn something the next session would waste time rediscovering
+— a workflow that differs from "the usual" (e.g. schema changes go
+through `mise run sync`, not the SQL Editor), a non-obvious
+constraint, a load-bearing invariant — write it down:
+
+- **Single-file scope:** leave it as a comment next to the code.
+  You'll see it on the next edit.
+- **Multi-file or repo-wide scope:** add it here, ideally under a
+  named section so it surfaces on a quick scan of the table of
+  contents.
+- **Both:** a short pointer in the file (e.g. "see CLAUDE.md §
+  Supabase schema changes") plus the full explanation here.
+
+When the underlying behavior changes, update the note in the same
+PR. A stale convention note sends the next session the wrong way
+with full confidence — worse than no note at all.
+
+If the user corrects you on a project convention, that's a strong
+signal the convention isn't documented yet. Add it before closing
+the task.
+
 ## Commit / branch / merge conventions
 
 See the standing instructions given at session start for branch names and
@@ -120,3 +144,26 @@ CSS-only changes. The test suite includes a postcss parse of every
 stylesheet under `src/` (see `tests/styles.test.ts`), which is the
 only local gate that catches a malformed rule before `pnpm build` /
 the Pages deploy rejects it.
+
+## Supabase schema changes
+
+Schema lives in `supabase/schema.sql` and is applied to the linked
+project by `mise run sync` (see `scripts/sync.mjs` and the `[tasks.sync]`
+entry in `.mise.toml`). There are no up/down migrations — the file is
+re-applied start-to-finish on every sync, so **every statement must
+be idempotent**. The header comment in `schema.sql` itself documents
+the specific patterns the project uses (`if not exists`, `drop policy
+if exists` + recreate, guarded `do $$` blocks for things without
+native `if not exists` support like `alter publication`).
+
+When you add a column, table, policy, trigger, publication member,
+index, extension, etc., the workflow is:
+
+1. Edit `supabase/schema.sql`.
+2. Tell the user to `mise run sync` to apply it to their linked
+   project. Don't point them at the Supabase SQL Editor — that's the
+   fallback, not the convention.
+
+The `mise run sync` task also merges the fork's Pages URL into the
+auth allowlist, but that's orthogonal to schema — don't dwell on it
+in PR descriptions for schema changes.

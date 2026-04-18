@@ -1,14 +1,51 @@
--- Nak — minimum viable schema.
--- Run this once in the Supabase SQL Editor for your project.
+-- Nak — Supabase schema.
 --
--- Tables:
---   profiles  one row per authenticated user
+-- Canonical source of truth for the database shape. Applied to the
+-- linked project by `mise run sync` (see scripts/sync.mjs and
+-- .mise.toml), which pipes this file through the Supabase Management
+-- API's `runSql` endpoint. Pasting into the Supabase SQL Editor is a
+-- last-resort fallback — the convention is that every schema change
+-- goes through `mise run sync` so there's exactly one application
+-- path and one source of truth. Don't tell users to run statements
+-- manually; tell them to `mise run sync`.
+--
+-- ---------------------------------------------------------------------------
+-- Rules for edits
+-- ---------------------------------------------------------------------------
+--
+-- `mise run sync` re-applies this file start-to-finish on every run.
+-- There are no up/down migrations. Every statement must therefore be
+-- safe to run against an already-migrated database. Patterns this
+-- file uses, in rough order of preference:
+--
+--   - `create table if not exists`, `create index if not exists`,
+--     `create extension if not exists`.
+--   - `alter table ... add column if not exists`.
+--   - `drop policy if exists` followed by `create policy ...` —
+--     the project-wide pattern for editing RLS policies.
+--   - `create or replace function`. For triggers, `drop trigger if
+--     exists` then `create trigger`.
+--   - Statements with no native `if not exists` (notably
+--     `alter publication ... add table`) go inside a guarded
+--     `do $$ begin if not exists (...) then ... end if; end $$;`
+--     block that checks the relevant catalog first.
+--
+-- If you add a statement that can't be made idempotent, stop and
+-- fix that before merging — the next `mise run sync` on a
+-- previously-synced project will error out, and the error won't be
+-- at your statement, it'll be on whoever syncs after you.
+--
+-- ---------------------------------------------------------------------------
+-- Tables
+-- ---------------------------------------------------------------------------
+--   profiles  one row per authenticated user (settings blob, timestamps)
 --   threads   conversation containers owned by a user
---   messages  individual turns within a thread
+--   messages  individual turns within a thread (incl. OpenAI-shape tool rows)
+--   memories  freeform notes CRUD-able by the user and the memory_* tools
 --
--- All tables have Row Level Security enabled so that an authenticated user
--- can only access rows they own. The anon key that the browser uses is
--- safe to expose provided RLS policies are in place.
+-- All tables have Row Level Security enabled so an authenticated user
+-- can only access rows they own. The anon key the browser uses is
+-- safe to expose provided RLS policies stay in place.
 
 create extension if not exists pgcrypto;
 
