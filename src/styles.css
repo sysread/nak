@@ -1167,6 +1167,18 @@ h1 {
   background: var(--bg);
 }
 
+/* When an assistant message opens with a code fence, the code-block's
+   own copy button would otherwise land at the exact coordinates of
+   the message-level .copy-btn (both pinned to the top-right corner of
+   a container whose right edge is the card's content edge). Slide
+   the first-child code-fence button left so the two sit side-by-side
+   with a small gap instead of stacking on top of each other. The
+   offset is tuned to roughly "the width of .copy-btn + a small gap"
+   — if that button ever changes size, this value may need a nudge. */
+.msg.assistant .md > .code-block:first-child .copy-code-btn {
+  right: 3.6rem;
+}
+
 /* ---------- Composer ----------
    One rounded shell containing the textarea stacked on top of a button
    bar: [prompts] [model] ...............................[ send ].
