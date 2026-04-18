@@ -187,8 +187,17 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // Prepend the system-prompt catalog every round. It's not stored in
     // the DB — it's derived from the registry at request-time, so adding
     // a tool automatically updates what the model knows about.
+    // Advertise Venice's web-search augmentation to the model when the
+    // user hasn't opted out. In `auto` mode Venice only runs the search
+    // if the model signals intent — without this hint the model reads
+    // the gated-tool list as exhaustive and refuses.
     const requestMessages: VeniceMessage[] = [
-      { role: 'system', content: buildToolCatalog() },
+      {
+        role: 'system',
+        content: buildToolCatalog({
+          webSearch: webSearch === 'auto' || webSearch === 'on',
+        }),
+      },
       ...history,
     ];
 

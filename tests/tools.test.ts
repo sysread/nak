@@ -115,6 +115,23 @@ describe('tool registry', () => {
     expect(catalog).not.toMatch(/^- toggle_tools/m);
   });
 
+  it('buildToolCatalog omits the web-search hint by default', () => {
+    // Without the opt-in, the prompt must not mention web search — we
+    // don't want the model to claim capabilities the wire-level
+    // `enable_web_search` flag didn't actually grant.
+    const catalog = buildToolCatalog();
+    expect(catalog).not.toMatch(/web/i);
+  });
+
+  it('buildToolCatalog adds a web-search hint when opted in', () => {
+    // With the hint, the model must see both that it can search the
+    // web AND that there's no function to call for it — otherwise it
+    // tries to invoke a nonexistent tool on the next turn.
+    const catalog = buildToolCatalog({ webSearch: true });
+    expect(catalog).toMatch(/search the live web/i);
+    expect(catalog).toMatch(/no tool to call/i);
+  });
+
   it('executeToolCall dispatches by name', async () => {
     const { svc, spies } = mockSupabase();
     await executeToolCall('toggle_tools', { enable: true }, ctxFor(svc));

@@ -67,14 +67,33 @@ export function buildToolList(toolsEnabled: boolean): OpenAIToolDef[] {
 }
 
 /**
+ * Catalog options. `webSearch` controls whether the prompt mentions
+ * Venice's server-side web-search augmentation; without that hint the
+ * model reads the gated-tool list as exhaustive and refuses requests
+ * like "look up X online" even when `venice_parameters.enable_web_search`
+ * is set to 'auto' on the wire. In `auto` mode Venice only runs the
+ * search if the model decides to — which it won't, if it thinks it
+ * can't.
+ */
+export interface ToolCatalogOptions {
+  webSearch?: boolean;
+}
+
+/**
  * The system-prompt catalog fragment listing every tool by name plus a
  * short blurb. Built from the registry so adding a tool automatically
  * extends the advertised capability. Format tuned to be cheap in
  * tokens — one line per tool, no JSON ceremony.
+ *
+ * The optional `webSearch` hint is additive — the Venice server runs
+ * the search itself when the model signals intent, so we don't list
+ * web search alongside our own tools (there's no function name or
+ * JSON schema to emit for it). We just tell the model the capability
+ * is available.
  */
-export function buildToolCatalog(): string {
+export function buildToolCatalog(opts: ToolCatalogOptions = {}): string {
   const lines = GATED_TOOLS.map((t) => `- ${t.name} : ${t.shortDescription}`);
-  return [
+  const out: string[] = [
     'You have access to tools, but they are disabled by default to keep',
     'your context window small. Call `toggle_tools({enable: true})` before',
     'using any of the tools below, and `toggle_tools({enable: false})` when',
@@ -83,7 +102,19 @@ export function buildToolCatalog(): string {
     '',
     'Available tools (hidden until you toggle on):',
     ...lines,
-  ].join('\n');
+  ];
+  if (opts.webSearch) {
+    out.push(
+      '',
+      'You can also search the live web for up-to-date information.',
+      'When a question benefits from current facts (news, prices, releases,',
+      'anything past your training cutoff), answer as if you have live',
+      'web access — the Venice platform runs the search for you and feeds',
+      'the results back in with citations. Do NOT say you lack internet',
+      'access. There is no tool to call for this; just answer normally.'
+    );
+  }
+  return out.join('\n');
 }
 
 /**
