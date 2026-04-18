@@ -857,6 +857,17 @@
     | { kind: 'plain'; message: Message }
     | { kind: 'tool-group'; assistant: Message; resultsByCallId: Record<string, Message> };
 
+  // `toggle_tools` is a housekeeping call — the LLM flips tools on/off
+  // as it decides whether it needs the full catalog for the next turn.
+  // The user already sees the state change (toolbox button flashes and
+  // updates its active state via onToolsEnabledChange), and the call
+  // itself carries no reply-relevant content. Rendering it as a tool
+  // row just adds noise to the transcript, so we hide it from the
+  // render plan. The underlying `tool_calls` and tool-result rows
+  // still live in the message store and go out on the wire on replay
+  // — this is purely a display filter.
+  const HIDDEN_TOOL_NAMES = new Set(['toggle_tools']);
+
   const messageBlocks = $derived.by<MessageBlock[]>(() => {
     // First pass: index tool rows by their tool_call_id.
     const resultsByCallId: Record<string, Message> = {};
@@ -875,12 +886,29 @@
         m.tool_calls &&
         m.tool_calls.length > 0
       ) {
+        const visibleCalls = m.tool_calls.filter(
+          (c) => !HIDDEN_TOOL_NAMES.has(c.function.name)
+        );
+        // If every call on this turn is hidden, we either drop the
+        // whole row (no body, nothing to show) or demote it to a
+        // plain block so any assistant text still reaches the user.
+        // Demoting preserves the rare case where a model emits a
+        // short "ok, tools off" reply alongside the toggle call.
+        if (visibleCalls.length === 0) {
+          if (m.content && m.content.trim().length > 0) {
+            blocks.push({ kind: 'plain', message: m });
+          }
+          continue;
+        }
         const scoped: Record<string, Message> = {};
-        for (const call of m.tool_calls) {
+        for (const call of visibleCalls) {
           const r = resultsByCallId[call.id];
           if (r) scoped[call.id] = r;
         }
-        blocks.push({ kind: 'tool-group', assistant: m, resultsByCallId: scoped });
+        // Copy the message so we can narrow tool_calls to just the
+        // visible ones without mutating the store-owned row.
+        const narrowed: Message = { ...m, tool_calls: visibleCalls };
+        blocks.push({ kind: 'tool-group', assistant: narrowed, resultsByCallId: scoped });
       } else {
         blocks.push({ kind: 'plain', message: m });
       }
