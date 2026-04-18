@@ -1057,11 +1057,20 @@ h1 {
   max-width: 80%;
   background: var(--surface);
   border: 1px solid var(--border);
-  /* Anchor for the absolutely-positioned `.copy-btn` that the chat
-     screen drops into each assistant card. Without a positioning
-     context here the button would fly up to the nearest ancestor
-     (messages-wrap) and stick at the top of the list. */
-  position: relative;
+}
+
+/* Post-message action panel. Sits inside each assistant bubble,
+   right-aligned, separated from the reply body by a hairline so the
+   transition from "content" to "controls" reads cleanly. Using border
+   rather than margin keeps the panel visually tethered to the bubble
+   — it's part of the card, not a floating afterthought. */
+.msg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
 }
 
 /* Re-apply the mobile full-width rule here, *after* the base
@@ -1084,16 +1093,14 @@ h1 {
 
 /* ---------- Copy button ----------
    Shared styles for the two copy-to-clipboard surfaces: the message
-   button (CopyButton.svelte, dropped into each assistant bubble) and
-   the code-fence button (emitted as plain HTML by the markdown
-   renderer, click-delegated from Markdown.svelte). They live in
-   different DOM contexts but share a visual identity — same corner,
-   same muted → accent ramp, same "Copied!" green flash. */
+   button (CopyButton.svelte, dropped into the `.msg-actions` panel of
+   each assistant bubble) and the code-fence button (emitted as plain
+   HTML by the markdown renderer, click-delegated from Markdown.svelte
+   and pinned to the top-right corner of each fence). They live in
+   different DOM contexts but share a visual identity — same muted →
+   accent ramp, same copy-glyph → checkmark flash. */
 
 .copy-btn {
-  position: absolute;
-  top: 0.35rem;
-  right: 0.35rem;
   /* Icon-only — flex centers the SVG inside the bordered square. */
   display: inline-flex;
   align-items: center;
@@ -1108,10 +1115,6 @@ h1 {
     color 120ms ease-out,
     background 120ms ease-out,
     border-color 120ms ease-out;
-  /* Sit above the pre's token spans and any absolutely-positioned
-     overlays in the bubble without stealing clicks from text
-     selection elsewhere in the card. */
-  z-index: 1;
 }
 
 .copy-btn:hover,
@@ -1169,21 +1172,6 @@ h1 {
   background: var(--bg);
 }
 
-/* When an assistant message opens with a code fence, the code-block's
-   own copy button would otherwise land at the exact coordinates of
-   the message-level .copy-btn (both pinned to the top-right corner of
-   a container whose right edge is the card's content edge). Slide
-   the first-child code-fence button left so the two sit side-by-side
-   with a small gap instead of stacking on top of each other. The
-   offset is tuned to roughly "the width of .copy-btn + a small gap"
-   — if that button ever changes size, this value may need a nudge.
-   Both buttons are icon-only (14px glyph + 0.25rem padding + 1px
-   border ≈ 1.5rem wide), so this is the icon-button width plus
-   ~0.3rem of breathing room. */
-.msg.assistant .md > .code-block:first-child .copy-code-btn {
-  right: 2.2rem;
-}
-
 /* ---------- Composer ----------
    One rounded shell containing the textarea stacked on top of a button
    bar: [prompts] [model] ...............................[ send ].
@@ -1215,9 +1203,15 @@ h1 {
      that matches scrollHeight on every keystroke; max-height caps the
      growth at 40% of the viewport so the composer never eats the
      conversation. Manual resize is disabled because the auto-grow
-     would immediately snap the element back on the next keystroke. */
+     would immediately snap the element back on the next keystroke.
+     `min-height` seats the empty composer at ~3 lines of text so
+     long-form drafts feel invited rather than cramped; the auto-grow
+     effect still runs on every keystroke, and inline heights below
+     the floor are clamped by `min-height`. `line-height: 1.4` gives
+     the text a touch more vertical breathing room than the browser
+     default (~1.15–1.2) without drifting into body-copy loose. */
   width: 100%;
-  min-height: 2.6rem;
+  min-height: 4.4rem;
   max-height: 40vh;
   border: 0;
   background: transparent;
@@ -1225,6 +1219,7 @@ h1 {
   resize: none;
   font-family: inherit;
   font-size: 0.95rem;
+  line-height: 1.4;
   color: var(--text);
 }
 .composer-textarea:focus {

@@ -1078,7 +1078,6 @@
             {#if block.kind === 'tool-group'}
               <div class="msg assistant">
                 {#if block.assistant.content}
-                  <CopyButton text={block.assistant.content} ariaLabel="Copy message" />
                   <Markdown content={block.assistant.content} />
                 {/if}
                 <ToolCalls
@@ -1087,13 +1086,23 @@
                   timings={toolTimings}
                   nowMs={nowMs}
                 />
+                {#if block.assistant.content}
+                  <!-- Post-message action panel. Right-aligned so the
+                       controls read as trailing affordances and don't
+                       compete with the reading flow. -->
+                  <div class="msg-actions">
+                    <CopyButton text={block.assistant.content} ariaLabel="Copy message" />
+                  </div>
+                {/if}
               </div>
             {:else}
               <div class="msg {block.message.role}">
-                {#if block.message.role === 'assistant'}
-                  <CopyButton text={block.message.content} ariaLabel="Copy message" />
-                {/if}
                 <Markdown content={block.message.content} />
+                {#if block.message.role === 'assistant'}
+                  <div class="msg-actions">
+                    <CopyButton text={block.message.content} ariaLabel="Copy message" />
+                  </div>
+                {/if}
               </div>
             {/if}
           {/each}
