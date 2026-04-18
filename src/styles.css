@@ -652,16 +652,9 @@ h1 {
     padding: 0.5rem;
   }
 
-  /* On phones there isn't enough width to waste on the 80%/65% column
-     layout — let both roles fill the width. The role bubbles still
-     read distinctly via background color; alignment collapses to the
-     default stretch so the column reads top-to-bottom. */
-  .msg.user,
-  .msg.assistant {
-    width: 100%;
-    max-width: 100%;
-    align-self: stretch;
-  }
+  /* The `.msg.user` / `.msg.assistant` mobile width override lives down
+     with the base role rules themselves — source-order specificity ties
+     would otherwise let the later desktop declarations win on mobile. */
 
   .composer {
     padding: 0.5rem;
@@ -1048,6 +1041,24 @@ h1 {
   max-width: 80%;
   background: var(--surface);
   border: 1px solid var(--border);
+}
+
+/* Re-apply the mobile full-width rule here, *after* the base
+   .msg.user/.msg.assistant declarations above. Without this duplicate
+   block, the base rules — same specificity, later in source order —
+   win even when the mobile media query matches, leaving the cards at
+   80% centered while the composer below sits at 100%. The result was
+   visibly mismatched left/right edges between the list and the input.
+   The earlier @media block at the top of the stylesheet still handles
+   the drawer / sidebar / composer mobile tweaks; this narrow block
+   only overrides the role-specific sizing. */
+@media (max-width: 720px) {
+  .msg.user,
+  .msg.assistant {
+    width: 100%;
+    max-width: 100%;
+    align-self: stretch;
+  }
 }
 
 /* ---------- Composer ----------
