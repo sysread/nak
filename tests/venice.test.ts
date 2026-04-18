@@ -64,6 +64,22 @@ describe('parseSseFrame', () => {
       'data: {"choices":[{"delta":{"content":"!"},"finish_reason":"stop"}]}';
     expect(parseSseFrame(frame)).toEqual({ text: '!', finishReason: 'stop' });
   });
+
+  it('extracts the usage epilogue frame (empty choices)', () => {
+    const frame =
+      'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}';
+    expect(parseSseFrame(frame)).toEqual({
+      usage: { prompt_tokens: 12, completion_tokens: 7, total_tokens: 19 },
+    });
+  });
+
+  it('ignores a malformed usage object (missing a field)', () => {
+    // A partial usage block is dropped so downstream callers can treat
+    // TokenUsage as a total record. The frame still parses but carries
+    // no actionable data, so the parser returns null.
+    const frame = 'data: {"choices":[],"usage":{"prompt_tokens":12}}';
+    expect(parseSseFrame(frame)).toBeNull();
+  });
 });
 
 describe('VeniceClient.streamChat', () => {
@@ -174,7 +190,7 @@ describe('VeniceClient.streamChat', () => {
     const events: Array<{ type: string; value: unknown }> = [];
     for await (const ev of client.streamChat({ model: 'm', messages: [] })) {
       if (ev.type === 'text') events.push({ type: 'text', value: ev.delta });
-      else events.push({ type: 'tool_call', value: ev.toolCall });
+      else if (ev.type === 'tool_call') events.push({ type: 'tool_call', value: ev.toolCall });
     }
     expect(events[0]).toEqual({ type: 'text', value: 'let me check...' });
     expect(events[events.length - 1]).toMatchObject({
@@ -258,6 +274,78 @@ describe('VeniceClient.streamChat', () => {
     const [, init] = fetchImpl.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.tools).toEqual(tools);
+  });
+
+  it('requests the usage epilogue via stream_options', async () => {
+    // Without this flag, Venice / OpenAI-compatible providers only
+    // emit usage on non-streaming responses. The per-message
+    // context-window indicator depends on having it on every turn.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    for await (const _ of client.streamChat({ model: 'm', messages: [] })) {
+      void _;
+    }
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.stream_options).toEqual({ include_usage: true });
+  });
+
+  it('emits a trailing usage event when the epilogue frame arrives', async () => {
+    const frames = [
+      'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      // OpenAI sends the usage epilogue *after* finish_reason and
+      // *before* [DONE]. Make sure the stream loop doesn't
+      // short-circuit on finish_reason and miss this frame.
+      'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(frames), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const events: Array<{ type: string; value: unknown }> = [];
+    for await (const ev of client.streamChat({ model: 'm', messages: [] })) {
+      if (ev.type === 'text') events.push({ type: 'text', value: ev.delta });
+      else if (ev.type === 'usage') events.push({ type: 'usage', value: ev.usage });
+    }
+    expect(events).toEqual([
+      { type: 'text', value: 'ok' },
+      {
+        type: 'usage',
+        value: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+      },
+    ]);
+  });
+
+  it('omits the usage event when the provider skips the epilogue', async () => {
+    // Older providers (and tests that don't simulate the epilogue)
+    // should silently produce no usage event — the caller then
+    // persists `usage: null` and the indicator stays hidden.
+    const frames = [
+      'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(frames), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const types: string[] = [];
+    for await (const ev of client.streamChat({ model: 'm', messages: [] })) {
+      types.push(ev.type);
+    }
+    expect(types).toEqual(['text']);
   });
 
   it('omits `tools` from the body when the array is empty', async () => {

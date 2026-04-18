@@ -83,3 +83,22 @@ export function resolveTier(
 ): ModelTier {
   return threadModel ?? defaultTier;
 }
+
+/**
+ * Reverse lookup: given a Venice model id (e.g. 'kimi-k2-5'), return the
+ * ModelSpec whose `id` matches. Used by the per-message context-window
+ * indicator — a message row stores the concrete id it was answered by,
+ * and we need the id → contextWindow map to compute a percentage.
+ *
+ * Returns null when no tier matches, which happens on rows written under
+ * a now-retired model id (we've retargeted the tier in the meantime but
+ * old rows still carry the old id). The caller should hide the
+ * indicator rather than guess at the window.
+ */
+export function findModelById(id: string | null | undefined): ModelSpec | null {
+  if (typeof id !== 'string' || id.length === 0) return null;
+  for (const spec of Object.values(MODELS)) {
+    if (spec.id === id) return spec;
+  }
+  return null;
+}

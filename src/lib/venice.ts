@@ -55,13 +55,29 @@ export interface ChatRequest {
 }
 
 /**
+ * OpenAI-shaped token usage block. Venice emits this in an epilogue SSE
+ * frame when we pass `stream_options: { include_usage: true }` — the
+ * frame carries an empty `choices` array and a populated `usage` object.
+ * All three fields are integers; the server guarantees
+ * `total_tokens = prompt_tokens + completion_tokens`.
+ */
+export interface TokenUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+/**
  * Events yielded by streamChat. Text arrives as it's generated; tool
  * calls arrive exactly once each, after their arguments JSON has been
- * fully assembled from its fragments.
+ * fully assembled from its fragments. A `usage` event — if the provider
+ * reported one — fires exactly once, after the final text/tool event
+ * and before the generator returns.
  */
 export type StreamEvent =
   | { type: 'text'; delta: string }
-  | { type: 'tool_call'; toolCall: OpenAIToolCall };
+  | { type: 'tool_call'; toolCall: OpenAIToolCall }
+  | { type: 'usage'; usage: TokenUsage };
 
 export interface EmbeddingRequest {
   model: string;
@@ -155,6 +171,14 @@ export class VeniceClient {
       temperature: req.temperature,
       max_tokens: req.maxTokens,
       stream: true,
+      // Ask for a token-usage epilogue frame on the SSE stream. Without
+      // this flag Venice (and OpenAI-compatible providers generally)
+      // only emit usage on non-streaming responses; with it, a final
+      // frame carries `{choices:[], usage:{...}}` after [DONE] logic
+      // would otherwise fire. Drives the per-message context-window
+      // indicator — a silently-unsupported provider just yields no
+      // usage event and the indicator stays hidden.
+      stream_options: { include_usage: true },
     };
     if (req.tools && req.tools.length > 0) {
       body.tools = req.tools;
@@ -189,6 +213,11 @@ export class VeniceClient {
       argumentsAccum: string;
     }>();
     let finished = false;
+    // Captured from the epilogue frame (see `stream_options.include_usage`
+    // in the request). Emitted as a trailing `usage` event below after
+    // tool-call flushing, so consumers can pair it to the just-finished
+    // turn. Stays null if the provider didn't include one.
+    let usage: TokenUsage | null = null;
 
     const flushToolCalls = function* (): Generator<StreamEvent, void, void> {
       const sorted = Array.from(pending.entries()).sort((a, b) => a[0] - b[0]);
@@ -239,14 +268,16 @@ export class VeniceClient {
               pending.set(frag.index, entry);
             }
           }
-          // On `finish_reason='tool_calls'` (or 'stop' with no pending
-          // calls) we're done with this response. We defer emission
-          // until the loop actually exits so any straggling text deltas
-          // in the same frame already got yielded above.
-          if (parsed.finishReason) {
-            finished = true;
-            break outer;
-          }
+          // The epilogue frame requested via `stream_options.include_usage`
+          // arrives after the last choice-bearing frame and before
+          // `[DONE]`. Capture it so we can emit a trailing `usage`
+          // event below.
+          if (parsed.usage) usage = parsed.usage;
+          // `finish_reason` is informational now: the usage epilogue
+          // arrives *after* it, so we can't short-circuit here. We
+          // flag the round as finished and keep reading until `[DONE]`
+          // or the socket closes.
+          if (parsed.finishReason) finished = true;
         }
       }
     } finally {
@@ -258,6 +289,12 @@ export class VeniceClient {
     // are dropped by flushToolCalls — those would be truncated
     // mid-announcement and can't be executed safely.
     yield* flushToolCalls();
+    // Trailing usage event, if the provider honored include_usage. Fires
+    // after tool_call flushing so consumers that only care about usage
+    // never have to peek past tool events to find it.
+    if (usage !== null) {
+      yield { type: 'usage', usage };
+    }
     // The `finished` flag is a debugging aid more than a contract —
     // callers only care that the generator returned.
     void finished;
@@ -302,6 +339,13 @@ export interface SseDelta {
     argumentsAppend?: string;
   }>;
   finishReason?: string;
+  /**
+   * Populated only on the usage epilogue frame (empty `choices`,
+   * top-level `usage` object). Carried separately from text/tool fields
+   * because it travels on a choice-less frame and describes the whole
+   * turn, not a single choice.
+   */
+  usage?: TokenUsage;
 }
 
 /**
@@ -337,16 +381,44 @@ export function parseSseFrame(frame: string): SseDelta | '[DONE]' | null {
     finish_reason?: string | null;
   }
 
-  let obj: { choices?: RawChoice[] };
+  interface RawUsage {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  }
+
+  let obj: { choices?: RawChoice[]; usage?: RawUsage };
   try {
-    obj = JSON.parse(payload) as { choices?: RawChoice[] };
+    obj = JSON.parse(payload) as { choices?: RawChoice[]; usage?: RawUsage };
   } catch {
     return null;
   }
-  const choice = obj.choices?.[0];
-  if (!choice) return null;
 
   const out: SseDelta = {};
+
+  // Usage epilogue: `choices` is an empty array, `usage` sits at the top
+  // level. We accept only fully-formed usage (all three ints present)
+  // so downstream code can treat TokenUsage as a total record.
+  const rawUsage = obj.usage;
+  if (
+    rawUsage &&
+    typeof rawUsage.prompt_tokens === 'number' &&
+    typeof rawUsage.completion_tokens === 'number' &&
+    typeof rawUsage.total_tokens === 'number'
+  ) {
+    out.usage = {
+      prompt_tokens: rawUsage.prompt_tokens,
+      completion_tokens: rawUsage.completion_tokens,
+      total_tokens: rawUsage.total_tokens,
+    };
+  }
+
+  const choice = obj.choices?.[0];
+  if (!choice) {
+    // No choice but maybe a usage epilogue — surface that alone.
+    return Object.keys(out).length === 0 ? null : out;
+  }
+
   const content = choice.delta?.content;
   if (typeof content === 'string' && content.length > 0) {
     out.text = content;

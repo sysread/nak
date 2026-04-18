@@ -26,7 +26,7 @@
  */
 
 import type { SupabaseService, Message, Thread } from './supabase';
-import type { VeniceClient, VeniceMessage } from './venice';
+import type { VeniceClient, VeniceMessage, TokenUsage } from './venice';
 import {
   buildToolList,
   buildToolCatalog,
@@ -188,12 +188,19 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 
     let roundText = '';
     const roundCalls: OpenAIToolCall[] = [];
+    let roundUsage: TokenUsage | null = null;
     for await (const ev of stream) {
       if (ev.type === 'text') {
         roundText += ev.delta;
         handlers?.onTextUpdate?.(roundText);
       } else if (ev.type === 'tool_call') {
         roundCalls.push(ev.toolCall);
+      } else if (ev.type === 'usage') {
+        // Captured from the stream's trailing usage frame. Persisted on
+        // every assistant row we write below — the tokens were spent
+        // regardless of whether the turn produced text or tool calls,
+        // and we want the per-row data honest for future aggregates.
+        roundUsage = ev.usage;
       }
     }
 
@@ -201,7 +208,10 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // exit; no need for a tool round.
     if (roundCalls.length === 0) {
       if (roundText.length > 0) {
-        const msg = await supabase.addMessage(thread.id, 'assistant', roundText);
+        const msg = await supabase.addMessage(thread.id, 'assistant', roundText, {
+          model: modelId,
+          usage: roundUsage,
+        });
         handlers?.onAssistantPersisted?.(msg);
       }
       finalText = roundText;
@@ -216,7 +226,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       thread.id,
       'assistant',
       roundText,
-      { tool_calls: roundCalls }
+      { tool_calls: roundCalls, model: modelId, usage: roundUsage }
     );
     handlers?.onAssistantPersisted?.(assistantMsg);
 

@@ -1136,6 +1136,27 @@ h1 {
   background: var(--bg-2);
 }
 
+/* Context-window indicator (ContextRing.svelte). Sits right of the
+   CopyButton in `.msg-actions`. Matches the button's footprint exactly
+   — same padding, border, radius, background — so the strip reads as
+   one continuous control row even though the ring itself isn't
+   interactive. `cursor: help` hints that hover will reveal a tooltip
+   with the exact numbers. */
+.context-ring {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: help;
+  /* The inline SVG has no intrinsic baseline behavior we want; zero it
+     out so the ring sits centered with the copy button rather than
+     riding a phantom text baseline. */
+  line-height: 0;
+}
+
 /* `.copy-code-btn` is the in-fence variant — same styling, just a
    slightly tighter inset so it doesn't overhang the code content. */
 .md .code-block .copy-code-btn {

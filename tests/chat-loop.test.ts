@@ -71,6 +71,8 @@ function mockSupabase(overrides: Partial<MockSupabase> = {}): {
         tool_calls: (opts.tool_calls as Message['tool_calls']) ?? undefined,
         tool_call_id: (opts.tool_call_id as Message['tool_call_id']) ?? undefined,
         name: (opts.name as Message['name']) ?? undefined,
+        model: (opts.model as Message['model']) ?? undefined,
+        usage: (opts.usage as Message['usage']) ?? undefined,
       };
       messagesOut.push(m);
       return m;
@@ -372,6 +374,86 @@ describe('runChatLoop', () => {
       },
     });
     expect(order).toEqual(['assistant', 'tool', 'assistant']);
+  });
+
+  it('persists model id and usage on a plain text assistant row', async () => {
+    const venice = mockVenice([
+      [
+        { type: 'text', delta: 'hi' },
+        {
+          type: 'usage',
+          usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+        },
+      ],
+    ]);
+    const { svc, messagesOut } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'kimi-k2-5',
+      history: [],
+      signal: new AbortController().signal,
+    });
+    expect(messagesOut).toHaveLength(1);
+    expect(messagesOut[0].model).toBe('kimi-k2-5');
+    expect(messagesOut[0].usage).toEqual({
+      prompt_tokens: 5,
+      completion_tokens: 2,
+      total_tokens: 7,
+    });
+  });
+
+  it('persists model id and usage on an assistant-with-tool-calls row', async () => {
+    // Tool-call turns burn tokens too; the indicator should be able to
+    // reflect that even though the content-less assistant row won't
+    // surface the ring in the UI.
+    const call = mkCall('memory_search', {});
+    const venice = mockVenice([
+      [
+        { type: 'tool_call', toolCall: call },
+        {
+          type: 'usage',
+          usage: { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 },
+        },
+      ],
+      [{ type: 'text', delta: 'done' }],
+    ]);
+    const { svc, messagesOut } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread({ tools_enabled: true }),
+      userId: 'u-1',
+      modelId: 'arcee-trinity-large-thinking',
+      history: [],
+      signal: new AbortController().signal,
+    });
+    const firstAssistant = messagesOut.find(
+      (m) => m.role === 'assistant' && (m.tool_calls?.length ?? 0) > 0
+    );
+    expect(firstAssistant?.model).toBe('arcee-trinity-large-thinking');
+    expect(firstAssistant?.usage?.total_tokens).toBe(110);
+  });
+
+  it('leaves usage undefined when the stream skipped the epilogue', async () => {
+    const venice = mockVenice([[{ type: 'text', delta: 'hi' }]]);
+    const { svc, messagesOut } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'kimi-k2-5',
+      history: [],
+      signal: new AbortController().signal,
+    });
+    expect(messagesOut[0].model).toBe('kimi-k2-5');
+    // The chat-loop passes `usage: null` when no epilogue arrived; the
+    // mock's `?? undefined` fallback normalizes that to undefined,
+    // matching how a freshly-inserted row would deserialize.
+    expect(messagesOut[0].usage).toBeUndefined();
   });
 
   it('handles malformed JSON arguments as a tool error', async () => {

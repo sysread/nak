@@ -42,12 +42,14 @@
     TIERS,
     DEFAULT_TIER,
     UTILITY_TIER,
+    findModelById,
     resolveTier,
     type ModelTier,
   } from '$lib/models';
   import Auth from './Auth.svelte';
   import Settings from './Settings.svelte';
   import CopyButton from '../components/CopyButton.svelte';
+  import ContextRing from '../components/ContextRing.svelte';
   import Markdown from '../components/Markdown.svelte';
   import Scanner from '../components/Scanner.svelte';
   import ToolCalls from '../components/ToolCalls.svelte';
@@ -1197,9 +1199,25 @@
                 {#if block.assistant.content}
                   <!-- Post-message action panel. Right-aligned so the
                        controls read as trailing affordances and don't
-                       compete with the reading flow. -->
+                       compete with the reading flow. The context ring
+                       trails the copy button so the hover-tooltip
+                       affordance sits at the absolute right edge, where
+                       the eye naturally lands after reading. -->
                   <div class="msg-actions">
                     <CopyButton text={block.assistant.content} ariaLabel="Copy message" />
+                    <!-- `{@const}` must live inside an {#if}/{#each}/etc
+                         per Svelte 5 placement rules, so we gate both the
+                         spec resolution and the ring on `usage` being
+                         present in one block. -->
+                    {#if block.assistant.usage}
+                      {@const spec = findModelById(block.assistant.model)}
+                      {#if spec}
+                        <ContextRing
+                          totalTokens={block.assistant.usage.total_tokens}
+                          contextWindow={spec.contextWindow}
+                        />
+                      {/if}
+                    {/if}
                   </div>
                 {/if}
               </div>
@@ -1209,6 +1227,15 @@
                 {#if block.message.role === 'assistant'}
                   <div class="msg-actions">
                     <CopyButton text={block.message.content} ariaLabel="Copy message" />
+                    {#if block.message.usage}
+                      {@const spec = findModelById(block.message.model)}
+                      {#if spec}
+                        <ContextRing
+                          totalTokens={block.message.usage.total_tokens}
+                          contextWindow={spec.contextWindow}
+                        />
+                      {/if}
+                    {/if}
                   </div>
                 {/if}
               </div>

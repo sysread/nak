@@ -212,6 +212,23 @@ alter table public.messages
 alter table public.messages
   add column if not exists name text;
 
+-- Per-message provenance for assistant rows. `model` is the concrete Venice
+-- model id that produced this response (e.g. 'kimi-k2-5'), captured at
+-- send-time — not the abstract tier — so the row stays truthful even when
+-- a tier is later re-pointed to a different backend. Null on non-assistant
+-- rows and on assistant rows written before this column existed.
+alter table public.messages
+  add column if not exists model text;
+
+-- OpenAI-shaped token usage block for the turn that produced this assistant
+-- row: `{prompt_tokens, completion_tokens, total_tokens}`. Sourced from the
+-- `usage` epilogue frame that Venice emits when we pass
+-- `stream_options: { include_usage: true }`. Drives the context-window
+-- indicator on the message card. Null when usage wasn't reported (the
+-- provider declined, or the stream was cut short).
+alter table public.messages
+  add column if not exists usage jsonb;
+
 -- Per-thread master switch for tool availability. When false, only the
 -- always-on `toggle_tools` meta-tool is sent with the request; when true,
 -- every registered tool's schema is included. The LLM can flip this via

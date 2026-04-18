@@ -19,6 +19,7 @@ import type { AppConfig } from './config';
 import { isModelTier, type ModelTier } from './models';
 import { isAccent, isColorMode, type Accent, type ColorMode } from './theme';
 import type { OpenAIToolCall } from './tools/types';
+import type { TokenUsage } from './venice';
 
 export interface Thread {
   id: string;
@@ -98,6 +99,21 @@ export interface Message {
   tool_call_id?: string | null;
   /** On role='tool' rows, the name of the tool that was invoked. */
   name?: string | null;
+  /**
+   * Concrete Venice model id that produced this assistant row (e.g.
+   * 'kimi-k2-5'). Captured at send-time rather than derived from the
+   * tier, so the row stays truthful across later tier re-targeting.
+   * Null on user/system/tool rows and on assistant rows written before
+   * this column existed.
+   */
+  model?: string | null;
+  /**
+   * OpenAI-shaped token usage for the turn that produced this assistant
+   * row. Drives the context-window indicator on the message card. Null
+   * when the provider didn't report usage (older rows; rate-limited
+   * streams that got cut before the epilogue).
+   */
+  usage?: TokenUsage | null;
 }
 
 export class SupabaseError extends Error {
@@ -425,12 +441,18 @@ export class SupabaseService {
       tool_calls?: OpenAIToolCall[] | null;
       tool_call_id?: string | null;
       name?: string | null;
+      /** Concrete Venice model id that produced this assistant row. */
+      model?: string | null;
+      /** Token-usage object returned by the provider for this turn. */
+      usage?: TokenUsage | null;
     } = {}
   ): Promise<Message> {
     const row: Record<string, unknown> = { thread_id: threadId, role, content };
     if (opts.tool_calls !== undefined) row.tool_calls = opts.tool_calls;
     if (opts.tool_call_id !== undefined) row.tool_call_id = opts.tool_call_id;
     if (opts.name !== undefined) row.name = opts.name;
+    if (opts.model !== undefined) row.model = opts.model;
+    if (opts.usage !== undefined) row.usage = opts.usage;
     const { data, error } = await this.client
       .from('messages')
       .insert(row)
