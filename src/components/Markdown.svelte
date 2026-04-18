@@ -29,6 +29,44 @@
     return renderMarkdown(content ?? '');
   });
 
+  // Static icon markup for the code-fence "Copy" button. We can't emit
+  // these inside renderMarkdown's output because DOMPurify's allowlist
+  // excludes <svg>/<path>/<rect>/<polyline>; broadening the allowlist
+  // would also let any model-emitted raw SVG through, so instead we
+  // inject the icon client-side after each render. The strings are
+  // static and author-controlled, so setting innerHTML from them is
+  // safe.
+  const COPY_ICON_SVG =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+    'stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>' +
+    '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>' +
+    '</svg>';
+  const CHECK_ICON_SVG =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" ' +
+    'stroke-linejoin="round" aria-hidden="true">' +
+    '<polyline points="20 6 9 17 4 12"></polyline>' +
+    '</svg>';
+
+  let mdRoot: HTMLDivElement | undefined = $state();
+
+  // After every {@html} commit, swap the renderer's plain "Copy" text
+  // for the icon SVG. Skip buttons that are mid-flash (.copied) — the
+  // click handler owns the icon for the duration of the timeout and
+  // we'd otherwise stomp the checkmark with the copy glyph if the user
+  // streams more text right after copying.
+  $effect(() => {
+    void html;
+    if (!mdRoot) return;
+    for (const btn of mdRoot.querySelectorAll('.copy-code-btn')) {
+      if (!btn.classList.contains('copied')) {
+        btn.innerHTML = COPY_ICON_SVG;
+      }
+    }
+  });
+
   // Delegated click handler for the "Copy" buttons that live inside each
   // fenced code block. We can't use a Svelte component for those buttons
   // because the surrounding HTML comes from `{@html}` — Svelte doesn't
@@ -63,12 +101,12 @@
       // the "Copied!" flash itself signals something went wrong.
       return;
     }
-    btn.textContent = 'Copied!';
+    btn.innerHTML = CHECK_ICON_SVG;
     btn.classList.add('copied');
     const prior = btn.getAttribute('data-revert-timer');
     if (prior) window.clearTimeout(Number(prior));
     const id = window.setTimeout(() => {
-      btn.textContent = 'Copy';
+      btn.innerHTML = COPY_ICON_SVG;
       btn.classList.remove('copied');
       btn.removeAttribute('data-revert-timer');
     }, 1500);
@@ -83,7 +121,7 @@
      interactive surface. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
-<div class="md" onclick={onClick}>
+<div class="md" bind:this={mdRoot} onclick={onClick}>
   <!-- Safe: `html` comes from renderMarkdown, which pipes through
        DOMPurify with an element/attribute allowlist (see
        src/lib/markdown.ts). The svelte/no-at-html-tags rule is

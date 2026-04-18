@@ -1094,10 +1094,11 @@ h1 {
   position: absolute;
   top: 0.35rem;
   right: 0.35rem;
-  padding: 0.1rem 0.45rem;
-  font-family: inherit;
-  font-size: 0.72rem;
-  line-height: 1.4;
+  /* Icon-only — flex centers the SVG inside the bordered square. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
   background: var(--bg-2);
   color: var(--muted);
   border: 1px solid var(--border);
@@ -1138,10 +1139,11 @@ h1 {
   position: absolute;
   top: 0.3rem;
   right: 0.3rem;
-  padding: 0.1rem 0.45rem;
-  font-family: inherit;
-  font-size: 0.7rem;
-  line-height: 1.4;
+  /* Icon-only — flex centers the SVG inside the bordered square. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
   background: var(--bg);
   color: var(--muted);
   border: 1px solid var(--border);
@@ -1174,9 +1176,12 @@ h1 {
    the first-child code-fence button left so the two sit side-by-side
    with a small gap instead of stacking on top of each other. The
    offset is tuned to roughly "the width of .copy-btn + a small gap"
-   — if that button ever changes size, this value may need a nudge. */
+   — if that button ever changes size, this value may need a nudge.
+   Both buttons are icon-only (14px glyph + 0.25rem padding + 1px
+   border ≈ 1.5rem wide), so this is the icon-button width plus
+   ~0.3rem of breathing room. */
 .msg.assistant .md > .code-block:first-child .copy-code-btn {
-  right: 3.6rem;
+  right: 2.2rem;
 }
 
 /* ---------- Composer ----------
