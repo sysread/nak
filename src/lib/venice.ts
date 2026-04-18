@@ -40,6 +40,22 @@ export interface VeniceMessage {
   tool_calls?: OpenAIToolCall[];
 }
 
+/**
+ * Venice-specific web-search mode, passed as
+ * `venice_parameters.enable_web_search` on the request body.
+ *
+ *   'auto' — let the model decide when a live search improves the answer
+ *            (our enabled-by-default value).
+ *   'on'   — force a search on every turn.
+ *   'off'  — disable the server-side tool entirely. Also the implicit
+ *            Venice default when `venice_parameters` is omitted; we still
+ *            send it explicitly so a user who flipped the setting off
+ *            can't be overridden by a future server-side default change.
+ *
+ * Docs: https://docs.venice.ai/api-reference (§ venice_parameters).
+ */
+export type WebSearchMode = 'auto' | 'on' | 'off';
+
 export interface ChatRequest {
   model: string;
   messages: VeniceMessage[];
@@ -52,6 +68,12 @@ export interface ChatRequest {
    * may emit `tool_calls` events instead of (or in addition to) text.
    */
   tools?: OpenAIToolDef[];
+  /**
+   * When set, populates `venice_parameters.enable_web_search` on the
+   * request body. Omitted → field is not sent (Venice's server-side
+   * default applies). See {@link WebSearchMode}.
+   */
+  webSearch?: WebSearchMode;
 }
 
 /**
@@ -182,6 +204,13 @@ export class VeniceClient {
     };
     if (req.tools && req.tools.length > 0) {
       body.tools = req.tools;
+    }
+    // Venice-specific: request web-search behavior via venice_parameters.
+    // We send the field only when the caller passed an explicit mode so
+    // that unrelated tests / callers that never opt in don't carry an
+    // extra body key.
+    if (req.webSearch) {
+      body.venice_parameters = { enable_web_search: req.webSearch };
     }
     let res: Response;
     try {

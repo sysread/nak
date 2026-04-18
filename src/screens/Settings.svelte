@@ -27,6 +27,7 @@
     setDefaultModel,
     setSystemPrompts,
     setTheme,
+    setWebSearchEnabled,
   } from '$lib/state.svelte';
   import { MODELS, TIERS, type ModelTier } from '$lib/models';
   import type { SystemPrompt } from '$lib/supabase';
@@ -47,11 +48,19 @@
   }
   let { onClose }: Props = $props();
 
-  type Group = 'keys' | 'model' | 'prompts' | 'appearance' | 'export' | 'security';
+  type Group =
+    | 'keys'
+    | 'model'
+    | 'prompts'
+    | 'websearch'
+    | 'appearance'
+    | 'export'
+    | 'security';
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'keys', label: 'API keys' },
     { id: 'model', label: 'Model' },
     { id: 'prompts', label: 'Prompts' },
+    { id: 'websearch', label: 'Web search' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'export', label: 'Export' },
     { id: 'security', label: 'Security' },
@@ -165,6 +174,46 @@
       promptsSaveState = 'idle';
     } finally {
       promptsSaving = false;
+    }
+  }
+
+  // --- Web search pane ---
+  // Mirror of app.webSearchEnabled. Persisted on Supabase
+  // `profiles.settings.webSearchEnabled`. Enabled-by-default: an empty
+  // settings jsonb means web search is on, so we only write a literal
+  // `false` to flip it off.
+  let webSearchEnabled = $state<boolean>(app.webSearchEnabled);
+  let webSearchError = $state<string | null>(null);
+  let webSearchInfo = $state<string | null>(null);
+
+  // Follow the global flag if it changes while Settings is mounted —
+  // a late-arriving refreshSettings() in Chat.svelte shouldn't leave
+  // the checkbox stale.
+  $effect(() => {
+    webSearchEnabled = app.webSearchEnabled;
+  });
+
+  async function onToggleWebSearch(): Promise<void> {
+    webSearchError = null;
+    webSearchInfo = null;
+    if (!app.supabase) {
+      webSearchError = 'Not connected to Supabase yet.';
+      return;
+    }
+    const next = !webSearchEnabled;
+    webSearchEnabled = next;
+    // Optimistic in-memory flip so any in-flight send reflects the new
+    // choice. Supabase settles below; on failure we roll back both.
+    setWebSearchEnabled(next);
+    try {
+      await app.supabase.updateSettings({ webSearchEnabled: next });
+      webSearchInfo = next
+        ? 'Web search enabled — the model can pull live citations when they help.'
+        : 'Web search disabled.';
+    } catch (err) {
+      webSearchEnabled = !next;
+      setWebSearchEnabled(!next);
+      webSearchError = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -474,6 +523,28 @@
           </div>
         </div>
         {#if promptsError}<p class="error">{promptsError}</p>{/if}
+      {:else if group === 'websearch'}
+        <h2>Web search</h2>
+        <p class="subtle">
+          Venice can augment answers with live web results and cite sources
+          inline. Enabled by default — the model decides turn-by-turn
+          whether a search would help. Toggle off to send
+          <code>enable_web_search=off</code> on every request.
+        </p>
+        <label class="form-row" style="display:flex;gap:0.5rem;align-items:center">
+          <input
+            type="checkbox"
+            checked={webSearchEnabled}
+            onchange={onToggleWebSearch}
+          />
+          <span><strong>Enable Venice web search</strong></span>
+        </label>
+        <p class="subtle" style="font-size:0.8rem">
+          Stored on your Supabase profile so the choice follows you across
+          browsers.
+        </p>
+        {#if webSearchError}<p class="error">{webSearchError}</p>{/if}
+        {#if webSearchInfo}<p class="subtle">{webSearchInfo}</p>{/if}
       {:else if group === 'appearance'}
         <h2>Appearance</h2>
         <p class="subtle">

@@ -348,6 +348,47 @@ describe('VeniceClient.streamChat', () => {
     expect(types).toEqual(['text']);
   });
 
+  it('forwards webSearch as venice_parameters.enable_web_search', async () => {
+    // The Venice-specific knob lands inside `venice_parameters`, not at
+    // the top level — mirroring https://docs.venice.ai/api-reference.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    for await (const _ of client.streamChat({
+      model: 'm',
+      messages: [],
+      webSearch: 'auto',
+    })) {
+      void _;
+    }
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.venice_parameters).toEqual({ enable_web_search: 'auto' });
+  });
+
+  it('omits venice_parameters entirely when webSearch is not set', async () => {
+    // Tests that don't care about web-search shouldn't carry the field —
+    // keeps the request body minimal and lets Venice's server-side
+    // default apply.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    for await (const _ of client.streamChat({ model: 'm', messages: [] })) {
+      void _;
+    }
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).not.toHaveProperty('venice_parameters');
+  });
+
   it('omits `tools` from the body when the array is empty', async () => {
     // A present-but-empty tools array would confuse some providers —
     // better to elide it entirely.

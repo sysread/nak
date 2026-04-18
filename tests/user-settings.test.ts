@@ -94,4 +94,14 @@ describe('coerceSettings', () => {
       coerceSettings({ systemPrompts: ['nope', 123, null] }).systemPrompts
     ).toBeUndefined();
   });
+
+  it('preserves webSearchEnabled only for strict booleans', () => {
+    expect(coerceSettings({ webSearchEnabled: true }).webSearchEnabled).toBe(true);
+    expect(coerceSettings({ webSearchEnabled: false }).webSearchEnabled).toBe(false);
+    // Truthy non-boolean: dropped so the caller-side default stays in charge.
+    expect(coerceSettings({ webSearchEnabled: 'yes' }).webSearchEnabled).toBeUndefined();
+    expect(coerceSettings({ webSearchEnabled: 1 }).webSearchEnabled).toBeUndefined();
+    // Missing key is an absent opt-out signal — treated as "use the default".
+    expect(coerceSettings({}).webSearchEnabled).toBeUndefined();
+  });
 });

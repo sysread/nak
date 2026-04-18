@@ -58,6 +58,14 @@ interface AppState {
    * conversation-scoped.
    */
   systemPrompts: SystemPrompt[];
+  /**
+   * Mirror of `profiles.settings.webSearchEnabled`. Defaults to true so
+   * a brand-new account (empty settings jsonb) gets Venice's web-search
+   * augmentation on day one — the DB setting is opt-out, not opt-in.
+   * Chat.svelte reads this to choose the `webSearch` value it passes
+   * into each streamChat call.
+   */
+  webSearchEnabled: boolean;
   error: string | null;
 }
 
@@ -72,6 +80,9 @@ export const app = $state<AppState>({
   colorMode: cachedTheme?.mode ?? DEFAULT_MODE,
   accent: cachedTheme?.accent ?? DEFAULT_ACCENT,
   systemPrompts: [],
+  // Enabled-by-default. A Supabase settings fetch on unlock overwrites
+  // this with the user's stored preference (see Chat.svelte refreshSettings).
+  webSearchEnabled: true,
   error: null,
 });
 
@@ -81,6 +92,10 @@ export function setDefaultModel(tier: ModelTier): void {
 
 export function setSystemPrompts(prompts: SystemPrompt[]): void {
   app.systemPrompts = prompts;
+}
+
+export function setWebSearchEnabled(enabled: boolean): void {
+  app.webSearchEnabled = enabled;
 }
 
 /**
@@ -119,6 +134,9 @@ export function lock(): void {
   app.venice = null;
   app.defaultModel = DEFAULT_TIER;
   app.systemPrompts = [];
+  // Reset to the enabled-by-default seed — the next sign-in's
+  // refreshSettings will overwrite with the stored preference.
+  app.webSearchEnabled = true;
   app.phase = 'locked';
   clearSession();
 }

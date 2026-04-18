@@ -26,7 +26,12 @@
  */
 
 import type { SupabaseService, Message, Thread } from './supabase';
-import type { VeniceClient, VeniceMessage, TokenUsage } from './venice';
+import type {
+  VeniceClient,
+  VeniceMessage,
+  TokenUsage,
+  WebSearchMode,
+} from './venice';
 import {
   buildToolList,
   buildToolCatalog,
@@ -96,6 +101,14 @@ export interface ChatLoopOptions {
   history: VeniceMessage[];
   signal: AbortSignal;
   handlers?: ChatLoopHandlers;
+  /**
+   * Optional Venice web-search mode. When set, forwarded to every
+   * streamChat call in the loop as `venice_parameters.enable_web_search`.
+   * Caller (Chat.svelte) derives this from `app.webSearchEnabled`:
+   * enabled → 'auto', disabled → 'off'. Omitted here means "don't pass
+   * the field" — used by tests that don't care about web-search.
+   */
+  webSearch?: WebSearchMode;
 }
 
 /** Non-error completion shape returned to the caller. */
@@ -159,7 +172,7 @@ function encodeToolContent(
  * produces a terminal response (no tool_calls) or the cap trips.
  */
 export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult> {
-  const { venice, supabase, thread, userId, modelId, signal, handlers } = opts;
+  const { venice, supabase, thread, userId, modelId, signal, handlers, webSearch } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
   let toolsEnabled = thread.tools_enabled;
@@ -184,6 +197,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       messages: requestMessages,
       signal,
       tools: buildToolList(toolsEnabled),
+      webSearch,
     });
 
     let roundText = '';

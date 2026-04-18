@@ -33,7 +33,14 @@
    */
   import { onMount, tick } from 'svelte';
   import type { Session } from '@supabase/supabase-js';
-  import { app, lock, setDefaultModel, setSystemPrompts, setTheme } from '$lib/state.svelte';
+  import {
+    app,
+    lock,
+    setDefaultModel,
+    setSystemPrompts,
+    setTheme,
+    setWebSearchEnabled,
+  } from '$lib/state.svelte';
   import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
   import type { Thread, Message } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
@@ -232,6 +239,9 @@
         setTheme(s.colorMode ?? app.colorMode, s.accent ?? app.accent);
       }
       setSystemPrompts(s.systemPrompts ?? []);
+      // Only a literal `false` flips web search off — an absent value
+      // keeps the enabled-by-default seed set in state.svelte.ts.
+      setWebSearchEnabled(s.webSearchEnabled !== false);
       // Only (re)seed the active set if the user hasn't already started
       // toggling prompts on the current thread. Avoids clobbering their
       // per-thread selection when settings arrive late.
@@ -601,6 +611,10 @@
           modelId,
           history: historyOnWire,
           signal: abortCtl.signal,
+          // Enabled → 'auto' so the model pulls live context in only
+          // when it actually helps. Disabled → 'off' so we pin the
+          // field even against any future Venice-side default change.
+          webSearch: app.webSearchEnabled ? 'auto' : 'off',
           handlers: {
             onTextUpdate: (t) => {
               pending = t;

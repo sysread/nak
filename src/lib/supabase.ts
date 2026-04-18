@@ -134,6 +134,14 @@ export interface UserSettings {
   accent?: Accent;
   /** Library of named system prompts the user can toggle per-thread. */
   systemPrompts?: SystemPrompt[];
+  /**
+   * Opt out of Venice's server-side web-search augmentation. Absent /
+   * true → we send `venice_parameters.enable_web_search='auto'` on every
+   * chat request, letting the model pull live citations in when it
+   * helps. Explicit `false` → we send `'off'` so the field is pinned
+   * even if Venice later changes its server-side default.
+   */
+  webSearchEnabled?: boolean;
 }
 
 /**
@@ -180,6 +188,11 @@ export function coerceSettings(raw: unknown): UserSettings {
     }
     if (prompts.length > 0) out.systemPrompts = prompts;
   }
+  // Tri-state on the wire (absent / true / false). Only a literal `false`
+  // flips the feature off — any other shape leaves it absent so the
+  // caller-side default ("enabled") kicks in.
+  if (r.webSearchEnabled === false) out.webSearchEnabled = false;
+  else if (r.webSearchEnabled === true) out.webSearchEnabled = true;
   return out;
 }
 
@@ -276,6 +289,12 @@ export class SupabaseService {
           .map((p) => coerceSystemPrompt(p))
           .filter((p): p is SystemPrompt => p !== null);
         merged.systemPrompts = cleaned;
+      }
+    }
+    if ('webSearchEnabled' in patch) {
+      if (patch.webSearchEnabled === undefined) delete merged.webSearchEnabled;
+      else if (typeof patch.webSearchEnabled === 'boolean') {
+        merged.webSearchEnabled = patch.webSearchEnabled;
       }
     }
     const { error } = await this.client
