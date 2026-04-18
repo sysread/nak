@@ -1314,43 +1314,60 @@ h1 {
   color: var(--muted);
 }
 
-/* Typing indicator shown in an assistant bubble while we're waiting for
-   the first streaming chunk. The three child spans reveal in sequence
-   (. → .. → ...) then all reset together on the next cycle. Staggered
-   animation-delay plus a tight keyframe keeps the rhythm visible. */
-.typing-dots {
+/* Scanner — K.I.T.T.-style bouncing-red-light indicator. Used by the
+   <Scanner> component (see src/components/Scanner.svelte) for any short-
+   lived "working on it" state that has no useful progress signal yet.
+
+   Five dots each pulse (small/dim → large/bright → small/dim) on a
+   shared 1.4s cycle with staggered delays. `animation-direction:
+   alternate` reverses the timeline each cycle, so the peak walks
+   left→right→left→right, producing the bounce. */
+.scanner {
   display: inline-flex;
-  gap: 0.08em;
-  color: var(--muted);
-  font-size: 1.2em;
+  align-items: center;
+  gap: 0.3em;
+  /* `--scanner-scale` is set inline by the component to let callers
+     resize without touching CSS. Default 1 inherits the caller's font
+     size so the dots feel proportional wherever it lands. */
+  font-size: calc(1em * var(--scanner-scale, 1));
   line-height: 1;
+  color: #ff3b3b;
+  vertical-align: middle;
+  /* Slight horizontal padding so the glow doesn't clip at container edges. */
+  padding: 0 0.1em;
 }
-.typing-dots span {
+
+.scanner > span:not(.sr-only) {
   display: inline-block;
   width: 0.5em;
   height: 0.5em;
   border-radius: 50%;
   background: currentColor;
-  animation: typing-dot-pulse 1.2s infinite;
+  box-shadow: 0 0 0.5em currentColor;
+  transform: scale(0.3);
+  opacity: 0.25;
+  animation: knight-pulse 1.4s ease-in-out infinite alternate;
 }
-.typing-dots span:nth-child(1) { animation-delay: 0s; }
-.typing-dots span:nth-child(2) { animation-delay: 0.4s; }
-.typing-dots span:nth-child(3) { animation-delay: 0.8s; }
 
-/* Each dot is hidden from the cycle's start until its staggered delay
-   hits ~1% of its own timeline; the delays (0/0.4/0.8s) offset when
-   each transitions to visible. All three hide again at 100%, so the
-   loop restarts cleanly with the sequence ". → .. → ...". */
-@keyframes typing-dot-pulse {
-  0%, 1%     { opacity: 0; transform: translateY(0); }
-  2%, 99%    { opacity: 1; transform: translateY(-1px); }
-  100%       { opacity: 0; transform: translateY(0); }
+/* Stagger each dot by 1/4 of the half-cycle so the peak walks across
+   the row. With alternate direction the sequence reverses on every
+   other iteration — hence the back-and-forth sweep. */
+.scanner > span:not(.sr-only):nth-child(1) { animation-delay: 0s; }
+.scanner > span:not(.sr-only):nth-child(2) { animation-delay: 0.175s; }
+.scanner > span:not(.sr-only):nth-child(3) { animation-delay: 0.35s; }
+.scanner > span:not(.sr-only):nth-child(4) { animation-delay: 0.525s; }
+.scanner > span:not(.sr-only):nth-child(5) { animation-delay: 0.7s; }
+
+@keyframes knight-pulse {
+  0%   { transform: scale(0.3); opacity: 0.2; }
+  100% { transform: scale(1.0); opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .typing-dots span {
+  .scanner > span:not(.sr-only) {
     animation: none;
-    opacity: 1;
+    transform: scale(0.8);
+    opacity: 0.6;
   }
 }
 
@@ -1518,4 +1535,18 @@ h1 {
 
 @media (prefers-reduced-motion: reduce) {
   .toolbox-btn.flash { animation: none; }
+}
+
+/* Streaming-response bubble before the markdown pass kicks in. Plain
+   pre-wrap text is orders of magnitude cheaper to render than running
+   the incremental marked + highlight.js + DOMPurify pipeline on every
+   rAF-batched write to a growing buffer. Once the stream completes the
+   committed message rerenders via <Markdown>. */
+.streaming-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-family: inherit;
+  line-height: 1.45;
+}
 }
