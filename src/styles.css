@@ -635,11 +635,12 @@ h1 {
   }
 
   .messages {
-    /* Narrow gutter on phones — the card's own `padding: 0.7rem 0.9rem`
-       is doing most of the breathing-room work, and every pixel between
-       the card edge and the viewport edge is one we can give back to
-       the content (especially code fences, which need the width). */
-    padding: 0.5rem 0.35rem;
+    /* Mirror `.composer`'s mobile padding (0.5rem on all sides) so the
+       message cards' left/right edges land on the same vertical line as
+       the `.composer-shell`'s outer edge just below. Visually the list
+       and the input look like one continuous column rather than two
+       stacks with mismatched gutters. */
+    padding: 0.5rem;
   }
 
   /* On phones there isn't enough width to waste on the 80%/65% column
