@@ -94,9 +94,22 @@
     return () => cancelAnimationFrame(raf);
   });
   let composer = $state('');
+  let composerEl: HTMLTextAreaElement | undefined = $state();
   let sending = $state(false);
   let error = $state<string | null>(null);
   let abortCtl: AbortController | null = null;
+
+  // Auto-grow the composer so the caret is always visible as the user
+  // types. CSS caps the textarea at 40vh — once content exceeds that
+  // the element scrolls internally. We reset height to auto first so
+  // deletes shrink the box back down to the natural content height.
+  $effect(() => {
+    void composer;
+    const el = composerEl;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  });
 
   // Inline title rename state.
   let renaming = $state(false);
@@ -1060,6 +1073,7 @@
           <textarea
             class="composer-textarea"
             bind:value={composer}
+            bind:this={composerEl}
             onkeydown={onKeydown}
             placeholder={`Message… (${sendHint})`}
             disabled={sending}

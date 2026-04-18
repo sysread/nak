@@ -1206,15 +1206,18 @@ h1 {
 
 .composer-textarea {
   /* The textarea is borderless inside the shell — the shell owns the
-     outline and focus ring. Keep resize: vertical so users can still
-     drag the handle for a taller composer on the fly. */
+     outline and focus ring. Height is driven by a $effect in Chat.svelte
+     that matches scrollHeight on every keystroke; max-height caps the
+     growth at 40% of the viewport so the composer never eats the
+     conversation. Manual resize is disabled because the auto-grow
+     would immediately snap the element back on the next keystroke. */
   width: 100%;
   min-height: 2.6rem;
-  max-height: 24rem;
+  max-height: 40vh;
   border: 0;
   background: transparent;
   padding: 0.35rem 0.4rem 0.15rem;
-  resize: vertical;
+  resize: none;
   font-family: inherit;
   font-size: 0.95rem;
   color: var(--text);
