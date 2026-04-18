@@ -123,7 +123,6 @@ describe('renderMarkdown — security', () => {
   });
 
   it('rejects javascript: URLs in markdown links', () => {
-    // eslint-disable-next-line no-script-url
     const html = renderMarkdown('[click](javascript:alert(1))');
     expect(html).not.toMatch(/javascript:/i);
   });

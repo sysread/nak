@@ -84,6 +84,12 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <div class="md" onclick={onClick}>
-  <!-- eslint-disable-next-line -->
+  <!-- Safe: `html` comes from renderMarkdown, which pipes through
+       DOMPurify with an element/attribute allowlist (see
+       src/lib/markdown.ts). The svelte/no-at-html-tags rule is
+       switched off for this one file in eslint.config.js — inline
+       eslint-disable-next-line comments in Svelte templates aren't
+       honored by eslint-plugin-svelte, so a file-level override is
+       the only way to silence it cleanly. -->
   {@html html}
 </div>
