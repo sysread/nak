@@ -359,8 +359,30 @@
   }
 </script>
 
-<div class="center">
-  <div class="settings-shell">
+<!--
+  Escape and click-outside both dismiss the modal. The outer `.center`
+  doubles as the backdrop — we only close when the click target IS the
+  backdrop itself, so clicks inside `.settings-shell` (forms, tabs, the
+  horizontally-scrolling mobile nav) don't trigger a spurious close.
+-->
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
+
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<div
+  class="center settings-backdrop"
+  onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+>
+  <div class="settings-shell" role="dialog" aria-modal="true" aria-label="Settings">
+    <!-- Fixed top-right close. Anchored to `.settings-shell` (not the nav)
+         so it stays put while the mobile nav scrolls horizontally underneath. -->
+    <button
+      type="button"
+      class="settings-close"
+      onclick={onClose}
+      aria-label="Close settings"
+      title="Close"
+    >×</button>
     <nav class="settings-nav">
       <h1>Settings</h1>
       <div class="settings-nav-list">
@@ -373,9 +395,6 @@
           >{g.label}</button>
         {/each}
       </div>
-      <button type="button" class="secondary" style="margin-top:auto" onclick={onClose}>
-        Back
-      </button>
     </nav>
 
     <section class="settings-pane">
