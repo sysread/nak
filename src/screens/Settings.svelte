@@ -5,9 +5,11 @@
    *
    *   keys        — the three API keys. Re-encrypts + re-activates, so
    *                 requires the current master password.
-   *   model       — default model tier. Writes through to Supabase
-   *                 `profiles.settings.defaultModel` so the preference
-   *                 follows the account across browsers.
+   *   ai          — three AI-adjacent subsections sharing one pane:
+   *                 default model tier, system-prompt library, and
+   *                 the Venice web-search toggle. All persist to the
+   *                 Supabase `profiles.settings` blob so preferences
+   *                 follow the account across browsers.
    *   appearance  — color mode + accent. Live-applies on click (no Save
    *                 button) and mirrors to Supabase the same way as
    *                 the default model.
@@ -50,17 +52,13 @@
 
   type Group =
     | 'keys'
-    | 'model'
-    | 'prompts'
-    | 'websearch'
+    | 'ai'
     | 'appearance'
     | 'export'
     | 'security';
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'keys', label: 'API keys' },
-    { id: 'model', label: 'Model' },
-    { id: 'prompts', label: 'Prompts' },
-    { id: 'websearch', label: 'Web search' },
+    { id: 'ai', label: 'AI' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'export', label: 'Export' },
     { id: 'security', label: 'Security' },
@@ -425,8 +423,16 @@
           {#if keysInfo}<p class="subtle">{keysInfo}</p>{/if}
           <button type="submit" disabled={busy}>Save keys</button>
         </form>
-      {:else if group === 'model'}
-        <h2>Default AI model</h2>
+      {:else if group === 'ai'}
+        <!-- Three AI-adjacent settings share one pane so the sidebar
+             doesn't fan out into a dedicated tab per toggle. Each
+             subsection keeps its own save mechanism: the model form
+             has an explicit Save button, prompts autosave on edit,
+             and the web-search toggle flips through on change. -->
+        <h2>AI</h2>
+        <p class="subtle">Default model, system prompts, and web search.</p>
+
+        <h3 class="pane-section">Default model</h3>
         <p class="subtle">
           Used for any thread that doesn't have its own model set. You can override
           per-thread from the chat top bar.
@@ -460,8 +466,8 @@
           {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
           <button type="submit" disabled={busy}>Save default model</button>
         </form>
-      {:else if group === 'prompts'}
-        <h2>System prompts</h2>
+
+        <h3 class="pane-section">System prompts</h3>
         <p class="subtle">
           Named prompts you can toggle on or off from the chat composer. The
           "Default" checkbox seeds the active set for new conversations.
@@ -542,8 +548,8 @@
           </div>
         </div>
         {#if promptsError}<p class="error">{promptsError}</p>{/if}
-      {:else if group === 'websearch'}
-        <h2>Web search</h2>
+
+        <h3 class="pane-section">Web search</h3>
         <p class="subtle">
           Venice grounds every answer with live web results plus inline
           source citations. Enabled by default — each request goes out
