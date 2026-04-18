@@ -775,6 +775,16 @@ h1 {
      the markdown renderer; we don't need pre-wrap on the container. */
   overflow-wrap: anywhere;
   word-break: break-word;
+  /* Flex items default to min-width: auto, which sizes them by their
+     content's min-content width. A <pre> with `white-space: pre` reports
+     its longest line as min-content, so a wide code fence would push the
+     card past its parent (.messages) and off the right edge of the
+     viewport — the body-level `overflow-x: hidden` then just clips it
+     silently, with no way to scroll to see the rest. min-width: 0 lets
+     the card shrink to its parent's width so that per-element overflow
+     handling inside .md (the `overflow-x: auto` on pre, tables, KaTeX)
+     can take over and scroll their own content sideways. */
+  min-width: 0;
 }
 
 /* ---------- Markdown content inside a message ----------
@@ -847,6 +857,10 @@ h1 {
   overflow-x: auto;
   /* Code blocks preserve whitespace; the container scrolls. */
   white-space: pre;
+  /* Belt-and-braces: even though .msg's min-width: 0 already lets the
+     card shrink, an explicit max-width pins the <pre> to the card's
+     inner width so the scrollbar lives here rather than on an ancestor. */
+  max-width: 100%;
 }
 .md pre code {
   background: transparent;
@@ -862,6 +876,15 @@ h1 {
   border-collapse: collapse;
   margin: 0 0 0.6em;
   font-size: 0.95em;
+  /* A wide GFM table would otherwise inflate the message card past its
+     parent (same failure mode as a wide <pre>). `display: block` drops
+     the table formatting context from the <table> element itself so it
+     can scroll as a block — the <tr>/<td> children still pick up
+     table-row/table-cell display via user-agent defaults, so cell
+     layout reads the same. */
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 .md th, .md td {
   border: 1px solid var(--border);
