@@ -570,6 +570,15 @@ h1 {
 }
 
 @media (max-width: 720px) {
+  /* Nudge the base size up on phones. At 13.5px Lekton reads fine on
+     a desktop monitor but sits below the comfortable-reading threshold
+     on a typical 5–7" screen held at arm's length. Everything else
+     scales off this via `rem`, so a single bump here resizes headings,
+     buttons, messages, and composer in lockstep. */
+  :root {
+    font-size: 15.5px;
+  }
+
   .shell,
   .shell:not(.drawer-open) {
     /* On mobile the sidebar overlays the chat instead of taking a
