@@ -16,9 +16,9 @@ function sseStream(chunks: string[]): ReadableStream<Uint8Array> {
 }
 
 describe('parseSseFrame', () => {
-  it('extracts content delta from standard frame', () => {
+  it('extracts content delta from a standard text frame', () => {
     const frame = 'data: {"choices":[{"delta":{"content":"hello"}}]}';
-    expect(parseSseFrame(frame)).toBe('hello');
+    expect(parseSseFrame(frame)).toEqual({ text: 'hello' });
   });
 
   it('recognizes [DONE]', () => {
@@ -29,13 +29,45 @@ describe('parseSseFrame', () => {
     expect(parseSseFrame(': ping\n\n')).toBeNull();
   });
 
-  it('returns null when there is no content delta', () => {
+  it('returns null when the choice delta is empty', () => {
     expect(parseSseFrame('data: {"choices":[{"delta":{}}]}')).toBeNull();
+  });
+
+  it('extracts a tool-call fragment with id and name', () => {
+    const frame =
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x",' +
+      '"type":"function","function":{"name":"memory_search","arguments":""}}]}}]}';
+    expect(parseSseFrame(frame)).toEqual({
+      toolCallFragments: [
+        { index: 0, id: 'call_x', name: 'memory_search', argumentsAppend: '' },
+      ],
+    });
+  });
+
+  it('extracts a tool-call argument fragment (no id/name on continuation)', () => {
+    const frame =
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"q\\":"}}]}}]}';
+    expect(parseSseFrame(frame)).toEqual({
+      toolCallFragments: [
+        { index: 0, argumentsAppend: '{"q":' },
+      ],
+    });
+  });
+
+  it('captures finish_reason', () => {
+    const frame = 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}';
+    expect(parseSseFrame(frame)).toEqual({ finishReason: 'tool_calls' });
+  });
+
+  it('captures text + finish_reason in one frame', () => {
+    const frame =
+      'data: {"choices":[{"delta":{"content":"!"},"finish_reason":"stop"}]}';
+    expect(parseSseFrame(frame)).toEqual({ text: '!', finishReason: 'stop' });
   });
 });
 
 describe('VeniceClient.streamChat', () => {
-  it('yields incremental deltas from SSE frames', async () => {
+  it('yields incremental text deltas from SSE frames', async () => {
     const frames = [
       'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
       'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
@@ -48,14 +80,14 @@ describe('VeniceClient.streamChat', () => {
       apiKey: 'k',
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    const out: string[] = [];
-    for await (const d of client.streamChat({
+    const deltas: string[] = [];
+    for await (const ev of client.streamChat({
       model: 'm',
       messages: [{ role: 'user', content: 'hi' }],
     })) {
-      out.push(d);
+      if (ev.type === 'text') deltas.push(ev.delta);
     }
-    expect(out.join('')).toBe('Hello');
+    expect(deltas.join('')).toBe('Hello');
     expect(fetchImpl).toHaveBeenCalledOnce();
     const [, init] = fetchImpl.mock.calls[0];
     expect((init as RequestInit).headers).toMatchObject({
@@ -75,14 +107,179 @@ describe('VeniceClient.streamChat', () => {
       apiKey: 'k',
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    const out: string[] = [];
-    for await (const d of client.streamChat({
+    const deltas: string[] = [];
+    for await (const ev of client.streamChat({
       model: 'm',
       messages: [{ role: 'user', content: 'x' }],
     })) {
-      out.push(d);
+      if (ev.type === 'text') deltas.push(ev.delta);
     }
-    expect(out.join('')).toBe('Hi');
+    expect(deltas.join('')).toBe('Hi');
+  });
+
+  it('accumulates tool-call argument fragments and emits one call at end', async () => {
+    // Mirror of the OpenAI streaming pattern: announce call with id+name
+    // + empty arguments, stream argument fragments, finish_reason.
+    const frames = [
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1",' +
+        '"type":"function","function":{"name":"memory_search","arguments":""}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"qu"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ery\\":"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"cats\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(frames), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const calls: unknown[] = [];
+    for await (const ev of client.streamChat({
+      model: 'm',
+      messages: [],
+    })) {
+      if (ev.type === 'tool_call') calls.push(ev.toolCall);
+    }
+    expect(calls).toEqual([
+      {
+        id: 'call_1',
+        type: 'function',
+        function: { name: 'memory_search', arguments: '{"query":"cats"}' },
+      },
+    ]);
+  });
+
+  it('interleaves text and tool-call events from the same stream', async () => {
+    // Not a common shape for OpenAI today — usually the model either
+    // produces text OR tool calls — but the parser should handle a
+    // frame that carries text and then the stream ends with a tool-
+    // call announcement, gracefully.
+    const frames = [
+      'data: {"choices":[{"delta":{"content":"let me check..."}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1",' +
+        '"type":"function","function":{"name":"memory_search","arguments":"{}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(frames), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const events: Array<{ type: string; value: unknown }> = [];
+    for await (const ev of client.streamChat({ model: 'm', messages: [] })) {
+      if (ev.type === 'text') events.push({ type: 'text', value: ev.delta });
+      else events.push({ type: 'tool_call', value: ev.toolCall });
+    }
+    expect(events[0]).toEqual({ type: 'text', value: 'let me check...' });
+    expect(events[events.length - 1]).toMatchObject({
+      type: 'tool_call',
+      value: { function: { name: 'memory_search' } },
+    });
+  });
+
+  it('emits parallel tool calls in index order', async () => {
+    // Two calls interleaved across frames.
+    const frames = [
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c0",' +
+        '"type":"function","function":{"name":"a","arguments":"{}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"c1",' +
+        '"type":"function","function":{"name":"b","arguments":"{}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(frames), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const names: string[] = [];
+    for await (const ev of client.streamChat({ model: 'm', messages: [] })) {
+      if (ev.type === 'tool_call') names.push(ev.toolCall.function.name);
+    }
+    expect(names).toEqual(['a', 'b']);
+  });
+
+  it('drops a partial tool call that never announced id/name', async () => {
+    // If a stream is cut off before the id/name frame, we can't
+    // safely execute the partial call — better to drop it than
+    // dispatch a malformed request.
+    const frames = [
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":' +
+        '{"arguments":"{\\"x\\":"}}]}}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(frames), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const events: unknown[] = [];
+    for await (const ev of client.streamChat({ model: 'm', messages: [] })) {
+      events.push(ev);
+    }
+    expect(events).toEqual([]);
+  });
+
+  it('sends `tools` in the request body when provided', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const tools = [
+      {
+        type: 'function' as const,
+        function: {
+          name: 'fake',
+          description: 'test',
+          parameters: { type: 'object', properties: {} },
+        },
+      },
+    ];
+    for await (const _ of client.streamChat({
+      model: 'm',
+      messages: [],
+      tools,
+    })) {
+      void _;
+    }
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.tools).toEqual(tools);
+  });
+
+  it('omits `tools` from the body when the array is empty', async () => {
+    // A present-but-empty tools array would confuse some providers —
+    // better to elide it entirely.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    for await (const _ of client.streamChat({
+      model: 'm',
+      messages: [],
+      tools: [],
+    })) {
+      void _;
+    }
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).not.toHaveProperty('tools');
   });
 
   it('throws auth error on 401', async () => {

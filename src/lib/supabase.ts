@@ -18,6 +18,7 @@ import { createClient, type SupabaseClient, type Session } from '@supabase/supab
 import type { AppConfig } from './config';
 import { isModelTier, type ModelTier } from './models';
 import { isAccent, isColorMode, type Accent, type ColorMode } from './theme';
+import type { OpenAIToolCall } from './tools/types';
 
 export interface Thread {
   id: string;
@@ -25,6 +26,13 @@ export interface Thread {
   title: string;
   /** Per-thread model tier override. Null/absent means use user default. */
   model: ModelTier | null;
+  /**
+   * Master switch for tool availability on this thread. Flipped by the
+   * `toggle_tools` meta-tool (LLM-driven) or the composer toolbox button
+   * (user-driven). When false, only toggle_tools rides along with each
+   * request; when true, every registered tool's schema is included.
+   */
+  tools_enabled: boolean;
   created_at: string;
   updated_at: string;
   /**
@@ -37,7 +45,9 @@ export interface Thread {
 
 /**
  * Coerce the raw row from Supabase. The `model` column is `text` without a
- * CHECK constraint, so scrub unexpected values to null.
+ * CHECK constraint, so scrub unexpected values to null. `tools_enabled`
+ * defaults to false if the column is missing (older row before the
+ * migration, or a coerce on a freshly-minted draft).
  */
 function coerceThread(row: Record<string, unknown>): Thread {
   const model = isModelTier(row.model) ? row.model : null;
@@ -46,17 +56,48 @@ function coerceThread(row: Record<string, unknown>): Thread {
     user_id: String(row.user_id),
     title: String(row.title ?? ''),
     model,
+    tools_enabled: row.tools_enabled === true,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
 }
 
+/**
+ * A saved memory — label + free-form data, per-user. The `embedding` column
+ * exists on the table but we deliberately don't ship it to the client
+ * (1024 floats is a lot of bytes for a list view). The embed-on-write
+ * path will populate it server-side or via a dedicated client method.
+ */
+export interface Memory {
+  id: string;
+  label: string;
+  data: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Message {
   id: string;
   thread_id: string;
-  role: 'user' | 'assistant' | 'system';
+  /**
+   * OpenAI message roles. `'tool'` rows carry a tool-result (`content` is
+   * the stringified return value) and always pair to an assistant row
+   * via `tool_call_id`. Every other role works as before.
+   */
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   created_at: string;
+  /**
+   * When the assistant emitted tool calls, this holds the raw array in
+   * the OpenAI shape: `[{id, type, function: {name, arguments}}]`.
+   * Arguments is a JSON-encoded string as the API provides it — don't
+   * re-stringify on read.
+   */
+  tool_calls?: OpenAIToolCall[] | null;
+  /** On role='tool' rows, the call id this result answers. */
+  tool_call_id?: string | null;
+  /** On role='tool' rows, the name of the tool that was invoked. */
+  name?: string | null;
 }
 
 export class SupabaseError extends Error {
@@ -266,8 +307,90 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
   }
 
+  /**
+   * Flip the thread's tool-availability master switch. Called from the
+   * toggle_tools meta-tool (LLM path) and from the composer toolbox button
+   * (user path). Doesn't touch updated_at — we don't want a toggle to
+   * promote the thread to the top of the sidebar.
+   */
+  async setThreadToolsEnabled(threadId: string, enabled: boolean): Promise<void> {
+    const { error } = await this.client
+      .from('threads')
+      .update({ tools_enabled: enabled })
+      .eq('id', threadId);
+    if (error) throw new SupabaseError(error.message);
+  }
+
   async deleteThread(threadId: string): Promise<void> {
     const { error } = await this.client.from('threads').delete().eq('id', threadId);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  // memories -------------------------------------------------------------
+  //
+  // RLS on the memories table scopes every query to the signed-in user's
+  // own rows, so these methods don't need to filter by user_id on
+  // select/update/delete. Inserts do need to set user_id explicitly (RLS
+  // checks with_check against the row, and there's no default).
+
+  /**
+   * Case-insensitive substring search over `label || data`. Empty query
+   * lists all memories (most-recent first). Results are capped at `limit`
+   * so a runaway LLM can't blow up context with a giant memory dump.
+   */
+  async searchMemories(query: string, limit: number): Promise<Memory[]> {
+    let q = this.client
+      .from('memories')
+      .select('id, label, data, created_at, updated_at')
+      .order('updated_at', { ascending: false })
+      .limit(limit);
+    if (query && query.length > 0) {
+      // Escape the PostgREST "or" filter's reserved chars — commas and
+      // parentheses would otherwise break the `.or(…)` grammar. ILIKE's
+      // `%` and `_` are intentional wildcards, so we wrap the whole
+      // query in `%` to match anywhere in the field.
+      const safe = query.replace(/([,()])/g, '\\$1');
+      const pattern = `%${safe}%`;
+      q = q.or(`label.ilike.${pattern},data.ilike.${pattern}`);
+    }
+    const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as Memory[];
+  }
+
+  async createMemory(label: string, data: string): Promise<Memory> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const { data: row, error } = await this.client
+      .from('memories')
+      .insert({ user_id: session.user.id, label, data })
+      .select('id, label, data, created_at, updated_at')
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return row as Memory;
+  }
+
+  /**
+   * Partial update. Caller guarantees at least one of label/data is set;
+   * the tool-side code enforces that contract. We bump updated_at on
+   * every write so memory_search orders by freshness.
+   */
+  async updateMemory(
+    id: string,
+    patch: { label?: string; data?: string }
+  ): Promise<Memory> {
+    const { data: row, error } = await this.client
+      .from('memories')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('id, label, data, created_at, updated_at')
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return row as Memory;
+  }
+
+  async deleteMemory(id: string): Promise<void> {
+    const { error } = await this.client.from('memories').delete().eq('id', id);
     if (error) throw new SupabaseError(error.message);
   }
 
@@ -288,15 +411,29 @@ export class SupabaseService {
    * just keeps its old ordering timestamp until the next activity.
    * That's intentional: losing the message would be a bigger regression
    * than a briefly stale sort order.
+   *
+   * The optional OpenAI-shape fields let assistant-with-tool-calls and
+   * tool-result rows round-trip faithfully. `tool_calls` applies to
+   * assistant rows that invoked tools; `tool_call_id` and `name` apply
+   * to role='tool' rows pairing the assistant call to its result.
    */
   async addMessage(
     threadId: string,
     role: Message['role'],
-    content: string
+    content: string,
+    opts: {
+      tool_calls?: OpenAIToolCall[] | null;
+      tool_call_id?: string | null;
+      name?: string | null;
+    } = {}
   ): Promise<Message> {
+    const row: Record<string, unknown> = { thread_id: threadId, role, content };
+    if (opts.tool_calls !== undefined) row.tool_calls = opts.tool_calls;
+    if (opts.tool_call_id !== undefined) row.tool_call_id = opts.tool_call_id;
+    if (opts.name !== undefined) row.name = opts.name;
     const { data, error } = await this.client
       .from('messages')
-      .insert({ thread_id: threadId, role, content })
+      .insert(row)
       .select()
       .single();
     if (error) throw new SupabaseError(error.message);

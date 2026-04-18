@@ -36,6 +36,7 @@
   import { app, lock, setDefaultModel, setSystemPrompts, setTheme } from '$lib/state.svelte';
   import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
   import type { Thread, Message } from '$lib/supabase';
+  import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
   import {
     MODELS,
     TIERS,
@@ -47,6 +48,7 @@
   import Auth from './Auth.svelte';
   import Settings from './Settings.svelte';
   import Markdown from '../components/Markdown.svelte';
+  import ToolCalls from '../components/ToolCalls.svelte';
 
   const DEFAULT_TITLE = 'New conversation';
 
@@ -58,6 +60,37 @@
   let activeThreadId = $state<string | null>(null);
   let messages = $state<Message[]>([]);
   let streamingText = $state('');
+
+  /**
+   * In-memory latency tracking for tool calls in the current session.
+   * Populated by the chat-loop's onToolStart / onToolDone / onToolError
+   * handlers and read by the ToolCalls component. Wiped on navigation
+   * (fresh thread selection clears this) because "how long did this
+   * take when it originally ran?" isn't a question we bother to
+   * persist — reopened conversations show only the final status
+   * glyph and hide the pill.
+   */
+  let toolTimings = $state<Record<string, { startedAt: number; endedAt?: number; error?: boolean }>>(
+    {}
+  );
+  /**
+   * Live monotonic clock, driven by rAF while any tool is in flight and
+   * frozen when everything is idle. Drives the live-duration pill and
+   * the animated ellipsis in ToolCalls. Using performance.now() because
+   * Date.now() is clamped on a 1ms boundary and can go backwards.
+   */
+  let nowMs = $state<number>(typeof performance !== 'undefined' ? performance.now() : 0);
+  $effect(() => {
+    const pending = Object.values(toolTimings).some((t) => t.endedAt === undefined);
+    if (!pending) return;
+    let raf = 0;
+    const tick = (): void => {
+      nowMs = performance.now();
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  });
   let composer = $state('');
   let sending = $state(false);
   let error = $state<string | null>(null);
@@ -184,6 +217,10 @@
     // Opening a thread starts in follow-bottom mode; the autoscroll
     // effect lands the view on the newest messages once they load.
     followBottom = true;
+    // Tool-call timings are a session-scoped display aid; nav to another
+    // thread drops them so the previous thread's pills don't leak into
+    // the new one.
+    toolTimings = {};
     // On mobile the drawer is modal, so dismiss it once a thread is chosen.
     // On desktop the sidebar is a persistent column — leave it open.
     if (
@@ -290,7 +327,7 @@
     if (!app.venice || !app.supabase) return;
     let raw = '';
     try {
-      for await (const d of app.venice.streamChat({
+      for await (const ev of app.venice.streamChat({
         model: MODELS[UTILITY_TIER].id,
         messages: [
           {
@@ -302,7 +339,9 @@
         ],
         maxTokens: 24,
       })) {
-        raw += d;
+        // Title generation never sends tools; any non-text event is
+        // ignored. Keeping the filter explicit makes the intent clear.
+        if (ev.type === 'text') raw += ev.delta;
       }
     } catch {
       return;
@@ -335,6 +374,7 @@
       user_id: session.user.id,
       title: DEFAULT_TITLE,
       model: null,
+      tools_enabled: false,
       created_at: now,
       updated_at: now,
       isDraft: true,
@@ -407,26 +447,31 @@
       messages = [...messages, userMsg];
       streamingText = '';
       abortCtl = new AbortController();
+
       // Build the request payload: active system prompts first (in library
-      // order, skipping empties), then the stored conversation history.
-      // Prompts aren't stored on the thread — we re-apply whatever the user
-      // has toggled on at send time.
+      // order, skipping empties), then the stored conversation history
+      // (faithfully projected onto the OpenAI wire shape via
+      // toVeniceMessage so stored tool_calls / tool_call_id / name
+      // round-trip). Prompts aren't stored on the thread — we re-apply
+      // whatever the user has toggled on at send time.
       const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
         .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
         .map((p) => ({ role: 'system' as const, content: p.body }));
-      const history = [
+      const freshThread = threads.find((t) => t.id === threadId);
+      if (!freshThread) throw new Error('thread disappeared before send');
+      const currentUserId = session?.user.id ?? freshThread.user_id;
+      const historyOnWire = [
         ...systemMessages,
-        ...messages.map((m) => ({ role: m.role, content: m.content })),
+        ...messages.map(toVeniceMessage),
       ];
-      let full = '';
-      // Coalesce streaming updates with requestAnimationFrame so the main
-      // thread only re-parses/sanitizes/renders the growing text at most
-      // once per paint. Without this, bursts of SSE deltas (e.g. when a
-      // whole sentence lands in one TCP chunk) would each trigger a full
-      // marked + DOMPurify re-parse, queueing behind one another and
-      // making the UI update in visible gulps instead of smoothly. It
-      // also guarantees at least one paint of the "thinking dots" state
-      // before any streamingText is written.
+
+      // Coalesce streamingText updates with rAF so the main thread
+      // only re-parses/sanitizes/renders the growing text at most once
+      // per paint. Without this, bursts of SSE deltas (e.g. a whole
+      // sentence landing in one TCP chunk) would each trigger a full
+      // marked + DOMPurify re-parse, visible as UI gulps instead of a
+      // smooth stream. Also guarantees at least one paint of the
+      // "thinking dots" state before any streamingText is written.
       let pending: string | null = null;
       let rafId = 0;
       const flushPending = (): void => {
@@ -436,35 +481,87 @@
           pending = null;
         }
       };
-      try {
-        for await (const delta of app.venice.streamChat({
-          model: modelId,
-          messages: history,
-          signal: abortCtl.signal,
-        })) {
-          full += delta;
-          pending = full;
-          if (rafId === 0) rafId = requestAnimationFrame(flushPending);
-        }
-      } finally {
-        // Commit whatever's pending synchronously so post-loop code (save
-        // to Supabase, scroll, autoTitle) sees the final text in state.
+      const cancelPending = (): void => {
         if (rafId !== 0) {
           cancelAnimationFrame(rafId);
           rafId = 0;
         }
+      };
+
+      let loopResult;
+      try {
+        loopResult = await runChatLoop({
+          venice: app.venice,
+          supabase: app.supabase,
+          thread: freshThread,
+          userId: currentUserId,
+          modelId,
+          history: historyOnWire,
+          signal: abortCtl.signal,
+          handlers: {
+            onTextUpdate: (t) => {
+              pending = t;
+              if (rafId === 0) rafId = requestAnimationFrame(flushPending);
+            },
+            onAssistantPersisted: (msg) => {
+              // Cancel any pending frame — the persisted row takes
+              // over rendering and we don't want a stale flush to
+              // replay the text into streamingText after this.
+              cancelPending();
+              pending = null;
+              messages = [...messages, msg];
+              streamingText = '';
+            },
+            onToolResultPersisted: (msg) => {
+              messages = [...messages, msg];
+            },
+            onToolStart: (call) => {
+              // performance.now() rather than Date.now() so the
+              // elapsed math is monotonic — the user's clock jumping
+              // (NTP sync, daylight saving) can't produce negative
+              // durations.
+              toolTimings[call.id] = { startedAt: performance.now() };
+            },
+            onToolDone: (call) => {
+              const t = toolTimings[call.id];
+              if (t) t.endedAt = performance.now();
+            },
+            onToolError: (call) => {
+              const t = toolTimings[call.id];
+              if (t) {
+                t.endedAt = performance.now();
+                t.error = true;
+              }
+            },
+            onToolsEnabledChange: (enabled) => {
+              threads = threads.map((t) =>
+                t.id === threadId ? { ...t, tools_enabled: enabled } : t
+              );
+              // Brief flash on the composer toolbox so a human eye
+              // notices the LLM-initiated state flip. User-initiated
+              // flips don't flash (the click itself is the feedback).
+              toolboxFlash = true;
+              setTimeout(() => {
+                toolboxFlash = false;
+              }, 600);
+            },
+          },
+        });
+      } finally {
+        // Commit anything pending synchronously so post-loop code
+        // sees the final state.
+        cancelPending();
         if (pending !== null) {
           streamingText = pending;
           pending = null;
         }
       }
-      if (full.length > 0) {
-        const assistantMsg = await app.supabase.addMessage(threadId, 'assistant', full);
-        messages = [...messages, assistantMsg];
-        if (isFirstExchange) {
-          // Fire-and-forget: don't block the UI on title generation.
-          void autoTitle(threadId, text);
-        }
+      if (loopResult.stoppedByLimit && !loopResult.finalText) {
+        error = 'Stopped: tool-call loop hit the 5-round limit.';
+      }
+      if (isFirstExchange && loopResult.finalText.length > 0) {
+        // Fire-and-forget: don't block the UI on title generation.
+        void autoTitle(threadId, text);
       }
       streamingText = '';
       await refreshThreads();
@@ -634,6 +731,78 @@
     };
   });
 
+  // Brief pulse on the composer toolbox button when the LLM flips
+  // tools_enabled via toggle_tools. Set true on change, unset after the
+  // animation finishes — ~600ms is enough for the keyframe to complete.
+  let toolboxFlash = $state(false);
+
+  /**
+   * Render plan derived from the raw message list. Tool-result rows are
+   * folded into their parent assistant message's tool-group so the UI
+   * sees one card per turn. Plain user / assistant-text rows pass through.
+   *
+   * Built as a $derived so messages mutations re-group automatically
+   * (e.g. when the chat-loop pushes a new tool-result in mid-turn).
+   */
+  type MessageBlock =
+    | { kind: 'plain'; message: Message }
+    | { kind: 'tool-group'; assistant: Message; resultsByCallId: Record<string, Message> };
+
+  const messageBlocks = $derived.by<MessageBlock[]>(() => {
+    // First pass: index tool rows by their tool_call_id.
+    const resultsByCallId: Record<string, Message> = {};
+    for (const m of messages) {
+      if (m.role === 'tool' && m.tool_call_id) {
+        resultsByCallId[m.tool_call_id] = m;
+      }
+    }
+    // Second pass: emit blocks, folding assistant-with-tool_calls rows
+    // into a tool-group that carries the matching result rows.
+    const blocks: MessageBlock[] = [];
+    for (const m of messages) {
+      if (m.role === 'tool') continue; // folded under their assistant parent
+      if (
+        m.role === 'assistant' &&
+        m.tool_calls &&
+        m.tool_calls.length > 0
+      ) {
+        const scoped: Record<string, Message> = {};
+        for (const call of m.tool_calls) {
+          const r = resultsByCallId[call.id];
+          if (r) scoped[call.id] = r;
+        }
+        blocks.push({ kind: 'tool-group', assistant: m, resultsByCallId: scoped });
+      } else {
+        blocks.push({ kind: 'plain', message: m });
+      }
+    }
+    return blocks;
+  });
+
+  /**
+   * Manual toolbox toggle — the user-driven path parallel to the
+   * toggle_tools tool. Writes straight through to Supabase + updates
+   * local state. Only meaningful on a real (non-draft) thread; drafts
+   * don't exist server-side until they materialize on send.
+   */
+  async function toggleToolsManually(): Promise<void> {
+    if (!app.supabase || !currentThread || currentThread.isDraft) return;
+    const next = !currentThread.tools_enabled;
+    const threadId = currentThread.id;
+    // Optimistic: update locally first so the button feels instant.
+    threads = threads.map((t) =>
+      t.id === threadId ? { ...t, tools_enabled: next } : t
+    );
+    try {
+      await app.supabase.setThreadToolsEnabled(threadId, next);
+    } catch (err) {
+      // Revert on failure so the UI doesn't lie about server state.
+      threads = threads.map((t) =>
+        t.id === threadId ? { ...t, tools_enabled: !next } : t
+      );
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
 </script>
 
 {#if !sessionLoaded}
@@ -786,10 +955,24 @@
           bind:this={messagesEl}
           onscroll={onMessagesScroll}
         >
-          {#each messages as m (m.id)}
-            <div class="msg {m.role}">
-              <Markdown content={m.content} />
-            </div>
+          {#each messageBlocks as block (block.kind === 'plain' ? block.message.id : block.assistant.id)}
+            {#if block.kind === 'tool-group'}
+              <div class="msg assistant">
+                {#if block.assistant.content}
+                  <Markdown content={block.assistant.content} />
+                {/if}
+                <ToolCalls
+                  calls={block.assistant.tool_calls ?? []}
+                  resultsByCallId={block.resultsByCallId}
+                  timings={toolTimings}
+                  nowMs={nowMs}
+                />
+              </div>
+            {:else}
+              <div class="msg {block.message.role}">
+                <Markdown content={block.message.content} />
+              </div>
+            {/if}
           {/each}
           {#if sending || streamingText}
             <div class="msg assistant">
@@ -891,6 +1074,34 @@
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
+              {/if}
+
+              <!-- Tool master switch: on = every registered tool's schema
+                   rides along with the next send; off = only toggle_tools.
+                   Pulses on LLM-initiated flips via .flash (see CSS). -->
+              {#if currentThread && !currentThread.isDraft}
+                <button
+                  type="button"
+                  class="secondary toolbox-btn"
+                  class:on={currentThread.tools_enabled}
+                  class:flash={toolboxFlash}
+                  onclick={toggleToolsManually}
+                  title={currentThread.tools_enabled
+                    ? 'Tools ON — click to disable'
+                    : 'Tools OFF — click to enable'}
+                  aria-label={currentThread.tools_enabled ? 'Disable tools' : 'Enable tools'}
+                  aria-pressed={currentThread.tools_enabled}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+                    <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    <line x1="3" y1="12" x2="21" y2="12" />
+                    <line x1="10" y1="12" x2="10" y2="14" />
+                    <line x1="14" y1="12" x2="14" y2="14" />
                   </svg>
                 </button>
               {/if}

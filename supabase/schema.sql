@@ -140,3 +140,88 @@ create policy "messages are self-deletable via thread" on public.messages
       where t.id = messages.thread_id and t.user_id = auth.uid()
     )
   );
+
+-- Tool calling -----------------------------------------------------------
+--
+-- Messages gain an OpenAI-shaped tool-call payload so conversations
+-- involving tool calls round-trip faithfully. The shape follows the
+-- OpenAI chat completions API (which Venice mirrors):
+--
+--   role='assistant' with tool_calls[]  — the model asked to invoke tools
+--   role='tool'     with tool_call_id   — one row per tool execution result,
+--                       name, content=<string-encoded result>
+--
+-- Keeping this shape on the wire means history → API becomes a direct
+-- projection and future providers drop in with no schema churn.
+
+-- Replace the role check to include 'tool'. Drop-and-recreate is safe here
+-- because we control the only writer.
+alter table public.messages drop constraint if exists messages_role_check;
+alter table public.messages
+  add constraint messages_role_check
+  check (role in ('system', 'user', 'assistant', 'tool'));
+
+-- Assistant rows that produced tool calls carry the raw array; we keep it
+-- as jsonb so the OpenAI shape (`[{id, type, function: {name, arguments}}]`)
+-- lands untouched. Null on every other row.
+alter table public.messages
+  add column if not exists tool_calls jsonb;
+
+-- Tool-result rows reference the assistant call they answer. `name` echoes
+-- the tool that was invoked (OpenAI includes it on the `tool` message too).
+-- Both null on non-tool rows.
+alter table public.messages
+  add column if not exists tool_call_id text;
+alter table public.messages
+  add column if not exists name text;
+
+-- Per-thread master switch for tool availability. When false, only the
+-- always-on `toggle_tools` meta-tool is sent with the request; when true,
+-- every registered tool's schema is included. The LLM can flip this via
+-- `toggle_tools`, or the user can flip it from the composer toolbox button.
+alter table public.threads
+  add column if not exists tools_enabled boolean not null default false;
+
+-- memories ---------------------------------------------------------------
+--
+-- Free-form notes the user (or the LLM via the memory_* tools) can CRUD
+-- and search. `data` is plain text by design — we want the LLM to be able
+-- to read and write it directly without a schema it has to learn.
+--
+-- The `embedding` column is here early so we don't need a schema migration
+-- later: 1024 dims matches the embedding model we plan to use. Stays null
+-- until the embed-on-write path lands. Until then, search runs on pg's
+-- ILIKE over label||data — fine for the small-N memory count we expect.
+
+create extension if not exists vector;
+
+create table if not exists public.memories (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  label text not null,
+  data text not null,
+  embedding vector(1024),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists memories_user_updated_idx
+  on public.memories (user_id, updated_at desc);
+
+alter table public.memories enable row level security;
+
+drop policy if exists "memories are self-selectable" on public.memories;
+create policy "memories are self-selectable" on public.memories
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "memories are self-insertable" on public.memories;
+create policy "memories are self-insertable" on public.memories
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "memories are self-updatable" on public.memories;
+create policy "memories are self-updatable" on public.memories
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "memories are self-deletable" on public.memories;
+create policy "memories are self-deletable" on public.memories
+  for delete using (auth.uid() = user_id);

@@ -15,11 +15,29 @@
  * It lives in memory while the app is unlocked (state.svelte.ts holds
  * the VeniceClient instance) and never touches storage except as part
  * of the encrypted config blob.
+ *
+ * Streaming shape: streamChat yields a discriminated union of
+ * StreamEvent values. Text deltas appear as they arrive; tool_call
+ * events appear *once* per call, after the accumulator has assembled
+ * a complete `arguments` JSON string from the fragments OpenAI
+ * streams across many deltas.
  */
 
+import type { OpenAIToolDef, OpenAIToolCall } from './tools/types';
+
+/**
+ * Messages on the wire can include any of the OpenAI roles. When the
+ * caller passes a role='tool' message, it must also set tool_call_id
+ * and name to pair the result with the assistant call that produced it.
+ * Likewise role='assistant' rows that invoked tools carry a tool_calls
+ * array (and usually an empty `content`).
+ */
 export interface VeniceMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  name?: string;
+  tool_call_id?: string;
+  tool_calls?: OpenAIToolCall[];
 }
 
 export interface ChatRequest {
@@ -28,7 +46,22 @@ export interface ChatRequest {
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
+  /**
+   * Tools available for this turn. When omitted, no tools are offered
+   * and the model responds with plain text. When present, the model
+   * may emit `tool_calls` events instead of (or in addition to) text.
+   */
+  tools?: OpenAIToolDef[];
 }
+
+/**
+ * Events yielded by streamChat. Text arrives as it's generated; tool
+ * calls arrive exactly once each, after their arguments JSON has been
+ * fully assembled from its fragments.
+ */
+export type StreamEvent =
+  | { type: 'text'; delta: string }
+  | { type: 'tool_call'; toolCall: OpenAIToolCall };
 
 export interface EmbeddingRequest {
   model: string;
@@ -111,17 +144,21 @@ export class VeniceClient {
   }
 
   /**
-   * Streaming chat completion. Yields assistant text deltas as they arrive.
-   * The server uses the OpenAI-compatible SSE format.
+   * Streaming chat completion. Yields a mix of text deltas (as they
+   * arrive) and tool_call events (each emitted once, after its
+   * arguments string has been fully assembled).
    */
-  async *streamChat(req: ChatRequest): AsyncGenerator<string, void, void> {
-    const body = {
+  async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+    const body: Record<string, unknown> = {
       model: req.model,
       messages: req.messages,
       temperature: req.temperature,
       max_tokens: req.maxTokens,
       stream: true,
     };
+    if (req.tools && req.tools.length > 0) {
+      body.tools = req.tools;
+    }
     let res: Response;
     try {
       res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
@@ -142,8 +179,38 @@ export class VeniceClient {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    // Tool-call fragments stream fragmented across deltas, keyed by
+    // `index`. We accumulate until the server signals the call is
+    // complete (finish_reason='tool_calls' or stream end), then emit
+    // one `tool_call` event per completed call.
+    const pending = new Map<number, {
+      id?: string;
+      name?: string;
+      argumentsAccum: string;
+    }>();
+    let finished = false;
+
+    const flushToolCalls = function* (): Generator<StreamEvent, void, void> {
+      const sorted = Array.from(pending.entries()).sort((a, b) => a[0] - b[0]);
+      for (const [, partial] of sorted) {
+        if (!partial.id || !partial.name) continue;
+        yield {
+          type: 'tool_call',
+          toolCall: {
+            id: partial.id,
+            type: 'function',
+            function: {
+              name: partial.name,
+              arguments: partial.argumentsAccum,
+            },
+          },
+        };
+      }
+      pending.clear();
+    };
+
     try {
-      for (;;) {
+      outer: for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -152,15 +219,48 @@ export class VeniceClient {
         while ((idx = buffer.indexOf('\n\n')) !== -1) {
           const frame = buffer.slice(0, idx);
           buffer = buffer.slice(idx + 2);
-          const delta = parseSseFrame(frame);
-          if (delta === null) continue;
-          if (delta === '[DONE]') return;
-          yield delta;
+          const parsed = parseSseFrame(frame);
+          if (parsed === null) continue;
+          if (parsed === '[DONE]') {
+            finished = true;
+            break outer;
+          }
+          if (parsed.text !== undefined && parsed.text.length > 0) {
+            yield { type: 'text', delta: parsed.text };
+          }
+          if (parsed.toolCallFragments) {
+            for (const frag of parsed.toolCallFragments) {
+              const entry = pending.get(frag.index) ?? { argumentsAccum: '' };
+              if (frag.id) entry.id = frag.id;
+              if (frag.name) entry.name = frag.name;
+              if (frag.argumentsAppend) {
+                entry.argumentsAccum += frag.argumentsAppend;
+              }
+              pending.set(frag.index, entry);
+            }
+          }
+          // On `finish_reason='tool_calls'` (or 'stop' with no pending
+          // calls) we're done with this response. We defer emission
+          // until the loop actually exits so any straggling text deltas
+          // in the same frame already got yielded above.
+          if (parsed.finishReason) {
+            finished = true;
+            break outer;
+          }
         }
       }
     } finally {
       reader.releaseLock();
     }
+
+    // Regardless of how we exited the loop, emit whatever tool_calls
+    // finished accumulating. Fragments without both an id and a name
+    // are dropped by flushToolCalls — those would be truncated
+    // mid-announcement and can't be executed safely.
+    yield* flushToolCalls();
+    // The `finished` flag is a debugging aid more than a contract —
+    // callers only care that the generator returned.
+    void finished;
   }
 
   async embed(req: EmbeddingRequest): Promise<EmbeddingResponse> {
@@ -188,11 +288,30 @@ export class VeniceClient {
 }
 
 /**
- * Parses a single SSE frame and returns the content delta. Returns null
- * if the frame has no usable content, or the string '[DONE]' when the
- * server signals completion.
+ * A parsed SSE frame. Multiple fields may be set in a single frame —
+ * OpenAI sometimes batches a text delta, a tool-call fragment, and a
+ * finish_reason into one choice. `null` means the frame carried no
+ * actionable info (blank, heartbeat, malformed).
  */
-export function parseSseFrame(frame: string): string | '[DONE]' | null {
+export interface SseDelta {
+  text?: string;
+  toolCallFragments?: Array<{
+    index: number;
+    id?: string;
+    name?: string;
+    argumentsAppend?: string;
+  }>;
+  finishReason?: string;
+}
+
+/**
+ * Parses a single SSE frame. Returns '[DONE]' when the server signals
+ * end-of-stream; null when the frame has no usable data (heartbeat,
+ * empty delta); otherwise an SseDelta with whichever fields the frame
+ * contained. Text and tool-call fragments can both be present in the
+ * same frame — the caller handles each independently.
+ */
+export function parseSseFrame(frame: string): SseDelta | '[DONE]' | null {
   const dataLines: string[] = [];
   for (const rawLine of frame.split('\n')) {
     const line = rawLine.trimEnd();
@@ -204,13 +323,53 @@ export function parseSseFrame(frame: string): string | '[DONE]' | null {
   if (dataLines.length === 0) return null;
   const payload = dataLines.join('\n');
   if (payload === '[DONE]') return '[DONE]';
-  try {
-    const obj = JSON.parse(payload) as {
-      choices?: { delta?: { content?: string } }[];
+
+  interface RawChoice {
+    delta?: {
+      content?: string;
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        type?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
     };
-    const delta = obj.choices?.[0]?.delta?.content;
-    return typeof delta === 'string' && delta.length > 0 ? delta : null;
+    finish_reason?: string | null;
+  }
+
+  let obj: { choices?: RawChoice[] };
+  try {
+    obj = JSON.parse(payload) as { choices?: RawChoice[] };
   } catch {
     return null;
   }
+  const choice = obj.choices?.[0];
+  if (!choice) return null;
+
+  const out: SseDelta = {};
+  const content = choice.delta?.content;
+  if (typeof content === 'string' && content.length > 0) {
+    out.text = content;
+  }
+  const rawCalls = choice.delta?.tool_calls;
+  if (Array.isArray(rawCalls) && rawCalls.length > 0) {
+    const frags: NonNullable<SseDelta['toolCallFragments']> = [];
+    for (const c of rawCalls) {
+      if (typeof c.index !== 'number') continue;
+      const frag: { index: number; id?: string; name?: string; argumentsAppend?: string } = {
+        index: c.index,
+      };
+      if (typeof c.id === 'string') frag.id = c.id;
+      const fname = c.function?.name;
+      if (typeof fname === 'string') frag.name = fname;
+      const fargs = c.function?.arguments;
+      if (typeof fargs === 'string') frag.argumentsAppend = fargs;
+      frags.push(frag);
+    }
+    if (frags.length > 0) out.toolCallFragments = frags;
+  }
+  if (typeof choice.finish_reason === 'string') {
+    out.finishReason = choice.finish_reason;
+  }
+  return Object.keys(out).length === 0 ? null : out;
 }
