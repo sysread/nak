@@ -467,6 +467,29 @@
           <button type="submit" disabled={busy}>Save default model</button>
         </form>
 
+        <h3 class="pane-section">Web search</h3>
+        <p class="subtle">
+          Venice grounds every answer with live web results plus inline
+          source citations. Enabled by default — each request goes out
+          with <code>enable_web_search=on</code> and
+          <code>enable_web_citations=true</code>. Toggle off to send
+          <code>enable_web_search=off</code> on every request instead.
+        </p>
+        <label class="form-row" style="display:flex;gap:0.5rem;align-items:center">
+          <input
+            type="checkbox"
+            checked={webSearchEnabled}
+            onchange={onToggleWebSearch}
+          />
+          <span><strong>Enable Venice web search</strong></span>
+        </label>
+        <p class="subtle" style="font-size:0.8rem">
+          Stored on your Supabase profile so the choice follows you across
+          browsers.
+        </p>
+        {#if webSearchError}<p class="error">{webSearchError}</p>{/if}
+        {#if webSearchInfo}<p class="subtle">{webSearchInfo}</p>{/if}
+
         <h3 class="pane-section">System prompts</h3>
         <p class="subtle">
           Named prompts you can toggle on or off from the chat composer. The
@@ -548,29 +571,6 @@
           </div>
         </div>
         {#if promptsError}<p class="error">{promptsError}</p>{/if}
-
-        <h3 class="pane-section">Web search</h3>
-        <p class="subtle">
-          Venice grounds every answer with live web results plus inline
-          source citations. Enabled by default — each request goes out
-          with <code>enable_web_search=on</code> and
-          <code>enable_web_citations=true</code>. Toggle off to send
-          <code>enable_web_search=off</code> on every request instead.
-        </p>
-        <label class="form-row" style="display:flex;gap:0.5rem;align-items:center">
-          <input
-            type="checkbox"
-            checked={webSearchEnabled}
-            onchange={onToggleWebSearch}
-          />
-          <span><strong>Enable Venice web search</strong></span>
-        </label>
-        <p class="subtle" style="font-size:0.8rem">
-          Stored on your Supabase profile so the choice follows you across
-          browsers.
-        </p>
-        {#if webSearchError}<p class="error">{webSearchError}</p>{/if}
-        {#if webSearchInfo}<p class="subtle">{webSearchInfo}</p>{/if}
       {:else if group === 'appearance'}
         <h2>Appearance</h2>
         <p class="subtle">
