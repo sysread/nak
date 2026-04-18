@@ -1194,6 +1194,37 @@
           ></textarea>
           <div class="composer-bar" bind:this={composerBarEl}>
             <div class="composer-bar-left">
+              <!-- Tool master switch: on = every registered tool's schema
+                   rides along with the next send; off = only toggle_tools.
+                   Pulses on LLM-initiated flips via .flash (see CSS). Sits
+                   first in the row because whether tools are armed for
+                   this conversation is the most load-bearing decision on
+                   this toolbar — cost and capability both pivot on it. -->
+              {#if currentThread && !currentThread.isDraft}
+                <button
+                  type="button"
+                  class="secondary toolbox-btn"
+                  class:on={currentThread.tools_enabled}
+                  class:flash={toolboxFlash}
+                  onclick={toggleToolsManually}
+                  title={currentThread.tools_enabled
+                    ? 'Tools ON — click to disable'
+                    : 'Tools OFF — click to enable'}
+                  aria-label={currentThread.tools_enabled ? 'Disable tools' : 'Enable tools'}
+                  aria-pressed={currentThread.tools_enabled}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+                    <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    <line x1="3" y1="12" x2="21" y2="12" />
+                    <line x1="10" y1="12" x2="10" y2="14" />
+                    <line x1="14" y1="12" x2="14" y2="14" />
+                  </svg>
+                </button>
+              {/if}
+
               <!-- Prompts: toggles which system prompts ride along on
                    every future send in this conversation. -->
               <button
@@ -1245,34 +1276,6 @@
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <polyline points="6 9 12 15 18 9" />
-                  </svg>
-                </button>
-              {/if}
-
-              <!-- Tool master switch: on = every registered tool's schema
-                   rides along with the next send; off = only toggle_tools.
-                   Pulses on LLM-initiated flips via .flash (see CSS). -->
-              {#if currentThread && !currentThread.isDraft}
-                <button
-                  type="button"
-                  class="secondary toolbox-btn"
-                  class:on={currentThread.tools_enabled}
-                  class:flash={toolboxFlash}
-                  onclick={toggleToolsManually}
-                  title={currentThread.tools_enabled
-                    ? 'Tools ON — click to disable'
-                    : 'Tools OFF — click to enable'}
-                  aria-label={currentThread.tools_enabled ? 'Disable tools' : 'Enable tools'}
-                  aria-pressed={currentThread.tools_enabled}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                       stroke="currentColor" stroke-width="2"
-                       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
-                    <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    <line x1="3" y1="12" x2="21" y2="12" />
-                    <line x1="10" y1="12" x2="10" y2="14" />
-                    <line x1="14" y1="12" x2="14" y2="14" />
                   </svg>
                 </button>
               {/if}
