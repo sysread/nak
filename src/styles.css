@@ -719,6 +719,13 @@ h1 {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* As a grid item in `.shell`, min-width defaults to auto — meaning this
+     column can inflate to fit the intrinsic width of its widest descendant
+     (e.g. a long-line <pre> deep inside a message). That pushes the whole
+     chat column — top bar, messages, composer — past the viewport edge.
+     min-width: 0 pins the column to its grid track so the downstream
+     overflow handling (scrollable <pre>, scrollable <table>) can kick in. */
+  min-width: 0;
 }
 
 /* Wrap the scroll container so the floating "↓" button can be anchored
@@ -728,6 +735,9 @@ h1 {
   min-height: 0;
   position: relative;
   display: flex;
+  /* Same trap, one level deeper: without this, a wide message subtree
+     would drag this flex item past its parent column's width. */
+  min-width: 0;
 }
 
 .messages {
@@ -737,6 +747,11 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  /* And again at the scroll container itself — otherwise the list
+     inflates alongside its children and the viewport-level
+     `overflow-x: hidden` is what ends up doing the clipping, with no way
+     for the user to reach the hidden content. */
+  min-width: 0;
 }
 
 /* Floating jump-to-bottom button. Appears only when the user has
