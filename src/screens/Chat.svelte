@@ -611,10 +611,13 @@
           modelId,
           history: historyOnWire,
           signal: abortCtl.signal,
-          // Enabled → 'auto' so the model pulls live context in only
-          // when it actually helps. Disabled → 'off' so we pin the
-          // field even against any future Venice-side default change.
-          webSearch: app.webSearchEnabled ? 'auto' : 'off',
+          // Enabled → 'on' so every turn is grounded with live results
+          // plus citations — 'auto' leaves too much up to the model's
+          // self-assessment, and we kept seeing refusals on questions
+          // that would have benefited from a search. Disabled → 'off'
+          // so the field is pinned even against any future Venice-side
+          // default change.
+          webSearch: app.webSearchEnabled ? 'on' : 'off',
           handlers: {
             onTextUpdate: (t) => {
               pending = t;

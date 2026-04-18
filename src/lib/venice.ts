@@ -44,13 +44,19 @@ export interface VeniceMessage {
  * Venice-specific web-search mode, passed as
  * `venice_parameters.enable_web_search` on the request body.
  *
- *   'auto' — let the model decide when a live search improves the answer
- *            (our enabled-by-default value).
- *   'on'   — force a search on every turn.
+ *   'on'   — force a search on every turn. Our enabled-by-default value:
+ *            relying on `auto` leaves too many model refusals ("I can't
+ *            access the internet") on the table, since in auto mode the
+ *            server only runs the search if the model signals intent.
+ *   'auto' — let the model decide when a live search improves the answer.
  *   'off'  — disable the server-side tool entirely. Also the implicit
  *            Venice default when `venice_parameters` is omitted; we still
  *            send it explicitly so a user who flipped the setting off
  *            can't be overridden by a future server-side default change.
+ *
+ * Active modes ('on' / 'auto') additionally set
+ * `venice_parameters.enable_web_citations=true` so sourced claims come
+ * back attributed rather than silently merged into the answer.
  *
  * Docs: https://docs.venice.ai/api-reference (§ venice_parameters).
  */
@@ -208,9 +214,21 @@ export class VeniceClient {
     // Venice-specific: request web-search behavior via venice_parameters.
     // We send the field only when the caller passed an explicit mode so
     // that unrelated tests / callers that never opt in don't carry an
-    // extra body key.
+    // extra body key. Pair an active search mode with
+    // `enable_web_citations` so sourced claims come back marked up —
+    // without that flag Venice merges the fetched content into the
+    // answer but strips the attribution. Citations are meaningless
+    // when search is 'off', so we omit that field in that case.
+    // (We deliberately do NOT set the xAI xsearch knob — that's a
+    // separate server-side tool and the user hasn't opted in.)
     if (req.webSearch) {
-      body.venice_parameters = { enable_web_search: req.webSearch };
+      const veniceParams: Record<string, unknown> = {
+        enable_web_search: req.webSearch,
+      };
+      if (req.webSearch !== 'off') {
+        veniceParams.enable_web_citations = true;
+      }
+      body.venice_parameters = veniceParams;
     }
     let res: Response;
     try {

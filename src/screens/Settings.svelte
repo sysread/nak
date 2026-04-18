@@ -526,10 +526,11 @@
       {:else if group === 'websearch'}
         <h2>Web search</h2>
         <p class="subtle">
-          Venice can augment answers with live web results and cite sources
-          inline. Enabled by default — the model decides turn-by-turn
-          whether a search would help. Toggle off to send
-          <code>enable_web_search=off</code> on every request.
+          Venice grounds every answer with live web results plus inline
+          source citations. Enabled by default — each request goes out
+          with <code>enable_web_search=on</code> and
+          <code>enable_web_citations=true</code>. Toggle off to send
+          <code>enable_web_search=off</code> on every request instead.
         </p>
         <label class="form-row" style="display:flex;gap:0.5rem;align-items:center">
           <input

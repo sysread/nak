@@ -348,9 +348,36 @@ describe('VeniceClient.streamChat', () => {
     expect(types).toEqual(['text']);
   });
 
-  it('forwards webSearch as venice_parameters.enable_web_search', async () => {
+  it('forwards webSearch=on with citations on venice_parameters', async () => {
     // The Venice-specific knob lands inside `venice_parameters`, not at
     // the top level — mirroring https://docs.venice.ai/api-reference.
+    // Active modes also pair with `enable_web_citations: true` so
+    // sourced claims come back attributed rather than silently merged.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    for await (const _ of client.streamChat({
+      model: 'm',
+      messages: [],
+      webSearch: 'on',
+    })) {
+      void _;
+    }
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.venice_parameters).toEqual({
+      enable_web_search: 'on',
+      enable_web_citations: true,
+    });
+  });
+
+  it('pairs citations with auto mode too', async () => {
+    // `auto` is still an active search mode — citations remain useful
+    // whenever the server actually performs a lookup.
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
     );
@@ -367,7 +394,33 @@ describe('VeniceClient.streamChat', () => {
     }
     const [, init] = fetchImpl.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.venice_parameters).toEqual({ enable_web_search: 'auto' });
+    expect(body.venice_parameters).toEqual({
+      enable_web_search: 'auto',
+      enable_web_citations: true,
+    });
+  });
+
+  it('omits citations when webSearch is explicitly off', async () => {
+    // 'off' is an explicit opt-out pin, not a search mode — attaching
+    // `enable_web_citations` to an off request is noise, so we leave
+    // it off the body entirely.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    for await (const _ of client.streamChat({
+      model: 'm',
+      messages: [],
+      webSearch: 'off',
+    })) {
+      void _;
+    }
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.venice_parameters).toEqual({ enable_web_search: 'off' });
   });
 
   it('omits venice_parameters entirely when webSearch is not set', async () => {

@@ -136,10 +136,11 @@ export interface UserSettings {
   systemPrompts?: SystemPrompt[];
   /**
    * Opt out of Venice's server-side web-search augmentation. Absent /
-   * true → we send `venice_parameters.enable_web_search='auto'` on every
-   * chat request, letting the model pull live citations in when it
-   * helps. Explicit `false` → we send `'off'` so the field is pinned
-   * even if Venice later changes its server-side default.
+   * true → we send `venice_parameters.enable_web_search='on'` plus
+   * `enable_web_citations=true` on every chat request, grounding every
+   * turn with live results and inline source attribution. Explicit
+   * `false` → we send `'off'` so the field is pinned even if Venice
+   * later changes its server-side default.
    */
   webSearchEnabled?: boolean;
 }

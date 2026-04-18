@@ -62,8 +62,8 @@ interface AppState {
    * Mirror of `profiles.settings.webSearchEnabled`. Defaults to true so
    * a brand-new account (empty settings jsonb) gets Venice's web-search
    * augmentation on day one — the DB setting is opt-out, not opt-in.
-   * Chat.svelte reads this to choose the `webSearch` value it passes
-   * into each streamChat call.
+   * Chat.svelte reads this and maps true → 'on' + citations,
+   * false → 'off' when building each streamChat call.
    */
   webSearchEnabled: boolean;
   error: string | null;
