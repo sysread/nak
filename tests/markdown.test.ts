@@ -37,6 +37,18 @@ describe('renderMarkdown — happy paths', () => {
     expect(fenced).toMatch(/const/);
   });
 
+  it('wraps fenced code blocks in a .code-block with a copy button', () => {
+    // The wrapper is what gives the absolutely-positioned copy button a
+    // stable anchor, and the button itself is what Markdown.svelte
+    // delegates clicks to. If either shape changes, the UI breaks
+    // silently — this test is the gate that keeps them in sync.
+    const html = renderMarkdown('```\nhello\n```');
+    expect(html).toMatch(/<div class="code-block">/);
+    expect(html).toMatch(/<button[^>]*class="copy-code-btn"[^>]*>Copy<\/button>/);
+    // The <pre> must stay inside the wrapper, not become a sibling.
+    expect(html).toMatch(/<div class="code-block">[\s\S]*<pre>[\s\S]*<\/pre>[\s\S]*<\/div>/);
+  });
+
   it('applies hljs token spans for supported languages', () => {
     const html = renderMarkdown('```python\ndef hello(): return 1\n```');
     // highlight.js emits <span class="hljs-keyword">def</span> etc.

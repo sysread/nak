@@ -47,6 +47,7 @@
   } from '$lib/models';
   import Auth from './Auth.svelte';
   import Settings from './Settings.svelte';
+  import CopyButton from '../components/CopyButton.svelte';
   import Markdown from '../components/Markdown.svelte';
   import Scanner from '../components/Scanner.svelte';
   import ToolCalls from '../components/ToolCalls.svelte';
@@ -987,6 +988,7 @@
             {#if block.kind === 'tool-group'}
               <div class="msg assistant">
                 {#if block.assistant.content}
+                  <CopyButton text={block.assistant.content} ariaLabel="Copy message" />
                   <Markdown content={block.assistant.content} />
                 {/if}
                 <ToolCalls
@@ -998,6 +1000,9 @@
               </div>
             {:else}
               <div class="msg {block.message.role}">
+                {#if block.message.role === 'assistant'}
+                  <CopyButton text={block.message.content} ariaLabel="Copy message" />
+                {/if}
                 <Markdown content={block.message.content} />
               </div>
             {/if}

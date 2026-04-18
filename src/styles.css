@@ -816,6 +816,14 @@ h1 {
 .md > :first-child { margin-top: 0; }
 .md > :last-child  { margin-bottom: 0; }
 
+/* Reserve space for the absolutely-positioned `.copy-btn` at the top
+   right of assistant cards so a long first-line heading doesn't
+   render *under* the button. Only the first element needs the
+   clearance — subsequent lines already fall below it. */
+.msg.assistant .md > :first-child {
+  padding-right: 3.2rem;
+}
+
 .md p {
   margin: 0 0 0.6em;
 }
@@ -892,6 +900,14 @@ h1 {
   /* Undo the outer overflow-wrap so code lines don't break mid-token. */
   word-break: normal;
   overflow-wrap: normal;
+}
+
+/* Fenced code blocks are wrapped by the markdown renderer in a
+   .code-block so the absolutely-positioned "Copy" button has a stable
+   anchor. The button itself is styled by the shared `.copy-btn` rules
+   below — this selector just establishes the positioning context. */
+.md .code-block {
+  position: relative;
 }
 
 .md table {
@@ -1041,6 +1057,11 @@ h1 {
   max-width: 80%;
   background: var(--surface);
   border: 1px solid var(--border);
+  /* Anchor for the absolutely-positioned `.copy-btn` that the chat
+     screen drops into each assistant card. Without a positioning
+     context here the button would fly up to the nearest ancestor
+     (messages-wrap) and stick at the top of the list. */
+  position: relative;
 }
 
 /* Re-apply the mobile full-width rule here, *after* the base
@@ -1059,6 +1080,91 @@ h1 {
     max-width: 100%;
     align-self: stretch;
   }
+}
+
+/* ---------- Copy button ----------
+   Shared styles for the two copy-to-clipboard surfaces: the message
+   button (CopyButton.svelte, dropped into each assistant bubble) and
+   the code-fence button (emitted as plain HTML by the markdown
+   renderer, click-delegated from Markdown.svelte). They live in
+   different DOM contexts but share a visual identity — same corner,
+   same muted → accent ramp, same "Copied!" green flash. */
+
+.copy-btn {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  padding: 0.1rem 0.45rem;
+  font-family: inherit;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  background: var(--bg-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    color 120ms ease-out,
+    background 120ms ease-out,
+    border-color 120ms ease-out;
+  /* Sit above the pre's token spans and any absolutely-positioned
+     overlays in the bubble without stealing clicks from text
+     selection elsewhere in the card. */
+  z-index: 1;
+}
+
+.copy-btn:hover,
+.copy-btn:focus-visible {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--text);
+}
+
+/* The .copied modifier is set by both CopyButton.svelte and the
+   delegated handler in Markdown.svelte. Green so the state reads as
+   success-shaped regardless of theme accent. Also pins the hover
+   style so the confirmation doesn't re-flash if the cursor moves. */
+.copy-btn.copied,
+.copy-btn.copied:hover,
+.copy-btn.copied:focus-visible {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--bg-2);
+}
+
+/* `.copy-code-btn` is the in-fence variant — same styling, just a
+   slightly tighter inset so it doesn't overhang the code content. */
+.md .code-block .copy-code-btn {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.3rem;
+  padding: 0.1rem 0.45rem;
+  font-family: inherit;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  background: var(--bg);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    color 120ms ease-out,
+    background 120ms ease-out,
+    border-color 120ms ease-out;
+  z-index: 1;
+}
+.md .code-block .copy-code-btn:hover,
+.md .code-block .copy-code-btn:focus-visible {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--text);
+}
+.md .code-block .copy-code-btn.copied,
+.md .code-block .copy-code-btn.copied:hover,
+.md .code-block .copy-code-btn.copied:focus-visible {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--bg);
 }
 
 /* ---------- Composer ----------

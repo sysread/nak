@@ -61,7 +61,19 @@ renderer.code = ({ text, lang }: { text: string; lang?: string }) => {
   const classes: string[] = [];
   if (highlighted) classes.push('hljs', `language-${escapeAttr(normalized)}`);
   const cls = classes.length ? ` class="${classes.join(' ')}"` : '';
-  return `<pre><code${cls}>${body}\n</code></pre>\n`;
+  // Wrap every fence in a .code-block div so (1) a "Copy" button can
+  // be absolutely positioned inside, and (2) the button has a stable
+  // anchor from which a delegated click handler in Markdown.svelte
+  // can locate the adjacent <code>. The swap to "Copied!" happens in
+  // that delegation handler on click — DOMPurify only permits a
+  // static element/attribute set, so we can't attach any script-side
+  // behavior to the button from here.
+  return (
+    `<div class="code-block">` +
+      `<button type="button" class="copy-code-btn" aria-label="Copy code">Copy</button>` +
+      `<pre><code${cls}>${body}\n</code></pre>` +
+    `</div>\n`
+  );
 };
 
 marked.use({ renderer });
@@ -78,8 +90,15 @@ const ALLOWED_TAGS = [
   'b',
   'blockquote',
   'br',
+  // `button` and `div` are needed for the code-fence copy-button
+  // wrapper emitted by `renderer.code` above. DOMPurify still strips
+  // any event-handler attributes (onclick etc.) from any <button> that
+  // a model tries to smuggle in through raw HTML, and the allowlisted
+  // attributes below don't include anything script-executing.
+  'button',
   'code',
   'del',
+  'div',
   'em',
   'h1',
   'h2',
@@ -111,7 +130,18 @@ const ALLOWED_TAGS = [
 // `style` is needed for KaTeX's layout (font-size, padding, transforms on
 // individual glyph spans). DOMPurify sanitizes the value, rejecting url()
 // and other attack vectors, so allowing the attribute here is safe.
-const ALLOWED_ATTR = ['href', 'title', 'class', 'lang', 'align', 'start', 'style'];
+// `type` and `aria-label` cover the button we emit for code-fence copy.
+const ALLOWED_ATTR = [
+  'href',
+  'title',
+  'class',
+  'lang',
+  'align',
+  'start',
+  'style',
+  'type',
+  'aria-label',
+];
 
 let hookRegistered = false;
 function registerLinkHardening(): void {
