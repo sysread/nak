@@ -225,3 +225,34 @@ create policy "memories are self-updatable" on public.memories
 drop policy if exists "memories are self-deletable" on public.memories;
 create policy "memories are self-deletable" on public.memories
   for delete using (auth.uid() = user_id);
+
+-- Realtime subscriptions --------------------------------------------------
+--
+-- The client subscribes to INSERTs on `messages` (filtered by thread_id)
+-- and all CUD on `threads` (filtered by user_id) so a conversation open
+-- on two devices stays in sync without polling. Supabase ships with the
+-- `supabase_realtime` publication pre-created; we just opt in the two
+-- tables that carry conversation state.
+--
+-- Guarded so re-running the script doesn't error on tables that are
+-- already members — `alter publication ... add table` has no built-in
+-- `if not exists`.
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'threads'
+  ) then
+    alter publication supabase_realtime add table public.threads;
+  end if;
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'messages'
+  ) then
+    alter publication supabase_realtime add table public.messages;
+  end if;
+end $$;

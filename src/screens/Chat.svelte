@@ -111,6 +111,86 @@
     el.style.height = `${el.scrollHeight}px`;
   });
 
+  // Append a message if we don't already have a row with that id.
+  // Dedupe is load-bearing: the device that writes a message also
+  // receives the realtime echo of its own insert, and the echo can
+  // arrive before or after `addMessage` resolves — either way we'd
+  // otherwise double-up the row. The $effect below writes via this
+  // helper; the send path calls it explicitly.
+  function appendMessage(msg: Message): void {
+    if (messages.some((m) => m.id === msg.id)) return;
+    messages = [...messages, msg];
+  }
+
+  // Match the ordering `refreshThreads` produces so live realtime
+  // updates don't contradict the next full refetch: drafts first
+  // (local-only, preserved across Supabase round-trips), then real
+  // threads newest-first.
+  function sortThreads(arr: Thread[]): Thread[] {
+    const drafts: Thread[] = [];
+    const real: Thread[] = [];
+    for (const t of arr) (t.isDraft ? drafts : real).push(t);
+    real.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    return [...drafts, ...real];
+  }
+
+  // Realtime: follow the active thread's messages. Re-runs whenever
+  // `activeThreadId` changes, so switching threads tears down the
+  // previous channel and opens a new one. Drafts are skipped because
+  // they don't exist in Supabase yet — there's nothing to sync until
+  // the draft materializes, at which point activeThreadId flips to
+  // the real id and the effect re-subscribes.
+  $effect(() => {
+    if (!app.supabase || !activeThreadId) return;
+    const active = threads.find((t) => t.id === activeThreadId);
+    if (active?.isDraft) return;
+    const threadId = activeThreadId;
+    return app.supabase.subscribeToMessages(threadId, (msg) => {
+      // Ignore echoes for threads we've since left — the effect's
+      // teardown will run, but a message queued in-flight may still
+      // reach this closure before removeChannel completes.
+      if (activeThreadId !== threadId) return;
+      appendMessage(msg);
+    });
+  });
+
+  // Realtime: follow the current user's thread list. Covers the
+  // sidebar across devices — creates, renames, model/tools toggles,
+  // auto-titles, deletes, and `updated_at` bumps on each send all
+  // propagate without the user refreshing. RLS enforces the
+  // user_id scoping; the filter here just narrows wire traffic.
+  $effect(() => {
+    if (!app.supabase || !session) return;
+    const userId = session.user.id;
+    return app.supabase.subscribeToThreads(userId, {
+      onInsert: (t) => {
+        // The device that created the thread already has it locally
+        // (createThread / newThread pushed it); skip the echo.
+        if (threads.some((x) => x.id === t.id)) return;
+        threads = sortThreads([...threads, t]);
+      },
+      onUpdate: (t) => {
+        // Merge rather than replace so locally-added fields (`isDraft`
+        // is the only one today) aren't stomped by the server row.
+        // Realtime will never send `isDraft` anyway — it's in-memory.
+        threads = sortThreads(
+          threads.map((x) => (x.id === t.id ? { ...x, ...t } : x))
+        );
+      },
+      onDelete: (id) => {
+        threads = threads.filter((x) => x.id !== id);
+        // Another device just deleted the thread we're looking at —
+        // close it rather than keep rendering messages that no
+        // longer have a home.
+        if (activeThreadId === id) {
+          activeThreadId = null;
+          messages = [];
+          setSessionThreadId(null);
+        }
+      },
+    });
+  });
+
   // Inline title rename state.
   let renaming = $state(false);
   let renameBuffer = $state('');
@@ -465,7 +545,7 @@
     followBottom = true;
     try {
       const userMsg = await app.supabase.addMessage(threadId, 'user', text);
-      messages = [...messages, userMsg];
+      appendMessage(userMsg);
       streamingText = '';
       abortCtl = new AbortController();
 
@@ -530,11 +610,11 @@
               // replay the text into streamingText after this.
               cancelPending();
               pending = null;
-              messages = [...messages, msg];
+              appendMessage(msg);
               streamingText = '';
             },
             onToolResultPersisted: (msg) => {
-              messages = [...messages, msg];
+              appendMessage(msg);
             },
             onToolStart: (call) => {
               // performance.now() rather than Date.now() so the

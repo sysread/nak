@@ -443,4 +443,112 @@ export class SupabaseService {
       .eq('id', threadId);
     return data as Message;
   }
+
+  /**
+   * Realtime: stream INSERTs for a single thread's messages. Keeps a
+   * thread open on two devices in sync — when device A's chat-loop
+   * commits a user / assistant / tool row, device B sees it land in
+   * the transcript without a refresh. Filtering happens server-side
+   * (`filter: thread_id=eq.<id>`), layered on top of RLS so a
+   * compromised client can't just listen to other users' threads.
+   *
+   * The caller is responsible for deduping — the inserting device
+   * also receives an echo of its own write, and a race can push the
+   * echo ahead of the promise resolution for `addMessage`. Dedupe by
+   * `Message.id` at the append site handles both orderings.
+   */
+  subscribeToMessages(
+    threadId: string,
+    onInsert: (msg: Message) => void
+  ): () => void {
+    const channel = this.client
+      .channel(`messages:${threadId}`)
+      .on(
+        // `postgres_changes` is the realtime-js event shape for
+        // replication-stream rows. Typed loose here — the supabase-js
+        // generic is over a whole DB schema and we don't have one.
+        'postgres_changes' as never,
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `thread_id=eq.${threadId}`,
+        },
+        (payload: { new: Message }) => {
+          onInsert(payload.new);
+        }
+      )
+      .subscribe();
+    return () => {
+      // removeChannel returns a promise but we don't care to await —
+      // the caller is teardown path, and stray events after this
+      // would be no-ops (the channel is detached). Fire-and-forget
+      // matches the onAuthChange unsubscribe contract above.
+      void this.client.removeChannel(channel);
+    };
+  }
+
+  /**
+   * Realtime: stream INSERT / UPDATE / DELETE on the current user's
+   * threads. Keeps the sidebar in sync across devices — a rename on
+   * phone reflects on desktop, a newly-created thread appears in the
+   * list, and the `updated_at` bump that each message triggers
+   * reorders the list newest-first without polling. RLS enforces the
+   * user_id scoping; the filter here just narrows the wire traffic.
+   *
+   * DELETE payloads only carry the primary key (the default
+   * `replica identity` — we don't need old-column values), so the
+   * handler receives just the id.
+   */
+  subscribeToThreads(
+    userId: string,
+    handlers: {
+      onInsert?: (thread: Thread) => void;
+      onUpdate?: (thread: Thread) => void;
+      onDelete?: (id: string) => void;
+    }
+  ): () => void {
+    const channel = this.client
+      .channel(`threads:${userId}`)
+      .on(
+        'postgres_changes' as never,
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'threads',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload: { new: Thread }) => {
+          handlers.onInsert?.(payload.new);
+        }
+      )
+      .on(
+        'postgres_changes' as never,
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'threads',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload: { new: Thread }) => {
+          handlers.onUpdate?.(payload.new);
+        }
+      )
+      .on(
+        'postgres_changes' as never,
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'threads',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload: { old: { id: string } }) => {
+          handlers.onDelete?.(payload.old.id);
+        }
+      )
+      .subscribe();
+    return () => {
+      void this.client.removeChannel(channel);
+    };
+  }
 }
