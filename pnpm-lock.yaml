@@ -60,6 +60,9 @@ importers:
       jsdom:
         specifier: ^25.0.0
         version: 25.0.1
+      postcss:
+        specifier: ^8.5.10
+        version: 8.5.10
       svelte:
         specifier: ^5.0.0
         version: 5.55.4(@typescript-eslint/types@8.58.2)

@@ -115,5 +115,8 @@ pnpm test    # Vitest unit tests
 pnpm test:e2e  # Playwright E2E (slow; CI runs this)
 ```
 
-Always run at least `check` and `test` before committing. If a CSS-only
-change, `check` is sufficient.
+Always run `check` and `test` before committing — including for
+CSS-only changes. The test suite includes a postcss parse of every
+stylesheet under `src/` (see `tests/styles.test.ts`), which is the
+only local gate that catches a malformed rule before `pnpm build` /
+the Pages deploy rejects it.
