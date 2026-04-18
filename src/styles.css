@@ -1209,13 +1209,19 @@ h1 {
      effect still runs on every keystroke, and inline heights below
      the floor are clamped by `min-height`. `line-height: 1.4` gives
      the text a touch more vertical breathing room than the browser
-     default (~1.15–1.2) without drifting into body-copy loose. */
+     default (~1.15–1.2) without drifting into body-copy loose.
+     Internal padding is generous (especially on the bottom) so a
+     slightly-off tap on mobile still lands inside the textarea
+     rather than the button bar a few CSS pixels below — a fingertip
+     is ~40–50px across, and the previous 0.15rem floor gave almost
+     no forgiveness. min-height grows to compensate, keeping the
+     ~3-line empty-state intent at the new padding. */
   width: 100%;
-  min-height: 4.4rem;
+  min-height: 5rem;
   max-height: 40vh;
   border: 0;
   background: transparent;
-  padding: 0.35rem 0.4rem 0.15rem;
+  padding: 0.5rem 0.5rem;
   resize: none;
   font-family: inherit;
   font-size: 0.95rem;
