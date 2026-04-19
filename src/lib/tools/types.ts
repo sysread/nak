@@ -20,9 +20,17 @@
  * that cascades from the outer send() cancellation.
  */
 import type { SupabaseService } from '../supabase';
+import type { VeniceClient } from '../venice';
 
 export interface ToolContext {
   supabase: SupabaseService;
+  /**
+   * Same VeniceClient the chat loop is using — tools that need to call
+   * Venice directly (e.g. memory_search embeds the query before running
+   * the similarity RPC) reach for this one rather than constructing a
+   * second client with a duplicated API key in memory.
+   */
+  venice: VeniceClient;
   userId: string;
   threadId: string;
   signal: AbortSignal;

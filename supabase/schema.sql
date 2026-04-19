@@ -250,10 +250,35 @@ alter table public.threads
 -- and search. `data` is plain text by design — we want the LLM to be able
 -- to read and write it directly without a schema it has to learn.
 --
--- The `embedding` column is here early so we don't need a schema migration
--- later: 1024 dims matches the embedding model we plan to use. Stays null
--- until the embed-on-write path lands. Until then, search runs on pg's
--- ILIKE over label||data — fine for the small-N memory count we expect.
+-- The `embedding` column is sized at 2048 dims for forward compatibility.
+-- Venice's current embeddings model (text-embedding-bge-m3) emits 1024
+-- dims; the worker zero-pads to 2048 before storing. Cosine similarity is
+-- invariant to the extra zeros (the padded suffix contributes nothing to
+-- the dot product and scales both vectors' norms identically), so we can
+-- eventually switch to a native-2048 model without a column-type
+-- migration. See src/lib/models.ts for the padding helper.
+--
+-- No HNSW index: pgvector caps HNSW at 2000 dims for the `vector` type
+-- (halfvec goes to 4000 but trades precision). Sequential scan is plenty
+-- at memories-scale — a few ms at 10k rows per user. If we ever outgrow
+-- seq scan, the escape hatch is to switch `embedding` to halfvec(2048)
+-- and add the HNSW index then.
+--
+-- A background Web Worker (src/lib/embeddings/*) populates the column on
+-- a poll of `where embedding is null`; rows stay pending until the worker
+-- catches up, and `memory_search` falls back to ILIKE for those
+-- unembedded rows so a just-written memory is never invisible.
+--
+-- `embedding_model` records which Venice model produced the vector. A
+-- future model rotation reselects stale rows with
+-- `where embedding_model <> $current` without a schema change.
+--
+-- `embedding_claim_holder` / `embedding_claim_expires` implement the
+-- per-row lease for cross-device coordination. See the lease table below
+-- for the full picture — the short version: when a worker on device A is
+-- embedding a row, the claim columns are stamped so device B (if it ever
+-- holds the lease) skips the row until the claim expires, preventing
+-- duplicate Venice billing across devices.
 
 create extension if not exists vector;
 
@@ -262,13 +287,73 @@ create table if not exists public.memories (
   user_id uuid not null references auth.users(id) on delete cascade,
   label text not null,
   data text not null,
-  embedding vector(1024),
+  embedding vector(2048),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
+-- Columns added after the initial table ship. `add column if not exists`
+-- keeps every alter statement idempotent across re-runs of the script.
+alter table public.memories
+  add column if not exists embedding_model text,
+  add column if not exists embedding_claim_holder text,
+  add column if not exists embedding_claim_expires timestamptz;
+
+-- Upgrade path for projects that shipped with vector(1024) before the
+-- pad-to-2048 decision. Guarded so fresh projects (already created at
+-- vector(2048) above) skip the block entirely. We null the embedding
+-- column first because ALTER TYPE on a vector column with mismatched-dim
+-- rows would error. The null is safe — any previously-populated vector
+-- gets re-embedded by the worker on the next poll, and
+-- `embedding_model` is nulled alongside so memory_search knows it's
+-- pending. No HNSW index to drop on old projects since we never shipped
+-- one against 1024-dim either.
+do $$
+declare
+  current_type text;
+begin
+  select format_type(atttypid, atttypmod) into current_type
+    from pg_attribute
+   where attrelid = 'public.memories'::regclass
+     and attname = 'embedding'
+     and not attisdropped;
+  if current_type = 'vector(1024)' then
+    drop index if exists memories_embedding_hnsw;
+    update public.memories set embedding = null, embedding_model = null;
+    alter table public.memories alter column embedding type vector(2048);
+  end if;
+end $$;
+
+-- A prior revision of this file shipped an HNSW index. Drop it
+-- unconditionally — see the "No HNSW index" comment at the top of this
+-- section for rationale.
+drop index if exists memories_embedding_hnsw;
+
 create index if not exists memories_user_updated_idx
   on public.memories (user_id, updated_at desc);
+
+-- Invalidate the embedding whenever the text that produced it changes.
+-- Pending = `embedding is null`, so once the trigger fires the worker
+-- will re-embed on its next poll. We null the claim columns too — an
+-- in-flight worker save would otherwise land a now-stale embedding,
+-- since its guard checks `claim_holder = $me and claim_expires > now()`
+-- and both of those would still match without this clear.
+create or replace function public.clear_memory_embedding_on_change()
+  returns trigger language plpgsql as $$
+begin
+  if new.label is distinct from old.label or new.data is distinct from old.data then
+    new.embedding := null;
+    new.embedding_model := null;
+    new.embedding_claim_holder := null;
+    new.embedding_claim_expires := null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clear_memory_embedding_on_change on public.memories;
+create trigger clear_memory_embedding_on_change
+  before update on public.memories
+  for each row execute function public.clear_memory_embedding_on_change();
 
 alter table public.memories enable row level security;
 
@@ -287,6 +372,211 @@ create policy "memories are self-updatable" on public.memories
 drop policy if exists "memories are self-deletable" on public.memories;
 create policy "memories are self-deletable" on public.memories
   for delete using (auth.uid() = user_id);
+
+-- embedding_worker_leases ------------------------------------------------
+--
+-- Singleton per user: at most one embedding worker runs at a time across
+-- all the user's open tabs and devices. The lease is the top rail for
+-- "one device at a time"; the per-row claim (columns above) is the
+-- bottom rail that handles the lease-handover race (an in-flight embed
+-- finishing milliseconds after the next device takes the lease).
+--
+-- Workers hold the lease by writing `(holder_id, expires_at)` and
+-- heartbeating it forward every ~20s. When `expires_at < now()` the
+-- lease is claimable by anyone. A polling device runs acquire every
+-- ~20s; it's one cheap SELECT plus an optional UPDATE.
+--
+-- Why `user_id primary key` and not a surrogate: we want the "at most
+-- one per user" constraint structurally enforced, and `on conflict
+-- (user_id)` is the primitive the acquire RPC relies on.
+
+create table if not exists public.embedding_worker_leases (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  holder_id text not null,
+  expires_at timestamptz not null
+);
+
+alter table public.embedding_worker_leases enable row level security;
+
+drop policy if exists "embedding leases are self-selectable"
+  on public.embedding_worker_leases;
+create policy "embedding leases are self-selectable"
+  on public.embedding_worker_leases
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "embedding leases are self-insertable"
+  on public.embedding_worker_leases;
+create policy "embedding leases are self-insertable"
+  on public.embedding_worker_leases
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "embedding leases are self-updatable"
+  on public.embedding_worker_leases;
+create policy "embedding leases are self-updatable"
+  on public.embedding_worker_leases
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "embedding leases are self-deletable"
+  on public.embedding_worker_leases;
+create policy "embedding leases are self-deletable"
+  on public.embedding_worker_leases
+  for delete using (auth.uid() = user_id);
+
+-- Embedding pipeline RPCs ------------------------------------------------
+--
+-- `security invoker` throughout — RLS still applies, but the explicit
+-- `user_id = auth.uid()` guards inside each function's body keep intent
+-- obvious at the call site and protect us if the policies ever change
+-- shape. Every function is drop-then-create because some signatures
+-- change the return type, which `create or replace` can't do in place.
+
+-- Try to take the singleton lease. Returns true iff we hold it after the
+-- call. Atomic via `on conflict do update where ...`: the update only
+-- fires when the existing lease is either ours (same holder_id, harmless
+-- refresh) or expired.
+drop function if exists public.acquire_embedding_lease(text, int);
+create or replace function public.acquire_embedding_lease(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns boolean
+language plpgsql security invoker as $$
+begin
+  insert into public.embedding_worker_leases (user_id, holder_id, expires_at)
+    values (auth.uid(), p_holder_id, now() + make_interval(secs => p_ttl_seconds))
+    on conflict (user_id) do update
+      set holder_id = excluded.holder_id,
+          expires_at = excluded.expires_at
+      where public.embedding_worker_leases.expires_at < now()
+         or public.embedding_worker_leases.holder_id = excluded.holder_id;
+  return exists (
+    select 1 from public.embedding_worker_leases
+     where user_id = auth.uid()
+       and holder_id = p_holder_id
+       and expires_at > now()
+  );
+end $$;
+
+-- Extend our lease if we still own it. Returns true iff the update
+-- landed — false means our lease lapsed and someone else took over, in
+-- which case the worker should stop immediately rather than keep
+-- processing rows it no longer has the right to.
+drop function if exists public.heartbeat_embedding_lease(text, int);
+create or replace function public.heartbeat_embedding_lease(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.embedding_worker_leases
+     set expires_at = now() + make_interval(secs => p_ttl_seconds)
+   where user_id = auth.uid()
+     and holder_id = p_holder_id
+     and expires_at > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Explicit release — used by the worker on graceful shutdown so another
+-- device can pick up instantly rather than waiting for the TTL. Always
+-- returns void: nothing to do if our lease is already gone.
+drop function if exists public.release_embedding_lease(text);
+create or replace function public.release_embedding_lease(
+  p_holder_id text
+) returns void
+language plpgsql security invoker as $$
+begin
+  delete from public.embedding_worker_leases
+   where user_id = auth.uid()
+     and holder_id = p_holder_id;
+end $$;
+
+-- Claim the next pending memory atomically. The CTE picks one unclaimed
+-- or expired-claim row using `for update skip locked`, which is the
+-- Postgres queue pattern — concurrent claimers (shouldn't happen under
+-- the lease invariant, but defensive) walk past a row another claimer
+-- has locked instead of contending. The outer UPDATE stamps the claim
+-- and returns the row contents so the worker can embed without a second
+-- round trip.
+drop function if exists public.claim_next_pending_memory(text, int);
+create or replace function public.claim_next_pending_memory(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, label text, data text)
+language sql security invoker as $$
+  with candidate as (
+    select m.id
+      from public.memories m
+     where m.user_id = auth.uid()
+       and m.embedding is null
+       and (m.embedding_claim_expires is null
+            or m.embedding_claim_expires < now())
+     order by m.updated_at desc
+     limit 1
+     for update skip locked
+  )
+  update public.memories m
+     set embedding_claim_holder = p_holder_id,
+         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where m.id = c.id
+  returning m.id, m.label, m.data;
+$$;
+
+-- Save the embedding IF our claim is still valid. Returns true on
+-- success, false when we lost the row — either the user edited it
+-- (trigger nulled our claim), the TTL expired and another worker
+-- re-claimed, or the row was deleted. The worker treats false as "skip
+-- and move on"; it's not an error.
+drop function if exists public.save_memory_embedding_if_claimed(uuid, text, vector, text);
+create or replace function public.save_memory_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.memories
+     set embedding = p_embedding,
+         embedding_model = p_embedding_model,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where id = p_id
+     and user_id = auth.uid()
+     and embedding_claim_holder = p_holder_id
+     and embedding_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Similarity search RPC. `security invoker` means the function runs as
+-- the caller — RLS still applies — but the explicit `user_id = auth.uid()`
+-- guard keeps behavior obvious here and protects us if the select policy
+-- ever changes shape. Returns the full row (minus embedding) so the
+-- client doesn't re-fetch 2048 floats per hit just to drop them.
+drop function if exists public.search_memories_by_embedding(vector, int);
+create or replace function public.search_memories_by_embedding(
+  query_embedding vector(2048),
+  match_limit int
+) returns table (
+  id uuid,
+  label text,
+  data text,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language sql stable security invoker as $$
+  select id, label, data, created_at, updated_at
+    from public.memories
+   where user_id = auth.uid()
+     and embedding is not null
+   order by embedding <=> query_embedding
+   limit match_limit
+$$;
 
 -- Realtime subscriptions --------------------------------------------------
 --

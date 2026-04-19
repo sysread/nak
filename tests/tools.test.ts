@@ -19,6 +19,7 @@ import {
   type ToolContext,
 } from '../src/lib/tools';
 import type { SupabaseService } from '../src/lib/supabase';
+import type { VeniceClient } from '../src/lib/venice';
 
 /**
  * Build a SupabaseService mock with just the methods the tool handlers
@@ -29,6 +30,8 @@ function mockSupabase(): {
   spies: {
     setThreadToolsEnabled: ReturnType<typeof vi.fn>;
     searchMemories: ReturnType<typeof vi.fn>;
+    searchMemoriesByEmbedding: ReturnType<typeof vi.fn>;
+    searchUnembeddedMemoriesByText: ReturnType<typeof vi.fn>;
     createMemory: ReturnType<typeof vi.fn>;
     updateMemory: ReturnType<typeof vi.fn>;
     deleteMemory: ReturnType<typeof vi.fn>;
@@ -39,6 +42,10 @@ function mockSupabase(): {
     searchMemories: vi.fn(async () => [
       { id: 'm1', label: 'foo', data: 'bar', created_at: 't', updated_at: 't' },
     ]),
+    searchMemoriesByEmbedding: vi.fn(async () => [
+      { id: 'm1', label: 'foo', data: 'bar', created_at: 't', updated_at: 't' },
+    ]),
+    searchUnembeddedMemoriesByText: vi.fn(async () => []),
     createMemory: vi.fn(async (label: string, data: string) => ({
       id: 'new-id',
       label,
@@ -60,9 +67,23 @@ function mockSupabase(): {
   return { svc, spies };
 }
 
-function ctxFor(svc: SupabaseService): ToolContext {
+/**
+ * Stand-in VeniceClient for the tool tests. Only `memory_search` calls into
+ * Venice (to embed the query), so we only stub `.embed()`. The embedding
+ * shape matches the real response so the tool's index-0 unwrap works.
+ */
+function mockVenice(): VeniceClient {
+  return {
+    embed: vi.fn(async () => ({
+      data: [{ index: 0, embedding: new Array(1024).fill(0) }],
+    })),
+  } as unknown as VeniceClient;
+}
+
+function ctxFor(svc: SupabaseService, venice: VeniceClient = mockVenice()): ToolContext {
   return {
     supabase: svc,
+    venice,
     userId: 'u-1',
     threadId: 't-1',
     signal: new AbortController().signal,
@@ -165,16 +186,40 @@ describe('toggle_tools', () => {
 describe('memory_search', () => {
   const tool = TOOLS.find((t) => t.name === 'memory_search')!;
 
-  it('passes trimmed query and default limit', async () => {
+  it('embeds the trimmed query and runs vector + ILIKE-fallback in parallel', async () => {
     const { svc, spies } = mockSupabase();
-    await tool.execute({ query: '  foo  ' }, ctxFor(svc));
-    expect(spies.searchMemories).toHaveBeenCalledWith('foo', 20);
+    const venice = mockVenice();
+    await tool.execute({ query: '  foo  ' }, ctxFor(svc, venice));
+    expect(venice.embed).toHaveBeenCalledWith(
+      expect.objectContaining({ input: 'foo' })
+    );
+    // Vector path runs against the embedded rows; the ILIKE probe
+    // covers just-written rows the worker hasn't embedded yet.
+    expect(spies.searchMemoriesByEmbedding).toHaveBeenCalledOnce();
+    expect(spies.searchUnembeddedMemoriesByText).toHaveBeenCalledWith('foo', 20);
+    // The legacy ILIKE-everything path is only used for list-all (empty
+    // query) now.
+    expect(spies.searchMemories).not.toHaveBeenCalled();
   });
 
-  it('empty query lists everything', async () => {
+  it('pads the Venice query embedding to the storage dim before the similarity RPC', async () => {
+    const { svc, spies } = mockSupabase();
+    const venice = mockVenice();
+    await tool.execute({ query: 'anything' }, ctxFor(svc, venice));
+    // Venice's mock returns 1024 floats; the tool must pad to 2048 or
+    // the RPC errors at pgvector's dimension check.
+    const [embedding, limit] = spies.searchMemoriesByEmbedding.mock.calls[0];
+    expect(embedding).toHaveLength(2048);
+    // Prefix preserved, suffix zero-padded.
+    expect(embedding.slice(1024).every((v: number) => v === 0)).toBe(true);
+    expect(limit).toBe(20);
+  });
+
+  it('empty query lists everything via the legacy path', async () => {
     const { svc, spies } = mockSupabase();
     await tool.execute({}, ctxFor(svc));
     expect(spies.searchMemories).toHaveBeenCalledWith('', 20);
+    expect(spies.searchMemoriesByEmbedding).not.toHaveBeenCalled();
   });
 
   it('clamps limit to the max', async () => {
@@ -187,6 +232,34 @@ describe('memory_search', () => {
     const { svc, spies } = mockSupabase();
     await tool.execute({ limit: 0 }, ctxFor(svc));
     expect(spies.searchMemories).toHaveBeenCalledWith('', 1);
+  });
+
+  it('merges vector hits ahead of ILIKE fallback hits without duplicates', async () => {
+    const { svc, spies } = mockSupabase();
+    spies.searchMemoriesByEmbedding.mockResolvedValueOnce([
+      { id: 'm1', label: 'a', data: 'a', created_at: 't', updated_at: 't' },
+      { id: 'm2', label: 'b', data: 'b', created_at: 't', updated_at: 't' },
+    ]);
+    spies.searchUnembeddedMemoriesByText.mockResolvedValueOnce([
+      // Overlap with a vector hit — should be deduped.
+      { id: 'm2', label: 'b', data: 'b', created_at: 't', updated_at: 't' },
+      // New row the worker hasn't caught up to yet.
+      { id: 'm3', label: 'c', data: 'c', created_at: 't', updated_at: 't' },
+    ]);
+    const result = (await tool.execute({ query: 'q' }, ctxFor(svc))) as {
+      id: string;
+    }[];
+    expect(result.map((r) => r.id)).toEqual(['m1', 'm2', 'm3']);
+  });
+
+  it('falls back to ILIKE when Venice returns no embedding', async () => {
+    const { svc, spies } = mockSupabase();
+    const venice = {
+      embed: vi.fn(async () => ({ data: [] })),
+    } as unknown as VeniceClient;
+    await tool.execute({ query: 'foo' }, ctxFor(svc, venice));
+    expect(spies.searchMemories).toHaveBeenCalledWith('foo', 20);
+    expect(spies.searchMemoriesByEmbedding).not.toHaveBeenCalled();
   });
 });
 

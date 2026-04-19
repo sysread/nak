@@ -111,6 +111,69 @@ export const DEFAULT_TIER: ModelTier = 'balanced';
 /** Tier used for one-shot utility calls (auto-titling, etc.). */
 export const UTILITY_TIER: ModelTier = 'fast';
 
+/**
+ * Venice's embeddings model. Single constant rather than a tier because
+ * Venice only ships one embeddings model today. If Venice ever introduces
+ * a second model, this string becomes the current default and the
+ * `embedding_model` column on each row lets us locate rows stamped with
+ * the older id (`where embedding_model <> VENICE_EMBEDDING_MODEL`) for
+ * re-embedding.
+ */
+export const VENICE_EMBEDDING_MODEL = 'text-embedding-bge-m3';
+
+/**
+ * Native output dimension of VENICE_EMBEDDING_MODEL — the length of each
+ * `embedding` array returned by `/embeddings`. bge-m3 emits 1024.
+ */
+export const VENICE_EMBEDDING_DIMS = 1024;
+
+/**
+ * Column dimension of `memories.embedding` in `supabase/schema.sql`. We
+ * store wider than the current model emits so a future model rotation
+ * (say Venice adding a 2048-dim model) doesn't force an `ALTER TYPE
+ * vector(N)` on the column — ALTER TYPE on a pgvector column requires
+ * every row either null or already the new dimension, which is a
+ * painful migration step we'd rather skip.
+ *
+ * The gap is filled by zero-extension (see `padEmbeddingForStorage`).
+ * Cosine similarity is invariant under zero-extension: dot(u_padded,
+ * v_padded) = dot(u, v) and |u_padded| = |u|, so cos-sim over padded
+ * vectors equals cos-sim over the native prefix. Euclidean distance is
+ * similarly preserved.
+ *
+ * 2048 was picked as a compromise between forward room and seq-scan
+ * latency — doubling cos-sim compute per row to cover a future model we
+ * don't have yet. At memories-scale (hundreds of rows per user) the
+ * extra cost is unobservable. If we ever need HNSW we'd switch to
+ * `halfvec(2048)`, which pgvector indexes up to 4000 dims.
+ */
+export const EMBEDDING_STORAGE_DIMS = 2048;
+
+/**
+ * Zero-extend a Venice embedding to the storage dimension. Pure function,
+ * safe to call on any length up to EMBEDDING_STORAGE_DIMS. A longer input
+ * is a bug — either VENICE_EMBEDDING_DIMS is stale or the caller handed
+ * us someone else's vector — so we throw rather than silently truncate,
+ * which would look like a correctness bug dressed up as a performance
+ * regression when searches started returning the wrong rows.
+ */
+export function padEmbeddingForStorage(embedding: readonly number[]): number[] {
+  if (embedding.length > EMBEDDING_STORAGE_DIMS) {
+    throw new Error(
+      `embedding length ${embedding.length} exceeds storage dim ${EMBEDDING_STORAGE_DIMS}`
+    );
+  }
+  if (embedding.length === EMBEDDING_STORAGE_DIMS) {
+    // Fast path: already the right shape. Return a copy so callers can't
+    // mutate the caller's buffer.
+    return embedding.slice();
+  }
+  const padded = new Array<number>(EMBEDDING_STORAGE_DIMS);
+  for (let i = 0; i < embedding.length; i++) padded[i] = embedding[i];
+  for (let i = embedding.length; i < EMBEDDING_STORAGE_DIMS; i++) padded[i] = 0;
+  return padded;
+}
+
 export function isModelTier(v: unknown): v is ModelTier {
   return v === 'smart' || v === 'balanced' || v === 'fast';
 }

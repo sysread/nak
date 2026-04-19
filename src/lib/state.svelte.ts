@@ -24,6 +24,7 @@ import type { AppConfig } from './config';
 import { SupabaseService, type SystemPrompt } from './supabase';
 import { VeniceClient } from './venice';
 import { saveSession, clearSession } from './session';
+import { embeddingManager } from './embeddings/manager';
 import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_TIER,
@@ -144,9 +145,18 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.phase = 'unlocked';
   app.error = null;
   if (opts.persist !== false) saveSession(config);
+  // Fire-and-forget: the manager acquires a cross-tab lock before
+  // spawning its worker, so another tab holding the lock will make this
+  // call hang — never await it. If there's no Supabase session yet the
+  // worker exits cleanly and state.svelte.ts doesn't need to retry; the
+  // next unlock / sign-in will call activate() again.
+  void embeddingManager.start({ supabase: app.supabase, config });
 }
 
 export function lock(): void {
+  // Tear the worker down before clearing services — the manager releases
+  // its Web Lock here so a queued tab can take over as soon as we're gone.
+  embeddingManager.stop();
   app.config = null;
   app.supabase = null;
   app.venice = null;

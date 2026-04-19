@@ -226,14 +226,27 @@ export function coerceSettings(raw: unknown): UserSettings {
 export class SupabaseService {
   readonly client: SupabaseClient;
 
-  constructor(config: Pick<AppConfig, 'supabaseUrl' | 'supabaseAnonKey'>) {
-    this.client = createClient(config.supabaseUrl, config.supabaseAnonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: false,
-      },
-    });
+  /**
+   * `opts.client` is the dependency-injection hatch used by the
+   * embeddings Web Worker (src/lib/embeddings/worker.ts). The worker
+   * builds its own `SupabaseClient` with `persistSession: false` + a
+   * manually-pinned session, because workers have no localStorage and
+   * shouldn't fight the main-thread client for the session store. The
+   * default path (no `opts`) preserves the original main-thread behavior.
+   */
+  constructor(
+    config: Pick<AppConfig, 'supabaseUrl' | 'supabaseAnonKey'>,
+    opts: { client?: SupabaseClient } = {}
+  ) {
+    this.client =
+      opts.client ??
+      createClient(config.supabaseUrl, config.supabaseAnonKey, {
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          detectSessionInUrl: false,
+        },
+      });
   }
 
   async getSession(): Promise<Session | null> {
@@ -487,6 +500,162 @@ export class SupabaseService {
   async deleteMemory(id: string): Promise<void> {
     const { error } = await this.client.from('memories').delete().eq('id', id);
     if (error) throw new SupabaseError(error.message);
+  }
+
+  // Embeddings pipeline ---------------------------------------------------
+  //
+  // Every method in this block exists for the background worker in
+  // `src/lib/embeddings/*`. RLS scopes every query to the current user
+  // automatically — the worker receives a session-scoped SupabaseService
+  // and never needs to know the user id.
+  //
+  // Cross-device coordination has two layers:
+  //
+  //   1. A singleton lease per user (`embedding_worker_leases`) enforces
+  //      that at most one worker runs at a time across all the user's
+  //      tabs and devices. acquireEmbeddingLease / heartbeatEmbeddingLease
+  //      / releaseEmbeddingLease drive it. Duplicate Venice charges would
+  //      otherwise be the default for anyone with a laptop + phone both
+  //      unlocked.
+  //
+  //   2. A per-row claim (`embedding_claim_holder` + `embedding_claim_expires`
+  //      columns on `memories`) covers the lease-handover race: a row the
+  //      previous lease holder was mid-embedding shouldn't be instantly
+  //      grabbed by the new holder. The claim keeps it reserved until the
+  //      TTL expires (long enough for the old device's Venice call to
+  //      definitely have returned or timed out).
+  //
+  // Everything flows through SECURITY INVOKER RPCs in the schema so the
+  // atomic bits (on-conflict upsert, FOR UPDATE SKIP LOCKED, save-if-
+  // claim-still-ours) run in a single round trip each.
+
+  /**
+   * Try to take the embedding-worker lease. Returns true iff we hold it
+   * after the call. Safe to call at any interval — the RPC is idempotent
+   * (harmless if we already hold it, harmless if someone else does and
+   * theirs hasn't expired).
+   */
+  async acquireEmbeddingLease(holderId: string, ttlSeconds: number): Promise<boolean> {
+    const { data, error } = await this.client.rpc('acquire_embedding_lease', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Extend our lease. Returns false if the lease has already been taken
+   * over by someone else — in that case the worker must stop processing
+   * rows immediately; continuing would risk a double-embed race with the
+   * new holder.
+   */
+  async heartbeatEmbeddingLease(holderId: string, ttlSeconds: number): Promise<boolean> {
+    const { data, error } = await this.client.rpc('heartbeat_embedding_lease', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Release our lease explicitly on graceful shutdown (stop message, app
+   * lock, sign-out). Idempotent — no-op when we don't actually hold it.
+   * Lets another device take over instantly instead of waiting for the
+   * TTL to elapse.
+   */
+  async releaseEmbeddingLease(holderId: string): Promise<void> {
+    const { error } = await this.client.rpc('release_embedding_lease', {
+      p_holder_id: holderId,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Atomically claim the next memory awaiting an embedding and stamp
+   * our holder + claim-expiry onto it. Returns null when the queue is
+   * empty (or every pending row is already claimed by a still-unexpired
+   * holder — which shouldn't happen under the lease invariant, but the
+   * query handles it correctly regardless).
+   */
+  async claimNextPendingMemory(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{ id: string; label: string; data: string } | null> {
+    const { data, error } = await this.client.rpc('claim_next_pending_memory', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as { id: string; label: string; data: string }[];
+    return rows.length > 0 ? rows[0] : null;
+  }
+
+  /**
+   * Save an embedding IF our claim is still valid — the SQL function
+   * guards on `embedding_claim_holder = $me AND embedding_claim_expires
+   * > now()`. Returns false when the row was edited (trigger nulled our
+   * claim), the claim expired and was retaken, or the row was deleted.
+   * Callers treat a false as "skip, loop to next row"; it is not an
+   * error condition.
+   */
+  async saveMemoryEmbedding(
+    id: string,
+    holderId: string,
+    embedding: number[],
+    model: string
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('save_memory_embedding_if_claimed', {
+      p_id: id,
+      p_holder_id: holderId,
+      p_embedding: embedding,
+      p_embedding_model: model,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Cosine-similarity search via the `search_memories_by_embedding` RPC.
+   * The RPC enforces `user_id = auth.uid()` in addition to RLS and hides
+   * the `embedding` column from the response — 2048 floats per row is a
+   * lot to ship back just to throw away.
+   */
+  async searchMemoriesByEmbedding(
+    queryEmbedding: number[],
+    limit: number
+  ): Promise<Memory[]> {
+    const { data, error } = await this.client.rpc('search_memories_by_embedding', {
+      query_embedding: queryEmbedding,
+      match_limit: limit,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as Memory[];
+  }
+
+  /**
+   * ILIKE fallback, scoped to rows the worker hasn't embedded yet. Used
+   * by `memory_search` to fill in results for just-created memories —
+   * without this, a memory the user wrote seconds ago would be invisible
+   * until the worker catches up.
+   */
+  async searchUnembeddedMemoriesByText(
+    query: string,
+    limit: number
+  ): Promise<Memory[]> {
+    if (!query || query.length === 0) return [];
+    const safe = query.replace(/([,()])/g, '\\$1');
+    const pattern = `%${safe}%`;
+    const { data, error } = await this.client
+      .from('memories')
+      .select('id, label, data, created_at, updated_at')
+      .is('embedding', null)
+      .or(`label.ilike.${pattern},data.ilike.${pattern}`)
+      .order('updated_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as Memory[];
   }
 
   async listMessages(threadId: string): Promise<Message[]> {

@@ -49,6 +49,8 @@ interface MockSupabase {
   addMessage: ReturnType<typeof vi.fn>;
   setThreadToolsEnabled: ReturnType<typeof vi.fn>;
   searchMemories: ReturnType<typeof vi.fn>;
+  searchMemoriesByEmbedding: ReturnType<typeof vi.fn>;
+  searchUnembeddedMemoriesByText: ReturnType<typeof vi.fn>;
   createMemory: ReturnType<typeof vi.fn>;
   updateMemory: ReturnType<typeof vi.fn>;
   deleteMemory: ReturnType<typeof vi.fn>;
@@ -80,6 +82,8 @@ function mockSupabase(overrides: Partial<MockSupabase> = {}): {
     }),
     setThreadToolsEnabled: vi.fn(async () => undefined),
     searchMemories: vi.fn(async () => []),
+    searchMemoriesByEmbedding: vi.fn(async () => []),
+    searchUnembeddedMemoriesByText: vi.fn(async () => []),
     createMemory: vi.fn(async (label: string, data: string) => ({
       id: 'mem-1',
       label,
@@ -118,6 +122,13 @@ function mockVenice(roundEvents: StreamEvent[][]): VeniceClient {
         yield ev;
       }
     },
+    // memory_search embeds its query before running the similarity RPC;
+    // any test that drives a non-empty search through the loop hits this.
+    // A fixed-length zero vector keeps the shape honest without caring
+    // about the contents.
+    embed: vi.fn(async () => ({
+      data: [{ index: 0, embedding: new Array(1024).fill(0) }],
+    })),
   } as unknown as VeniceClient;
 }
 
@@ -242,7 +253,9 @@ describe('runChatLoop', () => {
       [{ type: 'text', delta: 'You have a cat named Whiskers.' }],
     ]);
     const { svc, mocks, messagesOut } = mockSupabase({
-      searchMemories: vi.fn(async () => [
+      // memory_search with a non-empty query now runs vector search;
+      // route the hit through the embedding-backed path.
+      searchMemoriesByEmbedding: vi.fn(async () => [
         { id: 'mem-1', label: 'cat', data: 'Whiskers', created_at: 't', updated_at: 't' },
       ]),
     });
@@ -262,7 +275,7 @@ describe('runChatLoop', () => {
     expect(messagesOut[0].tool_calls).toHaveLength(1);
     expect(messagesOut[1].tool_call_id).toBe(call.id);
     expect(messagesOut[1].name).toBe('memory_search');
-    expect(mocks.searchMemories).toHaveBeenCalledOnce();
+    expect(mocks.searchMemoriesByEmbedding).toHaveBeenCalledOnce();
   });
 
   it('executes parallel tool calls concurrently', async () => {

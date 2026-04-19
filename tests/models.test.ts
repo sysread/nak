@@ -7,6 +7,10 @@ import {
   REASONING_EFFORT_LABELS,
   TIERS,
   UTILITY_TIER,
+  VENICE_EMBEDDING_MODEL,
+  VENICE_EMBEDDING_DIMS,
+  EMBEDDING_STORAGE_DIMS,
+  padEmbeddingForStorage,
   isModelTier,
   isReasoningEffort,
   resolveReasoningEffort,
@@ -94,5 +98,75 @@ describe('reasoning effort', () => {
   it('resolveReasoningEffort prefers thread override over default', () => {
     expect(resolveReasoningEffort('high', 'low')).toBe('high');
     expect(resolveReasoningEffort(null, 'medium')).toBe('medium');
+  });
+});
+
+describe('embedding constants', () => {
+  it('stores the Venice embeddings model id', () => {
+    expect(VENICE_EMBEDDING_MODEL).toBe('text-embedding-bge-m3');
+  });
+  it('has storage dim > native dim so padding always has room', () => {
+    expect(EMBEDDING_STORAGE_DIMS).toBeGreaterThanOrEqual(VENICE_EMBEDDING_DIMS);
+  });
+  it('native dim matches bge-m3 (1024)', () => {
+    // If Venice ever swaps the model, this constant and the schema must
+    // move together — the test exists so the swap isn't silent.
+    expect(VENICE_EMBEDDING_DIMS).toBe(1024);
+  });
+  it('storage dim matches the column in supabase/schema.sql (2048)', () => {
+    expect(EMBEDDING_STORAGE_DIMS).toBe(2048);
+  });
+});
+
+describe('padEmbeddingForStorage', () => {
+  it('pads a native-length vector to storage length with zeros', () => {
+    const input = Array.from({ length: VENICE_EMBEDDING_DIMS }, (_, i) => i * 0.001);
+    const padded = padEmbeddingForStorage(input);
+    expect(padded).toHaveLength(EMBEDDING_STORAGE_DIMS);
+    // Prefix is preserved exactly.
+    for (let i = 0; i < VENICE_EMBEDDING_DIMS; i++) {
+      expect(padded[i]).toBe(input[i]);
+    }
+    // Suffix is all zeros — the invariant that makes cosine similarity
+    // equal between padded and unpadded vectors.
+    for (let i = VENICE_EMBEDDING_DIMS; i < EMBEDDING_STORAGE_DIMS; i++) {
+      expect(padded[i]).toBe(0);
+    }
+  });
+
+  it('returns a copy on the fast path so callers cannot mutate the caller buffer', () => {
+    const input = new Array<number>(EMBEDDING_STORAGE_DIMS).fill(0.5);
+    const padded = padEmbeddingForStorage(input);
+    expect(padded).not.toBe(input);
+    expect(padded).toEqual(input);
+  });
+
+  it('handles a zero-length input (edge case: null embedding)', () => {
+    const padded = padEmbeddingForStorage([]);
+    expect(padded).toHaveLength(EMBEDDING_STORAGE_DIMS);
+    expect(padded.every((v) => v === 0)).toBe(true);
+  });
+
+  it('handles an arbitrary length shorter than storage', () => {
+    const input = [1, 2, 3, 4];
+    const padded = padEmbeddingForStorage(input);
+    expect(padded).toHaveLength(EMBEDDING_STORAGE_DIMS);
+    expect(padded.slice(0, 4)).toEqual([1, 2, 3, 4]);
+    expect(padded.slice(4).every((v) => v === 0)).toBe(true);
+  });
+
+  it('throws when the input is longer than storage dim — this is a config bug, not silent truncation', () => {
+    const tooLong = new Array<number>(EMBEDDING_STORAGE_DIMS + 1).fill(0);
+    expect(() => padEmbeddingForStorage(tooLong)).toThrow(/exceeds storage dim/);
+  });
+
+  it('is cosine-invariant (dot product of padded vectors equals dot product of originals)', () => {
+    const a = Array.from({ length: VENICE_EMBEDDING_DIMS }, (_, i) => Math.sin(i));
+    const b = Array.from({ length: VENICE_EMBEDDING_DIMS }, (_, i) => Math.cos(i));
+    const aDot = (x: number[], y: number[]) =>
+      x.reduce((sum, v, i) => sum + v * y[i], 0);
+    const original = aDot(a, b);
+    const padded = aDot(padEmbeddingForStorage(a), padEmbeddingForStorage(b));
+    expect(padded).toBeCloseTo(original, 10);
   });
 });
