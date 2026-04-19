@@ -476,7 +476,15 @@
   // change to their default propagates to this thread automatically, and
   // we don't pin a stale value just because it happened to match once.
   async function setReasoning(effort: ReasoningEffort): Promise<void> {
-    if (!app.supabase || !currentThread) return;
+    if (!app.supabase) return;
+    // Same fresh-session pattern as setTier — without a thread to land
+    // the override on, picking an effort would silently no-op. Auto-
+    // create a draft so the choice has somewhere to go; the draft is
+    // local-only until the first send materializes it.
+    if (!currentThread) {
+      await newThread();
+      if (!currentThread) return;
+    }
     const next: ReasoningEffort | null = effort === defaultReasoning ? null : effort;
     if ((currentThread.reasoning_effort ?? null) === next) return;
     const threadId = currentThread.id;
@@ -1698,11 +1706,15 @@
               <!-- Reasoning-effort picker: per-thread override, stored on
                    threads.reasoning_effort. Hidden when the resolved model
                    doesn't advertise reasoning support — no point offering
-                   a knob the provider will reject. Extracted so the
-                   picker is mountable in isolation under
+                   a knob the provider will reject. Renders with no active
+                   thread too: `currentReasoning` falls back to the user
+                   default via `resolveReasoningEffort`, and `setReasoning`
+                   auto-creates a draft on first pick so the choice has
+                   somewhere to land — same pattern as the model picker.
+                   Extracted so the picker is mountable in isolation under
                    @testing-library/svelte; Chat.svelte itself is too
                    coupled to the live app state to mount cleanly. -->
-              {#if currentThread && currentSupportsReasoning}
+              {#if currentSupportsReasoning}
                 <ReasoningPicker
                   value={currentReasoning}
                   defaultEffort={defaultReasoning}
