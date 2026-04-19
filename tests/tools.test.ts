@@ -40,6 +40,7 @@ function mockSupabase(): {
     createMemory: ReturnType<typeof vi.fn>;
     updateMemory: ReturnType<typeof vi.fn>;
     deleteMemory: ReturnType<typeof vi.fn>;
+    decayMemoryConfidence: ReturnType<typeof vi.fn>;
   };
 } {
   const spies = {
@@ -66,6 +67,10 @@ function mockSupabase(): {
       updated_at: 't',
     })),
     deleteMemory: vi.fn(async () => undefined),
+    // Reflection-agent soft delete: server returns the post-decay
+    // confidence. Default mock returns 0.5 — one halving from the 1.0
+    // seed value.
+    decayMemoryConfidence: vi.fn(async () => 0.5),
   };
   // Cast is fine — the handlers only touch the methods we've implemented.
   const svc = spies as unknown as SupabaseService;
@@ -345,18 +350,62 @@ describe('memory_delete', () => {
 });
 
 describe('memoryToolbox', () => {
-  it('bundles the four memory CRUD handlers without toggle_tools', () => {
-    // toggle_tools is a chat-UX concern (context-window gate); agents
-    // that use this toolbox always have its full kit available, so the
-    // gate tool must not leak in.
+  it('swaps memory_delete for memory_invalidate — agents get soft-delete only', () => {
+    // Soft-delete by design: an autonomous agent shouldn't be hard-
+    // erasing user data based on its own reading of the conversation.
+    // memory_delete stays available to the main chat (user-directed
+    // "forget X"). memory_invalidate halves confidence; recoverable.
     const names = memoryToolbox.tools.map((t) => t.name);
-    expect(names).toEqual(['memory_search', 'memory_create', 'memory_update', 'memory_delete']);
+    expect(names).toEqual([
+      'memory_search',
+      'memory_create',
+      'memory_update',
+      'memory_invalidate',
+    ]);
+    expect(names).not.toContain('memory_delete');
     expect(names).not.toContain('toggle_tools');
   });
 
   it('carries a stable name and a non-empty description for downstream prompts', () => {
     expect(memoryToolbox.name).toBe('memory');
     expect(memoryToolbox.description.length).toBeGreaterThan(0);
+  });
+});
+
+describe('memory_invalidate', () => {
+  const tool = memoryToolbox.tools.find((t) => t.name === 'memory_invalidate')!;
+
+  it('calls decayMemoryConfidence and returns the new confidence', async () => {
+    const { svc, spies } = mockSupabase();
+    const result = await tool.execute({ id: 'm1' }, ctxFor(svc));
+    expect(spies.decayMemoryConfidence).toHaveBeenCalledWith('m1');
+    expect(result).toEqual({ id: 'm1', confidence: 0.5 });
+  });
+
+  it('propagates a smaller post-decay confidence from the server', async () => {
+    // A memory that's been decayed multiple times comes back from the
+    // server below the search floor; the tool must reflect that value
+    // untouched so the agent can see how close to invisibility it is.
+    const { svc, spies } = mockSupabase();
+    spies.decayMemoryConfidence.mockResolvedValueOnce(0.03125);
+    const result = await tool.execute({ id: 'm9' }, ctxFor(svc));
+    expect(result).toEqual({ id: 'm9', confidence: 0.03125 });
+  });
+
+  it('rejects a missing id', async () => {
+    const { svc } = mockSupabase();
+    await expect(tool.execute({}, ctxFor(svc))).rejects.toThrow(/id/);
+  });
+
+  it('surfaces a not-found as an error rather than silently no-op', async () => {
+    // If the RPC returns null (row missing or RLS blocked), the tool
+    // must throw so the agent sees a failure on its next turn — a
+    // silent success would let the agent think it had soft-deleted
+    // something it hadn't and skip the memory_update path that would
+    // have fixed the root cause.
+    const { svc, spies } = mockSupabase();
+    spies.decayMemoryConfidence.mockResolvedValueOnce(null);
+    await expect(tool.execute({ id: 'gone' }, ctxFor(svc))).rejects.toThrow(/not found/);
   });
 });
 

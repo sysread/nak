@@ -244,6 +244,38 @@ alter table public.messages
 alter table public.threads
   add column if not exists tools_enabled boolean not null default false;
 
+-- Reflection pipeline ----------------------------------------------------
+--
+-- The memory-reflection agent (src/lib/agents/reflection/*) sweeps
+-- completed conversations and updates long-term memory based on what it
+-- learned. These columns on `threads` are the ground truth for two
+-- questions:
+--
+--   1. "Has this thread been reflected on since its last terminal
+--      assistant response?" — answered by comparing
+--      `last_reflected_msg_id` to the newest terminal assistant message
+--      in the thread.
+--   2. "Is this thread currently being reflected on by some device?" —
+--      answered by `reflection_holder_id`/`reflection_claim_expires_at`
+--      (same per-row-claim pattern memories uses for embeddings).
+--
+-- A message id is the pointer rather than a timestamp because message
+-- ids are stable and comparable without clock-skew worries across
+-- devices. "Terminal assistant message" means a row with role='assistant',
+-- no tool_calls (the tool round resolved), and non-null content — a
+-- failed / empty response doesn't count as a round worth reflecting on.
+alter table public.threads
+  add column if not exists last_reflected_msg_id uuid references public.messages(id) on delete set null,
+  add column if not exists reflection_holder_id text,
+  add column if not exists reflection_claim_expires_at timestamptz;
+
+-- Claim-lookup index. Partial on `reflection_holder_id is not null` so
+-- the index only carries live claims — the common case is 0 rows
+-- claimed, and a partial index stays tiny under that steady state.
+create index if not exists threads_reflection_claim_idx
+  on public.threads (reflection_claim_expires_at)
+  where reflection_holder_id is not null;
+
 -- memories ---------------------------------------------------------------
 --
 -- Free-form notes the user (or the LLM via the memory_* tools) can CRUD
@@ -297,7 +329,17 @@ create table if not exists public.memories (
 alter table public.memories
   add column if not exists embedding_model text,
   add column if not exists embedding_claim_holder text,
-  add column if not exists embedding_claim_expires timestamptz;
+  add column if not exists embedding_claim_expires timestamptz,
+  -- Confidence that this memory is still valid. Starts at 1.0 on
+  -- create; the reflection agent's `memory_invalidate` halves it when
+  -- the agent thinks a memory has been contradicted by new evidence.
+  -- The memory-search RPC floors at 0.05 (effectively hides the row
+  -- from search without hard-deleting — recoverable if the agent
+  -- re-learns the fact) and applies a logarithmic boost to the
+  -- similarity score so corroborated memories (`memory_update` calls
+  -- `bump_memory_confidence`, adding 1.0 up to a cap of 10.0) rank
+  -- higher than single-occurrence ones.
+  add column if not exists confidence real not null default 1.0;
 
 -- Upgrade path for projects that shipped with vector(1024) before the
 -- pad-to-2048 decision. Guarded so fresh projects (already created at
@@ -587,6 +629,21 @@ end $$;
 -- guard keeps behavior obvious here and protects us if the select policy
 -- ever changes shape. Returns the full row (minus embedding) so the
 -- client doesn't re-fetch 2048 floats per hit just to drop them.
+--
+-- Ranking: the raw cosine distance is `embedding <=> query_embedding`,
+-- so similarity is `1 - distance`. We boost that by a logarithmic
+-- function of confidence: `score = (1 - distance) * (1 + 0.15 *
+-- ln(1 + confidence))`. The `+1` inside the log keeps the formula
+-- defined at confidence=0 and monotonic; γ=0.15 keeps the boost
+-- multiplier bounded roughly in [1.00, 1.36] across the [0, 10]
+-- confidence range, so a corroborated memory can't steamroller a
+-- merely-more-similar one — it just wins on ties and near-ties.
+--
+-- `confidence >= 0.05` filters memories the reflection agent has
+-- decayed into oblivion — they're still stored (recoverable if the
+-- agent re-learns the fact), just hidden from search. The ORDER BY
+-- uses DESC on the boosted score because higher score = more
+-- relevant.
 drop function if exists public.search_memories_by_embedding(vector, int);
 create or replace function public.search_memories_by_embedding(
   query_embedding vector(2048),
@@ -603,8 +660,159 @@ language sql stable security invoker as $$
     from public.memories
    where user_id = auth.uid()
      and embedding is not null
-   order by embedding <=> query_embedding
+     and confidence >= 0.05
+   order by (1 - (embedding <=> query_embedding))
+          * (1 + 0.15 * ln(1 + confidence)) desc
    limit match_limit
+$$;
+
+-- Reflection pipeline RPCs -----------------------------------------------
+--
+-- The reflection agent's worker runs on the same claim/lease pattern as
+-- the embeddings worker, but against `threads` instead of `memories`
+-- and with a different "what does 'needs work' mean?" predicate.
+--
+-- "Needs reflection" = there exists a terminal assistant message in the
+-- thread (role='assistant' AND (tool_calls IS NULL OR empty) AND
+-- content is non-null and non-empty) whose id is strictly greater than
+-- whatever `threads.last_reflected_msg_id` currently is (or any such
+-- message, if last_reflected_msg_id is null). The token-volume guard
+-- (~6400 chars ≈ 20% of the fast model's 8192-token embedding context)
+-- keeps us from burning Venice calls on "hi"/"hey" exchanges that
+-- produced nothing worth remembering.
+--
+-- The function returns `(thread_id, terminal_msg_id)` atomically. The
+-- worker fetches messages up to `terminal_msg_id` (so a race where the
+-- user adds more turns mid-reflection just queues the thread for the
+-- next cycle), runs its tool-call loop, and calls
+-- `mark_thread_reflected_if_claimed` with the same msg_id it got here.
+-- If the claim was lost (device B took over mid-reflection) the mark
+-- returns false and the whole run is discarded — device B will redo it.
+
+-- Claim the oldest thread in need of reflection and return its id plus
+-- the terminal assistant message we should reflect up to. `for update
+-- skip locked` is belt-and-suspenders under the lease invariant (only
+-- one device should be claiming at a time); it costs nothing and
+-- removes an entire class of wrong answer from the corner where two
+-- devices briefly both think they hold the lease.
+drop function if exists public.claim_next_thread_for_reflection(text, int);
+create or replace function public.claim_next_thread_for_reflection(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, terminal_msg_id uuid)
+language sql security invoker as $$
+  with candidate as (
+    -- Oldest thread (by updated_at ascending) that has a terminal
+    -- assistant message newer than what we've reflected on, passes the
+    -- token-volume guard, and isn't currently claimed. The terminal-
+    -- message lookup is a lateral join so we get both the thread row
+    -- AND the specific msg id to mark up to, in one round trip.
+    select t.id as thread_id, term.msg_id as terminal_msg_id
+      from public.threads t
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+     where t.user_id = auth.uid()
+       and term.msg_id is distinct from t.last_reflected_msg_id
+       and (t.reflection_claim_expires_at is null
+            or t.reflection_claim_expires_at < now())
+       and (
+         -- Sum of all message content in the thread (user + assistant
+         -- + tool) — generous proxy for conversation volume. ~6400
+         -- chars ≈ 20% of 8192-token embedding-model context.
+         select coalesce(sum(length(m2.content)), 0)
+           from public.messages m2
+          where m2.thread_id = t.id
+       ) >= 6400
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set reflection_holder_id = p_holder_id,
+         reflection_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id;
+$$;
+
+-- Record a completed reflection IF the claim is still ours. Returns
+-- true on success, false when the claim expired or was stolen (another
+-- device took over). The worker treats false the same way
+-- save_memory_embedding_if_claimed does: drop the work, loop to the
+-- next row. Any memory writes the agent already made during the run
+-- stay — they're owned by the user, not the claim, and re-reflection
+-- on the same thread will just find them via memory_search and
+-- memory_update rather than duplicate.
+drop function if exists public.mark_thread_reflected_if_claimed(uuid, text, uuid);
+create or replace function public.mark_thread_reflected_if_claimed(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_msg_id uuid
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.threads
+     set last_reflected_msg_id = p_msg_id,
+         reflection_holder_id = null,
+         reflection_claim_expires_at = null
+   where id = p_thread_id
+     and user_id = auth.uid()
+     and reflection_holder_id = p_holder_id
+     and reflection_claim_expires_at > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Confidence adjustment RPCs ---------------------------------------------
+--
+-- Both bump and decay return the new confidence so the calling agent
+-- can include it in the tool result — gives the model visible feedback
+-- on its own action (if a tool result said "confidence now 0.25" the
+-- agent sees how close the memory is to the 0.05 search-hide floor).
+--
+-- Rounding / flooring:
+--   - decay halves confidence (× 0.5) without a floor. A memory hit
+--     many times keeps halving below 0.05, where the search RPC will
+--     stop returning it — exactly the "soft delete" semantic we want.
+--   - bump adds 1.0 and caps at 10.0. The cap prevents a runaway loop
+--     (agent writes the same memory every round for weeks) from
+--     pushing confidence so high the log boost saturates.
+
+drop function if exists public.decay_memory_confidence(uuid);
+create or replace function public.decay_memory_confidence(
+  p_id uuid
+) returns real
+language sql security invoker as $$
+  update public.memories
+     set confidence = confidence * 0.5
+   where id = p_id
+     and user_id = auth.uid()
+  returning confidence;
+$$;
+
+drop function if exists public.bump_memory_confidence(uuid);
+create or replace function public.bump_memory_confidence(
+  p_id uuid
+) returns real
+language sql security invoker as $$
+  update public.memories
+     set confidence = least(confidence + 1.0, 10.0)
+   where id = p_id
+     and user_id = auth.uid()
+  returning confidence;
 $$;
 
 -- Realtime subscriptions --------------------------------------------------

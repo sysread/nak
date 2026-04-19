@@ -21,6 +21,7 @@ import { memorySearch } from './memory_search';
 import { memoryCreate } from './memory_create';
 import { memoryUpdate } from './memory_update';
 import { memoryDelete } from './memory_delete';
+import { memoryInvalidate } from './memory_invalidate';
 
 /** Every tool, including the always-on meta-tool at index 0. */
 export const TOOLS: readonly ToolDef[] = [
@@ -133,17 +134,29 @@ export async function executeToolCall(
 
 /**
  * The toolbox the memory-reflection agent (and any future memory-only
- * agent) will ship to its model. Same four CRUD handlers the main chat
- * exposes — minus `toggle_tools`, which is a chat-UX concern: agents
- * don't need a context-window gate because their prompts and tool
- * schemas aren't shared with the user-facing conversation.
+ * agent) ships to its model. Notably NOT identical to the main chat's
+ * tool set:
+ *
+ *   - `toggle_tools` is absent — chat-UX concern; agents don't need a
+ *     context-window gate because their prompts and tool schemas
+ *     aren't shared with the user-facing conversation.
+ *   - `memory_delete` is replaced by `memory_invalidate`. The agent's
+ *     job is to react to new evidence, which sometimes means
+ *     contradicting what it knew before — but we don't want autonomous
+ *     hard deletes. `memory_invalidate` halves confidence (schema
+ *     `decay_memory_confidence` RPC), which drives the row below the
+ *     search floor without erasing it. Recoverable if the agent
+ *     re-learns the fact. The main chat keeps hard-delete semantics
+ *     because "forget X" is user-directed and unambiguous.
  */
 export const memoryToolbox: Toolbox = {
   name: 'memory',
   description:
-    'Create, read, update, and delete the signed-in user\'s memories. ' +
-    'Vector + text search is available via memory_search.',
-  tools: [memorySearch, memoryCreate, memoryUpdate, memoryDelete],
+    "Create, read, and update the signed-in user's memories, and " +
+    'invalidate ones contradicted by new evidence. Vector + text search ' +
+    'is available via memory_search. Invalidation is reversible — ' +
+    'memory_invalidate halves confidence rather than hard-deleting.',
+  tools: [memorySearch, memoryCreate, memoryUpdate, memoryInvalidate],
 };
 
 /**

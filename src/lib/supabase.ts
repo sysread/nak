@@ -632,6 +632,83 @@ export class SupabaseService {
   }
 
   /**
+   * Atomically claim the oldest thread in need of reflection. Returns
+   * null when no thread qualifies (already-reflected, under the token
+   * threshold, or currently claimed by another device). The returned
+   * `terminalMsgId` is the specific assistant message we should
+   * reflect up to; we pass it back to `markThreadReflectedIfClaimed`
+   * after a successful run so a race where the user adds more turns
+   * mid-reflection simply queues the thread for the next cycle.
+   */
+  async claimNextThreadForReflection(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{ threadId: string; terminalMsgId: string } | null> {
+    const { data, error } = await this.client.rpc('claim_next_thread_for_reflection', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as { thread_id: string; terminal_msg_id: string }[];
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return { threadId: row.thread_id, terminalMsgId: row.terminal_msg_id };
+  }
+
+  /**
+   * Stamp `last_reflected_msg_id` IF our claim is still valid. Returns
+   * false when the claim expired or another device took over. Callers
+   * treat false as "skip, loop to next"; any memory writes the agent
+   * made during the run stay, because memories are owned by the user,
+   * not the claim — re-reflection on the same thread just finds them
+   * via memory_search and memory_update rather than duplicate.
+   */
+  async markThreadReflectedIfClaimed(
+    threadId: string,
+    holderId: string,
+    msgId: string
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('mark_thread_reflected_if_claimed', {
+      p_thread_id: threadId,
+      p_holder_id: holderId,
+      p_msg_id: msgId,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Halve a memory's confidence — the reflection agent's `memory_invalidate`
+   * soft-delete path. Returns the new confidence (the server-side value
+   * after the update). A memory hit many times falls below the 0.05
+   * search-hide floor without hard-deleting, keeping it recoverable if
+   * the agent re-learns the fact. Not gated on RLS beyond the
+   * `user_id = auth.uid()` check inside the RPC.
+   */
+  async decayMemoryConfidence(id: string): Promise<number | null> {
+    const { data, error } = await this.client.rpc('decay_memory_confidence', {
+      p_id: id,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return typeof data === 'number' ? data : null;
+  }
+
+  /**
+   * Bump a memory's confidence by 1.0, capped at 10.0. The cap prevents
+   * a runaway agent from saturating the log boost; the bump itself is
+   * what the reflection agent calls after a corroborating
+   * `memory_update` so repeatedly-confirmed memories surface ahead of
+   * single-sighting ones in search.
+   */
+  async bumpMemoryConfidence(id: string): Promise<number | null> {
+    const { data, error } = await this.client.rpc('bump_memory_confidence', {
+      p_id: id,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return typeof data === 'number' ? data : null;
+  }
+
+  /**
    * Cosine-similarity search via the `search_memories_by_embedding` RPC.
    * The RPC enforces `user_id = auth.uid()` in addition to RLS and hides
    * the `embedding` column from the response — 2048 floats per row is a
