@@ -701,25 +701,6 @@ h1 {
     font-size: 0.9rem;
     min-width: 1.8rem;
   }
-
-  /* Collapse the composer-bar pickers to icon-only on phones. The label +
-     chevron combo reads fine at desktop widths, but on a ~360–400px
-     viewport the model picker would overflow the composer-bar-left row
-     and disappear past the send button, leaving no way to switch tiers.
-     Icon-only keeps the affordance visible; `aria-haspopup` + `title`
-     still carry the "this opens a menu" contract. Applies to both the
-     model tier button in Chat.svelte and ReasoningPicker.svelte, which
-     share `.model-picker-btn` for exactly this kind of parallel styling. */
-  .model-picker-btn {
-    padding: 0.45rem;
-  }
-  .model-picker-btn .model-picker-label,
-  .model-picker-btn > svg {
-    display: none;
-  }
-  .model-picker-btn .model-picker-icon {
-    font-size: 1rem;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1270,6 +1251,30 @@ h1 {
     width: 100%;
     max-width: 100%;
     align-self: stretch;
+  }
+
+  /* Collapse the composer-bar pickers to icon-only on phones. The label
+     + chevron combo reads fine at desktop widths, but on a ~360–400px
+     viewport the model picker would overflow `.composer-bar-left` and
+     disappear past the send button, leaving no way to switch tiers.
+     Lives in this late @media block (not the earlier one at ~720px
+     near the top of the file) for the same cascade reason documented
+     above: base `.model-picker-btn` at ~line 1476 is later in source,
+     so an override placed before it loses on equal specificity. The
+     rule targets both the model tier button in Chat.svelte and the
+     ReasoningPicker.svelte trigger, which share `.model-picker-btn`
+     for exactly this kind of parallel styling. `aria-haspopup` +
+     `title` still carry the "opens a menu" contract for a11y. */
+  .model-picker-btn {
+    padding: 0.45rem;
+    gap: 0;
+  }
+  .model-picker-btn .model-picker-label,
+  .model-picker-btn > svg {
+    display: none;
+  }
+  .model-picker-btn .model-picker-icon {
+    font-size: 1.05rem;
   }
 }
 
