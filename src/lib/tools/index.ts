@@ -22,10 +22,13 @@ import { memoryCreate } from './memory_create';
 import { memoryUpdate } from './memory_update';
 import { memoryDelete } from './memory_delete';
 import { memoryInvalidate } from './memory_invalidate';
+import { memoryRecall } from './memory_recall';
+import { recallToolbox } from './recall_toolbox';
 
 /** Every tool, including the always-on meta-tool at index 0. */
 export const TOOLS: readonly ToolDef[] = [
   toggleTools,
+  memoryRecall,
   memorySearch,
   memoryCreate,
   memoryUpdate,
@@ -140,6 +143,10 @@ export async function executeToolCall(
  *   - `toggle_tools` is absent — chat-UX concern; agents don't need a
  *     context-window gate because their prompts and tool schemas
  *     aren't shared with the user-facing conversation.
+ *   - `memory_recall` is absent — it spawns another agent, and giving
+ *     reflection a nested recall pass would be recursion with no
+ *     purpose (reflection already has the whole conversation in
+ *     context). Main-chat tool only.
  *   - `memory_delete` is replaced by `memory_invalidate`. The agent's
  *     job is to react to new evidence, which sometimes means
  *     contradicting what it knew before — but we don't want autonomous
@@ -158,6 +165,12 @@ export const memoryToolbox: Toolbox = {
     'memory_invalidate halves confidence rather than hard-deleting.',
   tools: [memorySearch, memoryCreate, memoryUpdate, memoryInvalidate],
 };
+
+// Re-export the recall agent's read-only toolbox so callers that
+// import from `$lib/tools` see the same surface they do for
+// `memoryToolbox`. The actual definition lives in `./recall_toolbox`
+// to avoid a circular import — see that file's header for why.
+export { recallToolbox };
 
 /**
  * OpenAI / Venice wire shape for every tool in a toolbox, in declared

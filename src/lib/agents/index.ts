@@ -22,3 +22,11 @@ export type {
   ReflectionOutput,
 } from './reflection/agent';
 export { REFLECTION_PROMPT } from './reflection/prompt';
+
+export { RecallAgent, trimToLastUserTurn, parseRecallOutput } from './recall/agent';
+export type {
+  RecallInput,
+  RecallOutput,
+  RecallNote,
+} from './recall/agent';
+export { RECALL_PROMPT } from './recall/prompt';

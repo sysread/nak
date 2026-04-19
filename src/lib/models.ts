@@ -128,6 +128,18 @@ export const UTILITY_TIER: ModelTier = 'fast';
 export const VENICE_REFLECTION_MODEL = MODELS.fast.id;
 
 /**
+ * Model the memory-recall agent runs against. Same rationale as
+ * reflection — the task is "read the live conversation, search
+ * memories, produce a short note" and leans on long-context reading,
+ * not reasoning. Tracks the fast tier so a retune of the fast slot
+ * carries recall forward automatically. Kept as a distinct constant
+ * from `VENICE_REFLECTION_MODEL` so a future decision to pin recall
+ * to a different model (e.g. a cheaper tier once it's proven good
+ * enough) doesn't require editing reflection call sites.
+ */
+export const VENICE_RECALL_MODEL = MODELS.fast.id;
+
+/**
  * Venice's embeddings model. Single constant rather than a tier because
  * Venice only ships one embeddings model today. If Venice ever introduces
  * a second model, this string becomes the current default and the

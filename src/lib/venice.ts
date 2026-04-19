@@ -42,6 +42,21 @@ export interface VeniceMessage {
 }
 
 /**
+ * OpenAI-compatible `response_format` body field. Venice honors the
+ * `text` / `json_object` variants from OpenAI's spec. We keep the type
+ * loose (`type: string` + passthrough props) rather than modelling
+ * every OpenAI shape because a future `json_schema` variant — which
+ * carries nested `{ name, schema, strict }` — should ride through
+ * unchanged if a caller reaches for it, without this file needing an
+ * edit. Callers are responsible for building a shape the provider
+ * actually accepts.
+ */
+export interface ResponseFormat {
+  type: 'text' | 'json_object' | 'json_schema';
+  [k: string]: unknown;
+}
+
+/**
  * Venice-specific web-search mode, passed as
  * `venice_parameters.enable_web_search` on the request body.
  *
@@ -90,6 +105,16 @@ export interface ChatRequest {
    * `ModelSpec.supportsReasoning` before setting this.
    */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * OpenAI-compatible `response_format`. Forwarded verbatim on the
+   * request body; omitted entirely when unset so providers that
+   * 400 on the unknown field never see it. Used by background agents
+   * that want structured output (e.g. the recall agent's
+   * discriminated union of "nothing to inject" vs. "assimilated
+   * note"). The main chat loop leaves this unset — the UI renders
+   * free-form markdown, not JSON.
+   */
+  responseFormat?: ResponseFormat;
 }
 
 /**
@@ -226,6 +251,13 @@ export class VeniceClient {
     // call paths (auto-titling) that shouldn't pay the latency tax.
     if (req.reasoningEffort) {
       body.reasoning_effort = req.reasoningEffort;
+    }
+    // Same discipline for response_format — only forwarded when the
+    // caller asked. Some providers (and Venice's non-default models)
+    // reject the field when its value isn't recognised, so silence is
+    // the safer default.
+    if (req.responseFormat) {
+      body.response_format = req.responseFormat;
     }
     // Venice-specific: request web-search behavior via venice_parameters.
     // We send the field only when the caller passed an explicit mode so

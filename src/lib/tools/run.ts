@@ -25,7 +25,7 @@
  */
 import type { Toolbox, ToolContext, OpenAIToolCall } from './types';
 import { buildToolboxWireList, executeToolboxCall } from './index';
-import type { VeniceClient, VeniceMessage } from '../venice';
+import type { VeniceClient, VeniceMessage, ResponseFormat } from '../venice';
 
 /** Upper bound on rounds a headless run can take. Prevents runaway loops. */
 export const DEFAULT_MAX_ROUNDS = 8;
@@ -104,6 +104,14 @@ export interface HeadlessToolLoopOptions {
    * the caller can surface in logs.
    */
   maxRounds?: number;
+  /**
+   * Optional OpenAI-compatible `response_format`. Forwarded on every
+   * round. Providers only constrain the *text* part of a response to
+   * the requested shape — tool_call rounds are unaffected, so asking
+   * for `json_object` here doesn't block the model from going through
+   * tool rounds before settling on a structured final answer.
+   */
+  responseFormat?: ResponseFormat;
 }
 
 export interface HeadlessToolLoopResult {
@@ -152,6 +160,7 @@ export async function runHeadlessToolLoop(
       messages,
       signal,
       tools: buildToolboxWireList(toolbox),
+      responseFormat: opts.responseFormat,
     });
 
     let roundText = '';
