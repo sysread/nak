@@ -15,3 +15,10 @@ export type {
   AgentRunResult,
   AgentStoppedReason,
 } from './types';
+
+export { ReflectionAgent } from './reflection/agent';
+export type {
+  ReflectionInput,
+  ReflectionOutput,
+} from './reflection/agent';
+export { REFLECTION_PROMPT } from './reflection/prompt';

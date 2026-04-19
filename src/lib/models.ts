@@ -112,6 +112,22 @@ export const DEFAULT_TIER: ModelTier = 'balanced';
 export const UTILITY_TIER: ModelTier = 'fast';
 
 /**
+ * Model the memory-reflection agent runs against. Tracks the fast
+ * tier because the reflection task is "read the conversation, make
+ * some judgments, call the memory tools" — not reasoning-heavy, but
+ * bottlenecked on input length (entire thread as context). The fast
+ * tier's ~1M-token window means we don't need a summariser layer in
+ * front of the agent.
+ *
+ * Re-points automatically if the fast tier is retargeted, which is
+ * usually what we want — if a cheaper/faster model lands in the fast
+ * slot, reflection benefits without a separate edit. If the tiers are
+ * ever retuned and the new fast model regresses on long-context
+ * understanding, override by hardcoding the concrete Venice id here.
+ */
+export const VENICE_REFLECTION_MODEL = MODELS.fast.id;
+
+/**
  * Venice's embeddings model. Single constant rather than a tier because
  * Venice only ships one embeddings model today. If Venice ever introduces
  * a second model, this string becomes the current default and the

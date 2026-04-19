@@ -1,0 +1,242 @@
+/**
+ * Headless tool-call loop — the agent-side counterpart to the chat-loop
+ * in `src/lib/chat-loop.ts`. Drives a sequence of model turns and
+ * concurrent tool executions entirely in memory: no Supabase writes,
+ * no streaming callbacks, no catalog-prompt prepend. Returns the final
+ * text and a handful of observability counters once the model settles
+ * into a text-only (no-tool-calls) response.
+ *
+ * Why separate from `chat-loop.ts`: the two surfaces are only
+ * superficially the same. The chat loop persists every assistant and
+ * tool row into `messages`, emits streaming callbacks for the UI,
+ * tracks the per-thread `tools_enabled` gate, prepends a dynamic
+ * catalog system message, and supports Venice's server-side web-
+ * search augmentation. An agent doesn't want any of that — it has a
+ * fixed prompt it composed itself, its tools are always on, its
+ * "conversation" is ephemeral, and nothing reads token-level
+ * progress. Forcing one abstraction to cover both grows a laundry
+ * list of optional flags; two focused functions are easier to read
+ * and easier to evolve independently.
+ *
+ * Cancellation: each tool execution gets a child AbortController
+ * linked to `opts.signal`, same pattern as the chat loop, so aborting
+ * the caller's signal tears down in-flight Venice and Supabase
+ * requests across every tool in parallel.
+ */
+import type { Toolbox, ToolContext, OpenAIToolCall } from './types';
+import { buildToolboxWireList, executeToolboxCall } from './index';
+import type { VeniceClient, VeniceMessage } from '../venice';
+
+/** Upper bound on rounds a headless run can take. Prevents runaway loops. */
+export const DEFAULT_MAX_ROUNDS = 8;
+
+/**
+ * Compose a child AbortController whose `.abort()` fires whenever the
+ * parent signal aborts. Used to scope per-tool cancellation under the
+ * outer signal — aborting the outer cancels every in-flight tool
+ * fetch as a side effect. Same shape as `chat-loop.ts`'s helper;
+ * duplicated rather than shared to keep this file free of a chat-loop
+ * import (agents shouldn't depend on the streaming chat infrastructure).
+ */
+function childController(parent: AbortSignal): AbortController {
+  const child = new AbortController();
+  if (parent.aborted) {
+    child.abort(parent.reason);
+    return child;
+  }
+  const onAbort = (): void => child.abort(parent.reason);
+  parent.addEventListener('abort', onAbort, { once: true });
+  return child;
+}
+
+/**
+ * Encode a tool's return value (or error) into the string `content`
+ * field that OpenAI's tool-result messages expect. Always JSON so the
+ * model sees structured data rather than a toString rendering. Matches
+ * `chat-loop.ts`'s encoder — agent tool results and chat tool results
+ * must be shaped identically so a future model swap between the two
+ * doesn't have to relearn the result format.
+ */
+function encodeToolContent(
+  result: { ok: true; value: unknown } | { ok: false; error: Error }
+): string {
+  if (result.ok) {
+    try {
+      return JSON.stringify(result.value ?? null);
+    } catch {
+      return JSON.stringify({ error: 'result not serializable' });
+    }
+  }
+  return JSON.stringify({ error: result.error.message || String(result.error) });
+}
+
+export interface HeadlessToolLoopOptions {
+  venice: VeniceClient;
+  /** Concrete Venice model id sent as `model` on every round. */
+  model: string;
+  /**
+   * Initial conversation the model sees on round 1. The caller is
+   * responsible for having appended its own instruction turn (system
+   * or user) — we don't prepend anything. Copied internally so
+   * in-place extensions across rounds don't mutate the caller's
+   * array.
+   */
+  messages: VeniceMessage[];
+  /**
+   * Tools the model can call. The wire array is
+   * `buildToolboxWireList(toolbox)` and dispatch goes through
+   * `executeToolboxCall(toolbox, …)` — both calls strictly scope to
+   * the tools this toolbox declares; no fall-through to the global
+   * registry.
+   */
+  toolbox: Toolbox;
+  /**
+   * Base fields for the per-call ToolContext. We fill in `signal`
+   * per-call with a child controller so parallel tool runs can be
+   * torn down independently under one outer abort.
+   */
+  toolCtx: Omit<ToolContext, 'signal'>;
+  signal: AbortSignal;
+  /**
+   * Upper bound on rounds; defaults to `DEFAULT_MAX_ROUNDS`. Acts as
+   * a circuit breaker against a model that keeps asking for tools
+   * without settling — the result's `stoppedByLimit` is the signal
+   * the caller can surface in logs.
+   */
+  maxRounds?: number;
+}
+
+export interface HeadlessToolLoopResult {
+  /** Final assistant text — empty when the loop hit maxRounds without settling. */
+  finalText: string;
+  /** Number of streaming rounds that ran (>=1 on any non-aborted call). */
+  rounds: number;
+  /** Total number of tool calls issued across all rounds. */
+  toolCalls: number;
+  /** True iff we stopped because of maxRounds rather than a clean finish. */
+  stoppedByLimit: boolean;
+}
+
+/**
+ * Drive the model → tool → model loop until it settles. Returns as
+ * soon as the model produces a round with no `tool_calls`, or after
+ * `maxRounds` rounds — whichever comes first. An aborted signal
+ * short-circuits on the next round boundary.
+ *
+ * This function does NOT touch Supabase. Persistence is the caller's
+ * problem (an agent may choose to persist nothing — the reflection
+ * agent's side effects are entirely in the memory_* tool calls it
+ * issues, so there's no transcript to save).
+ */
+export async function runHeadlessToolLoop(
+  opts: HeadlessToolLoopOptions
+): Promise<HeadlessToolLoopResult> {
+  const { venice, model, toolbox, toolCtx, signal } = opts;
+  const maxRounds = opts.maxRounds ?? DEFAULT_MAX_ROUNDS;
+
+  // Local copy — we extend with assistant+tool turns each round but
+  // must not mutate the caller's array.
+  const messages: VeniceMessage[] = [...opts.messages];
+
+  let finalText = '';
+  let rounds = 0;
+  let toolCalls = 0;
+  let stoppedByLimit = false;
+
+  for (let round = 0; round < maxRounds; round++) {
+    if (signal.aborted) break;
+    rounds++;
+
+    const stream = venice.streamChat({
+      model,
+      messages,
+      signal,
+      tools: buildToolboxWireList(toolbox),
+    });
+
+    let roundText = '';
+    const roundCalls: OpenAIToolCall[] = [];
+    for await (const ev of stream) {
+      if (ev.type === 'text') {
+        roundText += ev.delta;
+      } else if (ev.type === 'tool_call') {
+        roundCalls.push(ev.toolCall);
+      }
+      // 'usage' events are ignored — headless runs don't surface
+      // per-turn token usage to the caller. If an agent ever cares,
+      // add a `onUsage` callback rather than putting it on the
+      // return shape.
+    }
+
+    // No tool calls → this is the terminal response. We're done.
+    if (roundCalls.length === 0) {
+      finalText = roundText;
+      break;
+    }
+
+    toolCalls += roundCalls.length;
+
+    // Execute every call concurrently — each promise catches
+    // internally so Promise.all never rejects. OpenAI requires a
+    // tool-result row for every tool_call in the assistant message,
+    // so we need all of them settled (success or failure) before
+    // composing the next round's message list.
+    const executions = roundCalls.map(async (call) => {
+      const ctl = childController(signal);
+      const ctx: ToolContext = { ...toolCtx, signal: ctl.signal };
+      let args: Record<string, unknown>;
+      try {
+        // OpenAI streams `arguments` as a JSON string, one fragment
+        // at a time; Venice's streamChat concatenates the fragments
+        // and hands us the final assembled string. An invalid JSON
+        // blob is a model error — surface it back as a tool result
+        // so the next round sees the failure and can retry with a
+        // valid argument.
+        args = call.function.arguments.length > 0
+          ? (JSON.parse(call.function.arguments) as Record<string, unknown>)
+          : {};
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        return { call, ok: false as const, error };
+      }
+      try {
+        const value = await executeToolboxCall(toolbox, call.function.name, args, ctx);
+        return { call, ok: true as const, value };
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        return { call, ok: false as const, error };
+      }
+    });
+    const settled = await Promise.all(executions);
+
+    // Extend the in-memory conversation with the assistant-with-
+    // tool-calls turn and one tool-result turn per call, in the
+    // order the model returned them. OpenAI's API rejects a
+    // message list where a tool_call doesn't have a matching
+    // subsequent `role: 'tool'` with the same tool_call_id — that's
+    // why the assistant row must come first and every call gets a
+    // result, even on failure.
+    messages.push({
+      role: 'assistant',
+      content: roundText,
+      tool_calls: roundCalls,
+    });
+    for (const r of settled) {
+      const content = r.ok
+        ? encodeToolContent({ ok: true, value: r.value })
+        : encodeToolContent({ ok: false, error: r.error });
+      messages.push({
+        role: 'tool',
+        content,
+        tool_call_id: r.call.id,
+        name: r.call.function.name,
+      });
+    }
+
+    if (round === maxRounds - 1) {
+      stoppedByLimit = true;
+    }
+  }
+
+  return { finalText, rounds, toolCalls, stoppedByLimit };
+}
