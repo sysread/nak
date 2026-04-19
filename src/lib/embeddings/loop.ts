@@ -87,6 +87,18 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   }
   if (!claimed) return 'empty-queue';
 
+  // Task pickup — one log per claimed row so the dev console can
+  // surface the worker's activity. .log for the headline, .debug
+  // for the input preview (which can be noisy and is only useful
+  // when actively debugging an embedding).
+  // eslint-disable-next-line no-console
+  console.log(`[embed-worker] picked up ${ctx.source.name} row ${claimed.id}`);
+  // eslint-disable-next-line no-console
+  console.debug(
+    `[embed-worker] row ${claimed.id} input (${claimed.input.length} chars):`,
+    claimed.input.length > 200 ? claimed.input.slice(0, 200) + '…' : claimed.input
+  );
+
   let rawEmbedding: number[] | undefined;
   try {
     const resp = await ctx.venice.embed({
@@ -112,6 +124,16 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     saved = await ctx.source.save(claimed.id, ctx.holderId, padded, ctx.embeddingModel);
   } catch {
     return 'error';
+  }
+  if (saved) {
+    // eslint-disable-next-line no-console
+    console.log(`[embed-worker] finished ${ctx.source.name} row ${claimed.id}`);
+  } else {
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[embed-worker] save rejected for ${ctx.source.name} row ${claimed.id} — ` +
+        'row was edited, claim expired, or the row was deleted'
+    );
   }
   return saved ? 'embedded' : 'save-rejected';
 }

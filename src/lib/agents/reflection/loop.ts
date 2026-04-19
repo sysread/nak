@@ -94,6 +94,15 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   }
   if (!claim) return 'empty-queue';
 
+  // Task pickup — one log per claimed thread so the dev console can
+  // surface the worker's activity. Keep the headline on .log (always
+  // on) and the specifics on .debug (filter-out-able when not
+  // actively debugging).
+  // eslint-disable-next-line no-console
+  console.log(
+    `[reflection-worker] picked up thread ${claim.threadId} @ msg ${claim.terminalMsgId}`
+  );
+
   // Run the agent. The agent itself catches its own errors and
   // returns a well-formed AgentRunResult — we still wrap in a try to
   // defend against a future bug that lets an exception escape.
@@ -105,7 +114,12 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       threadId: claim.threadId,
       signal: ctx.signal,
     });
-  } catch {
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[reflection-worker] thread ${claim.threadId} threw unexpectedly:`,
+      err instanceof Error ? err.message : String(err)
+    );
     return 'error';
   }
 
@@ -121,7 +135,14 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   // lease holder (or this one, post-backoff) will retry. We don't
   // mark because last_reflected_msg_id is the "definitely done"
   // pointer, and the run didn't definitely complete.
-  if (runResult.stoppedReason === 'error') return 'error';
+  if (runResult.stoppedReason === 'error') {
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[reflection-worker] thread ${claim.threadId} agent reported error:`,
+      runResult.error ?? '(no message)'
+    );
+    return 'error';
+  }
 
   // Attempt to mark. A false return means the claim expired or was
   // stolen between runStart and runEnd — this is `claim-lost`, not
@@ -132,14 +153,43 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       ctx.holderId,
       claim.terminalMsgId
     );
+    if (marked) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[reflection-worker] finished thread ${claim.threadId} ` +
+          `(${runResult.toolCalls} tool calls over ${runResult.output.inputMessageCount} messages)`
+      );
+      // Final text is discarded per the prompt ("reply with a single
+      // word") but useful breadcrumb when actively debugging —
+      // surface it on .debug so a noisy production console stays
+      // quiet.
+      if (runResult.output.finalText.length > 0) {
+        // eslint-disable-next-line no-console
+        console.debug(
+          `[reflection-worker] thread ${claim.threadId} final text:`,
+          runResult.output.finalText
+        );
+      }
+    } else {
+      // eslint-disable-next-line no-console
+      console.debug(
+        `[reflection-worker] claim lost on thread ${claim.threadId} — ` +
+          'another device took over mid-reflection; any memories already written stay'
+      );
+    }
     return marked ? 'reflected' : 'claim-lost';
-  } catch {
+  } catch (err) {
     // Mark RPC threw — treat as transient. We don't know whether the
     // server-side update landed or not. Next cycle will re-claim the
     // thread (since last_reflected_msg_id didn't advance) and redo
     // the reflection. Re-reflection is safe: the agent will find
     // its own already-written memories via memory_search and
     // memory_update rather than duplicate.
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[reflection-worker] mark RPC threw for thread ${claim.threadId}:`,
+      err instanceof Error ? err.message : String(err)
+    );
     return 'error';
   }
 }
