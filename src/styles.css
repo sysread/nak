@@ -816,6 +816,11 @@ h1 {
   cursor: not-allowed;
 }
 .thread-menu-item.danger {
+  /* Global `button.danger` fills the button solid red, which would bury
+     the label. For a menu item we want the danger cue in the text color,
+     not the background — match the neutral menu surface and only flash
+     red on the label itself. */
+  background: transparent;
   color: var(--danger);
 }
 
