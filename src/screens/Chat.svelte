@@ -77,6 +77,20 @@
   let messages = $state<Message[]>([]);
   let streamingText = $state('');
 
+  // Drawer sections: drafts live in-memory and always belong with Chats;
+  // the server-backed partition is straight off the `archived` flag.
+  const activeThreads = $derived(threads.filter((t) => !t.archived));
+  const archivedThreads = $derived(threads.filter((t) => t.archived));
+
+  // Per-row action menu and long-press state for the drawer. Long-press
+  // opens the menu on touch; the trailing click is suppressed via
+  // `suppressNextClick` so lifting the finger doesn't also select the
+  // thread and close the drawer on mobile.
+  let openMenuThreadId = $state<string | null>(null);
+  let archiveExpanded = $state(false);
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let suppressNextClick = false;
+
   /**
    * In-memory latency tracking for tool calls in the current session.
    * Populated by the chat-loop's onToolStart / onToolDone / onToolError
@@ -531,6 +545,7 @@
       model: null,
       reasoning_effort: null,
       tools_enabled: false,
+      archived: false,
       created_at: now,
       updated_at: now,
       isDraft: true,
@@ -543,6 +558,7 @@
     if (!app.supabase) return;
     const t = threads.find((x) => x.id === id);
     if (!t) return;
+    closeRowMenu();
     if (!confirm('Delete this thread and all its messages?')) return;
     try {
       // Drafts only exist in memory — just drop them locally.
@@ -556,6 +572,98 @@
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
+  }
+
+  // Archive / restore. Both optimistically mutate local state and rely on
+  // the realtime `onUpdate` echo to reconcile — same pattern as rename.
+  // Both bump updated_at so the thread surfaces at the top of whichever
+  // section it lands in (see setThreadArchived in supabase.ts). Drafts
+  // can't be archived because they don't exist server-side yet.
+  async function archiveThread(id: string): Promise<void> {
+    if (!app.supabase) return;
+    const t = threads.find((x) => x.id === id);
+    if (!t || t.isDraft) return;
+    closeRowMenu();
+    const nowIso = new Date().toISOString();
+    threads = sortThreads(
+      threads.map((x) =>
+        x.id === id ? { ...x, archived: true, updated_at: nowIso } : x
+      )
+    );
+    try {
+      await app.supabase.setThreadArchived(id, true);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function restoreThread(id: string): Promise<void> {
+    if (!app.supabase) return;
+    closeRowMenu();
+    const nowIso = new Date().toISOString();
+    threads = sortThreads(
+      threads.map((x) =>
+        x.id === id ? { ...x, archived: false, updated_at: nowIso } : x
+      )
+    );
+    // Auto-expand the archive section is handled elsewhere; ensure the
+    // restored thread is visible by expanding Chats implicitly (Chats is
+    // always visible) — no extra work needed.
+    try {
+      await app.supabase.setThreadArchived(id, false);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // Rename via the row dropdown: select the thread first (so the top-bar
+  // title input is the one being edited), then flip into rename mode on
+  // the next microtask — startRename reads currentThread, which only
+  // updates after the selectThread state mutation propagates.
+  function renameFromRow(id: string): void {
+    closeRowMenu();
+    void selectThread(id);
+    queueMicrotask(() => {
+      void startRename();
+    });
+  }
+
+  function closeRowMenu(): void {
+    openMenuThreadId = null;
+  }
+
+  function toggleRowMenu(id: string): void {
+    openMenuThreadId = openMenuThreadId === id ? null : id;
+  }
+
+  // 500ms matches the platform long-press convention on iOS/Android.
+  // Any movement or early release cancels — matches how native context
+  // menus behave, so a scroll gesture doesn't accidentally open the menu.
+  function startLongPress(id: string): void {
+    cancelLongPress();
+    longPressTimer = setTimeout(() => {
+      openMenuThreadId = id;
+      // Swallow the click that fires when the finger eventually lifts —
+      // otherwise selectThread would run and close the drawer on mobile,
+      // defeating the long-press.
+      suppressNextClick = true;
+      longPressTimer = null;
+    }, 500);
+  }
+
+  function cancelLongPress(): void {
+    if (longPressTimer !== null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
+  function onThreadClick(id: string): void {
+    if (suppressNextClick) {
+      suppressNextClick = false;
+      return;
+    }
+    void selectThread(id);
   }
 
   async function send(): Promise<void> {
@@ -971,17 +1079,36 @@
   }
 
   function onDocClick(e: MouseEvent): void {
+    // Close the per-row thread menu unless the click lands inside it or
+    // on the actions button that owns it. Menu items close themselves
+    // via their handlers, so this branch mostly handles "clicked
+    // somewhere else in the drawer".
+    if (openMenuThreadId !== null) {
+      const tgt = e.target;
+      const inside =
+        tgt instanceof Element &&
+        (tgt.closest('.thread-menu') || tgt.closest('.thread-actions-btn'));
+      if (!inside) closeRowMenu();
+    }
     if (!promptsMenuOpen && !modelMenuOpen && !reasoningMenuOpen) return;
     if (composerBarEl && composerBarEl.contains(e.target as Node)) return;
     closeMenus();
   }
 
   function onDocKey(e: KeyboardEvent): void {
-    if (e.key === 'Escape') closeMenus();
+    if (e.key === 'Escape') {
+      closeMenus();
+      closeRowMenu();
+    }
   }
 
   $effect(() => {
-    if (!promptsMenuOpen && !modelMenuOpen && !reasoningMenuOpen) return;
+    const anyOpen =
+      promptsMenuOpen ||
+      modelMenuOpen ||
+      reasoningMenuOpen ||
+      openMenuThreadId !== null;
+    if (!anyOpen) return;
     document.addEventListener('click', onDocClick);
     document.addEventListener('keydown', onDocKey);
     return () => {
@@ -1119,12 +1246,17 @@
         >+ New thread</button>
       </header>
       <div class="thread-list">
-        {#each threads as t (t.id)}
-          <div class="row" style="padding:0 0.2rem">
+        {#snippet threadRow(t: Thread)}
+          <div class="row thread-row">
             <button
               class="thread grow"
               class:active={t.id === activeThreadId}
-              onclick={() => selectThread(t.id)}
+              onclick={() => onThreadClick(t.id)}
+              ontouchstart={() => startLongPress(t.id)}
+              ontouchend={cancelLongPress}
+              ontouchmove={cancelLongPress}
+              ontouchcancel={cancelLongPress}
+              title={t.title || 'Untitled'}
             >
               {#if titlingThreadIds.has(t.id)}
                 <Scanner label="Generating title" size={0.85} />
@@ -1132,12 +1264,72 @@
                 {t.title || 'Untitled'}
               {/if}
             </button>
-            <button class="secondary" title="Delete" aria-label="Delete thread"
-                    onclick={() => deleteThread(t.id)}>×</button>
+            <button
+              class="secondary thread-actions-btn"
+              onclick={(e) => { e.stopPropagation(); toggleRowMenu(t.id); }}
+              aria-haspopup="menu"
+              aria-expanded={openMenuThreadId === t.id}
+              title="Actions"
+              aria-label="Thread actions"
+            >⋯</button>
+            {#if openMenuThreadId === t.id}
+              <div class="thread-menu" role="menu">
+                {#if t.archived}
+                  <button class="thread-menu-item" role="menuitem"
+                          onclick={() => restoreThread(t.id)}>Restore</button>
+                  <button class="thread-menu-item danger" role="menuitem"
+                          onclick={() => deleteThread(t.id)}>Delete</button>
+                {:else}
+                  <button class="thread-menu-item" role="menuitem"
+                          onclick={() => archiveThread(t.id)}
+                          disabled={t.isDraft}
+                          title={t.isDraft ? "Draft threads can't be archived — send or rename to save first." : undefined}>
+                    Archive
+                  </button>
+                  <button class="thread-menu-item" role="menuitem"
+                          onclick={() => renameFromRow(t.id)}>Rename</button>
+                  <button class="thread-menu-item danger" role="menuitem"
+                          onclick={() => deleteThread(t.id)}>Delete</button>
+                {/if}
+              </div>
+            {/if}
           </div>
+        {/snippet}
+
+        {#each activeThreads as t (t.id)}
+          {@render threadRow(t)}
         {/each}
-        {#if threads.length === 0}
+        {#if activeThreads.length === 0}
           <p class="subtle" style="padding:0.75rem">No threads yet.</p>
+        {/if}
+
+        <!-- Archive section: hidden when empty; collapsed by default so
+             the Chats list is what the user sees on mount. -->
+        {#if archivedThreads.length > 0}
+          <div class="archive-section">
+            <button
+              class="archive-toggle"
+              onclick={() => (archiveExpanded = !archiveExpanded)}
+              aria-expanded={archiveExpanded}
+              aria-controls="archive-list"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                   stroke-linejoin="round" aria-hidden="true"
+                   class="archive-chevron" class:expanded={archiveExpanded}>
+                <polyline points="9 6 15 12 9 18" />
+              </svg>
+              <span class="archive-label">Archive</span>
+              <span class="archive-count">{archivedThreads.length}</span>
+            </button>
+            {#if archiveExpanded}
+              <div id="archive-list">
+                {#each archivedThreads as t (t.id)}
+                  {@render threadRow(t)}
+                {/each}
+              </div>
+            {/if}
+          </div>
         {/if}
       </div>
       <footer>
@@ -1336,6 +1528,14 @@
           {#if messages.length === 0 && !streamingText && !sending}
             <div class="empty">Type a message to begin.</div>
           {/if}
+          <!-- End-of-conversation notice for archived chats. Sits inside
+               .messages so it scrolls with the transcript, and after any
+               streaming bubble so it always reads as "the end". -->
+          {#if currentThread?.archived}
+            <div class="archived-notice">
+              This conversation is archived. Restore it to continue.
+            </div>
+          {/if}
         </div>
         {#if !followBottom && hasOverflow}
           <button
@@ -1364,8 +1564,10 @@
             bind:value={composer}
             bind:this={composerEl}
             onkeydown={onKeydown}
-            placeholder={`Message… (${sendHint})`}
-            disabled={sending}
+            placeholder={currentThread?.archived
+              ? 'Restore this conversation to continue.'
+              : `Message… (${sendHint})`}
+            disabled={sending || currentThread?.archived}
           ></textarea>
           <div class="composer-bar" bind:this={composerBarEl}>
             <div class="composer-bar-left">
@@ -1485,8 +1687,12 @@
             <button
               class="send-btn composer-send"
               onclick={send}
-              disabled={sending || composer.trim().length === 0}
-              title={sending ? 'Sending…' : 'Send'}
+              disabled={sending || composer.trim().length === 0 || currentThread?.archived}
+              title={sending
+                ? 'Sending…'
+                : currentThread?.archived
+                  ? 'Archived — restore to continue'
+                  : 'Send'}
               aria-label={sending ? 'Sending' : 'Send'}
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"

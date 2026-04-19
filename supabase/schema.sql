@@ -244,6 +244,15 @@ alter table public.messages
 alter table public.threads
   add column if not exists tools_enabled boolean not null default false;
 
+-- Soft-hide flag for the "Archive" drawer section. Archived threads still
+-- load into the sidebar and remain viewable, but the composer is disabled
+-- in the UI and they're rendered under a separate collapsed section.
+-- Restoring flips this back to false and bumps updated_at so the thread
+-- reappears at the top of the Chats list. Existing RLS (auth.uid() =
+-- user_id) already covers both states — no policy change needed.
+alter table public.threads
+  add column if not exists archived boolean not null default false;
+
 -- Reflection pipeline ----------------------------------------------------
 --
 -- The memory-reflection agent (src/lib/agents/reflection/*) sweeps

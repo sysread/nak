@@ -745,6 +745,14 @@ h1 {
   border: 0;
   width: 100%;
   text-align: left;
+  /* Single-line titles with ellipsis. `min-width: 0` is load-bearing:
+     without it, flex's default `min-width: auto` lets the button's
+     intrinsic content (a long title) inflate the button, pushing the
+     actions dropdown off-screen instead of triggering the ellipsis. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .thread:hover {
@@ -754,6 +762,122 @@ h1 {
 .thread.active {
   background: var(--accent-weak);
   color: var(--text);
+}
+
+/* Thread rows need `position: relative` to anchor the per-row actions
+   menu, and some horizontal padding to breathe inside the list. */
+.thread-row {
+  position: relative;
+  padding: 0 0.2rem;
+}
+
+.thread-actions-btn {
+  padding: 0.25rem 0.5rem;
+  font-size: 1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* Per-row dropdown. Anchored to the right edge of the row so it
+   expands inward without clipping against the drawer's right border.
+   Reuses the composer-menu visual language. */
+.thread-menu {
+  position: absolute;
+  top: calc(100% - 0.1rem);
+  right: 0.2rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.25rem;
+  min-width: 9rem;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.thread-menu-item {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  text-align: left;
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.thread-menu-item:hover:not(:disabled) {
+  background: var(--bg-2);
+}
+.thread-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.thread-menu-item.danger {
+  color: var(--danger);
+}
+
+/* Archive section — a collapsible group below the main Chats list.
+   The toggle reads as a muted header rather than an interactive button
+   to stay out of the way visually; the chevron rotates to signal state. */
+.archive-section {
+  margin-top: 0.35rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.35rem;
+}
+
+.archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  border-radius: var(--radius);
+  text-align: left;
+}
+.archive-toggle:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.archive-chevron {
+  transition: transform 120ms ease-out;
+  flex-shrink: 0;
+}
+.archive-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.archive-label {
+  flex: 1;
+}
+
+.archive-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--muted);
+}
+
+/* End-of-conversation marker for archived chats. Centered, italic,
+   muted — reads as a system interjection rather than a message. */
+.archived-notice {
+  text-align: center;
+  font-style: italic;
+  color: var(--muted);
+  padding: 0.75rem 1rem;
+  font-size: 0.9rem;
 }
 
 .chat {

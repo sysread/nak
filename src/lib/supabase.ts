@@ -46,6 +46,13 @@ export interface Thread {
    * request; when true, every registered tool's schema is included.
    */
   tools_enabled: boolean;
+  /**
+   * Soft-hide flag. Archived threads still load — they just render under
+   * the drawer's collapsed "Archive" section and lock out the composer.
+   * Flipped by the archive / restore row actions; restore also bumps
+   * updated_at so the thread jumps to the top of the Chats list.
+   */
+  archived: boolean;
   created_at: string;
   updated_at: string;
   /**
@@ -74,6 +81,7 @@ function coerceThread(row: Record<string, unknown>): Thread {
     model,
     reasoning_effort,
     tools_enabled: row.tools_enabled === true,
+    archived: row.archived === true,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
@@ -425,6 +433,21 @@ export class SupabaseService {
     const { error } = await this.client
       .from('threads')
       .update({ tools_enabled: enabled })
+      .eq('id', threadId);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Flip the thread's archived flag. Unlike setThreadToolsEnabled /
+   * setThreadReasoningEffort, this one DOES bump updated_at — both
+   * directions want the thread promoted to the top of whichever section
+   * (Chats or Archive) it lands in, so the user immediately sees where
+   * it went.
+   */
+  async setThreadArchived(threadId: string, archived: boolean): Promise<void> {
+    const { error } = await this.client
+      .from('threads')
+      .update({ archived, updated_at: new Date().toISOString() })
       .eq('id', threadId);
     if (error) throw new SupabaseError(error.message);
   }
