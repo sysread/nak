@@ -52,11 +52,19 @@
     </p>
     <div class="form-row">
       <label for="email">Email</label>
-      <input id="email" type="email" bind:value={email} required />
+      <input id="email" type="email" bind:value={email} required
+             autocomplete="email" />
     </div>
     <div class="form-row">
       <label for="password">Password</label>
-      <input id="password" type="password" bind:value={password} required minlength="6" />
+      <!--
+        Mode-dependent autocomplete. "current-password" lets password managers
+        offer saved credentials on sign-in; "new-password" tells them to offer
+        to save the freshly-entered one on sign-up. A single fixed value would
+        either suppress autofill on sign-in or spam the save prompt on sign-up.
+      -->
+      <input id="password" type="password" bind:value={password} required minlength="6"
+             autocomplete={mode === 'sign-in' ? 'current-password' : 'new-password'} />
     </div>
     {#if error}<p class="error">{error}</p>{/if}
     {#if info}<p class="subtle">{info}</p>{/if}
