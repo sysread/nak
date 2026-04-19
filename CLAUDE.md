@@ -160,10 +160,21 @@ When you add a column, table, policy, trigger, publication member,
 index, extension, etc., the workflow is:
 
 1. Edit `supabase/schema.sql`.
-2. Tell the user to `mise run sync` to apply it to their linked
-   project. Don't point them at the Supabase SQL Editor — that's the
-   fallback, not the convention.
+2. Merge to `main`. The `sync-supabase` job in
+   `.github/workflows/deploy.yml` runs `node scripts/sync.mjs` on every
+   deploy — the same script `mise run sync` runs locally. The workflow
+   passes `SUPABASE_PROJECT_REF` (repo variable) and
+   `SUPABASE_ACCESS_TOKEN` (repo secret), which puts the script in its
+   CI mode: it skips the `.nak/state.json` + interactive project-picker
+   path and goes straight to the Management API.
+3. `mise run sync` is still the way to try a schema change against the
+   linked project before opening a PR. The Supabase SQL Editor remains
+   a manual fallback if both paths fail.
 
-The `mise run sync` task also merges the fork's Pages URL into the
-auth allowlist, but that's orthogonal to schema — don't dwell on it
-in PR descriptions for schema changes.
+A schema-apply failure in CI fails the whole deploy on purpose — we'd
+rather catch a bad migration than ship an app whose code expects
+columns the DB doesn't have.
+
+The sync job also merges the fork's Pages URL into the auth allowlist,
+but that's orthogonal to schema — don't dwell on it in PR descriptions
+for schema changes.
