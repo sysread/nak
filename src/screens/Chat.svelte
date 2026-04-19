@@ -441,7 +441,17 @@
   }
 
   async function setTier(tier: ModelTier): Promise<void> {
-    if (!app.supabase || !currentThread) return;
+    if (!app.supabase) return;
+    // Fresh sessions (first run, last thread deleted, sidebar not yet
+    // opened) leave `activeThreadId` null, which used to hide the picker
+    // entirely — on mobile the sidebar is an overlay, so "pick a thread
+    // first" isn't a discoverable step. Auto-create a draft so the tier
+    // choice has somewhere to land; draft creation is free (local-only
+    // until the first send materializes it).
+    if (!currentThread) {
+      await newThread();
+      if (!currentThread) return;
+    }
     // If the chosen tier matches the user's default, clear the per-thread
     // override so the thread keeps tracking future default changes; only
     // pin an explicit tier when it actually differs from the default.
@@ -1636,28 +1646,33 @@
                 {/if}
               </button>
 
-              <!-- Model picker: per-thread override, stored on threads.model. -->
-              {#if currentThread}
-                <button
-                  type="button"
-                  class="secondary model-picker-btn"
-                  onclick={() => {
-                    promptsMenuOpen = false;
-                    reasoningMenuOpen = false;
-                    modelMenuOpen = !modelMenuOpen;
-                  }}
-                  aria-haspopup="true"
-                  aria-expanded={modelMenuOpen}
-                  title={`Model: ${MODELS[currentTier].label} (${MODELS[currentTier].id})`}
-                >
-                  <span class="model-picker-icon" aria-hidden="true">{MODELS[currentTier].icon}</span>
-                  <span class="model-picker-label">{MODELS[currentTier].label}</span>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <polyline points="6 9 12 15 18 9" />
-                  </svg>
-                </button>
-              {/if}
+              <!-- Model picker: per-thread override, stored on threads.model.
+                   Renders unconditionally — even with no active thread the
+                   current tier is well-defined (falls back to the user
+                   default via `resolveTier`), and `setTier` auto-creates
+                   a draft on first pick so the choice has somewhere to
+                   live. Gating on `currentThread` hid the button on any
+                   fresh session where session-restore didn't pick a thread,
+                   which on mobile is the common case. -->
+              <button
+                type="button"
+                class="secondary model-picker-btn"
+                onclick={() => {
+                  promptsMenuOpen = false;
+                  reasoningMenuOpen = false;
+                  modelMenuOpen = !modelMenuOpen;
+                }}
+                aria-haspopup="true"
+                aria-expanded={modelMenuOpen}
+                title={`Model: ${MODELS[currentTier].label} (${MODELS[currentTier].id})`}
+              >
+                <span class="model-picker-icon" aria-hidden="true">{MODELS[currentTier].icon}</span>
+                <span class="model-picker-label">{MODELS[currentTier].label}</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
 
               <!-- Reasoning-effort picker: per-thread override, stored on
                    threads.reasoning_effort. Hidden when the resolved model
@@ -1721,7 +1736,7 @@
               </div>
             {/if}
 
-            {#if modelMenuOpen && currentThread}
+            {#if modelMenuOpen}
               <div class="composer-menu composer-menu-left" role="menu">
                 <div class="menu-header">Model for this conversation</div>
                 {#each TIERS as tier (tier)}
