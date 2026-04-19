@@ -166,7 +166,9 @@ index, extension, etc., the workflow is:
    passes `SUPABASE_PROJECT_REF` (repo variable) and
    `SUPABASE_ACCESS_TOKEN` (repo secret), which puts the script in its
    CI mode: it skips the `.nak/state.json` + interactive project-picker
-   path and goes straight to the Management API.
+   path and goes straight to the Management API. The step is gated on
+   `vars.SUPABASE_PROJECT_REF != ''` so forks that haven't wired the
+   automation up still deploy normally.
 3. `mise run sync` is still the way to try a schema change against the
    linked project before opening a PR. The Supabase SQL Editor remains
    a manual fallback if both paths fail.

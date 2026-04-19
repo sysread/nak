@@ -41,6 +41,10 @@ jobs:
           cache: true
 
       - name: Sync schema and auth allowlist to Supabase
+        # Opt-in: only runs on forks that have configured the Supabase
+        # repo secret + variable. Without the var, the step is a no-op so
+        # fresh forks can deploy before they've wired automation up.
+        if: vars.SUPABASE_PROJECT_REF != ''
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}

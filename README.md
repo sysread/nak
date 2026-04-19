@@ -231,13 +231,39 @@ the bundled `Lekton_LICENSE.txt`).
 
 ### Keeping a project in sync
 
-- `mise run setup` — full first-time wizard. Walks you through Pages,
-  Supabase, auth policy, and the main user.
-- `mise run sync` — idempotent re-application for **later**. Re-applies
-  `schema.sql` and merges the current Pages URL into Supabase's auth
-  allowlist. No prompts; it remembers the linked project in
-  `.nak/state.json`. Use this whenever you pull new code that added
-  schema changes.
+Schema and auth-allowlist updates can be re-applied two ways:
+
+- **Automatically on deploy (recommended).** The `sync-supabase` job in
+  `.github/workflows/deploy.yml` runs `scripts/sync.mjs` before the
+  build on every push to `main`. A schema failure fails the deploy, so
+  you can't accidentally ship app code that expects a column the DB
+  doesn't have. Opt in once:
+
+  1. In Supabase: click your avatar (top-right) → **Account** →
+     **Access Tokens** → **Generate new token**. Name it something
+     like `nak-deploy` and copy the value — Supabase only shows it
+     once.
+  2. In your GitHub fork → **Settings** → **Secrets and variables**
+     → **Actions**:
+     - **Secrets** tab → **New repository secret** → name
+       `SUPABASE_ACCESS_TOKEN`, value = the token from step 1.
+     - **Variables** tab → **New repository variable** → name
+       `SUPABASE_PROJECT_REF`, value = your project ref (the part
+       after `/project/` in its Supabase dashboard URL; also visible
+       in `.nak/state.json` after `mise run setup`).
+
+  From the next deploy onward, every merge to `main` re-applies
+  `schema.sql` and merges your Pages URL into the auth allowlist
+  before the site is rebuilt. If you never add these secrets, the
+  sync step is a no-op and the rest of the deploy is unaffected — so
+  this is purely opt-in.
+
+- **Manually from your laptop.** `mise run setup` is the full
+  first-time wizard. `mise run sync` is the idempotent re-applier
+  — handy for trying a schema change against the linked project
+  *before* opening a PR, and as a fallback if you'd rather not grant
+  your fork a Supabase access token. No prompts after first setup;
+  it remembers the linked project in `.nak/state.json`.
 
 ### Schema columns added over time
 
