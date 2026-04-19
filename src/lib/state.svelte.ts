@@ -25,6 +25,7 @@ import { SupabaseService, type SystemPrompt } from './supabase';
 import { VeniceClient } from './venice';
 import { saveSession, clearSession } from './session';
 import { embeddingManager } from './embeddings/manager';
+import { reflectionManager } from './agents/reflection/manager';
 import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_TIER,
@@ -145,18 +146,27 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.phase = 'unlocked';
   app.error = null;
   if (opts.persist !== false) saveSession(config);
-  // Fire-and-forget: the manager acquires a cross-tab lock before
-  // spawning its worker, so another tab holding the lock will make this
-  // call hang — never await it. If there's no Supabase session yet the
-  // worker exits cleanly and state.svelte.ts doesn't need to retry; the
-  // next unlock / sign-in will call activate() again.
+  // Fire-and-forget: each manager acquires a cross-tab lock before
+  // spawning its worker, so another tab holding the lock will make
+  // this call hang — never await it. If there's no Supabase session
+  // yet the worker exits cleanly and state.svelte.ts doesn't need to
+  // retry; the next unlock / sign-in will call activate() again.
+  //
+  // The two workers run concurrently: they partition the shared
+  // `worker_leases` table on `worker_kind` so one device can hold
+  // both the embedding lease and the reflection lease
+  // simultaneously without contention.
   void embeddingManager.start({ supabase: app.supabase, config });
+  void reflectionManager.start({ supabase: app.supabase, config });
 }
 
 export function lock(): void {
-  // Tear the worker down before clearing services — the manager releases
-  // its Web Lock here so a queued tab can take over as soon as we're gone.
+  // Tear both workers down before clearing services — each manager
+  // releases its Web Lock here so a queued tab can take over as soon
+  // as we're gone. Order doesn't matter; the two locks are
+  // independent.
   embeddingManager.stop();
+  reflectionManager.stop();
   app.config = null;
   app.supabase = null;
   app.venice = null;
