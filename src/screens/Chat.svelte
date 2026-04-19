@@ -1666,6 +1666,27 @@
                 aria-expanded={modelMenuOpen}
                 title={`Model: ${MODELS[currentTier].label} (${MODELS[currentTier].id})`}
               >
+                <!-- Generic "model selection" glyph, only revealed in the
+                     mobile icon-only layout. Uses a CPU outline rather
+                     than the tier emoji so the collapsed button reads as
+                     "pick a model" instead of "currently on 🧠". The tier
+                     emoji (next sibling) is the desktop affordance where
+                     the label disambiguates. -->
+                <svg class="model-picker-model-icon" width="18" height="18"
+                     viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true">
+                  <rect x="4" y="4" width="16" height="16" rx="2" />
+                  <rect x="9" y="9" width="6" height="6" />
+                  <line x1="9" y1="2" x2="9" y2="4" />
+                  <line x1="15" y1="2" x2="15" y2="4" />
+                  <line x1="9" y1="20" x2="9" y2="22" />
+                  <line x1="15" y1="20" x2="15" y2="22" />
+                  <line x1="20" y1="9" x2="22" y2="9" />
+                  <line x1="20" y1="14" x2="22" y2="14" />
+                  <line x1="2" y1="9" x2="4" y2="9" />
+                  <line x1="2" y1="14" x2="4" y2="14" />
+                </svg>
                 <span class="model-picker-icon" aria-hidden="true">{MODELS[currentTier].icon}</span>
                 <span class="model-picker-label">{MODELS[currentTier].label}</span>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"

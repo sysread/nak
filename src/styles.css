@@ -1264,17 +1264,33 @@ h1 {
      rule targets both the model tier button in Chat.svelte and the
      ReasoningPicker.svelte trigger, which share `.model-picker-btn`
      for exactly this kind of parallel styling. `aria-haspopup` +
-     `title` still carry the "opens a menu" contract for a11y. */
+     `title` still carry the "opens a menu" contract for a11y.
+
+     The model picker also swaps its tier-specific emoji for a generic
+     CPU glyph here — on desktop the "🧠 Smart ⌄" combo is clear, but
+     when collapsed to a single icon the tier emoji reads as "this is
+     a brain", not "this opens the model menu". The CPU outline is
+     unambiguously a picker affordance. `.model-picker-model-icon`
+     only exists in the model button (Chat.svelte), so the reasoning
+     picker keeps its 💭 emoji. */
   .model-picker-btn {
     padding: 0.45rem;
     gap: 0;
   }
   .model-picker-btn .model-picker-label,
-  .model-picker-btn > svg {
+  .model-picker-btn > svg:not(.model-picker-model-icon) {
     display: none;
   }
-  .model-picker-btn .model-picker-icon {
-    font-size: 1.05rem;
+  /* Hide the tier emoji only in the model picker, where we're swapping
+     in the CPU glyph — the sibling selector matches `.model-picker-icon`
+     only when a `.model-picker-model-icon` precedes it in the same
+     button, which is true only of the model picker in Chat.svelte. The
+     reasoning picker has no preceding CPU glyph, so its 💭 stays. */
+  .model-picker-btn .model-picker-model-icon ~ .model-picker-icon {
+    display: none;
+  }
+  .model-picker-btn .model-picker-model-icon {
+    display: inline-block;
   }
 }
 
@@ -1492,6 +1508,11 @@ h1 {
 }
 .model-picker-label {
   white-space: nowrap;
+}
+/* The CPU glyph is mobile-only (see the late @media block). Hidden on
+   desktop so the tier emoji + label carry the affordance there. */
+.model-picker-model-icon {
+  display: none;
 }
 
 /* Popover menus. Positioned absolutely inside the composer-bar (which is
