@@ -155,11 +155,13 @@
     </div>
     <div class="form-row">
       <label for="password">Master password</label>
-      <SecretInput id="password" bind:value={password} required minlength={8} />
+      <SecretInput id="password" bind:value={password} required minlength={8}
+                   autocomplete="new-password" />
     </div>
     <div class="form-row">
       <label for="password-confirm">Confirm master password</label>
-      <SecretInput id="password-confirm" bind:value={confirmPassword} required />
+      <SecretInput id="password-confirm" bind:value={confirmPassword} required
+                   autocomplete="new-password" />
     </div>
     {#if error}<p class="error">{error}</p>{/if}
     <button type="submit" disabled={busy}>

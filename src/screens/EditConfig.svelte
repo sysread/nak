@@ -82,7 +82,8 @@
     </div>
     <div class="form-row">
       <label for="pw">Master password</label>
-      <SecretInput id="pw" bind:value={password} required />
+      <SecretInput id="pw" bind:value={password} required
+                   autocomplete="current-password" />
     </div>
 
     {#if error}<p class="error">{error}</p>{/if}

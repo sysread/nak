@@ -5,8 +5,11 @@
    * (where seeing what you pasted is the difference between a working
    * app and a "Supabase rejected the anon key" error).
    *
-   * autocomplete is disabled so browsers don't try to autofill the
-   * Supabase anon key into a credit-card form somewhere.
+   * Autocomplete defaults to "off" so browsers don't try to autofill the
+   * Supabase anon key into a credit-card form somewhere. Master-password
+   * fields override with "current-password" / "new-password" so OS
+   * password managers and Chrome devtools stop warning about the missing
+   * attribute and can remember the freshly-chosen passphrase.
    */
   interface Props {
     id: string;
@@ -14,6 +17,7 @@
     required?: boolean;
     minlength?: number;
     placeholder?: string;
+    autocomplete?: AutoFill;
   }
   let {
     id,
@@ -21,6 +25,7 @@
     required = false,
     minlength,
     placeholder,
+    autocomplete = 'off',
   }: Props = $props();
 
   let revealed = $state(false);
@@ -34,7 +39,7 @@
     {required}
     minlength={minlength}
     {placeholder}
-    autocomplete="off"
+    {autocomplete}
   />
   <button
     type="button"

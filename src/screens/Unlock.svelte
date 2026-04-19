@@ -80,8 +80,14 @@
     <p class="subtle">Enter your master password to decrypt your configuration.</p>
     <div class="form-row">
       <label for="password">Master password</label>
+      <!--
+        "current-password" so an OS/browser password manager that has saved
+        the master password can offer to fill it. This blob can only be
+        decrypted with the user's own password, so there's nothing to lose
+        by letting a local vault remember it.
+      -->
       <input id="password" type="password" bind:value={password} required
-             bind:this={passwordEl} />
+             bind:this={passwordEl} autocomplete="current-password" />
     </div>
     {#if error}<p class="error">{error}</p>{/if}
     <div class="row">

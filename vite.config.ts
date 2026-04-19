@@ -34,16 +34,17 @@ export default defineConfig({
         background_color: '#0b0d10',
         display: 'standalone',
         start_url: '.',
+        // Single SVG icon covers every size — declaring `sizes: 'any'`
+        // tells the UA it's resolution-independent, and `purpose: 'any
+        // maskable'` lets Android crop it for adaptive icons without us
+        // shipping a second raster copy. The file lives in public/ so
+        // Vite copies it verbatim to the build root.
         icons: [
           {
-            src: 'icon-192.png',
-            sizes: '192x192',
-            type: 'image/png',
-          },
-          {
-            src: 'icon-512.png',
-            sizes: '512x512',
-            type: 'image/png',
+            src: 'icon.svg',
+            sizes: 'any',
+            type: 'image/svg+xml',
+            purpose: 'any maskable',
           },
         ],
       },

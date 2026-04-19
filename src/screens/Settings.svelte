@@ -458,7 +458,8 @@
           </div>
           <div class="form-row">
             <label for="cp">Current master password</label>
-            <SecretInput id="cp" bind:value={keysPassword} required />
+            <SecretInput id="cp" bind:value={keysPassword} required
+                         autocomplete="current-password" />
           </div>
           {#if keysError}<p class="error">{keysError}</p>{/if}
           {#if keysInfo}<p class="subtle">{keysInfo}</p>{/if}
@@ -707,11 +708,13 @@
         <form onsubmit={onChangePassword}>
           <div class="form-row">
             <label for="pw-current">Current master password</label>
-            <SecretInput id="pw-current" bind:value={pwCurrent} required />
+            <SecretInput id="pw-current" bind:value={pwCurrent} required
+                         autocomplete="current-password" />
           </div>
           <div class="form-row">
             <label for="pw-new">New master password</label>
-            <SecretInput id="pw-new" bind:value={pwNew} minlength={8} required />
+            <SecretInput id="pw-new" bind:value={pwNew} minlength={8} required
+                         autocomplete="new-password" />
           </div>
           {#if pwError}<p class="error">{pwError}</p>{/if}
           {#if pwInfo}<p class="subtle">{pwInfo}</p>{/if}
