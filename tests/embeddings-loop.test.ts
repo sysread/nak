@@ -36,16 +36,16 @@ import { EMBEDDING_STORAGE_DIMS, VENICE_EMBEDDING_DIMS } from '../src/lib/models
 function buildCoordinator(): {
   coordinator: LeaseCoordinator;
   leaseSpies: {
-    acquireEmbeddingLease: ReturnType<typeof vi.fn>;
-    heartbeatEmbeddingLease: ReturnType<typeof vi.fn>;
-    releaseEmbeddingLease: ReturnType<typeof vi.fn>;
+    acquireWorkerLease: ReturnType<typeof vi.fn>;
+    heartbeatWorkerLease: ReturnType<typeof vi.fn>;
+    releaseWorkerLease: ReturnType<typeof vi.fn>;
   };
   fireHeartbeat: () => Promise<void>;
 } {
   const leaseSpies = {
-    acquireEmbeddingLease: vi.fn(async () => true),
-    heartbeatEmbeddingLease: vi.fn(async () => true),
-    releaseEmbeddingLease: vi.fn(async () => undefined),
+    acquireWorkerLease: vi.fn(async () => true),
+    heartbeatWorkerLease: vi.fn(async () => true),
+    releaseWorkerLease: vi.fn(async () => undefined),
   };
   let captured: (() => void) | null = null;
   const handle = Symbol('h') as unknown as ReturnType<typeof setInterval>;
@@ -60,6 +60,7 @@ function buildCoordinator(): {
   };
   const coordinator = new LeaseCoordinator(
     leaseSpies as unknown as SupabaseService,
+    'embedding',
     'holder-test',
     { ttlSeconds: 45, heartbeatMs: 20_000 },
     timers
@@ -128,7 +129,7 @@ function buildCtx(overrides: Partial<CycleContext> = {}): CycleContext {
 describe('runOneCycle — lease acquisition', () => {
   it('returns polling when the acquire RPC denies the lease', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(false);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(false);
     const ctx = buildCtx({ coordinator });
     const result = await runOneCycle(ctx);
     expect(result).toBe<CycleResult>('polling');
@@ -137,7 +138,7 @@ describe('runOneCycle — lease acquisition', () => {
 
   it('returns acquired-lease and flips isHolding on successful acquire', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(true);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const ctx = buildCtx({ coordinator });
     const result = await runOneCycle(ctx);
     expect(result).toBe<CycleResult>('acquired-lease');
@@ -154,12 +155,12 @@ describe('runOneCycle — lease acquisition', () => {
 
   it('invokes onLeaseLost when a subsequent heartbeat fails', async () => {
     const { coordinator, leaseSpies, fireHeartbeat } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(true);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const onLeaseLost = vi.fn();
     const ctx = buildCtx({ coordinator, onLeaseLost });
     await runOneCycle(ctx);
     // Next heartbeat says "you lost it".
-    leaseSpies.heartbeatEmbeddingLease.mockResolvedValueOnce(false);
+    leaseSpies.heartbeatWorkerLease.mockResolvedValueOnce(false);
     await fireHeartbeat();
     expect(onLeaseLost).toHaveBeenCalledOnce();
     expect(coordinator.isHolding).toBe(false);
@@ -167,14 +168,14 @@ describe('runOneCycle — lease acquisition', () => {
 
   it('after a lease loss, the next runOneCycle falls back into polling', async () => {
     const { coordinator, leaseSpies, fireHeartbeat } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(true);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const ctx = buildCtx({ coordinator });
     await runOneCycle(ctx); // acquired-lease
 
-    leaseSpies.heartbeatEmbeddingLease.mockResolvedValueOnce(false);
+    leaseSpies.heartbeatWorkerLease.mockResolvedValueOnce(false);
     await fireHeartbeat();
 
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(false);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(false);
     const result = await runOneCycle(ctx);
     expect(result).toBe<CycleResult>('polling');
   });
@@ -189,7 +190,7 @@ describe('runOneCycle — holding lease, work path', () => {
 
   it('empty queue returns empty-queue without touching Venice', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(true);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
     const { venice, embed } = makeVenice();
     sourceSpies.claimNext.mockResolvedValue(null);
@@ -205,7 +206,7 @@ describe('runOneCycle — holding lease, work path', () => {
 
   it('happy path: claim → embed → pad to storage dim → save → embedded', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(true);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
     const { venice, embed } = makeVenice();
     sourceSpies.claimNext.mockResolvedValueOnce({ id: 'm-1', input: 'hello world' });
@@ -236,7 +237,7 @@ describe('runOneCycle — holding lease, work path', () => {
 
   it('save-rejected when the claim guard returns false (row edited or TTL expired)', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(true);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
     const { venice } = makeVenice();
     sourceSpies.claimNext.mockResolvedValueOnce({ id: 'm-2', input: 'x' });
@@ -251,7 +252,7 @@ describe('runOneCycle — holding lease, work path', () => {
 
   it('no-embedding when Venice returns empty data (rare protocol edge)', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(true);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
     const embed = vi.fn(async () => ({ data: [] }));
     const venice = { embed } as unknown as VeniceClient;
@@ -267,7 +268,7 @@ describe('runOneCycle — holding lease, work path', () => {
 
   it('rate-limited when Venice throws VeniceError(kind=rate_limit)', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(true);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
     const embed = vi.fn(async () => {
       throw new VeniceError('429', 'rate_limit');
@@ -285,7 +286,7 @@ describe('runOneCycle — holding lease, work path', () => {
 
   it('error when Venice throws a non-rate-limit VeniceError', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(true);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
     const embed = vi.fn(async () => {
       throw new VeniceError('500', 'http');
@@ -302,7 +303,7 @@ describe('runOneCycle — holding lease, work path', () => {
 
   it('error when claimNext itself throws — row stays unclaimed for next cycle', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(true);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
     sourceSpies.claimNext.mockRejectedValueOnce(new Error('network'));
     const { venice, embed } = makeVenice();
@@ -317,7 +318,7 @@ describe('runOneCycle — holding lease, work path', () => {
 
   it('error when save itself throws — treats like transient failure', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(true);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
     sourceSpies.claimNext.mockResolvedValueOnce({ id: 'm-6', input: 'x' });
     sourceSpies.save.mockRejectedValueOnce(new Error('network'));
@@ -332,7 +333,7 @@ describe('runOneCycle — holding lease, work path', () => {
 
   it('threads the AbortSignal through to Venice so stop cancels in-flight embeds', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
-    leaseSpies.acquireEmbeddingLease.mockResolvedValueOnce(true);
+    leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
     const { venice, embed } = makeVenice();
     sourceSpies.claimNext.mockResolvedValueOnce({ id: 'm-7', input: 'x' });

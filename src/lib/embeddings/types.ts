@@ -17,10 +17,11 @@
  * batch-save: cross-device coordination. Multiple unlocked sessions
  * (laptop + phone, say) would otherwise race for the same pending rows
  * and double-bill Venice. The worker holds a singleton lease
- * (`embedding_worker_leases`) and processes rows one at a time, each
- * stamped with a per-row claim so a lease-handover never produces
- * duplicate work. See `SupabaseService.acquireEmbeddingLease` and the
- * schema comments for the full protocol.
+ * (`worker_leases` partitioned on `worker_kind='embedding'`) and
+ * processes rows one at a time, each stamped with a per-row claim so a
+ * lease-handover never produces duplicate work. See
+ * `SupabaseService.acquireWorkerLease` and the schema comments for
+ * the full protocol.
  */
 
 /**

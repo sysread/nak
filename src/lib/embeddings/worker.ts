@@ -125,7 +125,10 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     apiKey: msg.veniceApiKey,
     baseUrl: msg.veniceBaseUrl,
   });
-  const coordinator = new LeaseCoordinator(supabase, msg.holderId, {
+  // 'embedding' is this worker's partition of the shared `worker_leases`
+  // table. Agent workers use different values ('reflection', …) and
+  // hold independently.
+  const coordinator = new LeaseCoordinator(supabase, 'embedding', msg.holderId, {
     ttlSeconds: msg.leaseTtlSeconds,
     heartbeatMs: msg.leaseHeartbeatMs,
   });

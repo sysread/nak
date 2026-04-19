@@ -502,27 +502,31 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
   }
 
-  // Embeddings pipeline ---------------------------------------------------
+  // Background-worker pipeline --------------------------------------------
   //
-  // Every method in this block exists for the background worker in
-  // `src/lib/embeddings/*`. RLS scopes every query to the current user
-  // automatically — the worker receives a session-scoped SupabaseService
-  // and never needs to know the user id.
+  // Methods in this block drive the background workers in
+  // `src/lib/embeddings/*` and, later, `src/lib/agents/*`. RLS scopes
+  // every query to the current user automatically — workers receive a
+  // session-scoped SupabaseService and never need to know the user id.
   //
   // Cross-device coordination has two layers:
   //
-  //   1. A singleton lease per user (`embedding_worker_leases`) enforces
-  //      that at most one worker runs at a time across all the user's
-  //      tabs and devices. acquireEmbeddingLease / heartbeatEmbeddingLease
-  //      / releaseEmbeddingLease drive it. Duplicate Venice charges would
-  //      otherwise be the default for anyone with a laptop + phone both
-  //      unlocked.
+  //   1. A singleton lease per user per worker kind (`worker_leases`)
+  //      enforces that at most one worker of a given kind runs at a
+  //      time across all the user's tabs and devices.
+  //      acquireWorkerLease / heartbeatWorkerLease / releaseWorkerLease
+  //      drive it. The `workerKind` argument partitions the lease:
+  //      'embedding' and 'reflection' hold independently so both can
+  //      run concurrently. Duplicate Venice charges would otherwise be
+  //      the default for anyone with a laptop + phone both unlocked.
   //
-  //   2. A per-row claim (`embedding_claim_holder` + `embedding_claim_expires`
-  //      columns on `memories`) covers the lease-handover race: a row the
-  //      previous lease holder was mid-embedding shouldn't be instantly
-  //      grabbed by the new holder. The claim keeps it reserved until the
-  //      TTL expires (long enough for the old device's Venice call to
+  //   2. A per-row claim covers the lease-handover race: a row the
+  //      previous lease holder was mid-processing shouldn't be instantly
+  //      grabbed by the new holder. For embeddings that's
+  //      (`embedding_claim_holder`, `embedding_claim_expires`) columns
+  //      on `memories`; for reflection it's a parallel pair on `threads`.
+  //      The claim keeps the row reserved until TTL expires (long
+  //      enough for the old device's in-flight network call to
   //      definitely have returned or timed out).
   //
   // Everything flows through SECURITY INVOKER RPCs in the schema so the
@@ -530,13 +534,18 @@ export class SupabaseService {
   // claim-still-ours) run in a single round trip each.
 
   /**
-   * Try to take the embedding-worker lease. Returns true iff we hold it
-   * after the call. Safe to call at any interval — the RPC is idempotent
-   * (harmless if we already hold it, harmless if someone else does and
-   * theirs hasn't expired).
+   * Try to take the singleton lease for a given worker kind. Returns
+   * true iff we hold it after the call. Safe to call at any interval —
+   * the RPC is idempotent (harmless if we already hold it, harmless if
+   * someone else does and theirs hasn't expired).
    */
-  async acquireEmbeddingLease(holderId: string, ttlSeconds: number): Promise<boolean> {
-    const { data, error } = await this.client.rpc('acquire_embedding_lease', {
+  async acquireWorkerLease(
+    workerKind: string,
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('acquire_worker_lease', {
+      p_worker_kind: workerKind,
       p_holder_id: holderId,
       p_ttl_seconds: ttlSeconds,
     });
@@ -545,13 +554,18 @@ export class SupabaseService {
   }
 
   /**
-   * Extend our lease. Returns false if the lease has already been taken
-   * over by someone else — in that case the worker must stop processing
-   * rows immediately; continuing would risk a double-embed race with the
-   * new holder.
+   * Extend our lease for a given worker kind. Returns false if the
+   * lease has already been taken over by someone else — in that case
+   * the worker must stop processing immediately; continuing would risk
+   * a double-work race with the new holder.
    */
-  async heartbeatEmbeddingLease(holderId: string, ttlSeconds: number): Promise<boolean> {
-    const { data, error } = await this.client.rpc('heartbeat_embedding_lease', {
+  async heartbeatWorkerLease(
+    workerKind: string,
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('heartbeat_worker_lease', {
+      p_worker_kind: workerKind,
       p_holder_id: holderId,
       p_ttl_seconds: ttlSeconds,
     });
@@ -560,13 +574,14 @@ export class SupabaseService {
   }
 
   /**
-   * Release our lease explicitly on graceful shutdown (stop message, app
-   * lock, sign-out). Idempotent — no-op when we don't actually hold it.
-   * Lets another device take over instantly instead of waiting for the
-   * TTL to elapse.
+   * Release our lease for a given worker kind explicitly on graceful
+   * shutdown (stop message, app lock, sign-out). Idempotent — no-op
+   * when we don't actually hold it. Lets another device take over
+   * instantly instead of waiting for the TTL to elapse.
    */
-  async releaseEmbeddingLease(holderId: string): Promise<void> {
-    const { error } = await this.client.rpc('release_embedding_lease', {
+  async releaseWorkerLease(workerKind: string, holderId: string): Promise<void> {
+    const { error } = await this.client.rpc('release_worker_lease', {
+      p_worker_kind: workerKind,
       p_holder_id: holderId,
     });
     if (error) throw new SupabaseError(error.message);

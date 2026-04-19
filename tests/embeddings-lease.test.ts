@@ -16,15 +16,15 @@ import type { SupabaseService } from '../src/lib/supabase';
 function mockSupabase(): {
   svc: SupabaseService;
   spies: {
-    acquireEmbeddingLease: ReturnType<typeof vi.fn>;
-    heartbeatEmbeddingLease: ReturnType<typeof vi.fn>;
-    releaseEmbeddingLease: ReturnType<typeof vi.fn>;
+    acquireWorkerLease: ReturnType<typeof vi.fn>;
+    heartbeatWorkerLease: ReturnType<typeof vi.fn>;
+    releaseWorkerLease: ReturnType<typeof vi.fn>;
   };
 } {
   const spies = {
-    acquireEmbeddingLease: vi.fn(async () => true),
-    heartbeatEmbeddingLease: vi.fn(async () => true),
-    releaseEmbeddingLease: vi.fn(async () => undefined),
+    acquireWorkerLease: vi.fn(async () => true),
+    heartbeatWorkerLease: vi.fn(async () => true),
+    releaseWorkerLease: vi.fn(async () => undefined),
   };
   return { svc: spies as unknown as SupabaseService, spies };
 }
@@ -71,46 +71,65 @@ describe('LeaseCoordinator', () => {
     it('rejects heartbeat >= TTL (would let lease expire between beats)', () => {
       expect(
         () =>
-          new LeaseCoordinator(svc, 'h', { ttlSeconds: 10, heartbeatMs: 10_000 }, timers)
+          new LeaseCoordinator(svc, 'embedding', 'h', { ttlSeconds: 10, heartbeatMs: 10_000 }, timers)
       ).toThrow(/must be less than/);
     });
 
     it('accepts heartbeat comfortably below TTL', () => {
       expect(
         () =>
-          new LeaseCoordinator(svc, 'h', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers)
+          new LeaseCoordinator(svc, 'embedding', 'h', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers)
       ).not.toThrow();
     });
   });
 
   describe('acquire', () => {
     it('returns true and flips isHolding when the RPC grants the lease', async () => {
-      spies.acquireEmbeddingLease.mockResolvedValueOnce(true);
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      spies.acquireWorkerLease.mockResolvedValueOnce(true);
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       const ok = await co.acquire();
       expect(ok).toBe(true);
       expect(co.isHolding).toBe(true);
-      expect(spies.acquireEmbeddingLease).toHaveBeenCalledWith('h1', 45);
+      expect(spies.acquireWorkerLease).toHaveBeenCalledWith('embedding', 'h1', 45);
     });
 
     it('returns false and leaves isHolding false on contention', async () => {
-      spies.acquireEmbeddingLease.mockResolvedValueOnce(false);
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      spies.acquireWorkerLease.mockResolvedValueOnce(false);
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       expect(await co.acquire()).toBe(false);
       expect(co.isHolding).toBe(false);
     });
 
     it('propagates RPC errors — callers decide how to back off', async () => {
-      spies.acquireEmbeddingLease.mockRejectedValueOnce(new Error('network'));
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      spies.acquireWorkerLease.mockRejectedValueOnce(new Error('network'));
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       await expect(co.acquire()).rejects.toThrow(/network/);
       expect(co.isHolding).toBe(false);
+    });
+
+    it('passes workerKind through to every RPC so non-embedding kinds partition correctly', async () => {
+      // Sanity: if this regressed to hard-coding 'embedding' the
+      // reflection agent and the embeddings worker would collide on
+      // the same row in worker_leases — one would always lose. Prove
+      // the value is threaded through acquire, heartbeat, and release.
+      spies.acquireWorkerLease.mockResolvedValueOnce(true);
+      const co = new LeaseCoordinator(svc, 'reflection', 'h-r', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      await co.acquire();
+      expect(spies.acquireWorkerLease).toHaveBeenCalledWith('reflection', 'h-r', 45);
+
+      const onLost = vi.fn();
+      co.startHeartbeat(onLost);
+      await timers.fireInterval();
+      expect(spies.heartbeatWorkerLease).toHaveBeenCalledWith('reflection', 'h-r', 45);
+
+      await co.release();
+      expect(spies.releaseWorkerLease).toHaveBeenCalledWith('reflection', 'h-r');
     });
   });
 
   describe('heartbeat', () => {
     it('no-ops when we do not hold the lease', async () => {
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       const onLost = vi.fn();
       co.startHeartbeat(onLost);
       // No interval was armed — firing would throw in our mock.
@@ -118,30 +137,30 @@ describe('LeaseCoordinator', () => {
     });
 
     it('refreshes the lease while the RPC keeps returning true', async () => {
-      spies.acquireEmbeddingLease.mockResolvedValueOnce(true);
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      spies.acquireWorkerLease.mockResolvedValueOnce(true);
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       await co.acquire();
       const onLost = vi.fn();
       co.startHeartbeat(onLost);
 
-      spies.heartbeatEmbeddingLease.mockResolvedValue(true);
+      spies.heartbeatWorkerLease.mockResolvedValue(true);
       await timers.fireInterval();
       await timers.fireInterval();
       await timers.fireInterval();
 
-      expect(spies.heartbeatEmbeddingLease).toHaveBeenCalledTimes(3);
+      expect(spies.heartbeatWorkerLease).toHaveBeenCalledTimes(3);
       expect(onLost).not.toHaveBeenCalled();
       expect(co.isHolding).toBe(true);
     });
 
     it('fires onLost and flips isHolding when heartbeat returns false', async () => {
-      spies.acquireEmbeddingLease.mockResolvedValueOnce(true);
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      spies.acquireWorkerLease.mockResolvedValueOnce(true);
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       await co.acquire();
       const onLost = vi.fn();
       co.startHeartbeat(onLost);
 
-      spies.heartbeatEmbeddingLease.mockResolvedValueOnce(false);
+      spies.heartbeatWorkerLease.mockResolvedValueOnce(false);
       await timers.fireInterval();
 
       expect(onLost).toHaveBeenCalledOnce();
@@ -149,32 +168,32 @@ describe('LeaseCoordinator', () => {
     });
 
     it('swallows thrown errors — one failed beat is not decisive', async () => {
-      spies.acquireEmbeddingLease.mockResolvedValueOnce(true);
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      spies.acquireWorkerLease.mockResolvedValueOnce(true);
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       await co.acquire();
       const onLost = vi.fn();
       co.startHeartbeat(onLost);
 
-      spies.heartbeatEmbeddingLease.mockRejectedValueOnce(new Error('boom'));
+      spies.heartbeatWorkerLease.mockRejectedValueOnce(new Error('boom'));
       // Should not reject, should not fire onLost.
       await timers.fireInterval();
       expect(onLost).not.toHaveBeenCalled();
       expect(co.isHolding).toBe(true);
 
       // A subsequent successful beat continues normally.
-      spies.heartbeatEmbeddingLease.mockResolvedValueOnce(true);
+      spies.heartbeatWorkerLease.mockResolvedValueOnce(true);
       await timers.fireInterval();
       expect(co.isHolding).toBe(true);
     });
 
     it('stops the interval after a decisive loss so old timers do not fire onLost twice', async () => {
-      spies.acquireEmbeddingLease.mockResolvedValueOnce(true);
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      spies.acquireWorkerLease.mockResolvedValueOnce(true);
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       await co.acquire();
       const onLost = vi.fn();
       co.startHeartbeat(onLost);
 
-      spies.heartbeatEmbeddingLease.mockResolvedValueOnce(false);
+      spies.heartbeatWorkerLease.mockResolvedValueOnce(false);
       await timers.fireInterval();
       expect(onLost).toHaveBeenCalledOnce();
 
@@ -185,51 +204,51 @@ describe('LeaseCoordinator', () => {
     });
 
     it('startHeartbeat is idempotent — duplicate calls do not stack intervals', async () => {
-      spies.acquireEmbeddingLease.mockResolvedValueOnce(true);
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      spies.acquireWorkerLease.mockResolvedValueOnce(true);
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       await co.acquire();
       const onLost = vi.fn();
       co.startHeartbeat(onLost);
       co.startHeartbeat(onLost); // second call should replace, not duplicate
 
-      spies.heartbeatEmbeddingLease.mockResolvedValueOnce(true);
+      spies.heartbeatWorkerLease.mockResolvedValueOnce(true);
       await timers.fireInterval();
       // One beat per fire — not two.
-      expect(spies.heartbeatEmbeddingLease).toHaveBeenCalledTimes(1);
+      expect(spies.heartbeatWorkerLease).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('release', () => {
     it('calls the release RPC and flips isHolding when we held the lease', async () => {
-      spies.acquireEmbeddingLease.mockResolvedValueOnce(true);
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      spies.acquireWorkerLease.mockResolvedValueOnce(true);
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       await co.acquire();
       await co.release();
-      expect(spies.releaseEmbeddingLease).toHaveBeenCalledWith('h1');
+      expect(spies.releaseWorkerLease).toHaveBeenCalledWith('embedding', 'h1');
       expect(co.isHolding).toBe(false);
     });
 
     it('is a no-op when we never held the lease', async () => {
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       await co.release();
-      expect(spies.releaseEmbeddingLease).not.toHaveBeenCalled();
+      expect(spies.releaseWorkerLease).not.toHaveBeenCalled();
     });
 
     it('swallows release RPC errors — the TTL will sweep anyway', async () => {
-      spies.acquireEmbeddingLease.mockResolvedValueOnce(true);
-      spies.releaseEmbeddingLease.mockRejectedValueOnce(new Error('offline'));
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      spies.acquireWorkerLease.mockResolvedValueOnce(true);
+      spies.releaseWorkerLease.mockRejectedValueOnce(new Error('offline'));
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       await co.acquire();
       await expect(co.release()).resolves.toBeUndefined();
       expect(co.isHolding).toBe(false);
     });
 
     it('stops the heartbeat interval even if the release RPC errors', async () => {
-      spies.acquireEmbeddingLease.mockResolvedValueOnce(true);
-      const co = new LeaseCoordinator(svc, 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
+      spies.acquireWorkerLease.mockResolvedValueOnce(true);
+      const co = new LeaseCoordinator(svc, 'embedding', 'h1', { ttlSeconds: 45, heartbeatMs: 20_000 }, timers);
       await co.acquire();
       co.startHeartbeat(() => {});
-      spies.releaseEmbeddingLease.mockRejectedValueOnce(new Error('offline'));
+      spies.releaseWorkerLease.mockRejectedValueOnce(new Error('offline'));
       await co.release();
       await expect(timers.fireInterval()).rejects.toThrow(/no active/);
     });

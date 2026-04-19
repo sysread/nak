@@ -373,84 +373,109 @@ drop policy if exists "memories are self-deletable" on public.memories;
 create policy "memories are self-deletable" on public.memories
   for delete using (auth.uid() = user_id);
 
--- embedding_worker_leases ------------------------------------------------
+-- worker_leases ----------------------------------------------------------
 --
--- Singleton per user: at most one embedding worker runs at a time across
--- all the user's open tabs and devices. The lease is the top rail for
--- "one device at a time"; the per-row claim (columns above) is the
--- bottom rail that handles the lease-handover race (an in-flight embed
--- finishing milliseconds after the next device takes the lease).
+-- Singleton per user per worker kind: at most one worker of a given kind
+-- runs at a time across all the user's open tabs and devices. Originally
+-- an embeddings-only table (`embedding_worker_leases`); generalised when
+-- the memory-reflection agent landed — agents are a category now, not a
+-- one-off, and each agent kind wants the same lease-plus-heartbeat
+-- shape. The `worker_kind` column partitions the lease: `'embedding'`
+-- and `'reflection'` hold independently so both can run concurrently as
+-- long as there's one per kind.
 --
--- Workers hold the lease by writing `(holder_id, expires_at)` and
+-- Lease is the top rail for "one device at a time per worker kind"; the
+-- bottom rails (per-row claims on `memories`, per-thread claims on
+-- `threads`) handle the lease-handover race where in-flight work on the
+-- outgoing device shouldn't collide with the new lease holder.
+--
+-- Workers hold their lease by writing `(holder_id, expires_at)` and
 -- heartbeating it forward every ~20s. When `expires_at < now()` the
 -- lease is claimable by anyone. A polling device runs acquire every
 -- ~20s; it's one cheap SELECT plus an optional UPDATE.
 --
--- Why `user_id primary key` and not a surrogate: we want the "at most
--- one per user" constraint structurally enforced, and `on conflict
--- (user_id)` is the primitive the acquire RPC relies on.
+-- Why `(user_id, worker_kind)` composite primary key: we want "at most
+-- one per user per kind" structurally enforced, and `on conflict
+-- (user_id, worker_kind)` is the primitive the acquire RPC relies on.
 
-create table if not exists public.embedding_worker_leases (
-  user_id uuid primary key references auth.users(id) on delete cascade,
+-- Clean up the pre-generalisation table on databases synced before the
+-- rename. `cascade` also sweeps its old RLS policies. Idempotent — a
+-- never-synced database or a freshly-synced one has no table by that
+-- name and skips.
+drop table if exists public.embedding_worker_leases cascade;
+
+create table if not exists public.worker_leases (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  worker_kind text not null,
   holder_id text not null,
-  expires_at timestamptz not null
+  expires_at timestamptz not null,
+  primary key (user_id, worker_kind)
 );
 
-alter table public.embedding_worker_leases enable row level security;
+alter table public.worker_leases enable row level security;
 
-drop policy if exists "embedding leases are self-selectable"
-  on public.embedding_worker_leases;
-create policy "embedding leases are self-selectable"
-  on public.embedding_worker_leases
+drop policy if exists "worker leases are self-selectable"
+  on public.worker_leases;
+create policy "worker leases are self-selectable"
+  on public.worker_leases
   for select using (auth.uid() = user_id);
 
-drop policy if exists "embedding leases are self-insertable"
-  on public.embedding_worker_leases;
-create policy "embedding leases are self-insertable"
-  on public.embedding_worker_leases
+drop policy if exists "worker leases are self-insertable"
+  on public.worker_leases;
+create policy "worker leases are self-insertable"
+  on public.worker_leases
   for insert with check (auth.uid() = user_id);
 
-drop policy if exists "embedding leases are self-updatable"
-  on public.embedding_worker_leases;
-create policy "embedding leases are self-updatable"
-  on public.embedding_worker_leases
+drop policy if exists "worker leases are self-updatable"
+  on public.worker_leases;
+create policy "worker leases are self-updatable"
+  on public.worker_leases
   for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
-drop policy if exists "embedding leases are self-deletable"
-  on public.embedding_worker_leases;
-create policy "embedding leases are self-deletable"
-  on public.embedding_worker_leases
+drop policy if exists "worker leases are self-deletable"
+  on public.worker_leases;
+create policy "worker leases are self-deletable"
+  on public.worker_leases
   for delete using (auth.uid() = user_id);
 
--- Embedding pipeline RPCs ------------------------------------------------
+-- Worker-lease RPCs ------------------------------------------------------
 --
 -- `security invoker` throughout — RLS still applies, but the explicit
 -- `user_id = auth.uid()` guards inside each function's body keep intent
 -- obvious at the call site and protect us if the policies ever change
 -- shape. Every function is drop-then-create because some signatures
 -- change the return type, which `create or replace` can't do in place.
-
--- Try to take the singleton lease. Returns true iff we hold it after the
--- call. Atomic via `on conflict do update where ...`: the update only
--- fires when the existing lease is either ours (same holder_id, harmless
--- refresh) or expired.
+--
+-- Drop the pre-generalisation function signatures too, so a
+-- freshly-synced database with no leftover table still has no leftover
+-- functions pointing at it.
 drop function if exists public.acquire_embedding_lease(text, int);
-create or replace function public.acquire_embedding_lease(
+drop function if exists public.heartbeat_embedding_lease(text, int);
+drop function if exists public.release_embedding_lease(text);
+
+-- Try to take the singleton lease for a given worker kind. Returns true
+-- iff we hold it after the call. Atomic via `on conflict do update
+-- where ...`: the update only fires when the existing lease is either
+-- ours (same holder_id, harmless refresh) or expired.
+drop function if exists public.acquire_worker_lease(text, text, int);
+create or replace function public.acquire_worker_lease(
+  p_worker_kind text,
   p_holder_id text,
   p_ttl_seconds int
 ) returns boolean
 language plpgsql security invoker as $$
 begin
-  insert into public.embedding_worker_leases (user_id, holder_id, expires_at)
-    values (auth.uid(), p_holder_id, now() + make_interval(secs => p_ttl_seconds))
-    on conflict (user_id) do update
+  insert into public.worker_leases (user_id, worker_kind, holder_id, expires_at)
+    values (auth.uid(), p_worker_kind, p_holder_id, now() + make_interval(secs => p_ttl_seconds))
+    on conflict (user_id, worker_kind) do update
       set holder_id = excluded.holder_id,
           expires_at = excluded.expires_at
-      where public.embedding_worker_leases.expires_at < now()
-         or public.embedding_worker_leases.holder_id = excluded.holder_id;
+      where public.worker_leases.expires_at < now()
+         or public.worker_leases.holder_id = excluded.holder_id;
   return exists (
-    select 1 from public.embedding_worker_leases
+    select 1 from public.worker_leases
      where user_id = auth.uid()
+       and worker_kind = p_worker_kind
        and holder_id = p_holder_id
        and expires_at > now()
   );
@@ -460,8 +485,9 @@ end $$;
 -- landed — false means our lease lapsed and someone else took over, in
 -- which case the worker should stop immediately rather than keep
 -- processing rows it no longer has the right to.
-drop function if exists public.heartbeat_embedding_lease(text, int);
-create or replace function public.heartbeat_embedding_lease(
+drop function if exists public.heartbeat_worker_lease(text, text, int);
+create or replace function public.heartbeat_worker_lease(
+  p_worker_kind text,
   p_holder_id text,
   p_ttl_seconds int
 ) returns boolean
@@ -469,9 +495,10 @@ language plpgsql security invoker as $$
 declare
   updated int;
 begin
-  update public.embedding_worker_leases
+  update public.worker_leases
      set expires_at = now() + make_interval(secs => p_ttl_seconds)
    where user_id = auth.uid()
+     and worker_kind = p_worker_kind
      and holder_id = p_holder_id
      and expires_at > now();
   get diagnostics updated = row_count;
@@ -481,14 +508,16 @@ end $$;
 -- Explicit release — used by the worker on graceful shutdown so another
 -- device can pick up instantly rather than waiting for the TTL. Always
 -- returns void: nothing to do if our lease is already gone.
-drop function if exists public.release_embedding_lease(text);
-create or replace function public.release_embedding_lease(
+drop function if exists public.release_worker_lease(text, text);
+create or replace function public.release_worker_lease(
+  p_worker_kind text,
   p_holder_id text
 ) returns void
 language plpgsql security invoker as $$
 begin
-  delete from public.embedding_worker_leases
+  delete from public.worker_leases
    where user_id = auth.uid()
+     and worker_kind = p_worker_kind
      and holder_id = p_holder_id;
 end $$;
 

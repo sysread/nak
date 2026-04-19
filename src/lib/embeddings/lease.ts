@@ -1,13 +1,22 @@
 /**
- * Lease coordination for the embeddings worker. Wraps the three lease
+ * Lease coordination for a background worker. Wraps the three lease
  * RPCs (acquire / heartbeat / release) and the heartbeat interval so
  * the surrounding loop can ignore timer plumbing and just ask
  * `coordinator.isHolding`.
  *
- * The lease is a singleton per user across every tab, every device —
- * see the schema comments on `embedding_worker_leases` for the full
- * protocol. The short version: at most one worker runs at a time, which
- * matters because duplicate embedding work costs real Venice money.
+ * The lease is a singleton per user per worker kind across every tab,
+ * every device — see the schema comments on `worker_leases` for the
+ * full protocol. `workerKind` partitions the lease: `'embedding'` and
+ * `'reflection'` hold independently so both kinds can run concurrently
+ * as long as there's one per kind. The short version: at most one
+ * worker of a given kind runs at a time, which matters because
+ * duplicate work (embedding reruns, reflection reruns) costs real
+ * Venice money.
+ *
+ * Lives under `src/lib/embeddings/` for historical reasons — it was
+ * the embeddings worker's coordinator first and got generalised when
+ * the reflection agent arrived. Both `src/lib/embeddings/worker.ts`
+ * and `src/lib/agents/reflection/worker.ts` import from here.
  *
  * Heartbeat timing: default TTL is 45s and we beat every 20s. That's
  * two attempts per expiry window; a single missed beat is still inside
@@ -46,6 +55,13 @@ export class LeaseCoordinator {
 
   constructor(
     private readonly supabase: SupabaseService,
+    /**
+     * Partitioning key for the lease row — 'embedding', 'reflection',
+     * etc. Two coordinators with different kinds never contend; one
+     * device can hold both a reflection lease and an embedding lease
+     * simultaneously (different kinds, different rows).
+     */
+    readonly workerKind: string,
     readonly holderId: string,
     private readonly config: LeaseConfig,
     private readonly timers: LeaseTimers = realTimers
@@ -71,7 +87,8 @@ export class LeaseCoordinator {
    * refresh of the expiry.
    */
   async acquire(): Promise<boolean> {
-    this.holding = await this.supabase.acquireEmbeddingLease(
+    this.holding = await this.supabase.acquireWorkerLease(
+      this.workerKind,
       this.holderId,
       this.config.ttlSeconds
     );
@@ -105,7 +122,8 @@ export class LeaseCoordinator {
    */
   async beatOnce(onLost: () => void): Promise<void> {
     try {
-      const ok = await this.supabase.heartbeatEmbeddingLease(
+      const ok = await this.supabase.heartbeatWorkerLease(
+        this.workerKind,
         this.holderId,
         this.config.ttlSeconds
       );
@@ -138,7 +156,7 @@ export class LeaseCoordinator {
     if (!this.holding) return;
     this.holding = false;
     try {
-      await this.supabase.releaseEmbeddingLease(this.holderId);
+      await this.supabase.releaseWorkerLease(this.workerKind, this.holderId);
     } catch {
       // Best-effort: if the release RPC fails we just wait for TTL
       // expiry. Throwing here would leak into the calling `stop()`
