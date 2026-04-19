@@ -79,25 +79,56 @@ export function buildToolList(toolsEnabled: boolean): OpenAIToolDef[] {
  * search if the model decides to — which it won't, if it thinks it
  * can't.
  */
-export interface ToolCatalogOptions {
+export interface SystemPromptOptions {
   webSearch?: boolean;
 }
 
 /**
- * The system-prompt catalog fragment listing every tool by name plus a
- * short blurb. Built from the registry so adding a tool automatically
- * extends the advertised capability. Format tuned to be cheap in
- * tokens — one line per tool, no JSON ceremony.
+ * The baseline system prompt prepended to every main-chat request.
+ * Carries three things, in this order:
  *
- * The optional `webSearch` hint is additive — the Venice server runs
- * the search itself when the model signals intent, so we don't list
- * web search alongside our own tools (there's no function name or
- * JSON schema to emit for it). We just tell the model the capability
- * is available.
+ *   1. **Identity.** "You are Nak." plus a short paragraph about what
+ *      Nak is and the memory loop the model participates in. User-
+ *      configured system prompts from Settings ride AFTER this in
+ *      the wire order, so a "you are a pirate" custom prompt wins
+ *      on voice while the baseline still carries the tool framing
+ *      every turn needs.
+ *
+ *   2. **Tool framing.** The toggle_tools gating rule lives here
+ *      rather than in the tool's own description — the model's tool
+ *      description is a contract for *this call*, not a place to
+ *      teach ambient conversation policy. Keeping the policy in the
+ *      prompt means it's visible even before any tool schemas are on
+ *      the wire (tools_enabled=false → only toggle_tools is sent,
+ *      but the catalog below still tells the model what's behind the
+ *      gate).
+ *
+ *   3. **Dynamic tool catalog.** One line per gated tool, name +
+ *      shortDescription. Built from the registry (`GATED_TOOLS`) so
+ *      adding a tool automatically extends the advertised capability
+ *      — no second list to keep in sync.
+ *
+ * The optional `webSearch` section is additive. Venice's server runs
+ * the search itself when the model signals intent; there's no tool
+ * name or JSON schema to emit, so we just tell the model the
+ * capability exists. Without the hint, the model reads the gated
+ * list as exhaustive and refuses questions that would have benefited
+ * from live search.
  */
-export function buildToolCatalog(opts: ToolCatalogOptions = {}): string {
-  const lines = GATED_TOOLS.map((t) => `- ${t.name} : ${t.shortDescription}`);
+export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
+  const catalog = GATED_TOOLS.map((t) => `- ${t.name} : ${t.shortDescription}`);
   const out: string[] = [
+    'You are Nak, a personal AI assistant running inside the user\u2019s',
+    'browser. Every conversation happens on their device; the memories',
+    "and transcripts you see belong to them and to them alone.",
+    '',
+    'You have persistent long-term memory about this user \u2014 facts,',
+    'preferences, and short notes you\u2019ve written to your future self',
+    'during prior conversations. When something you previously learned',
+    "would help answer the current turn, reach for `memory_recall` so",
+    'you can weave that context back in without making the user repeat',
+    'themselves.',
+    '',
     'You have access to tools, but they are disabled by default to keep',
     'your context window small. Call `toggle_tools({enable: true})` before',
     'using any of the tools below, and `toggle_tools({enable: false})` when',
@@ -105,7 +136,7 @@ export function buildToolCatalog(opts: ToolCatalogOptions = {}): string {
     "tools, don't enable them at all.",
     '',
     'Available tools (hidden until you toggle on):',
-    ...lines,
+    ...catalog,
   ];
   if (opts.webSearch) {
     out.push(
@@ -113,7 +144,7 @@ export function buildToolCatalog(opts: ToolCatalogOptions = {}): string {
       'You can also search the live web for up-to-date information.',
       'When a question benefits from current facts (news, prices, releases,',
       'anything past your training cutoff), answer as if you have live',
-      'web access — the Venice platform runs the search for you and feeds',
+      'web access \u2014 the Venice platform runs the search for you and feeds',
       'the results back in with citations. Do NOT say you lack internet',
       'access. There is no tool to call for this; just answer normally.'
     );

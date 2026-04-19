@@ -12,7 +12,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   TOOLS,
   buildToolList,
-  buildToolCatalog,
+  buildSystemPrompt,
   buildToolboxWireList,
   executeToolboxCall,
   memoryToolbox,
@@ -135,32 +135,73 @@ describe('tool registry', () => {
     });
   });
 
-  it('buildToolCatalog lists gated tools but omits toggle_tools itself', () => {
-    const catalog = buildToolCatalog();
-    expect(catalog).toContain('memory_search');
-    expect(catalog).toContain('memory_create');
-    expect(catalog).toContain('memory_update');
-    expect(catalog).toContain('memory_delete');
-    // toggle_tools is the switch itself, not something to advertise in
-    // the catalog of gated tools.
-    expect(catalog).not.toMatch(/^- toggle_tools/m);
+  it('buildSystemPrompt opens with the Nak identity line', () => {
+    // The first sentence frames the model. It has to be present every
+    // turn, even when the user has custom system prompts stacked after
+    // it, because user prompts are allowed to reshape voice but shouldn't
+    // have to re-establish what the product is.
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/^You are Nak/);
   });
 
-  it('buildToolCatalog omits the web-search hint by default', () => {
+  it('buildSystemPrompt mentions long-term memory and nudges memory_recall', () => {
+    // The memory loop is the interesting behavior. If this copy rots,
+    // the model stops reaching for memory_recall and recall becomes a
+    // dead tool. Fail loudly on a regression rather than silently.
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/long-term memory/i);
+    expect(prompt).toContain('memory_recall');
+  });
+
+  it('buildSystemPrompt lists every gated tool but omits toggle_tools itself', () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('memory_recall');
+    expect(prompt).toContain('memory_search');
+    expect(prompt).toContain('memory_create');
+    expect(prompt).toContain('memory_update');
+    expect(prompt).toContain('memory_delete');
+    // toggle_tools is the switch itself, not something to advertise in
+    // the catalog of gated tools.
+    expect(prompt).not.toMatch(/^- toggle_tools/m);
+  });
+
+  it('buildSystemPrompt catalog lines are dynamically derived from the registry', () => {
+    // Every gated tool's name AND shortDescription land on a line. If
+    // a tool is added to TOOLS but forgotten in the catalog, this
+    // test catches the drift — the prompt is always the live view.
+    const prompt = buildSystemPrompt();
+    const gated = TOOLS.filter((t) => t.name !== toggleTools.name);
+    for (const tool of gated) {
+      expect(prompt).toContain(`- ${tool.name} : ${tool.shortDescription}`);
+    }
+  });
+
+  it('buildSystemPrompt explains the toggle_tools gating rule', () => {
+    // The policy used to live on toggle_tools' own description; it
+    // now belongs here so the model sees it before any tool schemas
+    // are on the wire (tools_enabled=false → only toggle_tools is
+    // sent). A drop here would let a model that doesn't already know
+    // about toggle_tools just try to call memory_search directly.
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/toggle_tools\(\{enable: true\}\)/);
+    expect(prompt).toMatch(/toggle_tools\(\{enable: false\}\)/);
+  });
+
+  it('buildSystemPrompt omits the web-search hint by default', () => {
     // Without the opt-in, the prompt must not mention web search — we
     // don't want the model to claim capabilities the wire-level
     // `enable_web_search` flag didn't actually grant.
-    const catalog = buildToolCatalog();
-    expect(catalog).not.toMatch(/web/i);
+    const prompt = buildSystemPrompt();
+    expect(prompt).not.toMatch(/live web|search the live web|web access/i);
   });
 
-  it('buildToolCatalog adds a web-search hint when opted in', () => {
+  it('buildSystemPrompt adds a web-search hint when opted in', () => {
     // With the hint, the model must see both that it can search the
     // web AND that there's no function to call for it — otherwise it
     // tries to invoke a nonexistent tool on the next turn.
-    const catalog = buildToolCatalog({ webSearch: true });
-    expect(catalog).toMatch(/search the live web/i);
-    expect(catalog).toMatch(/no tool to call/i);
+    const prompt = buildSystemPrompt({ webSearch: true });
+    expect(prompt).toMatch(/search the live web/i);
+    expect(prompt).toMatch(/no tool to call/i);
   });
 
   it('executeToolCall dispatches by name', async () => {

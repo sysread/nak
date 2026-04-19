@@ -6,17 +6,23 @@
  *
  * Also reachable from the UI via the composer toolbox button — the
  * state column is the single source of truth for both paths.
+ *
+ * The tool description below is deliberately terse. The ambient
+ * "what's the catalog, when should you toggle" policy lives in the
+ * baseline system prompt (`buildSystemPrompt` in ./index.ts) so it's
+ * visible before any tool schemas are on the wire and stays dynamic
+ * as tools are added or removed. A tool description is a per-call
+ * contract, not a place to teach the model conversation-level rules.
  */
 import type { ToolDef } from './types';
 
 export const toggleTools: ToolDef = {
   name: 'toggle_tools',
   description:
-    'Turn the full tool set on or off for this conversation. When OFF, only ' +
-    'this meta-tool is available — call it with {enable: true} before ' +
-    "attempting any other tool. When ON, every tool in the catalog is " +
-    'callable. Call with {enable: false} when the current task is done, ' +
-    'to keep future turns cheap.',
+    'Toggle the full tool set for this conversation. Pass ' +
+    '{enable: true} to expose every tool listed in the system prompt; ' +
+    '{enable: false} to put them back behind the gate when the current ' +
+    'task is done.',
   shortDescription: 'turn the full tool set on or off',
   parameters: {
     type: 'object',

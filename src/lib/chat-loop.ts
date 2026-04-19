@@ -35,7 +35,7 @@ import type {
 } from './venice';
 import {
   buildToolList,
-  buildToolCatalog,
+  buildSystemPrompt,
   executeToolCall,
   toggleTools,
   type OpenAIToolCall,
@@ -202,17 +202,23 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     if (signal.aborted) break;
     roundsRun++;
 
-    // Prepend the system-prompt catalog every round. It's not stored in
-    // the DB — it's derived from the registry at request-time, so adding
-    // a tool automatically updates what the model knows about.
-    // Advertise Venice's web-search augmentation to the model when the
-    // user hasn't opted out. In `auto` mode Venice only runs the search
-    // if the model signals intent — without this hint the model reads
-    // the gated-tool list as exhaustive and refuses.
+    // Prepend the baseline system prompt every round. It's not stored
+    // in the DB — it's derived from the registry at request-time, so
+    // adding a tool automatically updates what the model knows about,
+    // and editing the identity copy takes effect for the next turn
+    // with no migration. User-configured system prompts from Settings
+    // ride AFTER this in `history`, which means a custom "you are a
+    // pirate" prompt still wins on voice while the baseline tool
+    // framing stays in force.
+    //
+    // Advertise Venice's web-search augmentation to the model when
+    // the user hasn't opted out. In `auto` mode Venice only runs the
+    // search if the model signals intent — without this hint the
+    // model reads the gated-tool list as exhaustive and refuses.
     const requestMessages: VeniceMessage[] = [
       {
         role: 'system',
-        content: buildToolCatalog({
+        content: buildSystemPrompt({
           webSearch: webSearch === 'auto' || webSearch === 'on',
         }),
       },
