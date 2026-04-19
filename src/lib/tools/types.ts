@@ -79,3 +79,25 @@ export interface OpenAIToolCall {
     arguments: string;
   };
 }
+
+/**
+ * A named bundle of tools that travel together. Agents and the main
+ * chat loop both compose requests against a toolbox; the toolbox is
+ * the unit of "here is the capability set this model can reach for".
+ *
+ * Deliberately spare: no toggle semantics, no prompt-catalog helper,
+ * no per-tool enable flags. The main chat loop wraps its toolbox with
+ * a gate (`toggle_tools`) and a prompt-catalog fragment because that's
+ * chat-specific UX — an agent that always runs with its full kit
+ * doesn't need either. Callers layer those concerns on top of the
+ * primitive rather than fighting to unset them.
+ *
+ * `name` identifies the toolbox for error messages and debug logs;
+ * `description` is human-readable prose an agent can stitch into its
+ * own system prompt if it wants to advertise the capability set.
+ */
+export interface Toolbox {
+  readonly name: string;
+  readonly description: string;
+  readonly tools: readonly ToolDef[];
+}

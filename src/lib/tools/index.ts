@@ -15,7 +15,7 @@
  * other tools are included only when the thread's `tools_enabled`
  * column is true. `buildToolList()` encodes that rule.
  */
-import type { ToolDef, OpenAIToolDef, ToolContext, ToolResult } from './types';
+import type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
 import { toggleTools } from './toggle_tools';
 import { memorySearch } from './memory_search';
 import { memoryCreate } from './memory_create';
@@ -131,6 +131,48 @@ export async function executeToolCall(
   return tool.execute(args, ctx);
 }
 
+/**
+ * The toolbox the memory-reflection agent (and any future memory-only
+ * agent) will ship to its model. Same four CRUD handlers the main chat
+ * exposes — minus `toggle_tools`, which is a chat-UX concern: agents
+ * don't need a context-window gate because their prompts and tool
+ * schemas aren't shared with the user-facing conversation.
+ */
+export const memoryToolbox: Toolbox = {
+  name: 'memory',
+  description:
+    'Create, read, update, and delete the signed-in user\'s memories. ' +
+    'Vector + text search is available via memory_search.',
+  tools: [memorySearch, memoryCreate, memoryUpdate, memoryDelete],
+};
+
+/**
+ * OpenAI / Venice wire shape for every tool in a toolbox, in declared
+ * order. Order matters only for human readability — the model
+ * addresses tools by name — but preserving it keeps diffs and logs
+ * predictable.
+ */
+export function buildToolboxWireList(toolbox: Toolbox): OpenAIToolDef[] {
+  return toolbox.tools.map(toOpenAIToolDef);
+}
+
+/**
+ * Dispatch a tool call against a specific toolbox. Unknown names
+ * throw with the toolbox name included so errors from e.g. the memory
+ * agent don't look identical to errors from the main chat — useful
+ * when two surfaces share tool names but not toolboxes.
+ */
+export async function executeToolboxCall(
+  toolbox: Toolbox,
+  name: string,
+  args: Record<string, unknown>,
+  ctx: ToolContext
+): Promise<ToolResult> {
+  const tool = toolbox.tools.find((t) => t.name === name);
+  if (!tool) throw new Error(`Unknown tool in toolbox '${toolbox.name}': ${name}`);
+  return tool.execute(args, ctx);
+}
+
 export { toggleTools };
-export type { ToolDef, OpenAIToolDef, ToolContext, ToolResult } from './types';
+export type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
 export type { OpenAIToolCall } from './types';

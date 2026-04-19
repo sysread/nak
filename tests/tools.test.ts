@@ -13,10 +13,15 @@ import {
   TOOLS,
   buildToolList,
   buildToolCatalog,
+  buildToolboxWireList,
+  executeToolboxCall,
+  memoryToolbox,
   toOpenAIToolDef,
   executeToolCall,
   toggleTools,
   type ToolContext,
+  type Toolbox,
+  type ToolDef,
 } from '../src/lib/tools';
 import type { SupabaseService } from '../src/lib/supabase';
 import type { VeniceClient } from '../src/lib/venice';
@@ -336,5 +341,91 @@ describe('memory_delete', () => {
   it('rejects a missing id', async () => {
     const { svc } = mockSupabase();
     await expect(tool.execute({}, ctxFor(svc))).rejects.toThrow(/id/);
+  });
+});
+
+describe('memoryToolbox', () => {
+  it('bundles the four memory CRUD handlers without toggle_tools', () => {
+    // toggle_tools is a chat-UX concern (context-window gate); agents
+    // that use this toolbox always have its full kit available, so the
+    // gate tool must not leak in.
+    const names = memoryToolbox.tools.map((t) => t.name);
+    expect(names).toEqual(['memory_search', 'memory_create', 'memory_update', 'memory_delete']);
+    expect(names).not.toContain('toggle_tools');
+  });
+
+  it('carries a stable name and a non-empty description for downstream prompts', () => {
+    expect(memoryToolbox.name).toBe('memory');
+    expect(memoryToolbox.description.length).toBeGreaterThan(0);
+  });
+});
+
+describe('buildToolboxWireList', () => {
+  it('projects every tool in the toolbox to the OpenAI wire shape, in declared order', () => {
+    const wire = buildToolboxWireList(memoryToolbox);
+    expect(wire.map((t) => t.function.name)).toEqual(
+      memoryToolbox.tools.map((t) => t.name)
+    );
+    for (const item of wire) {
+      expect(item.type).toBe('function');
+      expect(typeof item.function.description).toBe('string');
+      expect(typeof item.function.parameters).toBe('object');
+    }
+  });
+
+  it('returns an empty array for an empty toolbox — no implicit fallback', () => {
+    const empty: Toolbox = { name: 'empty', description: 'nothing', tools: [] };
+    expect(buildToolboxWireList(empty)).toEqual([]);
+  });
+});
+
+describe('executeToolboxCall', () => {
+  it('dispatches to the named tool within the given toolbox', async () => {
+    const { svc, spies } = mockSupabase();
+    await executeToolboxCall(memoryToolbox, 'memory_create', { label: 'x', data: 'y' }, ctxFor(svc));
+    expect(spies.createMemory).toHaveBeenCalledWith('x', 'y');
+  });
+
+  it("throws with the toolbox name in the message when the tool isn't in this toolbox", async () => {
+    // `toggle_tools` IS a real ToolDef in the global registry, but it's
+    // deliberately absent from memoryToolbox — so a dispatch against
+    // this toolbox must refuse it. The error names the toolbox so
+    // memory-agent errors don't read identically to main-chat errors.
+    const { svc } = mockSupabase();
+    await expect(
+      executeToolboxCall(memoryToolbox, 'toggle_tools', { enable: true }, ctxFor(svc))
+    ).rejects.toThrow(/toolbox 'memory'/);
+  });
+
+  it('throws on an entirely unknown tool name', async () => {
+    const { svc } = mockSupabase();
+    await expect(
+      executeToolboxCall(memoryToolbox, 'no_such_tool', {}, ctxFor(svc))
+    ).rejects.toThrow(/no_such_tool/);
+  });
+
+  it('honors a caller-supplied toolbox over the global registry (isolation)', async () => {
+    // Regression guard: a toolbox must only reach its declared tools,
+    // never fall through to TOOLS. A custom toolbox with a single
+    // stub handler should run the stub — not the real memory_create.
+    const { svc, spies } = mockSupabase();
+    const stub = vi.fn(async () => ({ stubbed: true }));
+    const custom: Toolbox = {
+      name: 'custom',
+      description: 'one fake tool',
+      tools: [
+        {
+          name: 'memory_create',
+          description: 'stub',
+          shortDescription: 'stub',
+          parameters: {},
+          execute: stub,
+        } satisfies ToolDef,
+      ],
+    };
+    const result = await executeToolboxCall(custom, 'memory_create', {}, ctxFor(svc));
+    expect(stub).toHaveBeenCalledOnce();
+    expect(result).toEqual({ stubbed: true });
+    expect(spies.createMemory).not.toHaveBeenCalled();
   });
 });
