@@ -88,10 +88,11 @@
   });
 
   // Post-render: assign ids to headings so `#anchor` links resolve,
-  // then scroll to `pendingHash` if the latest navigate asked for it.
-  // Runs after `{@html}` commits because `contentEl` only exists once
-  // Markdown has been rendered, and Svelte 5 schedules `$effect` after
-  // the DOM update.
+  // demote unreachable anchors so a click can't trap the reader in an
+  // error state, then scroll to `pendingHash` if the latest navigate
+  // asked for it. Runs after `{@html}` commits because `contentEl`
+  // only exists once Markdown has been rendered, and Svelte 5
+  // schedules `$effect` after the DOM update.
   $effect(() => {
     void content;
     if (loading || !contentEl) return;
@@ -104,6 +105,27 @@
         continue;
       }
       h.id = uniqueSlug(h.textContent ?? '', used);
+    }
+    // Demote anchors that can't render a working navigation in this
+    // modal into plain <code> spans. Two failure modes converge here:
+    //   1. DOMPurify stripped the href (bare-relative links that
+    //      don't match ALLOWED_URI_REGEXP). The anchor still carries
+    //      .md a styling but clicking it does nothing.
+    //   2. Relative href that resolves outside `docs/user/` or names
+    //      a doc we don't bundle (e.g. a `../dev/` cross-tree
+    //      pointer). Clicking previously wiped content with an error
+    //      banner and disabled the back button — the reader had no
+    //      way out short of closing the modal.
+    // Rendering those references as code is honest about the
+    // constraint: it still surfaces the path in the prose, but
+    // without pretending to be navigable.
+    for (const a of contentEl.querySelectorAll<HTMLAnchorElement>('.md a')) {
+      const href = a.getAttribute('href');
+      if (href && (href.startsWith('#') || isExternalHref(href))) continue;
+      if (href && resolveDocPath(currentPath, href)) continue;
+      const code = document.createElement('code');
+      code.innerHTML = a.innerHTML;
+      a.replaceWith(code);
     }
     if (pendingHash) {
       const target = contentEl.querySelector<HTMLElement>(
@@ -206,12 +228,12 @@
     if (isExternalHref(href)) return;
 
     e.preventDefault();
+    // Unreachable in practice — the post-render effect demotes
+    // anchors that can't resolve into <code> spans, so the click
+    // never fires on one. If a race ever slips through, a silent
+    // no-op is preferable to trapping the reader in an error state.
     const resolved = resolveDocPath(currentPath, href);
-    if (resolved) {
-      navigate(resolved.path, resolved.hash);
-    } else {
-      error = `This link points outside the help pages: ${href}`;
-    }
+    if (resolved) navigate(resolved.path, resolved.hash);
   }
 </script>
 
