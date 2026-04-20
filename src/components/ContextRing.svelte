@@ -74,7 +74,7 @@
   // legible (1,234,567 reads instantly; 1234567 doesn't).
   const fmt = new Intl.NumberFormat();
   const summary = $derived(
-    `${Math.round(pct * 100)}% (${fmt.format(totalTokens)} / ${fmt.format(contextWindow)} tokens)`
+    `Context window: ${Math.round(pct * 100)}% used (${fmt.format(totalTokens)} / ${fmt.format(contextWindow)} tokens)`
   );
 
   let open = $state(false);

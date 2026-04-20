@@ -20,7 +20,7 @@ import {
 describe('MODELS', () => {
   it('has the three tiers with the expected Venice model ids', () => {
     expect(MODELS.smart.id).toBe('kimi-k2-5');
-    expect(MODELS.balanced.id).toBe('arcee-trinity-large-thinking');
+    expect(MODELS.balanced.id).toBe('gemma-4-uncensored');
     expect(MODELS.fast.id).toBe('grok-41-fast');
   });
   it('has matching tier/label and sensible context windows', () => {
