@@ -35,9 +35,23 @@
      * no flash is pending.
      */
     flashCite?: { index: number; key: number } | null;
+    /**
+     * "Orphan refs" mode: the message body has `^N^` superscripts,
+     * but the citations column is empty or null — typically because
+     * the turn was written before the column existed. Rendering the
+     * panel with an explanatory note (instead of no panel at all)
+     * keeps the in-body superscript clicks from silently no-opping,
+     * and tells the user the links aren't broken — just unsaved.
+     */
+    unavailable?: boolean;
   }
 
-  const { citations, open, flashCite = null }: Props = $props();
+  const {
+    citations,
+    open,
+    flashCite = null,
+    unavailable = false,
+  }: Props = $props();
 
   /**
    * Truthy only while a specific flash request is in flight. Rendered
@@ -48,7 +62,22 @@
   const flashTarget = $derived(flashCite);
 </script>
 
-{#if open && citations.length > 0}
+{#if open && unavailable}
+  <!-- Orphan-refs notice. The body still has `^N^` superscripts, but
+       the citation data for this turn isn't in our database (either
+       the message predates the column or the response was captured
+       before we started persisting citations). The panel still
+       opens so the superscript clicks aren't dead ends, but the
+       content is a single status line rather than a list. -->
+  <div
+    class="citations-panel citations-unavailable"
+    role="status"
+    transition:slide={{ duration: 220, easing: cubicOut }}
+  >
+    Sources aren't saved on this message — only responses from newer
+    turns carry the citation list.
+  </div>
+{:else if open && citations.length > 0}
   <ol
     class="citations-panel"
     role="list"
@@ -182,5 +211,17 @@
     line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+
+  /* Orphan-refs panel: muted / italic so it reads as a status line
+     rather than a list row. Shares the same surface color as the
+     real list so the "panel opened" gesture looks identical — only
+     the contents change. */
+  .citations-unavailable {
+    padding: 0.65rem 0.85rem;
+    color: var(--muted);
+    font-style: italic;
+    font-size: 0.9rem;
+    line-height: 1.4;
   }
 </style>

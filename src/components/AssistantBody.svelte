@@ -76,6 +76,31 @@
   const citationList = $derived(citations ?? []);
   const hasCitations = $derived(citationList.length > 0);
 
+  /**
+   * True when the message body carries `^N^` / `^i,j^` superscript
+   * references — the same pattern the markdown extension matches on.
+   * Used to detect the "older row" case: an assistant turn from
+   * before we persisted the citations column still has the inline
+   * marks, but no source list to expand behind them. In that case
+   * we still show the panel and the toggle — just with a "sources
+   * weren't saved on this message" note inside — so a click on
+   * `^2^` doesn't silently no-op.
+   */
+  const hasCitationRefsInBody = $derived.by(() => {
+    if (!content) return false;
+    return /\^\d+(?:\s*,\s*\d+)*\^/.test(content);
+  });
+  /**
+   * Flag rather than a derived of `!hasCitations` alone — a turn
+   * with neither refs nor stored citations (the common case) should
+   * not surface a toggle or panel at all, only a turn with orphan
+   * refs should.
+   */
+  const citationsUnavailable = $derived(
+    hasCitationRefsInBody && !hasCitations
+  );
+  const showCitationsControls = $derived(hasCitations || citationsUnavailable);
+
   const contextWindow = $derived(
     usage ? findContextWindowById(model ?? undefined) : null
   );
@@ -105,6 +130,13 @@
     if (!Number.isFinite(idx)) return;
     const wasOpen = citationsOpen;
     if (!citationsOpen) citationsOpen = true;
+    // Orphan-refs case (older rows before the citations column
+    // existed): the panel opens to a "sources not saved" notice, so
+    // there's no row to flash. Skip the flash scheduling and we
+    // avoid passing `flashCite` down into a panel that can't honor
+    // it — keeps the "missing sources" affordance from looking like
+    // it's half-working.
+    if (citationsUnavailable) return;
     const delay = wasOpen ? 0 : 240;
     // setTimeout rather than `tick()` — Svelte's tick resolves as
     // soon as the state update commits, but the slide transition
@@ -176,21 +208,28 @@
         </svg>
       </button>
     {/if}
-    {#if hasCitations}
+    {#if showCitationsControls}
       <!-- Citations toggle — numbered badge doubles as count AND the
            "source list" affordance. Inline-linked in the markdown as
            `^N^` anchors; this button opens the same panel a direct
-           click on one of those would. -->
+           click on one of those would. Orphan-refs case (older rows
+           from before we persisted the citations column) renders
+           without a count badge and with a "—" style marker so the
+           user understands the button will surface a status note,
+           not a working source list. -->
       <button
         type="button"
         class="copy-btn citations-toggle"
         class:active={citationsOpen}
+        class:unavailable={citationsUnavailable}
         onclick={() => {
           citationsOpen = !citationsOpen;
         }}
-        title={citationsOpen
-          ? 'Hide sources'
-          : `${citationList.length} source${citationList.length === 1 ? '' : 's'}`}
+        title={citationsUnavailable
+          ? 'Sources not saved on this message'
+          : citationsOpen
+            ? 'Hide sources'
+            : `${citationList.length} source${citationList.length === 1 ? '' : 's'}`}
         aria-label={citationsOpen ? 'Hide sources' : 'Show sources'}
         aria-pressed={citationsOpen}
       >
@@ -212,7 +251,9 @@
           <path d="M2 3h7a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
           <path d="M22 3h-7a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h8z" />
         </svg>
-        <span class="badge citation-count">{citationList.length}</span>
+        {#if hasCitations}
+          <span class="badge citation-count">{citationList.length}</span>
+        {/if}
       </button>
     {/if}
     {#if usage && contextWindow}
@@ -221,7 +262,12 @@
   </div>
 {/if}
 
-<CitationsPanel citations={citationList} open={citationsOpen} {flashCite} />
+<CitationsPanel
+  citations={citationList}
+  open={citationsOpen}
+  unavailable={citationsUnavailable}
+  {flashCite}
+/>
 
 <style>
   /* `.assistant-body` is just a delegation host — no visual styling.
@@ -266,5 +312,17 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+  }
+
+  /* Orphan-refs state: the button is present because the message
+     has ^N^ marks, but we have no list to show. Dim the glyph so
+     the control reads as "follow-up available, but degraded" — the
+     title tooltip + panel contents explain the rest. */
+  .citations-toggle.unavailable {
+    opacity: 0.55;
+  }
+  .citations-toggle.unavailable:hover,
+  .citations-toggle.unavailable:focus-visible {
+    opacity: 1;
   }
 </style>
