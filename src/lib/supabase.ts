@@ -105,6 +105,51 @@ export interface Memory {
   updated_at: string;
 }
 
+/**
+ * One file attached to a user message. Binary lives in `data_base64` as
+ * a base64 string — PostgREST surfaces the DB-side `bytea` that way on
+ * SELECT, so the client doesn't have to negotiate a binary content
+ * type. Null `data_base64` + non-null `expired_at` is the "reclaimed"
+ * state produced by the attachment_expiry worker; `extracted_text`
+ * survives that transition on purpose so the message list stays
+ * meaningful.
+ */
+export interface Attachment {
+  id: string;
+  message_id: string;
+  /** Stable in-message render order. Sparse; assigned at insert time. */
+  position: number;
+  filename: string;
+  /** MIME type captured at upload time. Drives icon selection and vision inlining. */
+  mime_type: string;
+  /** Byte count of the original file — preserved across expiration. */
+  size_bytes: number;
+  /**
+   * Base64-encoded file bytes, or `null` after the attachment_expiry
+   * worker has reclaimed the row. Non-null iff the attachment is live.
+   */
+  data_base64: string | null;
+  /**
+   * Text extracted by Venice's /augment/text-parser at upload time for
+   * non-image files. Stays populated after expiration — the value the
+   * model saw outlives the original blob.
+   */
+  extracted_text: string | null;
+  /** Timestamp at which `data` was nulled by the expiry worker; null when live. */
+  expired_at: string | null;
+  created_at: string;
+}
+
+/** Fields callers supply when inserting a new attachment row. */
+export interface NewAttachment {
+  position: number;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  data_base64: string;
+  extracted_text: string | null;
+}
+
 export interface Message {
   id: string;
   thread_id: string;
@@ -116,6 +161,16 @@ export interface Message {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   created_at: string;
+  /**
+   * Files the user attached to this message. Only populated on user
+   * rows, and only after `listMessages` has co-fetched the attachment
+   * table — the base `messages` SELECT doesn't include this. Null
+   * means "we haven't loaded attachments for this row yet"; an empty
+   * array means "we loaded and there are none." Realtime INSERTs
+   * arrive without attachments attached; the subscriber is
+   * responsible for hydrating them via `listAttachmentsByMessageIds`.
+   */
+  attachments?: Attachment[] | null;
   /**
    * When the assistant emitted tool calls, this holds the raw array in
    * the OpenAI shape: `[{id, type, function: {name, arguments}}]`.
@@ -1204,7 +1259,137 @@ export class SupabaseService {
       .eq('thread_id', threadId)
       .order('created_at', { ascending: true });
     if (error) throw new SupabaseError(error.message);
-    return (data ?? []) as Message[];
+    const messages = (data ?? []) as Message[];
+    // Hydrate attachments in a second query keyed by message id. Keeps
+    // the base SELECT cheap (no bytea on the wire for rows without
+    // attachments, which is the common case) and lets the realtime
+    // subscribe path reuse the same hydration helper later.
+    const userMessageIds = messages
+      .filter((m) => m.role === 'user')
+      .map((m) => m.id);
+    if (userMessageIds.length > 0) {
+      const attachmentsByMessageId = await this.listAttachmentsByMessageIds(userMessageIds);
+      for (const m of messages) {
+        m.attachments = attachmentsByMessageId.get(m.id) ?? [];
+      }
+    } else {
+      for (const m of messages) {
+        if (m.role === 'user') m.attachments = [];
+      }
+    }
+    return messages;
+  }
+
+  /**
+   * Fetch every attachment belonging to the given user-message ids, in
+   * one round trip. Returns a map keyed by `message_id` so the caller
+   * can hang the array straight onto each message. Ordered by
+   * `position` within each bucket so the message renderer doesn't have
+   * to re-sort.
+   *
+   * Used by `listMessages` for the initial load and by the realtime
+   * subscription path when a user row arrives with attachments.
+   */
+  async listAttachmentsByMessageIds(
+    messageIds: string[]
+  ): Promise<Map<string, Attachment[]>> {
+    const result = new Map<string, Attachment[]>();
+    if (messageIds.length === 0) return result;
+    // `data` is the large column — but PostgREST returns it base64-
+    // encoded into the `data` field and we rename to `data_base64` via
+    // an explicit select list so the TypeScript type matches what the
+    // UI expects.
+    const { data, error } = await this.client
+      .from('message_attachments')
+      .select(
+        'id, message_id, position, filename, mime_type, size_bytes, data, extracted_text, expired_at, created_at'
+      )
+      .in('message_id', messageIds)
+      .order('position', { ascending: true });
+    if (error) throw new SupabaseError(error.message);
+    for (const row of (data ?? []) as Array<
+      Omit<Attachment, 'data_base64'> & { data: string | null }
+    >) {
+      const existing = result.get(row.message_id) ?? [];
+      const attachment: Attachment = {
+        id: row.id,
+        message_id: row.message_id,
+        position: row.position,
+        filename: row.filename,
+        mime_type: row.mime_type,
+        size_bytes: row.size_bytes,
+        data_base64: row.data,
+        extracted_text: row.extracted_text,
+        expired_at: row.expired_at,
+        created_at: row.created_at,
+      };
+      existing.push(attachment);
+      result.set(row.message_id, existing);
+    }
+    return result;
+  }
+
+  /**
+   * Bulk-insert attachments for a just-written user message. Writes
+   * rows in the given order; `position` is caller-supplied so the
+   * render order matches the order the user picked them in.
+   *
+   * Returns the hydrated rows (including generated ids and
+   * timestamps) so the caller can append them to the in-memory
+   * message without a follow-up fetch.
+   */
+  async addAttachments(
+    messageId: string,
+    rows: NewAttachment[]
+  ): Promise<Attachment[]> {
+    if (rows.length === 0) return [];
+    const payload = rows.map((r) => ({
+      message_id: messageId,
+      position: r.position,
+      filename: r.filename,
+      mime_type: r.mime_type,
+      size_bytes: r.size_bytes,
+      // PostgREST accepts the base64 string as the value for a bytea
+      // column when the request content-type is JSON — it decodes on
+      // the server. Same pattern as the memories embedding column.
+      data: r.data_base64,
+      extracted_text: r.extracted_text,
+    }));
+    const { data, error } = await this.client
+      .from('message_attachments')
+      .insert(payload)
+      .select(
+        'id, message_id, position, filename, mime_type, size_bytes, data, extracted_text, expired_at, created_at'
+      );
+    if (error) throw new SupabaseError(error.message);
+    return ((data ?? []) as Array<
+      Omit<Attachment, 'data_base64'> & { data: string | null }
+    >).map((row) => ({
+      id: row.id,
+      message_id: row.message_id,
+      position: row.position,
+      filename: row.filename,
+      mime_type: row.mime_type,
+      size_bytes: row.size_bytes,
+      data_base64: row.data,
+      extracted_text: row.extracted_text,
+      expired_at: row.expired_at,
+      created_at: row.created_at,
+    }));
+  }
+
+  /**
+   * Run one pass of the attachment expiry sweep via the
+   * `expire_old_attachments` RPC. Returns the number of rows the
+   * server nulled on this call. The worker drains the backlog by
+   * calling repeatedly while the count is > 0.
+   */
+  async expireOldAttachments(days: number): Promise<number> {
+    const { data, error } = await this.client.rpc('expire_old_attachments', {
+      p_days: days,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return typeof data === 'number' ? data : 0;
   }
 
   /**

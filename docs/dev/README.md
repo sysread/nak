@@ -44,6 +44,9 @@ changing a contract that other features depend on.
   master-password envelope, session lifecycle, locking.
 - [Chat](./chat.md) — chat screen + chat-loop + models +
   realtime thread list.
+- [Attachments](./attachments.md) — per-message file
+  attachments, Venice text-parser integration, and the
+  expiration worker.
 - [Tools](./tools.md) — tool registry + the two parallel
   executors (chat-side and headless-agent-side).
 - [Memory](./memory.md) — `memories` store + reflection

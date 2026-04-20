@@ -34,6 +34,7 @@ import type {
   WebSearchMode,
   Citation,
 } from './venice';
+import { buildUserVeniceContent } from './attachments';
 import {
   buildToolList,
   buildSystemPrompt,
@@ -154,7 +155,10 @@ export interface ChatLoopResult {
  * be empty), and a tool-result row (`role='tool'` with tool_call_id and
  * name).
  */
-export function toVeniceMessage(m: Message): VeniceMessage {
+export function toVeniceMessage(
+  m: Message,
+  opts?: { visionSpec?: { supportsVision: boolean } }
+): VeniceMessage {
   if (m.role === 'tool') {
     return {
       role: 'tool',
@@ -162,6 +166,20 @@ export function toVeniceMessage(m: Message): VeniceMessage {
       tool_call_id: m.tool_call_id ?? undefined,
       name: m.name ?? undefined,
     };
+  }
+  // User messages may carry attachments; build the multimodal content
+  // through the attachments helper so extracted text lands as fenced
+  // prelude blocks and images inline as `image_url` parts on vision
+  // tiers. Passing a default (non-vision) spec when the caller doesn't
+  // provide one keeps older callers working — they just never inline
+  // images. See buildUserVeniceContent for the rules.
+  if (m.role === 'user' && m.attachments && m.attachments.length > 0) {
+    const content = buildUserVeniceContent(
+      m.content,
+      m.attachments,
+      opts?.visionSpec ?? { supportsVision: false }
+    );
+    return { role: 'user', content };
   }
   const out: VeniceMessage = { role: m.role, content: m.content };
   if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {

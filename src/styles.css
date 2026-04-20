@@ -1641,6 +1641,121 @@ h1 {
   font-weight: 600;
 }
 
+/* Attachments: preview row, chips, drop overlay, file input. The chip
+   row sits above the textarea inside the composer-shell so the chips
+   and the input feel like one control. Chips flex-wrap so several
+   queued files don't push the toolbar off-screen. */
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.1rem 0.2rem 0;
+}
+
+.composer-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.35rem 0.2rem 0.55rem;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  max-width: 18rem;
+}
+
+/* While the extracted-text or image-downscale round-trip is in flight
+   the chip is visually muted to signal "not ready yet" — the send
+   guard also blocks on this state. */
+.composer-attachment-chip.pending {
+  opacity: 0.7;
+  border-style: dashed;
+}
+
+.composer-attachment-chip.errored {
+  border-color: var(--danger, #c0392b);
+  color: var(--danger, #c0392b);
+}
+
+.composer-attachment-chip .chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12rem;
+}
+
+.composer-attachment-chip .chip-size {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.7rem;
+}
+
+.composer-attachment-chip .chip-status {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.composer-attachment-chip .chip-error {
+  color: var(--danger, #c0392b);
+}
+
+.composer-attachment-chip .chip-remove {
+  background: transparent;
+  border: 0;
+  padding: 0 0.2rem;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+}
+.composer-attachment-chip .chip-remove:hover,
+.composer-attachment-chip .chip-remove:focus-visible {
+  color: var(--text);
+}
+
+/* Drop overlay shown while a file drag is hovering the composer-shell.
+   Absolute inside the shell so it doesn't affect layout; the shell
+   itself gains a --accent outline to confirm the drop target. */
+.composer-shell {
+  position: relative;
+}
+
+.composer-shell.dragging {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-weak, var(--accent)) 20%, var(--bg-2));
+}
+
+.composer-drop-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-size: 0.9rem;
+  color: var(--accent);
+  font-weight: 500;
+  border-radius: 14px;
+  /* Very subtle tint so the textarea content underneath stays
+     readable — we're augmenting the border highlight, not obscuring
+     the input. */
+  background: color-mix(in srgb, var(--accent-weak, var(--accent)) 10%, transparent);
+  z-index: 1;
+}
+
+/* Hidden file input that the paperclip button triggers via .click(). */
+.composer-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Collapsed icon-only trigger. Both the model tier button (Chat.svelte)
    and the ReasoningPicker.svelte trigger share `.model-picker-btn`, so
    these rules style both. The accessible contract — `aria-haspopup`,

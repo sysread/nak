@@ -221,8 +221,13 @@ describe('runHeadlessToolLoop — error paths', () => {
     expect(result.finalText).toBe('ok');
     expect(result.toolCalls).toBe(1);
     const toolRow = streamCalls[1].find((m) => m.role === 'tool');
-    expect(toolRow?.content).toContain('tool blew up');
-    expect(() => JSON.parse(toolRow!.content)).not.toThrow();
+    // content was widened to `string | ContentPart[]` when vision
+    // inlining landed; tool rows are always strings, assert and
+    // narrow before parsing.
+    expect(typeof toolRow?.content).toBe('string');
+    const toolContent = toolRow?.content as string;
+    expect(toolContent).toContain('tool blew up');
+    expect(() => JSON.parse(toolContent)).not.toThrow();
   });
 
   it('surfaces an invalid-JSON arguments blob as a tool error without calling the handler', async () => {

@@ -50,9 +50,22 @@
     type ThreadCursor,
     type ThreadSearchHit,
     type Message,
+    type NewAttachment,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
   import { drainSharesForComposer } from '$lib/share-intake';
+  import {
+    arrayBufferToBase64,
+    formatBytes,
+    isConsumableBy,
+    isImageMimeType,
+    maybeDownscaleImage,
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    MAX_MESSAGE_AGGREGATE_BYTES,
+    toNewAttachment,
+    validateFile,
+    type LocalAttachment,
+  } from '$lib/attachments';
   import {
     DEFAULT_REASONING_EFFORT,
     DEFAULT_TIER,
@@ -77,6 +90,8 @@
   import ReasoningPicker from '../components/ReasoningPicker.svelte';
   import Scanner from '../components/Scanner.svelte';
   import ToolCalls from '../components/ToolCalls.svelte';
+  import MessageAttachments from '../components/MessageAttachments.svelte';
+  import ExtractedTextDrawer from '../components/ExtractedTextDrawer.svelte';
   import type { Citation } from '$lib/venice';
 
   const DEFAULT_TITLE = 'New conversation';
@@ -331,6 +346,207 @@
   let sending = $state(false);
   let error = $state<string | null>(null);
   let abortCtl: AbortController | null = null;
+
+  // Pending attachments — one chip per queued file. Populated by the
+  // file picker, the paste handler, and the drop handler; cleared on
+  // send or explicit remove. Entries start with `pending: true` until
+  // their extracted-text / downscale round-trip finishes.
+  let pendingAttachments = $state<LocalAttachment[]>([]);
+  // Hidden file input the paperclip button triggers via .click(); kept
+  // in a ref so we can reset its `value` after every pick (so picking
+  // the same file twice still fires `change`).
+  let fileInputEl: HTMLInputElement | undefined = $state();
+  // Counter for drag-enter / drag-leave balance. A single boolean
+  // would flicker off when the cursor moves from the overlay onto a
+  // child element (another dragenter fires before the dragleave
+  // bubbles). Tracking a counter survives the sub-element traversal
+  // and reads 0 only when the drag has actually left the zone.
+  let dragDepth = $state(0);
+  const isDragging = $derived(dragDepth > 0);
+
+  // Stable-ish random ids for the client-side LocalAttachment rows.
+  // crypto.randomUUID is universal in modern browsers; the fallback
+  // is for the test environment where jsdom sometimes lacks it.
+  function newLocalId(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return `la-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  // Total bytes across all currently-pending attachments. Used by the
+  // add-file path to reject files that would push the message past
+  // the aggregate cap. Cheap enough to recompute each call.
+  function pendingBytes(): number {
+    return pendingAttachments.reduce((n, a) => n + a.size_bytes, 0);
+  }
+
+  /**
+   * Add one file to the composer. Handles the full add-time flow:
+   * validate, image-downscale for images, base64-encode, kick off the
+   * Venice text-parser call for non-image files. The chip appears
+   * immediately (with `pending: true`) so the user sees progress;
+   * when its async work finishes, the chip flips to ready and the
+   * send button unblocks.
+   */
+  async function addAttachment(file: File): Promise<void> {
+    if (pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+      error = `You can attach at most ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`;
+      return;
+    }
+    const perFileReason = validateFile(file);
+    if (perFileReason) {
+      error = `${file.name}: ${perFileReason}`;
+      return;
+    }
+    if (pendingBytes() + file.size > MAX_MESSAGE_AGGREGATE_BYTES) {
+      error = `Total attachment size exceeds ${formatBytes(MAX_MESSAGE_AGGREGATE_BYTES)}.`;
+      return;
+    }
+    error = null;
+
+    const id = newLocalId();
+    // Insert the pending chip first so the user sees feedback while
+    // we encode / extract. Mutated in place once the async work lands.
+    const draft: LocalAttachment = {
+      id,
+      filename: file.name,
+      mime_type: file.type || 'application/octet-stream',
+      size_bytes: file.size,
+      data_base64: '',
+      extracted_text: null,
+      pending: true,
+      error: null,
+    };
+    pendingAttachments = [...pendingAttachments, draft];
+
+    try {
+      // Images: downscale if oversize, then encode. Non-images: encode
+      // as-is and hit Venice text-parser.
+      let finalFile: File | null = file;
+      if (isImageMimeType(file.type)) {
+        finalFile = await maybeDownscaleImage(file);
+        if (!finalFile) throw new Error('Could not decode image.');
+      }
+      const buffer = await finalFile.arrayBuffer();
+      const base64 = arrayBufferToBase64(buffer);
+
+      let extractedText: string | null = null;
+      if (!isImageMimeType(finalFile.type) && app.venice) {
+        // Fire the text-parser call. We treat failure here as a
+        // non-blocking error on the chip — the user gets a red chip
+        // with an explanation, and the pre-send guard blocks until
+        // they remove or retry.
+        try {
+          extractedText = await app.venice.extractText(finalFile, finalFile.name);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          patchAttachment(id, {
+            pending: false,
+            error: `Text extraction failed: ${msg}`,
+          });
+          return;
+        }
+      }
+
+      patchAttachment(id, {
+        size_bytes: finalFile.size,
+        mime_type: finalFile.type || draft.mime_type,
+        data_base64: base64,
+        extracted_text: extractedText,
+        pending: false,
+        error: null,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      patchAttachment(id, { pending: false, error: msg });
+    }
+  }
+
+  function patchAttachment(id: string, patch: Partial<LocalAttachment>): void {
+    pendingAttachments = pendingAttachments.map((a) =>
+      a.id === id ? { ...a, ...patch } : a
+    );
+  }
+
+  function removeAttachment(id: string): void {
+    pendingAttachments = pendingAttachments.filter((a) => a.id !== id);
+    if (pendingAttachments.length === 0) error = null;
+  }
+
+  async function onFilePicker(): Promise<void> {
+    fileInputEl?.click();
+  }
+
+  async function onFileInputChange(e: Event): Promise<void> {
+    const input = e.target as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    // Reset the input's value so picking the same file twice still
+    // fires `change`. Do this before the awaits so a re-click during
+    // upload doesn't race.
+    input.value = '';
+    for (const file of files) {
+      // Sequential so the aggregate-size check sees the running total
+      // from the previous adds. The Venice text-parser calls are the
+      // dominant latency; in practice users attach 1–3 files.
+       
+      await addAttachment(file);
+    }
+  }
+
+  async function onComposerPaste(e: ClipboardEvent): Promise<void> {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const f = item.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length === 0) return;
+    // preventDefault only when we consumed files — otherwise text
+    // pastes would lose their default behavior (populating the
+    // textarea).
+    e.preventDefault();
+    for (const f of files) {
+       
+      await addAttachment(f);
+    }
+  }
+
+  function onComposerDragEnter(e: DragEvent): void {
+    if (!e.dataTransfer) return;
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+    dragDepth += 1;
+  }
+
+  function onComposerDragOver(e: DragEvent): void {
+    if (!e.dataTransfer) return;
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+    // Signal that a drop here is accepted — without this the browser
+    // falls back to "not allowed" cursor and the drop event never
+    // fires.
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }
+
+  function onComposerDragLeave(): void {
+    if (dragDepth > 0) dragDepth -= 1;
+  }
+
+  async function onComposerDrop(e: DragEvent): Promise<void> {
+    dragDepth = 0;
+    if (!e.dataTransfer) return;
+    const files = Array.from(e.dataTransfer.files ?? []);
+    if (files.length === 0) return;
+    e.preventDefault();
+    for (const f of files) {
+       
+      await addAttachment(f);
+    }
+  }
 
   // Auto-grow the composer so the caret is always visible as the user
   // types. CSS caps the textarea at 40vh — once content exceeds that
@@ -980,7 +1196,12 @@
 
   async function send(): Promise<void> {
     const text = composer.trim();
-    if (!text || !app.supabase || !app.venice) return;
+    // Attachments alone (no text) are allowed — a user may "send an
+    // image for you to look at". Still require text OR at least one
+    // ready attachment so an empty send doesn't fire.
+    const readyAttachments = pendingAttachments.filter((a) => !a.pending && !a.error);
+    const hasAttachments = readyAttachments.length > 0;
+    if ((!text && !hasAttachments) || !app.supabase || !app.venice) return;
     error = null;
 
     const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
@@ -988,11 +1209,35 @@
     // `threads` and could make `currentThread` briefly null.
     const tier = resolveTier(active?.model ?? null, defaultTier);
     const modelId = MODELS[tier].id;
+    const tierSpec = MODELS[tier];
     // Only pass reasoning_effort on models that accept it; letting it
     // ride along to a non-reasoning model produces a 400 on some providers.
-    const sendReasoning: ReasoningEffort | undefined = MODELS[tier].supportsReasoning
+    const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
       ? resolveReasoningEffort(active?.reasoning_effort ?? null, defaultReasoning)
       : undefined;
+
+    // Pre-send guard on attachments. Block the send if any attachment
+    // is still processing, is in an error state, or can't be read by
+    // the selected tier. Surface the reason on `error` — the user sees
+    // it above the composer and can either remove the file or switch
+    // tier.
+    const stillPending = pendingAttachments.find((a) => a.pending);
+    if (stillPending) {
+      error = `"${stillPending.filename}" is still processing — wait for it to finish.`;
+      return;
+    }
+    const erroredChip = pendingAttachments.find((a) => a.error);
+    if (erroredChip) {
+      error = `"${erroredChip.filename}": ${erroredChip.error}`;
+      return;
+    }
+    const unreadable = readyAttachments.find((a) => !isConsumableBy(a, tierSpec));
+    if (unreadable) {
+      error = isImageMimeType(unreadable.mime_type)
+        ? `"${unreadable.filename}" is an image and the ${tierSpec.label} tier can't see images. Switch to a vision-capable tier or remove the file.`
+        : `"${unreadable.filename}" has no extractable text — the model won't be able to read it. Remove it to send.`;
+      return;
+    }
 
     let threadId: string;
     let isFirstExchange = false;
@@ -1015,7 +1260,13 @@
       isFirstExchange = messages.length === 0 && active.title === DEFAULT_TITLE;
     }
 
+    // Snapshot the queued attachments and clear the composer chips.
+    // Keeping a local copy means a late text-parser completion (if we
+    // ever allow background adds) can't retroactively mutate the
+    // message we just inserted.
+    const sendAttachments = readyAttachments;
     composer = '';
+    pendingAttachments = [];
     sending = true;
     // Sending is an explicit "pay attention to the bottom" signal — even
     // if the user had scrolled up before hitting send, we want their new
@@ -1023,6 +1274,29 @@
     followBottom = true;
     try {
       const userMsg = await app.supabase.addMessage(threadId, 'user', text);
+      // Persist attachment rows. Positional index matches the chip
+      // order so the message list renders them the way the user queued
+      // them. If the insert fails the user message is still saved and
+      // the transcript reads as plain text — an attachment-less send
+      // is recoverable; a missing user message row is not.
+      if (sendAttachments.length > 0) {
+        const newRows: NewAttachment[] = sendAttachments.map((a, i) =>
+          toNewAttachment(a, i)
+        );
+        try {
+          const rows = await app.supabase.addAttachments(userMsg.id, newRows);
+          userMsg.attachments = rows;
+        } catch (err) {
+          // Non-fatal: surface a console warning but keep going. The
+          // user's typed text still gets a reply — the attachments
+          // just won't make it into history.
+           
+          console.warn('[attachments] persistAttachments failed', err);
+          userMsg.attachments = [];
+        }
+      } else {
+        userMsg.attachments = [];
+      }
       appendMessage(userMsg);
       streamingText = '';
       abortCtl = new AbortController();
@@ -1041,7 +1315,13 @@
       const currentUserId = session?.user.id ?? freshThread.user_id;
       const historyOnWire = [
         ...systemMessages,
-        ...messages.map(toVeniceMessage),
+        // Pass the tier's vision capability so user messages with
+        // image attachments land on the wire as multimodal content
+        // arrays on vision tiers, and as string-plus-fenced-extracted
+        // text on non-vision tiers. toVeniceMessage is safe to call
+        // on rows without attachments — they come back as plain
+        // strings either way.
+        ...messages.map((m) => toVeniceMessage(m, { visionSpec: tierSpec })),
       ];
 
       // Throttle streamingText updates to ~2Hz while the response
@@ -2236,6 +2516,9 @@
             {:else}
               <div class="msg {block.message.role}">
                 <Markdown content={block.message.content} />
+                {#if block.message.role === 'user' && block.message.attachments && block.message.attachments.length > 0}
+                  <MessageAttachments attachments={block.message.attachments} />
+                {/if}
               </div>
             {/if}
           {/each}
@@ -2320,17 +2603,78 @@
       </div>
       {#if error}<p class="error" style="padding:0 1rem">{error}</p>{/if}
       <div class="composer">
-        <div class="composer-shell">
+        <div
+          class="composer-shell"
+          class:dragging={isDragging}
+          ondragenter={onComposerDragEnter}
+          ondragover={onComposerDragOver}
+          ondragleave={onComposerDragLeave}
+          ondrop={onComposerDrop}
+          role="group"
+        >
+          {#if isDragging}
+            <!-- Drop overlay. Sits over the textarea while a file drag
+                 is in progress so the user has visible feedback that
+                 releasing here will attach. pointer-events:none would
+                 cause the hover styling to cascade to the textarea,
+                 so we wrap the overlay in an absolutely-positioned
+                 div that lets drag events pass through. -->
+            <div class="composer-drop-overlay" aria-hidden="true">
+              Drop files to attach
+            </div>
+          {/if}
+          {#if pendingAttachments.length > 0}
+            <div class="composer-attachments" role="list">
+              {#each pendingAttachments as a (a.id)}
+                <div
+                  class="composer-attachment-chip"
+                  class:pending={a.pending}
+                  class:errored={!!a.error}
+                  role="listitem"
+                  title={a.error ?? ''}
+                >
+                  <span class="chip-name">{a.filename}</span>
+                  <span class="chip-size">{formatBytes(a.size_bytes)}</span>
+                  {#if a.pending}
+                    <span class="chip-status" aria-label="Processing">…</span>
+                  {:else if a.error}
+                    <span class="chip-status chip-error" aria-label="Error">!</span>
+                  {/if}
+                  <button
+                    type="button"
+                    class="chip-remove"
+                    aria-label="Remove attachment"
+                    onclick={() => removeAttachment(a.id)}
+                  >×</button>
+                </div>
+              {/each}
+            </div>
+          {/if}
           <textarea
             class="composer-textarea"
             bind:value={composer}
             bind:this={composerEl}
             onkeydown={onKeydown}
+            onpaste={onComposerPaste}
             placeholder={currentThread?.archived
               ? 'Restore this conversation to continue.'
               : `Message… (${sendHint})`}
             disabled={sending || currentThread?.archived}
           ></textarea>
+          <!-- Hidden file input — the paperclip button triggers this
+               via .click(). `multiple` because users routinely attach
+               more than one file at a time; no `accept` filter
+               because we deliberately allow any MIME type (the
+               pre-send guard decides whether the model can read it). -->
+          <input
+            type="file"
+            class="composer-file-input"
+            bind:this={fileInputEl}
+            onchange={onFileInputChange}
+            multiple
+            aria-hidden="true"
+            tabindex="-1"
+          />
           <div class="composer-bar">
             <div class="composer-bar-left">
               <!-- Tool master switch: on = every registered tool's schema
@@ -2363,6 +2707,32 @@
                   </svg>
                 </button>
               {/if}
+
+              <!-- File picker: opens a native file chooser; selected
+                   files become pendingAttachments chips above the
+                   textarea. Paste (on the textarea) and drag-drop
+                   (on the composer-shell) are the two other entry
+                   points into the same add pipeline. -->
+              <button
+                type="button"
+                class="secondary icon-btn"
+                class:active={pendingAttachments.length > 0}
+                onclick={onFilePicker}
+                title="Attach files (or paste / drag-drop)"
+                aria-label="Attach files"
+                disabled={sending ||
+                  currentThread?.archived ||
+                  pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21.44 11.05L12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 1 1-2.83-2.83L14.5 6.66" />
+                </svg>
+                {#if pendingAttachments.length > 0}
+                  <span class="badge" aria-hidden="true">{pendingAttachments.length}</span>
+                {/if}
+              </button>
 
               <!-- Prompts: toggles which system prompts ride along on
                    every future send in this conversation. -->
@@ -2543,4 +2913,11 @@
       </div>
     </main>
   </div>
+  <!-- Global right-side drawer for the extracted-text preview.
+       Controlled by the `extractedTextDrawer` rune store; any
+       MessageAttachments "Text" button clicks route through there.
+       Mounted at the Chat root so it can sit above the transcript
+       without the transcript being a containing block for its
+       fixed positioning. -->
+  <ExtractedTextDrawer />
 {/if}

@@ -181,17 +181,29 @@ recent commits (`git log --oneline`).
 
 ## Running the checks locally
 
+From a cold clone the minimum is `pnpm install && pnpm test` — every
+gating tool (vitest, svelte-check, ESLint, markdownlint-cli2) is a
+pnpm devDependency, so `pnpm install` is the only provisioning step
+required for the test suite to pass. `mise` adds the aqua-installed
+CLIs (`gh`, `supabase`) and task shortcuts on top; use it when you
+also need the deploy / sync flows.
+
 ```sh
-mise run check        # full local gate: tests + svelte-check + ESLint
-mise run test         # vitest only (includes the markdownlint guardrail)
-mise run markdownlint # markdownlint-cli2 only (fast iteration on docs)
+pnpm install          # one-time; provisions every dev tool
+pnpm test             # vitest run (includes the markdownlint guardrail)
+pnpm check            # svelte-check
+pnpm lint             # ESLint
+pnpm markdownlint     # markdownlint-cli2 only (fast iteration on docs)
+
+mise run check        # full local gate: pnpm test + check + lint
+mise run test         # alias for pnpm test
+mise run markdownlint # alias for pnpm markdownlint
 ```
 
 `mise run check` is what CI runs (see `.github/workflows/tests.yml`),
-so a green `mise run check` locally is a green CI job. The individual
-pnpm targets still work — `pnpm check`, `pnpm lint`, `pnpm test`,
-`pnpm test:e2e` — but prefer the mise tasks so dev + CI stay on the
-same entry point.
+so a green `mise run check` locally is a green CI job. When mise is
+not available — ephemeral sandboxes, first-time checkouts — the
+equivalent sequence is `pnpm test && pnpm check && pnpm lint`.
 
 Always run the gate before committing — including for CSS- or
 markdown-only changes. The test suite includes a postcss parse of
