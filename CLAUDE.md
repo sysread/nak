@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code / Claude sessions working in this repo. See `README.md` for the human-facing documentation.
+Guidance for Claude Code / Claude sessions working in this repo. See `README.md` for the project-level overview, and `docs/user/README.md` for the end-user manual (also rendered in-app via the **Help** button).
 
 ## Commenting style
 
@@ -119,6 +119,53 @@ with full confidence — worse than no note at all.
 If the user corrects you on a project convention, that's a strong
 signal the convention isn't documented yet. Add it before closing
 the task.
+
+## User-facing documentation
+
+The repo ships two parallel doc trees:
+
+- `docs/user/` — the end-user manual. Rendered in-app by the **Help**
+  button (leftmost icon in the conversation drawer footer), and also
+  readable directly on GitHub.
+- `docs/dev/` — architecture, subsystem deep-dives, and
+  contributor-facing notes. Still mostly a scaffold; `CLAUDE.md`
+  remains the working convention doc until sections grow too large to
+  live here.
+
+**Rule: any change to observable user behavior must update
+`docs/user/` in the same PR.** That covers new UI controls, new
+settings, changed shortcuts, changed flows, renamed menu items, and
+any user-visible copy that docs already describe. If you touched the
+user experience and didn't touch the docs, the PR isn't done.
+
+Mechanics:
+
+- The landing page is `docs/user/README.md`. It's both the "what is
+  this" statement and the index — every other doc under `docs/user/`
+  must be linked from it. Adding a new page? Add the link too.
+- Docs are bundled via Vite's `import.meta.glob('/docs/user/**/*.md',
+  { query: '?raw', import: 'default' })` (see `src/lib/docs.ts`). A
+  file that isn't committed doesn't exist to the Help modal, so add
+  + stage the file in the same change that links to it.
+- Internal links should be relative (`./foo.md`, `../dev/bar.md`).
+  Those are intercepted by the Help modal's click handler and loaded
+  in-place. Anything with a scheme (`https:`, `mailto:`) is treated
+  as external and opens in a new tab.
+- After editing, smoke-test: open Help, click through to the edited
+  page, confirm the markdown renders, internal links resolve, and
+  external links open in a new tab. No automated test covers the
+  end-to-end render path today.
+- Dev-facing changes (build tooling, internal APIs, subsystem
+  conventions) go in `docs/dev/` under the corresponding topic file,
+  linked from `docs/dev/README.md`. If the topic doesn't have a file
+  yet, start one.
+- If a user-facing change ships without doc updates, treat it as a
+  bug — file a follow-up to close the gap.
+
+Stubs in `docs/user/` start out as an H1 + one-paragraph summary +
+placeholder H2s. Fleshing them out is its own work; what matters for
+each feature PR is that the relevant page moves forward by at least
+the section the PR introduces or changes.
 
 ## Commit / branch / merge conventions
 

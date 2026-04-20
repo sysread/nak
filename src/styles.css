@@ -2116,3 +2116,116 @@ h1 {
      before the dots resolve. */
   padding: 0.25rem 0;
 }
+
+/* ---------- Help modal ----------
+   Renders `docs/user/` markdown in-app. Structurally a sibling of the
+   Settings modal — same backdrop dismiss, same Escape handler, same
+   top-right close — but the internal layout is a header over a single
+   scrolling content column rather than Settings' two-column nav/pane
+   split. See src/screens/Help.svelte for the markup. */
+
+.help-shell {
+  /* Matches .settings-shell so the two modals read as the same
+     surface. Anchors .help-close in the top-right. */
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 52rem;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  /* Cap the height so long docs scroll within the modal rather than
+     growing it off-screen. The `min(...)` keeps short viewports
+     usable by clamping to a fraction of the available height. */
+  height: min(40rem, 85vh);
+  overflow: hidden;
+}
+
+.help-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+
+.help-header .help-title {
+  font-size: 1rem;
+  margin: 0;
+  padding: 0 0.25rem;
+}
+
+/* The current doc path, shown as a thin "breadcrumb" between the title
+   and the close button. Truncates with an ellipsis on narrow widths so
+   a deep path can't push the close button off-screen. */
+.help-crumb {
+  flex: 1;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Back button sits at the left edge of the header. Disabled styling
+   mirrors the existing .secondary:disabled rules — no extra work
+   needed — so we only need layout tweaks here. */
+.help-back {
+  flex: 0 0 auto;
+}
+
+/* Close affordance. Duplicates .settings-close rather than sharing so
+   Settings can evolve independently; the two files have to stay
+   in visual lockstep anyway because users expect the same modal
+   chrome. */
+.help-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 2;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  line-height: 1;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.help-close:hover {
+  background: var(--bg-2);
+}
+
+.help-content {
+  padding: 1rem 1.25rem;
+  overflow-y: auto;
+  /* Forms the scroll container for `scrollIntoView` hash jumps so
+     navigation lands the anchor at the top of the visible pane
+     rather than scrolling the document behind the modal. */
+}
+
+.help-content .md {
+  /* .md styles already handle typography for rendered markdown
+     everywhere else; no overrides needed here. This selector exists
+     as a hook for future doc-only tweaks (e.g. tighter h2 spacing)
+     without touching chat-message rendering. */
+}
+
+/* Scanner replaces the markdown body during transitions. Centered so
+   short transitions don't jump the content's vertical midline
+   around. */
+.help-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 0;
+  min-height: 12rem;
+}

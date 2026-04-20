@@ -67,6 +67,7 @@
     type ReasoningEffort,
   } from '$lib/models';
   import Auth from './Auth.svelte';
+  import Help from './Help.svelte';
   import Settings from './Settings.svelte';
   import CopyButton from '../components/CopyButton.svelte';
   import ContextRing from '../components/ContextRing.svelte';
@@ -80,6 +81,7 @@
   let session = $state<Session | null>(null);
   let sessionLoaded = $state(false);
   let showSettings = $state(false);
+  let showHelp = $state(false);
 
   let activeThreadId = $state<string | null>(null);
   let messages = $state<Message[]>([]);
@@ -1712,6 +1714,8 @@
   <Auth />
 {:else if showSettings}
   <Settings onClose={() => (showSettings = false)} />
+{:else if showHelp}
+  <Help onClose={() => (showHelp = false)} />
 {:else}
   <div class="shell" class:drawer-open={drawerOpen}>
     <div
@@ -1918,6 +1922,23 @@
           {session.user.email}
         </div>
         <div class="row">
+          <!-- Help sits first in the row so the leftmost affordance
+               is the "where do I start" button. Opens the in-app
+               manual (docs/user/ rendered through the Markdown
+               pipeline). See src/screens/Help.svelte. -->
+          <button
+            class="secondary icon-btn"
+            onclick={() => (showHelp = true)}
+            title="Help"
+            aria-label="Help"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+          </button>
           <button
             class="secondary icon-btn"
             onclick={() => (showSettings = true)}
