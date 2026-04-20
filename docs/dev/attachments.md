@@ -128,11 +128,16 @@ via-parent-of-parent pattern —
   `./embeddings.md` for the lease + Web-Lock pattern. The
   manager mirrors `summary/manager.ts` and
   `reflection/manager.ts`.
-- **Realtime**: `subscribeToMessages` doesn't hydrate attachments
-  on its own — a user-row INSERT echo arrives without
-  attachments, and the hydration happens on initial
-  `listMessages`. Cross-tab live attachment sync is a known gap
-  and is left as a follow-up.
+- **Realtime**: `subscribeToMessages` fires for every `messages`
+  INSERT with the row payload only — Postgres replication doesn't
+  join `message_attachments`, so a user-row echo arrives with
+  `attachments` unset. Chat.svelte's subscribe handler fires a
+  follow-up `listAttachmentsByMessageIds([msg.id])` for every
+  user-role INSERT and re-runs `appendMessage` with the hydrated
+  row. Needed for (a) cross-tab sync (tab B sees tab A's insert
+  and must hydrate itself) and (b) defense against a local race
+  where the attachment-less echo arrives before the sender's own
+  `appendMessage(userMsg)` can upgrade the row.
 
 ## Gotchas
 

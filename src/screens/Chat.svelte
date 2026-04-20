@@ -571,9 +571,30 @@
   // arrive before or after `addMessage` resolves — either way we'd
   // otherwise double-up the row. The $effect below writes via this
   // helper; the send path calls it explicitly.
+  //
+  // Upgrade-on-dup: when an incoming row carries attachments that the
+  // existing row lacks, REPLACE the existing row instead of skipping.
+  // Fixes the local race where realtime echoes a user-row INSERT
+  // before attachment rows are persisted — without the upgrade, the
+  // attachment-less echo wins, `toVeniceMessage` sees no attachments,
+  // and images never reach vision models. Symmetric for the cross-tab
+  // path: the subscribe handler re-fires appendMessage after
+  // hydrating attachments so the upgrade runs there too.
   function appendMessage(msg: Message): void {
-    if (messages.some((m) => m.id === msg.id)) return;
-    messages = [...messages, msg];
+    const existingIdx = messages.findIndex((m) => m.id === msg.id);
+    if (existingIdx === -1) {
+      messages = [...messages, msg];
+      return;
+    }
+    const existing = messages[existingIdx];
+    const incomingHasAttachments = !!msg.attachments && msg.attachments.length > 0;
+    const existingHasAttachments =
+      !!existing.attachments && existing.attachments.length > 0;
+    if (incomingHasAttachments && !existingHasAttachments) {
+      const updated = [...messages];
+      updated[existingIdx] = msg;
+      messages = updated;
+    }
   }
 
   // Insertion ordering across the three buckets is "updated_at desc,
@@ -599,6 +620,39 @@
       // reach this closure before removeChannel completes.
       if (activeThreadId !== threadId) return;
       appendMessage(msg);
+      // Hydrate attachments for user rows. The realtime payload only
+      // carries the `messages` row — Postgres replication doesn't
+      // join across tables — so a user message that was sent with
+      // files reaches the subscriber with `attachments` unset. Fire
+      // a follow-up fetch and re-append; `appendMessage`'s upgrade
+      // path replaces the placeholder with the hydrated row.
+      //
+      // Covers two scenarios:
+      //   1. Local sender race — the sender's own `appendMessage(userMsg)`
+      //      with attachments already lands via the upgrade path; this
+      //      hydration is a defensive second attempt for the case where
+      //      the realtime echo arrives but the local path never fires
+      //      (e.g. an error between addMessage and addAttachments).
+      //   2. Cross-tab sync — tab B sees the INSERT from tab A and
+      //      needs to fetch attachments itself; this is the only path
+      //      that does it.
+      //
+      // Fire-and-forget: a failure here just leaves the row without
+      // attachments in this tab. The next full `listMessages` on
+      // reload (or a re-subscribe) hydrates correctly.
+      if (msg.role === 'user' && app.supabase) {
+        void app.supabase
+          .listAttachmentsByMessageIds([msg.id])
+          .then((byId) => {
+            if (activeThreadId !== threadId) return;
+            const attachments = byId.get(msg.id) ?? [];
+            if (attachments.length === 0) return;
+            appendMessage({ ...msg, attachments });
+          })
+          .catch(() => {
+            // Swallowed intentionally — best-effort hydration, see above.
+          });
+      }
     });
   });
 
