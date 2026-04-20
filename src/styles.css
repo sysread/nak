@@ -888,13 +888,12 @@ h1 {
   color: var(--muted);
 }
 
-/* Drawer header now owns the search input instead of the old
-   "+ New thread" button. Keep the padding structure identical so the
-   border-bottom and vertical rhythm still line up with the rest of
-   the sidebar — only the inner control has changed. */
+/* Drawer header owns the search input instead of the old
+   "+ New thread" button. No bottom border — the search field's own
+   background gives enough visual separation from the thread list,
+   and the divider read as noisy chrome. */
 .sidebar-header {
   padding: 0.55rem 0.6rem;
-  border-bottom: 1px solid var(--border);
 }
 
 .sidebar-search-input {
