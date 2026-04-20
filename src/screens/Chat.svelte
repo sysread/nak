@@ -1302,7 +1302,6 @@
   let promptsMenuOpen = $state(false);
   let modelMenuOpen = $state(false);
   let reasoningMenuOpen = $state(false);
-  let composerBarEl: HTMLDivElement | undefined = $state();
 
   // IDs of system prompts active for the current thread. Seeded from
   // `enabledByDefault` when a thread is opened, not persisted. Swapping
@@ -1357,7 +1356,19 @@
       if (!inside) closeRowMenu();
     }
     if (!promptsMenuOpen && !modelMenuOpen && !reasoningMenuOpen) return;
-    if (composerBarEl && composerBarEl.contains(e.target as Node)) return;
+    // "Inside" is scoped to the open popover and its trigger — not the
+    // whole composer bar. Clicks on the bar's empty filler, the send
+    // button, or the toolbox toggle all count as outside so the popover
+    // yields the moment the user's attention moves anywhere else.
+    // `aria-haspopup="true"` is already set on every menu trigger for
+    // a11y, so we reuse it here instead of listing CSS classes.
+    const tgt = e.target;
+    if (
+      tgt instanceof Element &&
+      (tgt.closest('.composer-menu') || tgt.closest('[aria-haspopup="true"]'))
+    ) {
+      return;
+    }
     closeMenus();
   }
 
@@ -2178,7 +2189,7 @@
               : `Message… (${sendHint})`}
             disabled={sending || currentThread?.archived}
           ></textarea>
-          <div class="composer-bar" bind:this={composerBarEl}>
+          <div class="composer-bar">
             <div class="composer-bar-left">
               <!-- Tool master switch: on = every registered tool's schema
                    rides along with the next send; off = only toggle_tools.

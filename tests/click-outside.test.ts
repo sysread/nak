@@ -1,9 +1,9 @@
 /**
  * Verifies the document-level click-outside pattern that dismisses
  * composer-bar popovers in Chat.svelte. Mirrors the same shape
- * (anyOpen-gated document listener, `composerBarEl.contains(target)`
- * check) in a minimal harness component so the behaviour can be
- * asserted without mounting the whole chat screen.
+ * (anyOpen-gated document listener, `.composer-menu` / `[aria-haspopup]`
+ * containment check) in a minimal harness component so the behaviour
+ * can be asserted without mounting the whole chat screen.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { cleanup, render, fireEvent } from '@testing-library/svelte';
@@ -19,7 +19,7 @@ describe('composer click-outside dismissal', () => {
     expect(queryByTestId('prompts-menu')).not.toBeNull();
   });
 
-  it('closes the prompts menu when the user clicks outside', async () => {
+  it('closes the prompts menu when the user clicks fully outside the bar', async () => {
     const { getByTestId, queryByTestId } = render(Harness);
     await fireEvent.click(getByTestId('prompts-toggle'));
     expect(queryByTestId('prompts-menu')).not.toBeNull();
@@ -27,11 +27,24 @@ describe('composer click-outside dismissal', () => {
     expect(queryByTestId('prompts-menu')).toBeNull();
   });
 
-  it('keeps the menu open on clicks that land inside the composer bar', async () => {
+  it('closes the menu when the user clicks on empty bar filler', async () => {
+    // The failure this pins down: early versions treated the whole
+    // `.composer-bar` as "inside", so a click on the gap between the
+    // toggles and the send button did nothing. The popover only
+    // yields on genuine menu/trigger containment now.
     const { getByTestId, queryByTestId } = render(Harness);
     await fireEvent.click(getByTestId('prompts-toggle'));
-    // Clicking the menu itself shouldn't close it — interacting with a
-    // menu item (e.g. a prompts-list checkbox) is an inside click.
+    expect(queryByTestId('prompts-menu')).not.toBeNull();
+    await fireEvent.click(getByTestId('bar-filler'));
+    expect(queryByTestId('prompts-menu')).toBeNull();
+  });
+
+  it('keeps the menu open on clicks that land inside the menu itself', async () => {
+    const { getByTestId, queryByTestId } = render(Harness);
+    await fireEvent.click(getByTestId('prompts-toggle'));
+    // Clicking a menu item (e.g. a prompts-list checkbox) counts as
+    // inside — the popover must survive so the user can flip multiple
+    // toggles in one go.
     await fireEvent.click(getByTestId('prompts-menu'));
     expect(queryByTestId('prompts-menu')).not.toBeNull();
   });
