@@ -52,8 +52,10 @@ every screen reads. Phase transitions:
 `activate(config)` is the load-bearing transition: it stores the
 config, news up `SupabaseService` and `VeniceClient`, flips phase to
 `unlocked`, persists a session blob, and fires three background
-workers. `lock()` tears all of that down and clears the session.
-Both functions live in `state.svelte.ts`.
+workers. On a session-restore path, `App.svelte` calls
+`activate(config, { persist: false })` so the TTL isn’t bumped on
+refresh. `lock()` tears all of that down and clears the session. Both
+functions live in `state.svelte.ts`.
 
 ## Session lifecycle
 

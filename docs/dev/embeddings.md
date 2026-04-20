@@ -56,8 +56,9 @@ under-ranked until the worker catches up.
 
 - **`activate()` in `state.svelte.ts`** — calls
   `embeddingManager.start({ supabase, config })`. The manager
-  acquires the cross-tab Web Lock, reads the auth session,
-  posts a `StartMessage` to the Worker.
+  acquires the cross-tab Web Lock, reads the auth session, and
+  posts a `StartMessage` to the Worker with the access/refresh
+  tokens so the worker can construct its own Supabase client.
 - **`lock()`** — calls `embeddingManager.stop()`. Settles the
   Web Lock resolver (releases the lock), aborts the Worker,
   calls `release_worker_lease` so another device can take over

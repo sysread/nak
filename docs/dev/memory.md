@@ -1,7 +1,8 @@
 # Memory
 
-Long-term memory: the `memories` table, the five `memory_*` tools
-that CRUD it, the reflection agent that writes to it after
+Long-term memory: the `memories` table, the `memory_*` tools
+that CRUD it (search/create/update/invalidate/delete) plus the
+`memory_recall` top-level tool, the reflection agent that writes to it after
 conversations settle, and the recall agent that reads from it
 during live conversations. One coherent feature with a store, a
 writer, and a reader.
