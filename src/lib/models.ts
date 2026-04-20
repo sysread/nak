@@ -133,12 +133,12 @@ export interface ModelSpec {
 export const MODELS: Record<ModelTier, ModelSpec> = {
   smart: {
     tier: 'smart',
-    // kimi-k2-6 is a multimodal Moonshot model with native vision +
-    // reasoning and a 256k context window. Smart and Balanced both
-    // ride on this id; the two tiers differ only in their default
-    // reasoning effort (see defaultReasoningEffort below) so users
-    // can pick "deep think" vs "quick think" without giving up the
-    // underlying model's quality.
+    // kimi-k2-6 is Moonshot's latest multimodal model — native
+    // vision + reasoning, 256k context. Smart is the only tier on
+    // this id; Balanced runs kimi-k2-5 because k2-6 is frequently
+    // overloaded on Venice and we didn't want the default tier
+    // taking 503s. Users who want the newest model explicitly
+    // choose Smart.
     id: 'kimi-k2-6',
     label: 'Smart',
     icon: '🧠',
@@ -150,17 +150,23 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
   },
   balanced: {
     tier: 'balanced',
-    // Same model as Smart — see the note on smart.id. Differentiated
-    // by defaultReasoningEffort: 'low' here, so Balanced answers
-    // land faster while the model still has vision + long context.
-    id: 'kimi-k2-6',
+    // Retargeted off kimi-k2-6 because that id is frequently
+    // "overloaded" on Venice's backend — user-visible 503s in the
+    // middle of a conversation. kimi-k2-5 is the previous-generation
+    // sibling: same vision support, same 256k context, same
+    // reasoning knob, less contention. Smart stays on k2-6 so when
+    // the user really wants the newest model they can pick it; the
+    // tiers now differ by both model and reasoning effort, which
+    // still gives the "quick thinking" vs "deep thinking" shape the
+    // tier names imply.
+    id: 'kimi-k2-5',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
     // SCALES because the scales glyph is all thin strokes in every major
     // emoji font, and it vanishes against the toggle background in both
     // themes; yin-yang is a solid bi-tonal disc that reads at any size.
     icon: '\u262F\uFE0F',
-    description: 'Kimi K2.6 with light thinking. Good default for most turns.',
+    description: 'Kimi K2.5 with light thinking. Good default for most turns.',
     contextWindow: 256_000,
     supportsReasoning: true,
     supportsVision: true,
@@ -400,10 +406,9 @@ const RETIRED_MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   'arcee-trinity-large-thinking': 256_000,
   'gemma-4-uncensored': 198_000,
   'zai-org-glm-5': 198_000,
-  // Retired Smart-tier ids. kimi-k2-5 was the smart tier before it
-  // moved to kimi-k2-6; the window is unchanged (256k) but pin it
-  // anyway so retirement logic follows the same pattern for every id.
-  'kimi-k2-5': 256_000,
+  // kimi-k2-5 is not retired — Balanced currently fronts it. If
+  // that tier moves again, add it here at whatever window Venice
+  // reported at retirement time.
 };
 
 /**

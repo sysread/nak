@@ -26,11 +26,11 @@ import {
 
 describe('MODELS', () => {
   it('has the three tiers with the expected Venice model ids', () => {
-    // Smart and Balanced deliberately share the kimi-k2-6 id — the
-    // tiers differ by defaultReasoningEffort (high vs low), not by
-    // underlying model. See the note on MODELS.smart.id in models.ts.
+    // Smart on kimi-k2-6 (latest Moonshot); Balanced on k2-5 because
+    // k2-6 is frequently overloaded on Venice and Balanced is the
+    // default tier. See the note on MODELS.balanced.id in models.ts.
     expect(MODELS.smart.id).toBe('kimi-k2-6');
-    expect(MODELS.balanced.id).toBe('kimi-k2-6');
+    expect(MODELS.balanced.id).toBe('kimi-k2-5');
     expect(MODELS.fast.id).toBe('grok-41-fast');
   });
   it('differentiates smart and balanced by reasoning effort', () => {
@@ -233,7 +233,7 @@ describe('padEmbeddingForStorage', () => {
 describe('findContextWindowById', () => {
   it('returns the window for a currently-fronted model id', () => {
     expect(findContextWindowById('kimi-k2-6')).toBe(MODELS.smart.contextWindow);
-    expect(findContextWindowById('kimi-k2-6')).toBe(MODELS.balanced.contextWindow);
+    expect(findContextWindowById('kimi-k2-5')).toBe(MODELS.balanced.contextWindow);
     expect(findContextWindowById('grok-41-fast')).toBe(MODELS.fast.contextWindow);
   });
 
@@ -248,8 +248,6 @@ describe('findContextWindowById', () => {
     expect(findContextWindowById('gemma-4-uncensored')).toBe(198_000);
     expect(findModelById('zai-org-glm-5')).toBeNull();
     expect(findContextWindowById('zai-org-glm-5')).toBe(198_000);
-    expect(findModelById('kimi-k2-5')).toBeNull();
-    expect(findContextWindowById('kimi-k2-5')).toBe(256_000);
   });
 
   it('returns null for an unknown id and for null/empty input', () => {
