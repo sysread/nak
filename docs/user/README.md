@@ -6,7 +6,8 @@ the app up on your own Supabase + Venice accounts, and how to keep your
 data yours.
 
 Developer-facing material (architecture, build tooling, conventions)
-lives next door in [`../dev/`](../dev/README.md).
+lives next door in `docs/dev/` — not rendered by the in-app Help
+modal, but readable on GitHub.
 
 ## How this is organized
 
