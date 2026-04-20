@@ -79,6 +79,7 @@
     resolveReasoningEffort,
     resolveTier,
     resolveVerbosity,
+    type ModelSpec,
     type ModelTier,
     type ReasoningEffort,
     type Verbosity,
@@ -97,7 +98,7 @@
   import ToolCalls from '../components/ToolCalls.svelte';
   import MessageAttachments from '../components/MessageAttachments.svelte';
   import ExtractedTextDrawer from '../components/ExtractedTextDrawer.svelte';
-  import type { Citation } from '$lib/venice';
+  import { VeniceError, type Citation, type VeniceMessage } from '$lib/venice';
 
   const DEFAULT_TITLE = 'New conversation';
 
@@ -349,7 +350,13 @@
   let composer = $state('');
   let composerEl: HTMLTextAreaElement | undefined = $state();
   let sending = $state(false);
-  let error = $state<string | null>(null);
+  // Error banner state. `retry` is populated only for transient failures
+  // where re-firing the exact same request is meaningful (rate-limit so
+  // far) — it re-runs the chat loop with the captured history so the
+  // user doesn't have to retype. A fresh error assignment replaces any
+  // earlier retry closure; the banner only ever owns one.
+  type ChatError = { text: string; retry?: () => void };
+  let error = $state<ChatError | null>(null);
   let abortCtl: AbortController | null = null;
 
   // Pending attachments — one chip per queued file. Populated by the
@@ -396,16 +403,20 @@
    */
   async function addAttachment(file: File): Promise<void> {
     if (pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-      error = `You can attach at most ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`;
+      error = {
+        text: `You can attach at most ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`,
+      };
       return;
     }
     const perFileReason = validateFile(file);
     if (perFileReason) {
-      error = `${file.name}: ${perFileReason}`;
+      error = { text: `${file.name}: ${perFileReason}` };
       return;
     }
     if (pendingBytes() + file.size > MAX_MESSAGE_AGGREGATE_BYTES) {
-      error = `Total attachment size exceeds ${formatBytes(MAX_MESSAGE_AGGREGATE_BYTES)}.`;
+      error = {
+        text: `Total attachment size exceeds ${formatBytes(MAX_MESSAGE_AGGREGATE_BYTES)}.`,
+      };
       return;
     }
     error = null;
@@ -828,7 +839,7 @@
         setSessionThreadId(null);
       }
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -848,7 +859,7 @@
       // Surface pagination failures via the existing error banner;
       // leaving `olderLoading` stuck true would also lock the sentinel
       // so users can't retry.
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     } finally {
       olderLoading = false;
     }
@@ -866,7 +877,7 @@
       archivedCursor = page.nextCursor;
       archivedHasMore = page.nextCursor !== null;
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     } finally {
       archivedLoading = false;
     }
@@ -938,7 +949,7 @@
     try {
       messages = await app.supabase.listMessages(id);
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -1009,7 +1020,7 @@
       const updated = { ...currentThread, title: next, updated_at: new Date().toISOString() };
       rebucketThread(updated);
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -1055,7 +1066,7 @@
     try {
       await app.supabase.setThreadModel(threadId, next);
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -1081,7 +1092,7 @@
     try {
       await app.supabase.setThreadReasoningEffort(threadId, next);
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -1102,7 +1113,7 @@
     try {
       await app.supabase.setThreadVerbosity(threadId, next);
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -1203,7 +1214,7 @@
         setSessionThreadId(null);
       }
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -1222,7 +1233,7 @@
     try {
       await app.supabase.setThreadArchived(id, true);
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -1236,7 +1247,7 @@
     try {
       await app.supabase.setThreadArchived(id, false);
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -1329,19 +1340,23 @@
     // tier.
     const stillPending = pendingAttachments.find((a) => a.pending);
     if (stillPending) {
-      error = `"${stillPending.filename}" is still processing — wait for it to finish.`;
+      error = {
+        text: `"${stillPending.filename}" is still processing — wait for it to finish.`,
+      };
       return;
     }
     const erroredChip = pendingAttachments.find((a) => a.error);
     if (erroredChip) {
-      error = `"${erroredChip.filename}": ${erroredChip.error}`;
+      error = { text: `"${erroredChip.filename}": ${erroredChip.error}` };
       return;
     }
     const unreadable = readyAttachments.find((a) => !isConsumableBy(a, tierSpec));
     if (unreadable) {
-      error = isImageMimeType(unreadable.mime_type)
-        ? `"${unreadable.filename}" is an image and the ${tierSpec.label} tier can't see images. Switch to a vision-capable tier or remove the file.`
-        : `"${unreadable.filename}" has no extractable text — the model won't be able to read it. Remove it to send.`;
+      error = {
+        text: isImageMimeType(unreadable.mime_type)
+          ? `"${unreadable.filename}" is an image and the ${tierSpec.label} tier can't see images. Switch to a vision-capable tier or remove the file.`
+          : `"${unreadable.filename}" has no extractable text — the model won't be able to read it. Remove it to send.`,
+      };
       return;
     }
 
@@ -1378,6 +1393,15 @@
     // if the user had scrolled up before hitting send, we want their new
     // message (and the impending streaming response) in view.
     followBottom = true;
+
+    // Build the system-prompt preamble now, against the toggles the user
+    // has set at send time. On retry (rate-limit refresh button) we want
+    // the original prompts — capturing here, not inside runExchange,
+    // pins them even if the user flips a toggle while the banner is up.
+    const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
+      .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
+      .map((p) => ({ role: 'system' as const, content: p.body }));
+
     try {
       const userMsg = await app.supabase.addMessage(threadId, 'user', text);
       // Persist attachment rows. Positional index matches the chip
@@ -1396,7 +1420,7 @@
           // Non-fatal: surface a console warning but keep going. The
           // user's typed text still gets a reply — the attachments
           // just won't make it into history.
-           
+
           console.warn('[attachments] persistAttachments failed', err);
           userMsg.attachments = [];
         }
@@ -1404,67 +1428,125 @@
         userMsg.attachments = [];
       }
       appendMessage(userMsg);
-      streamingText = '';
-      abortCtl = new AbortController();
+    } catch (err) {
+      // Pre-exchange failure (user message persist). No retry here —
+      // the user's row didn't land, so "retry" would mean "try persist
+      // again," which is a different UX than "retry the LLM call."
+      error = { text: err instanceof Error ? err.message : String(err) };
+      sending = false;
+      return;
+    }
 
-      // Build the request payload: active system prompts first (in library
-      // order, skipping empties), then the stored conversation history
-      // (faithfully projected onto the OpenAI wire shape via
-      // toVeniceMessage so stored tool_calls / tool_call_id / name
-      // round-trip). Prompts aren't stored on the thread — we re-apply
-      // whatever the user has toggled on at send time.
-      const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
-        .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
-        .map((p) => ({ role: 'system' as const, content: p.body }));
-      const freshThread = findThread(threadId);
-      if (!freshThread) throw new Error('thread disappeared before send');
-      const currentUserId = session?.user.id ?? freshThread.user_id;
-      const historyOnWire = [
-        ...systemMessages,
-        // Pass the tier's vision capability so user messages with
-        // image attachments land on the wire as multimodal content
-        // arrays on vision tiers, and as string-plus-fenced-extracted
-        // text on non-vision tiers. toVeniceMessage is safe to call
-        // on rows without attachments — they come back as plain
-        // strings either way.
-        ...messages.map((m) => toVeniceMessage(m, { visionSpec: tierSpec })),
-      ];
+    const freshThread = findThread(threadId);
+    if (!freshThread) {
+      error = { text: 'Thread disappeared before send.' };
+      sending = false;
+      return;
+    }
+    const currentUserId = session?.user.id ?? freshThread.user_id;
 
-      // Throttle streamingText updates to ~2Hz while the response
-      // arrives. Every assignment drives <Markdown> to re-run marked
-      // + DOMPurify + highlight.js over the full growing buffer, so
-      // flushing on each SSE delta would peg the main thread and make
-      // long responses land in visible gulps. Trailing-edge throttle:
-      // the first delta schedules a 500ms timer, any deltas arriving
-      // inside that window get coalesced into the latest `pending`
-      // value, and one flush commits the buffer when the timer fires.
-      // Side effect: ~500ms of "thinking dots" before the first
-      // rendered paint, which reads as intentional pacing.
-      const FLUSH_MS = 500;
-      let pending: string | null = null;
-      let flushTimer = 0;
-      const flushPending = (): void => {
+    await runExchange({
+      threadId,
+      currentUserId,
+      modelId,
+      tierSpec,
+      systemMessages,
+      sendReasoning,
+      sendVerbosity,
+      isFirstExchange,
+      originalText: text,
+    });
+  }
+
+  /**
+   * Parameters captured once at send-time and re-used verbatim on a
+   * refresh-button retry. The wire history is intentionally NOT
+   * captured: runExchange rebuilds it from the current `messages` store
+   * on each call so a retry after a multi-round exchange (round 1 ran
+   * tools and persisted results, round 2 hit a 429) picks up from the
+   * right place rather than re-sending the original short history.
+   */
+  interface ExchangeContext {
+    threadId: string;
+    currentUserId: string;
+    modelId: string;
+    tierSpec: ModelSpec;
+    systemMessages: { role: 'system'; content: string }[];
+    sendReasoning: ReasoningEffort | undefined;
+    sendVerbosity: Verbosity;
+    isFirstExchange: boolean;
+    originalText: string;
+  }
+
+  /**
+   * Run (or re-run) a single chat-loop exchange against the current
+   * thread. Owns the `sending` flag, the abort controller, the text
+   * flush throttle, and the error banner's retry wiring — so both the
+   * initial send path and the rate-limit refresh button share identical
+   * lifecycle handling.
+   *
+   * On a rate-limit failure (VeniceError kind='rate_limit'), parks a
+   * retry closure on the error banner that re-invokes this function
+   * with the same context. Other errors surface their message without
+   * a retry — we only advertise a retry when re-firing is meaningful.
+   */
+  async function runExchange(ctx: ExchangeContext): Promise<void> {
+    if (!app.venice || !app.supabase) return;
+    const freshThread = findThread(ctx.threadId);
+    if (!freshThread) {
+      error = { text: 'Thread disappeared before send.' };
+      return;
+    }
+    error = null;
+    sending = true;
+    streamingText = '';
+    abortCtl = new AbortController();
+
+    // Rebuild at call time so a retry after mid-exchange persists
+    // (assistant row + tool result from a prior round) sees them.
+    // toVeniceMessage is safe to call on rows without attachments —
+    // they come back as plain strings either way.
+    const historyOnWire: VeniceMessage[] = [
+      ...ctx.systemMessages,
+      ...messages.map((m) => toVeniceMessage(m, { visionSpec: ctx.tierSpec })),
+    ];
+
+    // Throttle streamingText updates to ~2Hz while the response
+    // arrives. Every assignment drives <Markdown> to re-run marked
+    // + DOMPurify + highlight.js over the full growing buffer, so
+    // flushing on each SSE delta would peg the main thread and make
+    // long responses land in visible gulps. Trailing-edge throttle:
+    // the first delta schedules a 500ms timer, any deltas arriving
+    // inside that window get coalesced into the latest `pending`
+    // value, and one flush commits the buffer when the timer fires.
+    // Side effect: ~500ms of "thinking dots" before the first
+    // rendered paint, which reads as intentional pacing.
+    const FLUSH_MS = 500;
+    let pending: string | null = null;
+    let flushTimer = 0;
+    const flushPending = (): void => {
+      flushTimer = 0;
+      if (pending !== null) {
+        streamingText = pending;
+        pending = null;
+      }
+    };
+    const cancelPending = (): void => {
+      if (flushTimer !== 0) {
+        clearTimeout(flushTimer);
         flushTimer = 0;
-        if (pending !== null) {
-          streamingText = pending;
-          pending = null;
-        }
-      };
-      const cancelPending = (): void => {
-        if (flushTimer !== 0) {
-          clearTimeout(flushTimer);
-          flushTimer = 0;
-        }
-      };
+      }
+    };
 
+    try {
       let loopResult;
       try {
         loopResult = await runChatLoop({
           venice: app.venice,
           supabase: app.supabase,
           thread: freshThread,
-          userId: currentUserId,
-          modelId,
+          userId: ctx.currentUserId,
+          modelId: ctx.modelId,
           history: historyOnWire,
           signal: abortCtl.signal,
           // Enabled → 'on' so every turn is grounded with live results
@@ -1474,8 +1556,8 @@
           // so the field is pinned even against any future Venice-side
           // default change.
           webSearch: app.webSearchEnabled ? 'on' : 'off',
-          reasoningEffort: sendReasoning,
-          verbosity: sendVerbosity,
+          reasoningEffort: ctx.sendReasoning,
+          verbosity: ctx.sendVerbosity,
           handlers: {
             onTextUpdate: (t) => {
               pending = t;
@@ -1557,7 +1639,7 @@
               }
             },
             onToolsEnabledChange: (enabled) => {
-              patchThread(threadId, { tools_enabled: enabled });
+              patchThread(ctx.threadId, { tools_enabled: enabled });
               // Brief flash on the composer toolbox so a human eye
               // notices the LLM-initiated state flip. User-initiated
               // flips don't flash (the click itself is the feedback).
@@ -1578,11 +1660,11 @@
         }
       }
       if (loopResult.stoppedByLimit && !loopResult.finalText) {
-        error = 'Stopped: tool-call loop hit the 5-round limit.';
+        error = { text: 'Stopped: tool-call loop hit the 5-round limit.' };
       }
-      if (isFirstExchange && loopResult.finalText.length > 0) {
+      if (ctx.isFirstExchange && loopResult.finalText.length > 0) {
         // Fire-and-forget: don't block the UI on title generation.
-        void autoTitle(threadId, text);
+        void autoTitle(ctx.threadId, ctx.originalText);
       }
       streamingText = '';
       streamingReasoning = '';
@@ -1591,12 +1673,27 @@
       streamingContentStarted = false;
       await refreshThreads();
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
       streamingText = '';
       streamingReasoning = '';
       streamingCitations = null;
       streamingReasoningOpen = false;
       streamingContentStarted = false;
+      // Rate-limit is the one error where re-sending the same request
+      // a moment later is the right fix — Venice's message literally
+      // says "try again later." Park a retry closure on the banner so
+      // the refresh button is the only action needed; other failure
+      // kinds (auth, parse, the user's abort) would just repeat the
+      // error, so we omit the retry for them.
+      if (err instanceof VeniceError && err.kind === 'rate_limit') {
+        error = {
+          text: formatRateLimitMessage(err),
+          retry: () => {
+            void runExchange(ctx);
+          },
+        };
+      } else {
+        error = { text: err instanceof Error ? err.message : String(err) };
+      }
     } finally {
       sending = false;
       abortCtl = null;
@@ -1608,6 +1705,40 @@
         reasoningCloseTimer = 0;
       }
     }
+  }
+
+  /**
+   * Unwrap a Venice rate-limit error into a message fit for the banner.
+   * The raw err.message is `Venice rate limit hit (HTTP 429). <detail>`
+   * where <detail> is usually the OpenAI-compat envelope
+   * `{"error":"The model is currently overloaded..."}`. Peel both
+   * layers so the user sees only the provider's reason; fall back to
+   * the raw message when parsing fails — any text beats a blank banner.
+   */
+  function formatRateLimitMessage(err: VeniceError): string {
+    const prefix = `Venice rate limit hit (HTTP ${err.status ?? 429}). `;
+    const detail = err.message.startsWith(prefix)
+      ? err.message.slice(prefix.length).trim()
+      : err.message.trim();
+    if (detail.startsWith('{')) {
+      try {
+        const parsed: unknown = JSON.parse(detail);
+        if (parsed && typeof parsed === 'object') {
+          const e = (parsed as { error?: unknown }).error;
+          if (typeof e === 'string') return e;
+          if (
+            e &&
+            typeof e === 'object' &&
+            typeof (e as { message?: unknown }).message === 'string'
+          ) {
+            return (e as { message: string }).message;
+          }
+        }
+      } catch {
+        // Not JSON — fall through to the raw detail.
+      }
+    }
+    return detail || 'Rate limited. Please try again later.';
   }
 
   // ⌘+Enter (macOS), Ctrl+Enter (everyone else), and the legacy Shift+Enter
@@ -1992,7 +2123,7 @@
     } catch (err) {
       // Revert on failure so the UI doesn't lie about server state.
       patchThread(threadId, { tools_enabled: !next });
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -2075,7 +2206,7 @@
       focusedResultIdx = hits.length > 0 ? 0 : -1;
     } catch (err) {
       if (!ctl.signal.aborted) {
-        error = err instanceof Error ? err.message : String(err);
+        error = { text: err instanceof Error ? err.message : String(err) };
       }
     } finally {
       if (searchAbort === ctl) {
@@ -2129,7 +2260,7 @@
       // here usually means the Supabase session has expired or the
       // network is down; both get surfaced via the banner on the
       // subsequent selectThread call anyway.
-      error = err instanceof Error ? err.message : String(err);
+      error = { text: err instanceof Error ? err.message : String(err) };
     }
 
     clearSearch();
@@ -2712,7 +2843,31 @@
           </button>
         {/if}
       </div>
-      {#if error}<p class="error" style="padding:0 1rem">{error}</p>{/if}
+      {#if error}
+        <div class="error-bar">
+          <p class="error">{error.text}</p>
+          {#if error.retry}
+            <button
+              type="button"
+              class="secondary icon-btn error-retry"
+              onclick={error.retry}
+              disabled={sending}
+              title="Retry"
+              aria-label="Retry"
+            >
+              <!-- Refresh / circular-arrow icon (Feather "refresh-cw"). -->
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                   stroke-linejoin="round" aria-hidden="true">
+                <polyline points="23 4 23 10 17 10" />
+                <polyline points="1 20 1 14 7 14" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+                <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
+              </svg>
+            </button>
+          {/if}
+        </div>
+      {/if}
       <div class="composer">
         <div
           class="composer-shell"

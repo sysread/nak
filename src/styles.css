@@ -576,6 +576,30 @@ h1 {
   margin-top: 0.5rem;
 }
 
+/*
+ * Error banner wrapper used in the Chat screen between the message list
+ * and the composer. Keeps the retry button vertically centered next to
+ * the message line and gives the .error paragraph zero vertical margin
+ * inside the bar — the bar's own padding is what separates it from the
+ * composer below.
+ */
+.error-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 1rem;
+}
+
+.error-bar .error {
+  flex: 1;
+  margin: 0;
+}
+
+.error-bar .error-retry {
+  flex-shrink: 0;
+  color: var(--danger);
+}
+
 .row {
   display: flex;
   gap: 0.5rem;
