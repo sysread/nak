@@ -2096,19 +2096,6 @@ h1 {
   .toolbox-btn.flash { animation: none; }
 }
 
-/* Streaming-response bubble before the markdown pass kicks in. Plain
-   pre-wrap text is orders of magnitude cheaper to render than running
-   the incremental marked + highlight.js + DOMPurify pipeline on every
-   rAF-batched write to a growing buffer. Once the stream completes the
-   committed message rerenders via <Markdown>. */
-.streaming-text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  font-family: inherit;
-  line-height: 1.45;
-}
-
 /* Thinking-state assistant bubble: a single Scanner sitting in an
    otherwise-empty card. Center it so it doesn't visually anchor to the
    top-left corner. */

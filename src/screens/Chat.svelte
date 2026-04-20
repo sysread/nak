@@ -996,26 +996,30 @@
         ...messages.map(toVeniceMessage),
       ];
 
-      // Coalesce streamingText updates with rAF so the main thread
-      // only re-parses/sanitizes/renders the growing text at most once
-      // per paint. Without this, bursts of SSE deltas (e.g. a whole
-      // sentence landing in one TCP chunk) would each trigger a full
-      // marked + DOMPurify re-parse, visible as UI gulps instead of a
-      // smooth stream. Also guarantees at least one paint of the
-      // "thinking dots" state before any streamingText is written.
+      // Throttle streamingText updates to ~2Hz while the response
+      // arrives. Every assignment drives <Markdown> to re-run marked
+      // + DOMPurify + highlight.js over the full growing buffer, so
+      // flushing on each SSE delta would peg the main thread and make
+      // long responses land in visible gulps. Trailing-edge throttle:
+      // the first delta schedules a 500ms timer, any deltas arriving
+      // inside that window get coalesced into the latest `pending`
+      // value, and one flush commits the buffer when the timer fires.
+      // Side effect: ~500ms of "thinking dots" before the first
+      // rendered paint, which reads as intentional pacing.
+      const FLUSH_MS = 500;
       let pending: string | null = null;
-      let rafId = 0;
+      let flushTimer = 0;
       const flushPending = (): void => {
-        rafId = 0;
+        flushTimer = 0;
         if (pending !== null) {
           streamingText = pending;
           pending = null;
         }
       };
       const cancelPending = (): void => {
-        if (rafId !== 0) {
-          cancelAnimationFrame(rafId);
-          rafId = 0;
+        if (flushTimer !== 0) {
+          clearTimeout(flushTimer);
+          flushTimer = 0;
         }
       };
 
@@ -1040,7 +1044,9 @@
           handlers: {
             onTextUpdate: (t) => {
               pending = t;
-              if (rafId === 0) rafId = requestAnimationFrame(flushPending);
+              if (flushTimer === 0) {
+                flushTimer = window.setTimeout(flushPending, FLUSH_MS);
+              }
             },
             onAssistantPersisted: (msg) => {
               // Cancel any pending frame — the persisted row takes
@@ -2106,14 +2112,15 @@
           {#if sending || streamingText}
             <div class="msg assistant">
               {#if streamingText}
-                <!-- While the response is arriving, render the buffer as
-                     plain pre-wrap text. Full markdown (syntax highlighting,
-                     KaTeX, DOMPurify) re-parses the whole growing string on
-                     every update — fine for a finished message, but during
-                     streaming it pegs the main thread and makes the text
-                     land in visible gulps. Once the stream completes the
-                     committed message rerenders via <Markdown> below. -->
-                <div class="streaming-text">{streamingText}</div>
+                <!-- Live markdown render of the in-progress buffer. The
+                     onTextUpdate handler throttles writes to ~4Hz (see
+                     FLUSH_MS in send()), so marked + DOMPurify +
+                     highlight.js only re-parse the growing string a few
+                     times per second. Unclosed fences / bold / math
+                     resolve themselves as more deltas arrive; once the
+                     stream ends the persisted message rerenders through
+                     this same <Markdown> path. -->
+                <Markdown content={streamingText} />
               {:else}
                 <!-- Placeholder shown between "user hit send" and "first
                      token arrived" — gives the composer submit some
