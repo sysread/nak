@@ -1346,7 +1346,17 @@
     }
 
     let threadId: string;
-    let isFirstExchange = false;
+    // True when this send should trigger auto-titling after the
+    // assistant replies. Historically this was "is this the first
+    // user/assistant exchange?", but that made auto-title strictly
+    // one-shot — if the first attempt failed (Venice 503, network
+    // blip, etc.), the thread stayed stuck on DEFAULT_TITLE
+    // permanently. New contract: any send on a thread that's still
+    // carrying the default title qualifies. The title-gen cost is
+    // trivial (one short utility-tier call) and the only cases where
+    // the gate fires more than once are the ones we specifically
+    // want to recover from.
+    let needsAutoTitle = false;
     if (!active) {
       // No thread selected — create one on the fly.
       const t = await app.supabase.createThread(DEFAULT_TITLE);
@@ -1354,16 +1364,21 @@
       threadId = t.id;
       activeThreadId = t.id;
       setSessionThreadId(t.id);
-      isFirstExchange = true;
+      needsAutoTitle = true;
     } else if (active.isDraft) {
       // First send on a draft — materialize it now, preserving any model
       // choice the user already made from the dropdown.
       const real = await materializeIfDraft(active);
       threadId = real.id;
-      isFirstExchange = true;
+      needsAutoTitle = true;
     } else {
       threadId = active.id;
-      isFirstExchange = messages.length === 0 && active.title === DEFAULT_TITLE;
+      // Used to also require `messages.length === 0` — dropped so a
+      // send on a thread whose initial auto-title failed can recover
+      // on any subsequent send. The gate is "title is still the
+      // placeholder", which is automatically false once a title has
+      // landed (or the user renamed the thread manually).
+      needsAutoTitle = active.title === DEFAULT_TITLE;
     }
 
     // Snapshot the queued attachments and clear the composer chips.
@@ -1580,9 +1595,19 @@
       if (loopResult.stoppedByLimit && !loopResult.finalText) {
         error = 'Stopped: tool-call loop hit the 5-round limit.';
       }
-      if (isFirstExchange && loopResult.finalText.length > 0) {
+      if (needsAutoTitle && loopResult.finalText.length > 0) {
+        // Title from the thread's *opening* user turn, not the one
+        // we just sent. Matters for the retry-on-next-send case: if
+        // the first auto-title attempt failed and we're now on turn
+        // N, the latest user message is a follow-up that won't
+        // summarize the conversation well. For a genuinely new
+        // thread the two are identical because the just-appended
+        // message is also the first. Falls back to `text` only
+        // defensively — `messages` is reactive state we've already
+        // appended to.
+        const seed = messages.find((m) => m.role === 'user')?.content ?? text;
         // Fire-and-forget: don't block the UI on title generation.
-        void autoTitle(threadId, text);
+        void autoTitle(threadId, seed);
       }
       streamingText = '';
       streamingReasoning = '';
