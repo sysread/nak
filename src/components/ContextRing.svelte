@@ -21,7 +21,7 @@
   ring reads the same across themes.
 
   Accessibility: the element carries both `aria-label` and `title` with
-  a human-readable summary ("128,400 / 256,000 tokens · 50%") so screen
+  a human-readable summary ("50% (128,400 / 256,000 tokens)") so screen
   readers announce meaning, and sighted users get a hover tooltip with
   exact numbers. The ring itself is `aria-hidden` since its meaning is
   already captured in the label.
@@ -60,12 +60,15 @@
   const CIRC = 2 * Math.PI * RADIUS;
   const dashOffset = $derived(CIRC * (1 - pct));
 
-  // Human-readable summary for the tooltip / aria-label. We format
-  // large numbers with thousands separators so a glance gives a
-  // meaningful magnitude (1,234,567 reads instantly; 1234567 doesn't).
+  // Human-readable summary for the tooltip / aria-label. Percentage
+  // comes first because it's the headline — a glance at the ring
+  // already suggests "about half full"; the tooltip's job is to put
+  // a specific number to that impression, then back it up with the
+  // exact token counts. Thousands separators make the magnitudes
+  // legible (1,234,567 reads instantly; 1234567 doesn't).
   const fmt = new Intl.NumberFormat();
   const summary = $derived(
-    `${fmt.format(totalTokens)} / ${fmt.format(contextWindow)} tokens \u00b7 ${Math.round(pct * 100)}%`
+    `${Math.round(pct * 100)}% (${fmt.format(totalTokens)} / ${fmt.format(contextWindow)} tokens)`
   );
 </script>
 

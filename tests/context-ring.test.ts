@@ -126,9 +126,10 @@ describe('ContextRing', () => {
     const wrap = container.querySelector('.context-ring');
     expect(wrap).not.toBeNull();
     const label = wrap!.getAttribute('aria-label');
-    // Thousands separators + middle-dot + percentage. Exact format
-    // matters for the tooltip too; the user sees this string on hover.
-    expect(label).toBe('128,400 / 256,000 tokens \u00b7 50%');
+    // Percentage leads, exact token counts follow in parens. Exact
+    // format matters for the tooltip too; the user sees this string
+    // on hover.
+    expect(label).toBe('50% (128,400 / 256,000 tokens)');
     // The tooltip (`title`) mirrors the aria-label so sighted and
     // assistive-tech readers both get the same summary.
     expect(wrap!.getAttribute('title')).toBe(label);
