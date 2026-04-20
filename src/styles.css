@@ -65,7 +65,13 @@
   --bg: #f7f2e4;       /* warm cream / latte */
   --bg-2: #efe8d2;
   --surface: #ffffff;
-  --border: #d9cfb8;
+  /* Borders sit between near-identical warm tones (cream page bg vs.
+     slightly deeper sidebar bg vs. white surfaces) so they need more
+     contrast than the dark-theme equivalent to register as a line
+     rather than a seam. Previous value #d9cfb8 disappeared against
+     the sidebar tint; this darker tan holds its edge across all
+     three surfaces. */
+  --border: #c4b691;
   --text: #2b2620;
   --muted: #75695a;
   --danger: #b91c1c;
@@ -95,6 +101,17 @@
 :root[data-theme='light'][data-accent='pink']   { --accent: #be185d; --accent-weak: #fce7f3; }
 :root[data-theme='light'][data-accent='orange'] { --accent: #c2410c; --accent-weak: #ffedd5; }
 :root[data-theme='light'][data-accent='teal']   { --accent: #0f766e; --accent-weak: #ccfbf1; }
+
+/* Light-mode glyph weight. Lekton ships only 400 and 700 TTFs (see
+   @font-face above; the pixel-bitmap predecessor was retired precisely
+   to avoid synthesized faux-bold), so reaching for font-weight: 500
+   would route back through that same synthesis path. A sub-pixel
+   text-shadow thickens strokes uniformly and deterministically across
+   browsers — just enough to give the text the same visual density
+   against cream that the regular face has against the dark-mode bg. */
+:root[data-theme='light'] body {
+  text-shadow: 0 0 0.01em currentColor;
+}
 
 * {
   box-sizing: border-box;
@@ -1219,6 +1236,14 @@ h1 {
   width: 80%;
   max-width: 80%;
   background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+/* User bubbles borrow the assistant hairline in light mode only. On
+   the dark-theme near-black bg the accent-weak tint reads as a clearly
+   distinct panel on its own; on cream, pale-blue-on-cream loses the
+   edge and the bubble bleeds into the page. */
+:root[data-theme='light'] .msg.user {
   border: 1px solid var(--border);
 }
 
