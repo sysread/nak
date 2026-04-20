@@ -51,6 +51,12 @@ You can reach these pages two ways:
 - [Export & import](./export-import.md) — moving your keys to another
   browser.
 
+### Under the hood
+- [What runs in the background](./background.md) — auto-titling,
+  thread summaries, memory reflection, conversation recall,
+  embeddings, and the web-search toggle. What's running on your
+  behalf between messages, and what you can control.
+
 ### Installing as an app
 - [Install as a PWA](./install-pwa.md) — getting Nak onto your home
   screen, taskbar, or dock, and what works offline.
