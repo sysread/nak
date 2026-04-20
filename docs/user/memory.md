@@ -68,10 +68,48 @@ tool-call strip on a reply, you'll see the recall calls fire.
 Recall runs on the fast tier too — the cost is a few cents of tokens
 per invocation, at most.
 
+## Browsing memories directly
+
+Two entry points open the Memories browser:
+
+- the book icon in the drawer footer, between Help and Settings
+- the **Browse memories** link in Settings → AI
+
+The browser lists every memory on your account, most recent first.
+The search box runs a semantic match — paraphrases and synonyms
+count, not just substrings — and falls back to plain substring
+search when the embedding service is unreachable. Each row shows
+the label, the full body, and when it was last touched.
+
+From the list you can:
+
+- **Edit a memory in place.** Clicking *Edit* swaps the row into
+  label + body fields with character counters and an explicit
+  *Save* button. A save-state badge under the fields shows
+  *Unsaved changes*, *Saving…*, *Saved ✓*, or the error message
+  if the write failed, so you never have to guess whether an edit
+  landed on the server.
+- **Delete a memory.** *Delete* asks you to confirm inline before
+  issuing a hard delete (the same operation the assistant's
+  `memory_delete` tool performs).
+
+A freshly edited memory briefly falls back to substring search
+while the background embedding worker recomputes its vector — the
+list still shows it, but semantic-match hits on the old text stop
+landing until re-embedding catches up. This is the same behavior
+the assistant sees when it updates a memory through its tools.
+
+Invalidation (the soft-delete the assistant uses by default) is not
+exposed here — the browser only offers hard delete, because an
+explicit human decision to remove a memory is the stronger signal
+of the two. If you want to just hide a memory without erasing it,
+tell the assistant to forget it instead.
+
 ## Talking to memory
 
-You interact with memory through the assistant, not through a
-separate UI. Some things you can ask:
+You interact with memory through the assistant too — for in-flow
+edits it's often faster than opening the browser. Some things you
+can ask:
 
 - **"What do you remember about me?"** or **"What do you know about
   my work on X?"** — the model runs a memory search and reads back
@@ -128,14 +166,16 @@ reads go the same way.
 
 ## Limitations
 
-- **No in-app browser today.** There's no "Memories" pane in the
-  drawer or in Settings. The only way to read or edit memories is
-  through the assistant.
 - **No per-thread scope.** Memories are account-wide; the assistant
   can't scope a memory to "only remember this inside thread T."
 - **No manual import.** If you want to seed memory with a batch of
   facts, paste them into a conversation and ask the model to record
-  them. There's no bulk upload.
+  them. There's no bulk upload — and the Memories browser is edit/
+  delete only, not create.
+- **No invalidate-from-UI.** The in-app browser only offers hard
+  delete. To halve a memory's confidence instead of removing it,
+  ask the assistant to forget it — reflection and the assistant's
+  `memory_invalidate` tool handle the soft-delete path.
 - **Model-dependent quality.** The reflection agent is as thoughtful
   as the fast model it runs on. Occasional noise is unavoidable;
   invalidate or delete anything that slipped in.

@@ -14,7 +14,9 @@ destination:
 - **Keys** — the three API keys. Re-encrypts the config blob on
   save.
 - **AI** — default model tier, default reasoning effort, system-
-  prompt library, web-search toggle. All to `profiles.settings`.
+  prompt library, web-search toggle, and a "Browse memories"
+  link to the Memories modal. All preferences persist to
+  `profiles.settings`; the Memories link is pure navigation.
 - **Appearance** — color mode + accent. Live-applies on click
   (no Save button); mirrors to `profiles.settings` (and
   localStorage for the boot script).
@@ -47,13 +49,21 @@ every update) so it's covered here rather than in its own file.
 
 - **Gear button in `Chat.svelte`** — flips `showSettings` to
   true. `Chat.svelte` renders `<Settings onClose={() =>
-  showSettings = false} />` as a mutually-exclusive phase
-  branch.
+  showSettings = false} onOpenMemories={…} />` as a
+  mutually-exclusive phase branch.
 - **Backdrop click / Escape** — both dismiss. Backdrop
   discriminates by `e.target === e.currentTarget` so clicks
   inside the shell don't trigger close.
 - **AI pane save** — per-pane form submission. Each pane
   calls its own Supabase writer via `app.supabase.updateSettings`.
+- **AI pane → Memories browser** — the "Browse memories" button
+  in the AI pane calls the `onOpenMemories` prop, which Chat
+  wires to `() => { showSettings = false; showMemories = true; }`.
+  This is the only cross-modal handoff in the app — the modals
+  are otherwise mutually exclusive phase branches, so we can't
+  render Memories alongside Settings. The prop is optional so
+  Settings stays independently renderable from tests; when
+  absent the button is hidden.
 - **Appearance live-apply** — `onPickMode` /
   `onPickAccent` call `setTheme(mode, accent)` from the state
   store, which updates DOM attributes + cache + reactive
