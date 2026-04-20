@@ -307,9 +307,9 @@
   );
   /**
    * Live monotonic clock, driven by rAF while any tool is in flight and
-   * frozen when everything is idle. Drives the live-duration pill and
-   * the animated ellipsis in ToolCalls. Using performance.now() because
-   * Date.now() is clamped on a 1ms boundary and can go backwards.
+   * frozen when everything is idle. Drives the live-duration pill in
+   * ToolCalls. Using performance.now() because Date.now() is clamped on
+   * a 1ms boundary and can go backwards.
    */
   let nowMs = $state<number>(typeof performance !== 'undefined' ? performance.now() : 0);
   $effect(() => {

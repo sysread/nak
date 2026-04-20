@@ -41,9 +41,9 @@
     timings: Record<string, CallTiming>;
     /**
      * Monotonic "now" value the parent ticks while any call in the
-     * whole message list is in flight. Drives the live ms counter and
-     * the animated ellipsis; doesn't advance when everything is idle,
-     * so we're not chewing through frames on static history.
+     * whole message list is in flight. Drives the live ms counter;
+     * doesn't advance when everything is idle, so we're not chewing
+     * through frames on static history.
      */
     nowMs: number;
   }
@@ -76,11 +76,6 @@
     return 'pending';
   }
 
-  /** The ellipsis cycles at ~3 Hz; offset by call id is overkill here. */
-  function ellipsis(): string {
-    return ['', '.', '..', '...'][Math.floor(nowMs / 300) % 4];
-  }
-
   function durationPill(callId: string): string {
     const t = timings[callId];
     if (!t) return '';
@@ -88,7 +83,7 @@
       return `${Math.round(t.endedAt - t.startedAt)} ms`;
     }
     const elapsed = Math.max(0, Math.round(nowMs - t.startedAt));
-    return `${elapsed} ms${ellipsis()}`;
+    return `${elapsed} ms`;
   }
 
   function toggle(callId: string): void {
