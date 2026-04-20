@@ -82,7 +82,7 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
   },
   balanced: {
     tier: 'balanced',
-    id: 'gemma-4-uncensored',
+    id: 'zai-org-glm-5',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
     // SCALES because the scales glyph is all thin strokes in every major
@@ -90,7 +90,7 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     // themes; yin-yang is a solid bi-tonal disc that reads at any size.
     icon: '\u262F\uFE0F',
     description: 'Good quality, moderate speed.',
-    contextWindow: 256_000,
+    contextWindow: 198_000,
     supportsReasoning: true,
   },
   fast: {
@@ -286,9 +286,12 @@ export function findModelById(id: string | null | undefined): ModelSpec | null {
  * the ring on every historical message answered by that id.
  */
 const RETIRED_MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
-  // Predecessor of gemma-4-uncensored on the Balanced tier. 256k
-  // window per Venice's model registry at swap time.
+  // Retired Balanced-tier ids, in swap order (oldest first). Each
+  // window is whatever Venice reported for that id at the moment we
+  // stopped fronting it — pinned so a re-target doesn't silently
+  // retroactively shrink the ring on historical messages.
   'arcee-trinity-large-thinking': 256_000,
+  'gemma-4-uncensored': 198_000,
 };
 
 /**

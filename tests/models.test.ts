@@ -22,7 +22,7 @@ import {
 describe('MODELS', () => {
   it('has the three tiers with the expected Venice model ids', () => {
     expect(MODELS.smart.id).toBe('kimi-k2-5');
-    expect(MODELS.balanced.id).toBe('gemma-4-uncensored');
+    expect(MODELS.balanced.id).toBe('zai-org-glm-5');
     expect(MODELS.fast.id).toBe('grok-41-fast');
   });
   it('has matching tier/label and sensible context windows', () => {
@@ -175,7 +175,7 @@ describe('padEmbeddingForStorage', () => {
 
 describe('findContextWindowById', () => {
   it('returns the window for a currently-fronted model id', () => {
-    expect(findContextWindowById('gemma-4-uncensored')).toBe(
+    expect(findContextWindowById('zai-org-glm-5')).toBe(
       MODELS.balanced.contextWindow
     );
     expect(findContextWindowById('kimi-k2-5')).toBe(MODELS.smart.contextWindow);
@@ -183,11 +183,13 @@ describe('findContextWindowById', () => {
 
   // Historical assistant rows carry ids that used to front a tier — if
   // the fallback breaks, every pre-swap message silently loses its
-  // context-ring indicator. Pin the trinity window here because that's
-  // the concrete regression that motivated the retired-models map.
-  it('returns the pinned window for a retired model id', () => {
+  // context-ring indicator. Pin every retired Balanced id so each
+  // swap generation stays readable.
+  it('returns the pinned window for each retired model id', () => {
     expect(findModelById('arcee-trinity-large-thinking')).toBeNull();
     expect(findContextWindowById('arcee-trinity-large-thinking')).toBe(256_000);
+    expect(findModelById('gemma-4-uncensored')).toBeNull();
+    expect(findContextWindowById('gemma-4-uncensored')).toBe(198_000);
   });
 
   it('returns null for an unknown id and for null/empty input', () => {

@@ -177,7 +177,7 @@ pre-configured tiers so you don't have to memorize model names:
 | Tier         | Venice model id                  | Context | When to use                                 |
 | ------------ | -------------------------------- | ------- | ------------------------------------------- |
 | **Smart**    | `kimi-k2-5`                      | 256k    | Best quality; harder questions, longer answers. |
-| **Balanced** | `gemma-4-uncensored`             | 256k    | Default — solid quality at reasonable speed.     |
+| **Balanced** | `zai-org-glm-5`                  | 198k    | Default — solid quality at reasonable speed.     |
 | **Fast**     | `grok-41-fast`                   | 1M      | Snappy answers, big context windows.             |
 
 - Pick your **default tier** in Settings → *Default AI model*. Any thread

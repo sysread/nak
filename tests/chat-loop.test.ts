@@ -488,14 +488,14 @@ describe('runChatLoop', () => {
       supabase: svc,
       thread: mkThread({ tools_enabled: true }),
       userId: 'u-1',
-      modelId: 'gemma-4-uncensored',
+      modelId: 'zai-org-glm-5',
       history: [],
       signal: new AbortController().signal,
     });
     const firstAssistant = messagesOut.find(
       (m) => m.role === 'assistant' && (m.tool_calls?.length ?? 0) > 0
     );
-    expect(firstAssistant?.model).toBe('gemma-4-uncensored');
+    expect(firstAssistant?.model).toBe('zai-org-glm-5');
     expect(firstAssistant?.usage?.total_tokens).toBe(110);
   });
 
