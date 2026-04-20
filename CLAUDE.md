@@ -148,7 +148,7 @@ Mechanics:
 - Docs are bundled via Vite's `import.meta.glob('/docs/user/**/*.md',
   { query: '?raw', import: 'default' })` (see `src/lib/docs.ts`). A
   file that isn't committed doesn't exist to the Help modal, so add
-  + stage the file in the same change that links to it.
+  and stage the file in the same change that links to it.
 - Internal links should be relative (`./foo.md`, `../dev/bar.md`).
   Those are intercepted by the Help modal's click handler and loaded
   in-place. Anything with a scheme (`https:`, `mailto:`) is treated

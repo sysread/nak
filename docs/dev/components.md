@@ -125,11 +125,11 @@ Consumers: composer row in `Chat.svelte`.
 
 File: `src/components/ToolCalls.svelte`.
 
-Collapsible tool-call log rendered inside an assistant bubble when
-that turn invoked tools. One row per call: status glyph + tool name
-+ duration or live-ticker pill. Clicking a row expands into a
-detail panel with the arguments and result, both rendered as `json`
-fenced blocks via `<Markdown>`.
+Collapsible tool-call log rendered inside an assistant bubble
+when that turn invoked tools. One row per call: status glyph,
+tool name, plus a duration or live-ticker pill. Clicking a row
+expands into a detail panel with the arguments and result,
+both rendered as `json` fenced blocks via `<Markdown>`.
 
 ```ts
 interface Props {

@@ -31,8 +31,9 @@ docs imported via `import.meta.glob`.
   database. Applied by `mise run sync` (local) and by the
   `sync-supabase` CI job.
 - `scripts/sync.mjs` — the sync script. Interactive for
-  `mise run sync`; non-interactive when `SUPABASE_PROJECT_REF`
-  + `SUPABASE_ACCESS_TOKEN` are in the env (CI mode).
+  `mise run sync`; non-interactive when both
+  `SUPABASE_PROJECT_REF` and `SUPABASE_ACCESS_TOKEN` are
+  in the env (CI mode).
 - `.mise.toml` — tool pinning (node, pnpm, supabase CLI) and
   task definitions (`mise run sync`, `mise run setup`, etc.).
 - `.github/workflows/tests.yml` — runs `pnpm check / lint /

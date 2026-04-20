@@ -27,7 +27,7 @@ to refer back to.
 `src/lib/state.svelte.ts` owns the single reactive `app` object that
 every screen reads. Phase transitions:
 
-```
+```text
  loading --------- setup            (no stored config)
           \------- locked           (stored config, no live session)
                      |

@@ -307,7 +307,7 @@ entering its URL and anon key during initial setup. Apply `schema.sql` via
 
 ## Project layout
 
-```
+```text
 src/
   lib/
     crypto.ts         Web Crypto AES-GCM + PBKDF2

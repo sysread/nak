@@ -4,18 +4,34 @@ Architecture, conventions, and per-feature deep-dives for
 people working on Nak itself. End-user documentation lives
 next door in [`../user/`](../user/README.md).
 
-These docs are GitHub-rendered only — they are not bundled into the app and don't appear in the in-app Help modal. The in-app manual covers user-facing behavior; this tree covers the implementation. This reflects the current packaging; adding dev docs in-app would be a new feature.
+These docs are GitHub-rendered only — they are not bundled
+into the app and don't appear in the in-app Help modal.
+The in-app manual covers user-facing behavior; this tree
+covers the implementation.
+Adding dev docs in-app would be a new feature, not a
+packaging tweak.
 
 ## How this is organized
 
 Two overview docs frame the codebase, followed by one doc per
-coherent feature. Each feature doc follows a common pattern — Role, Files, Entry points, Data model, Contracts, Interactions, Gotchas — but the exact headings may vary slightly by feature. The goal is consistency, not rigidity.
+coherent feature.
+Each feature doc follows a common pattern — Role, Files,
+Entry points, Data model, Contracts, Interactions, Gotchas —
+but the exact headings may vary slightly by feature.
+The goal is consistency, not rigidity.
 
-The "Interactions" section is meant to fight rot: when two features drift apart it's usually because the coupling was tacit. Feature docs list the other features they actually touch, with the specific coupling named. Treat this as a best-effort ledger to cross-check before changing a contract that other features depend on.
+The "Interactions" section is meant to fight rot: when two
+features drift apart it's usually because the coupling was
+tacit.
+Feature docs list the other features they actually touch,
+with the specific coupling named.
+Treat this as a best-effort ledger to cross-check before
+changing a contract that other features depend on.
 
 ## Contents
 
 ### Overview
+
 - [Architecture](./architecture.md) — boot flow, phase state
   machine, worker model, data-layer conventions, Venice
   adapter. The one doc to read first.
@@ -23,6 +39,7 @@ The "Interactions" section is meant to fight rot: when two features drift apart 
   components screens compose.
 
 ### Core features
+
 - [Auth & session](./auth-session.md) — Supabase auth,
   master-password envelope, session lifecycle, locking.
 - [Chat](./chat.md) — chat screen + chat-loop + models +
@@ -43,14 +60,20 @@ The "Interactions" section is meant to fight rot: when two features drift apart 
 - [Help](./help.md) — in-app rendering of `docs/user/`.
 
 ### Build & deploy
+
 - [Build & deploy](./build-deploy.md) — Vite, PWA,
   GitHub Pages, the sync-on-deploy schema workflow.
 
 ## Writing conventions
 
-- **One sentence per line in prose.** Works well across
-  renderers, keeps diffs tight, and matches the existing
-  comment voice in `src/lib/*.ts`.
+- **Column-wrap prose around 65 chars**, breaking at
+  sentence or phrase boundaries where possible so
+  individual lines carry meaning on their own.
+  Keeps diffs tight and matches the comment voice in
+  `src/lib/*.ts`.
+  Avoid collapsing several sentences onto a single
+  long line — the readability loss isn't worth the
+  saved bytes.
 - **Internal links prefixed with `./` or `../`.** Repo-wide
   convention enforced by `CLAUDE.md`'s "User-facing
   documentation" section. In the dev tree the enforcement
@@ -69,7 +92,11 @@ The "Interactions" section is meant to fight rot: when two features drift apart 
 
 - A schema change (anything in `supabase/schema.sql`) → the
   affected feature doc's Data model section.
-- A new tool, agent, or worker → the relevant feature doc's Files + Entry points + Interactions sections. Add a link from `architecture.md` if it introduces a new subsystem pattern. This is maintainer policy; no code enforces it.
+- A new tool, agent, or worker → the relevant feature doc's
+  Files + Entry points + Interactions sections.
+  Add a link from `architecture.md` if it introduces a new
+  subsystem pattern.
+  Maintainer policy; no code enforces it.
 - A new Svelte component under `src/components/` → a new
   section in `components.md`.
 - A feature that starts calling into another feature for

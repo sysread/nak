@@ -1,11 +1,11 @@
 # Memory
 
-Long-term memory: the `memories` table, the `memory_*` tools
-that CRUD it (search/create/update/invalidate/delete) plus the
-`memory_recall` top-level tool, the reflection agent that writes to it after
-conversations settle, and the recall agent that reads from it
-during live conversations. One coherent feature with a store, a
-writer, and a reader.
+Long-term memory: the `memories` table, the `memory_*` CRUD
+tools (search / create / update / invalidate / delete), the
+top-level `memory_recall` tool, the reflection agent that
+writes memories after conversations settle, and the recall
+agent that reads them during live conversations.
+One coherent feature with a store, a writer, and a reader.
 
 ## Role in the app
 
@@ -92,8 +92,9 @@ in `docs/user/memory.md`. The dev side has three moving parts:
 - **RLS policies** — all four (select / insert / update / delete)
   are `auth.uid() = user_id`. No cross-user read is possible
   via the anon key.
-- **`threads.last_reflected_msg_id`** + `reflection_holder_id`
-  + `reflection_claim_expires_at` — same shape as the
+- **`threads.last_reflected_msg_id`**, plus
+  `reflection_holder_id` and `reflection_claim_expires_at`
+  — same shape as the
   summaries claim columns. A message id (not a timestamp) is
   the pointer because ids are stable across clock skew and
   terminal-assistant-detection is a straightforward query.

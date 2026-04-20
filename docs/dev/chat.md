@@ -25,9 +25,9 @@ A chat turn goes:
 
 ## Files
 
-- `src/screens/Chat.svelte` — the screen itself. Drawer + composer
-  + message list + thread lifecycle + the call sites for every
-  other feature that hooks into chat.
+- `src/screens/Chat.svelte` — the screen itself. Drawer,
+  composer, message list, thread lifecycle, plus the call
+  sites for every other feature that hooks into chat.
 - `src/lib/chat-loop.ts` — `runChatLoop`, `toVeniceMessage`, and
   the round-by-round orchestration. Split from the screen so the
   loop is unit-testable without a Svelte runtime.

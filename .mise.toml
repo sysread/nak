@@ -7,6 +7,11 @@ pnpm = "9.12.0"
 # — the wizard (`mise run doctor`) will tell you what's missing.
 "aqua:cli/cli"      = "latest"
 "aqua:supabase/cli" = "latest"
+# markdownlint-cli2 gates the repo's markdown against .markdownlint.json.
+# Invoked from tests/markdownlint.test.ts so `pnpm test` (and the CI tests
+# job that runs it) fails on broken docs. The npm backend keeps the pin in
+# mise rather than mixing it into package.json's devDependencies.
+"npm:markdownlint-cli2" = "0.14.0"
 
 [env]
 NODE_ENV = "development"

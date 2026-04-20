@@ -24,10 +24,12 @@ You can reach these pages two ways:
 ## Contents
 
 ### Getting started
+
 - [Getting started](./getting-started.md) — sign up, add your Supabase
   and Venice keys, pick a default model, send your first message.
 
 ### Using Nak
+
 - [The chat interface](./chat.md) — composer, streaming, thinking mode,
   regeneration, copy/edit/delete.
 - [Threads](./threads.md) — the conversation drawer, pinning,
@@ -41,6 +43,7 @@ You can reach these pages two ways:
   most time.
 
 ### Configuration
+
 - [Settings overview](./settings.md) — tour of the Settings modal and
   what each pane controls.
 - [Models & reasoning](./models.md) — picking a model tier, reasoning
@@ -48,6 +51,7 @@ You can reach these pages two ways:
 - [Appearance](./appearance.md) — color modes and accent colors.
 
 ### Data & security
+
 - [Security model](./security.md) — how your API keys are encrypted,
   what the master password protects, and how locking the session
   works.
@@ -55,6 +59,7 @@ You can reach these pages two ways:
   browser.
 
 ### Under the hood
+
 - [What runs in the background](./background.md) — auto-titling,
   thread summaries, embeddings, and the web-search toggle. What's
   running on your behalf between messages, and what you can
@@ -62,6 +67,7 @@ You can reach these pages two ways:
   separately.)
 
 ### Installing as an app
+
 - [Install as a PWA](./install-pwa.md) — getting Nak onto your home
   screen, taskbar, or dock, and what works offline.
 

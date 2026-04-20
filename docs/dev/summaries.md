@@ -94,10 +94,10 @@ a thread is worth opening without fetching full message history.
   if `summary_claim_holder = $me AND summary_claim_expires >
   now()`. False return means another device took over; treat
   as `claim-lost`, drain to next.
-- Transcript truncation — if a thread has more than 120 messages,
-summarization runs on the first 40 + last 80 messages. Caps token
-spend and keeps the summary biased toward opening framing + recent
-state.
+- Transcript truncation — if a thread has more than 120
+  messages, summarization runs on the first 40 + last 80.
+  Caps token spend and keeps the summary biased toward
+  opening framing + recent state.
 - `emptyToolbox` — the agent advertises a toolbox to satisfy
   the `Agent` interface, but it has zero tools. The headless
   loop never finds a tool call to dispatch, so this is
