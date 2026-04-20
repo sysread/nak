@@ -1370,13 +1370,21 @@
     if (followBottom) scrollToBottom(false);
   });
 
-  // Streaming deltas — debounced with a max-wait cap. `streamingText`
-  // toggling to '' at the end of a round also runs through here; the
-  // follow-up messages effect (assistant persisted) will cancel the
-  // pending timer and do the final snap-to-bottom, so we don't need
-  // a special "stream ended" signal.
+  // Streaming deltas — debounced with a max-wait cap. Tracks both the
+  // answer buffer (`streamingText`) and the reasoning buffer
+  // (`streamingReasoning`) so the view follows the bottom of the
+  // bubble while the thinking panel is growing, not just after the
+  // answer starts. Also tracks `streamingReasoningOpen`: the panel
+  // opening or closing causes a vertical layout shift that should
+  // scroll the view exactly the same way a token append would.
+  // `streamingText` toggling to '' at the end of a round also runs
+  // through here; the follow-up messages effect (assistant persisted)
+  // will cancel the pending timer and do the final snap-to-bottom,
+  // so we don't need a special "stream ended" signal.
   $effect(() => {
     void streamingText;
+    void streamingReasoning;
+    void streamingReasoningOpen;
     const el = messagesEl;
     if (!el) return;
     hasOverflow = el.scrollHeight > el.clientHeight + 1;
@@ -2199,7 +2207,7 @@
                    answer below. -->
               <ReasoningPanel
                 reasoning={streamingReasoning}
-                open={streamingReasoningOpen}
+                bind:open={streamingReasoningOpen}
                 duration={320}
               />
               {#if streamingText}
