@@ -57,3 +57,7 @@ yarn-error.log*
 
 # Wizard-written local state (linked Supabase project, etc.)
 .nak/
+
+# claude
+.claude/
+.mcp.json
