@@ -38,6 +38,7 @@
     lock,
     setDefaultModel,
     setDefaultReasoningEffort,
+    setDefaultVerbosity,
     setSystemPrompts,
     setTheme,
     setWebSearchEnabled,
@@ -69,6 +70,7 @@
   import {
     DEFAULT_REASONING_EFFORT,
     DEFAULT_TIER,
+    DEFAULT_VERBOSITY,
     MODELS,
     TIERS,
     UTILITY_TIER,
@@ -76,8 +78,10 @@
     padEmbeddingForStorage,
     resolveReasoningEffort,
     resolveTier,
+    resolveVerbosity,
     type ModelTier,
     type ReasoningEffort,
+    type Verbosity,
   } from '$lib/models';
   import Auth from './Auth.svelte';
   import Help from './Help.svelte';
@@ -88,6 +92,7 @@
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
   import ReasoningPicker from '../components/ReasoningPicker.svelte';
+  import VerbosityPicker from '../components/VerbosityPicker.svelte';
   import Scanner from '../components/Scanner.svelte';
   import ToolCalls from '../components/ToolCalls.svelte';
   import MessageAttachments from '../components/MessageAttachments.svelte';
@@ -697,6 +702,7 @@
       const s = await app.supabase.getSettings();
       if (s.defaultModel) setDefaultModel(s.defaultModel);
       if (s.defaultReasoningEffort) setDefaultReasoningEffort(s.defaultReasoningEffort);
+      if (s.defaultVerbosity) setDefaultVerbosity(s.defaultVerbosity);
       // If the server has a theme choice and it differs from the cached one,
       // apply it now. setTheme also re-caches, so subsequent loads are fast.
       if (s.colorMode || s.accent) {
@@ -822,7 +828,8 @@
     const real = await app.supabase.createThread(
       title ?? draft.title,
       draft.model,
-      draft.reasoning_effort
+      draft.reasoning_effort,
+      draft.verbosity
     );
     // Swap the draft for the real thread: remove from drafts, insert
     // into Recent (a freshly-created thread always lands inside the
@@ -904,6 +911,15 @@
   );
   const currentSupportsReasoning = $derived<boolean>(
     MODELS[currentTier].supportsReasoning
+  );
+  const defaultVerbosity = $derived<Verbosity>(
+    app.defaultVerbosity ?? DEFAULT_VERBOSITY
+  );
+  // Resolved verbosity for the current thread. Same override-wins pattern
+  // as reasoning; no capability gate — providers that don't recognize
+  // `text.verbosity` silently ignore it, so it's always safe to surface.
+  const currentVerbosity = $derived<Verbosity>(
+    resolveVerbosity(currentThread?.verbosity ?? null, defaultVerbosity)
   );
 
   async function startRename(): Promise<void> {
@@ -1011,6 +1027,27 @@
     }
   }
 
+  // Mirror of setReasoning for text.verbosity. Same clear-override-on-
+  // match discipline so a later change to the user's default propagates
+  // to this thread automatically.
+  async function setVerbosity(verbosity: Verbosity): Promise<void> {
+    if (!app.supabase) return;
+    if (!currentThread) {
+      await newThread();
+      if (!currentThread) return;
+    }
+    const next: Verbosity | null = verbosity === defaultVerbosity ? null : verbosity;
+    if ((currentThread.verbosity ?? null) === next) return;
+    const threadId = currentThread.id;
+    patchThread(threadId, { verbosity: next });
+    if (currentThread.isDraft) return;
+    try {
+      await app.supabase.setThreadVerbosity(threadId, next);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   /**
    * Best-effort: ask the fast model for a short title for this thread. Runs
    * after the first user+assistant round-trip. Any failure is swallowed —
@@ -1081,6 +1118,7 @@
       title: DEFAULT_TITLE,
       model: null,
       reasoning_effort: null,
+      verbosity: null,
       tools_enabled: false,
       archived: false,
       created_at: now,
@@ -1215,6 +1253,12 @@
     const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
       ? resolveReasoningEffort(active?.reasoning_effort ?? null, defaultReasoning)
       : undefined;
+    // Verbosity is safe to send unconditionally — providers that don't
+    // recognize `text.verbosity` silently ignore it.
+    const sendVerbosity: Verbosity = resolveVerbosity(
+      active?.verbosity ?? null,
+      defaultVerbosity
+    );
 
     // Pre-send guard on attachments. Block the send if any attachment
     // is still processing, is in an error state, or can't be read by
@@ -1369,6 +1413,7 @@
           // default change.
           webSearch: app.webSearchEnabled ? 'on' : 'off',
           reasoningEffort: sendReasoning,
+          verbosity: sendVerbosity,
           handlers: {
             onTextUpdate: (t) => {
               pending = t;
@@ -1691,11 +1736,13 @@
     scheduleStreamScroll();
   });
 
-  // Composer popovers (prompts list + model picker + reasoning picker).
-  // Only one is open at a time. Click-outside closes; Escape too.
+  // Composer popovers (prompts list + model picker + reasoning picker
+  // + verbosity picker). Only one is open at a time. Click-outside
+  // closes; Escape too.
   let promptsMenuOpen = $state(false);
   let modelMenuOpen = $state(false);
   let reasoningMenuOpen = $state(false);
+  let verbosityMenuOpen = $state(false);
 
   // IDs of system prompts active for the current thread. Seeded from
   // `enabledByDefault` when a thread is opened, not persisted. Swapping
@@ -1735,6 +1782,7 @@
     promptsMenuOpen = false;
     modelMenuOpen = false;
     reasoningMenuOpen = false;
+    verbosityMenuOpen = false;
   }
 
   function onDocClick(e: MouseEvent): void {
@@ -1749,7 +1797,7 @@
         (tgt.closest('.thread-menu') || tgt.closest('.thread-actions-btn'));
       if (!inside) closeRowMenu();
     }
-    if (!promptsMenuOpen && !modelMenuOpen && !reasoningMenuOpen) return;
+    if (!promptsMenuOpen && !modelMenuOpen && !reasoningMenuOpen && !verbosityMenuOpen) return;
     // "Inside" is scoped to the open popover and its trigger — not the
     // whole composer bar. Clicks on the bar's empty filler, the send
     // button, or the toolbox toggle all count as outside so the popover
@@ -1778,6 +1826,7 @@
       promptsMenuOpen ||
       modelMenuOpen ||
       reasoningMenuOpen ||
+      verbosityMenuOpen ||
       openMenuThreadId !== null;
     if (!anyOpen) return;
     document.addEventListener('click', onDocClick);
@@ -2743,6 +2792,7 @@
                 onclick={() => {
                   modelMenuOpen = false;
                   reasoningMenuOpen = false;
+                  verbosityMenuOpen = false;
                   promptsMenuOpen = !promptsMenuOpen;
                 }}
                 title="System prompts"
@@ -2782,6 +2832,7 @@
                 onclick={() => {
                   promptsMenuOpen = false;
                   reasoningMenuOpen = false;
+                  verbosityMenuOpen = false;
                   modelMenuOpen = !modelMenuOpen;
                 }}
                 aria-haspopup="true"
@@ -2835,6 +2886,7 @@
                   onToggle={() => {
                     promptsMenuOpen = false;
                     modelMenuOpen = false;
+                    verbosityMenuOpen = false;
                     reasoningMenuOpen = !reasoningMenuOpen;
                   }}
                   onSelect={(effort) => {
@@ -2843,6 +2895,29 @@
                   }}
                 />
               {/if}
+
+              <!-- Verbosity picker: per-thread override, stored on
+                   threads.verbosity. Surfaced unconditionally — unlike
+                   the reasoning picker there's no model-capability
+                   gate; providers that don't recognize `text.verbosity`
+                   silently ignore it. Same auto-create-draft pattern
+                   as the model and reasoning pickers so the choice
+                   always has somewhere to land. -->
+              <VerbosityPicker
+                value={currentVerbosity}
+                defaultVerbosity={defaultVerbosity}
+                open={verbosityMenuOpen}
+                onToggle={() => {
+                  promptsMenuOpen = false;
+                  modelMenuOpen = false;
+                  reasoningMenuOpen = false;
+                  verbosityMenuOpen = !verbosityMenuOpen;
+                }}
+                onSelect={(v) => {
+                  void setVerbosity(v);
+                  verbosityMenuOpen = false;
+                }}
+              />
             </div>
 
             <button

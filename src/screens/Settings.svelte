@@ -29,6 +29,7 @@
     activate,
     setDefaultModel,
     setDefaultReasoningEffort,
+    setDefaultVerbosity,
     setSystemPrompts,
     setTheme,
     setWebSearchEnabled,
@@ -38,8 +39,11 @@
     REASONING_EFFORTS,
     REASONING_EFFORT_LABELS,
     TIERS,
+    VERBOSITIES,
+    VERBOSITY_LABELS,
     type ModelTier,
     type ReasoningEffort,
+    type Verbosity,
   } from '$lib/models';
   import type { SystemPrompt } from '$lib/supabase';
   import {
@@ -101,6 +105,10 @@
   // and how hard should it think about it?"). Persisted on
   // `profiles.settings.defaultReasoningEffort`.
   let defaultReasoningEffort = $state<ReasoningEffort>(app.defaultReasoningEffort);
+  // Paired with defaultModel / defaultReasoningEffort — a third knob in
+  // the same "how do I want this model to answer me?" decision cluster.
+  // Persisted on `profiles.settings.defaultVerbosity`.
+  let defaultVerbosity = $state<Verbosity>(app.defaultVerbosity);
   let modelError = $state<string | null>(null);
   let modelInfo = $state<string | null>(null);
 
@@ -382,6 +390,26 @@
     }
   }
 
+  async function onPickVerbosity(next: Verbosity): Promise<void> {
+    modelError = null;
+    modelInfo = null;
+    if (!app.supabase) {
+      modelError = 'Not connected to Supabase yet.';
+      return;
+    }
+    const prev = defaultVerbosity;
+    defaultVerbosity = next;
+    setDefaultVerbosity(next);
+    try {
+      await app.supabase.updateSettings({ defaultVerbosity: next });
+      modelInfo = `Default verbosity set to ${VERBOSITY_LABELS[next].toLowerCase()}.`;
+    } catch (err) {
+      defaultVerbosity = prev;
+      setDefaultVerbosity(prev);
+      modelError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   async function onChangePassword(e: SubmitEvent): Promise<void> {
     e.preventDefault();
     pwError = null;
@@ -533,6 +561,29 @@
           >
             {#each REASONING_EFFORTS as effort (effort)}
               <option value={effort}>{REASONING_EFFORT_LABELS[effort]}</option>
+            {/each}
+          </select>
+        </div>
+        <h3 class="pane-section">Default verbosity</h3>
+        <p class="subtle">
+          Suggests how long the model's answers should be before any
+          reasoning knob kicks in. <strong>Low</strong> biases toward
+          short, direct replies; <strong>high</strong> invites
+          expansive prose. Passed on every request as
+          <code>text.verbosity</code> — providers that don't honor the
+          field silently ignore it. Overridable per-thread from the
+          composer.
+        </p>
+        <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
+          <label for="default-verbosity" class="sr-only">Default verbosity</label>
+          <select
+            id="default-verbosity"
+            value={defaultVerbosity}
+            onchange={(e) =>
+              onPickVerbosity((e.currentTarget as HTMLSelectElement).value as Verbosity)}
+          >
+            {#each VERBOSITIES as v (v)}
+              <option value={v}>{VERBOSITY_LABELS[v]}</option>
             {/each}
           </select>
         </div>

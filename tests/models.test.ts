@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_TIER,
+  DEFAULT_VERBOSITY,
   MODELS,
   REASONING_EFFORTS,
   REASONING_EFFORT_LABELS,
@@ -10,13 +11,17 @@ import {
   VENICE_EMBEDDING_MODEL,
   VENICE_EMBEDDING_DIMS,
   EMBEDDING_STORAGE_DIMS,
+  VERBOSITIES,
+  VERBOSITY_LABELS,
   findContextWindowById,
   findModelById,
   padEmbeddingForStorage,
   isModelTier,
   isReasoningEffort,
+  isVerbosity,
   resolveReasoningEffort,
   resolveTier,
+  resolveVerbosity,
 } from '../src/lib/models';
 
 describe('MODELS', () => {
@@ -100,6 +105,34 @@ describe('reasoning effort', () => {
   it('resolveReasoningEffort prefers thread override over default', () => {
     expect(resolveReasoningEffort('high', 'low')).toBe('high');
     expect(resolveReasoningEffort(null, 'medium')).toBe('medium');
+  });
+});
+
+describe('verbosity', () => {
+  it('exposes the three OpenAI-style levels', () => {
+    expect(VERBOSITIES).toEqual(['low', 'medium', 'high']);
+  });
+  it('defaults to medium (neutral; neither terse nor verbose by fiat)', () => {
+    expect(DEFAULT_VERBOSITY).toBe('medium');
+  });
+  it('has a human-readable label for every level', () => {
+    for (const v of VERBOSITIES) {
+      expect(VERBOSITY_LABELS[v]).toMatch(/^[A-Z]/);
+    }
+  });
+  it('isVerbosity accepts the three levels and rejects the rest', () => {
+    expect(isVerbosity('low')).toBe(true);
+    expect(isVerbosity('medium')).toBe(true);
+    expect(isVerbosity('high')).toBe(true);
+    expect(isVerbosity('extreme')).toBe(false);
+    expect(isVerbosity('LOW')).toBe(false);
+    expect(isVerbosity(null)).toBe(false);
+    expect(isVerbosity(undefined)).toBe(false);
+    expect(isVerbosity(1)).toBe(false);
+  });
+  it('resolveVerbosity prefers thread override over default', () => {
+    expect(resolveVerbosity('high', 'low')).toBe('high');
+    expect(resolveVerbosity(null, 'medium')).toBe('medium');
   });
 });
 

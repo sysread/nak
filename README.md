@@ -270,8 +270,9 @@ Schema and auth-allowlist updates can be re-applied two ways:
 All use `ADD COLUMN IF NOT EXISTS`, so `mise run sync` is always safe:
 
 - `threads.model text` — per-thread model override.
+- `threads.verbosity text` — per-thread `text.verbosity` override.
 - `profiles.settings jsonb` — per-user preferences (default model tier,
-  color mode, accent).
+  default verbosity, color mode, accent).
 
 ## Development
 

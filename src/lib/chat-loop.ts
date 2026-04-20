@@ -25,7 +25,7 @@
  * one tool-result row per call in the order the model returned them.
  */
 
-import type { ReasoningEffort } from './models';
+import type { ReasoningEffort, Verbosity } from './models';
 import type { SupabaseService, Message, Thread } from './supabase';
 import type {
   VeniceClient,
@@ -134,6 +134,12 @@ export interface ChatLoopOptions {
    * because the chat-loop only sees the concrete model id, not the spec.
    */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Optional text.verbosity knob forwarded to every streamChat call.
+   * Unlike reasoningEffort there's no model-capability gate — providers
+   * that don't recognize the field silently ignore it.
+   */
+  verbosity?: Verbosity;
 }
 
 /** Non-error completion shape returned to the caller. */
@@ -224,6 +230,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     handlers,
     webSearch,
     reasoningEffort,
+    verbosity,
   } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
@@ -266,6 +273,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       tools: buildToolList(toolsEnabled),
       webSearch,
       reasoningEffort,
+      verbosity,
     });
 
     let roundText = '';

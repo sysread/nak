@@ -23,7 +23,7 @@
  * streams across many deltas.
  */
 
-import type { ReasoningEffort } from './models';
+import type { ReasoningEffort, Verbosity } from './models';
 import type { OpenAIToolDef, OpenAIToolCall } from './tools/types';
 
 /**
@@ -147,6 +147,16 @@ export interface ChatRequest {
    * `ModelSpec.supportsReasoning` before setting this.
    */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * OpenAI-style `text.verbosity` knob ('low' | 'medium' | 'high').
+   * Nests under the top-level `text` object on the wire — body shape
+   * `{text: {verbosity: '…'}}` — not a flat field like
+   * `reasoning_effort`. Omitted entirely when unset so providers
+   * that don't recognize the field can't 400 on it. Orthogonal to
+   * reasoning_effort: verbosity controls answer length, reasoning
+   * controls hidden-thought depth.
+   */
+  verbosity?: Verbosity;
   /**
    * OpenAI-compatible `response_format`. Forwarded verbatim on the
    * request body; omitted entirely when unset so providers that
@@ -306,6 +316,13 @@ export class VeniceClient {
     // call paths (auto-titling) that shouldn't pay the latency tax.
     if (req.reasoningEffort) {
       body.reasoning_effort = req.reasoningEffort;
+    }
+    // Same discipline for text.verbosity — only forward when the
+    // caller opted in, and nest under `text` to match the OpenAI
+    // spec shape. Providers that don't recognize the field silently
+    // ignore it; ones that 400 on unknown params never see it.
+    if (req.verbosity) {
+      body.text = { verbosity: req.verbosity };
     }
     // Same discipline for response_format — only forwarded when the
     // caller asked. Some providers (and Venice's non-default models)

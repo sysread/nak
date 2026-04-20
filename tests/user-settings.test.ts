@@ -114,6 +114,24 @@ describe('coerceSettings', () => {
     expect(coerceSettings({ defaultReasoningEffort: null })).toEqual({});
   });
 
+  it('passes through a valid defaultVerbosity', () => {
+    expect(coerceSettings({ defaultVerbosity: 'low' })).toEqual({
+      defaultVerbosity: 'low',
+    });
+    expect(coerceSettings({ defaultVerbosity: 'medium' })).toEqual({
+      defaultVerbosity: 'medium',
+    });
+    expect(coerceSettings({ defaultVerbosity: 'high' })).toEqual({
+      defaultVerbosity: 'high',
+    });
+  });
+
+  it('drops an unknown defaultVerbosity value', () => {
+    expect(coerceSettings({ defaultVerbosity: 'extreme' })).toEqual({});
+    expect(coerceSettings({ defaultVerbosity: '' })).toEqual({});
+    expect(coerceSettings({ defaultVerbosity: null })).toEqual({});
+  });
+
   it('preserves webSearchEnabled only for strict booleans', () => {
     expect(coerceSettings({ webSearchEnabled: true }).webSearchEnabled).toBe(true);
     expect(coerceSettings({ webSearchEnabled: false }).webSearchEnabled).toBe(false);

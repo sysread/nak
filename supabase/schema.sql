@@ -122,6 +122,14 @@ alter table public.threads
 alter table public.threads
   add column if not exists reasoning_effort text;
 
+-- Optional per-thread text.verbosity override ('low' | 'medium' | 'high').
+-- Null means "use the user default" (profiles.settings.defaultVerbosity →
+-- DEFAULT_VERBOSITY). Same plain-text / no-CHECK rationale as `model` /
+-- `reasoning_effort`: the app validates on read and we want stored rows to
+-- survive a future tier / provider change without a schema migration.
+alter table public.threads
+  add column if not exists verbosity text;
+
 create index if not exists threads_user_updated_idx
   on public.threads (user_id, updated_at desc);
 

@@ -19,8 +19,10 @@ import type { AppConfig } from './config';
 import {
   isModelTier,
   isReasoningEffort,
+  isVerbosity,
   type ModelTier,
   type ReasoningEffort,
+  type Verbosity,
 } from './models';
 import { isAccent, isColorMode, type Accent, type ColorMode } from './theme';
 import type { OpenAIToolCall } from './tools/types';
@@ -43,6 +45,14 @@ export interface Thread {
    * when the resolved model can't reason.
    */
   reasoning_effort: ReasoningEffort | null;
+  /**
+   * Per-thread text.verbosity override. Null/absent means use the
+   * user default. Surfaced unconditionally in the composer —
+   * unlike reasoning_effort we don't gate on a model-capability
+   * flag; providers that don't recognize the knob silently ignore
+   * it rather than 400.
+   */
+  verbosity: Verbosity | null;
   /**
    * Master switch for tool availability on this thread. Flipped by the
    * `toggle_tools` meta-tool (LLM-driven) or the composer toolbox button
@@ -78,12 +88,14 @@ function coerceThread(row: Record<string, unknown>): Thread {
   const reasoning_effort = isReasoningEffort(row.reasoning_effort)
     ? row.reasoning_effort
     : null;
+  const verbosity = isVerbosity(row.verbosity) ? row.verbosity : null;
   return {
     id: String(row.id),
     user_id: String(row.user_id),
     title: String(row.title ?? ''),
     model,
     reasoning_effort,
+    verbosity,
     tools_enabled: row.tools_enabled === true,
     archived: row.archived === true,
     created_at: String(row.created_at),
@@ -302,6 +314,13 @@ export interface UserSettings {
    * empty settings jsonb still produces sane behavior.
    */
   defaultReasoningEffort?: ReasoningEffort;
+  /**
+   * User-level text.verbosity default, used when the thread hasn't
+   * overridden it. Absent means fall back to {@link DEFAULT_VERBOSITY}
+   * in code (`medium`) so an empty settings jsonb still produces sane
+   * behavior.
+   */
+  defaultVerbosity?: Verbosity;
   colorMode?: ColorMode;
   accent?: Accent;
   /** Library of named system prompts the user can toggle per-thread. */
@@ -354,6 +373,7 @@ export function coerceSettings(raw: unknown): UserSettings {
   if (isReasoningEffort(r.defaultReasoningEffort)) {
     out.defaultReasoningEffort = r.defaultReasoningEffort;
   }
+  if (isVerbosity(r.defaultVerbosity)) out.defaultVerbosity = r.defaultVerbosity;
   if (isColorMode(r.colorMode)) out.colorMode = r.colorMode;
   if (isAccent(r.accent)) out.accent = r.accent;
   if (Array.isArray(r.systemPrompts)) {
@@ -466,6 +486,13 @@ export class SupabaseService {
         delete merged.defaultReasoningEffort;
       } else if (isReasoningEffort(patch.defaultReasoningEffort)) {
         merged.defaultReasoningEffort = patch.defaultReasoningEffort;
+      }
+    }
+    if ('defaultVerbosity' in patch) {
+      if (patch.defaultVerbosity === undefined) {
+        delete merged.defaultVerbosity;
+      } else if (isVerbosity(patch.defaultVerbosity)) {
+        merged.defaultVerbosity = patch.defaultVerbosity;
       }
     }
     if ('colorMode' in patch) {
@@ -702,6 +729,7 @@ export class SupabaseService {
           title: row.title,
           model: null,
           reasoning_effort: null,
+          verbosity: null,
           tools_enabled: false,
           archived: row.archived,
           created_at: row.updated_at,
@@ -766,7 +794,8 @@ export class SupabaseService {
   async createThread(
     title: string,
     model: ModelTier | null = null,
-    reasoningEffort: ReasoningEffort | null = null
+    reasoningEffort: ReasoningEffort | null = null,
+    verbosity: Verbosity | null = null
   ): Promise<Thread> {
     const session = await this.getSession();
     if (!session) throw new SupabaseError('Not authenticated.');
@@ -777,6 +806,7 @@ export class SupabaseService {
         user_id: session.user.id,
         model,
         reasoning_effort: reasoningEffort,
+        verbosity,
       })
       .select()
       .single();
@@ -813,6 +843,23 @@ export class SupabaseService {
     const { error } = await this.client
       .from('threads')
       .update({ reasoning_effort: reasoningEffort })
+      .eq('id', threadId);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Pin the text.verbosity level for this thread, or clear the override
+   * (null) so the thread tracks the user default. Same discipline as
+   * setThreadReasoningEffort — no updated_at bump because flipping
+   * verbosity shouldn't promote the thread to the top of the sidebar.
+   */
+  async setThreadVerbosity(
+    threadId: string,
+    verbosity: Verbosity | null
+  ): Promise<void> {
+    const { error } = await this.client
+      .from('threads')
+      .update({ verbosity })
       .eq('id', threadId);
     if (error) throw new SupabaseError(error.message);
   }

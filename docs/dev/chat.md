@@ -67,7 +67,7 @@ A chat turn goes:
 
 - **Threads** — `threads` table; `Thread` TS interface in
   `supabase.ts`. Fields the chat loop reads: `id`, `model`,
-  `reasoning_effort`, `tools_enabled`, `archived`.
+  `reasoning_effort`, `verbosity`, `tools_enabled`, `archived`.
   `created_at`/`updated_at` drive sidebar ordering. Drafts are
   never written to Supabase; the `isDraft?: boolean` app-local
   flag keeps them in memory only.
@@ -87,6 +87,12 @@ A chat turn goes:
   resolved at send-time and only forwarded when
   `ModelSpec.supportsReasoning` is true (some providers 400 on
   the unknown field).
+- **Verbosity** — `profiles.settings.defaultVerbosity` or
+  per-thread `threads.verbosity`, resolved at send-time via
+  `resolveVerbosity`. Forwarded unconditionally as
+  `text.verbosity` (OpenAI-shape: nested under the top-level
+  `text` object, not a flat field). No capability gate —
+  providers that don't honor it silently ignore the knob.
 - **Usage** — `messages.usage` stores
   `{ prompt_tokens, completion_tokens, total_tokens }` from
   Venice. Sourced by passing `stream_options:
@@ -142,11 +148,12 @@ A chat turn goes:
   loop creates that assistant message; the workers pick it up on
   their next poll. See `./summaries.md` and `./memory.md`.
 - **Settings** — `Chat.svelte` reads `app.defaultModel`,
-  `app.defaultReasoningEffort`, `app.systemPrompts`,
-  `app.webSearchEnabled` from the state store. Settings writes
-  those values. System prompts configured as `enabledByDefault`
-  seed the per-thread active set; per-thread toggles aren't
-  persisted. See `./settings.md`.
+  `app.defaultReasoningEffort`, `app.defaultVerbosity`,
+  `app.systemPrompts`, `app.webSearchEnabled` from the state
+  store. Settings writes those values. System prompts
+  configured as `enabledByDefault` seed the per-thread active
+  set; per-thread toggles aren't persisted. See
+  `./settings.md`.
 - **Auth-session** — the screen renders only after `activate()`
   instantiates `app.supabase` + `app.venice`. A separate
   in-screen gate (`{:else if !session} <Auth />`) handles the
