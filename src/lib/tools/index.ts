@@ -32,6 +32,11 @@ import { conversationSearch } from './conversation_search';
 import { conversationRecall } from './conversation_recall';
 import { recallToolbox } from './recall_toolbox';
 import { conversationRecallToolbox } from './conversation_recall_toolbox';
+import { recipeSave } from './recipe_save';
+import { recipeList } from './recipe_list';
+import { recipeGet } from './recipe_get';
+import { recipeUpdate } from './recipe_update';
+import { recipeDelete } from './recipe_delete';
 
 /** Every tool the main chat model can see, recall tools first. */
 export const TOOLS: readonly ToolDef[] = [
@@ -43,6 +48,11 @@ export const TOOLS: readonly ToolDef[] = [
   memoryUpdate,
   memoryDelete,
   conversationSearch,
+  recipeList,
+  recipeGet,
+  recipeSave,
+  recipeUpdate,
+  recipeDelete,
 ];
 
 /**

@@ -42,4 +42,15 @@ export default [
       'svelte/no-at-html-tags': 'off',
     },
   },
+  {
+    // Cookbook.svelte renders Cooklang-derived HTML with {@html}. The
+    // HTML is produced by `cooklangToHtml` (src/lib/cooklang.ts) which
+    // escapes every user-supplied string via its internal `esc()` helper
+    // before wrapping in fixed tags — no user-supplied HTML or attribute
+    // values reach the output. Same rationale as Markdown.svelte.
+    files: ['src/screens/Cookbook.svelte'],
+    rules: {
+      'svelte/no-at-html-tags': 'off',
+    },
+  },
 ];

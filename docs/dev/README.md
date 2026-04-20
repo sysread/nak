@@ -51,6 +51,9 @@ changing a contract that other features depend on.
   executors (chat-side and headless-agent-side).
 - [Memory](./memory.md) — `memories` store + reflection
   agent + memory recall.
+- [Cookbook](./cookbook.md) — `recipes` store + Cooklang
+  parser + the recipe_* tools + the Cookbook modal and
+  drawer tab.
 - [Conversation recall](./conversation-recall.md) — recall
   over thread summaries.
 - [Summaries](./summaries.md) — background thread-summary

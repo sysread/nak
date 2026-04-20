@@ -44,6 +44,11 @@ thread's `tools_enabled` master switch:
 - `src/lib/tools/conversation_search.ts`,
   `conversation_recall.ts` — thread-level search + recall-agent
   trigger.
+- `src/lib/tools/recipe_*.ts` — five cookbook tools (`save`,
+  `list`, `get`, `update`, `delete`). Mutating ones fire
+  `notifyCookbookChanged` from `cookbook-store.svelte.ts` so the
+  Cookbook modal + drawer tab refresh without the UI layer needing
+  to import the tools module. See `./cookbook.md`.
 - `src/lib/tools/recall_toolbox.ts`,
   `conversation_recall_toolbox.ts` — the read-only toolboxes
   assembled for the recall agents. Standalone files to break
@@ -135,6 +140,10 @@ thread's `tools_enabled` master switch:
   imports `conversation_search` directly from its file to avoid
   the cycle tools/index → conversation_recall → agents/… →
   tools/index. See `./conversation-recall.md`.
+- **Cookbook** — five `recipe_*` tools gated like the memory ones.
+  The store in `cookbook-store.svelte.ts` owns the reactive recipe
+  list; mutating tools fire a `window` `CustomEvent` so the UI
+  refreshes without a tools → UI import. See `./cookbook.md`.
 - **Reflection agent** — uses `memoryToolbox`, a write-scoped
   subset of the memory tools: `create / update / invalidate /
   search`, but NOT `delete` (agent can only soft-invalidate; hard

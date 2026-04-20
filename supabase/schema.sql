@@ -42,6 +42,7 @@
 --   threads   conversation containers owned by a user
 --   messages  individual turns within a thread (incl. OpenAI-shape tool rows)
 --   memories  freeform notes CRUD-able by the user and the memory_* tools
+--   recipes   Cooklang recipes CRUD-able by the user and the recipe_* tools
 --
 -- All tables have Row Level Security enabled so an authenticated user
 -- can only access rows they own. The anon key the browser uses is
@@ -714,6 +715,58 @@ create policy "memories are self-updatable" on public.memories
 
 drop policy if exists "memories are self-deletable" on public.memories;
 create policy "memories are self-deletable" on public.memories
+  for delete using (auth.uid() = user_id);
+
+-- recipes ----------------------------------------------------------------
+--
+-- Cooklang recipes the user authors in Nak (often by asking the model to
+-- fetch one from a URL and save it). The store is deliberately simple —
+-- the canonical representation is a single `cooklang` text column holding
+-- the recipe's full source. All structure (ingredients, cookware, timers,
+-- metadata) is re-derived at read-time by `src/lib/cooklang.ts`, so a
+-- future spec change doesn't require a data migration.
+--
+-- `source` is an optional free-form provenance string (e.g. "NYT
+-- Cooking — Alison Roman" or "my grandmother"); `source_url` is the
+-- machine-readable URL when the model imported it from the web. Both
+-- nullable because hand-typed recipes often have neither.
+--
+-- No embedding column: a personal cookbook is small (tens to low
+-- hundreds of rows). ILIKE on `title` is fast enough and keeps us off
+-- the embeddings worker's critical path. If cookbook sizes grow past a
+-- few hundred rows, the escape hatch mirrors memories exactly — add
+-- vector(2048) + claim columns + the same RPC shape.
+
+create table if not exists public.recipes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  source text,
+  source_url text,
+  cooklang text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists recipes_user_updated_idx
+  on public.recipes (user_id, updated_at desc);
+
+alter table public.recipes enable row level security;
+
+drop policy if exists "recipes are self-selectable" on public.recipes;
+create policy "recipes are self-selectable" on public.recipes
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "recipes are self-insertable" on public.recipes;
+create policy "recipes are self-insertable" on public.recipes
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "recipes are self-updatable" on public.recipes;
+create policy "recipes are self-updatable" on public.recipes
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "recipes are self-deletable" on public.recipes;
+create policy "recipes are self-deletable" on public.recipes
   for delete using (auth.uid() = user_id);
 
 -- worker_leases ----------------------------------------------------------

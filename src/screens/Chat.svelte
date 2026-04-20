@@ -88,6 +88,12 @@
   import Help from './Help.svelte';
   import Memories from './Memories.svelte';
   import Settings from './Settings.svelte';
+  import Cookbook from './Cookbook.svelte';
+  import {
+    cookbook,
+    loadRecipes,
+    COOKBOOK_CHANGE_EVENT,
+  } from '$lib/cookbook-store.svelte';
   import AssistantBody from '../components/AssistantBody.svelte';
   import CitationsPanel from '../components/CitationsPanel.svelte';
   import Markdown from '../components/Markdown.svelte';
@@ -107,6 +113,59 @@
   let showSettings = $state(false);
   let showHelp = $state(false);
   let showMemories = $state(false);
+  let showCookbook = $state(false);
+  /**
+   * Recipe id the Cookbook modal should open to when `showCookbook`
+   * flips true. Reset to null after the modal closes so the next
+   * open from, say, the footer button lands on the list pane.
+   */
+  let cookbookOpenId = $state<string | null>(null);
+  /**
+   * Sidebar drawer tab. 'chats' renders the existing thread list;
+   * 'recipes' replaces the list with the user's cookbook. The tab
+   * state stays local to this component — swapping between a
+   * conversation and a recipe doesn't round-trip through app state,
+   * and the drawer closes cleanly (returning to 'chats') on next
+   * open.
+   */
+  let drawerTab = $state<'chats' | 'recipes'>('chats');
+  /** Recipe-side search, separate from conversation search. */
+  let recipeDrawerQuery = $state('');
+  const visibleDrawerRecipes = $derived.by(() => {
+    const q = recipeDrawerQuery.trim().toLowerCase();
+    if (q.length === 0) return cookbook.recipes;
+    return cookbook.recipes.filter((r) => r.title.toLowerCase().includes(q));
+  });
+
+  function onPickRecipesTab(): void {
+    drawerTab = 'recipes';
+    // Load lazily — a user who never opens the Recipes tab shouldn't
+    // pay for an extra Supabase round trip on every unlock. Once
+    // loaded the list is kept fresh by the COOKBOOK_CHANGE_EVENT
+    // listener registered in onMount below.
+    if (app.supabase && cookbook.recipes.length === 0 && !cookbook.loading) {
+      void loadRecipes(app.supabase);
+    }
+  }
+
+  function openRecipeFromDrawer(id: string): void {
+    cookbookOpenId = id;
+    showCookbook = true;
+  }
+
+  function onCookbookModalClose(): void {
+    showCookbook = false;
+    cookbookOpenId = null;
+  }
+
+  function onCookbookStoreChanged(): void {
+    // Any recipe_* tool call or modal write invalidates the list —
+    // reload if we've ever loaded it, so the Recipes drawer tab and
+    // the modal (if still open) both reflect the new state.
+    if (!app.supabase) return;
+    if (cookbook.recipes.length === 0 && !cookbook.loading) return;
+    void loadRecipes(app.supabase);
+  }
 
   let activeThreadId = $state<string | null>(null);
   let messages = $state<Message[]>([]);
@@ -758,7 +817,16 @@
       await tick();
       composerEl?.focus();
     });
-    return unsubscribe;
+    // Cookbook change listener. Fires when a recipe_* tool call
+    // succeeds, so the drawer tab's list reflects a model-driven
+    // save without the user having to reopen the tab. We only
+    // reload when we've already loaded at least once — a fresh
+    // unlock that never opened the Recipes tab stays lazy.
+    window.addEventListener(COOKBOOK_CHANGE_EVENT, onCookbookStoreChanged);
+    return () => {
+      unsubscribe();
+      window.removeEventListener(COOKBOOK_CHANGE_EVENT, onCookbookStoreChanged);
+    };
   });
 
   async function refreshSettings(): Promise<void> {
@@ -2403,6 +2471,8 @@
   <Help onClose={() => (showHelp = false)} />
 {:else if showMemories}
   <Memories onClose={() => (showMemories = false)} />
+{:else if showCookbook}
+  <Cookbook onClose={onCookbookModalClose} initialRecipeId={cookbookOpenId} />
 {:else}
   <div class="shell" class:drawer-open={drawerOpen}>
     <div
@@ -2416,19 +2486,55 @@
     ></div>
     <aside class="sidebar">
       <header class="sidebar-header">
-        <!-- Search replaces the old "+ New thread" button — the
-             topbar's `.new-thread-mini` icon (now visible on every
-             viewport, not just mobile) is the primary new-thread
-             affordance. -->
-        <input
-          type="search"
-          class="sidebar-search-input"
-          placeholder="Search conversations"
-          aria-label="Search conversations"
-          bind:value={searchQuery}
-          onkeydown={onSearchKey}
-        />
+        <!-- Tab switcher between conversation threads and the
+             cookbook. The drawer reuses its chrome for both — one
+             list-and-search column, with the list content swapping
+             by tab. Keeping both lists here avoids a second
+             top-level drawer affordance for a feature whose
+             relationship to Chats is "two sibling collections of
+             user-owned items". -->
+        <div class="sidebar-tabs" role="tablist" aria-label="Drawer section">
+          <button
+            type="button"
+            role="tab"
+            class="sidebar-tab"
+            class:active={drawerTab === 'chats'}
+            aria-selected={drawerTab === 'chats'}
+            onclick={() => (drawerTab = 'chats')}
+          >Chats</button>
+          <button
+            type="button"
+            role="tab"
+            class="sidebar-tab"
+            class:active={drawerTab === 'recipes'}
+            aria-selected={drawerTab === 'recipes'}
+            onclick={() => onPickRecipesTab()}
+          >Recipes</button>
+        </div>
+        {#if drawerTab === 'chats'}
+          <!-- Search replaces the old "+ New thread" button — the
+               topbar's `.new-thread-mini` icon (now visible on every
+               viewport, not just mobile) is the primary new-thread
+               affordance. -->
+          <input
+            type="search"
+            class="sidebar-search-input"
+            placeholder="Search conversations"
+            aria-label="Search conversations"
+            bind:value={searchQuery}
+            onkeydown={onSearchKey}
+          />
+        {:else}
+          <input
+            type="search"
+            class="sidebar-search-input"
+            placeholder="Search recipes"
+            aria-label="Search recipes"
+            bind:value={recipeDrawerQuery}
+          />
+        {/if}
       </header>
+      {#if drawerTab === 'chats'}
       <div class="thread-list">
         {#snippet threadRow(t: Thread)}
           <div class="row thread-row" data-thread-id={t.id}>
@@ -2604,6 +2710,43 @@
           {/if}
         {/if}
       </div>
+      {:else}
+        <!-- Recipes tab. Click opens the Cookbook modal on the detail
+             pane for that recipe. The list itself is a flattened read-
+             only view into `cookbook.recipes`; editing flows through
+             the modal, which owns the edit form and the delete
+             confirmation. -->
+        <div class="recipe-drawer-list">
+          {#if cookbook.loading && cookbook.recipes.length === 0}
+            <p class="subtle" style="padding:0.75rem">Loading recipes…</p>
+          {:else if visibleDrawerRecipes.length === 0}
+            <p class="subtle" style="padding:0.75rem">
+              {#if cookbook.recipes.length === 0}
+                No recipes yet. Open the Cookbook to add one.
+              {:else}
+                No matches.
+              {/if}
+            </p>
+          {:else}
+            {#each visibleDrawerRecipes as r (r.id)}
+              <div class="row thread-row" data-recipe-id={r.id}>
+                <button
+                  class="thread grow"
+                  onclick={() => openRecipeFromDrawer(r.id)}
+                  title={r.title}
+                >{r.title}</button>
+              </div>
+            {/each}
+          {/if}
+          <div class="recipe-drawer-footer">
+            <button
+              type="button"
+              class="secondary"
+              onclick={() => (showCookbook = true)}
+            >Open cookbook</button>
+          </div>
+        </div>
+      {/if}
       <footer>
         <div class="subtle" style="margin-bottom:0.4rem;font-size:0.8rem">
           {session.user.email}
@@ -2635,6 +2778,22 @@
             title="Memories"
             aria-label="Memories"
           >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+            </svg>
+          </button>
+          <button
+            class="secondary icon-btn"
+            onclick={() => (showCookbook = true)}
+            title="Cookbook"
+            aria-label="Cookbook"
+          >
+            <!-- Feather-style "book" glyph — paths taken from the Feather
+                 Icons "book" icon so it visually matches the rest of the
+                 footer row (help, settings, lock) that also use 16×16
+                 Feather-style strokes. -->
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />

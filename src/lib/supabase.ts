@@ -118,6 +118,7 @@ export interface Memory {
 }
 
 /**
+/**
  * One file attached to a user message. Binary lives in `data_base64`
  * as a base64 string — stored directly in a `text` column on the DB
  * side (see the note on `message_attachments.data` in schema.sql
@@ -161,6 +162,27 @@ export interface NewAttachment {
   size_bytes: number;
   data_base64: string;
   extracted_text: string | null;
+}
+
+/**
+ * A saved recipe. The authoritative representation is `cooklang`, the
+ * full raw Cooklang source string — structure (ingredients, cookware,
+ * timers, metadata) is re-derived on read by `src/lib/cooklang.ts`.
+ * Keeping the source as the source of truth means a future spec tweak
+ * doesn't invalidate stored rows.
+ *
+ * `source` and `source_url` are both nullable. A recipe the model fetched
+ * from a URL will carry both; a recipe the user typed by hand may have
+ * neither.
+ */
+export interface Recipe {
+  id: string;
+  title: string;
+  source: string | null;
+  source_url: string | null;
+  cooklang: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Message {
@@ -964,6 +986,103 @@ export class SupabaseService {
 
   async deleteMemory(id: string): Promise<void> {
     const { error } = await this.client.from('memories').delete().eq('id', id);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  // recipes --------------------------------------------------------------
+  //
+  // Same RLS posture as memories: every query is scoped to the signed-in
+  // user automatically; only inserts need an explicit user_id because the
+  // with_check policy has no default to fall back on. No embedding
+  // pipeline — the cookbook stays small enough that ILIKE on `title`
+  // is cheap, and the model doesn't need semantic search to find a
+  // recipe it just wrote.
+
+  /**
+   * List recipes most-recent first, optionally filtered by a case-
+   * insensitive `title` substring. Capped at `limit` to keep the
+   * recipe_list tool result small (one recipe's cooklang can be
+   * several kilobytes; a runaway list would blow the context budget).
+   */
+  async listRecipes(query: string, limit: number): Promise<Recipe[]> {
+    let q = this.client
+      .from('recipes')
+      .select('id, title, source, source_url, cooklang, created_at, updated_at')
+      .order('updated_at', { ascending: false })
+      .limit(limit);
+    if (query && query.length > 0) {
+      // Same escaping rationale as searchMemories: PostgREST's `.or(…)`
+      // grammar treats commas and parens specially, so an unfiltered
+      // user-typed query would break the filter. ILIKE's `%` / `_`
+      // remain wildcards by design.
+      const safe = query.replace(/([,()])/g, '\\$1');
+      q = q.ilike('title', `%${safe}%`);
+    }
+    const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as Recipe[];
+  }
+
+  async getRecipe(id: string): Promise<Recipe | null> {
+    const { data, error } = await this.client
+      .from('recipes')
+      .select('id, title, source, source_url, cooklang, created_at, updated_at')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    return (data as Recipe | null) ?? null;
+  }
+
+  async createRecipe(
+    title: string,
+    cooklang: string,
+    source: string | null = null,
+    sourceUrl: string | null = null
+  ): Promise<Recipe> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const { data: row, error } = await this.client
+      .from('recipes')
+      .insert({
+        user_id: session.user.id,
+        title,
+        cooklang,
+        source,
+        source_url: sourceUrl,
+      })
+      .select('id, title, source, source_url, cooklang, created_at, updated_at')
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return row as Recipe;
+  }
+
+  /**
+   * Partial update. Caller guarantees at least one field in `patch`
+   * is set — enforced by the recipe_update tool before it reaches
+   * here. Bumps updated_at so the list orders freshly-edited recipes
+   * to the top.
+   */
+  async updateRecipe(
+    id: string,
+    patch: {
+      title?: string;
+      cooklang?: string;
+      source?: string | null;
+      source_url?: string | null;
+    }
+  ): Promise<Recipe> {
+    const { data: row, error } = await this.client
+      .from('recipes')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('id, title, source, source_url, cooklang, created_at, updated_at')
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return row as Recipe;
+  }
+
+  async deleteRecipe(id: string): Promise<void> {
+    const { error } = await this.client.from('recipes').delete().eq('id', id);
     if (error) throw new SupabaseError(error.message);
   }
 

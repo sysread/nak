@@ -920,6 +920,55 @@ h1 {
   padding: 0.55rem 0.6rem;
 }
 
+/* Chats / Recipes tab pair at the top of the drawer. Visually
+   understated — the drawer is primarily a thread list, so the tab
+   affordance is a secondary signal that sits above the search
+   input without dominating the header. */
+.sidebar-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+.sidebar-tab {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.sidebar-tab.active {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+}
+.sidebar-tab:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-weak);
+}
+
+/* Recipes drawer list — same row chrome as threads so the switch
+   between tabs stays visually consistent. `.recipe-drawer-footer`
+   holds the "Open cookbook" button in a fixed position below the
+   list, mirroring the archive toggle in the threads tab. */
+.recipe-drawer-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.recipe-drawer-footer {
+  padding: 0.5rem;
+  border-top: 1px solid var(--border);
+  margin-top: auto;
+}
+.recipe-drawer-footer button {
+  width: 100%;
+}
+
 .sidebar-search-input {
   width: 100%;
   padding: 0.4rem 0.6rem;
