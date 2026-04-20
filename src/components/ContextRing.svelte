@@ -20,16 +20,19 @@
   extra thresholds to tune. Saturation and lightness are fixed so the
   ring reads the same across themes.
 
-  Reveal: the summary surfaces via three paths, so every platform has
-  one that works:
-    - desktop hover → native `title` tooltip
-    - click / tap   → an inline popover, dismissed by clicking outside
-                       or hitting Escape
-    - screen reader → `aria-label` on the button
-  The popover matters because `title` tooltips never fire on touch,
-  leaving mobile users with no way to see the exact token counts.
+  Reveal: the ring itself is a toggle. Clicking it slides a detail row
+  open right below the action bar with the exact summary; clicking
+  again (or hitting Escape) slides it closed. The action bar uses
+  `flex-wrap: wrap` and the detail row takes `flex-basis: 100%`, so
+  it naturally drops to its own line inside the bubble rather than
+  floating on top of the message. Desktop hover still shows a native
+  `title` tooltip for a quick peek without a click, and screen
+  readers read the same summary via `aria-label`.
 -->
 <script lang="ts">
+  import { slide } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
+
   interface Props {
     /** Total tokens spent on this turn (prompt + completion). */
     totalTokens: number;
@@ -63,11 +66,11 @@
   const CIRC = 2 * Math.PI * RADIUS;
   const dashOffset = $derived(CIRC * (1 - pct));
 
-  // Human-readable summary for the tooltip / popover / aria-label.
+  // Human-readable summary for the tooltip / detail row / aria-label.
   // Percentage comes first because it's the headline — a glance at the
-  // ring already suggests "about half full"; the tooltip's job is to
-  // put a specific number to that impression, then back it up with the
-  // exact token counts. Thousands separators make the magnitudes
+  // ring already suggests "about half full"; the reveal's job is to
+  // put a specific number to that impression, then back it up with
+  // the exact token counts. Thousands separators make the magnitudes
   // legible (1,234,567 reads instantly; 1234567 doesn't).
   const fmt = new Intl.NumberFormat();
   const summary = $derived(
@@ -75,39 +78,25 @@
   );
 
   let open = $state(false);
-  let rootEl: HTMLButtonElement | undefined = $state();
-
   function toggle() {
     open = !open;
   }
 
-  // While the popover is open, close it on any pointerdown outside the
-  // ring and on Escape. `pointerdown` rather than `click` so a tap that
-  // lands on another interactive element (e.g. a different message's
-  // ring) dismisses this one before the second element's click toggles
-  // its own popover — otherwise you'd need two taps to switch. The
-  // handler is wired inside an $effect so it's only attached while
-  // open, and torn down when the popover closes or the component
-  // unmounts.
+  // Escape closes the detail row, matching the dismissal affordance
+  // every expanding control in the app uses. Listener is only
+  // attached while open so we don't pay for it on every rendered
+  // message in a long thread.
   $effect(() => {
     if (!open) return;
-    function onDown(e: PointerEvent) {
-      if (rootEl && !rootEl.contains(e.target as Node)) open = false;
-    }
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') open = false;
     }
-    document.addEventListener('pointerdown', onDown, true);
     document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onDown, true);
-      document.removeEventListener('keydown', onKey);
-    };
+    return () => document.removeEventListener('keydown', onKey);
   });
 </script>
 
 <button
-  bind:this={rootEl}
   type="button"
   class="context-ring"
   aria-label={summary}
@@ -150,13 +139,21 @@
       transform="rotate(-90 12 12)"
     />
   </svg>
-  {#if open}
-    <!-- Positioned above and right-aligned to the ring so it stays
-         within the message card's horizontal bounds. pointer-events on
-         the popover are disabled via CSS so a tap on the popover text
-         passes through to the outside-click handler and dismisses it,
-         matching the "tap anywhere to close" mental model most touch
-         UIs use for transient overlays. -->
-    <span class="ring-popover" role="tooltip">{summary}</span>
-  {/if}
 </button>
+{#if open}
+  <!-- Sibling of .context-ring inside .msg-actions. `flex-basis: 100%`
+       on this row plus `flex-wrap: wrap` on the parent bar breaks it
+       onto its own line under the buttons. Svelte's slide transition
+       animates height (plus margin/padding), and cubicOut decelerates
+       the motion toward the end so the row settles rather than
+       snapping. 220ms is long enough to read as "moving" without
+       feeling sluggish on a repeated open/close. -->
+  <div
+    class="ring-detail"
+    role="region"
+    aria-label="Context window usage"
+    transition:slide={{ duration: 220, easing: cubicOut }}
+  >
+    {summary}
+  </div>
+{/if}

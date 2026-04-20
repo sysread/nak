@@ -1363,6 +1363,11 @@ h1 {
   margin-top: 0.6rem;
   padding-top: 0.4rem;
   border-top: 1px solid var(--border);
+  /* The ContextRing's detail row sits as a sibling of the action
+     buttons in this bar. flex-wrap lets it break to its own line
+     below the buttons (via `.ring-detail { flex-basis: 100% }`)
+     instead of getting squeezed onto the right-aligned row. */
+  flex-wrap: wrap;
 }
 
 /* Re-apply the mobile full-width rule here, *after* the base
@@ -1471,55 +1476,47 @@ h1 {
 /* Context-window indicator (ContextRing.svelte). Sits right of the
    CopyButton in `.msg-actions`. Matches the button's footprint exactly
    — same padding, border, radius, background — so the strip reads as
-   one continuous control row. `cursor: help` hints that hover will
-   reveal a tooltip with the exact numbers; the same info also appears
-   on click via `.ring-popover` for touch devices where the native
-   title never fires. */
+   one continuous control row. The ring itself is a toggle button
+   that opens a slide-down detail row below (`.ring-detail`); desktop
+   hover also shows the native `title` as a quick peek. */
 .context-ring {
-  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0.25rem;
   /* Button-reset: inherit the message card's typography so the
-     popover text renders in the same face as surrounding copy, and
-     drop the default outline/appearance the browser adds to button
-     elements. The bg/border/radius below then reapply the look we
-     had when this was a <span>. */
+     detail row text renders in the same face as surrounding copy,
+     and drop the default outline/appearance the browser adds to
+     button elements. The bg/border/radius below then reapply the
+     look we had when this was a <span>. */
   font: inherit;
   color: inherit;
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  cursor: help;
+  cursor: pointer;
   /* The inline SVG has no intrinsic baseline behavior we want; zero it
      out so the ring sits centered with the copy button rather than
      riding a phantom text baseline. */
   line-height: 0;
 }
 
-/* Tap/click popover with the exact summary. Anchored above the ring
-   and right-aligned so it grows leftward into the message card
-   rather than off the right edge of narrow bubbles. `pointer-events:
-   none` lets a tap on the popover pass through to the
-   outside-click handler — tapping the overlay dismisses it, which
-   is the convention on touch. Positioned high (z-index) because the
-   popover can overlap siblings in `.msg-actions`. */
-.ring-popover {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 6px);
-  z-index: 10;
-  padding: 0.35rem 0.55rem;
-  background: var(--surface);
-  color: var(--text);
+/* Slide-down detail row. Rendered as a sibling of the buttons inside
+   `.msg-actions`; `flex-basis: 100%` breaks it onto its own line
+   below the right-aligned controls, where Svelte's slide transition
+   animates its height open and shut. Matches the button footprint
+   (same bg/border/radius) so the bar reads as a single surface
+   that's expanded a row, not a different panel that appeared. */
+.ring-detail {
+  flex-basis: 100%;
+  margin-top: 0.4rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   line-height: 1.3;
-  white-space: nowrap;
-  pointer-events: none;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  text-align: left;
 }
 
 /* `.copy-code-btn` is the in-fence variant — same styling, just a

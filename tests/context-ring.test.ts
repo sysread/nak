@@ -145,53 +145,53 @@ describe('ContextRing', () => {
     expect(svg?.getAttribute('aria-hidden')).toBe('true');
   });
 
-  it('shows a popover with the summary when clicked', async () => {
-    // Title attributes don't fire on touch devices, so the popover is
-    // the only surface that reveals the exact numbers on mobile. If a
-    // click stops producing it, mobile users have no path to the
+  it('slides the detail row open when clicked', async () => {
+    // Title attributes don't fire on touch devices, so the detail row
+    // is the only surface that reveals the exact numbers on mobile.
+    // If a click stops producing it, mobile users have no path to the
     // detail again.
     const { container } = render(ContextRing, {
       props: { totalTokens: 128_400, contextWindow: 256_000 },
     });
     const btn = container.querySelector('.context-ring') as HTMLButtonElement;
     expect(btn).not.toBeNull();
-    // Closed state: no popover, aria-expanded reflects it.
-    expect(container.querySelector('.ring-popover')).toBeNull();
+    // Closed state: no detail row, aria-expanded reflects it.
+    expect(container.querySelector('.ring-detail')).toBeNull();
     expect(btn.getAttribute('aria-expanded')).toBe('false');
 
     await fireEvent.click(btn);
 
-    const popover = container.querySelector('.ring-popover');
-    expect(popover).not.toBeNull();
-    expect(popover!.textContent).toBe('50% (128,400 / 256,000 tokens)');
+    const detail = container.querySelector('.ring-detail');
+    expect(detail).not.toBeNull();
+    expect(detail!.textContent?.trim()).toBe('50% (128,400 / 256,000 tokens)');
     expect(btn.getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('closes the popover on Escape', async () => {
-    // Keyboard users need a dismissal path that doesn't require
-    // finding the click-outside target.
+  it('toggles closed on a second click', async () => {
+    // The ring is a toggle, not a one-shot reveal. A second click
+    // should collapse the row back.
     const { container } = render(ContextRing, {
       props: { totalTokens: 100, contextWindow: 1000 },
     });
     const btn = container.querySelector('.context-ring') as HTMLButtonElement;
     await fireEvent.click(btn);
-    expect(container.querySelector('.ring-popover')).not.toBeNull();
+    expect(btn.getAttribute('aria-expanded')).toBe('true');
 
-    await fireEvent.keyDown(document, { key: 'Escape' });
-    expect(container.querySelector('.ring-popover')).toBeNull();
+    await fireEvent.click(btn);
+    expect(btn.getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('closes the popover on a pointerdown outside the ring', async () => {
-    // Tapping elsewhere on the page should dismiss the overlay — the
-    // same mental model every transient UI element uses.
+  it('closes the detail row on Escape', async () => {
+    // Keyboard users need a dismissal path that doesn't require
+    // re-finding the toggle.
     const { container } = render(ContextRing, {
       props: { totalTokens: 100, contextWindow: 1000 },
     });
     const btn = container.querySelector('.context-ring') as HTMLButtonElement;
     await fireEvent.click(btn);
-    expect(container.querySelector('.ring-popover')).not.toBeNull();
+    expect(btn.getAttribute('aria-expanded')).toBe('true');
 
-    await fireEvent.pointerDown(document.body);
-    expect(container.querySelector('.ring-popover')).toBeNull();
+    await fireEvent.keyDown(document, { key: 'Escape' });
+    expect(btn.getAttribute('aria-expanded')).toBe('false');
   });
 });
