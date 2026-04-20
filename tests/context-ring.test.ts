@@ -9,7 +9,7 @@
  * those three stay truthful across the percentage range we know the ring
  * is showing the right story.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent } from '@testing-library/svelte';
 import ContextRing from '../src/components/ContextRing.svelte';
 
@@ -184,6 +184,45 @@ describe('ContextRing', () => {
 
     await fireEvent.click(btn);
     expect(btn.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('scrolls the detail row into view once the slide animation completes', async () => {
+    // Clicking the ring on a message near the bottom of the viewport
+    // slides the detail row down past the fold, leaving the user
+    // staring at the same scroll position with no visible result.
+    // The fix: on `introend` (when the slide has finished growing to
+    // its final height), scrollIntoView the detail row. We wait for
+    // introend specifically so the element's final height is measured
+    // — scrolling mid-transition would aim at a stale layout.
+    //
+    // jsdom doesn't implement scrollIntoView, so we stub the
+    // prototype, capture the call, and restore afterward so the mock
+    // doesn't leak into later tests in the file.
+    const scrollSpy = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollSpy;
+    try {
+      const { container } = render(ContextRing, {
+        props: { totalTokens: 100, contextWindow: 1000 },
+      });
+      const btn = container.querySelector('.context-ring') as HTMLButtonElement;
+      await fireEvent.click(btn);
+
+      const detail = container.querySelector('.ring-detail') as HTMLElement;
+      expect(detail).not.toBeNull();
+      // Svelte dispatches 'introend' on the element when the intro
+      // transition finishes. Firing it manually keeps the test off
+      // the real 220ms clock without mocking timers.
+      await fireEvent(detail, new CustomEvent('introend'));
+
+      expect(scrollSpy).toHaveBeenCalledTimes(1);
+      expect(scrollSpy.mock.calls[0][0]).toEqual({
+        behavior: 'smooth',
+        block: 'nearest',
+      });
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
   });
 
   it('closes the detail row on Escape', async () => {
