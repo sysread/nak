@@ -82,6 +82,59 @@ describe('renderMarkdown — happy paths', () => {
     expect(html).toMatch(/<a [^>]*href="https:\/\/example\.com"/);
   });
 
+  describe('citation superscripts', () => {
+    it('renders a single ^N^ as a sup with an in-page anchor', () => {
+      // Venice marks sourced claims with `^N^` caret-wrapped runs; we
+      // turn each into a <sup> carrying an anchor that the Chat UI's
+      // click delegation interprets as "expand citation N."
+      const html = renderMarkdown('Some fact. ^2^');
+      expect(html).toMatch(
+        /<sup class="citation-sup"><a href="#cite-2" class="citation-ref"[^>]*>2<\/a><\/sup>/
+      );
+    });
+
+    it('renders ^i,j^ as one sup containing both anchors', () => {
+      // Multi-source citations come in two shapes — `^2^,^5^` (two
+      // separate sups, plain comma between) and `^2,5^` (one sup
+      // with both numbers). This test covers the latter.
+      const html = renderMarkdown('Sources ^2,5^ confirm.');
+      expect(html).toMatch(
+        /<sup class="citation-sup"><a href="#cite-2"[^>]*>2<\/a>,<a href="#cite-5"[^>]*>5<\/a><\/sup>/
+      );
+    });
+
+    it('leaves non-digit ^...^ runs as plain text', () => {
+      // A literal caret in prose ("^C^C") must not match — only
+      // digit-bounded patterns are citation candidates. Without this,
+      // any inline "pointing up" phrasing the model used would eat
+      // the rest of the line as a failed citation.
+      const html = renderMarkdown('press ^C^ to copy');
+      expect(html).not.toMatch(/citation-sup/);
+    });
+
+    it('does not expand ^N^ patterns inside fenced code', () => {
+      // The marked extension runs at the inline level; code fences
+      // are a block token whose body is never re-tokenized. Source
+      // text like `^1^` inside a fence should stay as-is so the user
+      // sees their literal characters, not a synthesized citation.
+      const html = renderMarkdown('```\ntext ^1^ here\n```');
+      expect(html).not.toMatch(/citation-sup/);
+      expect(html).toMatch(/text \^1\^ here/);
+    });
+
+    it('keeps #cite- anchors in-page (no target=_blank, no rel)', () => {
+      // The link-hardening hook rewrites external anchors with
+      // target/rel for safety — but in-page citation anchors must
+      // stay navigable inside the conversation view, since the
+      // click handler preventDefaults and opens the panel. An empty
+      // new tab would otherwise land on every citation click.
+      const html = renderMarkdown('Fact. ^1^');
+      const anchor = /<a href="#cite-1"[^>]*>/.exec(html)?.[0] ?? '';
+      expect(anchor).not.toMatch(/target=/);
+      expect(anchor).not.toMatch(/rel=/);
+    });
+  });
+
   it('renders inline math via $...$', () => {
     const html = renderMarkdown('Einstein said $E = mc^2$.');
     // KaTeX emits a `<span class="katex">…</span>` wrapper.

@@ -57,6 +57,31 @@ export interface ResponseFormat {
 }
 
 /**
+ * Web-search source cited by Venice when `enable_web_citations=true`.
+ * Ships on `venice_parameters.web_search_citations` — a top-level array
+ * on the non-streaming response, and on the FIRST chunk of a streaming
+ * result (Venice's own phrasing; see
+ * https://docs.venice.ai/api-reference/endpoint/chat/completions). The
+ * model is instructed to mark sourced claims inline with `^N^` /
+ * `^i,j^` superscripts that index into this array (1-based).
+ *
+ * Fields beyond `url` are all optional because Venice doesn't guarantee
+ * them per result — some sources come back with just a URL, others
+ * include title/date/snippet. Be liberal about what we render; the
+ * citation panel handles each field being absent.
+ */
+export interface Citation {
+  /** 1-based index matching the `^N^` superscripts in the message body. */
+  index: number;
+  title?: string;
+  url: string;
+  /** Short snippet / summary of the source content. */
+  content?: string;
+  /** ISO-ish date string; rendered verbatim. */
+  date?: string;
+}
+
+/**
  * Venice-specific web-search mode, passed as
  * `venice_parameters.enable_web_search` on the request body.
  *
@@ -136,11 +161,24 @@ export interface TokenUsage {
  * fully assembled from its fragments. A `usage` event — if the provider
  * reported one — fires exactly once, after the final text/tool event
  * and before the generator returns.
+ *
+ * `reasoning` carries chain-of-thought tokens streamed on
+ * `delta.reasoning_content` (OpenAI-compat; providers that support
+ * Anthropic-style thinking map into the same field). Arrives before
+ * the visible text on reasoning-capable models and lets the UI show a
+ * "thinking…" panel that collapses once real content starts flowing.
+ *
+ * `citations` carries Venice's `web_search_citations` array. Venice
+ * ships it on the first streaming chunk OR at the top of the non-
+ * streaming response (per docs); we normalize to one event emitted
+ * the first time we see a non-empty list in the stream.
  */
 export type StreamEvent =
   | { type: 'text'; delta: string }
+  | { type: 'reasoning'; delta: string }
   | { type: 'tool_call'; toolCall: OpenAIToolCall }
-  | { type: 'usage'; usage: TokenUsage };
+  | { type: 'usage'; usage: TokenUsage }
+  | { type: 'citations'; citations: Citation[] };
 
 export interface EmbeddingRequest {
   model: string;
@@ -313,6 +351,13 @@ export class VeniceClient {
     // tool-call flushing, so consumers can pair it to the just-finished
     // turn. Stays null if the provider didn't include one.
     let usage: TokenUsage | null = null;
+    // Venice's web_search_citations ride on `venice_parameters` on a
+    // frame early in the stream (docs: "first chunk of a streaming
+    // result"). Emit exactly one `citations` event the first time we
+    // see a non-empty list — re-emitting on every frame would force
+    // downstream consumers to dedupe. Stays false when citations
+    // weren't requested or the provider skipped them.
+    let citationsEmitted = false;
 
     const flushToolCalls = function* (): Generator<StreamEvent, void, void> {
       const sorted = Array.from(pending.entries()).sort((a, b) => a[0] - b[0]);
@@ -351,6 +396,29 @@ export class VeniceClient {
           }
           if (parsed.text !== undefined && parsed.text.length > 0) {
             yield { type: 'text', delta: parsed.text };
+          }
+          // Reasoning tokens land on a separate field per the
+          // OpenAI-compat convention (`delta.reasoning_content`). We
+          // pass them through as a distinct event rather than folding
+          // into `text` so the UI can present them in its own
+          // collapsible panel — if we mixed the two, reasoning would
+          // either leak into the rendered answer or get stripped by a
+          // post-hoc regex.
+          if (parsed.reasoning !== undefined && parsed.reasoning.length > 0) {
+            yield { type: 'reasoning', delta: parsed.reasoning };
+          }
+          // Emit citations the first time we see them — downstream
+          // consumers get the full list in one event, not a sequence
+          // they have to reconcile. Venice documents this as
+          // first-chunk-only, but guard anyway so a provider that
+          // re-sends the list doesn't produce duplicate events.
+          if (
+            !citationsEmitted &&
+            parsed.citations &&
+            parsed.citations.length > 0
+          ) {
+            citationsEmitted = true;
+            yield { type: 'citations', citations: parsed.citations };
           }
           if (parsed.toolCallFragments) {
             for (const frag of parsed.toolCallFragments) {
@@ -427,6 +495,14 @@ export class VeniceClient {
  */
 export interface SseDelta {
   text?: string;
+  /**
+   * Reasoning / chain-of-thought delta, surfaced on
+   * `choices[0].delta.reasoning_content` (the OpenAI-compat field
+   * Venice and most reasoning-capable providers use). Streamed
+   * incrementally just like `text`, so we accumulate by append on the
+   * consumer side.
+   */
+  reasoning?: string;
   toolCallFragments?: Array<{
     index: number;
     id?: string;
@@ -441,6 +517,15 @@ export interface SseDelta {
    * turn, not a single choice.
    */
   usage?: TokenUsage;
+  /**
+   * Populated from `venice_parameters.web_search_citations` when
+   * Venice attaches sources to a response. Docs say the list rides on
+   * the first chunk of a streaming result; we normalize to "whichever
+   * frame carries it" because a provider version bump could shift the
+   * exact frame. Stays absent when citations weren't requested or
+   * weren't produced.
+   */
+  citations?: Citation[];
 }
 
 /**
@@ -466,6 +551,7 @@ export function parseSseFrame(frame: string): SseDelta | '[DONE]' | null {
   interface RawChoice {
     delta?: {
       content?: string;
+      reasoning_content?: string;
       tool_calls?: Array<{
         index?: number;
         id?: string;
@@ -482,14 +568,55 @@ export function parseSseFrame(frame: string): SseDelta | '[DONE]' | null {
     total_tokens?: number;
   }
 
-  let obj: { choices?: RawChoice[]; usage?: RawUsage };
+  interface RawCitation {
+    title?: unknown;
+    url?: unknown;
+    content?: unknown;
+    date?: unknown;
+  }
+
+  interface RawVeniceParams {
+    web_search_citations?: RawCitation[];
+  }
+
+  let obj: {
+    choices?: RawChoice[];
+    usage?: RawUsage;
+    venice_parameters?: RawVeniceParams;
+  };
   try {
-    obj = JSON.parse(payload) as { choices?: RawChoice[]; usage?: RawUsage };
+    obj = JSON.parse(payload) as {
+      choices?: RawChoice[];
+      usage?: RawUsage;
+      venice_parameters?: RawVeniceParams;
+    };
   } catch {
     return null;
   }
 
   const out: SseDelta = {};
+
+  // Venice's `web_search_citations` ride at the top level (nested
+  // inside `venice_parameters`). The field is a sibling of `choices`
+  // and `usage`, not part of any individual delta — it describes the
+  // whole turn's sourcing. Parse defensively: every citation field
+  // except `url` is optional per the docs, and we drop rows with no
+  // usable url entirely (they'd render as dead refs).
+  const rawCitations = obj.venice_parameters?.web_search_citations;
+  if (Array.isArray(rawCitations) && rawCitations.length > 0) {
+    const citations: Citation[] = [];
+    rawCitations.forEach((c, i) => {
+      if (typeof c !== 'object' || c === null) return;
+      const url = typeof c.url === 'string' ? c.url : null;
+      if (!url) return;
+      const cite: Citation = { index: i + 1, url };
+      if (typeof c.title === 'string') cite.title = c.title;
+      if (typeof c.content === 'string') cite.content = c.content;
+      if (typeof c.date === 'string') cite.date = c.date;
+      citations.push(cite);
+    });
+    if (citations.length > 0) out.citations = citations;
+  }
 
   // Usage epilogue: `choices` is an empty array, `usage` sits at the top
   // level. We accept only fully-formed usage (all three ints present)
@@ -517,6 +644,10 @@ export function parseSseFrame(frame: string): SseDelta | '[DONE]' | null {
   const content = choice.delta?.content;
   if (typeof content === 'string' && content.length > 0) {
     out.text = content;
+  }
+  const reasoning = choice.delta?.reasoning_content;
+  if (typeof reasoning === 'string' && reasoning.length > 0) {
+    out.reasoning = reasoning;
   }
   const rawCalls = choice.delta?.tool_calls;
   if (Array.isArray(rawCalls) && rawCalls.length > 0) {

@@ -1158,6 +1158,31 @@ h1 {
   text-decoration-thickness: 2px;
 }
 
+/* Venice citation superscripts: `<sup class="citation-sup">` wrapping
+   one or more `<a class="citation-ref">N</a>` anchors. The UA's
+   default <sup> shrinks font-size and lifts baseline, which is most
+   of what we want — we just tune the color and drop the underline so
+   the mark reads as a footnote reference rather than a prose link. A
+   dotted underline on hover hints at the "click to reveal the source"
+   affordance without competing with real in-body links. */
+.md sup.citation-sup {
+  /* A hair of left margin keeps the ^N^ from crashing into the
+     trailing letter of the sentence — without it, the superscript
+     visually collides with a `.` or word-ending consonant. */
+  margin-left: 0.1em;
+}
+.md sup.citation-sup a.citation-ref {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+  padding: 0 0.15em;
+}
+.md sup.citation-sup a.citation-ref:hover,
+.md sup.citation-sup a.citation-ref:focus-visible {
+  text-decoration: underline dotted;
+  text-underline-offset: 1px;
+}
+
 .md code {
   font-family: 'Lekton', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   background: var(--bg-2);

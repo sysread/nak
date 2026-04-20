@@ -32,6 +32,7 @@ import type {
   VeniceMessage,
   TokenUsage,
   WebSearchMode,
+  Citation,
 } from './venice';
 import {
   buildToolList,
@@ -66,6 +67,21 @@ function childController(parent: AbortSignal): AbortController {
 export interface ChatLoopHandlers {
   /** Cumulative text for the current round; fires on every text delta. */
   onTextUpdate?(text: string): void;
+  /**
+   * Cumulative reasoning / chain-of-thought text for the current round.
+   * Fires on every reasoning delta, which on reasoning-capable models
+   * arrives before the visible `onTextUpdate` stream. The UI uses the
+   * transition from "reasoning arriving" to "text arriving" to animate
+   * the reasoning panel closed.
+   */
+  onReasoningUpdate?(text: string): void;
+  /**
+   * Venice citations for the current round. Fires at most once per
+   * round (Venice sends the full list in one frame). Replaces whatever
+   * the previous round emitted — each assistant row carries only its
+   * own turn's citations.
+   */
+  onCitationsUpdate?(citations: Citation[]): void;
   /** A tool call has been received from the model and is about to execute. */
   onToolStart?(call: OpenAIToolCall): void;
   /** A tool call resolved successfully. `result` is the parsed JS value. */
@@ -235,12 +251,17 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     });
 
     let roundText = '';
+    let roundReasoning = '';
+    let roundCitations: Citation[] | null = null;
     const roundCalls: OpenAIToolCall[] = [];
     let roundUsage: TokenUsage | null = null;
     for await (const ev of stream) {
       if (ev.type === 'text') {
         roundText += ev.delta;
         handlers?.onTextUpdate?.(roundText);
+      } else if (ev.type === 'reasoning') {
+        roundReasoning += ev.delta;
+        handlers?.onReasoningUpdate?.(roundReasoning);
       } else if (ev.type === 'tool_call') {
         roundCalls.push(ev.toolCall);
       } else if (ev.type === 'usage') {
@@ -249,6 +270,9 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         // regardless of whether the turn produced text or tool calls,
         // and we want the per-row data honest for future aggregates.
         roundUsage = ev.usage;
+      } else if (ev.type === 'citations') {
+        roundCitations = ev.citations;
+        handlers?.onCitationsUpdate?.(ev.citations);
       }
     }
 
@@ -259,6 +283,13 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         const msg = await supabase.addMessage(thread.id, 'assistant', roundText, {
           model: modelId,
           usage: roundUsage,
+          // Reasoning / citations ride along on the assistant row so
+          // the panels below the message survive a page refresh. Null
+          // when the model didn't produce either — keeps older rows
+          // (before the columns existed) distinguishable from "this
+          // turn actually had none."
+          reasoning: roundReasoning.length > 0 ? roundReasoning : null,
+          citations: roundCitations,
         });
         handlers?.onAssistantPersisted?.(msg);
       }
@@ -274,7 +305,17 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       thread.id,
       'assistant',
       roundText,
-      { tool_calls: roundCalls, model: modelId, usage: roundUsage }
+      {
+        tool_calls: roundCalls,
+        model: modelId,
+        usage: roundUsage,
+        // Intermediate tool-invoking rounds rarely carry reasoning or
+        // citations — but when they do (some reasoning models think
+        // out loud before picking a tool), persist them so the
+        // per-round panels reflect what actually happened.
+        reasoning: roundReasoning.length > 0 ? roundReasoning : null,
+        citations: roundCitations,
+      }
     );
     handlers?.onAssistantPersisted?.(assistantMsg);
 

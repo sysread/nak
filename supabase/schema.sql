@@ -237,6 +237,27 @@ alter table public.messages
 alter table public.messages
   add column if not exists usage jsonb;
 
+-- Chain-of-thought text emitted by reasoning-capable models on
+-- `delta.reasoning_content` during streaming. Stored separately from
+-- `content` so the visible answer renders without mixing in the
+-- thinking tokens — and so the UI can surface it in its own
+-- collapsible "thought" panel. Null on non-assistant rows, on older
+-- rows written before this column existed, and on turns where the
+-- model didn't emit any reasoning.
+alter table public.messages
+  add column if not exists reasoning text;
+
+-- Venice web-search citations array in the shape the API returns on
+-- `venice_parameters.web_search_citations`:
+--   [{index, title?, url, content?, date?}, ...]
+-- Inline `^N^` / `^i,j^` superscripts in `content` index into this
+-- array (1-based). Null when citations weren't requested, weren't
+-- produced, or on rows older than this column. jsonb (not jsonb[])
+-- so the whole list travels as a single typed blob matching the
+-- wire shape.
+alter table public.messages
+  add column if not exists citations jsonb;
+
 -- Per-thread master switch for tool availability. When false, only the
 -- always-on `toggle_tools` meta-tool is sent with the request; when true,
 -- every registered tool's schema is included. The LLM can flip this via

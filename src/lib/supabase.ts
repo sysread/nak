@@ -24,7 +24,11 @@ import {
 } from './models';
 import { isAccent, isColorMode, type Accent, type ColorMode } from './theme';
 import type { OpenAIToolCall } from './tools/types';
-import type { TokenUsage } from './venice';
+import type { Citation, TokenUsage } from './venice';
+
+// Re-exported so consumers that already pull Message from this module
+// don't also need to import from venice.ts just to type a row.
+export type { Citation };
 
 export interface Thread {
   id: string;
@@ -138,6 +142,23 @@ export interface Message {
    * streams that got cut before the epilogue).
    */
   usage?: TokenUsage | null;
+  /**
+   * Chain-of-thought text emitted by reasoning-capable models on
+   * `delta.reasoning_content`. Null when the model didn't produce any,
+   * and on older rows written before the column existed. Rendered in
+   * a collapsible panel at the top of the message bubble — the panel
+   * starts closed on replay; it auto-opens then animates shut while
+   * the live response is streaming in.
+   */
+  reasoning?: string | null;
+  /**
+   * Venice-sourced web citations for this assistant turn, in the shape
+   * Venice returns on `venice_parameters.web_search_citations`. The
+   * inline `^N^` superscripts in `content` are 1-based indexes into
+   * this array. Null on older rows and on turns that didn't touch the
+   * web-search augmentation.
+   */
+  citations?: Citation[] | null;
 }
 
 export class SupabaseError extends Error {
@@ -1211,6 +1232,10 @@ export class SupabaseService {
       model?: string | null;
       /** Token-usage object returned by the provider for this turn. */
       usage?: TokenUsage | null;
+      /** Chain-of-thought text; null when the model didn't produce any. */
+      reasoning?: string | null;
+      /** Venice web-search citations for this turn. */
+      citations?: Citation[] | null;
     } = {}
   ): Promise<Message> {
     const row: Record<string, unknown> = { thread_id: threadId, role, content };
@@ -1219,6 +1244,8 @@ export class SupabaseService {
     if (opts.name !== undefined) row.name = opts.name;
     if (opts.model !== undefined) row.model = opts.model;
     if (opts.usage !== undefined) row.usage = opts.usage;
+    if (opts.reasoning !== undefined) row.reasoning = opts.reasoning;
+    if (opts.citations !== undefined) row.citations = opts.citations;
     const { data, error } = await this.client
       .from('messages')
       .insert(row)
