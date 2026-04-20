@@ -18,9 +18,9 @@ Nak protects the keys you give it.
 
 ## Where to go next
 
-- [Export & import](export-import.md) — moving keys to another
+- [Export & import](./export-import.md) — moving keys to another
   browser.
-- [Settings overview](settings.md).
+- [Settings overview](./settings.md).
 
 ---
-Back to the [index](README.md).
+Back to the [index](./README.md).

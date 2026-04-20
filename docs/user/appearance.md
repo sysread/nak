@@ -11,7 +11,7 @@ they follow your account across browsers.
 
 ## Where to go next
 
-- [Settings overview](settings.md) — the pane this lives in.
+- [Settings overview](./settings.md) — the pane this lives in.
 
 ---
-Back to the [index](README.md).
+Back to the [index](./README.md).

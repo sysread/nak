@@ -11,9 +11,9 @@ field in the drawer matches thread titles and message bodies.
 
 ## Where to go next
 
-- [Threads](threads.md) — the drawer that hosts the search field.
-- [Keyboard shortcuts](shortcuts.md) — the shortcut for focusing
+- [Threads](./threads.md) — the drawer that hosts the search field.
+- [Keyboard shortcuts](./shortcuts.md) — the shortcut for focusing
   search.
 
 ---
-Back to the [index](README.md).
+Back to the [index](./README.md).

@@ -14,8 +14,8 @@ platforms except where noted — the `Mod` key is `Cmd` on macOS and
 
 ## Where to go next
 
-- [The chat interface](chat.md) — what the composer does.
-- [Threads](threads.md) — the drawer the navigation shortcuts act on.
+- [The chat interface](./chat.md) — what the composer does.
+- [Threads](./threads.md) — the drawer the navigation shortcuts act on.
 
 ---
-Back to the [index](README.md).
+Back to the [index](./README.md).

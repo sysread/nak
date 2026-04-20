@@ -18,8 +18,8 @@ how to organize, rename, and clean up threads.
 
 ## Where to go next
 
-- [Search](search.md) — find a specific thread.
-- [The chat interface](chat.md) — what happens inside a thread.
+- [Search](./search.md) — find a specific thread.
+- [The chat interface](./chat.md) — what happens inside a thread.
 
 ---
-Back to the [index](README.md).
+Back to the [index](./README.md).

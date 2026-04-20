@@ -13,10 +13,10 @@ device, or a reinstalled browser profile.
 
 ## Where to go next
 
-- [Security model](security.md) — what the file protects and what it
+- [Security model](./security.md) — what the file protects and what it
   doesn't.
-- [Getting started](getting-started.md) — the matching import step
+- [Getting started](./getting-started.md) — the matching import step
   during first-time setup.
 
 ---
-Back to the [index](README.md).
+Back to the [index](./README.md).

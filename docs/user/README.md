@@ -24,35 +24,35 @@ You can reach these pages two ways:
 ## Contents
 
 ### Getting started
-- [Getting started](getting-started.md) — sign up, add your Supabase
+- [Getting started](./getting-started.md) — sign up, add your Supabase
   and Venice keys, pick a default model, send your first message.
 
 ### Using Nak
-- [The chat interface](chat.md) — composer, streaming, thinking mode,
+- [The chat interface](./chat.md) — composer, streaming, thinking mode,
   regeneration, copy/edit/delete.
-- [Threads](threads.md) — the conversation drawer, pinning,
+- [Threads](./threads.md) — the conversation drawer, pinning,
   archiving, renaming, deleting.
-- [Search](search.md) — finding a thread or a message across your
+- [Search](./search.md) — finding a thread or a message across your
   history.
-- [Keyboard shortcuts](shortcuts.md) — the keys that save you the
+- [Keyboard shortcuts](./shortcuts.md) — the keys that save you the
   most time.
 
 ### Configuration
-- [Settings overview](settings.md) — tour of the Settings modal and
+- [Settings overview](./settings.md) — tour of the Settings modal and
   what each pane controls.
-- [Models & reasoning](models.md) — picking a model tier, reasoning
+- [Models & reasoning](./models.md) — picking a model tier, reasoning
   effort, and the web-search toggle.
-- [Appearance](appearance.md) — color modes and accent colors.
+- [Appearance](./appearance.md) — color modes and accent colors.
 
 ### Data & security
-- [Security model](security.md) — how your API keys are encrypted,
+- [Security model](./security.md) — how your API keys are encrypted,
   what the master password protects, and how locking the session
   works.
-- [Export & import](export-import.md) — moving your keys to another
+- [Export & import](./export-import.md) — moving your keys to another
   browser.
 
 ### Installing as an app
-- [Install as a PWA](install-pwa.md) — getting Nak onto your home
+- [Install as a PWA](./install-pwa.md) — getting Nak onto your home
   screen, taskbar, or dock, and what works offline.
 
 ## When docs and reality disagree

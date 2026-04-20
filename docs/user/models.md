@@ -16,8 +16,8 @@ web-search is available to the model.
 
 ## Where to go next
 
-- [Settings overview](settings.md) — the pane this lives in.
-- [The chat interface](chat.md) — where the choices take effect.
+- [Settings overview](./settings.md) — the pane this lives in.
+- [The chat interface](./chat.md) — where the choices take effect.
 
 ---
-Back to the [index](README.md).
+Back to the [index](./README.md).

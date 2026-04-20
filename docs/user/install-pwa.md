@@ -17,8 +17,8 @@ launches like a native app and works when you're offline.
 
 ## Where to go next
 
-- [Getting started](getting-started.md) — the one-time setup that
+- [Getting started](./getting-started.md) — the one-time setup that
   follows install.
 
 ---
-Back to the [index](README.md).
+Back to the [index](./README.md).

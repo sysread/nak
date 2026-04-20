@@ -19,10 +19,10 @@ a master password.
 
 ## Where to go next
 
-- [The chat interface](chat.md) — what the composer and the response
+- [The chat interface](./chat.md) — what the composer and the response
   area can do.
-- [Settings overview](settings.md) — tour of the other panes.
-- [Security model](security.md) — what the master password protects.
+- [Settings overview](./settings.md) — tour of the other panes.
+- [Security model](./security.md) — what the master password protects.
 
 ---
-Back to the [index](README.md).
+Back to the [index](./README.md).

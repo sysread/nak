@@ -18,9 +18,9 @@ aren't immediately obvious.
 
 ## Where to go next
 
-- [Threads](threads.md) — managing the conversation list.
-- [Models & reasoning](models.md) — picking a model per conversation.
-- [Keyboard shortcuts](shortcuts.md).
+- [Threads](./threads.md) — managing the conversation list.
+- [Models & reasoning](./models.md) — picking a model per conversation.
+- [Keyboard shortcuts](./shortcuts.md).
 
 ---
-Back to the [index](README.md).
+Back to the [index](./README.md).
