@@ -117,47 +117,70 @@ export interface ModelSpec {
    * /models response — update by hand when a tier is re-pointed.
    */
   supportsVision: boolean;
+  /**
+   * Tier-level reasoning-effort default. When set, wins over the
+   * user's account-level default (but not the per-thread override).
+   * Used to differentiate two tiers that point at the same Venice
+   * model id — e.g. when Smart and Balanced both run kimi-k2-6, the
+   * tier labels are really "same model, different thinking
+   * budgets", and this field is what realises that contract.
+   * Absent means "no tier opinion — fall through to the user
+   * default." Only consulted when `supportsReasoning` is also true.
+   */
+  defaultReasoningEffort?: ReasoningEffort;
 }
 
 export const MODELS: Record<ModelTier, ModelSpec> = {
   smart: {
     tier: 'smart',
-    id: 'kimi-k2-5',
+    // kimi-k2-6 is a multimodal Moonshot model with native vision +
+    // reasoning and a 256k context window. Smart and Balanced both
+    // ride on this id; the two tiers differ only in their default
+    // reasoning effort (see defaultReasoningEffort below) so users
+    // can pick "deep think" vs "quick think" without giving up the
+    // underlying model's quality.
+    id: 'kimi-k2-6',
     label: 'Smart',
     icon: '🧠',
-    description: 'Best quality, slower.',
+    description: 'Kimi K2.6 with deep thinking. Best for hard problems.',
     contextWindow: 256_000,
     supportsReasoning: true,
-    // kimi-k2-5 is currently text-only on Venice. Flip to true if the
-    // tier is re-pointed at a vision-capable model.
-    supportsVision: false,
+    supportsVision: true,
+    defaultReasoningEffort: 'high',
   },
   balanced: {
     tier: 'balanced',
-    id: 'zai-org-glm-5',
+    // Same model as Smart — see the note on smart.id. Differentiated
+    // by defaultReasoningEffort: 'low' here, so Balanced answers
+    // land faster while the model still has vision + long context.
+    id: 'kimi-k2-6',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
     // SCALES because the scales glyph is all thin strokes in every major
     // emoji font, and it vanishes against the toggle background in both
     // themes; yin-yang is a solid bi-tonal disc that reads at any size.
     icon: '\u262F\uFE0F',
-    description: 'Good quality, moderate speed.',
-    contextWindow: 198_000,
+    description: 'Kimi K2.6 with light thinking. Good default for most turns.',
+    contextWindow: 256_000,
     supportsReasoning: true,
-    // GLM-5 on Venice accepts vision input. Flip if the tier is
-    // retuned to a text-only model.
     supportsVision: true,
+    defaultReasoningEffort: 'low',
   },
   fast: {
     tier: 'fast',
     id: 'grok-41-fast',
     label: 'Fast',
     icon: '\u26A1\uFE0F',
-    description: 'Fastest; ~1M-token context.',
+    description: 'Fastest; ~1M-token context. Text only.',
     contextWindow: 1_000_000,
     supportsReasoning: true,
-    // grok-4.1-fast is text-only on Venice today.
+    // grok-4.1-fast is text-only on Venice today. Attach an image and
+    // the pre-send guard blocks until the user switches tier.
     supportsVision: false,
+    // No tier-level default — fast defers entirely to the user's
+    // chosen reasoning effort. Setting 'low' here would conflict
+    // with users who want fast-but-still-thinking; letting the user
+    // default apply keeps that behavior predictable.
   },
 };
 
@@ -297,16 +320,28 @@ export function resolveTier(
 }
 
 /**
- * Resolve the reasoning effort to use for a given thread. Mirrors
- * resolveTier: the per-thread override wins over the user default.
+ * Resolve the reasoning effort to use for a given thread. Cascade:
+ *
+ *   per-thread override → tier default → user account default
+ *
+ * The tier default is the mechanism that lets Smart + Balanced
+ * share one Venice model id and still feel different — Smart's
+ * `defaultReasoningEffort: 'high'` and Balanced's `'low'` win over
+ * the user's account default when the user hasn't explicitly set a
+ * per-thread effort. The user's thread-level choice still wins over
+ * everything, so anyone who prefers the account default can pin it
+ * per thread and Nak won't override.
+ *
  * Callers still have to gate on `MODELS[tier].supportsReasoning`
- * before putting this on the wire.
+ * before putting the result on the wire — some providers 400 on a
+ * `reasoning_effort` field they don't recognise.
  */
 export function resolveReasoningEffort(
   threadEffort: ReasoningEffort | null,
-  defaultEffort: ReasoningEffort
+  defaultEffort: ReasoningEffort,
+  tierDefault?: ReasoningEffort | null
 ): ReasoningEffort {
-  return threadEffort ?? defaultEffort;
+  return threadEffort ?? tierDefault ?? defaultEffort;
 }
 
 /**
@@ -364,6 +399,11 @@ const RETIRED_MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   // retroactively shrink the ring on historical messages.
   'arcee-trinity-large-thinking': 256_000,
   'gemma-4-uncensored': 198_000,
+  'zai-org-glm-5': 198_000,
+  // Retired Smart-tier ids. kimi-k2-5 was the smart tier before it
+  // moved to kimi-k2-6; the window is unchanged (256k) but pin it
+  // anyway so retirement logic follows the same pattern for every id.
+  'kimi-k2-5': 256_000,
 };
 
 /**

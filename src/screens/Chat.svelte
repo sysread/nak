@@ -961,7 +961,11 @@
   // otherwise the user default. Only surfaced in the UI / sent on the wire
   // when `MODELS[currentTier].supportsReasoning`.
   const currentReasoning = $derived<ReasoningEffort>(
-    resolveReasoningEffort(currentThread?.reasoning_effort ?? null, defaultReasoning)
+    resolveReasoningEffort(
+      currentThread?.reasoning_effort ?? null,
+      defaultReasoning,
+      MODELS[currentTier].defaultReasoningEffort
+    )
   );
   const currentSupportsReasoning = $derived<boolean>(
     MODELS[currentTier].supportsReasoning
@@ -1305,7 +1309,11 @@
     // Only pass reasoning_effort on models that accept it; letting it
     // ride along to a non-reasoning model produces a 400 on some providers.
     const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
-      ? resolveReasoningEffort(active?.reasoning_effort ?? null, defaultReasoning)
+      ? resolveReasoningEffort(
+          active?.reasoning_effort ?? null,
+          defaultReasoning,
+          tierSpec.defaultReasoningEffort
+        )
       : undefined;
     // Verbosity is safe to send unconditionally — providers that don't
     // recognize `text.verbosity` silently ignore it.
@@ -2977,7 +2985,9 @@
             <button
               class="send-btn composer-send"
               onclick={send}
-              disabled={sending || composer.trim().length === 0 || currentThread?.archived}
+              disabled={sending ||
+                (composer.trim().length === 0 && pendingAttachments.length === 0) ||
+                currentThread?.archived}
               title={sending
                 ? 'Sending…'
                 : currentThread?.archived

@@ -26,9 +26,18 @@ import {
 
 describe('MODELS', () => {
   it('has the three tiers with the expected Venice model ids', () => {
-    expect(MODELS.smart.id).toBe('kimi-k2-5');
-    expect(MODELS.balanced.id).toBe('zai-org-glm-5');
+    // Smart and Balanced deliberately share the kimi-k2-6 id — the
+    // tiers differ by defaultReasoningEffort (high vs low), not by
+    // underlying model. See the note on MODELS.smart.id in models.ts.
+    expect(MODELS.smart.id).toBe('kimi-k2-6');
+    expect(MODELS.balanced.id).toBe('kimi-k2-6');
     expect(MODELS.fast.id).toBe('grok-41-fast');
+  });
+  it('differentiates smart and balanced by reasoning effort', () => {
+    expect(MODELS.smart.defaultReasoningEffort).toBe('high');
+    expect(MODELS.balanced.defaultReasoningEffort).toBe('low');
+    // Fast intentionally has no tier default — it defers to the user.
+    expect(MODELS.fast.defaultReasoningEffort).toBeUndefined();
   });
   it('has matching tier/label and sensible context windows', () => {
     for (const t of TIERS) {
@@ -102,9 +111,24 @@ describe('reasoning effort', () => {
       expect(typeof MODELS[t].supportsReasoning).toBe('boolean');
     }
   });
-  it('resolveReasoningEffort prefers thread override over default', () => {
+  it('resolveReasoningEffort prefers thread override over every default', () => {
     expect(resolveReasoningEffort('high', 'low')).toBe('high');
+    expect(resolveReasoningEffort('high', 'low', 'medium')).toBe('high');
+  });
+
+  it('resolveReasoningEffort prefers tier default over user default', () => {
+    // Tier-level default (e.g. Smart: 'high', Balanced: 'low') has to
+    // win over the account default so the two tiers that share a
+    // Venice model id still feel different when the user hasn't set
+    // a per-thread effort.
+    expect(resolveReasoningEffort(null, 'medium', 'high')).toBe('high');
+    expect(resolveReasoningEffort(null, 'medium', 'low')).toBe('low');
+  });
+
+  it('resolveReasoningEffort falls through to user default when no tier default is set', () => {
     expect(resolveReasoningEffort(null, 'medium')).toBe('medium');
+    expect(resolveReasoningEffort(null, 'medium', undefined)).toBe('medium');
+    expect(resolveReasoningEffort(null, 'medium', null)).toBe('medium');
   });
 });
 
@@ -208,21 +232,24 @@ describe('padEmbeddingForStorage', () => {
 
 describe('findContextWindowById', () => {
   it('returns the window for a currently-fronted model id', () => {
-    expect(findContextWindowById('zai-org-glm-5')).toBe(
-      MODELS.balanced.contextWindow
-    );
-    expect(findContextWindowById('kimi-k2-5')).toBe(MODELS.smart.contextWindow);
+    expect(findContextWindowById('kimi-k2-6')).toBe(MODELS.smart.contextWindow);
+    expect(findContextWindowById('kimi-k2-6')).toBe(MODELS.balanced.contextWindow);
+    expect(findContextWindowById('grok-41-fast')).toBe(MODELS.fast.contextWindow);
   });
 
   // Historical assistant rows carry ids that used to front a tier — if
   // the fallback breaks, every pre-swap message silently loses its
-  // context-ring indicator. Pin every retired Balanced id so each
-  // swap generation stays readable.
+  // context-ring indicator. Pin every retired id so each swap
+  // generation stays readable.
   it('returns the pinned window for each retired model id', () => {
     expect(findModelById('arcee-trinity-large-thinking')).toBeNull();
     expect(findContextWindowById('arcee-trinity-large-thinking')).toBe(256_000);
     expect(findModelById('gemma-4-uncensored')).toBeNull();
     expect(findContextWindowById('gemma-4-uncensored')).toBe(198_000);
+    expect(findModelById('zai-org-glm-5')).toBeNull();
+    expect(findContextWindowById('zai-org-glm-5')).toBe(198_000);
+    expect(findModelById('kimi-k2-5')).toBeNull();
+    expect(findContextWindowById('kimi-k2-5')).toBe(256_000);
   });
 
   it('returns null for an unknown id and for null/empty input', () => {
