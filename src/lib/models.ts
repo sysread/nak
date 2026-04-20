@@ -140,6 +140,17 @@ export const VENICE_REFLECTION_MODEL = MODELS.fast.id;
 export const VENICE_RECALL_MODEL = MODELS.fast.id;
 
 /**
+ * Model the thread-summary agent runs against. The task is "read the
+ * conversation, write 2–3 sentences" — cheap, bounded, and leans on
+ * long-context reading, not reasoning. Tracks the fast tier for the
+ * same reason reflection does: a retune of the fast slot carries
+ * forward without editing call sites. A summary agent with a
+ * reasoning-heavy model would be overkill — the output is going into
+ * a single embedding vector, not a prose answer.
+ */
+export const VENICE_SUMMARY_MODEL = MODELS.fast.id;
+
+/**
  * Venice's embeddings model. Single constant rather than a tier because
  * Venice only ships one embeddings model today. If Venice ever introduces
  * a second model, this string becomes the current default and the

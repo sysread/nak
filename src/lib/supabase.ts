@@ -148,6 +148,53 @@ export class SupabaseError extends Error {
 }
 
 /**
+ * Composite cursor for thread pagination. `updated_at` is the primary
+ * sort key, `id` is the tie-break — collisions on `updated_at` are
+ * rare but non-zero under a realtime burst (two bumps in the same
+ * millisecond), and without the id tie-break a page boundary would
+ * drop or duplicate the colliding row.
+ */
+export interface ThreadCursor {
+  updated_at: string;
+  id: string;
+}
+
+export interface ThreadPage {
+  rows: Thread[];
+  /**
+   * `null` when the query has been drained (no more rows). Any truthy
+   * value should be passed straight back as `cursor` on the next call
+   * — the caller shouldn't synthesise cursors themselves.
+   */
+  nextCursor: ThreadCursor | null;
+}
+
+/**
+ * One merged search hit. `kind` tags where the hit came from so the
+ * UI can render an indicator badge; `similarity` is only set for
+ * semantic hits (cosine similarity in [−1, 1], generally ~0.3–0.9
+ * for meaningful matches on bge-m3). The merge ordering guarantees
+ * every 'exact' appears before every 'semantic', satisfying the
+ * product requirement that exact matches outrank semantic ones.
+ */
+export interface ThreadSearchHit {
+  thread: Thread;
+  kind: 'exact' | 'semantic';
+  similarity?: number;
+}
+
+/** Default page size for Older and Archived buckets. */
+export const DEFAULT_THREAD_PAGE_SIZE = 25;
+
+/**
+ * Recent-bucket cutoff. 3 days = roughly the "still actively working
+ * on it" window for most users — anything newer is something they're
+ * likely to want one click away at the top of the drawer, anything
+ * older is reference material and lives behind infinite-scroll.
+ */
+export const RECENT_THREAD_CUTOFF_MS = 3 * 24 * 60 * 60 * 1000;
+
+/**
  * Per-user preferences persisted on `profiles.settings` (jsonb). Keeps
  * prefs that should follow the account across browsers — API keys and
  * the master-password KDF remain per-device by design.
@@ -360,13 +407,218 @@ export class SupabaseService {
     return merged;
   }
 
-  async listThreads(): Promise<Thread[]> {
+  /**
+   * One page of threads. `nextCursor === null` means the query has been
+   * fully drained; any truthy value is what the caller should pass as
+   * `cursor` to fetch the next page.
+   */
+  async listRecentThreads(cutoff: string): Promise<Thread[]> {
+    // Everything touched within the "active" window — hardcoded by the
+    // caller so the boundary doesn't drift second-to-second and flip
+    // threads at the edge between Recent and Older as seconds tick by.
+    // Two-column ordering mirrors listOlderThreads so a thread the
+    // user just updated doesn't hop position when it transitions.
     const { data, error } = await this.client
       .from('threads')
       .select('*')
-      .order('updated_at', { ascending: false });
+      .eq('archived', false)
+      .gte('updated_at', cutoff)
+      .order('updated_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(500);
     if (error) throw new SupabaseError(error.message);
     return (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
+  }
+
+  async listOlderThreads(opts: {
+    cutoff: string;
+    cursor: ThreadCursor | null;
+    pageSize?: number;
+  }): Promise<ThreadPage> {
+    return this.pageThreads({
+      archived: false,
+      cutoff: opts.cutoff,
+      cursor: opts.cursor,
+      pageSize: opts.pageSize ?? DEFAULT_THREAD_PAGE_SIZE,
+    });
+  }
+
+  async listArchivedThreads(opts: {
+    cursor: ThreadCursor | null;
+    pageSize?: number;
+  }): Promise<ThreadPage> {
+    return this.pageThreads({
+      archived: true,
+      cutoff: null,
+      cursor: opts.cursor,
+      pageSize: opts.pageSize ?? DEFAULT_THREAD_PAGE_SIZE,
+    });
+  }
+
+  /**
+   * One-shot "window" fetch: every thread in `bucket` from the head of
+   * the list down to (and including) `target`. Used when the user
+   * clicks a search result that lives past the currently-loaded
+   * pagination cursor — we need to materialise enough of the list to
+   * put a DOM node at the target so `scrollIntoView` has something to
+   * aim at.
+   *
+   * Returning rows in the same ordering the bucket uses lets the
+   * caller merge without re-sorting. The archived bucket has no
+   * cutoff; the older bucket only window-fetches within the "before
+   * the cutoff" range (a Recent-bucket target should already be in
+   * memory — recent is eager-loaded).
+   */
+  async listThreadsSince(opts: {
+    target: ThreadCursor;
+    archived: boolean;
+    cutoff: string | null;
+  }): Promise<Thread[]> {
+    let q = this.client
+      .from('threads')
+      .select('*')
+      .eq('archived', opts.archived)
+      .gte('updated_at', opts.target.updated_at)
+      .order('updated_at', { ascending: false })
+      .order('id', { ascending: false });
+    if (opts.cutoff) q = q.lt('updated_at', opts.cutoff);
+    const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
+  }
+
+  private async pageThreads(opts: {
+    archived: boolean;
+    cutoff: string | null;
+    cursor: ThreadCursor | null;
+    pageSize: number;
+  }): Promise<ThreadPage> {
+    // Fetch pageSize+1 rows so we can derive hasMore without a second
+    // count query — if the server returned pageSize+1 rows we know at
+    // least one page remains, otherwise we're at the tail.
+    let q = this.client
+      .from('threads')
+      .select('*')
+      .eq('archived', opts.archived)
+      .order('updated_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(opts.pageSize + 1);
+    if (opts.cutoff) q = q.lt('updated_at', opts.cutoff);
+    if (opts.cursor) {
+      // Composite cursor: (updated_at, id) strictly-less-than the
+      // cursor, with id tie-break. PostgREST doesn't have row-value
+      // comparison sugar, so spell it as
+      // `updated_at < c.updated_at OR (updated_at = c.updated_at AND id < c.id)`.
+      const c = opts.cursor;
+      q = q.or(
+        `updated_at.lt.${c.updated_at},and(updated_at.eq.${c.updated_at},id.lt.${c.id})`
+      );
+    }
+    const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
+    const hasMore = rows.length > opts.pageSize;
+    const page = hasMore ? rows.slice(0, opts.pageSize) : rows;
+    const last = page[page.length - 1];
+    const nextCursor: ThreadCursor | null =
+      hasMore && last ? { updated_at: last.updated_at, id: last.id } : null;
+    return { rows: page, nextCursor };
+  }
+
+  /**
+   * Merged exact + semantic search across all the user's threads.
+   *
+   * Exact hits are ILIKE matches against `title` (substring, case-
+   * insensitive) — same escape pattern as `searchMemories`. Semantic
+   * hits come from the `search_threads_by_embedding` RPC against
+   * `title + summary` embeddings populated by the background workers.
+   * Both queries run in parallel; the merge puts every exact hit
+   * before every semantic hit, deduping by id on the way through so a
+   * thread can't appear twice.
+   *
+   * `queryEmbedding` may be null — callers that couldn't produce an
+   * embedding (Venice error, offline) still get useful exact-match
+   * results instead of an empty list. Archived threads are included
+   * in both halves; the UI greys them.
+   */
+  async searchThreads(opts: {
+    query: string;
+    queryEmbedding: number[] | null;
+    limit?: number;
+  }): Promise<ThreadSearchHit[]> {
+    const query = opts.query.trim();
+    if (query.length === 0) return [];
+    const limit = opts.limit ?? 50;
+
+    const safe = query.replace(/([,()])/g, '\\$1');
+    const pattern = `%${safe}%`;
+    const exactPromise = this.client
+      .from('threads')
+      .select('*')
+      .ilike('title', pattern)
+      .order('updated_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(limit);
+
+    const semanticPromise = opts.queryEmbedding
+      ? this.client.rpc('search_threads_by_embedding', {
+          query_embedding: opts.queryEmbedding,
+          match_limit: limit,
+        })
+      : Promise.resolve({ data: [] as unknown[], error: null });
+
+    const [exactRes, semRes] = await Promise.all([exactPromise, semanticPromise]);
+    if (exactRes.error) throw new SupabaseError(exactRes.error.message);
+    // A semantic failure shouldn't kill the whole search — fall back to
+    // exact-only. Mirrors how memory_search falls back when Venice is
+    // unreachable.
+    const semanticRows =
+      semRes.error !== null
+        ? []
+        : ((semRes.data ?? []) as {
+            id: string;
+            title: string;
+            archived: boolean;
+            updated_at: string;
+            similarity: number;
+          }[]);
+
+    const exactThreads = (exactRes.data ?? []).map((row) =>
+      coerceThread(row as Record<string, unknown>)
+    );
+
+    const out: ThreadSearchHit[] = [];
+    const seen = new Set<string>();
+    for (const t of exactThreads) {
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      out.push({ thread: t, kind: 'exact' });
+      if (out.length >= limit) return out;
+    }
+    for (const row of semanticRows) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      // The RPC projection gives us enough for the row UI; fields the
+      // result list doesn't render are stubbed so downstream code that
+      // wants a full Thread still gets a valid shape.
+      out.push({
+        thread: {
+          id: row.id,
+          user_id: '',
+          title: row.title,
+          model: null,
+          reasoning_effort: null,
+          tools_enabled: false,
+          archived: row.archived,
+          created_at: row.updated_at,
+          updated_at: row.updated_at,
+        },
+        kind: 'semantic',
+        similarity: row.similarity,
+      });
+      if (out.length >= limit) return out;
+    }
+    return out;
   }
 
   async createThread(
@@ -695,6 +947,91 @@ export class SupabaseService {
       p_thread_id: threadId,
       p_holder_id: holderId,
       p_msg_id: msgId,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Atomically claim the oldest thread that hasn't been summarised
+   * through its latest terminal assistant message. Returns null when
+   * nothing qualifies. The returned `terminalMsgId` is the specific
+   * message we should summarise up to — passed back to
+   * `saveThreadSummaryIfClaimed` so a race where the user adds more
+   * turns mid-summary simply queues the thread for the next cycle.
+   */
+  async claimNextThreadForSummary(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{ threadId: string; terminalMsgId: string } | null> {
+    const { data, error } = await this.client.rpc('claim_next_thread_for_summary', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as { thread_id: string; terminal_msg_id: string }[];
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return { threadId: row.thread_id, terminalMsgId: row.terminal_msg_id };
+  }
+
+  /**
+   * Save the generated summary IF our claim is still valid. The RPC
+   * guards on holder + TTL + user_id. A false return means the claim
+   * expired or another device took over — caller drops the work.
+   */
+  async saveThreadSummaryIfClaimed(
+    threadId: string,
+    holderId: string,
+    summary: string,
+    msgId: string
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('save_thread_summary_if_claimed', {
+      p_thread_id: threadId,
+      p_holder_id: holderId,
+      p_summary: summary,
+      p_msg_id: msgId,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Claim the next thread awaiting a title+summary embedding. Same
+   * shape as `claimNextPendingMemory` but against threads. Rows with
+   * the placeholder title AND no summary yet are deliberately skipped
+   * — they haven't settled yet and embedding empty-ish text would
+   * waste a Venice call.
+   */
+  async claimNextPendingThreadForEmbedding(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{ id: string; title: string; summary: string | null } | null> {
+    const { data, error } = await this.client.rpc(
+      'claim_next_pending_thread_for_embedding',
+      { p_holder_id: holderId, p_ttl_seconds: ttlSeconds }
+    );
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as { id: string; title: string; summary: string | null }[];
+    return rows.length > 0 ? rows[0] : null;
+  }
+
+  /**
+   * Save a thread embedding IF our claim is still valid. False = the
+   * row was edited or re-claimed; caller skips and loops. Never throws
+   * on a race, only on a network / SQL error.
+   */
+  async saveThreadEmbedding(
+    id: string,
+    holderId: string,
+    embedding: number[],
+    model: string
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('save_thread_embedding_if_claimed', {
+      p_id: id,
+      p_holder_id: holderId,
+      p_embedding: embedding,
+      p_embedding_model: model,
     });
     if (error) throw new SupabaseError(error.message);
     return data === true;

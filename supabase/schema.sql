@@ -285,6 +285,77 @@ create index if not exists threads_reflection_claim_idx
   on public.threads (reflection_claim_expires_at)
   where reflection_holder_id is not null;
 
+-- Summarisation + search pipeline ----------------------------------------
+--
+-- Two workers cooperate to make conversations searchable:
+--
+--   1. The summary agent (src/lib/agents/summary/*) takes a thread and
+--      writes a 2–3 sentence topical summary into `threads.summary`.
+--      `last_summarised_msg_id` points at the terminal assistant
+--      message we've summarised up to — same shape as
+--      `last_reflected_msg_id`, same reasons (stable ids, no clock
+--      skew). The per-thread claim columns mirror the reflection
+--      agent exactly; the top-rail lease is a separate worker_kind
+--      ('summary') so a device can hold summary + reflection +
+--      embedding leases simultaneously.
+--
+--   2. The embeddings worker (src/lib/embeddings/*) then embeds
+--      `title + summary` into `embedding` so the search RPC below can
+--      cosine-rank threads against a query vector. The trigger in
+--      `clear_thread_embedding_on_change` wipes the embedding when
+--      either input changes, so the worker picks the row up again on
+--      its next poll.
+--
+-- `embedding` is vector(2048) to match memories — same padding helper,
+-- same forward-compat headroom for a future native-2048 model. No HNSW
+-- index for the same reason memories skip it: per-user thread counts
+-- stay tiny (hundreds at most), so seq scan is fast enough; halfvec +
+-- HNSW is the escape hatch if that ever stops being true.
+alter table public.threads
+  add column if not exists summary text,
+  add column if not exists last_summarised_msg_id uuid references public.messages(id) on delete set null,
+  add column if not exists summary_claim_holder text,
+  add column if not exists summary_claim_expires timestamptz,
+  add column if not exists embedding vector(2048),
+  add column if not exists embedding_model text,
+  add column if not exists embedding_claim_holder text,
+  add column if not exists embedding_claim_expires timestamptz;
+
+-- Partial claim indexes: same shape as the reflection one. Only carry
+-- live claims so the index stays tiny in steady state.
+create index if not exists threads_summary_claim_idx
+  on public.threads (summary_claim_expires)
+  where summary_claim_holder is not null;
+
+create index if not exists threads_embedding_claim_idx
+  on public.threads (embedding_claim_expires)
+  where embedding_claim_holder is not null;
+
+-- Invalidate the embedding whenever its inputs change. Pending =
+-- `embedding is null`, so the embeddings worker will re-embed on its
+-- next poll. We null the claim columns too — an in-flight worker save
+-- would otherwise land a stale embedding, since its guard checks
+-- `claim_holder = $me and claim_expires > now()` and both of those
+-- would still match without this clear. Same invariant as the memories
+-- trigger.
+create or replace function public.clear_thread_embedding_on_change()
+  returns trigger language plpgsql as $$
+begin
+  if new.title is distinct from old.title
+     or new.summary is distinct from old.summary then
+    new.embedding := null;
+    new.embedding_model := null;
+    new.embedding_claim_holder := null;
+    new.embedding_claim_expires := null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clear_thread_embedding_on_change on public.threads;
+create trigger clear_thread_embedding_on_change
+  before update on public.threads
+  for each row execute function public.clear_thread_embedding_on_change();
+
 -- memories ---------------------------------------------------------------
 --
 -- Free-form notes the user (or the LLM via the memory_* tools) can CRUD
@@ -784,6 +855,169 @@ begin
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+-- Summarisation pipeline RPCs -------------------------------------------
+--
+-- Mirror of the reflection pair, but the predicate is "needs a new
+-- summary" — `last_summarised_msg_id` distinct from the most recent
+-- terminal assistant message. No token-volume guard here: even a
+-- short "fix the typo on this button" thread is worth a title-scale
+-- summary so search can semantically match against phrasing the user
+-- typed that never made it into the title. Venice cost of a fast-
+-- model call on a tiny thread is a rounding error.
+drop function if exists public.claim_next_thread_for_summary(text, int);
+create or replace function public.claim_next_thread_for_summary(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, terminal_msg_id uuid)
+language sql security invoker as $$
+  with candidate as (
+    select t.id as thread_id, term.msg_id as terminal_msg_id
+      from public.threads t
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+     where t.user_id = auth.uid()
+       and term.msg_id is distinct from t.last_summarised_msg_id
+       and (t.summary_claim_expires is null
+            or t.summary_claim_expires < now())
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set summary_claim_holder = p_holder_id,
+         summary_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id;
+$$;
+
+-- Save a completed summary IF the claim is still ours. The stamped
+-- msg_id is what we summarised up to; a new terminal message after
+-- that re-qualifies the thread on the next poll. Returns false when
+-- the claim expired or was stolen — the worker drops the work.
+drop function if exists public.save_thread_summary_if_claimed(uuid, text, text, uuid);
+create or replace function public.save_thread_summary_if_claimed(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_summary text,
+  p_msg_id uuid
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.threads
+     set summary = p_summary,
+         last_summarised_msg_id = p_msg_id,
+         summary_claim_holder = null,
+         summary_claim_expires = null
+   where id = p_thread_id
+     and user_id = auth.uid()
+     and summary_claim_holder = p_holder_id
+     and summary_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Thread embedding pipeline RPCs ----------------------------------------
+--
+-- The embeddings worker is multi-source: memories and now threads.
+-- This claim RPC returns the inputs the worker will concatenate —
+-- `title` plus `summary` — so the worker doesn't need a second round
+-- trip to read them. A freshly-created thread with its placeholder
+-- title and no summary yet is skipped (empty string wouldn't produce
+-- a meaningful embedding); the worker will pick it up on a later
+-- poll once either the autoTitle or the summary agent has landed.
+drop function if exists public.claim_next_pending_thread_for_embedding(text, int);
+create or replace function public.claim_next_pending_thread_for_embedding(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, title text, summary text)
+language sql security invoker as $$
+  with candidate as (
+    select t.id
+      from public.threads t
+     where t.user_id = auth.uid()
+       and t.embedding is null
+       and (t.embedding_claim_expires is null
+            or t.embedding_claim_expires < now())
+       and (t.title is distinct from 'New conversation' or t.summary is not null)
+     order by t.updated_at desc
+     limit 1
+     for update skip locked
+  )
+  update public.threads t
+     set embedding_claim_holder = p_holder_id,
+         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.id
+  returning t.id, t.title, t.summary;
+$$;
+
+-- Save the thread embedding IF our claim is still valid. Same shape
+-- as save_memory_embedding_if_claimed — false = skip, not an error.
+drop function if exists public.save_thread_embedding_if_claimed(uuid, text, vector, text);
+create or replace function public.save_thread_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.threads
+     set embedding = p_embedding,
+         embedding_model = p_embedding_model,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where id = p_id
+     and user_id = auth.uid()
+     and embedding_claim_holder = p_holder_id
+     and embedding_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Cosine-similarity search over threads. Returns a small projection
+-- (id + the columns the drawer renders) plus the raw similarity score
+-- so the client can merge this into its exact-match list without a
+-- second fetch. Archived threads are included — the drawer greys them
+-- and the client-side rank stays "exact before semantic" regardless
+-- of which bucket each hit lives in.
+drop function if exists public.search_threads_by_embedding(vector, int);
+create or replace function public.search_threads_by_embedding(
+  query_embedding vector(2048),
+  match_limit int
+) returns table (
+  id uuid,
+  title text,
+  archived boolean,
+  updated_at timestamptz,
+  similarity real
+)
+language sql stable security invoker as $$
+  select id, title, archived, updated_at,
+         (1 - (embedding <=> query_embedding))::real as similarity
+    from public.threads
+   where user_id = auth.uid()
+     and embedding is not null
+   order by embedding <=> query_embedding asc
+   limit match_limit
+$$;
 
 -- Confidence adjustment RPCs ---------------------------------------------
 --

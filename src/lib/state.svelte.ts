@@ -26,6 +26,7 @@ import { VeniceClient } from './venice';
 import { saveSession, clearSession } from './session';
 import { embeddingManager } from './embeddings/manager';
 import { reflectionManager } from './agents/reflection/manager';
+import { summaryManager } from './agents/summary/manager';
 import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_TIER,
@@ -152,21 +153,24 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   // yet the worker exits cleanly and state.svelte.ts doesn't need to
   // retry; the next unlock / sign-in will call activate() again.
   //
-  // The two workers run concurrently: they partition the shared
-  // `worker_leases` table on `worker_kind` so one device can hold
-  // both the embedding lease and the reflection lease
-  // simultaneously without contention.
+  // The workers run concurrently: they partition the shared
+  // `worker_leases` table on `worker_kind` ('embedding' / 'reflection'
+  // / 'summary') so one device can hold all three leases
+  // simultaneously without contention. The summary worker feeds the
+  // drawer's search feature — it writes `threads.summary`, which the
+  // embeddings worker then picks up to build the searchable vector.
   void embeddingManager.start({ supabase: app.supabase, config });
   void reflectionManager.start({ supabase: app.supabase, config });
+  void summaryManager.start({ supabase: app.supabase, config });
 }
 
 export function lock(): void {
-  // Tear both workers down before clearing services — each manager
+  // Tear all workers down before clearing services — each manager
   // releases its Web Lock here so a queued tab can take over as soon
-  // as we're gone. Order doesn't matter; the two locks are
-  // independent.
+  // as we're gone. Order doesn't matter; the locks are independent.
   embeddingManager.stop();
   reflectionManager.stop();
+  summaryManager.stop();
   app.config = null;
   app.supabase = null;
   app.venice = null;

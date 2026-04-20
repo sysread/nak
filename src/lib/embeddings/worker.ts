@@ -28,6 +28,7 @@ import { VeniceClient } from '../venice';
 import { SupabaseService } from '../supabase';
 import type { EmbeddingSource } from './types';
 import { createMemoriesSource } from './sources/memories';
+import { createThreadsSource } from './sources/threads';
 import { LeaseCoordinator } from './lease';
 import {
   runOneCycle,
@@ -133,7 +134,10 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     heartbeatMs: msg.leaseHeartbeatMs,
   });
 
-  const sources: EmbeddingSource[] = [createMemoriesSource(supabase)];
+  const sources: EmbeddingSource[] = [
+    createMemoriesSource(supabase),
+    createThreadsSource(supabase),
+  ];
   const napConfig: NapConfig = {
     leasePollMs: msg.leasePollMs,
     idleIntervalMs: msg.idleIntervalMs,
@@ -141,13 +145,27 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     rateLimitBackoffMs: msg.rateLimitBackoffMs,
   };
 
+  const onLeaseLost = (): void => {
+    post({ type: 'log', level: 'warn', message: 'lease lost — re-entering polling' });
+  };
+
   try {
-    // Drive every registered source through the same cycle loop. Today
-    // there's only `memories` — but the outer for-of is the shape a
-    // future conversation-summary source slots into without touching
-    // this file.
-    for (const source of sources) {
-      while (!signal.aborted) {
+    // Round-robin across sources: each outer iteration runs one cycle
+    // per source before sleeping. A prior version of this file ran an
+    // inner `while(!aborted)` per source, which had the unfortunate
+    // property of starving every source after the first — memories
+    // would drain forever and threads would never get a turn. Fair
+    // scheduling matters the moment there's more than one source.
+    //
+    // Sleeping policy: if every source reported the same "nothing to
+    // do" result (polling or empty-queue), we sleep for the longest
+    // of their nap intervals. If any source made progress, we don't
+    // sleep at all — drain. Lease acquisition is special-cased: it's
+    // always zero-nap so we get straight to claiming a row.
+    while (!signal.aborted) {
+      let longestNap = 0;
+      for (const source of sources) {
+        if (signal.aborted) break;
         const ctx: CycleContext = {
           source,
           venice,
@@ -156,22 +174,14 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
           embeddingModel: msg.embeddingModel,
           rowClaimTtlSeconds: msg.rowClaimTtlSeconds,
           signal,
-          onLeaseLost: () => {
-            // Next cycle's top check sees isHolding===false and falls
-            // into the polling branch; no special wake-up needed.
-            post({
-              type: 'log',
-              level: 'warn',
-              message: 'lease lost — re-entering polling',
-            });
-          },
+          onLeaseLost,
         };
         const result = await runOneCycle(ctx);
         post({ type: 'progress', source: source.name, result });
         const nap = napForResult(result, napConfig);
-        if (nap > 0) await sleep(nap, signal);
+        if (nap > longestNap) longestNap = nap;
       }
-      if (signal.aborted) break;
+      if (longestNap > 0) await sleep(longestNap, signal);
     }
   } finally {
     // Graceful release — best-effort, swallows errors. The server-side

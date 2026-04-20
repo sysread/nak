@@ -30,3 +30,7 @@ export type {
   RecallNote,
 } from './recall/agent';
 export { RECALL_PROMPT } from './recall/prompt';
+
+export { SummaryAgent } from './summary/agent';
+export type { SummaryInput, SummaryOutput } from './summary/agent';
+export { SUMMARY_PROMPT } from './summary/prompt';

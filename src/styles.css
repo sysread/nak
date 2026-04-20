@@ -616,8 +616,19 @@ h1 {
   display: inline-flex;
 }
 
+/* The "+ New thread" affordance in the topbar. Previously hidden on
+   desktop when the drawer had its own in-header button — once the
+   drawer traded that button for the search input, this is the only
+   new-thread button at any viewport, so it's always visible. Accent
+   styling below applies on every viewport too. */
 .new-thread-mini {
-  display: none;
+  display: inline-flex;
+  color: var(--accent);
+  border-color: var(--accent-weak);
+}
+.new-thread-mini:hover:not(:disabled),
+.new-thread-mini:focus-visible:not(:disabled) {
+  background: var(--accent-weak);
 }
 
 @media (max-width: 720px) {
@@ -672,21 +683,6 @@ h1 {
   .shell.drawer-open .drawer-backdrop {
     background: rgba(0, 0, 0, 0.45);
     pointer-events: auto;
-  }
-
-  .new-thread-mini {
-    display: inline-flex;
-  }
-
-  /* Subtle "this will open a new chat" hint — a softer outline than the
-     hamburger so it visually reads as a secondary, adjacent affordance. */
-  .new-thread-mini {
-    color: var(--accent);
-    border-color: var(--accent-weak);
-  }
-  .new-thread-mini:hover:not(:disabled),
-  .new-thread-mini:focus-visible:not(:disabled) {
-    background: var(--accent-weak);
   }
 
   /* The chat column owns the full viewport on mobile. Tighten the chrome. */
@@ -890,6 +886,114 @@ h1 {
   border-radius: 999px;
   background: var(--bg-2);
   color: var(--muted);
+}
+
+/* Drawer header now owns the search input instead of the old
+   "+ New thread" button. Keep the padding structure identical so the
+   border-bottom and vertical rhythm still line up with the rest of
+   the sidebar — only the inner control has changed. */
+.sidebar-header {
+  padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-search-input {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 0.88rem;
+}
+.sidebar-search-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-weak);
+}
+/* Hide the UA-provided `X` clear button on Chromium/WebKit — we honor
+   Escape instead, and the built-in glyph clashes with the surrounding
+   type style. */
+.sidebar-search-input::-webkit-search-cancel-button { display: none; }
+
+/* Recent / Older subheads above the paginated buckets. Visually
+   identical to `.archive-toggle`'s typography (uppercase, muted,
+   tracking) minus the chevron — they're labels, not toggles. */
+.bucket-header {
+  margin: 0.5rem 0 0.2rem;
+  padding: 0.35rem 0.55rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+}
+
+/* Pagination sentinel. 1px min-height keeps it in the layout even
+   when empty so IntersectionObserver has something to observe; the
+   centered Scanner renders inside when a page is loading. */
+.sentinel {
+  min-height: 1px;
+  padding: 0.35rem 0.55rem;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* Search-mode row variants. No kebab slot, so the full width is the
+   button. The `.focused` class (arrow-key nav) uses a subtle outline
+   that reads as "keyboard focus" without fighting the `.active`
+   highlight for the currently-open thread. */
+.thread-row.search-result {
+  padding-right: 0;
+}
+.thread-row.search-result .thread {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.thread-row.search-result .thread.focused {
+  outline: 2px solid var(--accent-weak);
+  outline-offset: -2px;
+}
+
+.search-result-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Small right-aligned badge that tells the user why a row matched.
+   "exact" is muted-neutral; "semantic" uses the accent tint so the
+   eye can skim the list and spot the primary hits. */
+.search-result-kind {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--bg-2);
+}
+
+/* Archived rows within search results: grey them out so the user
+   can see at a glance "this hit is in my archive". 0.55 opacity
+   keeps the text readable while unmistakably demoted. */
+.archived-result .thread {
+  opacity: 0.55;
+}
+
+/* Loading indicator when a search has been fired but not yet
+   returned. Reuses `.sentinel`'s layout — centered Scanner, no
+   background — but needs its own selector so the surrounding
+   search-mode branch can style it independently. */
+.search-status {
+  display: flex;
+  justify-content: center;
+  padding: 0.8rem 0;
 }
 
 /* End-of-conversation marker for archived chats. Centered, italic,

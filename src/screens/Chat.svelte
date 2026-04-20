@@ -43,7 +43,14 @@
     setWebSearchEnabled,
   } from '$lib/state.svelte';
   import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
-  import type { Thread, Message } from '$lib/supabase';
+  import {
+    DEFAULT_THREAD_PAGE_SIZE,
+    RECENT_THREAD_CUTOFF_MS,
+    type Thread,
+    type ThreadCursor,
+    type ThreadSearchHit,
+    type Message,
+  } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
   import {
     DEFAULT_REASONING_EFFORT,
@@ -51,7 +58,9 @@
     MODELS,
     TIERS,
     UTILITY_TIER,
+    VENICE_EMBEDDING_MODEL,
     findModelById,
+    padEmbeddingForStorage,
     resolveReasoningEffort,
     resolveTier,
     type ModelTier,
@@ -72,15 +81,178 @@
   let sessionLoaded = $state(false);
   let showSettings = $state(false);
 
-  let threads = $state<Thread[]>([]);
   let activeThreadId = $state<string | null>(null);
   let messages = $state<Message[]>([]);
   let streamingText = $state('');
 
-  // Drawer sections: drafts live in-memory and always belong with Chats;
-  // the server-backed partition is straight off the `archived` flag.
-  const activeThreads = $derived(threads.filter((t) => !t.archived));
-  const archivedThreads = $derived(threads.filter((t) => t.archived));
+  // Drawer state: four separate buckets.
+  //   drafts         — local-only threads the user has started but not
+  //                    sent anything in. Never in Supabase.
+  //   recentThreads  — non-archived, `updated_at >= recentCutoff`.
+  //                    Eagerly loaded; we expect a handful.
+  //   olderThreads   — non-archived, `updated_at <  recentCutoff`.
+  //                    Paginated infinite-scroll (see olderCursor).
+  //   archivedPage   — archived threads. Paginated the same way; the
+  //                    section starts collapsed, the user unfolds it
+  //                    to see/scroll.
+  //
+  // The partition lives here rather than as $derived-filters over a flat
+  // `threads` list because pagination means "not all threads are
+  // loaded." A single source of truth would silently drop threads the
+  // drawer hasn't fetched yet, and "active thread" bookkeeping would
+  // start producing wrong answers for deep-in-Older conversations.
+  let drafts = $state<Thread[]>([]);
+  let recentThreads = $state<Thread[]>([]);
+  let olderThreads = $state<Thread[]>([]);
+  let archivedPage = $state<Thread[]>([]);
+
+  // Pagination cursors + flags. `null` cursor = "haven't fetched yet OR
+  // no more pages". The distinction lives on `*HasMore`: true until a
+  // fetch returns `nextCursor === null`, at which point we stop hitting
+  // the sentinel.
+  let olderCursor = $state<ThreadCursor | null>(null);
+  let olderHasMore = $state(true);
+  let olderLoading = $state(false);
+  let archivedCursor = $state<ThreadCursor | null>(null);
+  let archivedHasMore = $state(true);
+  let archivedLoading = $state(false);
+
+  // Recent-bucket cutoff — pinned at refresh time so a thread at the
+  // 72h boundary doesn't ping-pong between Recent and Older every
+  // second. Recomputed whenever we do a full `refreshThreads` (which is
+  // already an explicit "reload" moment from the user's perspective).
+  let recentCutoff = $state<string>(new Date(Date.now() - RECENT_THREAD_CUTOFF_MS).toISOString());
+
+  /** All threads currently loaded into any bucket, drafts included. */
+  const loadedThreads = $derived<Thread[]>([
+    ...drafts,
+    ...recentThreads,
+    ...olderThreads,
+    ...archivedPage,
+  ]);
+
+  function findThread(id: string): Thread | undefined {
+    return loadedThreads.find((t) => t.id === id);
+  }
+
+  /**
+   * Apply a partial update to whichever bucket currently holds `id`.
+   * No-op if the thread isn't loaded (e.g. a realtime update for a
+   * thread buried deep in Older that the user hasn't paginated to
+   * yet). Safe to call for a patch that doesn't cross bucket
+   * boundaries — use `rebucketThread` when archived or updated_at
+   * might cause a bucket migration.
+   */
+  function patchThread(id: string, patch: Partial<Thread>): void {
+    drafts = drafts.map((t) => (t.id === id ? { ...t, ...patch } : t));
+    recentThreads = recentThreads.map((t) => (t.id === id ? { ...t, ...patch } : t));
+    olderThreads = olderThreads.map((t) => (t.id === id ? { ...t, ...patch } : t));
+    archivedPage = archivedPage.map((t) => (t.id === id ? { ...t, ...patch } : t));
+  }
+
+  /** Remove a thread from every bucket. */
+  function removeThread(id: string): void {
+    drafts = drafts.filter((t) => t.id !== id);
+    recentThreads = recentThreads.filter((t) => t.id !== id);
+    olderThreads = olderThreads.filter((t) => t.id !== id);
+    archivedPage = archivedPage.filter((t) => t.id !== id);
+  }
+
+  /** Classify a thread into its current bucket. Drafts are a special
+   *  case — their user-facing placement is always "top of Recent" but
+   *  internally they live in the drafts array. */
+  function bucketFor(t: Thread): 'draft' | 'recent' | 'older' | 'archived' {
+    if (t.isDraft) return 'draft';
+    if (t.archived) return 'archived';
+    return t.updated_at >= recentCutoff ? 'recent' : 'older';
+  }
+
+  /**
+   * Insert or move a server-sourced thread into the right bucket. Used
+   * by the realtime subscription's onInsert/onUpdate handlers. Pulls
+   * the thread out of every other bucket first — a cross-bucket
+   * migration (archive toggle; an `updated_at` bump that crosses the
+   * 3-day cutoff) is exactly "remove from old, insert into new."
+   */
+  function rebucketThread(t: Thread): void {
+    // Strip from every bucket so a cross-bucket migration doesn't
+    // leave a stale copy behind.
+    recentThreads = recentThreads.filter((x) => x.id !== t.id);
+    olderThreads = olderThreads.filter((x) => x.id !== t.id);
+    archivedPage = archivedPage.filter((x) => x.id !== t.id);
+    switch (bucketFor(t)) {
+      case 'recent':
+        recentThreads = insertByUpdatedAtDesc(recentThreads, t);
+        break;
+      case 'older':
+        // Only slot into Older if the thread sorts ahead of the
+        // current pagination cursor. A thread the user hasn't scrolled
+        // down to yet shouldn't jump into view from a realtime echo —
+        // it'll load when the user scrolls.
+        if (!olderCursor || sortsAheadOfCursor(t, olderCursor)) {
+          olderThreads = insertByUpdatedAtDesc(olderThreads, t);
+        }
+        break;
+      case 'archived':
+        if (!archivedCursor || sortsAheadOfCursor(t, archivedCursor)) {
+          archivedPage = insertByUpdatedAtDesc(archivedPage, t);
+        }
+        break;
+      case 'draft':
+        // Drafts don't come from the server — nothing to do.
+        break;
+    }
+  }
+
+  function sortsAheadOfCursor(t: Thread, c: ThreadCursor): boolean {
+    // (updated_at desc, id desc) ordering: a row "ahead of" the cursor
+    // is strictly greater than the cursor under that ordering.
+    if (t.updated_at > c.updated_at) return true;
+    if (t.updated_at < c.updated_at) return false;
+    return t.id > c.id;
+  }
+
+  function insertByUpdatedAtDesc(arr: Thread[], t: Thread): Thread[] {
+    // Keep the existing ordering (already sorted desc). Binary insert
+    // would be faster in principle, but the bucket sizes are small
+    // enough that a linear scan is simpler and just as quick.
+    const idx = arr.findIndex((x) => t.updated_at > x.updated_at);
+    if (idx === -1) return [...arr, t];
+    return [...arr.slice(0, idx), t, ...arr.slice(idx)];
+  }
+
+  function mergeByUpdatedAtDesc(a: Thread[], b: Thread[]): Thread[] {
+    // Merge two already-sorted-desc lists into one, deduping by id.
+    // Used by the scroll-to-search-result path (`openSearchResult`)
+    // which window-fetches a range of threads and needs to splice
+    // them into the paginated list without upsetting ordering.
+    const out: Thread[] = [];
+    const seen = new Set<string>();
+    let i = 0;
+    let j = 0;
+    while (i < a.length && j < b.length) {
+      if (seen.has(a[i].id)) {
+        i++;
+        continue;
+      }
+      if (seen.has(b[j].id)) {
+        j++;
+        continue;
+      }
+      if (a[i].updated_at >= b[j].updated_at) {
+        out.push(a[i]);
+        seen.add(a[i].id);
+        i++;
+      } else {
+        out.push(b[j]);
+        seen.add(b[j].id);
+        j++;
+      }
+    }
+    for (; i < a.length; i++) if (!seen.has(a[i].id)) { out.push(a[i]); seen.add(a[i].id); }
+    for (; j < b.length; j++) if (!seen.has(b[j].id)) { out.push(b[j]); seen.add(b[j].id); }
+    return out;
+  }
 
   // Per-row action menu and long-press state for the drawer. Long-press
   // opens the menu on touch; the trailing click is suppressed via
@@ -150,17 +322,11 @@
     messages = [...messages, msg];
   }
 
-  // Match the ordering `refreshThreads` produces so live realtime
-  // updates don't contradict the next full refetch: drafts first
-  // (local-only, preserved across Supabase round-trips), then real
-  // threads newest-first.
-  function sortThreads(arr: Thread[]): Thread[] {
-    const drafts: Thread[] = [];
-    const real: Thread[] = [];
-    for (const t of arr) (t.isDraft ? drafts : real).push(t);
-    real.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-    return [...drafts, ...real];
-  }
+  // Insertion ordering across the three buckets is "updated_at desc,
+  // id desc tiebreak" — same as the server-side ORDER BY in the
+  // pagination RPCs. The single-row insertion helper lives on
+  // `insertByUpdatedAtDesc` below; no caller needs the full re-sort
+  // variant, so it's not exposed.
 
   // Realtime: follow the active thread's messages. Re-runs whenever
   // `activeThreadId` changes, so switching threads tears down the
@@ -170,7 +336,7 @@
   // the real id and the effect re-subscribes.
   $effect(() => {
     if (!app.supabase || !activeThreadId) return;
-    const active = threads.find((t) => t.id === activeThreadId);
+    const active = findThread(activeThreadId);
     if (active?.isDraft) return;
     const threadId = activeThreadId;
     return app.supabase.subscribeToMessages(threadId, (msg) => {
@@ -194,19 +360,28 @@
       onInsert: (t) => {
         // The device that created the thread already has it locally
         // (createThread / newThread pushed it); skip the echo.
-        if (threads.some((x) => x.id === t.id)) return;
-        threads = sortThreads([...threads, t]);
+        if (findThread(t.id)) return;
+        rebucketThread(t);
       },
       onUpdate: (t) => {
-        // Merge rather than replace so locally-added fields (`isDraft`
-        // is the only one today) aren't stomped by the server row.
-        // Realtime will never send `isDraft` anyway — it's in-memory.
-        threads = sortThreads(
-          threads.map((x) => (x.id === t.id ? { ...x, ...t } : x))
-        );
+        // Three cases rolled into one call to rebucketThread:
+        //   1. archived flipped → migrate between archivedPage and
+        //      recent/older.
+        //   2. updated_at bumped past the Recent/Older cutoff →
+        //      migrate between those two buckets.
+        //   3. Plain in-bucket update (rename, model change, tools
+        //      toggle) → remove + re-insert in the same bucket so the
+        //      updated_at ordering reflects the bump.
+        // `isDraft` is main-thread-only and never round-trips through
+        // the server, so the incoming row can't clobber it — but
+        // drafts wouldn't match realtime filters anyway (they have no
+        // row in Supabase).
+        const existing = findThread(t.id);
+        if (existing?.isDraft) return; // shouldn't happen — drafts aren't in Supabase
+        rebucketThread(t);
       },
       onDelete: (id) => {
-        threads = threads.filter((x) => x.id !== id);
+        removeThread(id);
         // Another device just deleted the thread we're looking at —
         // close it rather than keep rendering messages that no
         // longer have a home.
@@ -233,7 +408,10 @@
         void refreshThreads();
         void refreshSettings();
       } else {
-        threads = [];
+        drafts = [];
+        recentThreads = [];
+        olderThreads = [];
+        archivedPage = [];
       }
     });
     void app.supabase.getSession().then((s) => {
@@ -275,32 +453,96 @@
   // session blob — ensures we only do it on the first threads fetch.
   let threadRestoreAttempted = false;
 
+  /**
+   * Full reload of the drawer's three server-sourced buckets. Drafts
+   * are local-only and survive a refresh unchanged. Pins a fresh
+   * `recentCutoff` so the Recent/Older partition matches the data we
+   * just fetched — otherwise a thread whose `updated_at` is exactly
+   * the old cutoff could end up in the wrong bucket.
+   *
+   * The three fetches run in parallel. The Older and Archived pages
+   * each come with their first-page cursor; subsequent pages load via
+   * `loadMoreOlder` / `loadMoreArchived` on IntersectionObserver
+   * intersection.
+   */
   async function refreshThreads(): Promise<void> {
     if (!app.supabase) return;
     try {
-      const fresh = await app.supabase.listThreads();
-      // Preserve any in-memory drafts — they don't round-trip through
-      // Supabase until the user sends or renames.
-      const drafts = threads.filter((t) => t.isDraft);
-      threads = [...drafts, ...fresh];
+      const cutoff = new Date(Date.now() - RECENT_THREAD_CUTOFF_MS).toISOString();
+      recentCutoff = cutoff;
+      const [recent, older, archived] = await Promise.all([
+        app.supabase.listRecentThreads(cutoff),
+        app.supabase.listOlderThreads({ cutoff, cursor: null, pageSize: DEFAULT_THREAD_PAGE_SIZE }),
+        app.supabase.listArchivedThreads({ cursor: null, pageSize: DEFAULT_THREAD_PAGE_SIZE }),
+      ]);
+      recentThreads = recent;
+      olderThreads = older.rows;
+      olderCursor = older.nextCursor;
+      olderHasMore = older.nextCursor !== null;
+      olderLoading = false;
+      archivedPage = archived.rows;
+      archivedCursor = archived.nextCursor;
+      archivedHasMore = archived.nextCursor !== null;
+      archivedLoading = false;
       if (!threadRestoreAttempted) {
         threadRestoreAttempted = true;
         // On first load within a tab, restore whichever conversation was
-        // open last time. Only kicks in if the id still exists (the thread
-        // may have been deleted, or it was an abandoned draft).
+        // open last time. Only kicks in if the id still exists in a
+        // loaded bucket — a thread buried deep in Older would miss, and
+        // that's acceptable (the user opens the drawer and clicks it).
         const restored = getSessionThreadId();
-        if (restored && threads.some((t) => t.id === restored)) {
+        if (restored && findThread(restored)) {
           void selectThread(restored);
           return;
         }
       }
-      if (activeThreadId && !threads.find((t) => t.id === activeThreadId)) {
+      if (activeThreadId && !findThread(activeThreadId)) {
         activeThreadId = null;
         messages = [];
         setSessionThreadId(null);
       }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function loadMoreOlder(): Promise<void> {
+    if (!app.supabase || olderLoading || !olderHasMore) return;
+    olderLoading = true;
+    try {
+      const page = await app.supabase.listOlderThreads({
+        cutoff: recentCutoff,
+        cursor: olderCursor,
+        pageSize: DEFAULT_THREAD_PAGE_SIZE,
+      });
+      olderThreads = mergeByUpdatedAtDesc(olderThreads, page.rows);
+      olderCursor = page.nextCursor;
+      olderHasMore = page.nextCursor !== null;
+    } catch (err) {
+      // Surface pagination failures via the existing error banner;
+      // leaving `olderLoading` stuck true would also lock the sentinel
+      // so users can't retry.
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      olderLoading = false;
+    }
+  }
+
+  async function loadMoreArchived(): Promise<void> {
+    if (!app.supabase || archivedLoading || !archivedHasMore) return;
+    archivedLoading = true;
+    try {
+      const page = await app.supabase.listArchivedThreads({
+        cursor: archivedCursor,
+        pageSize: DEFAULT_THREAD_PAGE_SIZE,
+      });
+      archivedPage = mergeByUpdatedAtDesc(archivedPage, page.rows);
+      archivedCursor = page.nextCursor;
+      archivedHasMore = page.nextCursor !== null;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      archivedLoading = false;
     }
   }
 
@@ -316,9 +558,12 @@
       draft.model,
       draft.reasoning_effort
     );
-    // Swap the draft for the real thread in local state; keep the new id
-    // in the session so a reload sticks to the now-persisted conversation.
-    threads = threads.map((t) => (t.id === draft.id ? real : t));
+    // Swap the draft for the real thread: remove from drafts, insert
+    // into Recent (a freshly-created thread always lands inside the
+    // 3-day window). The session pointer follows the new id so a
+    // reload sticks to the now-persisted conversation.
+    drafts = drafts.filter((t) => t.id !== draft.id);
+    rebucketThread(real);
     if (activeThreadId === draft.id) {
       activeThreadId = real.id;
       setSessionThreadId(real.id);
@@ -332,9 +577,9 @@
     // (never sent, never renamed), drop it from the sidebar rather than
     // leaving an empty placeholder behind once the user moves on.
     if (activeThreadId && activeThreadId !== id) {
-      const prev = threads.find((t) => t.id === activeThreadId);
+      const prev = findThread(activeThreadId);
       if (prev?.isDraft) {
-        threads = threads.filter((t) => t.id !== activeThreadId);
+        drafts = drafts.filter((t) => t.id !== activeThreadId);
       }
     }
     activeThreadId = id;
@@ -361,7 +606,7 @@
       drawerOpen = false;
     }
     // Drafts aren't in Supabase yet — no messages to fetch.
-    const t = threads.find((x) => x.id === id);
+    const t = findThread(id);
     if (t?.isDraft) return;
     try {
       messages = await app.supabase.listMessages(id);
@@ -375,7 +620,7 @@
   const currentIsEmpty = $derived(activeThreadId !== null && messages.length === 0);
 
   const currentThread = $derived(
-    activeThreadId ? threads.find((t) => t.id === activeThreadId) ?? null : null
+    activeThreadId ? findThread(activeThreadId) ?? null : null
   );
 
   const defaultTier = $derived<ModelTier>(app.defaultModel ?? DEFAULT_TIER);
@@ -419,7 +664,10 @@
       }
       const threadId = currentThread.id;
       await app.supabase.renameThread(threadId, next);
-      threads = threads.map((t) => (t.id === threadId ? { ...t, title: next } : t));
+      // Rename also bumps `updated_at` server-side (see
+      // renameThread); re-bucket so the drawer ordering tracks.
+      const updated = { ...currentThread, title: next, updated_at: new Date().toISOString() };
+      rebucketThread(updated);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
@@ -459,7 +707,7 @@
     if ((currentThread.model ?? null) === next) return;
     const threadId = currentThread.id;
     // Update local state immediately so the UI reflects the choice.
-    threads = threads.map((t) => (t.id === threadId ? { ...t, model: next } : t));
+    patchThread(threadId, { model: next });
     // For drafts, the choice rides along in memory and gets persisted when
     // the draft materializes (on send or manual rename). Changing the
     // model alone shouldn't create a Supabase row.
@@ -488,9 +736,7 @@
     const next: ReasoningEffort | null = effort === defaultReasoning ? null : effort;
     if ((currentThread.reasoning_effort ?? null) === next) return;
     const threadId = currentThread.id;
-    threads = threads.map((t) =>
-      t.id === threadId ? { ...t, reasoning_effort: next } : t
-    );
+    patchThread(threadId, { reasoning_effort: next });
     if (currentThread.isDraft) return;
     try {
       await app.supabase.setThreadReasoningEffort(threadId, next);
@@ -537,7 +783,14 @@
       if (!title) return;
       try {
         await app.supabase.renameThread(threadId, title);
-        threads = threads.map((t) => (t.id === threadId ? { ...t, title } : t));
+        const existing = findThread(threadId);
+        if (existing) {
+          rebucketThread({
+            ...existing,
+            title,
+            updated_at: new Date().toISOString(),
+          });
+        }
       } catch {
         /* ignore */
       }
@@ -568,20 +821,20 @@
       updated_at: now,
       isDraft: true,
     };
-    threads = [draft, ...threads];
+    drafts = [draft, ...drafts];
     await selectThread(draft.id);
   }
 
   async function deleteThread(id: string): Promise<void> {
     if (!app.supabase) return;
-    const t = threads.find((x) => x.id === id);
+    const t = findThread(id);
     if (!t) return;
     closeRowMenu();
     if (!confirm('Delete this thread and all its messages?')) return;
     try {
       // Drafts only exist in memory — just drop them locally.
       if (!t.isDraft) await app.supabase.deleteThread(id);
-      threads = threads.filter((x) => x.id !== id);
+      removeThread(id);
       if (activeThreadId === id) {
         activeThreadId = null;
         messages = [];
@@ -599,15 +852,11 @@
   // can't be archived because they don't exist server-side yet.
   async function archiveThread(id: string): Promise<void> {
     if (!app.supabase) return;
-    const t = threads.find((x) => x.id === id);
+    const t = findThread(id);
     if (!t || t.isDraft) return;
     closeRowMenu();
     const nowIso = new Date().toISOString();
-    threads = sortThreads(
-      threads.map((x) =>
-        x.id === id ? { ...x, archived: true, updated_at: nowIso } : x
-      )
-    );
+    rebucketThread({ ...t, archived: true, updated_at: nowIso });
     try {
       await app.supabase.setThreadArchived(id, true);
     } catch (err) {
@@ -617,16 +866,11 @@
 
   async function restoreThread(id: string): Promise<void> {
     if (!app.supabase) return;
+    const t = findThread(id);
+    if (!t) return;
     closeRowMenu();
     const nowIso = new Date().toISOString();
-    threads = sortThreads(
-      threads.map((x) =>
-        x.id === id ? { ...x, archived: false, updated_at: nowIso } : x
-      )
-    );
-    // Auto-expand the archive section is handled elsewhere; ensure the
-    // restored thread is visible by expanding Chats implicitly (Chats is
-    // always visible) — no extra work needed.
+    rebucketThread({ ...t, archived: false, updated_at: nowIso });
     try {
       await app.supabase.setThreadArchived(id, false);
     } catch (err) {
@@ -689,9 +933,7 @@
     if (!text || !app.supabase || !app.venice) return;
     error = null;
 
-    const active = activeThreadId
-      ? threads.find((t) => t.id === activeThreadId) ?? null
-      : null;
+    const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
     // Capture the tier BEFORE materializing, since materialize mutates
     // `threads` and could make `currentThread` briefly null.
     const tier = resolveTier(active?.model ?? null, defaultTier);
@@ -707,7 +949,7 @@
     if (!active) {
       // No thread selected — create one on the fly.
       const t = await app.supabase.createThread(DEFAULT_TITLE);
-      threads = [t, ...threads];
+      rebucketThread(t);
       threadId = t.id;
       activeThreadId = t.id;
       setSessionThreadId(t.id);
@@ -744,7 +986,7 @@
       const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
         .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
         .map((p) => ({ role: 'system' as const, content: p.body }));
-      const freshThread = threads.find((t) => t.id === threadId);
+      const freshThread = findThread(threadId);
       if (!freshThread) throw new Error('thread disappeared before send');
       const currentUserId = session?.user.id ?? freshThread.user_id;
       const historyOnWire = [
@@ -829,9 +1071,7 @@
               }
             },
             onToolsEnabledChange: (enabled) => {
-              threads = threads.map((t) =>
-                t.id === threadId ? { ...t, tools_enabled: enabled } : t
-              );
+              patchThread(threadId, { tools_enabled: enabled });
               // Brief flash on the composer toolbox so a human eye
               // notices the LLM-initiated state flip. User-initiated
               // flips don't flash (the click itself is the feedback).
@@ -1222,19 +1462,248 @@
     const next = !currentThread.tools_enabled;
     const threadId = currentThread.id;
     // Optimistic: update locally first so the button feels instant.
-    threads = threads.map((t) =>
-      t.id === threadId ? { ...t, tools_enabled: next } : t
-    );
+    patchThread(threadId, { tools_enabled: next });
     try {
       await app.supabase.setThreadToolsEnabled(threadId, next);
     } catch (err) {
       // Revert on failure so the UI doesn't lie about server state.
-      threads = threads.map((t) =>
-        t.id === threadId ? { ...t, tools_enabled: !next } : t
-      );
+      patchThread(threadId, { tools_enabled: !next });
       error = err instanceof Error ? err.message : String(err);
     }
   }
+
+  // -----------------------------------------------------------------------
+  // Conversation search
+  // -----------------------------------------------------------------------
+  //
+  // The search box at the top of the drawer runs both an exact ILIKE
+  // match on the title and a semantic cosine-similarity search against
+  // `title + summary` embeddings (see src/lib/agents/summary/* and the
+  // threads EmbeddingSource). Exact hits always rank above semantic
+  // hits — the merge in SupabaseService.searchThreads enforces that.
+  //
+  // The paginated list is hidden entirely while a query is active; the
+  // mental model is "I'm searching now," and restoring the list is a
+  // single Escape away. Archived threads appear in the results (greyed)
+  // because the user's mental index doesn't respect the archive flag —
+  // "where's that thread about X?" is the question we're answering.
+
+  let searchQuery = $state('');
+  let searchResults = $state<ThreadSearchHit[]>([]);
+  let searchBusy = $state(false);
+  /** Focused row index for arrow-key nav. -1 = nothing focused. */
+  let focusedResultIdx = $state(-1);
+  /** AbortController for the in-flight Venice embed call — newer queries cancel older ones. */
+  let searchAbort: AbortController | null = null;
+
+  const SEARCH_DEBOUNCE_MS = 200;
+
+  $effect(() => {
+    // Reactively read searchQuery — if it changes, the cleanup below
+    // runs, aborting any in-flight embed call and clearing the timer
+    // before a new one is set.
+    const q = searchQuery.trim();
+    if (q.length === 0) {
+      searchResults = [];
+      searchBusy = false;
+      focusedResultIdx = -1;
+      if (searchAbort) searchAbort.abort();
+      searchAbort = null;
+      return;
+    }
+    const timer = setTimeout(() => {
+      void runSearch(q);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  });
+
+  async function runSearch(query: string): Promise<void> {
+    if (!app.supabase || !app.venice) return;
+    // Supersede any in-flight search: abort the old embed call so its
+    // late arrival can't overwrite a newer query's results.
+    if (searchAbort) searchAbort.abort();
+    const ctl = new AbortController();
+    searchAbort = ctl;
+    searchBusy = true;
+    try {
+      let queryEmbedding: number[] | null = null;
+      try {
+        const resp = await app.venice.embed({
+          model: VENICE_EMBEDDING_MODEL,
+          input: query,
+          signal: ctl.signal,
+        });
+        const raw = resp.data[0]?.embedding;
+        if (raw) queryEmbedding = padEmbeddingForStorage(raw);
+      } catch {
+        // Best-effort: exact-only is still useful. Fall through with
+        // queryEmbedding === null; the Supabase method handles that by
+        // skipping the RPC.
+      }
+      if (ctl.signal.aborted) return;
+      const hits = await app.supabase.searchThreads({
+        query,
+        queryEmbedding,
+        limit: 50,
+      });
+      if (ctl.signal.aborted) return;
+      searchResults = hits;
+      focusedResultIdx = hits.length > 0 ? 0 : -1;
+    } catch (err) {
+      if (!ctl.signal.aborted) {
+        error = err instanceof Error ? err.message : String(err);
+      }
+    } finally {
+      if (searchAbort === ctl) {
+        searchAbort = null;
+        searchBusy = false;
+      }
+    }
+  }
+
+  function clearSearch(): void {
+    searchQuery = '';
+  }
+
+  /**
+   * Open a search result. Loads enough of the Older or Archived
+   * bucket to include the target row (so the DOM has something to
+   * scroll to), clears the search, selects the thread, then scrolls
+   * the drawer to its `[data-thread-id]` node. Recent-bucket targets
+   * are always already loaded (eager fetch), so the no-op branch is
+   * the common case.
+   */
+  async function openSearchResult(t: Thread): Promise<void> {
+    if (!app.supabase) return;
+    const bucket = bucketFor(t);
+    try {
+      if (bucket === 'older' && !olderThreads.some((x) => x.id === t.id)) {
+        const rows = await app.supabase.listThreadsSince({
+          target: { updated_at: t.updated_at, id: t.id },
+          archived: false,
+          cutoff: recentCutoff,
+        });
+        olderThreads = mergeByUpdatedAtDesc(olderThreads, rows);
+        const last = rows[rows.length - 1];
+        if (last) olderCursor = { updated_at: last.updated_at, id: last.id };
+      } else if (bucket === 'archived') {
+        archiveExpanded = true;
+        if (!archivedPage.some((x) => x.id === t.id)) {
+          const rows = await app.supabase.listThreadsSince({
+            target: { updated_at: t.updated_at, id: t.id },
+            archived: true,
+            cutoff: null,
+          });
+          archivedPage = mergeByUpdatedAtDesc(archivedPage, rows);
+          const last = rows[rows.length - 1];
+          if (last) archivedCursor = { updated_at: last.updated_at, id: last.id };
+        }
+      }
+    } catch (err) {
+      // Best-effort: even if the window-fetch fails, still open the
+      // thread — the drawer just won't scroll to it. An error
+      // here usually means the Supabase session has expired or the
+      // network is down; both get surfaced via the banner on the
+      // subsequent selectThread call anyway.
+      error = err instanceof Error ? err.message : String(err);
+    }
+
+    clearSearch();
+    await selectThread(t.id);
+    await tick();
+    scrollDrawerToThread(t.id);
+  }
+
+  function scrollDrawerToThread(id: string): void {
+    const el = document.querySelector(`[data-thread-id="${id}"]`);
+    if (el instanceof HTMLElement) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
+
+  // Arrow-key navigation while the search input owns focus. Enter
+  // opens the focused row; Escape clears the query. Scoped to the
+  // input via `onkeydown` rather than document-level to avoid
+  // interfering with the message-list area.
+  function onSearchKey(e: KeyboardEvent): void {
+    if (searchResults.length === 0) {
+      if (e.key === 'Escape') clearSearch();
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      focusedResultIdx = Math.min(focusedResultIdx + 1, searchResults.length - 1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      focusedResultIdx = Math.max(focusedResultIdx - 1, 0);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const hit = searchResults[focusedResultIdx];
+      if (hit) void openSearchResult(hit.thread);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      clearSearch();
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Infinite-scroll sentinels
+  // -----------------------------------------------------------------------
+  //
+  // Two sentinel elements at the bottom of the Older and Archived
+  // sections. When one intersects the drawer viewport we fire the
+  // corresponding `loadMore*` call. A single IntersectionObserver
+  // handles both; we disambiguate via `dataset.bucket`.
+
+  let olderSentinelEl: HTMLDivElement | undefined = $state();
+  let archivedSentinelEl: HTMLDivElement | undefined = $state();
+
+  $effect(() => {
+    if (typeof IntersectionObserver === 'undefined') return;
+    // Re-create the observer whenever the sentinel refs change. Svelte
+    // 5 runs this effect after every DOM patch, so the `untrack`-free
+    // reads below pin the dependency set to exactly these two refs
+    // plus the drawerOpen flag (observers on a hidden drawer are
+    // harmless but unnecessary).
+    const older = olderSentinelEl;
+    const archived = archivedSentinelEl;
+    if (!older && !archived) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const bucket = (entry.target as HTMLElement).dataset.bucket;
+          if (bucket === 'older') void loadMoreOlder();
+          else if (bucket === 'archived') void loadMoreArchived();
+        }
+      },
+      {
+        // Trigger a little before the sentinel is on-screen so the
+        // next page arrives while the user's still scrolling, not as
+        // an obvious pause at the bottom.
+        rootMargin: '200px 0px',
+        threshold: 0,
+      }
+    );
+    if (older) observer.observe(older);
+    if (archived) observer.observe(archived);
+    return () => observer.disconnect();
+  });
+
+  // Auto-scroll the drawer to the currently-active thread whenever it
+  // opens. Uses the same [data-thread-id] scroll machinery
+  // `openSearchResult` relies on, so a future thread-not-yet-loaded
+  // case can reuse the window-fetch path.
+  $effect(() => {
+    if (!drawerOpen || !activeThreadId) return;
+    // Wait for the drawer transition to start so the scroll target is
+    // measurable; `tick()` alone runs before layout, which
+    // scrollIntoView handles correctly but scrolls the hidden drawer
+    // instead of the visible one.
+    const id = activeThreadId;
+    const timer = setTimeout(() => scrollDrawerToThread(id), 40);
+    return () => clearTimeout(timer);
+  });
 </script>
 
 {#if !sessionLoaded}
@@ -1255,17 +1724,23 @@
       aria-hidden={!drawerOpen}
     ></div>
     <aside class="sidebar">
-      <header>
-        <button
-          style="width:100%"
-          onclick={newThread}
-          disabled={currentIsEmpty}
-          title={currentIsEmpty ? "You're already on an empty thread." : 'Start a new conversation'}
-        >+ New thread</button>
+      <header class="sidebar-header">
+        <!-- Search replaces the old "+ New thread" button — the
+             topbar's `.new-thread-mini` icon (now visible on every
+             viewport, not just mobile) is the primary new-thread
+             affordance. -->
+        <input
+          type="search"
+          class="sidebar-search-input"
+          placeholder="Search conversations"
+          aria-label="Search conversations"
+          bind:value={searchQuery}
+          onkeydown={onSearchKey}
+        />
       </header>
       <div class="thread-list">
         {#snippet threadRow(t: Thread)}
-          <div class="row thread-row">
+          <div class="row thread-row" data-thread-id={t.id}>
             <button
               class="thread grow"
               class:active={t.id === activeThreadId}
@@ -1314,40 +1789,128 @@
           </div>
         {/snippet}
 
-        {#each activeThreads as t (t.id)}
-          {@render threadRow(t)}
-        {/each}
-        {#if activeThreads.length === 0}
-          <p class="subtle" style="padding:0.75rem">No threads yet.</p>
-        {/if}
-
-        <!-- Archive section: hidden when empty; collapsed by default so
-             the Chats list is what the user sees on mount. -->
-        {#if archivedThreads.length > 0}
-          <div class="archive-section">
+        {#snippet searchResultRow(hit: ThreadSearchHit, idx: number)}
+          <!-- Results have no kebab menu (no archive/rename/delete
+               while searching) and get greyed when archived. -->
+          <div
+            class="row thread-row search-result"
+            class:archived-result={hit.thread.archived}
+            data-thread-id={hit.thread.id}
+          >
             <button
-              class="archive-toggle"
-              onclick={() => (archiveExpanded = !archiveExpanded)}
-              aria-expanded={archiveExpanded}
-              aria-controls="archive-list"
+              class="thread grow"
+              class:active={hit.thread.id === activeThreadId}
+              class:focused={idx === focusedResultIdx}
+              onclick={() => openSearchResult(hit.thread)}
+              title={hit.thread.title || 'Untitled'}
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                   stroke-linejoin="round" aria-hidden="true"
-                   class="archive-chevron" class:expanded={archiveExpanded}>
-                <polyline points="9 6 15 12 9 18" />
-              </svg>
-              <span class="archive-label">Archive</span>
-              <span class="archive-count">{archivedThreads.length}</span>
+              <span class="search-result-title">{hit.thread.title || 'Untitled'}</span>
+              <span
+                class="search-result-kind"
+                aria-label={hit.kind === 'exact' ? 'exact title match' : 'semantic match'}
+              >{hit.kind}</span>
             </button>
-            {#if archiveExpanded}
-              <div id="archive-list">
-                {#each archivedThreads as t (t.id)}
-                  {@render threadRow(t)}
-                {/each}
+          </div>
+        {/snippet}
+
+        {#if searchQuery.trim().length > 0}
+          <!-- Search mode: replace the paginated list entirely.
+               Escape or clearing the input returns to the list view.
+               An in-flight search renders a Scanner in place of the
+               result list so the user sees the work happening. -->
+          {#if searchBusy && searchResults.length === 0}
+            <div class="search-status">
+              <Scanner label="Searching conversations" size={0.9} />
+            </div>
+          {:else if searchResults.length === 0}
+            <p class="subtle" style="padding:0.75rem">No matches.</p>
+          {:else}
+            {#each searchResults as hit, idx (hit.thread.id)}
+              {@render searchResultRow(hit, idx)}
+            {/each}
+          {/if}
+        {:else}
+          <!-- Recent: everything updated in the last 3 days. Drafts
+               live above Recent since they're always "in progress"
+               even though they have no server-side updated_at. -->
+          {#if drafts.length > 0 || recentThreads.length > 0}
+            <h3 class="bucket-header">Recent</h3>
+            {#each drafts as t (t.id)}
+              {@render threadRow(t)}
+            {/each}
+            {#each recentThreads as t (t.id)}
+              {@render threadRow(t)}
+            {/each}
+          {/if}
+
+          <!-- Older: paginated 25 at a time. Header hides when there's
+               nothing to show so a fresh account doesn't see an empty
+               "Older" stub above its first real thread. -->
+          {#if olderThreads.length > 0 || olderHasMore}
+            <h3 class="bucket-header">Older</h3>
+            {#each olderThreads as t (t.id)}
+              {@render threadRow(t)}
+            {/each}
+            {#if olderHasMore}
+              <div
+                class="sentinel"
+                bind:this={olderSentinelEl}
+                data-bucket="older"
+                aria-hidden="true"
+              >
+                {#if olderLoading}
+                  <Scanner label="Loading older conversations" size={0.85} />
+                {/if}
               </div>
             {/if}
-          </div>
+          {/if}
+
+          {#if drafts.length === 0 && recentThreads.length === 0 && olderThreads.length === 0 && !olderLoading && !olderHasMore}
+            <p class="subtle" style="padding:0.75rem">No threads yet.</p>
+          {/if}
+
+          <!-- Archive: collapsible, paginated 25 at a time. The
+               section header always shows while Archive has any rows
+               OR more pages are available — otherwise a fresh account
+               with zero archived threads doesn't see an empty section
+               cluttering the drawer. -->
+          {#if archivedPage.length > 0 || archivedHasMore}
+            <div class="archive-section">
+              <button
+                class="archive-toggle"
+                onclick={() => (archiveExpanded = !archiveExpanded)}
+                aria-expanded={archiveExpanded}
+                aria-controls="archive-list"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round" aria-hidden="true"
+                     class="archive-chevron" class:expanded={archiveExpanded}>
+                  <polyline points="9 6 15 12 9 18" />
+                </svg>
+                <span class="archive-label">Archive</span>
+              </button>
+              {#if archiveExpanded}
+                <div id="archive-list">
+                  {#each archivedPage as t (t.id)}
+                    {@render threadRow(t)}
+                  {/each}
+                  {#if archivedHasMore}
+                    <div
+                      class="sentinel"
+                      bind:this={archivedSentinelEl}
+                      data-bucket="archived"
+                      aria-hidden="true"
+                    >
+                      {#if archivedLoading}
+                        <Scanner label="Loading archived conversations" size={0.85} />
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/if}
         {/if}
       </div>
       <footer>
