@@ -78,6 +78,7 @@
   );
 
   let open = $state(false);
+  let detailEl = $state<HTMLDivElement | null>(null);
   function toggle() {
     open = !open;
   }
@@ -94,6 +95,18 @@
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   });
+
+  // When a user taps the ring on a message near the bottom edge of
+  // the viewport, the newly-revealed detail row can slide past the
+  // fold — leaving them staring at the same pre-click scroll position
+  // with no visible confirmation anything happened. Wait for the
+  // slide-down to finish (so the element has its final height before
+  // we measure) then nudge it into view. `block: 'nearest'` only
+  // scrolls when the row is actually off-screen, so clicking a ring
+  // already in view stays still.
+  function onIntroEnd() {
+    detailEl?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 </script>
 
 <button
@@ -149,10 +162,12 @@
        snapping. 220ms is long enough to read as "moving" without
        feeling sluggish on a repeated open/close. -->
   <div
+    bind:this={detailEl}
     class="ring-detail"
     role="region"
     aria-label="Context window usage"
     transition:slide={{ duration: 220, easing: cubicOut }}
+    onintroend={onIntroEnd}
   >
     {summary}
   </div>
