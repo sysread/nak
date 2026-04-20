@@ -274,6 +274,163 @@ alter table public.threads
 alter table public.threads
   add column if not exists archived boolean not null default false;
 
+-- message_attachments ----------------------------------------------------
+--
+-- One row per file a user attached to a message. Binary lives in `data`
+-- as `bytea` (PostgREST surfaces it as base64 on SELECT, so clients see
+-- a string and don't have to negotiate the binary content-type).
+--
+-- `extracted_text` is populated at upload time for non-image files by
+-- calling Venice's POST /api/v1/augment/text-parser endpoint, so the
+-- LLM has a prompt-ready representation of documents without the
+-- client having to bundle a PDF parser. It lives alongside `data` on
+-- purpose: even after the binary is expired and reclaimed, the
+-- extracted text stays, so re-reading an old conversation still shows
+-- what the file said.
+--
+-- Expiration policy: the attachment_expiry worker nulls `data` and
+-- stamps `expired_at` 30 days after the parent thread's `updated_at`.
+-- `filename`, `mime_type`, `size_bytes`, and `extracted_text` are kept
+-- so the message list can still render "<file>: <expired icon> |
+-- [extracted text]". `data is null and expired_at is not null` is the
+-- expired state; `data is not null and expired_at is null` is live.
+--
+-- No `updated_at` — attachments are immutable once written (the
+-- expiry worker is the only writer post-insert, and it only nulls
+-- the blob). RLS is via-parent-of-parent: attachment → message →
+-- thread → user, mirroring the messages policies one level deeper.
+
+create table if not exists public.message_attachments (
+  id uuid primary key default gen_random_uuid(),
+  message_id uuid not null references public.messages(id) on delete cascade,
+  position int not null default 0,
+  filename text not null,
+  mime_type text not null,
+  size_bytes int not null,
+  data bytea,
+  extracted_text text,
+  expired_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists message_attachments_message_idx
+  on public.message_attachments (message_id, position);
+
+-- Partial index used by the expiration worker. Only carries live
+-- (non-expired) rows so the scan to find expirable attachments stays
+-- tiny in steady state — the bulk of history is already expired and
+-- excluded from the index.
+create index if not exists message_attachments_live_idx
+  on public.message_attachments (message_id)
+  where data is not null;
+
+alter table public.message_attachments enable row level security;
+
+-- Access is gated by the owning thread's user_id, reached via the
+-- message FK. Same via-parent pattern as messages, one level deeper.
+drop policy if exists "attachments are self-selectable via thread"
+  on public.message_attachments;
+create policy "attachments are self-selectable via thread"
+  on public.message_attachments
+  for select using (
+    exists (
+      select 1
+        from public.messages m
+        join public.threads t on t.id = m.thread_id
+       where m.id = message_attachments.message_id
+         and t.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "attachments are self-insertable via thread"
+  on public.message_attachments;
+create policy "attachments are self-insertable via thread"
+  on public.message_attachments
+  for insert with check (
+    exists (
+      select 1
+        from public.messages m
+        join public.threads t on t.id = m.thread_id
+       where m.id = message_attachments.message_id
+         and t.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "attachments are self-updatable via thread"
+  on public.message_attachments;
+create policy "attachments are self-updatable via thread"
+  on public.message_attachments
+  for update using (
+    exists (
+      select 1
+        from public.messages m
+        join public.threads t on t.id = m.thread_id
+       where m.id = message_attachments.message_id
+         and t.user_id = auth.uid()
+    )
+  ) with check (
+    exists (
+      select 1
+        from public.messages m
+        join public.threads t on t.id = m.thread_id
+       where m.id = message_attachments.message_id
+         and t.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "attachments are self-deletable via thread"
+  on public.message_attachments;
+create policy "attachments are self-deletable via thread"
+  on public.message_attachments
+  for delete using (
+    exists (
+      select 1
+        from public.messages m
+        join public.threads t on t.id = m.thread_id
+       where m.id = message_attachments.message_id
+         and t.user_id = auth.uid()
+    )
+  );
+
+-- Expiration RPC. Reclaims the binary for attachments whose owning
+-- thread hasn't been touched in `p_days`. Runs as the caller (RLS
+-- intact). The `limit` keeps each call's work bounded — the worker
+-- drains the backlog by calling repeatedly while the row count is
+-- non-zero, then naps for an hour when it returns 0.
+--
+-- We don't delete the row — we null `data` and stamp `expired_at`.
+-- `filename`, `mime_type`, `size_bytes`, and `extracted_text` stay so
+-- the message list can still render a "this file expired" entry with
+-- the original name and the text the model saw. Conversations read a
+-- year later still make sense.
+drop function if exists public.expire_old_attachments(int);
+create or replace function public.expire_old_attachments(
+  p_days int
+) returns int
+language plpgsql security invoker as $$
+declare
+  affected int;
+begin
+  with stale as (
+    select a.id
+      from public.message_attachments a
+      join public.messages m on m.id = a.message_id
+      join public.threads t on t.id = m.thread_id
+     where t.user_id = auth.uid()
+       and a.data is not null
+       and t.updated_at < now() - make_interval(days => p_days)
+     limit 500
+     for update skip locked
+  )
+  update public.message_attachments a
+     set data = null,
+         expired_at = now()
+    from stale s
+   where a.id = s.id;
+  get diagnostics affected = row_count;
+  return affected;
+end $$;
+
 -- Reflection pipeline ----------------------------------------------------
 --
 -- The memory-reflection agent (src/lib/agents/reflection/*) sweeps

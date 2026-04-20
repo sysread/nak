@@ -6,6 +6,12 @@ aren't immediately obvious.
 
 ## The composer
 
+### Attaching files
+
+The paperclip button in the composer toolbar queues files for the
+next message — click the paperclip, paste an image, or drag-drop
+onto the composer. Full details in [Attachments](./attachments.md).
+
 ## Streaming responses
 
 Replies stream token-by-token. Under the hood, Nak keeps the markdown

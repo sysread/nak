@@ -68,6 +68,17 @@ export interface ModelSpec {
    * update by hand when a tier is re-pointed at a non-reasoning model.
    */
   supportsReasoning: boolean;
+  /**
+   * True when the model accepts OpenAI-compatible multimodal input —
+   * `content` as an array of `{type:'text'|'image_url', ...}` parts
+   * rather than a plain string. Drives the attachment pre-send guard:
+   * on a vision tier, an image attachment is consumable (we inline it
+   * as `image_url`); on a non-vision tier the send is blocked until
+   * the user removes the image or switches tier. Sourced from the
+   * `model_spec.capabilities.supportsVision` field on Venice's
+   * /models response — update by hand when a tier is re-pointed.
+   */
+  supportsVision: boolean;
 }
 
 export const MODELS: Record<ModelTier, ModelSpec> = {
@@ -79,6 +90,9 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     description: 'Best quality, slower.',
     contextWindow: 256_000,
     supportsReasoning: true,
+    // kimi-k2-5 is currently text-only on Venice. Flip to true if the
+    // tier is re-pointed at a vision-capable model.
+    supportsVision: false,
   },
   balanced: {
     tier: 'balanced',
@@ -92,6 +106,9 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     description: 'Good quality, moderate speed.',
     contextWindow: 198_000,
     supportsReasoning: true,
+    // GLM-5 on Venice accepts vision input. Flip if the tier is
+    // retuned to a text-only model.
+    supportsVision: true,
   },
   fast: {
     tier: 'fast',
@@ -101,6 +118,8 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     description: 'Fastest; ~1M-token context.',
     contextWindow: 1_000_000,
     supportsReasoning: true,
+    // grok-4.1-fast is text-only on Venice today.
+    supportsVision: false,
   },
 };
 

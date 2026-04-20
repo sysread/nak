@@ -27,15 +27,32 @@ import type { ReasoningEffort } from './models';
 import type { OpenAIToolDef, OpenAIToolCall } from './tools/types';
 
 /**
+ * One entry in an OpenAI-compatible multimodal `content` array. Used for
+ * vision inlining: when a user message carries images and the model
+ * supports vision, we send `content` as `[{type:'text', text:'...'},
+ * {type:'image_url', image_url:{url:'data:image/png;base64,...'}}]`
+ * instead of a plain string. Venice accepts data-URI inputs for
+ * `image_url.url` on vision-capable tiers.
+ */
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+/**
  * Messages on the wire can include any of the OpenAI roles. When the
  * caller passes a role='tool' message, it must also set tool_call_id
  * and name to pair the result with the assistant call that produced it.
  * Likewise role='assistant' rows that invoked tools carry a tool_calls
  * array (and usually an empty `content`).
+ *
+ * `content` widened to accept a ContentPart[] so user messages with
+ * image attachments can inline them as `image_url` entries for vision
+ * models. Plain-string callers keep working unchanged — the union
+ * widens without breaking them.
  */
 export interface VeniceMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  content: string | ContentPart[];
   name?: string;
   tool_call_id?: string;
   tool_calls?: OpenAIToolCall[];
@@ -495,6 +512,67 @@ export class VeniceClient {
     } catch {
       throw new VeniceError('Failed to parse Venice embedding response.', 'parse');
     }
+  }
+
+  /**
+   * Extract readable text from a user-uploaded file via Venice's
+   * `POST /augment/text-parser` endpoint. Used at attachment-upload
+   * time for non-image files so the LLM sees a prompt-ready
+   * representation — avoids bundling a PDF / office-doc parser client-
+   * side. The returned string lands in `message_attachments.extracted_text`
+   * and survives the 30-day binary expiry.
+   *
+   * Multipart/form-data is required (the endpoint is file-typed, not
+   * JSON). We explicitly don't set Content-Type — the browser
+   * generates the correct `multipart/form-data; boundary=…` header
+   * from the FormData body.
+   *
+   * Throws a VeniceError on any failure; the caller decides whether to
+   * block the send or treat the file as text-less.
+   */
+  async extractText(file: Blob, filename: string): Promise<string> {
+    const form = new FormData();
+    form.append('file', file, filename);
+    form.append('response_format', 'json');
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}/augment/text-parser`, {
+        method: 'POST',
+        // Not `this.headers()` — the JSON Content-Type would clobber
+        // the multipart boundary the browser needs to write.
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+        body: form,
+      });
+    } catch (err) {
+      throw new VeniceError(
+        `Network error contacting Venice: ${(err as Error).message}`,
+        'network'
+      );
+    }
+    if (!res.ok) throw await this.classifyError(res);
+    let payload: unknown;
+    try {
+      payload = await res.json();
+    } catch {
+      throw new VeniceError('Failed to parse Venice text-parser response.', 'parse');
+    }
+    // Venice's documented response shape is `{ text: string, ... }`.
+    // Accept `text` as the canonical field and fall back to a couple
+    // of plausible alternates so an API tweak doesn't instantly break
+    // us — we'll see a populated string from at least one of them.
+    if (payload && typeof payload === 'object') {
+      const p = payload as Record<string, unknown>;
+      if (typeof p.text === 'string') return p.text;
+      if (typeof p.content === 'string') return p.content;
+      if (typeof p.data === 'object' && p.data) {
+        const d = p.data as Record<string, unknown>;
+        if (typeof d.text === 'string') return d.text;
+      }
+    }
+    throw new VeniceError(
+      'Venice text-parser response did not contain a text field.',
+      'parse'
+    );
   }
 }
 
