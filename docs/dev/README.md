@@ -1,29 +1,94 @@
 # Nak — Developer Notes
 
-Architecture, conventions, and subsystem deep-dives for people working
-on Nak itself. End-user documentation lives in
-[`../user/`](../user/README.md).
+Architecture, conventions, and per-feature deep-dives for
+people working on Nak itself. End-user documentation lives
+next door in [`../user/`](../user/README.md).
 
-This directory is scaffolded — the content will grow alongside the
-codebase. The repo-root `CLAUDE.md` is the current source of truth for
-conventions; as topics get too large to live there, they'll migrate
-into their own files here.
+These docs are GitHub-rendered only — they are not bundled
+into the app and don't appear in the in-app Help modal. The
+in-app manual covers user-facing behavior; this tree covers
+the implementation.
 
-## Planned sections
+## How this is organized
 
-- **Architecture** — the Vite + Svelte 5 app shell, the Supabase data
-  layer, the Venice streaming adapter.
-- **Storage** — schema, RLS, the `settings` blob on `profiles`, and
-  the idempotency rules schema files must follow.
-- **Encryption** — how API keys are encrypted at rest and why the
-  current primitive choice.
-- **Markdown rendering** — the `marked` → `DOMPurify` → `{@html}`
-  pipeline and the highlight.js dynamic-loading dance.
-- **Build & deploy** — Vite config, PWA config, the Cloudflare Pages
-  target, and the `sync-supabase` deploy job.
-- **Conventions** — commenting style, testing stance, separation-of-
-  concerns dogma. Currently lives in `CLAUDE.md` at the repo root.
+Two overview docs frame the codebase, followed by one doc per
+coherent feature. Each feature doc runs the same template —
+Role, Files, Entry points, Data model, Contracts,
+**Interactions with other features**, Gotchas — so scanning
+one prepares you to scan any other.
 
-## Until the sections exist
+The "Interactions" section is the anti-rot mechanism: when
+two features drift apart it's usually because the coupling
+was tacit. Feature docs list the other features they
+actually touch, with the specific coupling named. Cross-check
+this before changing a contract that other features depend on.
 
-Read `CLAUDE.md` at the repo root. It's the working convention doc.
+## Contents
+
+### Overview
+- [Architecture](./architecture.md) — boot flow, phase state
+  machine, worker model, data-layer conventions, Venice
+  adapter. The one doc to read first.
+- [Components](./components.md) — the reusable Svelte
+  components screens compose.
+
+### Core features
+- [Auth & session](./auth-session.md) — Supabase auth,
+  master-password envelope, session lifecycle, locking.
+- [Chat](./chat.md) — chat screen + chat-loop + models +
+  realtime thread list.
+- [Tools](./tools.md) — tool registry + the two parallel
+  executors (chat-side and headless-agent-side).
+- [Memory](./memory.md) — `memories` store + reflection
+  agent + memory recall.
+- [Conversation recall](./conversation-recall.md) — recall
+  over thread summaries.
+- [Summaries](./summaries.md) — background thread-summary
+  worker.
+- [Embeddings](./embeddings.md) — the Web-Worker embedding
+  pipeline plus the canonical cross-tab-lock + claim-RPC
+  pattern.
+- [Settings](./settings.md) — the settings modal +
+  `profiles.settings` JSONB + theme.
+- [Help](./help.md) — in-app rendering of `docs/user/`.
+
+### Build & deploy
+- [Build & deploy](./build-deploy.md) — Vite, PWA,
+  GitHub Pages, the sync-on-deploy schema workflow.
+
+## Writing conventions
+
+- **One sentence per line in prose.** Works well across
+  renderers, keeps diffs tight, and matches the existing
+  comment voice in `src/lib/*.ts`.
+- **Internal links prefixed with `./` or `../`.** Repo-wide
+  convention enforced by `CLAUDE.md`'s "User-facing
+  documentation" section. In the dev tree the enforcement
+  is by eyeballs only, but keep it consistent.
+- **File paths point at real files.** Never copy code
+  bodies into a doc — the file moves, the doc rots. Name
+  the path, name the function or column, trust the reader
+  to open the file.
+- **"Gotchas" sections are the load-bearing part.** They
+  surface the non-obvious constraints that comments
+  protect. If you delete a comment in a file, check
+  whether the corresponding Gotcha here needs updating
+  too.
+
+## When to update these docs
+
+- A schema change (anything in `supabase/schema.sql`) → the
+  affected feature doc's Data model section.
+- A new tool, agent, or worker → the relevant feature doc's
+  Files + Entry points + Interactions sections. Add a link
+  from `architecture.md` if it introduces a new subsystem
+  pattern.
+- A new Svelte component under `src/components/` → a new
+  section in `components.md`.
+- A feature that starts calling into another feature for
+  the first time → both docs' Interactions sections.
+
+Dev docs should move in the same PR as the code change. A
+commit that adds a subsystem without updating `docs/dev/`
+is incomplete in the same way a user-visible change
+without a `docs/user/` update is incomplete.

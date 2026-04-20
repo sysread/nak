@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code / Claude sessions working in this repo. See `README.md` for the project-level overview, and `docs/user/README.md` for the end-user manual (also rendered in-app via the **Help** button).
+Guidance for Claude Code / Claude sessions working in this repo. See `README.md` for the project-level overview, `docs/user/README.md` for the end-user manual (also rendered in-app via the **Help** button), and `docs/dev/README.md` for architecture + per-feature dev notes.
 
 ## Commenting style
 
@@ -127,10 +127,12 @@ The repo ships two parallel doc trees:
 - `docs/user/` — the end-user manual. Rendered in-app by the **Help**
   button (leftmost icon in the conversation drawer footer), and also
   readable directly on GitHub.
-- `docs/dev/` — architecture, subsystem deep-dives, and
-  contributor-facing notes. Still mostly a scaffold; `CLAUDE.md`
-  remains the working convention doc until sections grow too large to
-  live here.
+- `docs/dev/` — architecture overview, components inventory, and
+  per-feature dev notes. Each feature doc lists the other features it
+  touches in an "Interactions" section so coupling changes surface
+  loudly. `CLAUDE.md` stays the session-context doc (commenting
+  style, testing stance, git conventions); feature implementation
+  details belong in `docs/dev/`.
 
 **Rule: any change to observable user behavior must update
 `docs/user/` in the same PR.** That covers new UI controls, new

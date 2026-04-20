@@ -1,0 +1,197 @@
+# Settings
+
+The settings modal plus everything it persists: the five panes
+(Keys, AI, Appearance, Export, Security), the `profiles.settings`
+JSONB blob they read from and write to, and the theme system that
+lives alongside.
+
+## Role in the app
+
+Settings is the user-visible control surface for every
+preference the app holds. Each pane targets a different persistence
+destination:
+
+- **Keys** — the three API keys. Re-encrypts the config blob on
+  save.
+- **AI** — default model tier, default reasoning effort, system-
+  prompt library, web-search toggle. All to `profiles.settings`.
+- **Appearance** — color mode + accent. Live-applies on click
+  (no Save button); mirrors to `profiles.settings` (and
+  localStorage for the boot script).
+- **Export** — downloads the three keys as a plaintext JSON
+  file. No persistence change.
+- **Security** — rotates the master password. Re-encrypts the
+  config blob; doesn't touch Supabase.
+
+Theme is tightly coupled to Settings (the Appearance pane drives
+every update) so it's covered here rather than in its own file.
+
+## Files
+
+- `src/screens/Settings.svelte` — the modal; five panes + nav +
+  backdrop dismiss + Escape handling.
+- `src/lib/state.svelte.ts` — setters that Settings calls
+  (`setDefaultModel`, `setDefaultReasoningEffort`,
+  `setSystemPrompts`, `setTheme`, `setWebSearchEnabled`).
+- `src/lib/supabase.ts` — `getSettings`, `updateSettings`,
+  `updateSystemPrompts`. Read-then-write against the
+  `profiles.settings` JSONB column.
+- `src/lib/config.ts` — `saveConfig` (keys pane) and
+  `changePassword` (security pane).
+- `src/lib/theme.ts` — `ColorMode`, `Accent`, `applyTheme`,
+  `cacheTheme`, `readCachedTheme`, `effectiveMode`.
+- `index.html` — the inline boot script that applies cached
+  theme attributes before first paint.
+
+## Entry points
+
+- **Gear button in `Chat.svelte`** — flips `showSettings` to
+  true. `Chat.svelte` renders `<Settings onClose={() =>
+  showSettings = false} />` as a mutually-exclusive phase
+  branch.
+- **Backdrop click / Escape** — both dismiss. Backdrop
+  discriminates by `e.target === e.currentTarget` so clicks
+  inside the shell don't trigger close.
+- **AI pane save** — per-pane form submission. Each pane
+  calls its own Supabase writer via `app.supabase.updateSettings`.
+- **Appearance live-apply** — `onPickMode` /
+  `onPickAccent` call `setTheme(mode, accent)` from the state
+  store, which updates DOM attributes + cache + reactive
+  state synchronously, then fires
+  `app.supabase.updateSettings` fire-and-forget for server
+  persistence.
+- **Security pane submit** — `changePassword(old, new)` in
+  config.ts. Settings catches errors and displays them inline.
+
+## Data model
+
+- **`profiles.settings`** — JSONB column. No per-field schema.
+  Known keys today:
+  - `defaultModel`: `ModelTier`
+  - `defaultReasoningEffort`: `ReasoningEffort`
+  - `colorMode`: `ColorMode`
+  - `accent`: `Accent`
+  - `systemPrompts`: `SystemPrompt[]` with `{id, name, body,
+    enabledByDefault}`
+  - `webSearchEnabled`: boolean; absent defaults to `true`
+  `coerceSettings` in `supabase.ts` validates on read, dropping
+  unknown / mistyped fields.
+- **`localStorage['nak:theme:v1']`** — `<mode>|<accent>`.
+  Non-secret cache used by the inline boot script in
+  `index.html` to avoid flash-of-wrong-theme on first paint.
+- **`localStorage['nak:config:v1']`** — encrypted config blob;
+  the Keys pane overwrites it on save. See
+  `./auth-session.md`.
+- **Reactive state** — `app.defaultModel`,
+  `app.defaultReasoningEffort`, `app.colorMode`, `app.accent`,
+  `app.systemPrompts`, `app.webSearchEnabled`. Seeded to
+  defaults on `activate()`; overwritten from
+  `profiles.settings` by Chat's `refreshSettings` right after
+  the Supabase session lands.
+
+## Contracts
+
+- `getSettings(): Promise<UserSettings>` — reads the JSONB blob
+  and coerces. Missing row returns an empty object; unknown
+  keys are dropped.
+- `updateSettings(patch: Partial<UserSettings>):
+  Promise<UserSettings>` — merges a patch with the current row
+  via read-then-write. Scrubs unknown keys and validates each
+  known field; a `patch[field] === undefined` deletes that
+  field from the stored object.
+- `updateSystemPrompts(prompts: SystemPrompt[]): Promise<void>`
+  — replaces the `systemPrompts` array wholesale (system-prompt
+  editing is a full-form save, not per-prompt).
+- `setTheme(mode, accent)` — applies to DOM, caches locally,
+  writes reactive state. Does NOT persist to Supabase; callers
+  that want server persistence must also call
+  `updateSettings`.
+- `changePassword(old, new)` — decrypts with old, re-encrypts
+  under new. Doesn't touch Supabase.
+- `applyTheme(mode, accent)` — writes two data attributes
+  (`data-theme`, `data-accent`) to `<html>`. CSS reacts via
+  attribute selectors.
+- `effectiveMode(mode)` — collapses `'system'` to `'light'` or
+  `'dark'` via `matchMedia('(prefers-color-scheme: dark)')`.
+
+## Theme lifecycle
+
+1. **Pre-paint boot** — the inline script in `index.html` reads
+   `nak:theme:v1`, parses it, and writes `data-theme` +
+   `data-accent` to `<html>` before any CSS loads. This
+   prevents flash-of-wrong-theme on refresh.
+2. **Reactive seed** — `state.svelte.ts` reads the same cache
+   via `readCachedTheme()` into `app.colorMode` / `app.accent`.
+3. **Supabase override** — `Chat.svelte`'s `refreshSettings`
+   pulls the server version after session lands and calls
+   `setTheme(settings.colorMode, settings.accent)` if
+   different. If the user changed theme on another device,
+   this is where the update propagates in.
+4. **User picks a new mode/accent** — `setTheme` updates DOM +
+   cache + reactive state synchronously; Settings also fires
+   `updateSettings` for server persistence.
+5. **System-mode listener** — if `colorMode === 'system'`, an
+   `App.svelte` `matchMedia` listener re-applies the theme
+   when the OS preference flips (without changing the stored
+   `colorMode` value, which stays `'system'`).
+
+## Interactions with other features
+
+- **Auth-session** — the Keys pane overwrites the encrypted
+  config blob via `saveConfig`; the Security pane re-encrypts
+  via `changePassword`. Neither touches Supabase. See
+  `./auth-session.md`.
+- **Chat** — chat reads every AI-pane setting
+  (`defaultModel`, `defaultReasoningEffort`, `systemPrompts`,
+  `webSearchEnabled`) from the state store. Settings writes
+  those values. See `./chat.md`.
+- **Architecture** — the reactive state store
+  (`state.svelte.ts`) is the bridge: Settings writes setters,
+  other features read the corresponding `app.*` field. See
+  `./architecture.md`.
+
+## Gotchas
+
+- **Read-then-write on `profiles.settings`.** Not safe under
+  concurrent writes from multiple tabs. If two tabs both
+  flip theme at the same moment, one write wins and the
+  other's change is lost. Acceptable for a single-user
+  single-device app; if multi-tab concurrency becomes a real
+  concern, move to a Postgres `jsonb_set` so each field
+  updates atomically.
+- **`setTheme` does not persist.** It writes local state +
+  DOM + cache; server persistence is the caller's job. This
+  is on purpose — the Appearance pane calls both; any
+  future consumer that wants only the live-apply part (e.g.
+  a theme preview that reverts on cancel) can use `setTheme`
+  without dragging in a server round-trip.
+- **Empty `profiles.settings`.** A brand-new account has
+  `settings = '{}'`. `coerceSettings` returns every field
+  undefined; the state store falls back to its seed values
+  (`DEFAULT_TIER`, `DEFAULT_REASONING_EFFORT`, cached theme,
+  empty prompt list, web-search enabled). Any pane that
+  assumes a particular field exists has a bug.
+- **`webSearchEnabled` is tri-state on the wire.** Absent,
+  `true`, or `false`. Only `false` flips the feature off;
+  anything else leaves the app-side default (enabled) in
+  force. This means removing the key from the blob (by
+  setting the patch value to undefined) re-enables web
+  search on next load.
+- **Inline boot script in `index.html` is ES5.** Vite doesn't
+  transform inline scripts. Keep the theme-cache read logic
+  there simple; use `var`, avoid template literals and arrow
+  functions, don't import anything.
+- **Password rotation doesn't invalidate sessions.** The
+  encrypted blob re-encrypts; the sessionStorage session
+  blob keeps its plaintext copy, so an open tab stays
+  unlocked. This is the right behavior (rotating a password
+  shouldn't force a re-unlock in the tab doing the rotation)
+  but surprises people reviewing the flow.
+
+## Where to go next
+
+- `./auth-session.md` — the master-password and keys side
+  of the Keys and Security panes.
+- `./chat.md` — the consumer of every AI-pane setting.
+- `./architecture.md` — where the reactive state store sits
+  in the boot flow.
