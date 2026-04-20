@@ -4,24 +4,14 @@ Architecture, conventions, and per-feature deep-dives for
 people working on Nak itself. End-user documentation lives
 next door in [`../user/`](../user/README.md).
 
-These docs are GitHub-rendered only — they are not bundled
-into the app and don't appear in the in-app Help modal. The
-in-app manual covers user-facing behavior; this tree covers
-the implementation.
+These docs are GitHub-rendered only — they are not bundled into the app and don't appear in the in-app Help modal. The in-app manual covers user-facing behavior; this tree covers the implementation. This reflects the current packaging; adding dev docs in-app would be a new feature.
 
 ## How this is organized
 
 Two overview docs frame the codebase, followed by one doc per
-coherent feature. Each feature doc runs the same template —
-Role, Files, Entry points, Data model, Contracts,
-**Interactions with other features**, Gotchas — so scanning
-one prepares you to scan any other.
+coherent feature. Each feature doc follows a common pattern — Role, Files, Entry points, Data model, Contracts, Interactions, Gotchas — but the exact headings may vary slightly by feature. The goal is consistency, not rigidity.
 
-The "Interactions" section is the anti-rot mechanism: when
-two features drift apart it's usually because the coupling
-was tacit. Feature docs list the other features they
-actually touch, with the specific coupling named. Cross-check
-this before changing a contract that other features depend on.
+The "Interactions" section is meant to fight rot: when two features drift apart it's usually because the coupling was tacit. Feature docs list the other features they actually touch, with the specific coupling named. Treat this as a best-effort ledger to cross-check before changing a contract that other features depend on.
 
 ## Contents
 
@@ -79,10 +69,7 @@ this before changing a contract that other features depend on.
 
 - A schema change (anything in `supabase/schema.sql`) → the
   affected feature doc's Data model section.
-- A new tool, agent, or worker → the relevant feature doc's
-  Files + Entry points + Interactions sections. Add a link
-  from `architecture.md` if it introduces a new subsystem
-  pattern.
+- A new tool, agent, or worker → the relevant feature doc's Files + Entry points + Interactions sections. Add a link from `architecture.md` if it introduces a new subsystem pattern. This is maintainer policy; no code enforces it.
 - A new Svelte component under `src/components/` → a new
   section in `components.md`.
 - A feature that starts calling into another feature for

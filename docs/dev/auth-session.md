@@ -101,6 +101,10 @@ localStorage key (`v2`) rather than a migration.
   re-encrypts under new. Minimum-length check (8 chars); anything
   stronger is the user's job. Does NOT touch the Supabase
   password or session.
+- PBKDF2 iteration count is implicit in the envelope `VERSION`.
+  Changing `PBKDF2_ITERATIONS` requires bumping `VERSION` and
+  teaching `decrypt` to dispatch by version; otherwise old blobs
+  will be undecryptable.
 - `activate(config, opts?)` — the only transition into `unlocked`.
   By default persists a session blob; pass `{ persist: false }`
   when restoring from an existing session (don't bump the TTL on

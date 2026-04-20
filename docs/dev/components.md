@@ -69,10 +69,10 @@ File: `src/components/ContextRing.svelte`.
 Per-message context-window indicator. A 14px SVG ring that fills
 proportional to `totalTokens / contextWindow`, with a hue ramp from
 green (0%) through yellow (50%) to red (100%). Clicking the ring
-slides a detail row open beneath the message's action bar showing
-the exact `prompt + completion = total` breakdown; clicking again
-(or Escape) slides it closed. Desktop hover also exposes the same
-summary as a native `title` tooltip.
+slides a detail row open beneath the message's action bar showing a
+summary of context-window usage; clicking again (or Escape) slides it
+closed. Desktop hover also exposes the same summary as a native `title`
+tooltip.
 
 ```ts
 interface Props {
@@ -110,7 +110,7 @@ interface Props {
   defaultEffort: ReasoningEffort;
   open: boolean;
   onToggle: () => void;
-  onPick: (e: ReasoningEffort) => void;
+  onSelect: (e: ReasoningEffort) => void;
 }
 ```
 
@@ -134,8 +134,8 @@ fenced blocks via `<Markdown>`.
 ```ts
 interface Props {
   calls: OpenAIToolCall[];
-  results: Message[];        // role='tool' rows, paired by tool_call_id
-  timings?: Record<string, CallTiming>;  // in-memory, per-session
+  resultsByCallId: Record<string, Message>;  // role='tool' rows keyed by tool_call_id
+  timings?: Record<string, CallTiming>;      // in-memory, per-session
 }
 ```
 
@@ -146,7 +146,7 @@ Status sources:
 - **Replayed history** (opened a prior conversation) has no timings;
   rows are read-only. Success/failure falls back to parsing the
   result content — a JSON payload with an `error` key renders as
-  failure, otherwise success.
+  failure; invalid/non-JSON payloads are treated as success.
 
 Timings are not persisted (in-memory, owned by `Chat.svelte`).
 Reopening a conversation shows completed rows with status glyph

@@ -36,6 +36,7 @@ Both signals are background; recall is the read-time consumer.
   the agent that runs one recall pass.
 - `src/lib/tools/conversation_search.ts` — exact-ILIKE + vector
   merge over the user's threads. The recall agent's only tool.
+  Returns hits labeled by `match_kind: 'exact' | 'semantic'`.
 - `src/lib/tools/conversation_recall_toolbox.ts` — the read-only
   toolbox. Standalone file to break an import cycle (see
   Gotchas).
@@ -55,9 +56,9 @@ Both signals are background; recall is the read-time consumer.
   a final user turn, and calls `runHeadlessToolLoop` with
   `conversationRecallToolbox`.
 - **Agent tool calls** — inside the headless loop, the agent
-  calls `conversation_search` one or more times. Results are
-  ILIKE-title hits merged ahead of vector hits, with the
-  current thread filtered out by default.
+  calls `conversation_search` one or more times. Exact-title
+  hits are ordered ahead of semantic (vector) hits; the current
+  thread is filtered out by default.
 
 ## Data model
 
@@ -69,10 +70,10 @@ Both signals are background; recall is the read-time consumer.
   `embedding_model` + both embed claim columns) whenever
   `title` or `summary` changes, so the worker re-embeds on its
   next poll.
-- **`ThreadSearchHit`** — what the search RPC returns per row:
-  `{id, title, archived, updated_at, similarity, match_kind}`.
-  The tool joins this with `listThreadSummariesByIds` to include
-  `summary` in the result shape the recall agent actually sees.
+- **`ThreadSearchHit`** — core hit fields come from the backend
+  search; the tool layer hydrates summaries for display. The
+  merged list preserves ordering (exact before semantic) and
+  omits the current thread by default.
 - **Current-thread filter** — `conversation_search` excludes
   `ctx.threadId` by default. An explicit `include_current:
   true` flag opts back in for the rare case the main model
@@ -84,12 +85,11 @@ Both signals are background; recall is the read-time consumer.
 
 ## Contracts
 
-- `conversation_search.execute({ query, limit, include_current,
-  include_archived })` — merges exact-ILIKE hits (match_kind:
-  `'title'`) ahead of vector hits (`'semantic'`), dedupes by
-  id, caps at `limit` (default 20, max 100). When the embedding
-  fetch fails (no Venice key, offline), falls back to ILIKE-
-  only results.
+- `conversation_search.execute({ query, limit, include_current })`
+  — merges exact-title hits (`'exact'`) ahead of vector hits
+  (`'semantic'`), preserving backend ordering. Caps at `limit`
+  (default 20, max 100). When the embedding fetch fails (no
+  Venice key, offline), falls back to ILIKE-only results.
 - `ConversationRecallAgent.run(req): Promise<AgentRunResult<
   ConversationRecallOutput>>` — `req.input` is
   `{ threadId, topic? }`. The returned `note` is parsed from
@@ -123,9 +123,9 @@ Both signals are background; recall is the read-time consumer.
   `TOOLS` list but is excluded from every agent toolbox
   (reflection, memory recall, conversation recall itself);
   agents don't recurse into recall. The search tool
-  `conversation_search` lives in the registry AND in
-  `conversationRecallToolbox`; the main chat model can call
-  it directly, and so can the recall agent. See `./tools.md`.
+  `conversation_search` is shared by chat and the recall agent:
+  it lives in the registry and is also exposed via
+  `conversationRecallToolbox`. See `./tools.md`.
 
 ## Gotchas
 

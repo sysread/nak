@@ -37,9 +37,10 @@ docs imported via `import.meta.glob`.
   task definitions (`mise run sync`, `mise run setup`, etc.).
 - `.github/workflows/tests.yml` — runs `pnpm check / lint /
   test` on every push + PR.
-- `.github/workflows/deploy.yml` — triggered by a successful
-  Tests run on `main`; runs the Supabase sync, builds, and
-  publishes to Pages.
+- `.github/workflows/deploy.yml` — uses `workflow_run` on the
+  Tests workflow (success on `main`) and also supports manual
+  `workflow_dispatch`. Runs the Supabase sync (when repo vars are
+  configured), then builds and publishes to Pages.
 
 ## Entry points
 
@@ -93,14 +94,15 @@ docs imported via `import.meta.glob`.
   failing test won't ship.
 - **Sync-supabase gates the build.** `needs: sync-supabase`
   on the build job means a schema-apply failure halts the
-  deploy before the build runs. Better to fail than ship
-  against a stale DB.
+  deploy before the build runs. The sync step runs only when
+  `vars.SUPABASE_PROJECT_REF` is configured; forks without it
+  still build and publish.
 - **Fork-friendly sync gating.**
   `if: vars.SUPABASE_PROJECT_REF != ''` on the sync step.
   A fresh fork that hasn't wired the Supabase automation
   yet still deploys normally; the sync step is a no-op.
 - **`VITE_BASE` computation in CI.** The deploy workflow
-  computes `/<repo>/` for project pages and `/` for
+  sets `VITE_BASE` to `/<repo>/` for project pages and `/` for
   user/org pages. The repo root makes it a project page;
   `<user>.github.io` is the user-page exception.
 - **Service worker cache scope.** `globPatterns:
