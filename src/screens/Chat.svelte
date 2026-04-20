@@ -994,17 +994,17 @@
         ...messages.map(toVeniceMessage),
       ];
 
-      // Throttle streamingText updates to ~4Hz while the response
+      // Throttle streamingText updates to ~2Hz while the response
       // arrives. Every assignment drives <Markdown> to re-run marked
       // + DOMPurify + highlight.js over the full growing buffer, so
       // flushing on each SSE delta would peg the main thread and make
       // long responses land in visible gulps. Trailing-edge throttle:
-      // the first delta schedules a 250ms timer, any deltas arriving
+      // the first delta schedules a 500ms timer, any deltas arriving
       // inside that window get coalesced into the latest `pending`
       // value, and one flush commits the buffer when the timer fires.
-      // Side effect: ~250ms of "thinking dots" before the first
+      // Side effect: ~500ms of "thinking dots" before the first
       // rendered paint, which reads as intentional pacing.
-      const FLUSH_MS = 250;
+      const FLUSH_MS = 500;
       let pending: string | null = null;
       let flushTimer = 0;
       const flushPending = (): void => {
