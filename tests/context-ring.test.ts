@@ -126,10 +126,13 @@ describe('ContextRing', () => {
     const wrap = container.querySelector('.context-ring');
     expect(wrap).not.toBeNull();
     const label = wrap!.getAttribute('aria-label');
-    // Percentage leads, exact token counts follow in parens. Exact
-    // format matters for the tooltip too; the user sees this string
-    // on hover.
-    expect(label).toBe('50% (128,400 / 256,000 tokens)');
+    // "Context window" prefix names what the ring represents — without
+    // it, a screen-reader user landing on the control hears just a
+    // percentage and has no idea what's being measured. Percentage
+    // leads the numeric part, exact token counts follow in parens.
+    // Exact format matters for the tooltip too; the user sees this
+    // string on hover.
+    expect(label).toBe('Context window: 50% used (128,400 / 256,000 tokens)');
     // The tooltip (`title`) mirrors the aria-label so sighted and
     // assistive-tech readers both get the same summary.
     expect(wrap!.getAttribute('title')).toBe(label);
@@ -163,7 +166,9 @@ describe('ContextRing', () => {
 
     const detail = container.querySelector('.ring-detail');
     expect(detail).not.toBeNull();
-    expect(detail!.textContent?.trim()).toBe('50% (128,400 / 256,000 tokens)');
+    expect(detail!.textContent?.trim()).toBe(
+      'Context window: 50% used (128,400 / 256,000 tokens)'
+    );
     expect(btn.getAttribute('aria-expanded')).toBe('true');
   });
 

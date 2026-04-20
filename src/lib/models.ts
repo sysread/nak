@@ -82,7 +82,7 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
   },
   balanced: {
     tier: 'balanced',
-    id: 'arcee-trinity-large-thinking',
+    id: 'gemma-4-uncensored',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
     // SCALES because the scales glyph is all thin strokes in every major
