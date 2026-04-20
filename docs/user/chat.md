@@ -53,6 +53,20 @@ original page in a new tab.
 
 ## Stop and resume
 
+## When the model is rate-limited
+
+Venice occasionally returns a 429 "model overloaded" response when the
+requested model is under heavy load. When that happens the composer
+clears as usual, your message stays in the conversation, and a banner
+appears above the composer with the provider's explanation (e.g. "The
+model is currently overloaded. Please try again later.").
+
+Next to the banner is a refresh-arrow button — click it to re-send the
+same request without retyping. Retries pick up any intermediate
+tool-call results from the failed turn, so if the first attempt had
+already completed a tool round before the rate-limit hit, the retry
+resumes from there rather than starting over.
+
 ## Where to go next
 
 - [Threads](./threads.md) — managing the conversation list.
