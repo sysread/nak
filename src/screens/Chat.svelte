@@ -67,6 +67,7 @@
   } from '$lib/models';
   import Auth from './Auth.svelte';
   import Help from './Help.svelte';
+  import Memories from './Memories.svelte';
   import Settings from './Settings.svelte';
   import AssistantBody from '../components/AssistantBody.svelte';
   import CitationsPanel from '../components/CitationsPanel.svelte';
@@ -83,6 +84,7 @@
   let sessionLoaded = $state(false);
   let showSettings = $state(false);
   let showHelp = $state(false);
+  let showMemories = $state(false);
 
   let activeThreadId = $state<string | null>(null);
   let messages = $state<Message[]>([]);
@@ -1816,9 +1818,17 @@
 {:else if !session}
   <Auth />
 {:else if showSettings}
-  <Settings onClose={() => (showSettings = false)} />
+  <Settings
+    onClose={() => (showSettings = false)}
+    onOpenMemories={() => {
+      showSettings = false;
+      showMemories = true;
+    }}
+  />
 {:else if showHelp}
   <Help onClose={() => (showHelp = false)} />
+{:else if showMemories}
+  <Memories onClose={() => (showMemories = false)} />
 {:else}
   <div class="shell" class:drawer-open={drawerOpen}>
     <div
@@ -2040,6 +2050,21 @@
               <circle cx="12" cy="12" r="10" />
               <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
               <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+          </button>
+          <!-- Memories modal — the human-facing browser for the
+               memory table the reflection/recall agents read and
+               write behind the scenes. See src/screens/Memories.svelte. -->
+          <button
+            class="secondary icon-btn"
+            onclick={() => (showMemories = true)}
+            title="Memories"
+            aria-label="Memories"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
             </svg>
           </button>
           <button
