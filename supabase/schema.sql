@@ -284,9 +284,14 @@ alter table public.threads
 
 -- message_attachments ----------------------------------------------------
 --
--- One row per file a user attached to a message. Binary lives in `data`
--- as `bytea` (PostgREST surfaces it as base64 on SELECT, so clients see
--- a string and don't have to negotiate the binary content-type).
+-- One row per file a user attached to a message. The file bytes live
+-- in `data` as base64-encoded `text` — not `bytea`. The original
+-- design used bytea, but PostgREST serialises bytea as a hex-escaped
+-- string (`\x4869...`) on both read and write, which our client code
+-- assumed was base64 and fed straight into `atob()`. Storing base64
+-- as text removes the encoding ambiguity entirely: what goes in is
+-- what comes out, it's directly usable by `atob`, and the ~33%
+-- storage overhead is negligible under the 10 MB per-file cap.
 --
 -- `extracted_text` is populated at upload time for non-image files by
 -- calling Venice's POST /api/v1/augment/text-parser endpoint, so the
@@ -315,11 +320,41 @@ create table if not exists public.message_attachments (
   filename text not null,
   mime_type text not null,
   size_bytes int not null,
-  data bytea,
+  data text,
   extracted_text text,
   expired_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+-- Migrate the `data` column from bytea to text for projects synced
+-- under the original design. Idempotent: the information_schema
+-- check short-circuits on freshly-synced databases (where the column
+-- is already text) and on subsequent syncs after the migration runs
+-- (same reason). We drop + re-add rather than `alter column ... type
+-- text using encode(data, 'base64')` because pre-migration rows hold
+-- bytes under an ambiguous PostgREST encoding — re-encoding garbage
+-- doesn't restore the original files. Post-migration, any rows that
+-- existed before render as "expired" (data is null, extracted_text
+-- preserved where populated) which matches the expired-attachment
+-- rendering the message list already handles gracefully.
+do $$
+begin
+  if exists (
+    select 1
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'message_attachments'
+       and column_name = 'data'
+       and data_type = 'bytea'
+  ) then
+    -- Drop the dependent partial index first; `alter column ... type`
+    -- would preserve it implicitly but we're dropping the column.
+    -- `create index if not exists` further down recreates it.
+    drop index if exists public.message_attachments_live_idx;
+    alter table public.message_attachments drop column data;
+    alter table public.message_attachments add column data text;
+  end if;
+end $$;
 
 create index if not exists message_attachments_message_idx
   on public.message_attachments (message_id, position);

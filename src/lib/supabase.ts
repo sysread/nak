@@ -118,12 +118,13 @@ export interface Memory {
 }
 
 /**
- * One file attached to a user message. Binary lives in `data_base64` as
- * a base64 string — PostgREST surfaces the DB-side `bytea` that way on
- * SELECT, so the client doesn't have to negotiate a binary content
- * type. Null `data_base64` + non-null `expired_at` is the "reclaimed"
- * state produced by the attachment_expiry worker; `extracted_text`
- * survives that transition on purpose so the message list stays
+ * One file attached to a user message. Binary lives in `data_base64`
+ * as a base64 string — stored directly in a `text` column on the DB
+ * side (see the note on `message_attachments.data` in schema.sql
+ * explaining why not bytea). Null `data_base64` + non-null
+ * `expired_at` is the "reclaimed" state produced by the
+ * attachment_expiry worker; `extracted_text` survives that
+ * transition on purpose so the message list stays
  * meaningful.
  */
 export interface Attachment {
@@ -1308,9 +1309,10 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
     const messages = (data ?? []) as Message[];
     // Hydrate attachments in a second query keyed by message id. Keeps
-    // the base SELECT cheap (no bytea on the wire for rows without
-    // attachments, which is the common case) and lets the realtime
-    // subscribe path reuse the same hydration helper later.
+    // the base SELECT cheap (no large base64 payloads on the wire for
+    // rows without attachments, which is the common case) and lets
+    // the realtime subscribe path reuse the same hydration helper
+    // later.
     const userMessageIds = messages
       .filter((m) => m.role === 'user')
       .map((m) => m.id);
@@ -1342,10 +1344,11 @@ export class SupabaseService {
   ): Promise<Map<string, Attachment[]>> {
     const result = new Map<string, Attachment[]>();
     if (messageIds.length === 0) return result;
-    // `data` is the large column — but PostgREST returns it base64-
-    // encoded into the `data` field and we rename to `data_base64` via
-    // an explicit select list so the TypeScript type matches what the
-    // UI expects.
+    // `data` is the large column. It's a plain text column holding a
+    // base64-encoded file body (see schema.sql's message_attachments
+    // block for why not bytea). We rename it to `data_base64` in the
+    // TS shape so consumers of the Attachment type can't mistake it
+    // for raw bytes.
     const { data, error } = await this.client
       .from('message_attachments')
       .select(
@@ -1396,9 +1399,10 @@ export class SupabaseService {
       filename: r.filename,
       mime_type: r.mime_type,
       size_bytes: r.size_bytes,
-      // PostgREST accepts the base64 string as the value for a bytea
-      // column when the request content-type is JSON — it decodes on
-      // the server. Same pattern as the memories embedding column.
+      // The DB column is plain `text` — the base64 string rides
+      // through PostgREST unchanged on both write and read. See the
+      // note on `message_attachments.data` in schema.sql for why
+      // this isn't a bytea column.
       data: r.data_base64,
       extracted_text: r.extracted_text,
     }));

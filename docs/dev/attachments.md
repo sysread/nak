@@ -74,7 +74,7 @@ consume them, and reclaimed after a 30-day dormancy window.
 | `filename text` | Original filename, preserved across expiry. |
 | `mime_type text` | MIME captured at upload time. |
 | `size_bytes int` | Original size; truthful post-expiry. |
-| `data bytea` | Binary; NULL after expiry. |
+| `data text` | Base64-encoded file body; NULL after expiry. |
 | `extracted_text text` | Venice text-parser output; survives expiry. |
 | `expired_at timestamptz` | NULL while live; stamped when binary is reclaimed. |
 | `created_at timestamptz` | Insert time. |
@@ -141,11 +141,17 @@ via-parent-of-parent pattern —
 
 ## Gotchas
 
-- **PostgREST base64 column naming**: `bytea` columns surface as
-  base64-encoded strings on SELECT, but the column name is still
-  `data`. Our type exposes it as `data_base64` for clarity;
-  `listAttachmentsByMessageIds` renames the column into the
-  type.
+- **Base64 stored as text, not bytea**: the original design used a
+  `bytea` column on the assumption that PostgREST serialises bytea
+  as base64 on SELECT. It doesn't — PostgREST returns bytea as a
+  hex-escaped string (`\x4869…`), which our client fed straight
+  into `atob()` and tripped `InvalidCharacterError`. The write
+  path was equally wrong: we were sending a base64 string into a
+  bytea column and PostgreSQL stored whatever bytes happened to
+  match, producing garbage on read-back. Switching to plain `text`
+  storing the base64 directly makes the round-trip unambiguous.
+  The TS type renames the column to `data_base64` to keep callers
+  from confusing the base64 string with raw bytes.
 - **Multipart boundary on text-parser**: don't set a
   Content-Type header on the text-parser fetch — the browser
   emits the correct `multipart/form-data; boundary=…` from the
