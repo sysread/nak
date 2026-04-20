@@ -31,6 +31,16 @@ export type {
 } from './recall/agent';
 export { RECALL_PROMPT } from './recall/prompt';
 
+export { ConversationRecallAgent } from './conversation_recall/agent';
+export type {
+  ConversationRecallInput,
+  ConversationRecallOutput,
+} from './conversation_recall/agent';
+export {
+  CONVERSATION_RECALL_PROMPT,
+  buildConversationRecallPrompt,
+} from './conversation_recall/prompt';
+
 export { SummaryAgent } from './summary/agent';
 export type { SummaryInput, SummaryOutput } from './summary/agent';
 export { SUMMARY_PROMPT } from './summary/prompt';

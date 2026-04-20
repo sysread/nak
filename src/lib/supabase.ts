@@ -183,6 +183,24 @@ export interface ThreadSearchHit {
   similarity?: number;
 }
 
+/**
+ * Narrow projection of a thread row used by `listThreadSummariesByIds`
+ * and the `conversation_search` tool. Carries the fields the LLM needs
+ * to judge relevance — title + the summary agent's 2–3 sentence topical
+ * summary — plus just enough metadata (archived, updated_at) to order
+ * and weigh results. `summary` is nullable because the summary worker
+ * runs asynchronously after the first terminal assistant turn; a brand-
+ * new thread may have an embedding (populated from title alone) but no
+ * summary yet.
+ */
+export interface ThreadSummaryRow {
+  id: string;
+  title: string;
+  summary: string | null;
+  archived: boolean;
+  updated_at: string;
+}
+
 /** Default page size for Older and Archived buckets. */
 export const DEFAULT_THREAD_PAGE_SIZE = 25;
 
@@ -617,6 +635,54 @@ export class SupabaseService {
         similarity: row.similarity,
       });
       if (out.length >= limit) return out;
+    }
+    return out;
+  }
+
+  /**
+   * Batch-fetch a tool-facing projection of thread rows by id,
+   * preserving the caller's id ordering. Used to hydrate the
+   * `summary` column onto results of `searchThreads` — the
+   * `search_threads_by_embedding` RPC returns only the columns the
+   * drawer UI needs (id, title, archived, updated_at, similarity), so
+   * the model-facing `conversation_search` tool has to round-trip for
+   * the summary. Deliberately a narrow projection rather than a
+   * `Thread[]` — the tool result set doesn't need user_id /
+   * tools_enabled / model / reasoning_effort, and surfacing those on
+   * tool results would be noise the LLM then has to filter.
+   *
+   * `.in('id', ids)` returns rows in the server's natural order, not
+   * the caller's requested order — we re-sort against the input so
+   * callers that already sorted their ids upstream (by similarity, by
+   * merge order) keep that sort.
+   */
+  async listThreadSummariesByIds(ids: readonly string[]): Promise<ThreadSummaryRow[]> {
+    if (ids.length === 0) return [];
+    const { data, error } = await this.client
+      .from('threads')
+      .select('id, title, summary, archived, updated_at')
+      .in('id', ids as string[]);
+    if (error) throw new SupabaseError(error.message);
+    const rows = ((data ?? []) as {
+      id: unknown;
+      title: unknown;
+      summary: unknown;
+      archived: unknown;
+      updated_at: unknown;
+    }[]).map(
+      (row): ThreadSummaryRow => ({
+        id: String(row.id),
+        title: String(row.title ?? ''),
+        summary: typeof row.summary === 'string' ? row.summary : null,
+        archived: row.archived === true,
+        updated_at: String(row.updated_at),
+      })
+    );
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const out: ThreadSummaryRow[] = [];
+    for (const id of ids) {
+      const r = byId.get(id);
+      if (r) out.push(r);
     }
     return out;
   }

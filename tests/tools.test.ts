@@ -16,6 +16,8 @@ import {
   buildToolboxWireList,
   executeToolboxCall,
   memoryToolbox,
+  recallToolbox,
+  conversationRecallToolbox,
   toOpenAIToolDef,
   executeToolCall,
   toggleTools,
@@ -101,19 +103,43 @@ function ctxFor(svc: SupabaseService, venice: VeniceClient = mockVenice()): Tool
 }
 
 describe('tool registry', () => {
-  it('exposes toggle_tools plus every memory tool', () => {
+  it('exposes toggle_tools plus every memory + conversation tool', () => {
     const names = TOOLS.map((t) => t.name);
     expect(names).toContain('toggle_tools');
+    expect(names).toContain('memory_recall');
     expect(names).toContain('memory_search');
     expect(names).toContain('memory_create');
     expect(names).toContain('memory_update');
     expect(names).toContain('memory_delete');
+    expect(names).toContain('conversation_recall');
+    expect(names).toContain('conversation_search');
   });
 
-  it('buildToolList returns only toggle_tools when disabled', () => {
+  it('buildToolList returns the always-on set when disabled', () => {
+    // Always-on is toggle_tools + both recall tools. The recall tools
+    // are reflex-level — the system prompt tells the model to call
+    // them at the top of a new topic, so they can't sit behind a
+    // prefatory toggle round-trip.
     const list = buildToolList(false);
-    expect(list).toHaveLength(1);
-    expect(list[0].function.name).toBe('toggle_tools');
+    expect(list.map((t) => t.function.name).sort()).toEqual(
+      ['conversation_recall', 'memory_recall', 'toggle_tools']
+    );
+  });
+
+  it('buildToolList keeps the gated tools hidden when disabled', () => {
+    // Tripwire: if someone adds a gated tool to the always-on set by
+    // accident, the "tools_enabled=false → small wire payload" invariant
+    // breaks. Name every tool that MUST be gated here.
+    const disabled = buildToolList(false).map((t) => t.function.name);
+    for (const gated of [
+      'memory_search',
+      'memory_create',
+      'memory_update',
+      'memory_delete',
+      'conversation_search',
+    ]) {
+      expect(disabled).not.toContain(gated);
+    }
   });
 
   it('buildToolList returns every tool when enabled', () => {
@@ -153,27 +179,72 @@ describe('tool registry', () => {
     expect(prompt).toContain('memory_recall');
   });
 
-  it('buildSystemPrompt lists every gated tool but omits toggle_tools itself', () => {
+  it('buildSystemPrompt lists every tool (always-on + gated) but omits toggle_tools itself', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('memory_recall');
+    expect(prompt).toContain('conversation_recall');
     expect(prompt).toContain('memory_search');
     expect(prompt).toContain('memory_create');
     expect(prompt).toContain('memory_update');
     expect(prompt).toContain('memory_delete');
+    expect(prompt).toContain('conversation_search');
     // toggle_tools is the switch itself, not something to advertise in
-    // the catalog of gated tools.
+    // either catalog section — the prompt block that explains the
+    // toggle rule already names it.
     expect(prompt).not.toMatch(/^- toggle_tools/m);
   });
 
   it('buildSystemPrompt catalog lines are dynamically derived from the registry', () => {
-    // Every gated tool's name AND shortDescription land on a line. If
-    // a tool is added to TOOLS but forgotten in the catalog, this
-    // test catches the drift — the prompt is always the live view.
+    // Every tool other than `toggle_tools` appears as a catalog line
+    // with its name + shortDescription, across the two sections
+    // (always-available and gated). If a tool is added to TOOLS but
+    // forgotten in either section, this test catches the drift — the
+    // prompt is always the live view.
     const prompt = buildSystemPrompt();
-    const gated = TOOLS.filter((t) => t.name !== toggleTools.name);
-    for (const tool of gated) {
+    const cataloged = TOOLS.filter((t) => t.name !== toggleTools.name);
+    for (const tool of cataloged) {
       expect(prompt).toContain(`- ${tool.name} : ${tool.shortDescription}`);
     }
+  });
+
+  it('buildSystemPrompt splits the catalog into Always-available and Gated sections', () => {
+    // The two sections exist and are ordered — always-on first. This
+    // matches the tool order on the wire (ALWAYS_ON is sent regardless
+    // of the toggle) and the reading order the model needs: "here's
+    // what you can call right now; here's what's behind the toggle."
+    const prompt = buildSystemPrompt();
+    const alwaysIdx = prompt.indexOf('Always available');
+    const gatedIdx = prompt.indexOf('Gated tools');
+    expect(alwaysIdx).toBeGreaterThanOrEqual(0);
+    expect(gatedIdx).toBeGreaterThan(alwaysIdx);
+
+    // Recall pair lives under Always available; conversation_search
+    // lives under Gated. Slice the prompt by section and assert the
+    // tool names land in the right half.
+    const alwaysSection = prompt.slice(alwaysIdx, gatedIdx);
+    const gatedSection = prompt.slice(gatedIdx);
+    expect(alwaysSection).toMatch(/- memory_recall /);
+    expect(alwaysSection).toMatch(/- conversation_recall /);
+    expect(alwaysSection).not.toMatch(/- conversation_search /);
+    expect(gatedSection).toMatch(/- conversation_search /);
+    expect(gatedSection).toMatch(/- memory_search /);
+    expect(gatedSection).not.toMatch(/- memory_recall /);
+  });
+
+  it('buildSystemPrompt carries recall cadence rules', () => {
+    // The three rules (memory_recall at open, memory_recall on
+    // topic-clarify, conversation_recall on new topic) are what
+    // actually move the model from "recall exists" to "recall gets
+    // used." Grep-style assertions rather than exact-string so
+    // phrasing tweaks don't break the test — but the semantics must
+    // survive.
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/When a conversation opens/i);
+    expect(prompt).toMatch(/memory_recall.*once/i);
+    expect(prompt).toMatch(/land(s|ed)?\s+on\s+a\s+clear\s+topic/i);
+    expect(prompt).toMatch(/opens?\s+a\s+new\s+topic/i);
+    expect(prompt).toMatch(/conversation_recall/);
+    expect(prompt).toMatch(/(don\u2019t|don't)\s+make\s+the\s+user\s+repeat/i);
   });
 
   it('buildSystemPrompt explains the toggle_tools gating rule', () => {
@@ -447,6 +518,41 @@ describe('memory_invalidate', () => {
     const { svc, spies } = mockSupabase();
     spies.decayMemoryConfidence.mockResolvedValueOnce(null);
     await expect(tool.execute({ id: 'gone' }, ctxFor(svc))).rejects.toThrow(/not found/);
+  });
+});
+
+describe('conversationRecallToolbox', () => {
+  it('exposes only conversation_search — no write tools, no recall recursion', () => {
+    // Sibling of recallToolbox but against threads. A bug in the
+    // conversation-recall prompt that routed into a write or a
+    // nested recall call would be a fresh class of mistake; the
+    // registry shape is the tripwire. If someone adds
+    // conversation_recall or a thread-mutation tool here, this test
+    // points at the drift.
+    const names = conversationRecallToolbox.tools.map((t) => t.name);
+    expect(names).toEqual(['conversation_search']);
+    expect(names).not.toContain('conversation_recall');
+    expect(names).not.toContain('memory_search');
+    expect(names).not.toContain('toggle_tools');
+  });
+
+  it('carries a stable name and a non-empty description for downstream prompts', () => {
+    expect(conversationRecallToolbox.name).toBe('conversation-recall');
+    expect(conversationRecallToolbox.description.length).toBeGreaterThan(0);
+  });
+});
+
+describe('recall surface scoping — cross-toolbox', () => {
+  it('memory_recall is absent from every non-main toolbox', () => {
+    for (const tb of [memoryToolbox, recallToolbox, conversationRecallToolbox]) {
+      expect(tb.tools.map((t) => t.name)).not.toContain('memory_recall');
+    }
+  });
+
+  it('conversation_recall is absent from every non-main toolbox', () => {
+    for (const tb of [memoryToolbox, recallToolbox, conversationRecallToolbox]) {
+      expect(tb.tools.map((t) => t.name)).not.toContain('conversation_recall');
+    }
   });
 });
 

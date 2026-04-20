@@ -140,6 +140,17 @@ export const VENICE_REFLECTION_MODEL = MODELS.fast.id;
 export const VENICE_RECALL_MODEL = MODELS.fast.id;
 
 /**
+ * Model the conversation-recall agent runs against. Same rationale as
+ * memory recall: "read the live conversation, run one or more
+ * `conversation_search` queries against prior threads, produce a
+ * short first-person note." Long-context reading, not reasoning, so
+ * the fast tier fits. Kept as a distinct constant from
+ * `VENICE_RECALL_MODEL` so the two recall surfaces can be pinned to
+ * different models independently if one regresses.
+ */
+export const VENICE_CONVERSATION_RECALL_MODEL = MODELS.fast.id;
+
+/**
  * Model the thread-summary agent runs against. The task is "read the
  * conversation, write 2–3 sentences" — cheap, bounded, and leans on
  * long-context reading, not reasoning. Tracks the fast tier for the
