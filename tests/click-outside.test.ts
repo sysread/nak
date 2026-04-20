@@ -1,0 +1,60 @@
+/**
+ * Verifies the document-level click-outside pattern that dismisses
+ * composer-bar popovers in Chat.svelte. Mirrors the same shape
+ * (anyOpen-gated document listener, `.composer-menu` / `[aria-haspopup]`
+ * containment check) in a minimal harness component so the behaviour
+ * can be asserted without mounting the whole chat screen.
+ */
+import { describe, it, expect, afterEach } from 'vitest';
+import { cleanup, render, fireEvent } from '@testing-library/svelte';
+import Harness from './click-outside-harness.svelte';
+
+afterEach(cleanup);
+
+describe('composer click-outside dismissal', () => {
+  it('opens the prompts menu when its toggle is clicked', async () => {
+    const { getByTestId, queryByTestId } = render(Harness);
+    expect(queryByTestId('prompts-menu')).toBeNull();
+    await fireEvent.click(getByTestId('prompts-toggle'));
+    expect(queryByTestId('prompts-menu')).not.toBeNull();
+  });
+
+  it('closes the prompts menu when the user clicks fully outside the bar', async () => {
+    const { getByTestId, queryByTestId } = render(Harness);
+    await fireEvent.click(getByTestId('prompts-toggle'));
+    expect(queryByTestId('prompts-menu')).not.toBeNull();
+    await fireEvent.click(getByTestId('outside'));
+    expect(queryByTestId('prompts-menu')).toBeNull();
+  });
+
+  it('closes the menu when the user clicks on empty bar filler', async () => {
+    // The failure this pins down: early versions treated the whole
+    // `.composer-bar` as "inside", so a click on the gap between the
+    // toggles and the send button did nothing. The popover only
+    // yields on genuine menu/trigger containment now.
+    const { getByTestId, queryByTestId } = render(Harness);
+    await fireEvent.click(getByTestId('prompts-toggle'));
+    expect(queryByTestId('prompts-menu')).not.toBeNull();
+    await fireEvent.click(getByTestId('bar-filler'));
+    expect(queryByTestId('prompts-menu')).toBeNull();
+  });
+
+  it('keeps the menu open on clicks that land inside the menu itself', async () => {
+    const { getByTestId, queryByTestId } = render(Harness);
+    await fireEvent.click(getByTestId('prompts-toggle'));
+    // Clicking a menu item (e.g. a prompts-list checkbox) counts as
+    // inside — the popover must survive so the user can flip multiple
+    // toggles in one go.
+    await fireEvent.click(getByTestId('prompts-menu'));
+    expect(queryByTestId('prompts-menu')).not.toBeNull();
+  });
+
+  it('swaps between menus when a second toggle is clicked', async () => {
+    const { getByTestId, queryByTestId } = render(Harness);
+    await fireEvent.click(getByTestId('prompts-toggle'));
+    expect(queryByTestId('prompts-menu')).not.toBeNull();
+    await fireEvent.click(getByTestId('model-toggle'));
+    expect(queryByTestId('prompts-menu')).toBeNull();
+    expect(queryByTestId('model-menu')).not.toBeNull();
+  });
+});

@@ -56,8 +56,18 @@
 
   interface Props {
     onClose: () => void;
+    /**
+     * Optional handoff to the Memories modal. Chat.svelte wires this
+     * to `() => { showSettings = false; showMemories = true; }` so the
+     * AI pane's "Browse memories" link swaps modals atomically — we
+     * can't open Memories *alongside* Settings because both render in
+     * the same mutually-exclusive `{:else if}` branch in Chat.svelte.
+     * Left optional so Settings stays independently renderable (e.g.
+     * from tests) without a second modal in scope.
+     */
+    onOpenMemories?: () => void;
   }
-  let { onClose }: Props = $props();
+  let { onClose, onOpenMemories }: Props = $props();
 
   type Group =
     | 'keys'
@@ -633,6 +643,20 @@
           </div>
         </div>
         {#if promptsError}<p class="error">{promptsError}</p>{/if}
+
+        <h3 class="pane-section">Memories</h3>
+        <p class="subtle">
+          Nak builds up long-term notes about you as you chat — facts,
+          preferences, coaching notes the model writes to its future
+          self. Open the Memories browser to search, edit, or delete any
+          of them. Also reachable from the book icon in the drawer
+          footer.
+        </p>
+        {#if onOpenMemories}
+          <button type="button" class="secondary" onclick={onOpenMemories}>
+            Browse memories
+          </button>
+        {/if}
       {:else if group === 'appearance'}
         <h2>Appearance</h2>
         <p class="subtle">

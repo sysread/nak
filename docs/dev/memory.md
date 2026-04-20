@@ -17,7 +17,7 @@ in each user's own Supabase; the writes happen through the same
 tool harness the main chat uses.
 
 From the user's perspective this is the Memory feature documented
-in `docs/user/memory.md`. The dev side has three moving parts:
+in `docs/user/memory.md`. The dev side has four moving parts:
 
 1. **The store** — `memories` table, RLS-scoped, with a pgvector
    `embedding` column populated asynchronously.
@@ -27,11 +27,22 @@ in `docs/user/memory.md`. The dev side has three moving parts:
 3. **The reader** — the recall agent runs inline during a chat
    turn when the main model invokes the `memory_recall` tool.
    Read-only.
+4. **The browser** — `src/screens/Memories.svelte`, a modal reached
+   from the drawer footer or from the AI settings pane. Wraps the
+   shared `searchMemoriesSemantic` helper plus the `updateMemory` /
+   `deleteMemory` Supabase methods. Human-only; offers hard delete
+   but no invalidate (that stays an agent/assistant affordance).
 
 ## Files
 
-- `src/lib/tools/memory_search.ts` — vector search with ILIKE
-  fallback for unembedded rows.
+- `src/lib/memories.ts` — the shared `searchMemoriesSemantic`
+  helper. Owns the embed → pad → RPC + ILIKE merge pipeline.
+  Called by both the `memory_search` tool and the Memories
+  browser so the two can't drift on what "search a memory"
+  means.
+- `src/lib/tools/memory_search.ts` — thin tool wrapper over
+  `searchMemoriesSemantic`. Preserves the LLM-facing parameter
+  schema.
 - `src/lib/tools/memory_create.ts`, `memory_update.ts`,
   `memory_invalidate.ts`, `memory_delete.ts` — the CRUD surface.
   Invalidate halves confidence; delete hard-removes.
@@ -44,6 +55,11 @@ in `docs/user/memory.md`. The dev side has three moving parts:
   value (side effects = memory tool calls).
 - `src/lib/tools/recall_toolbox.ts` — the read-only toolbox the
   recall agent uses. Standalone file to break an import cycle.
+- `src/screens/Memories.svelte` — human-facing browser. Calls
+  `searchMemoriesSemantic` for search and
+  `SupabaseService.updateMemory` / `deleteMemory` for edits.
+  Rendered from `Chat.svelte` as a mutually-exclusive phase
+  branch alongside Help/Settings.
 - `supabase/schema.sql` (memory section + reflection section) —
   table shape, triggers, RLS policies, reflection claim columns
   on `threads`.
@@ -66,6 +82,13 @@ in `docs/user/memory.md`. The dev side has three moving parts:
   do you remember about me?" or "forget that I liked X"; the
   main model calls `memory_search` / `memory_update` /
   `memory_delete` through the normal tool flow.
+- **Memories browser** — drawer-footer book icon or Settings →
+  AI → "Browse memories" flips `showMemories` in `Chat.svelte`.
+  The modal searches via `searchMemoriesSemantic` (same helper
+  the tool uses) and edits via `SupabaseService.updateMemory` /
+  `deleteMemory`. No tool harness involved — the user has their
+  own session-scoped supabase client, so RLS is already in
+  force.
 
 ## Data model
 
@@ -132,7 +155,14 @@ in `docs/user/memory.md`. The dev side has three moving parts:
   mid-turn. The chat loop dispatches it, the recall agent runs
   inline on the fast tier, the structured output becomes a
   `role='tool'` message, and the main model folds the returned
-  note into its reply. See `./chat.md`.
+  note into its reply. The chat screen also owns the
+  `showMemories` phase state and the drawer-footer entry point
+  to the browser. See `./chat.md`.
+- **Settings** — the AI pane carries a "Browse memories" link
+  that hands off via an `onOpenMemories` prop. See
+  `./settings.md`. The link is the only cross-modal handoff in
+  the app today; everything else treats the mutually-exclusive
+  `{:else if}` branches as independent phases.
 - **Tools** — the five memory tools live in the registry
   (`tools/index.ts`). Reflection uses `memoryToolbox` (a
   write-scoped subset: search + create + update + invalidate,

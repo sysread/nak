@@ -22,14 +22,15 @@ accurate preview of the finished answer.
 ### Reasoning ("thinking") panel
 
 Reasoning-capable models stream a chain-of-thought trace **before**
-the visible answer. Nak shows it in a dark-grey italic panel that
+the visible answer. Nak shows it as a block-quote-styled panel that
 slides open at the top of the message bubble the moment the first
 thinking token arrives. Once the model transitions to the visible
 answer, the panel animates closed so the reply takes center stage.
 
-After the fact, a thought-balloon button in the action bar toggles
-the panel back open on any message that has saved reasoning — handy
-for reading *why* the model answered a specific way without regenerating.
+After the fact, every message that has saved reasoning shows a
+thought-balloon "Reasoning" header at the top of the bubble. Click
+it to expand the block-quote back open — handy for reading *why* the
+model answered a specific way without regenerating.
 
 ### Citations and sources
 

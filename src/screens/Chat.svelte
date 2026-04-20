@@ -80,6 +80,7 @@
   } from '$lib/models';
   import Auth from './Auth.svelte';
   import Help from './Help.svelte';
+  import Memories from './Memories.svelte';
   import Settings from './Settings.svelte';
   import AssistantBody from '../components/AssistantBody.svelte';
   import CitationsPanel from '../components/CitationsPanel.svelte';
@@ -98,6 +99,7 @@
   let sessionLoaded = $state(false);
   let showSettings = $state(false);
   let showHelp = $state(false);
+  let showMemories = $state(false);
 
   let activeThreadId = $state<string | null>(null);
   let messages = $state<Message[]>([]);
@@ -322,9 +324,9 @@
   );
   /**
    * Live monotonic clock, driven by rAF while any tool is in flight and
-   * frozen when everything is idle. Drives the live-duration pill and
-   * the animated ellipsis in ToolCalls. Using performance.now() because
-   * Date.now() is clamped on a 1ms boundary and can go backwards.
+   * frozen when everything is idle. Drives the live-duration pill in
+   * ToolCalls. Using performance.now() because Date.now() is clamped on
+   * a 1ms boundary and can go backwards.
    */
   let nowMs = $state<number>(typeof performance !== 'undefined' ? performance.now() : 0);
   $effect(() => {
@@ -1650,13 +1652,21 @@
     if (followBottom) scrollToBottom(false);
   });
 
-  // Streaming deltas — debounced with a max-wait cap. `streamingText`
-  // toggling to '' at the end of a round also runs through here; the
-  // follow-up messages effect (assistant persisted) will cancel the
-  // pending timer and do the final snap-to-bottom, so we don't need
-  // a special "stream ended" signal.
+  // Streaming deltas — debounced with a max-wait cap. Tracks both the
+  // answer buffer (`streamingText`) and the reasoning buffer
+  // (`streamingReasoning`) so the view follows the bottom of the
+  // bubble while the thinking panel is growing, not just after the
+  // answer starts. Also tracks `streamingReasoningOpen`: the panel
+  // opening or closing causes a vertical layout shift that should
+  // scroll the view exactly the same way a token append would.
+  // `streamingText` toggling to '' at the end of a round also runs
+  // through here; the follow-up messages effect (assistant persisted)
+  // will cancel the pending timer and do the final snap-to-bottom,
+  // so we don't need a special "stream ended" signal.
   $effect(() => {
     void streamingText;
+    void streamingReasoning;
+    void streamingReasoningOpen;
     const el = messagesEl;
     if (!el) return;
     hasOverflow = el.scrollHeight > el.clientHeight + 1;
@@ -1668,7 +1678,6 @@
   let promptsMenuOpen = $state(false);
   let modelMenuOpen = $state(false);
   let reasoningMenuOpen = $state(false);
-  let composerBarEl: HTMLDivElement | undefined = $state();
 
   // IDs of system prompts active for the current thread. Seeded from
   // `enabledByDefault` when a thread is opened, not persisted. Swapping
@@ -1723,7 +1732,19 @@
       if (!inside) closeRowMenu();
     }
     if (!promptsMenuOpen && !modelMenuOpen && !reasoningMenuOpen) return;
-    if (composerBarEl && composerBarEl.contains(e.target as Node)) return;
+    // "Inside" is scoped to the open popover and its trigger — not the
+    // whole composer bar. Clicks on the bar's empty filler, the send
+    // button, or the toolbox toggle all count as outside so the popover
+    // yields the moment the user's attention moves anywhere else.
+    // `aria-haspopup="true"` is already set on every menu trigger for
+    // a11y, so we reuse it here instead of listing CSS classes.
+    const tgt = e.target;
+    if (
+      tgt instanceof Element &&
+      (tgt.closest('.composer-menu') || tgt.closest('[aria-haspopup="true"]'))
+    ) {
+      return;
+    }
     closeMenus();
   }
 
@@ -2085,9 +2106,17 @@
 {:else if !session}
   <Auth />
 {:else if showSettings}
-  <Settings onClose={() => (showSettings = false)} />
+  <Settings
+    onClose={() => (showSettings = false)}
+    onOpenMemories={() => {
+      showSettings = false;
+      showMemories = true;
+    }}
+  />
 {:else if showHelp}
   <Help onClose={() => (showHelp = false)} />
+{:else if showMemories}
+  <Memories onClose={() => (showMemories = false)} />
 {:else}
   <div class="shell" class:drawer-open={drawerOpen}>
     <div
@@ -2311,6 +2340,21 @@
               <line x1="12" y1="17" x2="12.01" y2="17" />
             </svg>
           </button>
+          <!-- Memories modal — the human-facing browser for the
+               memory table the reflection/recall agents read and
+               write behind the scenes. See src/screens/Memories.svelte. -->
+          <button
+            class="secondary icon-btn"
+            onclick={() => (showMemories = true)}
+            title="Memories"
+            aria-label="Memories"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+            </svg>
+          </button>
           <button
             class="secondary icon-btn"
             onclick={() => (showSettings = true)}
@@ -2471,7 +2515,7 @@
                    answer below. -->
               <ReasoningPanel
                 reasoning={streamingReasoning}
-                open={streamingReasoningOpen}
+                bind:open={streamingReasoningOpen}
                 duration={320}
               />
               {#if streamingText}
@@ -2613,7 +2657,7 @@
             aria-hidden="true"
             tabindex="-1"
           />
-          <div class="composer-bar" bind:this={composerBarEl}>
+          <div class="composer-bar">
             <div class="composer-bar-left">
               <!-- Tool master switch: on = every registered tool's schema
                    rides along with the next send; off = only toggle_tools.
@@ -2726,12 +2770,11 @@
                 aria-expanded={modelMenuOpen}
                 title={`Model: ${MODELS[currentTier].label} (${MODELS[currentTier].id})`}
               >
-                <!-- Generic "model selection" glyph, only revealed in the
-                     mobile icon-only layout. Uses a CPU outline rather
-                     than the tier emoji so the collapsed button reads as
-                     "pick a model" instead of "currently on 🧠". The tier
-                     emoji (next sibling) is the desktop affordance where
-                     the label disambiguates. -->
+                <!-- Generic "model selection" glyph for the collapsed
+                     icon-only trigger. A CPU outline rather than the
+                     tier emoji so the button reads as "pick a model"
+                     instead of "currently on 🧠" — the CSS hides the
+                     tier emoji whenever this CPU icon precedes it. -->
                 <svg class="model-picker-model-icon" width="18" height="18"
                      viewBox="0 0 24 24" fill="none" stroke="currentColor"
                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
