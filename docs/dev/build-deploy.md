@@ -55,6 +55,14 @@ docs imported via `import.meta.glob`.
 - **`pnpm preview`** — serves the built `dist/` on
   `http://localhost:4173`. Use for a PWA smoke test (the dev
   server does not emit a service worker).
+- **`mise run check`** — the canonical full gate. Fires unit
+  tests (which include the markdownlint guardrail),
+  svelte-check, and ESLint. CI runs the same task via
+  `.github/workflows/tests.yml` so a green local check is a
+  green CI job.
+- **`mise run markdownlint`** — standalone markdownlint-cli2
+  pass over `docs/**/*.md`, `README.md`, and `CLAUDE.md`.
+  Faster than the full test suite when iterating on docs.
 - **`mise run sync`** — applies `supabase/schema.sql` to the
   linked project + merges the Pages URL into the auth
   allowlist. Interactive on first run (picks a project,

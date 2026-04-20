@@ -22,8 +22,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile=false
 
-      - name: Type check
-        run: pnpm check
-
-      - name: Unit tests
-        run: pnpm test
+      # `mise run check` is the canonical local gate — unit tests (which
+      # themselves include the markdownlint guardrail via
+      # tests/markdownlint.test.ts), svelte-check, and ESLint. Keeping
+      # CI on the same entry point local developers use means a green
+      # `mise run check` locally is a green CI job.
+      - name: Full gate
+        run: mise run check

@@ -182,17 +182,23 @@ recent commits (`git log --oneline`).
 ## Running the checks locally
 
 ```sh
-pnpm check   # svelte-check: TypeScript + Svelte type-check
-pnpm lint    # ESLint
-pnpm test    # Vitest unit tests
-pnpm test:e2e  # Playwright E2E (slow; CI runs this)
+mise run check        # full local gate: tests + svelte-check + ESLint
+mise run test         # vitest only (includes the markdownlint guardrail)
+mise run markdownlint # markdownlint-cli2 only (fast iteration on docs)
 ```
 
-Always run `check` and `test` before committing — including for
-CSS-only changes. The test suite includes a postcss parse of every
-stylesheet under `src/` (see `tests/styles.test.ts`), which is the
-only local gate that catches a malformed rule before `pnpm build` /
-the Pages deploy rejects it.
+`mise run check` is what CI runs (see `.github/workflows/tests.yml`),
+so a green `mise run check` locally is a green CI job. The individual
+pnpm targets still work — `pnpm check`, `pnpm lint`, `pnpm test`,
+`pnpm test:e2e` — but prefer the mise tasks so dev + CI stay on the
+same entry point.
+
+Always run the gate before committing — including for CSS- or
+markdown-only changes. The test suite includes a postcss parse of
+every stylesheet under `src/` (see `tests/styles.test.ts`) and a
+markdownlint-cli2 pass over the doc tree (see
+`tests/markdownlint.test.ts`). Both only surface at `pnpm build` /
+the Pages deploy otherwise.
 
 ## Supabase schema changes
 

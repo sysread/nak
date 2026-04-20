@@ -58,5 +58,25 @@ description = "Build the PWA for production"
 run = "pnpm build"
 
 [tasks.test]
-description = "Run unit tests"
+description = "Run unit tests (includes the markdownlint guardrail via tests/markdownlint.test.ts)"
 run = "pnpm test"
+
+[tasks.markdownlint]
+description = "Lint all tracked markdown via markdownlint-cli2"
+# Globs are quoted so the CLI expands them, not the shell — consistent
+# behavior on fish / zsh / bash. Keep this invocation in sync with
+# tests/markdownlint.test.ts; the two run the same tool against the
+# same targets, one for dev iteration and one as the CI gate.
+run = "markdownlint-cli2 'docs/**/*.md' README.md CLAUDE.md"
+
+[tasks.check]
+description = "Full local gate — tests, svelte-check, ESLint"
+# `depends` runs `test` before this task's own `run` list fires, so the
+# order ends up: tests (which includes the markdownlint guardrail) →
+# svelte-check → ESLint. Markdownlint rides the test dep; there's no
+# second invocation here.
+depends = ["test"]
+run = [
+  "pnpm check",
+  "pnpm lint",
+]
