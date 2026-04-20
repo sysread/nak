@@ -464,10 +464,13 @@ describe('VeniceClient.streamChat', () => {
   });
 
   it('forwards webSearch=on with citations on venice_parameters', async () => {
-    // The Venice-specific knob lands inside `venice_parameters`, not at
+    // The Venice-specific knobs land inside `venice_parameters`, not at
     // the top level — mirroring https://docs.venice.ai/api-reference.
-    // Active modes also pair with `enable_web_citations: true` so
-    // sourced claims come back attributed rather than silently merged.
+    // Active modes pair `enable_web_citations: true` (model inserts
+    // `^N^` superscripts) with `include_search_results_in_stream: true`
+    // (Venice emits the matching citation list in the streaming
+    // response; without this the list is non-streaming-only, and the
+    // inline superscripts become orphaned references).
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
     );
@@ -487,12 +490,16 @@ describe('VeniceClient.streamChat', () => {
     expect(body.venice_parameters).toEqual({
       enable_web_search: 'on',
       enable_web_citations: true,
+      include_search_results_in_stream: true,
     });
   });
 
   it('pairs citations with auto mode too', async () => {
     // `auto` is still an active search mode — citations remain useful
-    // whenever the server actually performs a lookup.
+    // whenever the server actually performs a lookup, and the stream
+    // opt-in has to ride along on `auto` as well as `on` for the same
+    // reason: without it, the superscripts in the content would point
+    // to nothing on any turn that did fetch.
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
     );
@@ -512,6 +519,7 @@ describe('VeniceClient.streamChat', () => {
     expect(body.venice_parameters).toEqual({
       enable_web_search: 'auto',
       enable_web_citations: true,
+      include_search_results_in_stream: true,
     });
   });
 

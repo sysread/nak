@@ -307,12 +307,23 @@ export class VeniceClient {
     // when search is 'off', so we omit that field in that case.
     // (We deliberately do NOT set the xAI xsearch knob — that's a
     // separate server-side tool and the user hasn't opted in.)
+    //
+    // `include_search_results_in_stream` is the opt-in for receiving
+    // the `web_search_citations` array during a streaming response —
+    // it defaults to `false` server-side, meaning citations would
+    // otherwise only appear in non-streaming responses. Without this
+    // flag the model still adds `^N^` superscripts to the content
+    // (that's what `enable_web_citations` gates), but the matching
+    // list never arrives and the superscripts become orphaned.
+    // Flagged experimental in the Venice docs but it's the only way
+    // to surface citations in our streaming pipeline.
     if (req.webSearch) {
       const veniceParams: Record<string, unknown> = {
         enable_web_search: req.webSearch,
       };
       if (req.webSearch !== 'off') {
         veniceParams.enable_web_citations = true;
+        veniceParams.include_search_results_in_stream = true;
       }
       body.venice_parameters = veniceParams;
     }
