@@ -8,13 +8,14 @@
  * we run markdownlint-cli2 here over the tree and fail the suite on
  * any violation.
  *
- * Tooling note: `markdownlint-cli2` is pinned in `.mise.toml` rather
- * than `package.json`. Keeping it in mise means the same binary is
- * used locally (via `mise exec`) and in CI (via the `jdx/mise-action`
- * step in `.github/workflows/tests.yml`), and we don't drag node_modules
- * bloat into the main app bundle path for a dev-only tool. The test
- * invokes it via `mise exec` so a system-wide homebrew install (which
- * might be a different version) can't shadow the pin.
+ * Tooling note: `markdownlint-cli2` is a devDependency in
+ * `package.json`. `pnpm install` provisions it, and the test resolves
+ * the pinned version via `pnpm exec` — `node_modules/.bin/` shadows
+ * any system-wide install automatically, so the version in the
+ * lockfile is the version that runs. No separate tool manager needed
+ * for `pnpm test` to work from a cold clone, which matters for
+ * agent-driven / CI-like environments where provisioning mise
+ * separately is friction.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -22,7 +23,7 @@ import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 
 // Patterns the lint should cover. markdownlint-cli2 expands the globs
-// itself — we pass them as literals so mise + node don't pre-expand.
+// itself — we pass them as literals so pnpm + node don't pre-expand.
 // Keep this in sync with the invocation documented in
 // `docs/dev/build-deploy.md`.
 const TARGETS = ['docs/**/*.md', 'README.md', 'CLAUDE.md'];
@@ -31,22 +32,24 @@ const REPO_ROOT = join(__dirname, '..');
 
 describe('markdown lints clean', () => {
   it('passes markdownlint-cli2 across the repo', () => {
-    const result = spawnSync('mise', ['exec', '--', 'markdownlint-cli2', ...TARGETS], {
-      cwd: REPO_ROOT,
-      encoding: 'utf8',
-      // 30s is generous; a clean run over the current tree is sub-second,
-      // but the first invocation after a fresh `mise install` may have
-      // to resolve the tool.
-      timeout: 30_000,
-    });
+    const result = spawnSync(
+      'pnpm',
+      ['exec', 'markdownlint-cli2', ...TARGETS],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        // 30s is generous; a clean run over the current tree is sub-second.
+        timeout: 30_000,
+      },
+    );
 
     // `spawnSync` sets `error` on ENOENT / ETIMEDOUT / etc. Treat it as
     // a test failure with the underlying message — there's nothing
     // useful we can do in the test itself.
     if (result.error) {
       throw new Error(
-        `Failed to invoke mise exec markdownlint-cli2: ${result.error.message}. ` +
-          `Is mise installed? Run \`mise install\` to provision dev tools.`,
+        `Failed to invoke pnpm exec markdownlint-cli2: ${result.error.message}. ` +
+          `Is pnpm on PATH? Run \`pnpm install\` to provision dev dependencies.`,
       );
     }
 

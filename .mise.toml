@@ -7,11 +7,13 @@ pnpm = "9.12.0"
 # — the wizard (`mise run doctor`) will tell you what's missing.
 "aqua:cli/cli"      = "latest"
 "aqua:supabase/cli" = "latest"
-# markdownlint-cli2 gates the repo's markdown against .markdownlint.json.
-# Invoked from tests/markdownlint.test.ts so `pnpm test` (and the CI tests
-# job that runs it) fails on broken docs. The npm backend keeps the pin in
-# mise rather than mixing it into package.json's devDependencies.
-"npm:markdownlint-cli2" = "0.14.0"
+
+# Note: markdownlint-cli2 is a pnpm devDependency — `pnpm install`
+# provisions it, and `tests/markdownlint.test.ts` runs it via
+# `pnpm exec`. No mise pin needed; keeping the doc-lint toolchain on
+# pnpm means a fresh clone can `pnpm install && pnpm test` without
+# provisioning mise first, which matters for agent-driven /
+# ephemeral-sandbox environments.
 
 [env]
 NODE_ENV = "development"
@@ -67,7 +69,7 @@ description = "Lint all tracked markdown via markdownlint-cli2"
 # behavior on fish / zsh / bash. Keep this invocation in sync with
 # tests/markdownlint.test.ts; the two run the same tool against the
 # same targets, one for dev iteration and one as the CI gate.
-run = "markdownlint-cli2 'docs/**/*.md' README.md CLAUDE.md"
+run = "pnpm exec markdownlint-cli2 'docs/**/*.md' README.md CLAUDE.md"
 
 [tasks.check]
 description = "Full local gate — tests, svelte-check, ESLint"
