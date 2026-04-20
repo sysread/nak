@@ -10,6 +10,8 @@ import {
   VENICE_EMBEDDING_MODEL,
   VENICE_EMBEDDING_DIMS,
   EMBEDDING_STORAGE_DIMS,
+  findContextWindowById,
+  findModelById,
   padEmbeddingForStorage,
   isModelTier,
   isReasoningEffort,
@@ -168,5 +170,30 @@ describe('padEmbeddingForStorage', () => {
     const original = aDot(a, b);
     const padded = aDot(padEmbeddingForStorage(a), padEmbeddingForStorage(b));
     expect(padded).toBeCloseTo(original, 10);
+  });
+});
+
+describe('findContextWindowById', () => {
+  it('returns the window for a currently-fronted model id', () => {
+    expect(findContextWindowById('gemma-4-uncensored')).toBe(
+      MODELS.balanced.contextWindow
+    );
+    expect(findContextWindowById('kimi-k2-5')).toBe(MODELS.smart.contextWindow);
+  });
+
+  // Historical assistant rows carry ids that used to front a tier — if
+  // the fallback breaks, every pre-swap message silently loses its
+  // context-ring indicator. Pin the trinity window here because that's
+  // the concrete regression that motivated the retired-models map.
+  it('returns the pinned window for a retired model id', () => {
+    expect(findModelById('arcee-trinity-large-thinking')).toBeNull();
+    expect(findContextWindowById('arcee-trinity-large-thinking')).toBe(256_000);
+  });
+
+  it('returns null for an unknown id and for null/empty input', () => {
+    expect(findContextWindowById('never-existed')).toBeNull();
+    expect(findContextWindowById(null)).toBeNull();
+    expect(findContextWindowById(undefined)).toBeNull();
+    expect(findContextWindowById('')).toBeNull();
   });
 });
