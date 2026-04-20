@@ -1471,14 +1471,23 @@ h1 {
 /* Context-window indicator (ContextRing.svelte). Sits right of the
    CopyButton in `.msg-actions`. Matches the button's footprint exactly
    — same padding, border, radius, background — so the strip reads as
-   one continuous control row even though the ring itself isn't
-   interactive. `cursor: help` hints that hover will reveal a tooltip
-   with the exact numbers. */
+   one continuous control row. `cursor: help` hints that hover will
+   reveal a tooltip with the exact numbers; the same info also appears
+   on click via `.ring-popover` for touch devices where the native
+   title never fires. */
 .context-ring {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0.25rem;
+  /* Button-reset: inherit the message card's typography so the
+     popover text renders in the same face as surrounding copy, and
+     drop the default outline/appearance the browser adds to button
+     elements. The bg/border/radius below then reapply the look we
+     had when this was a <span>. */
+  font: inherit;
+  color: inherit;
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1487,6 +1496,30 @@ h1 {
      out so the ring sits centered with the copy button rather than
      riding a phantom text baseline. */
   line-height: 0;
+}
+
+/* Tap/click popover with the exact summary. Anchored above the ring
+   and right-aligned so it grows leftward into the message card
+   rather than off the right edge of narrow bubbles. `pointer-events:
+   none` lets a tap on the popover pass through to the
+   outside-click handler — tapping the overlay dismisses it, which
+   is the convention on touch. Positioned high (z-index) because the
+   popover can overlap siblings in `.msg-actions`. */
+.ring-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 10;
+  padding: 0.35rem 0.55rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
 /* `.copy-code-btn` is the in-fence variant — same styling, just a

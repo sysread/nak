@@ -20,11 +20,14 @@
   extra thresholds to tune. Saturation and lightness are fixed so the
   ring reads the same across themes.
 
-  Accessibility: the element carries both `aria-label` and `title` with
-  a human-readable summary ("50% (128,400 / 256,000 tokens)") so screen
-  readers announce meaning, and sighted users get a hover tooltip with
-  exact numbers. The ring itself is `aria-hidden` since its meaning is
-  already captured in the label.
+  Reveal: the summary surfaces via three paths, so every platform has
+  one that works:
+    - desktop hover → native `title` tooltip
+    - click / tap   → an inline popover, dismissed by clicking outside
+                       or hitting Escape
+    - screen reader → `aria-label` on the button
+  The popover matters because `title` tooltips never fire on touch,
+  leaving mobile users with no way to see the exact token counts.
 -->
 <script lang="ts">
   interface Props {
@@ -60,23 +63,57 @@
   const CIRC = 2 * Math.PI * RADIUS;
   const dashOffset = $derived(CIRC * (1 - pct));
 
-  // Human-readable summary for the tooltip / aria-label. Percentage
-  // comes first because it's the headline — a glance at the ring
-  // already suggests "about half full"; the tooltip's job is to put
-  // a specific number to that impression, then back it up with the
+  // Human-readable summary for the tooltip / popover / aria-label.
+  // Percentage comes first because it's the headline — a glance at the
+  // ring already suggests "about half full"; the tooltip's job is to
+  // put a specific number to that impression, then back it up with the
   // exact token counts. Thousands separators make the magnitudes
   // legible (1,234,567 reads instantly; 1234567 doesn't).
   const fmt = new Intl.NumberFormat();
   const summary = $derived(
     `${Math.round(pct * 100)}% (${fmt.format(totalTokens)} / ${fmt.format(contextWindow)} tokens)`
   );
+
+  let open = $state(false);
+  let rootEl: HTMLButtonElement | undefined = $state();
+
+  function toggle() {
+    open = !open;
+  }
+
+  // While the popover is open, close it on any pointerdown outside the
+  // ring and on Escape. `pointerdown` rather than `click` so a tap that
+  // lands on another interactive element (e.g. a different message's
+  // ring) dismisses this one before the second element's click toggles
+  // its own popover — otherwise you'd need two taps to switch. The
+  // handler is wired inside an $effect so it's only attached while
+  // open, and torn down when the popover closes or the component
+  // unmounts.
+  $effect(() => {
+    if (!open) return;
+    function onDown(e: PointerEvent) {
+      if (rootEl && !rootEl.contains(e.target as Node)) open = false;
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') open = false;
+    }
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey);
+    };
+  });
 </script>
 
-<span
+<button
+  bind:this={rootEl}
+  type="button"
   class="context-ring"
-  role="img"
   aria-label={summary}
+  aria-expanded={open}
   title={summary}
+  onclick={toggle}
 >
   <svg
     width="14"
@@ -113,4 +150,13 @@
       transform="rotate(-90 12 12)"
     />
   </svg>
-</span>
+  {#if open}
+    <!-- Positioned above and right-aligned to the ring so it stays
+         within the message card's horizontal bounds. pointer-events on
+         the popover are disabled via CSS so a tap on the popover text
+         passes through to the outside-click handler and dismisses it,
+         matching the "tap anywhere to close" mental model most touch
+         UIs use for transient overlays. -->
+    <span class="ring-popover" role="tooltip">{summary}</span>
+  {/if}
+</button>

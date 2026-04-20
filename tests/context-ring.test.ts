@@ -10,7 +10,7 @@
  * is showing the right story.
  */
 import { describe, it, expect, afterEach } from 'vitest';
-import { render, cleanup } from '@testing-library/svelte';
+import { render, cleanup, fireEvent } from '@testing-library/svelte';
 import ContextRing from '../src/components/ContextRing.svelte';
 
 afterEach(() => {
@@ -143,5 +143,55 @@ describe('ContextRing', () => {
     });
     const svg = container.querySelector('svg');
     expect(svg?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('shows a popover with the summary when clicked', async () => {
+    // Title attributes don't fire on touch devices, so the popover is
+    // the only surface that reveals the exact numbers on mobile. If a
+    // click stops producing it, mobile users have no path to the
+    // detail again.
+    const { container } = render(ContextRing, {
+      props: { totalTokens: 128_400, contextWindow: 256_000 },
+    });
+    const btn = container.querySelector('.context-ring') as HTMLButtonElement;
+    expect(btn).not.toBeNull();
+    // Closed state: no popover, aria-expanded reflects it.
+    expect(container.querySelector('.ring-popover')).toBeNull();
+    expect(btn.getAttribute('aria-expanded')).toBe('false');
+
+    await fireEvent.click(btn);
+
+    const popover = container.querySelector('.ring-popover');
+    expect(popover).not.toBeNull();
+    expect(popover!.textContent).toBe('50% (128,400 / 256,000 tokens)');
+    expect(btn.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('closes the popover on Escape', async () => {
+    // Keyboard users need a dismissal path that doesn't require
+    // finding the click-outside target.
+    const { container } = render(ContextRing, {
+      props: { totalTokens: 100, contextWindow: 1000 },
+    });
+    const btn = container.querySelector('.context-ring') as HTMLButtonElement;
+    await fireEvent.click(btn);
+    expect(container.querySelector('.ring-popover')).not.toBeNull();
+
+    await fireEvent.keyDown(document, { key: 'Escape' });
+    expect(container.querySelector('.ring-popover')).toBeNull();
+  });
+
+  it('closes the popover on a pointerdown outside the ring', async () => {
+    // Tapping elsewhere on the page should dismiss the overlay — the
+    // same mental model every transient UI element uses.
+    const { container } = render(ContextRing, {
+      props: { totalTokens: 100, contextWindow: 1000 },
+    });
+    const btn = container.querySelector('.context-ring') as HTMLButtonElement;
+    await fireEvent.click(btn);
+    expect(container.querySelector('.ring-popover')).not.toBeNull();
+
+    await fireEvent.pointerDown(document.body);
+    expect(container.querySelector('.ring-popover')).toBeNull();
   });
 });
