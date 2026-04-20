@@ -59,7 +59,7 @@
     TIERS,
     UTILITY_TIER,
     VENICE_EMBEDDING_MODEL,
-    findModelById,
+    findContextWindowById,
     padEmbeddingForStorage,
     resolveReasoningEffort,
     resolveTier,
@@ -2051,11 +2051,11 @@
                          spec resolution and the ring on `usage` being
                          present in one block. -->
                     {#if block.assistant.usage}
-                      {@const spec = findModelById(block.assistant.model)}
-                      {#if spec}
+                      {@const contextWindow = findContextWindowById(block.assistant.model)}
+                      {#if contextWindow}
                         <ContextRing
                           totalTokens={block.assistant.usage.total_tokens}
-                          contextWindow={spec.contextWindow}
+                          contextWindow={contextWindow}
                         />
                       {/if}
                     {/if}
@@ -2069,11 +2069,11 @@
                   <div class="msg-actions">
                     <CopyButton text={block.message.content} ariaLabel="Copy message" />
                     {#if block.message.usage}
-                      {@const spec = findModelById(block.message.model)}
-                      {#if spec}
+                      {@const contextWindow = findContextWindowById(block.message.model)}
+                      {#if contextWindow}
                         <ContextRing
                           totalTokens={block.message.usage.total_tokens}
-                          contextWindow={spec.contextWindow}
+                          contextWindow={contextWindow}
                         />
                       {/if}
                     {/if}

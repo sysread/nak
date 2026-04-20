@@ -260,8 +260,9 @@ export function resolveReasoningEffort(
  *
  * Returns null when no tier matches, which happens on rows written under
  * a now-retired model id (we've retargeted the tier in the meantime but
- * old rows still carry the old id). The caller should hide the
- * indicator rather than guess at the window.
+ * old rows still carry the old id). Callers that need the window for
+ * the ring should fall back to `findContextWindowById` rather than
+ * inventing label/icon/description for an id we no longer front.
  */
 export function findModelById(id: string | null | undefined): ModelSpec | null {
   if (typeof id !== 'string' || id.length === 0) return null;
@@ -269,4 +270,37 @@ export function findModelById(id: string | null | undefined): ModelSpec | null {
     if (spec.id === id) return spec;
   }
   return null;
+}
+
+/**
+ * Context windows for model ids that used to front a tier but have
+ * since been swapped out. Historical `messages.model` values still
+ * carry these ids; without this map, every pre-swap assistant message
+ * would silently lose its context-ring indicator the moment a tier
+ * re-targeted, because findModelById correctly refuses to vend a spec
+ * for an id we no longer advertise.
+ *
+ * Add an entry here whenever you change a tier's `id` in MODELS above,
+ * pinning the window at whatever the retired id actually served. Do
+ * not delete rows even once the swap feels old — removing one hides
+ * the ring on every historical message answered by that id.
+ */
+const RETIRED_MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
+  // Predecessor of gemma-4-uncensored on the Balanced tier. 256k
+  // window per Venice's model registry at swap time.
+  'arcee-trinity-large-thinking': 256_000,
+};
+
+/**
+ * Ring-only helper: resolves the context window for any model id the
+ * app has ever fronted, falling back to RETIRED_MODEL_CONTEXT_WINDOWS
+ * when findModelById returns null. The ring needs just the window —
+ * not the full ModelSpec — so we keep this separate rather than
+ * synthesizing a fake spec.
+ */
+export function findContextWindowById(id: string | null | undefined): number | null {
+  const spec = findModelById(id);
+  if (spec) return spec.contextWindow;
+  if (typeof id !== 'string' || id.length === 0) return null;
+  return RETIRED_MODEL_CONTEXT_WINDOWS[id] ?? null;
 }
