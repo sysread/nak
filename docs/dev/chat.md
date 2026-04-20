@@ -20,8 +20,11 @@ A chat turn goes:
    first, then one `role='tool'` row per call) before looping.
 4. Terminal assistant message (no tool_calls) ends the loop; the
    composer re-enables.
-5. `autoTitle` fires in the background for new threads; realtime
-   subscriptions keep the sidebar in sync across tabs and devices.
+5. `autoTitle` fires in the background for any thread still
+   carrying the placeholder title — the gate is `title ===
+   DEFAULT_TITLE`, not "first exchange", so a previous failed
+   attempt recovers on the next send. Realtime subscriptions
+   keep the sidebar in sync across tabs and devices.
 
 ## Files
 
@@ -187,7 +190,12 @@ A chat turn goes:
 - **`autoTitle` uses `UTILITY_TIER`, not the thread's tier.**
   Titling a thread with the Smart tier would be silly; the fast
   tier is always adequate for "3-6 words summarizing the first
-  message." Silent failure keeps the placeholder.
+  message." Silent failure keeps the placeholder — and because
+  the gate is `title === DEFAULT_TITLE` (not "first exchange"),
+  the next send on that thread retries automatically. The seed
+  passed in is the *opening* user turn, not the current one, so
+  a retry titles the conversation's original topic rather than
+  whatever follow-up triggered the retry.
 - **`toggle_tools` is the only tool that mutates the loop's
   master switch in-flight.** Its return value is inspected
   specifically (`call.function.name === toggleTools.name`) to

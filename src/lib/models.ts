@@ -159,6 +159,15 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
     // tiers now differ by both model and reasoning effort, which
     // still gives the "quick thinking" vs "deep thinking" shape the
     // tier names imply.
+    //
+    // Fallback if k2-5 develops the same overload problem (or has a
+    // provider-side outage long enough to matter): swap id to
+    // 'qwen3-5-35b-a3b'. Same capability envelope on Venice —
+    // vision, reasoning_effort, long context — so the swap is one
+    // line here plus a description tweak. Remember to pin
+    // 'kimi-k2-5' at 256_000 in RETIRED_MODEL_CONTEXT_WINDOWS on
+    // the way out so historical assistant rows answered under k2-5
+    // don't lose their context-ring indicator.
     id: 'kimi-k2-5',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
