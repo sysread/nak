@@ -59,7 +59,6 @@
     TIERS,
     UTILITY_TIER,
     VENICE_EMBEDDING_MODEL,
-    findContextWindowById,
     padEmbeddingForStorage,
     resolveReasoningEffort,
     resolveTier,
@@ -69,12 +68,14 @@
   import Auth from './Auth.svelte';
   import Help from './Help.svelte';
   import Settings from './Settings.svelte';
-  import CopyButton from '../components/CopyButton.svelte';
-  import ContextRing from '../components/ContextRing.svelte';
+  import AssistantBody from '../components/AssistantBody.svelte';
+  import CitationsPanel from '../components/CitationsPanel.svelte';
   import Markdown from '../components/Markdown.svelte';
+  import ReasoningPanel from '../components/ReasoningPanel.svelte';
   import ReasoningPicker from '../components/ReasoningPicker.svelte';
   import Scanner from '../components/Scanner.svelte';
   import ToolCalls from '../components/ToolCalls.svelte';
+  import type { Citation } from '$lib/venice';
 
   const DEFAULT_TITLE = 'New conversation';
 
@@ -86,6 +87,33 @@
   let activeThreadId = $state<string | null>(null);
   let messages = $state<Message[]>([]);
   let streamingText = $state('');
+  // Live companions to streamingText during a turn. `streamingReasoning`
+  // is the running buffer of `delta.reasoning_content` chunks for the
+  // current round; `streamingCitations` is Venice's web_search_citations
+  // once they arrive on the first chunk. Both are reset when the
+  // assistant row persists and a new round begins.
+  //
+  // `streamingReasoningOpen` drives the slide-open state of the live
+  // reasoning panel. We flip it on the first reasoning delta, then —
+  // once the visible answer starts flowing — schedule a timer to
+  // animate it shut. Value persists across the transition so the
+  // intermediate "still streaming content with reasoning tucked away"
+  // state has somewhere to sit.
+  let streamingReasoning = $state('');
+  let streamingCitations = $state<Citation[] | null>(null);
+  let streamingReasoningOpen = $state(false);
+  // Timer id for the delayed-close on first content arrival. Separated
+  // from the text-flush timer because they have different lifetimes —
+  // the close fires once per round, the flush fires on every delta.
+  let reasoningCloseTimer = 0;
+  // Sticky flag: flipped on the first content delta of a round and
+  // NOT reset until that round ends (assistant persisted / stream
+  // errored). Prevents `onReasoningUpdate` from re-opening the panel
+  // after the auto-close timer has already fired — some reasoning
+  // models interleave a late thought or two after the first visible
+  // sentence, and the panel jumping back open on that reads as a
+  // misfire rather than a feature.
+  let streamingContentStarted = false;
 
   // Drawer state: four separate buckets.
   //   drafts         — local-only threads the user has started but not
@@ -1047,6 +1075,36 @@
               if (flushTimer === 0) {
                 flushTimer = window.setTimeout(flushPending, FLUSH_MS);
               }
+              // First content byte of this round — schedule the
+              // reasoning panel to animate shut shortly after so the
+              // user sees "thinking… answer starts" rather than a
+              // snap close. 600ms is long enough to read as a
+              // deliberate hand-off; shorter and it feels like the
+              // panel is running from the content rather than
+              // yielding to it. Guarded on streamingContentStarted
+              // so only the first text delta schedules it.
+              if (!streamingContentStarted) {
+                streamingContentStarted = true;
+                if (streamingReasoningOpen && streamingReasoning.length > 0) {
+                  reasoningCloseTimer = window.setTimeout(() => {
+                    streamingReasoningOpen = false;
+                    reasoningCloseTimer = 0;
+                  }, 600);
+                }
+              }
+            },
+            onReasoningUpdate: (t) => {
+              streamingReasoning = t;
+              // Panel opens on the first reasoning delta so the user
+              // watches the thinking stream in. Only before content
+              // has started — once the answer is flowing, late
+              // reasoning shouldn't pop the panel back open.
+              if (!streamingReasoningOpen && !streamingContentStarted) {
+                streamingReasoningOpen = true;
+              }
+            },
+            onCitationsUpdate: (c) => {
+              streamingCitations = c;
             },
             onAssistantPersisted: (msg) => {
               // Cancel any pending frame — the persisted row takes
@@ -1056,6 +1114,19 @@
               pending = null;
               appendMessage(msg);
               streamingText = '';
+              // Streaming companions reset per round so the NEXT
+              // round starts with a clean slate. The persisted row
+              // already carries reasoning/citations for the round
+              // just finished, so the UI keeps rendering them via
+              // the message store rather than the streaming state.
+              streamingReasoning = '';
+              streamingCitations = null;
+              streamingReasoningOpen = false;
+              streamingContentStarted = false;
+              if (reasoningCloseTimer !== 0) {
+                window.clearTimeout(reasoningCloseTimer);
+                reasoningCloseTimer = 0;
+              }
             },
             onToolResultPersisted: (msg) => {
               appendMessage(msg);
@@ -1107,13 +1178,28 @@
         void autoTitle(threadId, text);
       }
       streamingText = '';
+      streamingReasoning = '';
+      streamingCitations = null;
+      streamingReasoningOpen = false;
+      streamingContentStarted = false;
       await refreshThreads();
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
       streamingText = '';
+      streamingReasoning = '';
+      streamingCitations = null;
+      streamingReasoningOpen = false;
+      streamingContentStarted = false;
     } finally {
       sending = false;
       abortCtl = null;
+      // Always clear the close timer on exit — a stale timer firing
+      // after a new send has started would flip the panel shut
+      // mid-reasoning on the next turn.
+      if (reasoningCloseTimer !== 0) {
+        window.clearTimeout(reasoningCloseTimer);
+        reasoningCloseTimer = 0;
+      }
     }
   }
 
@@ -2054,63 +2140,57 @@
         >
           {#each messageBlocks as block (block.kind === 'plain' ? block.message.id : block.assistant.id)}
             {#if block.kind === 'tool-group'}
+              <!-- Tool-group bubble: reuse AssistantBody for the markdown
+                   / reasoning / citations triad, with `<ToolCalls>`
+                   snippet-slotted between the body and the action bar.
+                   The bubble itself still lives here so the component
+                   stays focused on per-message body concerns. -->
               <div class="msg assistant">
-                {#if block.assistant.content}
-                  <Markdown content={block.assistant.content} />
-                {/if}
-                <ToolCalls
-                  calls={block.assistant.tool_calls ?? []}
-                  resultsByCallId={block.resultsByCallId}
-                  timings={toolTimings}
-                  nowMs={nowMs}
+                <AssistantBody
+                  content={block.assistant.content}
+                  reasoning={block.assistant.reasoning}
+                  citations={block.assistant.citations}
+                  model={block.assistant.model}
+                  usage={block.assistant.usage}
+                >
+                  <ToolCalls
+                    calls={block.assistant.tool_calls ?? []}
+                    resultsByCallId={block.resultsByCallId}
+                    timings={toolTimings}
+                    nowMs={nowMs}
+                  />
+                </AssistantBody>
+              </div>
+            {:else if block.message.role === 'assistant'}
+              <div class="msg assistant">
+                <AssistantBody
+                  content={block.message.content}
+                  reasoning={block.message.reasoning}
+                  citations={block.message.citations}
+                  model={block.message.model}
+                  usage={block.message.usage}
                 />
-                {#if block.assistant.content}
-                  <!-- Post-message action panel. Right-aligned so the
-                       controls read as trailing affordances and don't
-                       compete with the reading flow. The context ring
-                       trails the copy button so the hover-tooltip
-                       affordance sits at the absolute right edge, where
-                       the eye naturally lands after reading. -->
-                  <div class="msg-actions">
-                    <CopyButton text={block.assistant.content} ariaLabel="Copy message" />
-                    <!-- `{@const}` must live inside an {#if}/{#each}/etc
-                         per Svelte 5 placement rules, so we gate both the
-                         spec resolution and the ring on `usage` being
-                         present in one block. -->
-                    {#if block.assistant.usage}
-                      {@const contextWindow = findContextWindowById(block.assistant.model)}
-                      {#if contextWindow}
-                        <ContextRing
-                          totalTokens={block.assistant.usage.total_tokens}
-                          contextWindow={contextWindow}
-                        />
-                      {/if}
-                    {/if}
-                  </div>
-                {/if}
               </div>
             {:else}
               <div class="msg {block.message.role}">
                 <Markdown content={block.message.content} />
-                {#if block.message.role === 'assistant'}
-                  <div class="msg-actions">
-                    <CopyButton text={block.message.content} ariaLabel="Copy message" />
-                    {#if block.message.usage}
-                      {@const contextWindow = findContextWindowById(block.message.model)}
-                      {#if contextWindow}
-                        <ContextRing
-                          totalTokens={block.message.usage.total_tokens}
-                          contextWindow={contextWindow}
-                        />
-                      {/if}
-                    {/if}
-                  </div>
-                {/if}
               </div>
             {/if}
           {/each}
-          {#if sending || streamingText}
+          {#if sending || streamingText || streamingReasoning}
             <div class="msg assistant">
+              <!-- Live reasoning panel. Open when `streamingReasoningOpen`
+                   is true; flipped on by the first reasoning delta and
+                   flipped off 600ms after the first content delta (see
+                   the onTextUpdate / onReasoningUpdate handlers). The
+                   duration is slightly longer than on replayed rows to
+                   sell the close as a deliberate hand-off to the
+                   answer below. -->
+              <ReasoningPanel
+                reasoning={streamingReasoning}
+                open={streamingReasoningOpen}
+                duration={320}
+              />
               {#if streamingText}
                 <!-- Live markdown render of the in-progress buffer. The
                      onTextUpdate handler throttles writes to ~4Hz (see
@@ -2121,16 +2201,27 @@
                      stream ends the persisted message rerenders through
                      this same <Markdown> path. -->
                 <Markdown content={streamingText} />
-              {:else}
+              {:else if !streamingReasoning}
                 <!-- Placeholder shown between "user hit send" and "first
                      token arrived" — gives the composer submit some
                      immediate feedback that something is happening.
                      Wrapper centers the inline-flex Scanner inside the
                      bubble so it doesn't read as a stranded artifact in
-                     the top-left corner. -->
+                     the top-left corner. Suppressed once reasoning has
+                     started (the thinking panel is itself feedback). -->
                 <div class="thinking">
                   <Scanner label="Thinking" />
                 </div>
+              {/if}
+              <!-- Live citations panel. Venice ships the full list in
+                   the first chunk, so it typically appears ahead of
+                   the answer body. Shown open-always during streaming
+                   (no toggle button here; the streaming bubble has no
+                   action bar). Once the assistant row persists, the
+                   regular AssistantBody panel takes over with the
+                   toggle affordance. -->
+              {#if streamingCitations && streamingCitations.length > 0}
+                <CitationsPanel citations={streamingCitations} open={true} />
               {/if}
             </div>
           {/if}

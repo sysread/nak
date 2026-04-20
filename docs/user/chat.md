@@ -8,6 +8,36 @@ aren't immediately obvious.
 
 ## Streaming responses
 
+Replies stream token-by-token. Under the hood, Nak keeps the markdown
+render hot — unfinished code fences, tables, and math resolve
+themselves in place as more text arrives, so the view is always an
+accurate preview of the finished answer.
+
+### Reasoning ("thinking") panel
+
+Reasoning-capable models stream a chain-of-thought trace **before**
+the visible answer. Nak shows it in a dark-grey italic panel that
+slides open at the top of the message bubble the moment the first
+thinking token arrives. Once the model transitions to the visible
+answer, the panel animates closed so the reply takes center stage.
+
+After the fact, a thought-balloon button in the action bar toggles
+the panel back open on any message that has saved reasoning — handy
+for reading *why* the model answered a specific way without regenerating.
+
+### Citations and sources
+
+When web-search is on (see [Settings](./settings.md)), Nak asks
+Venice to ground replies in live sources. Sourced claims come back
+marked with small `^N^` superscripts in the text. Click one and
+Nak expands the sources list under the message and flashes the
+matching row so you can see which URL the model leaned on.
+
+A "sources" button in the action bar (badge = count of cited sources)
+expands the same panel on demand. Each row shows the title, date
+where provided, and a short snippet; click the title to open the
+original page in a new tab.
+
 ## Thinking and reasoning effort
 
 ## Regenerating a response

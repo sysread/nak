@@ -80,6 +80,64 @@ describe('parseSseFrame', () => {
     const frame = 'data: {"choices":[],"usage":{"prompt_tokens":12}}';
     expect(parseSseFrame(frame)).toBeNull();
   });
+
+  it('extracts a reasoning_content delta from choices[].delta', () => {
+    // Venice / OpenAI-compat convention: chain-of-thought tokens ride
+    // on `delta.reasoning_content`, a sibling of `content`. Parser
+    // surfaces them as `reasoning` so the consumer yields distinct
+    // events rather than mixing into visible text.
+    const frame = 'data: {"choices":[{"delta":{"reasoning_content":"hmm"}}]}';
+    expect(parseSseFrame(frame)).toEqual({ reasoning: 'hmm' });
+  });
+
+  it('extracts text and reasoning deltas from the same frame', () => {
+    // A mid-stream frame can carry both once the model transitions
+    // from thinking to answering. Both must survive parsing — dropping
+    // either would leak content across the divide.
+    const frame =
+      'data: {"choices":[{"delta":{"content":"Hi","reasoning_content":"..."}}]}';
+    expect(parseSseFrame(frame)).toEqual({ text: 'Hi', reasoning: '...' });
+  });
+
+  it('extracts venice_parameters.web_search_citations at top level', () => {
+    // Venice ships the citations list on the first streaming chunk,
+    // nested under `venice_parameters`. Each row is normalized to a
+    // Citation with a 1-based `index` matching the `^N^` superscripts.
+    const frame =
+      'data: {"choices":[{"delta":{"content":"ok"}}],' +
+      '"venice_parameters":{"web_search_citations":[' +
+      '{"title":"A","url":"https://a.example","content":"x","date":"2024"},' +
+      '{"url":"https://b.example"}' +
+      ']}}';
+    expect(parseSseFrame(frame)).toEqual({
+      text: 'ok',
+      citations: [
+        {
+          index: 1,
+          title: 'A',
+          url: 'https://a.example',
+          content: 'x',
+          date: '2024',
+        },
+        { index: 2, url: 'https://b.example' },
+      ],
+    });
+  });
+
+  it('drops citation rows with no usable url', () => {
+    // A malformed row without `url` is useless — we'd render a dead
+    // ref. Better to silently prune than to surface a broken link.
+    const frame =
+      'data: {"choices":[{"delta":{}}],' +
+      '"venice_parameters":{"web_search_citations":[' +
+      '{"title":"orphan"},' +
+      '{"url":"https://ok.example"}' +
+      ']}}';
+    const parsed = parseSseFrame(frame);
+    expect(parsed).toMatchObject({
+      citations: [{ index: 2, url: 'https://ok.example' }],
+    });
+  });
 });
 
 describe('VeniceClient.streamChat', () => {
@@ -293,6 +351,63 @@ describe('VeniceClient.streamChat', () => {
     const [, init] = fetchImpl.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.stream_options).toEqual({ include_usage: true });
+  });
+
+  it('yields reasoning events alongside text events', async () => {
+    // Reasoning-capable models stream chain-of-thought on
+    // `delta.reasoning_content` before visible content starts. Both
+    // must reach the consumer as distinct event types so the UI can
+    // display them in their own panels.
+    const frames = [
+      'data: {"choices":[{"delta":{"reasoning_content":"think"}}]}\n\n',
+      'data: {"choices":[{"delta":{"reasoning_content":"ing..."}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(frames), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const events: Array<{ type: string; value: string }> = [];
+    for await (const ev of client.streamChat({ model: 'm', messages: [] })) {
+      if (ev.type === 'reasoning') events.push({ type: 'reasoning', value: ev.delta });
+      else if (ev.type === 'text') events.push({ type: 'text', value: ev.delta });
+    }
+    expect(events).toEqual([
+      { type: 'reasoning', value: 'think' },
+      { type: 'reasoning', value: 'ing...' },
+      { type: 'text', value: 'Hi' },
+    ]);
+  });
+
+  it('yields exactly one citations event even if the list is repeated', async () => {
+    // Venice docs say citations ride on the first chunk, but we guard
+    // against a provider that re-sends the list by only emitting once
+    // — downstream consumers treat the event as authoritative and
+    // shouldn't have to dedupe.
+    const citations =
+      '"venice_parameters":{"web_search_citations":[{"url":"https://a.example"}]}';
+    const frames = [
+      `data: {"choices":[{"delta":{"content":"A"}}],${citations}}\n\n`,
+      `data: {"choices":[{"delta":{"content":"B"}}],${citations}}\n\n`,
+      'data: [DONE]\n\n',
+    ];
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(frames), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const citationEvents: unknown[] = [];
+    for await (const ev of client.streamChat({ model: 'm', messages: [] })) {
+      if (ev.type === 'citations') citationEvents.push(ev.citations);
+    }
+    expect(citationEvents).toHaveLength(1);
+    expect(citationEvents[0]).toEqual([{ index: 1, url: 'https://a.example' }]);
   });
 
   it('emits a trailing usage event when the epilogue frame arrives', async () => {

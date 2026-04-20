@@ -247,6 +247,70 @@ describe('runChatLoop', () => {
     expect(messagesOut[0]).toMatchObject({ role: 'assistant', content: 'Hello there' });
   });
 
+  it('persists reasoning and citations on the assistant row', async () => {
+    // Reasoning-capable models on a web-search turn produce three
+    // event types we care about: reasoning deltas, the citations
+    // list (once), and visible text. All three must land on the
+    // persisted row so a page refresh restores the full UI — the
+    // collapsible thought panel, the citation superscripts in the
+    // body, and the source list under the action bar.
+    const venice = mockVenice([
+      [
+        { type: 'reasoning', delta: 'weighing ' },
+        { type: 'reasoning', delta: 'options...' },
+        {
+          type: 'citations',
+          citations: [
+            { index: 1, url: 'https://a.example', title: 'A' },
+          ],
+        },
+        { type: 'text', delta: 'Per source ^1^.' },
+      ],
+    ]);
+    const { svc, mocks } = mockSupabase();
+    const reasoningSeen: string[] = [];
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      handlers: {
+        onReasoningUpdate: (t) => reasoningSeen.push(t),
+      },
+    });
+    // Cumulative accumulation: each callback sees the growing string.
+    expect(reasoningSeen).toEqual(['weighing ', 'weighing options...']);
+    expect(mocks.addMessage).toHaveBeenCalledOnce();
+    const [, , , opts] = mocks.addMessage.mock.calls[0];
+    expect(opts).toMatchObject({
+      reasoning: 'weighing options...',
+      citations: [{ index: 1, url: 'https://a.example', title: 'A' }],
+    });
+  });
+
+  it('persists null reasoning when the turn produced none', async () => {
+    // Non-reasoning models never emit `delta.reasoning_content`. We
+    // still write the column — as null — so older rows (before the
+    // column existed) stay distinguishable from rows that had no
+    // reasoning on this specific turn.
+    const venice = mockVenice([[{ type: 'text', delta: 'hi' }]]);
+    const { svc, mocks } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'q' }],
+      signal: new AbortController().signal,
+    });
+    const [, , , opts] = mocks.addMessage.mock.calls[0];
+    expect(opts).toMatchObject({ reasoning: null, citations: null });
+  });
+
   it('runs a round of tool calls then a final text round', async () => {
     const call = mkCall('memory_search', { query: 'cat' });
     const venice = mockVenice([

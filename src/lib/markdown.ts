@@ -21,7 +21,7 @@
  *     won't emit `\href` links or other side-channel content.
  */
 
-import { marked } from 'marked';
+import { marked, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
 import markedKatex from 'marked-katex-extension';
 import { canLoad, ensureLanguage, highlight, isSupported, normalizeLang } from './highlight';
@@ -80,6 +80,64 @@ marked.use({ renderer });
 // `$...$` for inline, `$$...$$` for block math. Output stays as inline HTML
 // so DOMPurify can scrub it along with the rest.
 marked.use(markedKatex({ throwOnError: false, output: 'html' }));
+
+// Venice citation superscripts. The model is instructed (by Venice's
+// server-side prompt when `enable_web_citations=true`) to mark sourced
+// claims with a `^N^` or `^i,j^` caret-wrapped run of digits. We
+// translate those into in-page anchors that (1) read as superscripts
+// even without CSS via the `<sup>` element, and (2) jump to / flash
+// the corresponding row in the citations panel when clicked. Lives
+// as a marked inline extension rather than a regex on the rendered
+// HTML so matches inside code fences / code spans are automatically
+// skipped — marked's tokenizer never descends into those contexts.
+//
+// Accepts `^N^`, `^N,M^`, and whitespace-tolerant variants like
+// `^1, 2, 3^`. The outer regex is anchored with `^` (start of the
+// inline source slice marked hands us), so a stray `^` mid-word
+// doesn't match.
+interface CitationToken extends Tokens.Generic {
+  type: 'citation';
+  raw: string;
+  numbers: string[];
+}
+marked.use({
+  extensions: [
+    {
+      name: 'citation',
+      level: 'inline',
+      start(src: string): number | undefined {
+        const idx = src.indexOf('^');
+        return idx < 0 ? undefined : idx;
+      },
+      tokenizer(src: string): Tokens.Generic | undefined {
+        const match = /^\^(\d+(?:\s*,\s*\d+)*)\^/.exec(src);
+        if (!match) return undefined;
+        const numbers = match[1]
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+        if (numbers.length === 0) return undefined;
+        const tok: CitationToken = {
+          type: 'citation',
+          raw: match[0],
+          numbers,
+        };
+        return tok;
+      },
+      renderer(token: Tokens.Generic): string {
+        const tok = token as CitationToken;
+        const links = tok.numbers
+          .map(
+            (n) =>
+              `<a href="#cite-${escapeAttr(n)}" class="citation-ref" ` +
+              `title="Source ${escapeAttr(n)}">${escapeHtml(n)}</a>`
+          )
+          .join(',');
+        return `<sup class="citation-sup">${links}</sup>`;
+      },
+    },
+  ],
+});
 
 // ---------------------------------------------------------------------------
 // DOMPurify configuration
@@ -149,6 +207,13 @@ function registerLinkHardening(): void {
   DOMPurify.addHook('afterSanitizeAttributes', (node) => {
     if (!(node instanceof Element)) return;
     if (node.tagName === 'A') {
+      const href = node.getAttribute('href') ?? '';
+      // In-page citation anchors (`#cite-N`) must stay in-page — a
+      // `target="_blank"` here would open an empty new tab with the
+      // hash, and `rel="noopener..."` reads as link-to-external even
+      // though the anchor never navigates. The citation-ref click
+      // handler preventDefaults and expands/flashes the panel instead.
+      if (href.startsWith('#')) return;
       node.setAttribute('rel', 'noopener noreferrer nofollow');
       node.setAttribute('target', '_blank');
     }

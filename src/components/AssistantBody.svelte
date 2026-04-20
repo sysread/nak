@@ -1,0 +1,270 @@
+<!--
+  Assistant message body — everything inside an `.msg.assistant` bubble
+  EXCEPT the in-progress streaming branch (which is rendered directly
+  in Chat.svelte because it wires up live state). Used in two places:
+  the plain-text assistant block and the tool-group block; in the tool
+  case the `children` snippet slots the `<ToolCalls>` card between the
+  markdown and the action bar.
+
+  What this component owns:
+
+    - Markdown render of `content`, including delegated clicks on the
+      `^N^` citation superscripts our citation-extension emits.
+    - ReasoningPanel above the content (collapsed by default; toggled
+      via a thought-balloon button in the action bar).
+    - CitationsPanel below the content (collapsed by default; toggled
+      via the numbered citations button in the action bar, or opened
+      by a body-side citation click which also fires a flash on the
+      matching row).
+    - The `.msg-actions` row (copy, reasoning toggle, citations
+      toggle, context ring).
+
+  What it deliberately DOESN'T own:
+
+    - Streaming state — the live bubble in Chat.svelte keeps its own
+      reactive state because its open/close transitions are driven by
+      "reasoning arrived first, then content started" timing that only
+      exists during streaming.
+    - The outer `.msg.assistant` wrapper — the tool-group path needs
+      to share that wrapper with `<ToolCalls>` cards, so the bubble
+      is rendered by the parent.
+-->
+<script lang="ts">
+  import Markdown from './Markdown.svelte';
+  import CopyButton from './CopyButton.svelte';
+  import ContextRing from './ContextRing.svelte';
+  import ReasoningPanel from './ReasoningPanel.svelte';
+  import CitationsPanel from './CitationsPanel.svelte';
+  import type { Snippet } from 'svelte';
+  import type { Message } from '$lib/supabase';
+  import { findContextWindowById } from '$lib/models';
+
+  interface Props {
+    content: string;
+    reasoning?: string | null;
+    citations?: Message['citations'];
+    model?: string | null;
+    usage?: Message['usage'];
+    /** Tool-group card (ToolCalls component). Rendered between body and actions. */
+    children?: Snippet;
+  }
+
+  const {
+    content,
+    reasoning = null,
+    citations = null,
+    model = null,
+    usage = null,
+    children,
+  }: Props = $props();
+
+  let reasoningOpen = $state(false);
+  let citationsOpen = $state(false);
+
+  /**
+   * One-shot flash signal consumed by CitationsPanel. Bumped every time
+   * the user clicks a `^N^` superscript — even the same one twice in a
+   * row — so the panel's keyed block re-mounts and re-runs its CSS
+   * transition. Null between clicks so the panel is quiescent on open.
+   */
+  let flashCite = $state<{ index: number; key: number } | null>(null);
+  let flashCounter = 0;
+
+  const hasReasoning = $derived(
+    typeof reasoning === 'string' && reasoning.length > 0
+  );
+  const citationList = $derived(citations ?? []);
+  const hasCitations = $derived(citationList.length > 0);
+
+  const contextWindow = $derived(
+    usage ? findContextWindowById(model ?? undefined) : null
+  );
+
+  /**
+   * Click delegation for `^N^` citation links inside the markdown
+   * render. The citation extension (src/lib/markdown.ts) emits
+   * `<a href="#cite-N" class="citation-ref">N</a>`; we intercept the
+   * navigation here, expand the panel if it's closed, and schedule
+   * a flash on row N for after the slide-down animation completes.
+   *
+   * `await tick()` + a 240ms delay covers the 220ms slide transition
+   * in CitationsPanel plus a cushion for the layout to settle. Doing
+   * the flash earlier would start the highlight while the row is
+   * still sliding in, which reads as jank.
+   */
+  function onBodyClick(e: MouseEvent): void {
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    const anchor = target.closest('a.citation-ref');
+    if (!(anchor instanceof HTMLAnchorElement)) return;
+    e.preventDefault();
+    const href = anchor.getAttribute('href') ?? '';
+    const m = /^#cite-(\d+)$/.exec(href);
+    if (!m) return;
+    const idx = Number(m[1]);
+    if (!Number.isFinite(idx)) return;
+    const wasOpen = citationsOpen;
+    if (!citationsOpen) citationsOpen = true;
+    const delay = wasOpen ? 0 : 240;
+    // setTimeout rather than `tick()` — Svelte's tick resolves as
+    // soon as the state update commits, but the slide transition
+    // itself is still in flight. We want the flash to fire AFTER
+    // the user's eye has tracked the panel opening, not at the same
+    // instant it starts moving.
+    window.setTimeout(() => {
+      flashCounter += 1;
+      flashCite = { index: idx, key: flashCounter };
+    }, delay);
+  }
+</script>
+
+<ReasoningPanel reasoning={reasoning ?? ''} open={reasoningOpen} />
+
+<!-- The wrapper is a pure click-delegation host; all actual markup
+     is emitted by `<Markdown>`. Same a11y concession as Markdown.svelte
+     itself — the anchors inside are native, the wrapper is not an
+     interactive surface in its own right. -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<div class="assistant-body" onclick={onBodyClick}>
+  <Markdown {content} />
+</div>
+
+{#if children}
+  {@render children()}
+{/if}
+
+{#if content}
+  <div class="msg-actions">
+    <CopyButton text={content} ariaLabel="Copy message" />
+    {#if hasReasoning}
+      <!-- Thought-balloon toggle — opens the reasoning panel above the
+           content. Dotted inner lines read as "thinking" across
+           themes; the pressed state mirrors the panel's open state
+           so it doubles as a status indicator. -->
+      <button
+        type="button"
+        class="copy-btn reasoning-toggle"
+        class:active={reasoningOpen}
+        onclick={() => {
+          reasoningOpen = !reasoningOpen;
+        }}
+        title={reasoningOpen ? 'Hide reasoning' : 'Show reasoning'}
+        aria-label={reasoningOpen ? 'Hide reasoning' : 'Show reasoning'}
+        aria-pressed={reasoningOpen}
+      >
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <!-- Cloud-shaped thought balloon with two trailing bubbles
+               underneath. The cloud is the conventional "thinking"
+               glyph (vs. a speech balloon with a tail), so even
+               without the dots the shape reads as inner thought. -->
+          <path
+            d="M7 14a4 4 0 0 1-1-7.87A5 5 0 0 1 16 5a4 4 0 0 1 1 7.87 3 3 0 0 1-3 3H8a3 3 0 0 1-1-1z"
+          />
+          <circle cx="7" cy="19" r="1.2" />
+          <circle cx="4" cy="21.5" r="0.7" />
+        </svg>
+      </button>
+    {/if}
+    {#if hasCitations}
+      <!-- Citations toggle — numbered badge doubles as count AND the
+           "source list" affordance. Inline-linked in the markdown as
+           `^N^` anchors; this button opens the same panel a direct
+           click on one of those would. -->
+      <button
+        type="button"
+        class="copy-btn citations-toggle"
+        class:active={citationsOpen}
+        onclick={() => {
+          citationsOpen = !citationsOpen;
+        }}
+        title={citationsOpen
+          ? 'Hide sources'
+          : `${citationList.length} source${citationList.length === 1 ? '' : 's'}`}
+        aria-label={citationsOpen ? 'Hide sources' : 'Show sources'}
+        aria-pressed={citationsOpen}
+      >
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <!-- Open-book glyph: the "these claims are cited" shorthand
+               used by most research UIs. Preferred over a footnote
+               superscript because the toggle button is already 14px
+               — a footnote glyph that size becomes illegible. -->
+          <path d="M2 3h7a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+          <path d="M22 3h-7a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h8z" />
+        </svg>
+        <span class="badge citation-count">{citationList.length}</span>
+      </button>
+    {/if}
+    {#if usage && contextWindow}
+      <ContextRing totalTokens={usage.total_tokens} contextWindow={contextWindow} />
+    {/if}
+  </div>
+{/if}
+
+<CitationsPanel citations={citationList} open={citationsOpen} {flashCite} />
+
+<style>
+  /* `.assistant-body` is just a delegation host — no visual styling.
+     Keeping the wrapper in the stylesheet so the class name isn't
+     orphaned if a future CSS-only theme needs a hook here. */
+  .assistant-body {
+    display: contents;
+  }
+
+  /* Active state on the toggles mirrors the hover treatment so the
+     opened panel's button reads as "pressed" without a separate
+     color — consistent with the toolbox-btn conventions elsewhere. */
+  .reasoning-toggle.active,
+  .citations-toggle.active {
+    color: var(--text);
+    background: var(--surface);
+    border-color: var(--text);
+  }
+
+  /* Positioning shim for the count badge on the citations button.
+     .copy-btn's flex centering keeps the SVG glyph centered; the
+     badge rides absolute-positioned in the top-right corner so it
+     overlays the glyph slightly — the whole button stays 14px wide
+     instead of growing with the count. */
+  .citations-toggle {
+    position: relative;
+  }
+
+  .citations-toggle .citation-count {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 1em;
+    height: 1em;
+    padding: 0 0.25em;
+    font-size: 0.65rem;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--bg);
+    background: var(--accent);
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+</style>
