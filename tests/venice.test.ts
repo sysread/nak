@@ -609,6 +609,51 @@ describe('VeniceClient.streamChat', () => {
     expect(body).not.toHaveProperty('reasoning_effort');
   });
 
+  it('forwards verbosity nested under `text` per the OpenAI spec shape', async () => {
+    // `text.verbosity` is not a flat field like reasoning_effort — it
+    // nests under a top-level `text` object. If a future refactor
+    // accidentally promotes it to a flat key, providers that honor
+    // the field would stop applying it while still accepting the
+    // request, which is a silent regression. Pin the wire shape.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    for await (const _ of client.streamChat({
+      model: 'm',
+      messages: [],
+      verbosity: 'high',
+    })) {
+      void _;
+    }
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.text).toEqual({ verbosity: 'high' });
+    expect(body).not.toHaveProperty('verbosity');
+  });
+
+  it('omits text.verbosity entirely when the caller does not set it', async () => {
+    // Providers that don't recognize text.verbosity silently ignore
+    // it, but utility call paths (auto-titling) never set it and
+    // shouldn't carry an empty `text: {}` either.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    for await (const _ of client.streamChat({ model: 'm', messages: [] })) {
+      void _;
+    }
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).not.toHaveProperty('text');
+  });
+
   it('omits `tools` from the body when the array is empty', async () => {
     // A present-but-empty tools array would confuse some providers —
     // better to elide it entirely.

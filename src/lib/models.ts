@@ -48,6 +48,44 @@ export const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
   high: 'High',
 };
 
+/**
+ * OpenAI-style `text.verbosity` knob ('low' | 'medium' | 'high'). Passed
+ * through on /chat/completions nested under `text` — i.e. body shape
+ * `{text: {verbosity: '…'}}`. Controls how long the assistant's answers
+ * tend to be before any reasoning-effort knob kicks in: 'low' biases
+ * toward short direct replies, 'high' toward expansive prose. Omitted
+ * entirely when unset so providers that don't recognize the field
+ * don't 400 on it (same discipline we use for reasoning_effort).
+ *
+ * Orthogonal to reasoning_effort: verbosity controls output length,
+ * reasoning controls how much internal thinking happens before the
+ * output. A reasoning-heavy, low-verbosity turn does a lot of hidden
+ * work and emits a terse answer; the opposite pairing thinks little
+ * and writes a lot.
+ */
+export type Verbosity = 'low' | 'medium' | 'high';
+
+export const VERBOSITIES: readonly Verbosity[] = ['low', 'medium', 'high'];
+
+/**
+ * Default when the user hasn't picked anything explicitly. 'medium' is
+ * the neutral middle — neither forcing terse single-line answers nor
+ * padding simple replies into essays. Users who prefer one extreme
+ * can flip per-thread or change their default in Settings.
+ */
+export const DEFAULT_VERBOSITY: Verbosity = 'medium';
+
+export function isVerbosity(v: unknown): v is Verbosity {
+  return v === 'low' || v === 'medium' || v === 'high';
+}
+
+/** Display labels for the three verbosity levels. Keep short; the dropdown is narrow. */
+export const VERBOSITY_LABELS: Record<Verbosity, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+};
+
 export interface ModelSpec {
   tier: ModelTier;
   /** Venice API model id sent in chat-completion requests. */
@@ -269,6 +307,21 @@ export function resolveReasoningEffort(
   defaultEffort: ReasoningEffort
 ): ReasoningEffort {
   return threadEffort ?? defaultEffort;
+}
+
+/**
+ * Resolve the verbosity level to use for a given thread. Same
+ * "override wins over default" shape as resolveTier /
+ * resolveReasoningEffort. Unlike reasoning_effort, we don't gate on
+ * a `supportsVerbosity` capability flag — `text.verbosity` is a
+ * plain OpenAI-shape field that providers either honor or silently
+ * ignore. The caller is responsible for deciding whether to send it.
+ */
+export function resolveVerbosity(
+  threadVerbosity: Verbosity | null,
+  defaultVerbosity: Verbosity
+): Verbosity {
+  return threadVerbosity ?? defaultVerbosity;
 }
 
 /**

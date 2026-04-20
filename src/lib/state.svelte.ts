@@ -31,8 +31,10 @@ import { attachmentExpiryManager } from './agents/attachment_expiry/manager';
 import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_TIER,
+  DEFAULT_VERBOSITY,
   type ModelTier,
   type ReasoningEffort,
+  type Verbosity,
 } from './models';
 import {
   DEFAULT_MODE,
@@ -64,6 +66,14 @@ interface AppState {
    * Only consulted on reasoning-capable models.
    */
   defaultReasoningEffort: ReasoningEffort;
+  /**
+   * User-level default text.verbosity. Seeded to DEFAULT_VERBOSITY on
+   * activate(), then overwritten from Supabase
+   * `profiles.settings.defaultVerbosity` on unlock. Sent on every chat
+   * request (per-thread override wins if set) — providers that don't
+   * honor the field silently ignore it.
+   */
+  defaultVerbosity: Verbosity;
   /** UI theme — seeded from localStorage cache, then from Supabase. */
   colorMode: ColorMode;
   accent: Accent;
@@ -94,6 +104,7 @@ export const app = $state<AppState>({
   venice: null,
   defaultModel: DEFAULT_TIER,
   defaultReasoningEffort: DEFAULT_REASONING_EFFORT,
+  defaultVerbosity: DEFAULT_VERBOSITY,
   colorMode: cachedTheme?.mode ?? DEFAULT_MODE,
   accent: cachedTheme?.accent ?? DEFAULT_ACCENT,
   systemPrompts: [],
@@ -109,6 +120,10 @@ export function setDefaultModel(tier: ModelTier): void {
 
 export function setDefaultReasoningEffort(effort: ReasoningEffort): void {
   app.defaultReasoningEffort = effort;
+}
+
+export function setDefaultVerbosity(verbosity: Verbosity): void {
+  app.defaultVerbosity = verbosity;
 }
 
 export function setSystemPrompts(prompts: SystemPrompt[]): void {
@@ -145,6 +160,7 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   // Reset to a seed value; Chat.svelte will overwrite after Supabase settles.
   app.defaultModel = DEFAULT_TIER;
   app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
+  app.defaultVerbosity = DEFAULT_VERBOSITY;
   app.phase = 'unlocked';
   app.error = null;
   if (opts.persist !== false) saveSession(config);
@@ -181,6 +197,7 @@ export function lock(): void {
   app.venice = null;
   app.defaultModel = DEFAULT_TIER;
   app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
+  app.defaultVerbosity = DEFAULT_VERBOSITY;
   app.systemPrompts = [];
   // Reset to the enabled-by-default seed — the next sign-in's
   // refreshSettings will overwrite with the stored preference.

@@ -13,10 +13,11 @@ destination:
 
 - **Keys** — the three API keys. Re-encrypts the config blob on
   save.
-- **AI** — default model tier, default reasoning effort, system-
-  prompt library, web-search toggle, and a "Browse memories"
-  link to the Memories modal. All preferences persist to
-  `profiles.settings`; the Memories link is pure navigation.
+- **AI** — default model tier, default reasoning effort, default
+  verbosity, system-prompt library, web-search toggle, and a
+  "Browse memories" link to the Memories modal. All preferences
+  persist to `profiles.settings`; the Memories link is pure
+  navigation.
 - **Appearance** — color mode + accent. Live-applies on click
   (no Save button); mirrors to `profiles.settings` (and
   localStorage for the boot script).
@@ -34,7 +35,8 @@ every update) so it's covered here rather than in its own file.
   backdrop dismiss + Escape handling.
 - `src/lib/state.svelte.ts` — setters that Settings calls
   (`setDefaultModel`, `setDefaultReasoningEffort`,
-  `setSystemPrompts`, `setTheme`, `setWebSearchEnabled`).
+  `setDefaultVerbosity`, `setSystemPrompts`, `setTheme`,
+  `setWebSearchEnabled`).
 - `src/lib/supabase.ts` — `getSettings`, `updateSettings`,
   `updateSystemPrompts`. Read-then-write against the
   `profiles.settings` JSONB column.
@@ -79,6 +81,8 @@ every update) so it's covered here rather than in its own file.
   Known keys today:
   - `defaultModel`: `ModelTier`
   - `defaultReasoningEffort`: `ReasoningEffort`
+  - `defaultVerbosity`: `Verbosity` (`'low' | 'medium' | 'high'`);
+    absent falls back to `DEFAULT_VERBOSITY` (`medium`)
   - `colorMode`: `ColorMode`
   - `accent`: `Accent`
   - `systemPrompts`: `SystemPrompt[]` with `{id, name, body,
@@ -93,11 +97,11 @@ every update) so it's covered here rather than in its own file.
   the Keys pane overwrites it on save. See
   `./auth-session.md`.
 - **Reactive state** — `app.defaultModel`,
-  `app.defaultReasoningEffort`, `app.colorMode`, `app.accent`,
-  `app.systemPrompts`, `app.webSearchEnabled`. Seeded to
-  defaults on `activate()`; overwritten from
-  `profiles.settings` by Chat's `refreshSettings` right after
-  the Supabase session lands.
+  `app.defaultReasoningEffort`, `app.defaultVerbosity`,
+  `app.colorMode`, `app.accent`, `app.systemPrompts`,
+  `app.webSearchEnabled`. Seeded to defaults on `activate()`;
+  overwritten from `profiles.settings` by Chat's
+  `refreshSettings` right after the Supabase session lands.
 
 ## Contracts
 
@@ -152,9 +156,9 @@ every update) so it's covered here rather than in its own file.
   via `changePassword`. Neither touches Supabase. See
   `./auth-session.md`.
 - **Chat** — chat reads every AI-pane setting
-  (`defaultModel`, `defaultReasoningEffort`, `systemPrompts`,
-  `webSearchEnabled`) from the state store. Settings writes
-  those values. See `./chat.md`.
+  (`defaultModel`, `defaultReasoningEffort`, `defaultVerbosity`,
+  `systemPrompts`, `webSearchEnabled`) from the state store.
+  Settings writes those values. See `./chat.md`.
 - **Architecture** — the reactive state store
   (`state.svelte.ts`) is the bridge: Settings writes setters,
   other features read the corresponding `app.*` field. See
