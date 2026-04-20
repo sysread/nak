@@ -2367,12 +2367,11 @@
                 aria-expanded={modelMenuOpen}
                 title={`Model: ${MODELS[currentTier].label} (${MODELS[currentTier].id})`}
               >
-                <!-- Generic "model selection" glyph, only revealed in the
-                     mobile icon-only layout. Uses a CPU outline rather
-                     than the tier emoji so the collapsed button reads as
-                     "pick a model" instead of "currently on 🧠". The tier
-                     emoji (next sibling) is the desktop affordance where
-                     the label disambiguates. -->
+                <!-- Generic "model selection" glyph for the collapsed
+                     icon-only trigger. A CPU outline rather than the
+                     tier emoji so the button reads as "pick a model"
+                     instead of "currently on 🧠" — the CSS hides the
+                     tier emoji whenever this CPU icon precedes it. -->
                 <svg class="model-picker-model-icon" width="18" height="18"
                      viewBox="0 0 24 24" fill="none" stroke="currentColor"
                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
