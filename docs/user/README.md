@@ -32,6 +32,9 @@ You can reach these pages two ways:
   regeneration, copy/edit/delete.
 - [Threads](./threads.md) — the conversation drawer, pinning,
   archiving, renaming, deleting.
+- [Memory](./memory.md) — the long-term store Nak builds up about you
+  across conversations: what gets remembered, how to correct or
+  forget something, what's scoped to your account.
 - [Search](./search.md) — finding a thread or a message across your
   history.
 - [Keyboard shortcuts](./shortcuts.md) — the keys that save you the
@@ -53,9 +56,10 @@ You can reach these pages two ways:
 
 ### Under the hood
 - [What runs in the background](./background.md) — auto-titling,
-  thread summaries, memory reflection, conversation recall,
-  embeddings, and the web-search toggle. What's running on your
-  behalf between messages, and what you can control.
+  thread summaries, embeddings, and the web-search toggle. What's
+  running on your behalf between messages, and what you can
+  control. ([Memory](./memory.md) covers reflection and recall
+  separately.)
 
 ### Installing as an app
 - [Install as a PWA](./install-pwa.md) — getting Nak onto your home

@@ -49,56 +49,23 @@ cost stays roughly constant.
 
 No toggle.
 
-## Memory reflection
+## Memory reflection and recall
 
-When a thread settles, a second background agent reads it end-to-end
-and decides whether there's anything worth remembering across
-conversations — a stable user fact, a project constraint, a
-preference you've expressed, a decision you've landed on. When it
-finds something, it writes a memory row into your Supabase via the
-`memory_create` / `memory_update` / `memory_invalidate` tools.
+Two background loops — **reflection** (writes long-term memories
+after a thread settles) and **recall** (reads them back at the start
+of a new conversation or after a topic shift) — are the mechanics
+behind the [Memory](./memory.md) feature. That page is the primary
+source; everything here is just the plumbing view.
 
-What you see: nothing directly. The effect surfaces on *future*
-threads, when the model pulls a relevant memory via conversation
-recall (below) and brings context forward without you having to
-repeat yourself.
+Reflection runs on the fast model tier, one cycle per settled thread,
+and uses the memory tools to write or update memory rows. Recall is
+triggered by the main model on its own judgment (not by you) and
+runs a dedicated fast-tier agent that searches memories and prior
+threads, then hands the main model a short digest.
 
-Memories are scoped to your Supabase account under RLS, so no other
-user can read them — not even other users of the same deployment.
-There's no in-app browser for them today; the only way to read or
-edit a memory is through the assistant (ask it to recall, summarize,
-or correct one).
-
-Cost: one fast-tier call per settled thread, plus a few small tool
-calls for any memory writes.
-
-No toggle.
-
-## Conversation recall
-
-When the model decides a reply would benefit from prior context, it
-calls the `conversation_recall` or `memory_recall` tool. A dedicated
-fast-tier agent runs a semantic search across your past threads and
-stored memories, digests the hits into a short paragraph, and returns
-that paragraph to the main model, which folds it into its reply.
-
-What you see: usually just a better-informed answer. If you watch
-the tool-calls strip, you'll see `conversation_recall` or
-`memory_recall` fire during recall-heavy turns. Tool failures
-degrade gracefully — the main model continues without the extra
-context and you get a reply that's a little less informed rather
-than an error.
-
-Triggered by the model itself (on its own judgment at turn start or
-after a topic shift), not by the user. The system prompt cues the
-model to call recall when useful; you don't need to ask.
-
-Cost: one fast-tier agent call per recall, plus the embedding
-lookup. Recall runs at most a handful of times per turn in practice.
-
-No toggle. If you want recall to stay out of a specific reply, tell
-the model directly ("don't look up prior context for this one") and
-it will skip the call.
+No toggle for either. If you want recall to skip a specific turn,
+tell the model directly ("don't look up prior context for this
+one") and it will.
 
 ## Embeddings
 
@@ -159,6 +126,8 @@ A few things people often assume are happening but aren't:
 
 ## Where to go next
 
+- [Memory](./memory.md) - the user-facing side of reflection and
+  recall.
 - [Security model](./security.md) - what's encrypted, what's stored
   plaintext, and what the master password protects.
 - [Search](./search.md) - the user-facing side of the embeddings
