@@ -10,14 +10,13 @@
 
     - Markdown render of `content`, including delegated clicks on the
       `^N^` citation superscripts our citation-extension emits.
-    - ReasoningPanel above the content (collapsed by default; toggled
-      via a thought-balloon button in the action bar).
+    - ReasoningPanel above the content — self-contained collapsible
+      with its own click-to-expand header; no toggle needed here.
     - CitationsPanel below the content (collapsed by default; toggled
       via the numbered citations button in the action bar, or opened
       by a body-side citation click which also fires a flash on the
       matching row).
-    - The `.msg-actions` row (copy, reasoning toggle, citations
-      toggle, context ring).
+    - The `.msg-actions` row (copy, citations toggle, context ring).
 
   What it deliberately DOESN'T own:
 
@@ -58,7 +57,6 @@
     children,
   }: Props = $props();
 
-  let reasoningOpen = $state(false);
   let citationsOpen = $state(false);
 
   /**
@@ -70,9 +68,6 @@
   let flashCite = $state<{ index: number; key: number } | null>(null);
   let flashCounter = 0;
 
-  const hasReasoning = $derived(
-    typeof reasoning === 'string' && reasoning.length > 0
-  );
   const citationList = $derived(citations ?? []);
   const hasCitations = $derived(citationList.length > 0);
 
@@ -150,7 +145,7 @@
   }
 </script>
 
-<ReasoningPanel reasoning={reasoning ?? ''} open={reasoningOpen} />
+<ReasoningPanel reasoning={reasoning ?? ''} />
 
 <!-- The wrapper is a pure click-delegation host; all actual markup
      is emitted by `<Markdown>`. Same a11y concession as Markdown.svelte
@@ -169,45 +164,6 @@
 {#if content}
   <div class="msg-actions">
     <CopyButton text={content} ariaLabel="Copy message" />
-    {#if hasReasoning}
-      <!-- Thought-balloon toggle — opens the reasoning panel above the
-           content. Dotted inner lines read as "thinking" across
-           themes; the pressed state mirrors the panel's open state
-           so it doubles as a status indicator. -->
-      <button
-        type="button"
-        class="copy-btn reasoning-toggle"
-        class:active={reasoningOpen}
-        onclick={() => {
-          reasoningOpen = !reasoningOpen;
-        }}
-        title={reasoningOpen ? 'Hide reasoning' : 'Show reasoning'}
-        aria-label={reasoningOpen ? 'Hide reasoning' : 'Show reasoning'}
-        aria-pressed={reasoningOpen}
-      >
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <!-- Cloud-shaped thought balloon with two trailing bubbles
-               underneath. The cloud is the conventional "thinking"
-               glyph (vs. a speech balloon with a tail), so even
-               without the dots the shape reads as inner thought. -->
-          <path
-            d="M7 14a4 4 0 0 1-1-7.87A5 5 0 0 1 16 5a4 4 0 0 1 1 7.87 3 3 0 0 1-3 3H8a3 3 0 0 1-1-1z"
-          />
-          <circle cx="7" cy="19" r="1.2" />
-          <circle cx="4" cy="21.5" r="0.7" />
-        </svg>
-      </button>
-    {/if}
     {#if showCitationsControls}
       <!-- Citations toggle — numbered badge doubles as count AND the
            "source list" affordance. Inline-linked in the markdown as
@@ -277,10 +233,10 @@
     display: contents;
   }
 
-  /* Active state on the toggles mirrors the hover treatment so the
-     opened panel's button reads as "pressed" without a separate
-     color — consistent with the toolbox-btn conventions elsewhere. */
-  .reasoning-toggle.active,
+  /* Active state on the citations toggle mirrors the hover treatment
+     so the opened panel's button reads as "pressed" without a
+     separate color — consistent with the toolbox-btn conventions
+     elsewhere. */
   .citations-toggle.active {
     color: var(--text);
     background: var(--surface);
