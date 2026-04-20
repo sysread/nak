@@ -52,6 +52,7 @@
     type Message,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
+  import { drainSharesForComposer } from '$lib/share-intake';
   import {
     DEFAULT_REASONING_EFFORT,
     DEFAULT_TIER,
@@ -453,6 +454,23 @@
         void refreshThreads();
         void refreshSettings();
       }
+    });
+    // Web Share Target drain. The service worker (src/sw.ts) stashes
+    // incoming shares in IndexedDB and redirects here with
+    // `?share=pending` as a navigation signal. We drain unconditionally
+    // though — so a share that arrived while the app was locked gets
+    // picked up when the user eventually unlocks, even if the URL flag
+    // has since been stripped by a manual refresh. Content is merged
+    // into whatever the user already typed rather than clobbering it.
+    void drainSharesForComposer().then(async (shared) => {
+      if (!shared) return;
+      composer = composer ? `${composer}\n\n${shared}` : shared;
+      if (location.search.includes('share=pending')) {
+        const clean = location.pathname + location.hash;
+        history.replaceState(null, '', clean);
+      }
+      await tick();
+      composerEl?.focus();
     });
     return unsubscribe;
   });

@@ -24,6 +24,15 @@ export default defineConfig({
   plugins: [
     svelte(),
     VitePWA({
+      // injectManifest (vs generateSW) so we can ship a hand-written
+      // service worker — needed for the Web Share Target POST handler
+      // at `/share`, which can't be expressed as a workbox runtime
+      // rule. The SW lives at src/sw.ts; vite-plugin-pwa compiles it
+      // and substitutes `self.__WB_MANIFEST` with the precache list
+      // built from `injectManifest.globPatterns` below.
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
       registerType: 'autoUpdate',
       injectRegister: 'auto',
       manifest: {
@@ -47,11 +56,39 @@ export default defineConfig({
             purpose: 'any maskable',
           },
         ],
+        // Web Share Target: once the PWA is installed, the OS share
+        // sheet can pick Nak as a destination and POST the shared
+        // payload here. The `action` URL is relative to the manifest
+        // location so deploys under a subpath (GitHub Pages at
+        // `/<repo>/`) still resolve correctly — the effective URL
+        // becomes `<scope>share`. Method must be POST + multipart
+        // form data to carry file attachments; the SW at src/sw.ts
+        // intercepts the request, stashes the payload in IndexedDB,
+        // and redirects back to the app root with a query marker so
+        // the app knows to consume it. Android/Chromium implements
+        // this fully; iOS/Safari support is URL/text-only and only
+        // on recent versions, so file entries are best-effort.
+        share_target: {
+          action: 'share',
+          method: 'POST',
+          enctype: 'multipart/form-data',
+          params: {
+            title: 'title',
+            text: 'text',
+            url: 'url',
+            files: [
+              {
+                name: 'files',
+                // Broad accept list — we describe whatever lands in
+                // the composer rather than rejecting at the OS layer.
+                accept: ['*/*'],
+              },
+            ],
+          },
+        },
       },
-      workbox: {
+      injectManifest: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
-        // Never cache API requests to user-provided endpoints.
-        navigateFallbackDenylist: [/^\/api/],
       },
     }),
   ],
