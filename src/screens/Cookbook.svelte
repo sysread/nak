@@ -358,22 +358,77 @@
                 </p>
               {/if}
             </div>
+            <!-- Icon-only action bar. Each button carries a `title` +
+                 `aria-label` so the purpose stays discoverable without
+                 the visual weight of text labels — the four actions
+                 are common enough that the pencil / clipboard /
+                 code / trash glyphs read at a glance, especially on
+                 mobile where the text-label version wrapped to a
+                 second row. A thin rule separates the destructive
+                 Delete from the copy group so a misclick is less
+                 likely. -->
             <div class="cookbook-actions">
-              <button type="button" onclick={openEdit}>Edit</button>
-              <button type="button" onclick={onCopyPlain}>Copy plain text</button>
-              <button type="button" class="secondary" onclick={onCopyCooklang}>
-                Copy Cooklang
+              <button
+                type="button"
+                class="secondary icon-btn"
+                onclick={openEdit}
+                title="Edit recipe"
+                aria-label="Edit recipe"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                </svg>
               </button>
               <button
                 type="button"
-                class="danger"
+                class="secondary icon-btn"
+                onclick={onCopyPlain}
+                title="Copy as plain text (AnyList-friendly)"
+                aria-label="Copy as plain text"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                class="secondary icon-btn"
+                onclick={onCopyCooklang}
+                title="Copy Cooklang source"
+                aria-label="Copy Cooklang source"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="16 18 22 12 16 6" />
+                  <polyline points="8 6 2 12 8 18" />
+                </svg>
+              </button>
+              <span class="cookbook-action-sep" aria-hidden="true"></span>
+              <button
+                type="button"
+                class="secondary icon-btn cookbook-action-danger"
                 onclick={() => onDelete(r!.id)}
-              >Delete</button>
-              {#if copyFeedback}
-                <span class="subtle copy-feedback" aria-live="polite">
-                  {copyFeedback}
-                </span>
-              {/if}
+                title="Delete recipe"
+                aria-label="Delete recipe"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6" />
+                  <path d="M10 11v6M14 11v6" />
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                </svg>
+              </button>
+              <!-- aria-live so screen readers hear the "Copied." flash.
+                   Reserves its grid slot when empty so the button row
+                   doesn't jump when the message appears and fades. -->
+              <span class="subtle copy-feedback" aria-live="polite">
+                {copyFeedback ?? ''}
+              </span>
             </div>
             <!-- The parsed HTML is produced from trusted source (the
                  user's own Cooklang text, escaped in cooklangToHtml via
@@ -570,16 +625,37 @@
   }
   .cookbook-actions {
     display: flex;
-    gap: 0.5rem;
+    gap: 0.35rem;
     align-items: center;
     margin: 0.75rem 0;
     flex-wrap: wrap;
   }
-  .cookbook-actions .danger {
-    color: var(--warn, #c0392b);
+  /* Thin vertical rule between the copy group and the destructive
+     Delete. Renders as a 1px column the height of the button row —
+     purely decorative, so `aria-hidden` in the markup keeps screen
+     readers from announcing it. */
+  .cookbook-action-sep {
+    width: 1px;
+    align-self: stretch;
+    background: var(--border);
+    margin: 0.15rem 0.15rem;
   }
+  /* Danger tint on Delete — only the stroke shifts to the warn color
+     on hover / focus so the button's resting state matches its
+     neighbors. Matches the Thread drawer's "danger" menu-item
+     pattern (secondary chrome, red stroke on interaction). */
+  .cookbook-action-danger:hover,
+  .cookbook-action-danger:focus-visible {
+    color: var(--warn, #c0392b);
+    border-color: var(--warn, #c0392b);
+  }
+  /* Reserve a slot for the "Copied." flash so the button row stays
+     stable when the message appears and vanishes. The empty-state
+     min-width is rough parity with the longest flash text. */
   .copy-feedback {
     font-size: 0.85rem;
+    min-width: 6rem;
+    min-height: 1.1em;
   }
   .cookbook-render :global(h3) {
     margin: 1rem 0 0.25rem;
