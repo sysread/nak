@@ -428,11 +428,23 @@
    * in a bucket so they appear in the list (with a zero-width bar).
    * Grouping by currency too keeps a user on a mixed USD+VCU plan
    * from seeing nonsensical summed spend.
+   *
+   * `amount` is inverted before accumulation. Venice's ledger
+   * convention records charges as negative (debits against the
+   * balance); in a "what am I spending?" view we want those to read
+   * as positive costs — otherwise the pane reads as a balance sheet
+   * and sub-cent rows flashed `$-0.00` when the sign leaked through
+   * `.toFixed(2)` rounding.
+   *
+   * Buckets whose inverted spend lands below one cent are dropped.
+   * Dust rows clutter the chart without telling the user anything
+   * they'd act on, and keeping them produced the `$0.00` / `$-0.00`
+   * cells that started this refinement.
    */
   function aggregateUsage(rows: UsageRow[]): UsageBucket[] {
     const buckets = new Map<string, UsageBucket>();
     for (const row of rows) {
-      const key = `${row.sku} ${row.currency}`;
+      const key = `${row.sku}|${row.currency}`;
       let b = buckets.get(key);
       if (!b) {
         b = {
@@ -448,16 +460,26 @@
       if (d) {
         b.tokens += (d.promptTokens ?? 0) + (d.completionTokens ?? 0);
       }
-      b.amount += row.amount;
+      // Invert Venice's signed debit to a positive cost.
+      b.amount += -row.amount;
       b.requests += 1;
     }
-    return Array.from(buckets.values()).sort((a, b) => {
-      // Token-heavy rows first. Zero-token rows (image, video) cluster
-      // at the bottom in amount order so spend-only SKUs still sort
-      // sensibly among themselves.
-      if (b.tokens !== a.tokens) return b.tokens - a.tokens;
-      return b.amount - a.amount;
-    });
+    return (
+      Array.from(buckets.values())
+        // One-cent dust filter. The USD display resolution is two
+        // decimals, so anything under $0.01 renders as zero anyway;
+        // applying the same numeric threshold to credit currencies
+        // (VCU / DIEM / BUNDLED_CREDITS) drops equivalently trivial
+        // rows there too without needing a per-currency table.
+        .filter((b) => b.amount >= 0.01)
+        .sort((a, b) => {
+          // Token-heavy rows first. Zero-token rows (image, video)
+          // cluster at the bottom in amount order so spend-only SKUs
+          // still sort sensibly among themselves.
+          if (b.tokens !== a.tokens) return b.tokens - a.tokens;
+          return b.amount - a.amount;
+        })
+    );
   }
 
   const tokenFormatter = new Intl.NumberFormat(undefined, {
@@ -470,19 +492,67 @@
   }
 
   function formatAmount(amount: number, currency: UsageCurrency): string {
-    if (currency === 'USD') {
-      // $0.00 for cents, $1.23 for dollars; four decimals when the
-      // amount rounds to sub-cent zero — pricing per mtoken can be
-      // fractional and rendering "$0.00" for a non-zero spend reads
-      // as a bug.
-      if (amount > 0 && amount < 0.01) {
-        return `$${amount.toFixed(4)}`;
-      }
-      return `$${amount.toFixed(2)}`;
-    }
+    if (currency === 'USD') return `$${amount.toFixed(2)}`;
     // VCU / DIEM / BUNDLED_CREDITS — numeric with a suffix code. Two
     // decimals is plenty for credit-style units.
     return `${amount.toFixed(2)} ${currency}`;
+  }
+
+  /**
+   * Compute a hue (0–360) for a bucket's bar based on its token
+   * count relative to the rest of the chart. Maps "typical" to
+   * green (~140°), lightweight models to blue (~220°), and heavy
+   * hitters to red (~5°).
+   *
+   * Why median-anchored on log tokens, not a plain percentile
+   * tertile: usage distributions are heavy-tailed — a user with
+   * one kimi-heavy workload and a dozen utility calls on other
+   * models would see the whole spectrum collapsed to two adjacent
+   * shades under straight "top-third / middle-third / bottom-third"
+   * bucketing. Anchoring at the median isolates the outlier on the
+   * high side without flattening the rest into a single color,
+   * which matches the intuitive read: "most of these are the green
+   * pack, that one is obviously doing more work." log() is the
+   * other half of the trick — it squeezes an order-of-magnitude
+   * outlier into a comparable distance on the color axis so the
+   * gradient stays readable whether the biggest bucket is 2× or
+   * 200× the smallest.
+   *
+   * Small-N behavior: with 1 bucket, everything sits at the median
+   * (green). With 2, the larger is at +1 (red) and the smaller at
+   * -1 (blue) — minimally useful but not wrong. The coloring earns
+   * its keep at 3+ models, which is the common case.
+   */
+  function usageHue(tokens: number, buckets: UsageBucket[]): number {
+    // Neutral (green) — any row that somehow has zero tokens picks
+    // up the same color the rest of the "typical" band uses.
+    if (tokens <= 0) return 140;
+    const logs = buckets
+      .map((b) => b.tokens)
+      .filter((t) => t > 0)
+      .map((t) => Math.log(t))
+      .sort((a, b) => a - b);
+    if (logs.length === 0) return 140;
+    const median = logs[Math.floor(logs.length / 2)];
+    const minLog = logs[0];
+    const maxLog = logs[logs.length - 1];
+    const cur = Math.log(tokens);
+    // Position in [-1, +1] anchored at the median. +1 = the biggest
+    // bucket, -1 = the smallest, 0 = sitting on the median.
+    let pos: number;
+    if (cur >= median) {
+      pos = maxLog === median ? 0 : (cur - median) / (maxLog - median);
+    } else {
+      pos = minLog === median ? 0 : -(median - cur) / (median - minLog);
+    }
+    pos = Math.max(-1, Math.min(1, pos));
+    // Map: -1 → 220 (blue), 0 → 140 (green), +1 → 5 (red). The red
+    // side uses a steeper slope (140° → 5° over [0, 1]) so outliers
+    // reach a genuinely red hue; the blue side moves more gently
+    // (140° → 220° over [-1, 0]) to avoid pushing past cyan into
+    // purple.
+    if (pos >= 0) return 140 - pos * 135;
+    return 140 - pos * 80;
   }
 
   // --- Security pane ---
@@ -1072,7 +1142,7 @@
                       class:zero={b.tokens === 0}
                       style="--usage-pct:{maxTokens > 0 && b.tokens > 0
                         ? Math.max(2, (b.tokens / maxTokens) * 100)
-                        : 0}%"
+                        : 0}%; --usage-hue:{usageHue(b.tokens, buckets)}"
                     ></span>
                   </span>
                   <span class="usage-tokens" role="cell">{formatTokens(b.tokens)}</span>

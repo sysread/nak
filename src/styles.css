@@ -713,11 +713,18 @@ label {
   display: block;
   width: var(--usage-pct, 0%);
   height: 0.55rem;
+  /* Hue comes from usageHue() in Settings.svelte: 220 (blue) for
+     lightweights, 140 (green) for the typical band, 5 (red) for
+     outliers. Saturation / lightness are fixed here so the gradient
+     stays on one axis — color carries "how unusual is this row?",
+     length still carries "how many tokens?". Values chosen to read
+     on both the cream light surface and the dark navy dark surface
+     without mode-specific overrides. */
   background: linear-gradient(
     90deg,
-    var(--accent) 0%,
-    var(--accent) 70%,
-    color-mix(in srgb, var(--accent) 70%, var(--text) 30%) 100%
+    hsl(var(--usage-hue, 140), 62%, 52%) 0%,
+    hsl(var(--usage-hue, 140), 62%, 52%) 70%,
+    hsl(var(--usage-hue, 140), 58%, 40%) 100%
   );
   border-radius: 999px;
   /* Transition width so hitting Refresh doesn't snap the bars — they

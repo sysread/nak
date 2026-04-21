@@ -32,12 +32,21 @@ Each row shows a horizontal bar scaled by total tokens
 - The bars are measured in **tokens**, not money. A cheap-but-chatty
   model shows a long bar with a small pill; an expensive-but-concise
   model shows a short bar with a bigger pill.
+- Bar colors shade from blue (a quiet model) through green
+  (typical) to red (your heaviest hitter for this range) based on
+  each row's token count relative to the median of the rows
+  shown. The gradient is driven by how each bucket compares to
+  the median on a log scale, so one runaway workload stands out
+  in red without flattening everything else into a single shade.
 - The pane auto-loads the last 30 days the first time you open it
   in a session. Change the dates and click **Refresh** to re-fetch.
 - Spend is shown in whatever currency Venice billed the charge in —
   `$0.07` for USD, `0.15 VCU` for prepaid Venice Compute Units. If
   you're on a mixed plan, a given model can show up twice, once per
   currency.
+- Models that rounded to under a cent in this range are hidden —
+  the dust rows didn't add signal and produced `$0.00` cells that
+  looked like bugs.
 - Numbers come from Venice's beta billing endpoint. The ledger can
   lag live traffic by a few minutes, so a just-sent message may not
   appear immediately.
