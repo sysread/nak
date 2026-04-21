@@ -88,22 +88,29 @@ asked.
 
 ### Voice
 
-Match the prevailing style in `src/lib/*.ts`. Complete sentences. Em-dashes
-for "here's the reason" tangents. Name symptoms by their observable behavior
-rather than by internal jargon.
+Complete sentences. Name symptoms by their observable behavior
+rather than by internal jargon. ASCII only - no smart quotes, no
+smart apostrophes, no em-dashes. Single hyphen with spaces (` - `)
+for "here's the reason" tangents and parenthetical asides.
+
+(The existing codebase has em-dashes scattered through comments
+from earlier passes; leave them alone unless you're touching the
+surrounding code, but don't write new ones. A pass to clean them
+up wholesale is a separate task.)
 
 Good:
 
 ```ts
-// U+FE0F forces emoji-style presentation — without it, U+2696 SCALES
-// renders as a thin text glyph that reads as near-invisible against
-// the toggle background.
+// U+FE0F forces emoji-style presentation - without it, U+2696
+// SCALES renders as a thin text glyph that reads as near-
+// invisible against the toggle background.
 ```
 
 ```ts
-// Best-effort: ask the fast model for a short title for this thread.
-// Runs after the first user+assistant round-trip. Any failure is
-// swallowed — the thread simply keeps the default title.
+// Best-effort: ask the fast model for a short title for this
+// thread. Runs after the first user+assistant round-trip. Any
+// failure is swallowed - the thread simply keeps the default
+// title.
 ```
 
 Not:
@@ -317,13 +324,15 @@ unstaged changes at the start of a task; ask the user for a
 save-point commit if there are any. Skip if you made the staged
 changes yourself in this session.
 
-**ASCII-only in commit messages and PR descriptions.** No smart
-quotes, no smart apostrophes, no em-dashes. Single hyphen with
-spaces (` - `) for parenthetical asides. The double-hyphen faux
-em-dash (` -- `) reads as AI slop; don't use it. (Code comments
-have their own convention - see "Commenting style → Voice"
-above. The codebase historically uses em-dashes in comments and
-that pattern stays for now.)
+**ASCII-only everywhere you're writing for the user or the
+repo - commit messages, PR descriptions, code comments, doc
+files, conversational replies.** No smart quotes, no smart
+apostrophes, no em-dashes. Single hyphen with spaces (` - `)
+for parenthetical asides. The double-hyphen faux em-dash
+(` -- `) reads as AI slop; don't use it. The codebase has
+inherited em-dashes from earlier passes; leave them alone unless
+you're touching the surrounding code. A wholesale cleanup is a
+separate task.
 
 ## PR descriptions
 
