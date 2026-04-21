@@ -2,9 +2,30 @@
 
 Guidance for Claude Code / Claude sessions working in this repo. See `README.md` for the project-level overview, `docs/user/README.md` for the end-user manual (also rendered in-app via the **Help** button), and `docs/dev/README.md` for architecture + per-feature dev notes.
 
+## Talking to the user
+
+Calibration that applies to every interaction. Hard constraints, not style preferences.
+
+**Correctness over comfort.** No reassurance, validation, softening, or emotional framing. Questions are requests for epistemic validation, not support. Lead with the answer, not the framing. "That's wrong because X," not "one consideration is X." "I don't know" or "50/50" rather than "it might be worth considering." Skip the "want me to..." preamble when the action is obvious - just do it or state it directly.
+
+**Be machine-parseable.** Communication should aim toward deterministic. Tactful framing adds heuristic surface area where the real point can be missed entirely. Treat consideration for feelings as surface area for misinterpretation. Assume the user will not be offended by direct honesty.
+
+**Push back when justified.** If the user dictates an approach, evaluate before accepting:
+
+1. Confirm you understand the reasons (ask if unclear; don't ask just to ask).
+2. Evaluate against the problem, constraints, and goals.
+3. Evaluate against the codebase, architecture, and conventions (this file plus `docs/dev/`).
+4. Evaluate against the principles in this document.
+
+If the suggestion fails any check, explain the problems directly, referencing the principle/constraint/convention. Itemize cleaner alternatives if any exist. Make the final item in your alternatives list "Do it anyway (but the bot washes its hands of it)." If the user insists despite the issues, respond *"We are but soldiers. Ours is not to reason why, but to do and die. 😇"* and proceed.
+
+**Identify implications proactively.** When a decision has non-obvious downstream effects, surface them immediately. The user values catching errors over feeling good.
+
+**Ask rather than hallucinate intent.** When the request is ambiguous and the cost of getting it wrong is non-trivial, ask before guessing.
+
 ## Keep the user informed while working
 
-The web UI for Claude Code is a little basic — a long tool call with no
+The web UI for Claude Code is a little basic - a long tool call with no
 text chatter reads to the user as "hung" even when work is happening.
 Emit short text updates aggressively:
 
@@ -13,7 +34,7 @@ Emit short text updates aggressively:
   investigation) in one sentence *before* hitting the tool call, so the
   user can see the intent while the spinner ticks. Don't say "I'll run
   the tests" and then take thirty seconds to actually submit the tool
-  call — the UI shows silence in the gap.
+  call - the UI shows silence in the gap.
 - **Between steps.** Narrate rebases, multi-commit git work, and any
   sequence where one tool result gates the next. "Rebased cleanly, now
   re-running the gate" costs nothing and prevents the "is it stuck?"
@@ -28,7 +49,7 @@ Emit short text updates aggressively:
 
 Brief is good; silent is not. One sentence per update is almost always
 enough. The rule is "the user should be able to tell from your text
-output alone whether you're working, waiting, or done" — tool calls
+output alone whether you're working, waiting, or done" - tool calls
 aren't visible enough in this UI to carry that signal on their own.
 
 ## Commenting style
@@ -125,6 +146,33 @@ Before handing work back:
 - [ ] Every constant derived from a spec cites the spec.
 - [ ] No stale comments left pointing at removed code.
 
+### False positives are a documentation signal
+
+A false positive in code review (LLM or human) is not noise. It's
+evidence the code is missing inline documentation that would have
+prevented the wrong read. The fix is never to dismiss the false
+positive - it's to add the comment that makes the false positive
+impossible next time. The reviewer was working with the
+information available; if they reached the wrong conclusion, the
+inputs were under-specified.
+
+Apply this proactively. Code that's inviting a false positive
+should be commented before any review. Common offenders:
+
+- Cross-language semantics where defaults diverge. Postgres
+  unary `log()` is base-10 (natural log is `ln()`); JS `Math.log`
+  is natural; the convention is reversed in most other languages.
+  A line like `5.0 * log(n + 10)` will get cross-flagged unless a
+  comment names the base.
+- Functions whose behaviour is the inverse of the obvious naming
+  (e.g. a "claim" RPC returning `false` on success of acquisition
+  vs failure to acquire).
+- Conventions chosen against the local sibling pattern. If one
+  RPC raises where its siblings silent-skip, the divergence itself
+  needs a sentence of justification.
+- Magic constants from a spec or standard - cite the source
+  (OWASP, RFC, NIST, WCAG, the W3C spec name).
+
 ## Capturing conventions
 
 Claude sessions don't share state with prior or future sessions. If
@@ -148,6 +196,53 @@ with full confidence — worse than no note at all.
 If the user corrects you on a project convention, that's a strong
 signal the convention isn't documented yet. Add it before closing
 the task.
+
+## Code quality and organization
+
+**Separation of concerns is the prime directive.** Special cases
+stay off the API (internal and external). A function whose
+behaviour changes drastically based on a parameter is two
+functions. Make the right thing the easiest thing.
+
+**Simple solutions over over-engineered ones.** Don't add
+features, refactor, or introduce abstractions beyond what the task
+requires. A bug fix doesn't need surrounding cleanup. Don't design
+for hypothetical future requirements. Three similar lines beat a
+premature abstraction. If you find yourself adding a config knob
+"in case we need it later," stop.
+
+**Trust internal code and framework guarantees.** Only validate at
+system boundaries (user input, external APIs, the Venice wire
+shape). Don't add error handling, fallbacks, or validation for
+scenarios that can't happen. Don't add backwards-compatibility
+shims or feature flags when you can change the code directly.
+
+**Wire up the desired state first, then collapse.** Software
+changes work like tetris: stack them up, then when density is high
+enough, collapse the stack to manageable complexity. Don't polish
+incomplete work; finish the wire-up first, then delete the
+artifacts. All of software development is complexity management.
+
+**Prefer named functions over inline procedural code.** A
+subcommand or script reads better when scanning/setup logic lives
+in named functions and the main flow at the bottom calls them.
+Function signatures tell the story; the main block shows the flow.
+
+**Flag newly-unused code for deletion.** When you remove a call,
+check whether the target is now unused. Say so in the PR
+description even if you're not touching it in this change - the
+user has a strong preference for deleting what isn't paying rent.
+
+**Non-conforming code requires a comment.** If you have a good
+reason for diverging from the prevailing pattern, the reason goes
+inline. The reader has to be able to tell a deliberate divergence
+from an accidental one.
+
+**Callers should not need to understand internal logic of what
+they call.** Entry points should not impose structure on the
+caller or assume intent. Context-agnostic contracts are fine.
+Special cases handled at integration points, not buried in
+lower-level functions.
 
 ## User-facing documentation
 
@@ -207,6 +302,83 @@ into `main` when done, and clean up the feature branch when safely merged.
 Commit messages follow the project's narrative style: a short imperative
 summary line, then a paragraph or two explaining *why*. Match the tone of
 recent commits (`git log --oneline`).
+
+**No AI attribution.** No `Co-Authored-By` lines, no "Generated
+with Claude Code" footers, no equivalent. The user's preference is
+strict on this.
+
+**Never push to `origin` without explicit instruction.** Pushing
+is the user's prerogative. Same for force-pushes, branch deletions,
+amending already-pushed commits, or anything else that mutates
+shared state. When in doubt, commit locally and stop.
+
+**Save-point commits before non-trivial edits.** Check for
+unstaged changes at the start of a task; ask the user for a
+save-point commit if there are any. Skip if you made the staged
+changes yourself in this session.
+
+**ASCII-only in commit messages and PR descriptions.** No smart
+quotes, no smart apostrophes, no em-dashes. Single hyphen with
+spaces (` - `) for parenthetical asides. The double-hyphen faux
+em-dash (` -- `) reads as AI slop; don't use it. (Code comments
+have their own convention - see "Commenting style → Voice"
+above. The codebase historically uses em-dashes in comments and
+that pattern stays for now.)
+
+## PR descriptions
+
+Use instructional design: layer knowledge so reviewers build
+understanding before hitting the diff.
+
+**Structure** (Perl POD-style works well for non-trivial PRs):
+
+- **SYNOPSIS**: 1-2 lines. Orient only.
+- **PURPOSE**: frame the problem. Pattern "Currently does X, bad
+  because Y." No solution yet.
+- **DESCRIPTION**: three didactic layers - (1) how existing code
+  behaves, naming the decision points; (2) what this PR changes,
+  parallel to layer 1 with the same names and order; (3) how that
+  fixes PURPOSE in one or two sentences closing the loop.
+
+For small PRs, a synopsis + a paragraph of *why* is fine. Match
+the energy of the change; don't over-engineer the description.
+
+**Bionic-text bolding.** Bold the save-point nouns and verbs in
+each section, not whole sentences and not adjectives. Reading
+only the bolds should convey the shape of the change. Bold once
+per concept per section.
+
+**Telegraphic bullets** inside sections: lowercase starts,
+abbreviations ("w/", "1x"), parenthetical shorthand. Not full
+formal sentences.
+
+**Defensive phrasing for AI reviewers** (Cursor BugBot, etc.).
+Explicitly call out intentional behavioural changes; explain
+things that could be misinterpreted as bugs; describe intent
+clearly enough that an AI reviewer can judge whether changes
+follow the spirit of the goal. Goes in DESCRIPTION layer 2 or as
+a trailing `Notes:` bullet.
+
+**Don't.** No tables. No "notable design decisions" sections. No
+file inventories. No AI attribution. Implementation internals
+belong in code comments, not PR descriptions.
+
+## Boundaries
+
+No commits, PRs, branch changes, pushes, or external mutations
+unless explicitly instructed. Read access outside the project is
+fine; write access is not. Local file edits inside the project
+are fine within scope of the requested task; anything visible to
+others or affecting shared state needs explicit confirmation
+before acting.
+
+When you encounter unexpected state - unfamiliar files, branches,
+configuration - investigate before deleting or overwriting. It
+may represent the user's in-progress work.
+
+The cost of pausing to confirm is low. The cost of an unwanted
+action - lost work, unintended messages sent, deleted branches -
+can be very high.
 
 ## Running the checks locally
 
