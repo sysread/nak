@@ -72,7 +72,8 @@ per invocation, at most.
 
 Two entry points open the Memories browser:
 
-- the book icon in the drawer footer, between Help and Settings
+- the bookmark icon in the drawer footer, between Help and the
+  Cookbook's book icon
 - the **Browse memories** link in Settings → AI
 
 The browser lists every memory on your account, most recent first.
