@@ -275,6 +275,31 @@ describe('tool registry', () => {
     expect(prompt).toMatch(/no tool to call/i);
   });
 
+  it('buildSystemPrompt warns that web-search results are not user-authored', () => {
+    // Regression guard: Venice inlines search results + its own framing
+    // ("you can use this real time information to answer the user's
+    // query above") into the user turn server-side. Without an explicit
+    // warning the model misreads that as a user instruction — observed
+    // live on the "Web Tool Test Request" thread where the reasoning
+    // trace quoted the Venice preamble back as 'and the user says:
+    // "..."'. The prompt must both call out the non-user origin and
+    // point at the <user_message> boundary tags that chat-loop.ts
+    // splices around the current turn.
+    const prompt = buildSystemPrompt({ webSearch: true });
+    expect(prompt).toMatch(/not from the user/i);
+    expect(prompt).toContain('<user_message>');
+    expect(prompt).toContain('</user_message>');
+  });
+
+  it('buildSystemPrompt omits the attribution warning when web search is off', () => {
+    // Without web search opted in, there's no Venice injection to warn
+    // about — and chat-loop.ts's tag wrapping doesn't run either, so a
+    // reference to <user_message> tags would be a dangling pointer.
+    const prompt = buildSystemPrompt();
+    expect(prompt).not.toContain('<user_message>');
+    expect(prompt).not.toMatch(/not from the user/i);
+  });
+
   it('executeToolCall dispatches by name', async () => {
     const { svc, spies } = mockSupabase();
     await executeToolCall('toggle_tools', { enable: true }, ctxFor(svc));

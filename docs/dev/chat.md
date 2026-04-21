@@ -206,6 +206,22 @@ A chat turn goes:
   before being materialized, the realtime `INSERT` handler sees a
   thread it doesn't have, and the list gets out of order. The
   `isDraft` flag gates this; don't remove it.
+- **Venice inlines web-search results into the user turn.** When
+  `enable_web_search` is active, Venice splices the search payload
+  plus its own framing (e.g. "you can use this real time
+  information to answer the user's query above") into what arrives
+  as the user's turn, server-side — we never see or forward that
+  content, so there's nothing to strip client-side. The model
+  misreads the injection as a user instruction without help
+  (observed: thanking the user for links they never sent, quoting
+  snippets back as their words). Mitigation is two-part: the
+  system prompt's web-search block calls out the non-user origin,
+  and `runChatLoop` wraps the current turn's user text in
+  `<user_message>...</user_message>` tags via `tagLastUserMessage`
+  so the model has an unambiguous boundary. The tags are
+  request-time only — never persisted. If you add another place
+  that constructs wire messages when `webSearch` is active, apply
+  the same wrap or the model will lose the boundary signal.
 
 ## Where to go next
 

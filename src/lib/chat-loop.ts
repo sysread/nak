@@ -48,6 +48,76 @@ import {
 export const MAX_ROUNDS = 5;
 
 /**
+ * Boundary markers we splice around the current turn's user text when
+ * Venice web search is active. Venice inlines its search payload plus
+ * a framing instruction ("you can use this real time information to
+ * answer the user's query above") into the user's turn server-side,
+ * before the model ever sees it — and without a structural boundary
+ * the model confuses the Venice injection for user-authored input
+ * (observed: it started thanking the user for links they never sent
+ * and quoting snippets back as if they were the user's words, with
+ * the reasoning trace literally saying 'and the user says: "..."').
+ *
+ * Wrapping the user's real message gives the model an unambiguous
+ * signal. The system prompt's web-search block (see buildSystemPrompt
+ * in ./tools/index.ts) tells the model that only the text inside
+ * these tags is from the human; anything outside — even though it
+ * rides inside role=user on the wire — is platform-injected
+ * reference material.
+ */
+const USER_MSG_OPEN = '<user_message>';
+const USER_MSG_CLOSE = '</user_message>';
+
+/**
+ * Return a shallow copy of `messages` with the last role='user'
+ * message's content wrapped in the <user_message> boundary tags. The
+ * input messages are not mutated — we allocate a fresh message object
+ * (and fresh content array, when the content is multimodal) so that
+ * the caller's history stays untouched across the chat loop's rounds.
+ *
+ * Scope is deliberately "last user turn only": that's the one Venice
+ * augments on the current round. Earlier user turns in history were
+ * already processed on prior rounds and don't need re-tagging — and
+ * tagging every user turn in the request would bloat the wire and
+ * could confuse the model into thinking the tags carry per-turn
+ * semantics beyond "this is where the human's words are."
+ */
+function tagLastUserMessage(messages: VeniceMessage[]): VeniceMessage[] {
+  // Walk from the end so we find the most recent user message even
+  // when tool-result rows follow it on a mid-loop round.
+  let lastUserIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      lastUserIdx = i;
+      break;
+    }
+  }
+  if (lastUserIdx === -1) return messages;
+  const out = messages.slice();
+  const orig = out[lastUserIdx];
+  if (typeof orig.content === 'string') {
+    out[lastUserIdx] = {
+      ...orig,
+      content: `${USER_MSG_OPEN}${orig.content}${USER_MSG_CLOSE}`,
+    };
+  } else {
+    // Vision/multimodal: prepend an opening-tag text part and append
+    // a closing-tag text part so images and extracted-text prelude
+    // blocks all sit *inside* the user-message boundary. Allocating a
+    // fresh array so we don't mutate the caller's content.
+    out[lastUserIdx] = {
+      ...orig,
+      content: [
+        { type: 'text', text: USER_MSG_OPEN },
+        ...orig.content,
+        { type: 'text', text: USER_MSG_CLOSE },
+      ],
+    };
+  }
+  return out;
+}
+
+/**
  * Compose a child AbortController whose `.abort()` fires whenever the
  * parent signal aborts. Used to scope per-tool cancellation under the
  * outer send() signal: aborting the send cancels every in-flight tool
@@ -256,14 +326,23 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // the user hasn't opted out. In `auto` mode Venice only runs the
     // search if the model signals intent — without this hint the
     // model reads the gated-tool list as exhaustive and refuses.
+    //
+    // When web search is active we ALSO wrap the current user turn
+    // in <user_message> boundary tags (see tagLastUserMessage above):
+    // Venice inlines its search payload + framing into the user turn
+    // server-side, and the tags give the model a reliable "this is
+    // where the human's words are" signal. The system prompt block
+    // added in buildSystemPrompt ties the tags back to the warning.
+    const webSearchActive = webSearch === 'auto' || webSearch === 'on';
+    const projectedHistory = webSearchActive
+      ? tagLastUserMessage(history)
+      : history;
     const requestMessages: VeniceMessage[] = [
       {
         role: 'system',
-        content: buildSystemPrompt({
-          webSearch: webSearch === 'auto' || webSearch === 'on',
-        }),
+        content: buildSystemPrompt({ webSearch: webSearchActive }),
       },
-      ...history,
+      ...projectedHistory,
     ];
 
     const stream = venice.streamChat({
