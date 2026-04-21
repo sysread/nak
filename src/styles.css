@@ -2565,32 +2565,32 @@ h1 {
   background: var(--bg-2);
 }
 
+/* The title and the current doc path render as a single h1 ("Help ›
+   README.md"). Keeping them in one element means the chevron and
+   filename inherit the h1's font-family, font-size, and line-height
+   automatically — earlier revisions split them across an h1 and
+   sibling spans, which forced the flex container to reconcile
+   different type metrics and visibly stair-stepped the glyphs.
+   flex:1 + min-width:0 lets the h1 absorb remaining header space;
+   the inner span shrinks to ellipsis when a deep path wouldn't
+   otherwise fit. */
 .help-header .help-title {
+  flex: 1;
+  min-width: 0;
   font-size: 1rem;
   margin: 0;
   padding: 0 0.25rem;
-}
-
-/* The current doc path, shown as a breadcrumb between the title and
-   the close button. Matches the title's font-size so the three pieces
-   share a line; the muted color from .subtle is what distinguishes
-   it from the title. Truncates with an ellipsis on narrow widths so
-   a deep path can't push the close button off-screen. */
-.help-crumb {
-  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
 }
 
-/* Chevron between "Help" and the current filename, making the pair
-   read as a breadcrumb (Help › README.md) rather than as two mashed-
-   together labels. Decorative — aria-hidden in the markup — and
-   fixed-width so the crumb's flex:1 still consumes the remaining
-   header space. */
-.help-crumb-sep {
-  flex: 0 0 auto;
+/* Chevron + path inside the title. Only job is to de-emphasize the
+   path relative to "Help" — muted color and normal weight do that
+   without breaking inheritance of size and line-height from the h1. */
+.help-title .help-crumb {
+  color: var(--muted);
+  font-weight: normal;
 }
 
 /* Back button sits at the left edge of the header. Disabled styling
