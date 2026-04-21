@@ -455,6 +455,7 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;
+    box-shadow: var(--shadow-modal);
     width: 100%;
     max-width: 52rem;
     display: grid;

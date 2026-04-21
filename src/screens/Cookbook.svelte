@@ -533,6 +533,7 @@
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 10px;
+    box-shadow: var(--shadow-modal);
     width: min(1100px, 100%);
     max-height: calc(100vh - 2rem);
     display: flex;
@@ -557,8 +558,13 @@
   .cookbook-close:hover {
     background: var(--border);
   }
+  /* Title bar: a filled strip (--bg-2) sitting above the main recipe
+     surface (--surface). The tone shift reads as a proper header
+     rather than "content with a rule under it", and the border-bottom
+     continues to anchor the bottom edge crisply against the body. */
   .cookbook-header {
-    padding: 1rem 1rem 0.5rem;
+    padding: 0.85rem 1rem;
+    background: var(--bg-2);
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
@@ -635,6 +641,21 @@
     margin: 0.75rem 0;
     flex-wrap: wrap;
   }
+  /* Scoped fill for the recipe-detail action strip (edit / copy /
+     copy-source / trash). The global `.icon-btn` stays transparent so
+     other icon buttons in the app (drawer header, composer, …) are
+     untouched. Here we want the buttons to feel a bit more tactile:
+     a --bg-2 tile at rest so they stand off the recipe surface, an
+     --accent-weak wash on hover with the --accent border for a
+     confident "pressable" state. */
+  .cookbook-actions :global(button.icon-btn) {
+    background: var(--bg-2);
+  }
+  .cookbook-actions :global(button.icon-btn:hover),
+  .cookbook-actions :global(button.icon-btn:focus-visible) {
+    background: var(--accent-weak);
+    border-color: var(--accent);
+  }
   /* Thin vertical rule between the copy group and the destructive
      Delete. Renders as a 1px column the height of the button row —
      purely decorative, so `aria-hidden` in the markup keeps screen
@@ -648,9 +669,14 @@
   /* Danger tint on Delete — only the stroke shifts to the warn color
      on hover / focus so the button's resting state matches its
      neighbors. Matches the Thread drawer's "danger" menu-item
-     pattern (secondary chrome, red stroke on interaction). */
-  .cookbook-action-danger:hover,
-  .cookbook-action-danger:focus-visible {
+     pattern (secondary chrome, red stroke on interaction). The
+     selector chain mirrors the `.cookbook-actions :global(...)` rule
+     above so this wins on specificity and overrides the accent-weak
+     hover wash for the delete button only. Resting tile stays
+     --bg-2 so the warn stroke reads against a consistent fill. */
+  .cookbook-actions :global(button.icon-btn.cookbook-action-danger:hover),
+  .cookbook-actions :global(button.icon-btn.cookbook-action-danger:focus-visible) {
+    background: var(--bg-2);
     color: var(--warn, #c0392b);
     border-color: var(--warn, #c0392b);
   }
