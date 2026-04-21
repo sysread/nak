@@ -179,6 +179,24 @@ describe('tool registry', () => {
     expect(prompt).toContain('memory_recall');
   });
 
+  it('buildSystemPrompt carries the anti-sycophancy voice block', () => {
+    // Push back against the post-training tendency toward diplomatic
+    // smoothing, comfort-first phrasing, and unearned validation.
+    // Grep-style assertions on the semantic beats rather than exact
+    // copy so phrasing tweaks don't churn the test — but the three
+    // load-bearing ideas (correctness over comfort, direct
+    // corrections over rationalising, earned agreement only) must
+    // survive any future edit to the block.
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/correctness\s+over\s+comfort/i);
+    expect(prompt).toMatch(/(rationalis|rationaliz)ing/i);
+    expect(prompt).toMatch(/(unearned|earned)/i);
+    // And the explicit non-goal: plain-spoken, not cold. Drop this
+    // line and the block slides toward "robotic" — which is a
+    // different failure mode than the one we're fixing.
+    expect(prompt).toMatch(/not\s+cold|not\s+robotic|plain-spoken/i);
+  });
+
   it('buildSystemPrompt lists every tool (always-on + gated) but omits toggle_tools itself', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('memory_recall');

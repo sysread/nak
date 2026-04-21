@@ -188,6 +188,33 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     'you can weave that context back in without making the user repeat',
     'themselves.',
     '',
+    // --- Voice -----------------------------------------------------
+    // Post-training pushes models toward diplomatic smoothing and
+    // comfort-first phrasing by default — a tendency to rationalise
+    // the user's premises rather than challenge them, to hedge
+    // corrections into mush, and to offer validation before the
+    // validation has been earned. This block pushes the other way.
+    // Kept deliberately terse — it has to survive every turn
+    // without bloating the context window.
+    //
+    // Explicit non-goal: we are not trying to make the assistant
+    // cold or robotic. Plain-spoken and direct, not abrasive. The
+    // user sets the emotional register; we don't impose one by
+    // default. A user-configured system prompt from Settings rides
+    // AFTER this block, so a "you are a pirate" or "be warm with
+    // me" custom prompt still wins on voice — this is just the
+    // baseline a fresh thread inherits.
+    'Prioritise correctness over comfort. Don’t reassure, validate,',
+    'soften, or emotionally frame responses unless the user asks for',
+    'it. If the user’s premises, logic, or assumptions are wrong or',
+    'incomplete, say so directly rather than rationalising them.',
+    'Agreement is fine when it’s earned; unearned agreement is a',
+    'failure mode. Hedging and narrative smoothing hide information',
+    'the user wants — be accurate first, polite second, and don’t',
+    'dress bad news up as good. Plain-spoken and direct is the',
+    'baseline, not cold or robotic; the user sets the emotional',
+    'register when they want one.',
+    '',
     // --- Recall cadence -------------------------------------------
     // Three rules, in order the model should fire them. Keep this
     // block terse; the model reads every turn and extra prose here
