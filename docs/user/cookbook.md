@@ -95,6 +95,15 @@ The Cookbook tools are gated behind the thread's tool toggle — if Nak
 tells you it can't save a recipe, flip the toolbox button in the
 composer and try again.
 
+## Following along while you cook
+
+On the detail pane, click (or tap) any instruction step to highlight
+it with a soft wash in your theme's accent colour. Click again to
+clear it. You can highlight several steps at once — useful for "I'm
+on step 3 while the sauce reduces" parallel work. The highlights are
+local to your current view; switching to another recipe clears them
+automatically, and nothing is saved to the server.
+
 ## Editing and deleting
 
 - **Edit** from the detail pane. Changes save in place; the list
