@@ -327,16 +327,18 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // search if the model signals intent — without this hint the
     // model reads the gated-tool list as exhaustive and refuses.
     //
-    // When web search is active we ALSO wrap the current user turn
-    // in <user_message> boundary tags (see tagLastUserMessage above):
-    // Venice inlines its search payload + framing into the user turn
-    // server-side, and the tags give the model a reliable "this is
-    // where the human's words are" signal. The system prompt block
-    // added in buildSystemPrompt ties the tags back to the warning.
+    // The current user turn is ALWAYS wrapped in <user_message>
+    // boundary tags (see tagLastUserMessage above). Venice can inject
+    // content into the user's turn via two independent paths —
+    // `enable_web_search` (search payload + framing) and
+    // `enable_web_scraping` (full page content of any URL the user
+    // pasted). Scraping is always enabled in venice.ts, so the
+    // injection path is live on every request even when the user
+    // has opted out of live search. Wrapping unconditionally keeps
+    // the boundary reliable; the ~10 tokens per user turn are a
+    // cheap price for a signal the model can anchor on every time.
     const webSearchActive = webSearch === 'auto' || webSearch === 'on';
-    const projectedHistory = webSearchActive
-      ? tagLastUserMessage(history)
-      : history;
+    const projectedHistory = tagLastUserMessage(history);
     const requestMessages: VeniceMessage[] = [
       {
         role: 'system',
