@@ -1715,6 +1715,19 @@ create or replace function public.samskara_fire_top_k(
   score real
 )
 language sql stable security invoker as $$
+  -- Ranking has three multiplicands:
+  --   - cosine similarity (1 - distance) — semantic relevance to the
+  --     user's current message
+  --   - sqrt(health * confidence) — softens both axes so a strong-
+  --     but-distant samskara can't crush a weak-but-relevant one
+  --   - (1 + 0.1 * ln(1 + N)) where N = confirm + disconfirm —
+  --     sample-size bonus. A samskara with 4/5 confirms and one with
+  --     80/100 confirms have identical confidence; this term lets
+  --     the more-tested one rank higher when cosine and health are
+  --     close. Same shape as the memory-search confidence boost.
+  --     Caps growth: N=0 -> 1.00x, N=10 -> 1.24x, N=100 -> 1.46x.
+  --     A brand-new samskara still ranks normally so it can fire and
+  --     accumulate signal.
   select s.id,
          s.prediction,
          s.inner_voice,
@@ -1724,6 +1737,7 @@ language sql stable security invoker as $$
          (
            (1 - (s.prediction_embedding <=> p_query_embedding))
            * sqrt(greatest(s.health * s.confidence, 0.0))
+           * (1 + 0.1 * ln(1 + s.confirm_count + s.disconfirm_count))
          )::real as score
     from public.samskaras s
    where s.user_id = auth.uid()
@@ -2009,6 +2023,7 @@ declare
   v_uid uuid := auth.uid();
   v_stale int;
   v_disconfirm int;
+  v_unreinforced int;
 begin
   update public.samskaras
      set health = greatest(0.0, health - 0.02),
@@ -2026,7 +2041,29 @@ begin
      and (disconfirm_count + confirm_count) >= 3;
   get diagnostics v_disconfirm = row_count;
 
-  return v_stale + v_disconfirm;
+  -- Locked-in-without-feedback decay. A samskara that has fired many
+  -- times but accumulated very little reaction signal is one of two
+  -- things: bland context the user never reacts to, or stuck firing
+  -- without challenge ("stereotype hardening" - the recursion-trap
+  -- pathology where the model converges on a local minimum that's
+  -- not wrong enough to update but not right enough to delight).
+  -- Either way, a gentle 0.03 nudge per pass crowds it out without
+  -- artificially perturbing user-facing behaviour the way an
+  -- exploration epsilon would.
+  --
+  -- Threshold: fire_count > 10 AND total feedback < 20% of fires.
+  -- A row with no feedback at all has the ratio = 0, definitely
+  -- decays. A row that gets reacted-to ~1-in-3 fires is fine.
+  update public.samskaras
+     set health = greatest(0.0, health - 0.03),
+         updated_at = now()
+   where user_id = v_uid
+     and fire_count > 10
+     and (confirm_count + disconfirm_count)::real
+         < 0.2 * fire_count::real;
+  get diagnostics v_unreinforced = row_count;
+
+  return v_stale + v_disconfirm + v_unreinforced;
 end $$;
 
 -- Compound-summary regeneration coordination.

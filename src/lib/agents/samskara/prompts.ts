@@ -102,6 +102,15 @@ export const MINTER_PROMPT = [
   'When you set confirm:true, the prediction should be specific to the',
   'user. "User asks about coding" is too vague. "User pushes back on',
   'flowery responses to terse technical questions" is the right shape.',
+  '',
+  'Two prediction shapes are equally welcome:',
+  '- positive ("user tends to do Y in situations like X"),',
+  '- negative ("user tends to NOT do Y in situations like X" - useful',
+  '  when the cluster surfaces a contrast or aversion).',
+  'Predictions about the assistant\'s behaviour are also valid:',
+  '"this user expects the assistant to ask before suggesting code"',
+  'reads as a samskara just as cleanly as "this user prefers terse',
+  'replies." Lean into whichever framing the cluster actually supports.',
 ].join('\n');
 
 /**
