@@ -1,6 +1,6 @@
 <script lang="ts">
   /*
-   * Settings modal. Reached from the chat sidebar's gear icon. Five
+   * Settings modal. Reached from the chat sidebar's gear icon. Seven
    * panes, each with its own persistence target:
    *
    *   keys        — the three API keys. Re-encrypts + re-activates, so
@@ -14,11 +14,15 @@
    *   appearance  — color mode + accent. Live-applies on click (no Save
    *                 button) and mirrors to Supabase the same way as
    *                 the default model.
+   *   usage       — date-ranged snapshot of billed spend per model,
+   *                 pulled live from Venice's beta /billing/usage
+   *                 endpoint. Read-only; nothing persists.
    *   export      — download the three keys as a plaintext JSON file
    *                 for import on another browser. See config.ts for
    *                 the file format.
    *   security    — rotate the master password. Re-encrypts the stored
    *                 blob under the new password; doesn't touch Supabase.
+   *   about       — build fingerprint + update-checker. Read-only.
    *
    * The `busy` flag is shared across forms so double-submits during an
    * in-flight save are harmless.
@@ -493,11 +497,18 @@
     return tokenFormatter.format(n);
   }
 
-  function formatAmount(amount: number, currency: UsageCurrency): string {
-    if (currency === 'USD') return `$${amount.toFixed(2)}`;
-    // VCU / DIEM / BUNDLED_CREDITS — numeric with a suffix code. Two
-    // decimals is plenty for credit-style units.
-    return `${amount.toFixed(2)} ${currency}`;
+  /**
+   * Always render spend with the `$` sigil. Non-USD charges (VCU,
+   * DIEM, BUNDLED_CREDITS) get a small coin marker alongside the
+   * pill in the template — that flag is where "this was paid with
+   * credits, not cash" gets communicated. Keeping the numeric body
+   * identical across currencies lets every pill align cleanly in
+   * the spend column without the currency code widening the cell
+   * for a subset of rows.
+   */
+  function formatAmount(amount: number, _currency: UsageCurrency): string {
+    void _currency;
+    return `$${amount.toFixed(2)}`;
   }
 
   /**
@@ -1148,7 +1159,26 @@
                     ></span>
                   </span>
                   <span class="usage-tokens" role="cell">{formatTokens(b.tokens)}</span>
-                  <span class="usage-pill" role="cell">{formatAmount(b.amount, b.currency)}</span>
+                  <span class="usage-pill" role="cell">
+                    {formatAmount(b.amount, b.currency)}
+                    {#if b.currency !== 'USD'}
+                      <!--
+                        Badge-style marker anchored to the pill's
+                        top-right corner. Absolutely positioned so
+                        its width isn't part of the pill's max-content
+                        column — every pill keeps the same width and
+                        the spend column stays a clean vertical strip.
+                        The tooltip spells out the full currency code
+                        for anyone who can't immediately place the
+                        glyph.
+                      -->
+                      <span
+                        class="usage-pill-marker"
+                        title={b.currency}
+                        aria-label={b.currency}
+                      >🪙</span>
+                    {/if}
+                  </span>
                 </div>
               {/each}
             </div>

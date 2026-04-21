@@ -40,10 +40,11 @@ Each row shows a horizontal bar scaled by total tokens
   in red without flattening everything else into a single shade.
 - The pane auto-loads the last 7 days the first time you open it
   in a session. Change the dates and click **Refresh** to re-fetch.
-- Spend is shown in whatever currency Venice billed the charge in —
-  `$0.07` for USD, `0.15 VCU` for prepaid Venice Compute Units. If
-  you're on a mixed plan, a given model can show up twice, once per
-  currency.
+- Spend is always dollar-formatted, e.g. `$0.07`. Rows billed in
+  credits instead of cash (VCU, DIEM, or bundled credits) are
+  flagged with a small coin badge on the top-right of the pill —
+  hover for the exact currency code. If you're on a mixed plan, a
+  given model can show up twice, once per currency.
 - Models that rounded to under a cent in this range are hidden —
   the dust rows didn't add signal and produced `$0.00` cells that
   looked like bugs.

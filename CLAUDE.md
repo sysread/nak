@@ -2,6 +2,35 @@
 
 Guidance for Claude Code / Claude sessions working in this repo. See `README.md` for the project-level overview, `docs/user/README.md` for the end-user manual (also rendered in-app via the **Help** button), and `docs/dev/README.md` for architecture + per-feature dev notes.
 
+## Keep the user informed while working
+
+The web UI for Claude Code is a little basic — a long tool call with no
+text chatter reads to the user as "hung" even when work is happening.
+Emit short text updates aggressively:
+
+- **Before every slow call.** State what you're about to run (a test
+  suite, a rebase, a build, an `$effect` narration in a long
+  investigation) in one sentence *before* hitting the tool call, so the
+  user can see the intent while the spinner ticks. Don't say "I'll run
+  the tests" and then take thirty seconds to actually submit the tool
+  call — the UI shows silence in the gap.
+- **Between steps.** Narrate rebases, multi-commit git work, and any
+  sequence where one tool result gates the next. "Rebased cleanly, now
+  re-running the gate" costs nothing and prevents the "is it stuck?"
+  check-in.
+- **On an unexpected detour.** If you hit a surprise (a stale file, a
+  NUL byte, a 403 from the harness's git proxy), call it out
+  immediately rather than working around it silently. The user would
+  rather see "hitting X, trying Y" than wonder what happened during a
+  silent gap.
+- **At the end of a long op.** Always emit at least one sentence after
+  a slow tool returns, even if the next step is another slow tool.
+
+Brief is good; silent is not. One sentence per update is almost always
+enough. The rule is "the user should be able to tell from your text
+output alone whether you're working, waiting, or done" — tool calls
+aren't visible enough in this UI to carry that signal on their own.
+
 ## Commenting style
 
 Nak is small and dense. Many files encode non-obvious decisions — browser-API
