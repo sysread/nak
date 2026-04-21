@@ -1,12 +1,12 @@
 # Settings overview
 
 Everything configurable lives behind the gear icon in the drawer
-footer. The Settings modal has six panes, each with its own Save
+footer. The Settings modal has seven panes, each with its own Save
 behavior.
 
 ## Opening settings
 
-## The six panes
+## The seven panes
 
 ### API keys
 
@@ -19,6 +19,28 @@ Covered in detail on [Models & reasoning](./models.md).
 ### Appearance
 
 Covered in detail on [Appearance](./appearance.md).
+
+### Usage
+
+A date-ranged snapshot of what your Venice API key has been
+spending. Pick a **From** and **To** date, hit **Refresh**, and the
+pane pulls your billing ledger from Venice and groups it by model.
+Each row shows a horizontal bar scaled by total tokens
+(prompt + completion), the token count as a compact label (e.g.
+`72k`, `1.2M`), and a pill with the raw billed amount.
+
+- The bars are measured in **tokens**, not money. A cheap-but-chatty
+  model shows a long bar with a small pill; an expensive-but-concise
+  model shows a short bar with a bigger pill.
+- The pane auto-loads the last 30 days the first time you open it
+  in a session. Change the dates and click **Refresh** to re-fetch.
+- Spend is shown in whatever currency Venice billed the charge in —
+  `$0.07` for USD, `0.15 VCU` for prepaid Venice Compute Units. If
+  you're on a mixed plan, a given model can show up twice, once per
+  currency.
+- Numbers come from Venice's beta billing endpoint. The ledger can
+  lag live traffic by a few minutes, so a just-sent message may not
+  appear immediately.
 
 ### Export
 

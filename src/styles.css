@@ -622,6 +622,149 @@ label {
   border: 1px solid var(--border);
 }
 
+/* Settings → Usage pane. A date-ranged per-model bar chart of billed
+   usage fetched from Venice's /billing/usage endpoint. The chart is
+   a CSS grid so every row's sku / bar / token count / spend pill
+   line up across rows — a table shape without the <table> semantics,
+   which the role="table"/role="row" attributes in markup restore for
+   assistive tech. */
+.usage-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.25rem 0 1rem;
+}
+
+.usage-date {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.usage-date > input {
+  /* Shrink the date input off the default full-width since the two
+     sit side-by-side in a flex row with a Refresh button. */
+  width: auto;
+  min-width: 10rem;
+}
+
+.usage-totals {
+  margin: 0 0 0.6rem;
+}
+
+.usage-chart {
+  display: grid;
+  /* Columns: [sku] [bar] [tokens] [pill]. `min-content` on the sku
+     column right-aligns the model ids into a tight stack; `1fr` on
+     the bar column lets it flex to fill, `max-content` pins the
+     numeric label and pill widths to their content so they stack
+     cleanly. Row gap separates bars vertically without needing per-
+     row margins. */
+  grid-template-columns: max-content 1fr max-content max-content;
+  gap: 0.35rem 0.75rem;
+  align-items: center;
+  margin: 0 0 0.75rem;
+}
+
+.usage-row {
+  display: contents;
+}
+
+/* Header row gets muted uppercase labels — mirrors the .pane-section
+   styling elsewhere in the modal so the table reads as a labeled
+   region rather than a mystery grid. */
+.usage-head > * {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding-bottom: 0.1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-sku {
+  /* Right-align the sku column so the ragged-length model ids form a
+     tidy right edge against the bar. `text-align: end` rather than
+     `right` for RTL safety. */
+  text-align: end;
+  font-family: inherit;
+  font-size: 0.85rem;
+  color: var(--text);
+  /* Prevent a pathological long sku from blowing out the column —
+     break on arbitrary chars so a dash or underscore can wrap rather
+     than push the bar off the right side of the pane. */
+  max-width: 14rem;
+  overflow-wrap: anywhere;
+}
+
+.usage-bar-cell {
+  /* The bar sits inside a cell so row height tracks the bar plus
+     the baseline padding instead of swelling with the sku's line
+     height. Positioned via its own width alone. */
+  display: flex;
+  align-items: center;
+}
+
+.usage-bar {
+  display: block;
+  width: var(--usage-pct, 0%);
+  height: 0.55rem;
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0%,
+    var(--accent) 70%,
+    color-mix(in srgb, var(--accent) 70%, var(--text) 30%) 100%
+  );
+  border-radius: 999px;
+  /* Transition width so hitting Refresh doesn't snap the bars — they
+     ease into the new values. Cheap tell that the fetch completed. */
+  transition: width 220ms ease-out;
+}
+
+.usage-bar.zero {
+  /* A zero-token row (image/video SKU) renders as a faint stub so
+     the row still reads as present in the chart — using `display:
+     none` on the bar here would leave an empty bar cell and make the
+     row look broken. */
+  width: 0.4rem;
+  background: var(--border);
+}
+
+.usage-tokens {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-align: end;
+  min-width: 3rem;
+}
+
+.usage-pill {
+  background: var(--accent-weak);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  min-width: 4rem;
+}
+
+.usage-pill-head,
+.usage-bar-head {
+  text-align: end;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-bar {
+    transition: none;
+  }
+}
+
 .swatch-label {
   font-size: 0.75rem;
   color: var(--muted);

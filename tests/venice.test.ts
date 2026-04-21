@@ -732,3 +732,151 @@ describe('VeniceClient.streamChat', () => {
     }).rejects.toBeInstanceOf(VeniceError);
   });
 });
+
+describe('VeniceClient.fetchUsage', () => {
+  function usagePage(data: unknown[], totalPages = 1): Response {
+    return new Response(
+      JSON.stringify({
+        data,
+        pagination: { limit: 500, page: 1, total: data.length, totalPages },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+  }
+
+  it('issues a single-page GET with the expected headers and query string', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(usagePage([]));
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await client.fetchUsage({
+      startDate: '2026-01-01T00:00:00Z',
+      endDate: '2026-02-01T00:00:00Z',
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(String(url)).toContain('/billing/usage?');
+    expect(String(url)).toContain('startDate=2026-01-01');
+    expect(String(url)).toContain('endDate=2026-02-01');
+    expect(String(url)).toContain('sortOrder=desc');
+    expect((init as RequestInit).method).toBe('GET');
+    expect((init as RequestInit).headers).toMatchObject({
+      Authorization: 'Bearer k',
+      Accept: 'application/json',
+    });
+  });
+
+  it('decodes a well-formed row', async () => {
+    const row = {
+      timestamp: '2026-03-01T12:00:00Z',
+      sku: 'llm-output-mtokens-kimi-k2-5',
+      pricePerUnitUsd: 0.002,
+      units: 72,
+      amount: 0.14,
+      currency: 'USD',
+      notes: '',
+      inferenceDetails: {
+        requestId: 'req_1',
+        promptTokens: 50_000,
+        completionTokens: 22_000,
+        inferenceExecutionTime: 1234,
+      },
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(usagePage([row]));
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const rows = await client.fetchUsage();
+    expect(rows).toEqual([row]);
+  });
+
+  it('drops rows that fail coercion without failing the whole fetch', async () => {
+    // Defensive decoder drops any row missing a required scalar. The
+    // endpoint is marked beta and shape drift shouldn't crash the
+    // Usage pane; surviving rows still come through.
+    const good = {
+      timestamp: '2026-03-01T12:00:00Z',
+      sku: 'grok-41-fast',
+      pricePerUnitUsd: 0.001,
+      units: 10,
+      amount: 0.05,
+      currency: 'USD',
+      notes: '',
+      inferenceDetails: null,
+    };
+    const bad = { sku: 'broken' }; // no timestamp, no amount
+    const fetchImpl = vi.fn().mockResolvedValue(usagePage([bad, good]));
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const rows = await client.fetchUsage();
+    expect(rows).toEqual([good]);
+  });
+
+  it('drops rows with an unrecognized currency', async () => {
+    const row = {
+      timestamp: '2026-03-01T12:00:00Z',
+      sku: 'x',
+      pricePerUnitUsd: 0,
+      units: 1,
+      amount: 1,
+      currency: 'BTC',
+      notes: '',
+      inferenceDetails: null,
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(usagePage([row]));
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const rows = await client.fetchUsage();
+    expect(rows).toEqual([]);
+  });
+
+  it('pages through every page the server reports', async () => {
+    // Two-page response: request 1 returns totalPages=2, request 2
+    // returns the second page. fetchUsage should page transparently
+    // and concatenate the rows.
+    const page1 = {
+      timestamp: '2026-03-02T00:00:00Z',
+      sku: 'a',
+      pricePerUnitUsd: 0,
+      units: 1,
+      amount: 0.1,
+      currency: 'USD' as const,
+      notes: '',
+      inferenceDetails: null,
+    };
+    const page2 = { ...page1, timestamp: '2026-03-01T00:00:00Z', sku: 'b' };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(usagePage([page1], 2))
+      .mockResolvedValueOnce(usagePage([page2], 2));
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const rows = await client.fetchUsage();
+    expect(rows.map((r) => r.sku)).toEqual(['a', 'b']);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const [url2] = fetchImpl.mock.calls[1];
+    expect(String(url2)).toContain('page=2');
+  });
+
+  it('throws an auth error on 401', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response('bad key', { status: 401 }));
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(client.fetchUsage()).rejects.toMatchObject({
+      kind: 'auth',
+      status: 401,
+    });
+  });
+});

@@ -217,6 +217,61 @@ export interface EmbeddingResponse {
   data: { index: number; embedding: number[] }[];
 }
 
+/**
+ * Currency codes Venice reports on billing rows. USD is the obvious
+ * fiat denominator; VCU ("Venice Compute Units") is the credit unit on
+ * prepaid/bundled plans; DIEM and BUNDLED_CREDITS show up on Venice's
+ * token-economy and partner-credit tiers. Listed here as a union so the
+ * UI can format the pill ("$0.07" vs "0.15 VCU") without having to
+ * guess.
+ *
+ * Docs: https://docs.venice.ai/api-reference/endpoint/billing/usage
+ */
+export type UsageCurrency = 'USD' | 'VCU' | 'DIEM' | 'BUNDLED_CREDITS';
+
+/**
+ * One row of the `/billing/usage` response. Each row is a single
+ * charge against a product SKU — one chat completion, one embedding
+ * batch, one image generation. LLM rows carry an `inferenceDetails`
+ * block with prompt/completion token counts; non-LLM SKUs (image,
+ * video, etc.) leave it null. `units` is the billable quantity in
+ * whatever unit the SKU bills in (typically output mega-tokens for
+ * LLMs); `amount` is the cost in `currency`.
+ *
+ * Every field beyond the JSON-mandatory ones is treated as optional by
+ * the parser — the endpoint is marked beta in Venice's docs and shape
+ * drift is likely. See `fetchUsage` for the defensive coercion.
+ */
+export interface UsageRow {
+  timestamp: string;
+  sku: string;
+  pricePerUnitUsd: number;
+  units: number;
+  amount: number;
+  currency: UsageCurrency;
+  notes: string;
+  inferenceDetails: {
+    requestId?: string;
+    inferenceExecutionTime?: number;
+    promptTokens?: number;
+    completionTokens?: number;
+  } | null;
+}
+
+export interface UsageRequestOptions {
+  /** ISO 8601 lower bound (inclusive). Omitted ⇒ unbounded. */
+  startDate?: string;
+  /** ISO 8601 upper bound (exclusive, per Venice docs). Omitted ⇒ unbounded. */
+  endDate?: string;
+  /**
+   * Filter to a single currency. Usually left unset so the caller
+   * sees every charge regardless of denomination — pill formatting
+   * downstream handles the mix.
+   */
+  currency?: UsageCurrency;
+  signal?: AbortSignal;
+}
+
 export class VeniceError extends Error {
   readonly status: number | null;
   readonly kind: 'rate_limit' | 'auth' | 'network' | 'http' | 'parse';
@@ -233,6 +288,68 @@ export class VeniceError extends Error {
 }
 
 const DEFAULT_BASE_URL = 'https://api.venice.ai/api/v1';
+
+/**
+ * Safety cap on {@link VeniceClient.fetchUsage} paging. 20 × 500 =
+ * 10k rows — more than enough for a month of heavy use, and bounded
+ * memory for a pathological response. Hitting the cap is surfaced by
+ * the Usage pane as a truncation note so the user knows to narrow the
+ * date range rather than silently seeing only the top slice.
+ */
+export const USAGE_MAX_PAGES = 20;
+
+/**
+ * Defensive reader for one `/billing/usage` row. Venice's docs mark the
+ * endpoint beta and we've seen shape drift on other beta endpoints
+ * there — so every field is validated and a row that fails any check
+ * is dropped entirely. Better to lose one malformed row than crash the
+ * Usage pane on a single bad entry.
+ */
+function coerceUsageRow(raw: unknown): UsageRow | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const timestamp = typeof r.timestamp === 'string' ? r.timestamp : null;
+  const sku = typeof r.sku === 'string' ? r.sku : null;
+  const amount = typeof r.amount === 'number' ? r.amount : null;
+  const units = typeof r.units === 'number' ? r.units : null;
+  const pricePerUnitUsd =
+    typeof r.pricePerUnitUsd === 'number' ? r.pricePerUnitUsd : null;
+  const currency = isUsageCurrency(r.currency) ? r.currency : null;
+  if (!timestamp || !sku || amount === null || units === null || currency === null) {
+    return null;
+  }
+  const notes = typeof r.notes === 'string' ? r.notes : '';
+  let inferenceDetails: UsageRow['inferenceDetails'] = null;
+  if (typeof r.inferenceDetails === 'object' && r.inferenceDetails !== null) {
+    const d = r.inferenceDetails as Record<string, unknown>;
+    const details: NonNullable<UsageRow['inferenceDetails']> = {};
+    if (typeof d.requestId === 'string') details.requestId = d.requestId;
+    if (typeof d.inferenceExecutionTime === 'number') {
+      details.inferenceExecutionTime = d.inferenceExecutionTime;
+    }
+    if (typeof d.promptTokens === 'number') details.promptTokens = d.promptTokens;
+    if (typeof d.completionTokens === 'number') {
+      details.completionTokens = d.completionTokens;
+    }
+    inferenceDetails = details;
+  }
+  return {
+    timestamp,
+    sku,
+    pricePerUnitUsd: pricePerUnitUsd ?? 0,
+    units,
+    amount,
+    currency,
+    notes,
+    inferenceDetails,
+  };
+}
+
+function isUsageCurrency(v: unknown): v is UsageCurrency {
+  return (
+    v === 'USD' || v === 'VCU' || v === 'DIEM' || v === 'BUNDLED_CREDITS'
+  );
+}
 
 export interface VeniceClientOptions {
   apiKey: string;
@@ -537,6 +654,78 @@ export class VeniceClient {
     // The `finished` flag is a debugging aid more than a contract —
     // callers only care that the generator returned.
     void finished;
+  }
+
+  /**
+   * Fetch billing usage from `GET /billing/usage`. Pages through the
+   * cursor transparently and returns every row in the requested range.
+   *
+   * The endpoint is flagged beta in Venice's docs and may reshape; the
+   * response is coerced defensively — a row with a bad type on any
+   * field is dropped rather than surfaced, so the Usage pane never
+   * renders NaN bars or "undefined" pills.
+   *
+   * Paging cap: {@link USAGE_MAX_PAGES} pages (× 500 rows/page). A
+   * runaway response never spends the tab's memory without bound —
+   * hitting the cap just truncates the tail of the range, which the
+   * UI flags in a footer note.
+   */
+  async fetchUsage(opts: UsageRequestOptions = {}): Promise<UsageRow[]> {
+    const out: UsageRow[] = [];
+    const limit = 500;
+    let page = 1;
+    for (;;) {
+      const qs = new URLSearchParams();
+      qs.set('limit', String(limit));
+      qs.set('page', String(page));
+      qs.set('sortOrder', 'desc');
+      if (opts.startDate) qs.set('startDate', opts.startDate);
+      if (opts.endDate) qs.set('endDate', opts.endDate);
+      if (opts.currency) qs.set('currency', opts.currency);
+      let res: Response;
+      try {
+        res = await this.fetchImpl(`${this.baseUrl}/billing/usage?${qs}`, {
+          method: 'GET',
+          // Don't reach for `this.headers()` — the JSON Content-Type
+          // there is meaningful only for POST bodies. GET with a body-
+          // less request + that header confuses some intermediaries
+          // (and, more prosaically, preflights an extra OPTIONS round-
+          // trip we don't need). Also pin `Accept: application/json`
+          // so a client that defaults to `*/*` doesn't accidentally
+          // negotiate the CSV variant Venice also offers on this path.
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            Accept: 'application/json',
+          },
+          signal: opts.signal,
+        });
+      } catch (err) {
+        throw new VeniceError(
+          `Network error contacting Venice: ${(err as Error).message}`,
+          'network'
+        );
+      }
+      if (!res.ok) throw await this.classifyError(res);
+      let payload: unknown;
+      try {
+        payload = await res.json();
+      } catch {
+        throw new VeniceError('Failed to parse Venice usage response.', 'parse');
+      }
+      const body = payload as {
+        data?: unknown;
+        pagination?: { totalPages?: number };
+      };
+      const rows = Array.isArray(body.data) ? body.data : [];
+      for (const raw of rows) {
+        const row = coerceUsageRow(raw);
+        if (row) out.push(row);
+      }
+      const totalPages = body.pagination?.totalPages ?? 1;
+      if (page >= totalPages || page >= USAGE_MAX_PAGES) break;
+      page++;
+    }
+    return out;
   }
 
   async embed(req: EmbeddingRequest): Promise<EmbeddingResponse> {

@@ -1,9 +1,9 @@
 # Settings
 
-The settings modal plus everything it persists: the five panes
-(Keys, AI, Appearance, Export, Security), the `profiles.settings`
-JSONB blob they read from and write to, and the theme system that
-lives alongside.
+The settings modal plus everything it persists: the seven panes
+(Keys, AI, Appearance, Usage, Export, Security, About), the
+`profiles.settings` JSONB blob they read from and write to, and the
+theme system that lives alongside.
 
 ## Role in the app
 
@@ -21,6 +21,10 @@ destination:
 - **Appearance** — color mode + accent. Live-applies on click
   (no Save button); mirrors to `profiles.settings` (and
   localStorage for the boot script).
+- **Usage** — a date-ranged snapshot of per-model token spend
+  against the Venice API key. Read-only: it calls Venice's beta
+  `/billing/usage` endpoint and aggregates the rows client-side.
+  Nothing persists — closing the pane forgets the fetched data.
 - **Export** — downloads the three keys as a plaintext JSON
   file. No persistence change.
 - **Security** — rotates the master password. Re-encrypts the
@@ -36,7 +40,7 @@ every update) so it's covered here rather than in its own file.
 
 ## Files
 
-- `src/screens/Settings.svelte` — the modal; six panes + nav +
+- `src/screens/Settings.svelte` — the modal; seven panes + nav +
   backdrop dismiss + Escape handling.
 - `src/lib/update.svelte.ts` — reactive build fingerprint +
   service-worker update registration. Backs the About pane and the
@@ -52,6 +56,11 @@ every update) so it's covered here rather than in its own file.
 - `src/lib/supabase.ts` — `getSettings`, `updateSettings`,
   `updateSystemPrompts`. Read-then-write against the
   `profiles.settings` JSONB column.
+- `src/lib/venice.ts` — `VeniceClient.fetchUsage` + `UsageRow` /
+  `UsageCurrency` types. Backs the Usage pane; pages through
+  `/billing/usage` transparently up to `USAGE_MAX_PAGES`
+  (20 × 500 rows = 10k rows) and coerces each row defensively
+  before returning.
 - `src/lib/config.ts` — `saveConfig` (keys pane) and
   `changePassword` (security pane).
 - `src/lib/theme.ts` — `ColorMode`, `Accent`, `applyTheme`,
@@ -84,6 +93,14 @@ every update) so it's covered here rather than in its own file.
   state synchronously, then fires
   `app.supabase.updateSettings` fire-and-forget for server
   persistence.
+- **Usage pane first-open fetch** — an `$effect` in `Settings.svelte`
+  watches `group` and calls `loadUsage` exactly once, the first
+  time the user lands on the Usage tab. Subsequent pane toggles
+  don't refetch; the Refresh button is the explicit path for
+  reloading after a date-range change. The pane's state lives on
+  the Settings component itself (not the global store) so closing
+  the modal drops everything — there's no privacy value in
+  retaining a billing snapshot across sessions.
 - **Security pane submit** — `changePassword(old, new)` in
   config.ts. Settings catches errors and displays them inline.
 

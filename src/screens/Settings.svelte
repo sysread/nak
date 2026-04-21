@@ -58,6 +58,12 @@
   } from '$lib/theme';
   import SecretInput from '../components/SecretInput.svelte';
   import { updateState, applyUpdate, checkForUpdates } from '$lib/update.svelte';
+  import {
+    USAGE_MAX_PAGES,
+    VeniceError,
+    type UsageCurrency,
+    type UsageRow,
+  } from '$lib/venice';
 
   interface Props {
     onClose: () => void;
@@ -78,6 +84,7 @@
     | 'keys'
     | 'ai'
     | 'appearance'
+    | 'usage'
     | 'export'
     | 'security'
     | 'about';
@@ -85,6 +92,7 @@
     { id: 'keys', label: 'API keys' },
     { id: 'ai', label: 'AI' },
     { id: 'appearance', label: 'Appearance' },
+    { id: 'usage', label: 'Usage' },
     { id: 'export', label: 'Export' },
     { id: 'security', label: 'Security' },
     { id: 'about', label: 'About' },
@@ -310,6 +318,171 @@
     } catch (err) {
       exportError = err instanceof Error ? err.message : String(err);
     }
+  }
+
+  // --- Usage pane ---
+  // Backed by Venice's /billing/usage (beta per Venice docs). We pull
+  // all rows in the range, aggregate by (sku, currency), and show a
+  // token-scaled bar chart with a spend pill per row.
+  //
+  // Date picker values are yyyy-mm-dd strings (the format
+  // `<input type="date">` produces and consumes). We convert to ISO
+  // 8601 at fetch time — startDate as 00:00:00Z of the picked day,
+  // endDate as 24:00:00Z of the picked day so the upper bound is
+  // inclusive of the whole end-of-range day despite Venice's exclusive
+  // cursor semantics.
+
+  /** One aggregated bucket for the Usage table. */
+  interface UsageBucket {
+    sku: string;
+    currency: UsageCurrency;
+    /** Sum of prompt + completion tokens across LLM rows in this bucket. */
+    tokens: number;
+    /** Sum of `amount` in this bucket's currency. */
+    amount: number;
+    /** Row count — for the tooltip / debug, not displayed. */
+    requests: number;
+  }
+
+  function todayYmd(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+  function ymdDaysAgo(days: number): string {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    return d.toISOString().slice(0, 10);
+  }
+
+  // Default range: rolling 30-day window. "Last month of usage" is the
+  // mental model most users bring to a billing page.
+  let usageStart = $state<string>(ymdDaysAgo(30));
+  let usageEnd = $state<string>(todayYmd());
+  let usageRows = $state<UsageRow[] | null>(null);
+  let usageLoading = $state(false);
+  let usageError = $state<string | null>(null);
+  // True when fetchUsage bailed at the USAGE_MAX_PAGES cap. Surfaces as
+  // a footer note so the user can narrow their range rather than
+  // silently seeing only the top slice.
+  let usageTruncated = $state(false);
+  /**
+   * Tracks whether the Usage pane has auto-fetched at least once in
+   * this modal lifetime. The `$effect` below fires the first fetch
+   * when the user lands on the pane — without this guard it would
+   * refire every time `group` changes (including back to 'usage' after
+   * visiting another pane), which means a click on the Refresh button
+   * can feel redundant.
+   */
+  let usageAutoFetched = $state(false);
+
+  $effect(() => {
+    if (group === 'usage' && !usageAutoFetched && !usageLoading) {
+      usageAutoFetched = true;
+      void loadUsage();
+    }
+  });
+
+  async function loadUsage(): Promise<void> {
+    if (!app.venice) {
+      usageError = 'Not connected to Venice yet.';
+      return;
+    }
+    usageError = null;
+    usageLoading = true;
+    usageTruncated = false;
+    try {
+      // End-of-day upper bound: the date picker reads as "through this
+      // whole day". Venice treats endDate as an exclusive cutoff, so
+      // we pass the *next* midnight to include the picked day itself.
+      const startIso = new Date(`${usageStart}T00:00:00Z`).toISOString();
+      const endDay = new Date(`${usageEnd}T00:00:00Z`);
+      endDay.setUTCDate(endDay.getUTCDate() + 1);
+      const endIso = endDay.toISOString();
+      const rows = await app.venice.fetchUsage({
+        startDate: startIso,
+        endDate: endIso,
+      });
+      usageRows = rows;
+      // Best-effort cap detection: if the response came back exactly at
+      // the page × per-page ceiling, we almost certainly hit the safety
+      // limit. Not perfect (a user with exactly 10k rows would also
+      // trip it) but close enough for a "your data may be truncated"
+      // hint — never shown when we're confidently under the cap.
+      usageTruncated = rows.length >= USAGE_MAX_PAGES * 500;
+    } catch (err) {
+      usageError =
+        err instanceof VeniceError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      usageRows = null;
+    } finally {
+      usageLoading = false;
+    }
+  }
+
+  /**
+   * Aggregate per (sku, currency). LLM rows contribute
+   * prompt+completion to `tokens`; non-LLM rows (image/video) have a
+   * null `inferenceDetails` and contribute 0 to tokens but still land
+   * in a bucket so they appear in the list (with a zero-width bar).
+   * Grouping by currency too keeps a user on a mixed USD+VCU plan
+   * from seeing nonsensical summed spend.
+   */
+  function aggregateUsage(rows: UsageRow[]): UsageBucket[] {
+    const buckets = new Map<string, UsageBucket>();
+    for (const row of rows) {
+      const key = `${row.sku} ${row.currency}`;
+      let b = buckets.get(key);
+      if (!b) {
+        b = {
+          sku: row.sku,
+          currency: row.currency,
+          tokens: 0,
+          amount: 0,
+          requests: 0,
+        };
+        buckets.set(key, b);
+      }
+      const d = row.inferenceDetails;
+      if (d) {
+        b.tokens += (d.promptTokens ?? 0) + (d.completionTokens ?? 0);
+      }
+      b.amount += row.amount;
+      b.requests += 1;
+    }
+    return Array.from(buckets.values()).sort((a, b) => {
+      // Token-heavy rows first. Zero-token rows (image, video) cluster
+      // at the bottom in amount order so spend-only SKUs still sort
+      // sensibly among themselves.
+      if (b.tokens !== a.tokens) return b.tokens - a.tokens;
+      return b.amount - a.amount;
+    });
+  }
+
+  const tokenFormatter = new Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  });
+  function formatTokens(n: number): string {
+    if (n === 0) return '—';
+    return tokenFormatter.format(n);
+  }
+
+  function formatAmount(amount: number, currency: UsageCurrency): string {
+    if (currency === 'USD') {
+      // $0.00 for cents, $1.23 for dollars; four decimals when the
+      // amount rounds to sub-cent zero — pricing per mtoken can be
+      // fractional and rendering "$0.00" for a non-zero spend reads
+      // as a bug.
+      if (amount > 0 && amount < 0.01) {
+        return `$${amount.toFixed(4)}`;
+      }
+      return `$${amount.toFixed(2)}`;
+    }
+    // VCU / DIEM / BUNDLED_CREDITS — numeric with a suffix code. Two
+    // decimals is plenty for credit-style units.
+    return `${amount.toFixed(2)} ${currency}`;
   }
 
   // --- Security pane ---
@@ -810,6 +983,118 @@
 
         {#if appearanceError}<p class="error">{appearanceError}</p>{/if}
         {#if appearanceInfo}<p class="subtle">{appearanceInfo}</p>{/if}
+      {:else if group === 'usage'}
+        <!--
+          Usage pane: a date-ranged snapshot of the Venice billing
+          ledger for this API key. Hits Venice's beta
+          `/billing/usage` endpoint, aggregates by (sku, currency),
+          and renders a bar chart scaled by total tokens with a spend
+          pill per row. The pane auto-loads on first visit (see the
+          `$effect` gate above); the Refresh button re-runs the fetch
+          with the current date range.
+        -->
+        <h2>Usage</h2>
+        <p class="subtle">
+          Token spend against your Venice API key. Pulled live from
+          Venice's billing ledger each time you open this pane or
+          hit refresh — the numbers below are what Venice reports,
+          not a Nak-side tally. Bars are scaled by
+          prompt + completion tokens; the pill on the right is the
+          raw billed amount in whatever currency each charge was
+          denominated in.
+        </p>
+        <div class="usage-controls">
+          <label class="usage-date">
+            <span>From</span>
+            <input
+              type="date"
+              bind:value={usageStart}
+              max={usageEnd}
+            />
+          </label>
+          <label class="usage-date">
+            <span>To</span>
+            <input
+              type="date"
+              bind:value={usageEnd}
+              min={usageStart}
+              max={todayYmd()}
+            />
+          </label>
+          <button
+            type="button"
+            onclick={loadUsage}
+            disabled={usageLoading}
+          >
+            {usageLoading ? 'Loading…' : 'Refresh'}
+          </button>
+        </div>
+        {#if usageError}<p class="error">{usageError}</p>{/if}
+        {#if usageRows !== null && !usageError}
+          {@const buckets = aggregateUsage(usageRows)}
+          {@const maxTokens = buckets.reduce((m, b) => Math.max(m, b.tokens), 0)}
+          {@const totalTokens = buckets.reduce((s, b) => s + b.tokens, 0)}
+          <!--
+            Totals strip. We sum tokens unconditionally (a scalar
+            regardless of currency) but defer spend to per-row
+            formatting — a mixed-currency account can't sensibly be
+            collapsed to a single pill.
+          -->
+          <p class="subtle usage-totals">
+            {#if buckets.length === 0}
+              No usage in this range.
+            {:else}
+              <strong>{formatTokens(totalTokens)}</strong> tokens across
+              <strong>{buckets.length}</strong>
+              {buckets.length === 1 ? 'model' : 'models'}.
+            {/if}
+          </p>
+          {#if buckets.length > 0}
+            <div class="usage-chart" role="table" aria-label="Usage by model">
+              <div class="usage-row usage-head" role="row">
+                <span class="usage-sku" role="columnheader">Model</span>
+                <span class="usage-bar-head" role="columnheader">Tokens</span>
+                <span class="usage-tokens" role="columnheader">&nbsp;</span>
+                <span class="usage-pill-head" role="columnheader">Spend</span>
+              </div>
+              {#each buckets as b (b.sku + ' ' + b.currency)}
+                <div class="usage-row" role="row">
+                  <span class="usage-sku" role="cell" title={b.sku}>{b.sku}</span>
+                  <span class="usage-bar-cell" role="cell">
+                    <!--
+                      Width is `max(2%, share-of-max)` so a non-zero
+                      but tiny row still registers as a visible bar
+                      rather than an invisible sliver. A truly zero-
+                      token row (image SKU) collapses to nothing.
+                    -->
+                    <span
+                      class="usage-bar"
+                      class:zero={b.tokens === 0}
+                      style="--usage-pct:{maxTokens > 0 && b.tokens > 0
+                        ? Math.max(2, (b.tokens / maxTokens) * 100)
+                        : 0}%"
+                    ></span>
+                  </span>
+                  <span class="usage-tokens" role="cell">{formatTokens(b.tokens)}</span>
+                  <span class="usage-pill" role="cell">{formatAmount(b.amount, b.currency)}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+          {#if usageTruncated}
+            <p class="subtle" style="font-size:0.8rem">
+              Only the most recent {USAGE_MAX_PAGES * 500} rows were
+              loaded — narrow the date range to see the full picture.
+            </p>
+          {/if}
+        {/if}
+        <p class="subtle" style="font-size:0.8rem">
+          The underlying endpoint is marked beta by Venice; the shape
+          of a row can shift without notice. If the list comes back
+          empty after a successful fetch, Venice most likely hasn't
+          ingested your recent requests yet — the ledger can lag live
+          traffic by a few minutes.
+        </p>
       {:else if group === 'export'}
         <h2>Export</h2>
         <p class="subtle">
