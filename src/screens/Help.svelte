@@ -267,7 +267,7 @@
         </svg>
       </button>
       <h1 class="help-title" title={currentPath}>
-        Help<span class="help-crumb"> › {currentPath}</span>
+        Help&nbsp;<span class="help-crumb">› {currentPath}</span>
       </h1>
       <button
         type="button"
