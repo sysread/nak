@@ -38,7 +38,7 @@ Each row shows a horizontal bar scaled by total tokens
   shown. The gradient is driven by how each bucket compares to
   the median on a log scale, so one runaway workload stands out
   in red without flattening everything else into a single shade.
-- The pane auto-loads the last 30 days the first time you open it
+- The pane auto-loads the last 7 days the first time you open it
   in a session. Change the dates and click **Refresh** to re-fetch.
 - Spend is shown in whatever currency Venice billed the charge in —
   `$0.07` for USD, `0.15 VCU` for prepaid Venice Compute Units. If

@@ -353,9 +353,11 @@
     return d.toISOString().slice(0, 10);
   }
 
-  // Default range: rolling 30-day window. "Last month of usage" is the
-  // mental model most users bring to a billing page.
-  let usageStart = $state<string>(ymdDaysAgo(30));
+  // Default range: rolling 7-day window. A week is the shortest
+  // useful slice — long enough to smooth over a single heavy day,
+  // short enough that the pane loads quickly and the bars reflect
+  // recent habits rather than a month-old workload.
+  let usageStart = $state<string>(ymdDaysAgo(7));
   let usageEnd = $state<string>(todayYmd());
   let usageRows = $state<UsageRow[] | null>(null);
   let usageLoading = $state(false);
