@@ -263,6 +263,37 @@
     const r = activeRecipe;
     return r ? cooklangToHtml(r.cooklang) : '';
   });
+
+  // Click an instruction step to move a theme-tinted highlight onto
+  // it — a light "I'm on this step" marker for the reader cooking
+  // along. Single-highlight: clicking a new step moves the marker;
+  // clicking the already-active step clears it. Delegation walks up
+  // from the click target to the nearest `<li>`, then verifies that
+  // li is inside an `ol.cook-steps` (so clicks on ingredient lists
+  // or cookware don't highlight). We clear across every `cook-steps`
+  // in the container, not just the clicked `<ol>`, because sectioned
+  // recipes split steps into one `<ol>` per section — "one at a
+  // time" is one-per-recipe, not one-per-section. The state lives on
+  // the DOM via a class; no reactive state, no persistence —
+  // switching recipes replaces the HTML and wipes the highlight.
+  function onRenderClick(e: MouseEvent): void {
+    const target = e.target;
+    if (!(target instanceof Element)) return;
+    const li = target.closest('li');
+    if (!li) return;
+    const ol = li.parentElement;
+    if (!ol || !ol.classList.contains('cook-steps')) return;
+    const container = e.currentTarget;
+    if (!(container instanceof Element)) return;
+    // Capture before clearing so "click the active step to clear it"
+    // still works — otherwise the clear would remove the class and we
+    // couldn't tell the re-toggle case apart from a fresh click.
+    const wasActive = li.classList.contains('is-active');
+    for (const prev of container.querySelectorAll('ol.cook-steps li.is-active')) {
+      prev.classList.remove('is-active');
+    }
+    if (!wasActive) li.classList.add('is-active');
+  }
 </script>
 
 <svelte:window onkeydown={onEscape} />
@@ -439,7 +470,17 @@
                  `esc()`), so rendering with `{@html}` is safe. We still
                  wrap in a scoped container so any future style leak
                  stays contained to `.cookbook-render`. -->
-            <div class="cookbook-render">
+            <!-- Click-to-highlight instruction steps. Event delegation
+                 on the container, because the inner DOM is produced by
+                 `{@html}` and isn't directly bindable. We only react to
+                 clicks inside `ol.cook-steps` so ingredient chips,
+                 metadata, etc. stay inert. Highlight state is kept as
+                 a class on the DOM node — no Svelte state — which means
+                 switching recipes (a full `{@html}` re-render) naturally
+                 resets the highlights, and there's nothing to persist. -->
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="cookbook-render" onclick={onRenderClick}>
               {@html detailHtml}
             </div>
           </div>
@@ -817,6 +858,10 @@
     position: relative;
     padding: 0.15rem 0 0.6rem 2.1rem;
     line-height: 1.45;
+    /* Hint that the step is tappable — click toggles `.is-active`. The
+       `onRenderClick` handler in this component only reacts to clicks
+       inside `ol.cook-steps`, so the cursor stays accurate. */
+    cursor: pointer;
   }
   .cookbook-render :global(ol.cook-steps li::before) {
     content: counter(cook-step);
@@ -833,6 +878,23 @@
     font-size: 0.8rem;
     font-weight: 700;
     border-radius: 50%;
+  }
+  /* Highlighted step — a soft accent-weak wash that tells the reader
+     "this is the step I'm on" while cooking. Full-bleed padding so the
+     tint extends to the badge edge on the left and the pane edge on
+     the right, making the active step the obvious focal point at a
+     glance. Inherits the theme accent, so a blue theme gets a blue
+     wash and a pink theme gets a pink wash — no per-theme overrides
+     needed. */
+  .cookbook-render :global(ol.cook-steps li.is-active) {
+    background: var(--accent-weak);
+    border-radius: 6px;
+    margin: 0 -0.4rem;
+    padding-right: 0.4rem;
+    padding-left: 2.5rem;
+  }
+  .cookbook-render :global(ol.cook-steps li.is-active::before) {
+    left: 0.4rem;
   }
   .cookbook-edit-panes {
     display: grid;
