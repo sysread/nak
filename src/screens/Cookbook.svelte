@@ -281,18 +281,15 @@
     aria-modal="true"
     aria-label="Cookbook"
   >
-    <button
-      type="button"
-      class="cookbook-close"
-      onclick={onClose}
-      aria-label="Close cookbook"
-      title="Close"
-    >×</button>
-
     <header class="cookbook-header">
       <h1>Cookbook</h1>
-      {#if pane === 'list'}
-        <div class="cookbook-header-actions">
+      <!-- Right-side controls share one flex row so the close (×) button
+           can't overlap the Back button on the detail/edit panes. Keep
+           `cookbook-close` last — it's the outermost "leave this view"
+           action, so it reads naturally to the right of pane-local
+           controls (Back on detail/edit; search + New on list). -->
+      <div class="cookbook-header-actions">
+        {#if pane === 'list'}
           <input
             type="search"
             class="cookbook-search"
@@ -301,10 +298,17 @@
             bind:value={query}
           />
           <button type="button" class="primary" onclick={openNew}>+ New recipe</button>
-        </div>
-      {:else}
-        <button type="button" class="secondary" onclick={openList}>← Back</button>
-      {/if}
+        {:else}
+          <button type="button" class="secondary" onclick={openList}>← Back</button>
+        {/if}
+        <button
+          type="button"
+          class="cookbook-close"
+          onclick={onClose}
+          aria-label="Close cookbook"
+          title="Close"
+        >×</button>
+      </div>
     </header>
 
     <section class="cookbook-body">
@@ -536,10 +540,11 @@
     position: relative;
     overflow: hidden;
   }
+  /* Lives in `.cookbook-header-actions` now — see the template comment
+     there. Keep the transparent / borderless look so the glyph reads as
+     the modal's "dismiss" affordance rather than competing with the
+     adjacent bordered buttons (Back, + New recipe). */
   .cookbook-close {
-    position: absolute;
-    top: 0.5rem;
-    right: 0.75rem;
     background: transparent;
     border: none;
     color: var(--text);
