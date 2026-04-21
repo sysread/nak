@@ -266,9 +266,9 @@
           <polyline points="15 18 9 12 15 6" />
         </svg>
       </button>
-      <h1 class="help-title">Help</h1>
-      <span class="help-crumb-sep subtle" aria-hidden="true">›</span>
-      <span class="help-crumb subtle" title={currentPath}>{currentPath}</span>
+      <h1 class="help-title" title={currentPath}>
+        Help<span class="help-crumb"> › {currentPath}</span>
+      </h1>
       <button
         type="button"
         class="help-close"
