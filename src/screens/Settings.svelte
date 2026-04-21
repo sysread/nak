@@ -499,16 +499,36 @@
 
   /**
    * Always render spend with the `$` sigil. Non-USD charges (VCU,
-   * DIEM, BUNDLED_CREDITS) get a small coin marker alongside the
-   * pill in the template — that flag is where "this was paid with
-   * credits, not cash" gets communicated. Keeping the numeric body
-   * identical across currencies lets every pill align cleanly in
-   * the spend column without the currency code widening the cell
-   * for a subset of rows.
+   * DIEM, BUNDLED_CREDITS) get a muted pill style and a hover
+   * tooltip spelling out the origin — that's where "this was paid
+   * with credits, not cash" gets communicated. Keeping the numeric
+   * body identical across currencies lets every pill align cleanly
+   * in the spend column without the currency code widening the
+   * cell for a subset of rows.
    */
   function formatAmount(amount: number, _currency: UsageCurrency): string {
     void _currency;
     return `$${amount.toFixed(2)}`;
+  }
+
+  /**
+   * Human-facing tooltip text for a non-USD pill. Expands the wire-
+   * shape code into prose so a user who doesn't know what
+   * `BUNDLED_CREDITS` means on Venice's plan page still gets a
+   * readable hint. Unknown codes fall back to the raw identifier
+   * rather than silently hiding the distinction.
+   */
+  function currencyTitle(currency: UsageCurrency): string {
+    switch (currency) {
+      case 'BUNDLED_CREDITS':
+        return 'Paid with bundled credits';
+      case 'VCU':
+        return 'Paid with Venice Compute Units';
+      case 'DIEM':
+        return 'Paid with DIEM credits';
+      default:
+        return `Paid with ${currency}`;
+    }
   }
 
   /**
@@ -1152,26 +1172,21 @@
                     ></span>
                   </span>
                   <span class="usage-tokens" role="cell">{formatTokens(b.tokens)}</span>
-                  <span class="usage-pill" role="cell">
-                    {formatAmount(b.amount, b.currency)}
-                    {#if b.currency !== 'USD'}
-                      <!--
-                        Badge-style marker anchored to the pill's
-                        top-right corner. Absolutely positioned so
-                        its width isn't part of the pill's max-content
-                        column — every pill keeps the same width and
-                        the spend column stays a clean vertical strip.
-                        The tooltip spells out the full currency code
-                        for anyone who can't immediately place the
-                        glyph.
-                      -->
-                      <span
-                        class="usage-pill-marker"
-                        title={b.currency}
-                        aria-label={b.currency}
-                      >🪙</span>
-                    {/if}
-                  </span>
+                  <!--
+                    Non-USD rows get a muted pill style — same $-
+                    formatted body as USD rows, just visually
+                    de-emphasized so the eye skips past them to the
+                    cash charges that actually hit the user's card.
+                    The native `title` tooltip spells out which kind
+                    of credit paid for the row, so the info isn't
+                    lost when the pill is grey.
+                  -->
+                  <span
+                    class="usage-pill"
+                    class:credit={b.currency !== 'USD'}
+                    role="cell"
+                    title={b.currency !== 'USD' ? currencyTitle(b.currency) : undefined}
+                  >{formatAmount(b.amount, b.currency)}</span>
                 </div>
               {/each}
             </div>

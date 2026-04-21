@@ -768,12 +768,6 @@ label {
 }
 
 .usage-pill {
-  /* `position: relative` anchors the top-right credit-marker badge
-     (see .usage-pill-marker below). `overflow: visible` is CSS's
-     default, but we depend on it — the marker rides slightly
-     outside the pill's box, so if anything later sets
-     `overflow: hidden` on the pill the marker would get clipped. */
-  position: relative;
   background: var(--accent-weak);
   color: var(--text);
   border: 1px solid var(--border);
@@ -785,30 +779,17 @@ label {
   min-width: 4rem;
 }
 
-/* Credit-currency flag. Rendered only for non-USD rows as a small
-   coin emoji pinned to the pill's top-right corner, half-out of
-   the pill so the corner of the badge overlaps the pill's border
-   for a "notification dot" feel. `position: absolute` keeps it
-   out of the pill's intrinsic width — every spend cell still
-   measures to the same `$X.XX` string, so the column stays
-   visually aligned regardless of which rows are cash-denominated
-   and which are credits. */
-.usage-pill-marker {
-  position: absolute;
-  top: -0.4rem;
-  right: -0.35rem;
-  font-size: 0.75rem;
-  line-height: 1;
-  /* Faint outline so the badge reads as its own element rather than
-     blending into whatever sits behind the pill's overflowing
-     corner (the pane background). The circle is small enough that
-     a missing outline looks like a rendering glitch. */
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.1rem 0.2rem;
-  pointer-events: none;
-  user-select: none;
+/* Muted variant for non-USD rows (BUNDLED_CREDITS / VCU / DIEM).
+   Same geometry as the base pill so the spend column stays
+   vertically aligned; only the fill and text color change. `--bg-2`
+   + `--muted` gives a visibly "secondary" read against the brighter
+   `--accent-weak` USD fills, without reaching for a raw grey that
+   would look out of place against the cream-and-navy theme palette.
+   Dark mode: #8b94a3 on #13171c ≈ 6.7:1 contrast. Light mode:
+   #75695a on #efe8d2 ≈ 5.5:1. Both clear WCAG AA for body text. */
+.usage-pill.credit {
+  background: var(--bg-2);
+  color: var(--muted);
 }
 
 .usage-pill-head,
