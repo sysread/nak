@@ -2394,7 +2394,13 @@ h1 {
 
 .help-header {
   display: flex;
-  align-items: center;
+  /* Baseline alignment so "Help" (1rem) and the smaller crumb /
+     chevron share a text baseline — without it, align-items:center
+     centers the boxes and the glyphs visibly stair-step because
+     the font-sizes differ. The back button opts back into center
+     alignment on its own since an icon-only button has no useful
+     text baseline. */
+  align-items: baseline;
   gap: 0.5rem;
   padding: 0.5rem 0.6rem;
   border-bottom: 1px solid var(--border);
@@ -2427,14 +2433,17 @@ h1 {
 .help-crumb-sep {
   flex: 0 0 auto;
   font-size: 0.9rem;
-  line-height: 1;
 }
 
 /* Back button sits at the left edge of the header. Disabled styling
    mirrors the existing .secondary:disabled rules — no extra work
-   needed — so we only need layout tweaks here. */
+   needed — so we only need layout tweaks here. The explicit
+   align-self overrides the header's baseline alignment, since the
+   button's only child is an SVG and its baseline would land at
+   the bottom of the icon. */
 .help-back {
   flex: 0 0 auto;
+  align-self: center;
 }
 
 /* Close affordance. Duplicates .settings-close rather than sharing so
