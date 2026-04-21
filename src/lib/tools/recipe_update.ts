@@ -10,7 +10,8 @@
  */
 import type { ToolDef } from './types';
 import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../cooklang';
-import { notifyCookbookChanged } from '../cookbook-store.svelte';
+// See recipe_save.ts — plain-.ts import, not the rune-using store.
+import { notifyCookbookChanged } from '../cookbook-events';
 
 export const recipeUpdate: ToolDef = {
   name: 'recipe_update',

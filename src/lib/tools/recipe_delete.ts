@@ -8,7 +8,8 @@
  * Same reasoning as `memory_delete` vs `memory_invalidate`.
  */
 import type { ToolDef } from './types';
-import { notifyCookbookChanged } from '../cookbook-store.svelte';
+// See recipe_save.ts — plain-.ts import, not the rune-using store.
+import { notifyCookbookChanged } from '../cookbook-events';
 
 export const recipeDelete: ToolDef = {
   name: 'recipe_delete',
