@@ -34,9 +34,13 @@ export interface StartOpts {
  *   - claimTtlSeconds 600 — generous (10 min). Each phase claims one
  *     row and may run an LLM call; the TTL must outlast the slowest
  *     realistic call with margin.
- *   - regenClaimTtlSeconds 1200 — even more generous (20 min). The
- *     compound-summary regen is one LLM call but can be slower (long
- *     output, lower priority on Venice).
+ *   - regenClaimTtlSeconds 180 — three minutes. One LLM call to
+ *     summarise; if it doesn't return inside that window the claim
+ *     was probably orphaned by a tab close or process crash and
+ *     another device should be free to retry rather than waiting
+ *     out a 20-minute parking ticket. Earlier draft used 1200s for
+ *     "generous, lower priority" reasoning; in practice a hung
+ *     regen blocks the always-on summary update for everyone.
  *   - leasePollMs 20_000 — match heartbeat cadence.
  *   - idleIntervalMs 60_000 — when holding the lease and every phase
  *     said empty-phase, idle for a minute. Samskara work is much less
@@ -53,7 +57,7 @@ const WORKER_DEFAULTS = {
   leaseTtlSeconds: 45,
   leaseHeartbeatMs: 20_000,
   claimTtlSeconds: 600,
-  regenClaimTtlSeconds: 1200,
+  regenClaimTtlSeconds: 180,
   leasePollMs: 20_000,
   idleIntervalMs: 60_000,
   errorBackoffMs: 15_000,

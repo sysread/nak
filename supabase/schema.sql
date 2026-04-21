@@ -1765,6 +1765,19 @@ begin
   if jsonb_typeof(p_fires) <> 'array' or jsonb_array_length(p_fires) = 0 then
     return;
   end if;
+  -- Thread-ownership guard. RLS would hide reads of fires linked to
+  -- a thread the caller doesn't own, but RLS doesn't run on this
+  -- function's own INSERT inside `security invoker` once we've
+  -- already trusted `auth.uid()` for `user_id`. The thread_id field
+  -- is supplied by the client and would otherwise let a caller link
+  -- their own samskara_fires rows to threads they don't own,
+  -- corrupting cohort/reaction integrity. Verify ownership up front.
+  if not exists (
+    select 1 from public.threads t
+    where t.id = p_thread_id and t.user_id = v_uid
+  ) then
+    raise exception 'samskara_record_fires: thread % not owned by caller', p_thread_id;
+  end if;
   -- Insert one fire row per cohort member. The jsonb array is shape
   -- `[{"samskara_id": "...", "score": 0.42}, ...]` — minimal payload
   -- since the rest is derivable from the samskara row.

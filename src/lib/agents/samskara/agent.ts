@@ -144,7 +144,12 @@ export class SamskaraAgent {
     try {
       raw = await callOnce(this.venice, this.model, ASSIMILATOR_PROMPT, payload, signal, 400);
     } catch (err) {
-      if (err instanceof VeniceError && err.kind === 'rate_limit') return null;
+      // Rate-limit re-throws so the cycle driver can map to its
+      // long back-off (60s) rather than the short error back-off
+      // (15s). Other Venice failures are transient and treated as
+      // a parse-failure equivalent (the row stays claimed; the TTL
+      // releases it; the next pass retries).
+      if (err instanceof VeniceError && err.kind === 'rate_limit') throw err;
       return null;
     }
     const parsed = tryParseJson<{
@@ -181,7 +186,12 @@ export class SamskaraAgent {
     try {
       raw = await callOnce(this.venice, this.model, RELATOR_PROMPT, payload, signal, 200);
     } catch (err) {
-      if (err instanceof VeniceError && err.kind === 'rate_limit') return null;
+      // Rate-limit re-throws so the cycle driver can map to its
+      // long back-off (60s) rather than the short error back-off
+      // (15s). Other Venice failures are transient and treated as
+      // a parse-failure equivalent (the row stays claimed; the TTL
+      // releases it; the next pass retries).
+      if (err instanceof VeniceError && err.kind === 'rate_limit') throw err;
       return null;
     }
     const parsed = tryParseJson<{ kind?: unknown; label?: unknown }>(raw);
@@ -217,7 +227,12 @@ export class SamskaraAgent {
     try {
       raw = await callOnce(this.venice, this.model, MINTER_PROMPT, payload, signal, 400);
     } catch (err) {
-      if (err instanceof VeniceError && err.kind === 'rate_limit') return null;
+      // Rate-limit re-throws so the cycle driver can map to its
+      // long back-off (60s) rather than the short error back-off
+      // (15s). Other Venice failures are transient and treated as
+      // a parse-failure equivalent (the row stays claimed; the TTL
+      // releases it; the next pass retries).
+      if (err instanceof VeniceError && err.kind === 'rate_limit') throw err;
       return null;
     }
     const parsed = tryParseJson<{
@@ -261,7 +276,12 @@ export class SamskaraAgent {
     try {
       raw = await callOnce(this.venice, this.model, REACTION_PROMPT, payload, signal, 400);
     } catch (err) {
-      if (err instanceof VeniceError && err.kind === 'rate_limit') return null;
+      // Rate-limit re-throws so the cycle driver can map to its
+      // long back-off (60s) rather than the short error back-off
+      // (15s). Other Venice failures are transient and treated as
+      // a parse-failure equivalent (the row stays claimed; the TTL
+      // releases it; the next pass retries).
+      if (err instanceof VeniceError && err.kind === 'rate_limit') throw err;
       return null;
     }
     const parsed = tryParseJson<{
@@ -304,7 +324,12 @@ export class SamskaraAgent {
         500
       );
     } catch (err) {
-      if (err instanceof VeniceError && err.kind === 'rate_limit') return null;
+      // Rate-limit re-throws so the cycle driver can map to its
+      // long back-off (60s) rather than the short error back-off
+      // (15s). Other Venice failures are transient and treated as
+      // a parse-failure equivalent (the row stays claimed; the TTL
+      // releases it; the next pass retries).
+      if (err instanceof VeniceError && err.kind === 'rate_limit') throw err;
       return null;
     }
     const trimmed = raw.trim().replace(/^["'`]+|["'`]+$/g, '').trim();

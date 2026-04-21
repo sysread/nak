@@ -22,6 +22,7 @@
  */
 import type { SupabaseService, SamskaraSubstrateRow } from '../../supabase';
 import type { VeniceClient } from '../../venice';
+import { VeniceError } from '../../venice';
 import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from '../../models';
 import type { LeaseCoordinator } from '../../embeddings/lease';
 import type { SamskaraAgent } from './agent';
@@ -96,21 +97,33 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     return 'acquired-lease';
   }
 
-  switch (ctx.phase) {
-    case 'assimilate':
-      return runAssimilatePhase(ctx);
-    case 'pair-relate':
-      return runPairRelatePhase(ctx);
-    case 'mint-tier1':
-      return runMintTier1Phase(ctx);
-    case 'mint-tier2':
-      return runMintTier2Phase(ctx);
-    case 'reaction-classify':
-      return runReactionClassifyPhase(ctx);
-    case 'decay':
-      return runDecayPhase(ctx);
-    case 'compound-regen':
-      return runCompoundRegenPhase(ctx);
+  // Rate-limit propagation. Each phase function may throw a
+  // VeniceError with kind='rate_limit' (the agent re-throws those
+  // so the loop can distinguish from generic parse failures). Catch
+  // them here once rather than per-phase, and map to 'rate-limited'
+  // so napForResult picks the long back-off.
+  try {
+    switch (ctx.phase) {
+      case 'assimilate':
+        return await runAssimilatePhase(ctx);
+      case 'pair-relate':
+        return await runPairRelatePhase(ctx);
+      case 'mint-tier1':
+        return await runMintTier1Phase(ctx);
+      case 'mint-tier2':
+        return await runMintTier2Phase(ctx);
+      case 'reaction-classify':
+        return await runReactionClassifyPhase(ctx);
+      case 'decay':
+        return await runDecayPhase(ctx);
+      case 'compound-regen':
+        return await runCompoundRegenPhase(ctx);
+    }
+  } catch (err) {
+    if (err instanceof VeniceError && err.kind === 'rate_limit') {
+      return 'rate-limited';
+    }
+    return 'error';
   }
 }
 
@@ -399,10 +412,13 @@ async function runReactionClassifyPhase(ctx: CycleContext): Promise<CycleResult>
   // Find the most recent unresolved cohort whose follow-up user
   // message has landed. We look for fires where:
   //   - was_confirmed is null (unresolved)
-  //   - fired_at is between 1 and 30 minutes ago (give the user time
-  //     to send their next message; older fires age out by decay)
-  // Group by cohort_id, take the oldest within the window so we don't
-  // skip ones the user is actively responding to.
+  //   - fired_at is between 1 and 10 minutes ago - the design's
+  //     resolution window (see docs/dev/samskara.md). Older fires
+  //     age out via decay rather than being force-classified by
+  //     stale next-turn signal; the 1-minute floor avoids racing a
+  //     turn that's still in flight.
+  // Group by cohort_id, take the oldest within the window so we
+  // don't skip ones the user is actively responding to.
   const client = (ctx.supabase as unknown as {
     client: {
       from: (t: string) => {
@@ -431,7 +447,7 @@ async function runReactionClassifyPhase(ctx: CycleContext): Promise<CycleResult>
     };
   }).client;
   const now = new Date();
-  const minAge = new Date(now.getTime() - 30 * 60 * 1000).toISOString();
+  const minAge = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
   const maxAge = new Date(now.getTime() - 60 * 1000).toISOString();
   let candidate;
   try {

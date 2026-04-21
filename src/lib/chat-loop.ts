@@ -55,6 +55,19 @@ import {
 export const MAX_ROUNDS = 5;
 
 /**
+ * Hard cap on the wait for samskara priming before the first
+ * assistant round starts. Common case lands well under this; the
+ * cap exists so a slow Venice or a hiccup in the cosine RPC can't
+ * add visible latency to the user's first token. Picked at 1500ms
+ * because async chat tolerates a half-second send delay but not
+ * more - anything beyond that and the user starts noticing.
+ *
+ * Exported for tests that want to assert the timeout behaviour
+ * without waiting for real time.
+ */
+export const SAMSKARA_PRIMING_TIMEOUT_MS = 1500;
+
+/**
  * Boundary markers we splice around the current turn's user text when
  * Venice web search is active. Venice inlines its search payload plus
  * a framing instruction ("you can use this real time information to
@@ -358,15 +371,32 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // formatter renders whatever sections are present. Errors are
   // already swallowed inside the helpers — a samskara failure should
   // never block a chat turn.
+  //
+  // Bounded wait. The cosine fire involves one Venice embed call
+  // plus one Supabase RPC; the compound summary is a single SELECT.
+  // Common case lands in 100-300 ms. Cap at SAMSKARA_PRIMING_TIMEOUT_MS
+  // so a slow Venice doesn't add visible latency to the user's first
+  // token. The underlying Promises keep running on timeout so the
+  // fire-log RPC inside fireSamskaras still completes — the worst
+  // case is one cohort logged but never reaction-classified, which
+  // the worker's resolution-window discards naturally.
   const userText = extractUserText(history[history.length - 1]);
-  const [compoundSummary, fireResult] = await Promise.all([
-    getCompoundSummary(supabase),
-    fireSamskaras(supabase, venice, thread.id, userText, signal),
+  const primingWork = (async (): Promise<string> => {
+    const [compoundSummary, fireResult] = await Promise.all([
+      getCompoundSummary(supabase),
+      fireSamskaras(supabase, venice, thread.id, userText, signal),
+    ]);
+    return formatPriming({
+      compoundSummary,
+      fire: fireResult as FireResult | null,
+    });
+  })();
+  const samskaraAppendix = await Promise.race([
+    primingWork,
+    new Promise<string>((resolve) =>
+      setTimeout(() => resolve(''), SAMSKARA_PRIMING_TIMEOUT_MS)
+    ),
   ]);
-  const samskaraAppendix = formatPriming({
-    compoundSummary,
-    fire: fireResult as FireResult | null,
-  });
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) break;
