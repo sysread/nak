@@ -896,13 +896,13 @@
           <code>enable_web_citations=true</code>. Toggle off to send
           <code>enable_web_search=off</code> on every request instead.
         </p>
-        <label class="form-row" style="display:flex;gap:0.5rem;align-items:center">
+        <label class="form-row toggle-row">
           <input
             type="checkbox"
             checked={webSearchEnabled}
             onchange={onToggleWebSearch}
           />
-          <span><strong>Enable Venice web search</strong></span>
+          <span>Enabled</span>
         </label>
         <p class="subtle" style="font-size:0.8rem">
           Stored on your Supabase profile so the choice follows you across

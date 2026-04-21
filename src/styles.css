@@ -261,6 +261,24 @@ label {
   margin-bottom: 0.9rem;
 }
 
+/* Inline checkbox-with-label row. Without the width override the native
+   checkbox inherits the generic `input { width: 100% }` rule above and
+   stretches to fill the flex container — which renders the checkbox
+   floating near the middle of the row with its label shoved to the far
+   edge. label's default `display: block` also needs overriding so the
+   checkbox and text sit on one line. */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.toggle-row input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+}
+
 .center {
   min-height: 100%;
   display: grid;
