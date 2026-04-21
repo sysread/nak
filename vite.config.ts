@@ -2,13 +2,42 @@ import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { VitePWA } from 'vite-plugin-pwa';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 
 // When deployed to GitHub Pages at https://<user>.github.io/<repo>/
 // the VITE_BASE env var lets forks override. Default keeps relative paths.
 const base = process.env.VITE_BASE ?? './';
 
+// Build fingerprint. CI sets GITHUB_SHA on every workflow run; local builds
+// fall back to `git rev-parse` so `pnpm preview` has a meaningful value too.
+// The final fallback is the literal string 'dev' — which is what the running
+// `pnpm dev` server sees, since HMR doesn't re-run this block per file edit.
+// These values are inlined via `define` below and surface in Settings → About
+// so the user can tell at a glance which build their browser has cached.
+function readCommit(): string {
+  const envSha = process.env.GITHUB_SHA;
+  if (envSha) return envSha.slice(0, 7);
+  try {
+    return execSync('git rev-parse --short=7 HEAD', {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .toString()
+      .trim();
+  } catch {
+    // No git, shallow checkout without refs, or first boot of a fresh
+    // clone — none of these should fail the build.
+    return 'dev';
+  }
+}
+const commit = readCommit();
+const buildTime = new Date().toISOString();
+
 export default defineConfig({
   base,
+  define: {
+    __APP_COMMIT__: JSON.stringify(commit),
+    __APP_BUILD_TIME__: JSON.stringify(buildTime),
+  },
   resolve: {
     alias: {
       $lib: path.resolve('./src/lib'),
@@ -33,8 +62,14 @@ export default defineConfig({
       strategies: 'injectManifest',
       srcDir: 'src',
       filename: 'sw.ts',
-      registerType: 'autoUpdate',
-      injectRegister: 'auto',
+      // `prompt` mode parks a fresh SW in 'waiting' until the client
+      // explicitly posts SKIP_WAITING. We register manually from
+      // `src/lib/update.svelte.ts` so `onNeedRefresh` can flip a
+      // reactive flag that UpdateBanner renders — auto-update would
+      // reload silently and defeat the whole "tell me when a new build
+      // landed" point of the banner.
+      registerType: 'prompt',
+      injectRegister: false,
       manifest: {
         name: 'Nak',
         short_name: 'Nak',

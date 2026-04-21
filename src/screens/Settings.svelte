@@ -57,6 +57,7 @@
     type ColorMode,
   } from '$lib/theme';
   import SecretInput from '../components/SecretInput.svelte';
+  import { updateState, applyUpdate, checkForUpdates } from '$lib/update.svelte';
 
   interface Props {
     onClose: () => void;
@@ -78,13 +79,15 @@
     | 'ai'
     | 'appearance'
     | 'export'
-    | 'security';
+    | 'security'
+    | 'about';
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'keys', label: 'API keys' },
     { id: 'ai', label: 'AI' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'export', label: 'Export' },
     { id: 'security', label: 'Security' },
+    { id: 'about', label: 'About' },
   ];
   let group = $state<Group>('keys');
 
@@ -316,6 +319,58 @@
   let pwInfo = $state<string | null>(null);
 
   let busy = $state(false);
+
+  // --- About pane ---
+  // Humanize the ISO string Vite stamped at build time. Falls back to
+  // the raw value on any parse hiccup — e.g. the literal 'dev' that
+  // shows up during `pnpm dev` (no build step ran, so nothing to
+  // parse) or on a browser that doesn't speak the en-* locale family.
+  function formatBuildTime(iso: string): string {
+    const parsed = new Date(iso);
+    if (isNaN(parsed.getTime())) return iso;
+    return parsed.toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+  }
+
+  // `about-busy` covers both button states since they share the same
+  // button: checking for an update vs. reloading once one is found.
+  let aboutBusy = $state<'idle' | 'checking' | 'reloading'>('idle');
+  // Transient "No update available" hint after a manual check came up
+  // empty — clears on next button click. Prevents the user from
+  // wondering whether the click did anything when the app is already
+  // current.
+  let aboutCheckedInfo = $state<string | null>(null);
+
+  async function onAboutAction(): Promise<void> {
+    aboutCheckedInfo = null;
+    if (updateState.available) {
+      aboutBusy = 'reloading';
+      try {
+        await applyUpdate();
+      } catch {
+        // `applyUpdate` handles its own errors; reaching here would
+        // require `location.reload()` to reject, which effectively
+        // can't happen. Reset so the button is usable again.
+        aboutBusy = 'idle';
+      }
+      return;
+    }
+    aboutBusy = 'checking';
+    try {
+      await checkForUpdates();
+      // If `checkForUpdates` found something, `onNeedRefresh` already
+      // fired and `updateState.available` is now true — the button
+      // label will reflect that on the next render. If not, leave a
+      // subtle "Up to date." note so the click feels acknowledged.
+      if (!updateState.available) {
+        aboutCheckedInfo = 'You are on the latest build.';
+      }
+    } finally {
+      aboutBusy = 'idle';
+    }
+  }
 
   async function onSaveKeys(e: SubmitEvent): Promise<void> {
     e.preventDefault();
@@ -795,6 +850,58 @@
           {#if pwInfo}<p class="subtle">{pwInfo}</p>{/if}
           <button type="submit" disabled={busy}>Change password</button>
         </form>
+      {:else if group === 'about'}
+        <!-- About pane: surfaces the build fingerprint and lets the
+             user pull the latest deploy on demand. Paired with the
+             top-right update banner — this pane is the "I want to
+             check my version" entry point, the banner is the "the app
+             nudged me" one. Both drive the same `applyUpdate()`
+             code path. -->
+        <h2>About</h2>
+        <p class="subtle">
+          Which build your browser is running right now. A top-right
+          "new version available" banner also appears automatically when
+          a fresh deploy lands, so you don't need to open this pane to
+          get the prompt — this is just the place to check at any time.
+        </p>
+        <dl class="about-grid">
+          <dt>Version</dt>
+          <dd><code>{updateState.commit}</code></dd>
+          <dt>Built</dt>
+          <dd title={updateState.buildTime}>{formatBuildTime(updateState.buildTime)}</dd>
+          <dt>Status</dt>
+          <dd>
+            {#if updateState.available}
+              <span class="update-ready">Update available</span>
+            {:else}
+              <span class="subtle">Up to date</span>
+            {/if}
+          </dd>
+        </dl>
+        <button
+          type="button"
+          onclick={onAboutAction}
+          disabled={aboutBusy !== 'idle'}
+        >
+          {#if aboutBusy === 'reloading'}
+            Reloading…
+          {:else if aboutBusy === 'checking'}
+            Checking…
+          {:else if updateState.available}
+            Reload to update
+          {:else}
+            Check for updates
+          {/if}
+        </button>
+        {#if aboutCheckedInfo}
+          <p class="subtle" style="margin-top:0.5rem">{aboutCheckedInfo}</p>
+        {/if}
+        <p class="subtle" style="font-size:0.8rem">
+          "Check for updates" asks the service worker to look for a
+          fresh deploy without reloading. If one's found the button
+          flips to "Reload to update" and the top-right banner
+          appears.
+        </p>
       {/if}
     </section>
   </div>

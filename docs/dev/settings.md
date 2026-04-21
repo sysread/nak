@@ -25,14 +25,26 @@ destination:
   file. No persistence change.
 - **Security** — rotates the master password. Re-encrypts the
   config blob; doesn't touch Supabase.
+- **About** — build fingerprint (commit SHA + build time) and the
+  "Check for updates" / "Reload to update" action. Read-only; the
+  values come from `$lib/update.svelte` which Vite populates at
+  build time via `define`. See `./build-deploy.md` for the
+  version-detection pipeline.
 
 Theme is tightly coupled to Settings (the Appearance pane drives
 every update) so it's covered here rather than in its own file.
 
 ## Files
 
-- `src/screens/Settings.svelte` — the modal; five panes + nav +
+- `src/screens/Settings.svelte` — the modal; six panes + nav +
   backdrop dismiss + Escape handling.
+- `src/lib/update.svelte.ts` — reactive build fingerprint +
+  service-worker update registration. Backs the About pane and the
+  top-right `UpdateBanner`. Reads the Vite-`define`'d globals
+  `__APP_COMMIT__` / `__APP_BUILD_TIME__` (see `./build-deploy.md`).
+- `src/components/UpdateBanner.svelte` — fixed top-right "new
+  version available" pill, driven by `updateState.available`.
+  Mounted once in `App.svelte` so it appears across every phase.
 - `src/lib/state.svelte.ts` — setters that Settings calls
   (`setDefaultModel`, `setDefaultReasoningEffort`,
   `setDefaultVerbosity`, `setSystemPrompts`, `setTheme`,
@@ -163,6 +175,11 @@ every update) so it's covered here rather than in its own file.
   (`state.svelte.ts`) is the bridge: Settings writes setters,
   other features read the corresponding `app.*` field. See
   `./architecture.md`.
+- **Build & deploy** — the About pane surfaces the commit SHA +
+  build time that `vite.config.ts` inlines via `define`, and
+  drives the same `applyUpdate()` that UpdateBanner calls. See
+  `./build-deploy.md` for how the SW update-prompt pipeline is
+  wired.
 
 ## Gotchas
 

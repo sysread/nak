@@ -47,6 +47,7 @@
     "highlight.js": "^11.11.1",
     "katex": "^0.16.45",
     "marked": "^18.0.1",
-    "marked-katex-extension": "^5.1.8"
+    "marked-katex-extension": "^5.1.8",
+    "workbox-window": "^7.4.0"
   }
 }

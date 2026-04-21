@@ -122,6 +122,18 @@ docs imported via `import.meta.glob`.
   **/*.{js,css,html,svg,png,ico,woff2}` — every bundled
   asset is precached. `/api/*` is denied-listed so the
   SW never intercepts user-API traffic.
+- **Build fingerprint.** `vite.config.ts` reads
+  `process.env.GITHUB_SHA` (CI) or falls back to
+  `git rev-parse --short=7 HEAD` (local) plus `new Date()`
+  and inlines them as `__APP_COMMIT__` and
+  `__APP_BUILD_TIME__` via `define`. `src/lib/update.svelte.ts`
+  is the only consumer — it exposes them as reactive state
+  for Settings → About, and registers the SW with
+  `registerType: 'prompt'` so `onNeedRefresh` flips an
+  `available` flag when a new build lands. `UpdateBanner`
+  and the About pane both read that flag; both drive the
+  same `applyUpdate()` that posts `SKIP_WAITING` to the
+  waiting SW and reloads.
 
 ## Interactions with other features
 
@@ -144,12 +156,19 @@ docs imported via `import.meta.glob`.
   plugin only wires the SW in `build` + `preview` modes.
   Testing offline behavior or install prompts requires
   `pnpm build && pnpm preview`.
-- **`registerType: 'autoUpdate'`** — the SW updates in the
-  background and reloads to a new version on next
-  navigation. Users don't see a prompt; bugs in a shipped
-  version can't be "fixed by hard-refresh" once cached.
-  Think twice before shipping something you're not sure
-  about.
+- **`registerType: 'prompt'` + manual SKIP_WAITING handler.**
+  A newly-installed SW sits in 'waiting' until the page posts
+  `{type: 'SKIP_WAITING'}` — which happens from
+  `src/lib/update.svelte.ts` when the user clicks the
+  top-right "new version available" banner or the About pane's
+  "Reload to update" button. `sw.ts` listens for that message
+  and calls `self.skipWaiting()`, `registerSW` reloads, and
+  the fresh precache takes over. Asset URLs are already
+  content-hashed by Vite, so no cache-buster is needed. If
+  you ship a broken build, the prompt never fires for
+  users who haven't clicked Reload yet — you can push a
+  fix and the banner updates to the new SHA without anyone
+  noticing the interim.
 - **`navigateFallbackDenylist: [/^\/api/]`** is a Workbox
   setting — it prevents the SW from hijacking paths that
   start with `/api`. Nak doesn't ship an `/api` of its
