@@ -52,11 +52,20 @@ if (
 const SHARE_PATH = new URL('share', self.registration.scope).pathname;
 const APP_ROOT_WITH_FLAG = new URL('./?share=pending', self.registration.scope).toString();
 
-// Snappier updates — with `autoUpdate` registration on the client
-// side, this pair ensures a refreshed SW takes over without waiting
-// for every tab to close.
-self.addEventListener('install', () => {
-  void self.skipWaiting();
+// A freshly-installed SW sits in 'waiting' until the page explicitly
+// hands it the baton. `src/lib/update.svelte.ts` registers with
+// `registerType: 'prompt'`, which posts SKIP_WAITING when the user
+// clicks the "new version available" banner — at which point this
+// listener promotes the waiting SW to active and the client reloads
+// into the fresh precache. Dropping the unconditional `skipWaiting()`
+// here is what makes the banner possible; with an auto-skip install
+// handler the new SW would activate before `onNeedRefresh` could fire,
+// and the user would get a silent mid-session reload instead of a
+// visible prompt.
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    void self.skipWaiting();
+  }
 });
 
 self.addEventListener('activate', (event) => {

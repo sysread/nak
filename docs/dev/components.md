@@ -214,6 +214,25 @@ hint and stop warning about a missing attribute.
 Consumers: `Setup.svelte`, `Unlock.svelte`, `EditConfig.svelte`,
 `Settings.svelte` (keys pane, security pane).
 
+## `<UpdateBanner>`
+
+File: `src/components/UpdateBanner.svelte`.
+
+Top-right "new version available — Reload" pill. Renders only when
+`updateState.available` from `$lib/update.svelte` is true, so the
+banner has zero visual footprint until the service worker reports
+a waiting build.
+
+No props. Mounted once in `App.svelte` outside the phase switch so
+the banner appears across every phase (setup / locked / unlocked /
+edit-config). The Reload button calls `applyUpdate()`, which posts
+`SKIP_WAITING` to the waiting SW and reloads.
+
+See `./build-deploy.md` for the update-detection pipeline and
+`./settings.md` for the matching About pane.
+
+Consumers: `App.svelte`.
+
 ## Component-level conventions
 
 - **Runes everywhere.** `$props()` destructures at the top; bindable

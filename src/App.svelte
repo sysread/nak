@@ -26,10 +26,12 @@
     DEFAULT_TTL_MS,
   } from '$lib/session';
   import { applyTheme } from '$lib/theme';
+  import { initUpdateWatcher } from '$lib/update.svelte';
   import Setup from './screens/Setup.svelte';
   import Unlock from './screens/Unlock.svelte';
   import Chat from './screens/Chat.svelte';
   import EditConfig from './screens/EditConfig.svelte';
+  import UpdateBanner from './components/UpdateBanner.svelte';
 
   // Throttle activity writes to sessionStorage — sessionStorage.setItem is
   // synchronous and we don't want to hammer it on every keystroke.
@@ -44,6 +46,12 @@
     // reactive state (they should already match via cached theme, but this
     // keeps Svelte and the DOM in sync on first paint).
     applyTheme(app.colorMode, app.accent);
+
+    // Register the service worker and start polling for new builds. Has
+    // to run after mount (not at module top level) so tests that import
+    // state.svelte.ts without a DOM don't trip over `registerSW`'s
+    // window dependency.
+    initUpdateWatcher();
 
     // When mode === 'system', follow OS changes live.
     const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -96,6 +104,11 @@
     };
   });
 </script>
+
+<!-- Banner renders across every phase and sits above the active screen
+     via a high z-index — the "new version available" prompt is useless
+     if it hides behind Settings or the auth flow. -->
+<UpdateBanner />
 
 {#if app.phase === 'loading'}
   <div class="center"><p class="subtle">Loading…</p></div>
