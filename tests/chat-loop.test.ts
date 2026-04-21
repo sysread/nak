@@ -273,11 +273,16 @@ describe('runChatLoop', () => {
     expect(users[1].content).toBe('<user_message>look up X</user_message>');
   });
 
-  it('leaves user messages untouched when web search is off', async () => {
-    // Without webSearch active there's no Venice injection to fence
-    // off — and the system prompt omits the attribution warning in
-    // that mode, so dangling <user_message> tags in the history
-    // would be meaningless.
+  it('wraps the last user message even when web search is off', async () => {
+    // Wrapping used to be gated on an active webSearch mode, on the
+    // theory that "no search = no Venice injection". That theory
+    // broke when enable_web_scraping was turned always-on in
+    // venice.ts: now any user message that contains a URL gets the
+    // full scraped page inlined, even with search off. Wrapping
+    // unconditionally keeps the <user_message> boundary reliable
+    // across both injection paths and leaves the model with a
+    // single invariant to rely on, rather than two mutually
+    // exclusive prompt regimes keyed on a flag the model can't see.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -297,7 +302,32 @@ describe('runChatLoop', () => {
       webSearch: 'off',
     });
     const users = seenRequests[0].messages.filter((m) => m.role === 'user');
-    expect(users[0].content).toBe('hi');
+    expect(users[0].content).toBe('<user_message>hi</user_message>');
+  });
+
+  it('wraps the last user message when no webSearch option is supplied', async () => {
+    // The chat-loop option is optional; test callers that never
+    // pass `webSearch` still get the wrap, because scraping is
+    // always on in venice.ts regardless of caller opt-in.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+    });
+    const users = seenRequests[0].messages.filter((m) => m.role === 'user');
+    expect(users[0].content).toBe('<user_message>hi</user_message>');
   });
 
   it('does not mutate the caller-supplied history when wrapping for web search', async () => {

@@ -293,29 +293,44 @@ describe('tool registry', () => {
     expect(prompt).toMatch(/no tool to call/i);
   });
 
-  it('buildSystemPrompt warns that web-search results are not user-authored', () => {
-    // Regression guard: Venice inlines search results + its own framing
-    // ("you can use this real time information to answer the user's
-    // query above") into the user turn server-side. Without an explicit
-    // warning the model misreads that as a user instruction — observed
-    // live on the "Web Tool Test Request" thread where the reasoning
-    // trace quoted the Venice preamble back as 'and the user says:
-    // "..."'. The prompt must both call out the non-user origin and
-    // point at the <user_message> boundary tags that chat-loop.ts
-    // splices around the current turn.
-    const prompt = buildSystemPrompt({ webSearch: true });
-    expect(prompt).toMatch(/not from the user/i);
-    expect(prompt).toContain('<user_message>');
-    expect(prompt).toContain('</user_message>');
+  it('buildSystemPrompt carries the user-message boundary rule and Venice-injection warning unconditionally', () => {
+    // Venice can inject content into what arrives as the user turn
+    // on EVERY request, not just web-search turns — URL scraping
+    // (enable_web_scraping) is always on in venice.ts, so any
+    // request where the user pasted a URL gets the full scraped
+    // page inlined after their text. chat-loop.ts wraps the
+    // current user turn unconditionally in <user_message>…</user_message>
+    // as the structural boundary; this prompt block is the paired
+    // instruction telling the model what to do with the tags.
+    // Both halves must appear whether or not webSearch is opted in.
+    for (const prompt of [buildSystemPrompt(), buildSystemPrompt({ webSearch: true })]) {
+      expect(prompt).toContain('<user_message>');
+      expect(prompt).toContain('</user_message>');
+      // Behavior beats we don't want to lose on a future phrasing
+      // edit: the explicit "not a human-authored instruction" frame,
+      // the don't-thank-the-user guidance, and the "instructions
+      // come from this system message" anchor that tells the model
+      // which source of framing actually binds it.
+      expect(prompt).toMatch(/not a human-authored/i);
+      expect(prompt).toMatch(/do not thank/i);
+      expect(prompt).toMatch(/instructions come from this system message/i);
+    }
   });
 
-  it('buildSystemPrompt omits the attribution warning when web search is off', () => {
-    // Without web search opted in, there's no Venice injection to warn
-    // about — and chat-loop.ts's tag wrapping doesn't run either, so a
-    // reference to <user_message> tags would be a dangling pointer.
-    const prompt = buildSystemPrompt();
-    expect(prompt).not.toContain('<user_message>');
-    expect(prompt).not.toMatch(/not from the user/i);
+  it('buildSystemPrompt mentions URL scraping capability regardless of webSearch mode', () => {
+    // Web search is opt-in; URL scraping is always on. If the prompt
+    // only surfaced scraping in the webSearch branch, a user who
+    // turned search off would get a model that refuses "what does
+    // this page say?" with a generic "I cannot browse the web" —
+    // even though the scraped page content is already sitting in
+    // the user turn. Both branches must advertise the capability.
+    for (const prompt of [buildSystemPrompt(), buildSystemPrompt({ webSearch: true })]) {
+      expect(prompt).toMatch(/paste[sd]?\s+a\s+url/i);
+      expect(prompt).toMatch(/full\s+page\s+content/i);
+    }
+    // And only the webSearch-opted-in branch advertises live search.
+    expect(buildSystemPrompt()).not.toMatch(/search the live web/i);
+    expect(buildSystemPrompt({ webSearch: true })).toMatch(/search the live web/i);
   });
 
   it('executeToolCall dispatches by name', async () => {

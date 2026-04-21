@@ -489,6 +489,7 @@ describe('VeniceClient.streamChat', () => {
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.venice_parameters).toEqual({
       include_venice_system_prompt: false,
+      enable_web_scraping: true,
       enable_web_search: 'on',
       enable_web_citations: true,
       include_search_results_in_stream: true,
@@ -519,6 +520,7 @@ describe('VeniceClient.streamChat', () => {
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.venice_parameters).toEqual({
       include_venice_system_prompt: false,
+      enable_web_scraping: true,
       enable_web_search: 'auto',
       enable_web_citations: true,
       include_search_results_in_stream: true,
@@ -547,19 +549,27 @@ describe('VeniceClient.streamChat', () => {
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.venice_parameters).toEqual({
       include_venice_system_prompt: false,
+      enable_web_scraping: true,
       enable_web_search: 'off',
     });
   });
 
-  it('always disables the Venice platform system prompt, even when webSearch is unset', async () => {
+  it('always disables the Venice platform system prompt and enables URL scraping, even when webSearch is unset', async () => {
     // Venice's default platform system prompt stacks on top of ours
     // and drags the voice back toward the generic "helpful assistant"
     // phrasing that `buildSystemPrompt` is specifically pushing away
     // from. We opt out unconditionally on every streamChat call so
     // main chat + all sub-agents (recall, reflection, summary, auto-
-    // title) run under Nak's baseline alone. `venice_parameters` is
-    // therefore always present on the wire, even when the caller
-    // hasn't opted into web search.
+    // title) run under Nak's baseline alone.
+    //
+    // `enable_web_scraping` is also always on: per Venice's docs, it
+    // scrapes URLs the user pastes into the latest message (via
+    // Firecrawl) and inlines the page content. Baseline cost is
+    // zero when no URLs are present, and the intent when a URL IS
+    // present is nearly always "read this for me" — so there's no
+    // reason to gate it. Independent of `enable_web_search`, per
+    // the docs, hence the unconditional slot here rather than a
+    // conditional paired with the search flag.
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
     );
@@ -574,6 +584,7 @@ describe('VeniceClient.streamChat', () => {
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.venice_parameters).toEqual({
       include_venice_system_prompt: false,
+      enable_web_scraping: true,
     });
   });
 

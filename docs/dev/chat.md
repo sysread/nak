@@ -206,22 +206,39 @@ A chat turn goes:
   before being materialized, the realtime `INSERT` handler sees a
   thread it doesn't have, and the list gets out of order. The
   `isDraft` flag gates this; don't remove it.
-- **Venice inlines web-search results into the user turn.** When
-  `enable_web_search` is active, Venice splices the search payload
-  plus its own framing (e.g. "you can use this real time
-  information to answer the user's query above") into what arrives
-  as the user's turn, server-side — we never see or forward that
-  content, so there's nothing to strip client-side. The model
-  misreads the injection as a user instruction without help
-  (observed: thanking the user for links they never sent, quoting
-  snippets back as their words). Mitigation is two-part: the
-  system prompt's web-search block calls out the non-user origin,
-  and `runChatLoop` wraps the current turn's user text in
-  `<user_message>...</user_message>` tags via `tagLastUserMessage`
-  so the model has an unambiguous boundary. The tags are
-  request-time only — never persisted. If you add another place
-  that constructs wire messages when `webSearch` is active, apply
-  the same wrap or the model will lose the boundary signal.
+- **Venice can inject content into the user turn via two
+  independent paths.** Both happen server-side — we never see or
+  forward the injected content, so there is nothing to strip on
+  our side:
+  - `enable_web_scraping` (always on in `venice.ts`). When the
+    user's latest message contains any URLs, Venice fetches their
+    full content via Firecrawl and inlines the page text after
+    the user's prose. Firing condition: a URL in the message.
+    Independent of `enable_web_search` per Venice's docs; baseline
+    cost when no URLs are present is zero.
+  - `enable_web_search` (opt-in). When active, Venice splices a
+    search payload plus platform framing ("you can use this real
+    time information to answer the user's query above") into the
+    user turn.
+
+  Without help, the model misreads both kinds of injection as
+  user-authored (observed: thanking the user for links they never
+  sent, quoting snippets back as their words). Mitigation is
+  two-part and unconditional: the system prompt's boundary block
+  — which sits before the webSearch-gated hint block, not inside
+  it — calls out the non-user origin and names both paths, and
+  `runChatLoop` always wraps the current turn's user text in
+  `<user_message>...</user_message>` via `tagLastUserMessage`.
+  The tags are request-time only, never persisted. If you add
+  another place that constructs wire messages for any Venice
+  call, apply the same wrap — the wrap is no longer gated on
+  `webSearch`, because scraping fires even with search off.
+
+  There is also a companion rule in the webSearch block and its
+  else branch: both branches mention the URL-scraping capability
+  so the model doesn't refuse "what does this page say?" with a
+  generic "I can't browse the web" on turns where search is off
+  but a scraped page is sitting in the user turn ready to read.
 
 ## Where to go next
 

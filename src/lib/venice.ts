@@ -367,8 +367,22 @@ export class VeniceClient {
     // — recall, conversation_recall, reflection, summary,
     // auto-title). Each of those prompts is self-sufficient; none
     // of them benefit from a Venice generic preamble landing on top.
+    //
+    // `enable_web_scraping` (also always on): tells Venice to fetch
+    // the full content of any URL the user pastes into their latest
+    // message, via Firecrawl on Venice's side. Independent of
+    // `enable_web_search` per Venice's docs — search augments the
+    // turn with results from a query, scraping reads URLs the user
+    // explicitly provided. Baseline cost is zero when the message
+    // has no URLs, so there's no reason to gate it; when a user
+    // drops a link, they nearly always want it read. The scraped
+    // content lands inlined in the user turn the same way search
+    // results do, so the attribution guard in `buildSystemPrompt`
+    // plus the `<user_message>` wrapping in chat-loop.ts cover
+    // both injection paths uniformly.
     const veniceParams: Record<string, unknown> = {
       include_venice_system_prompt: false,
+      enable_web_scraping: true,
     };
     if (req.webSearch) {
       veniceParams.enable_web_search = req.webSearch;
