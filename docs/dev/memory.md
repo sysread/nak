@@ -82,7 +82,7 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   do you remember about me?" or "forget that I liked X"; the
   main model calls `memory_search` / `memory_update` /
   `memory_delete` through the normal tool flow.
-- **Memories browser** — drawer-footer book icon or Settings →
+- **Memories browser** — drawer-footer bookmark icon or Settings →
   AI → "Browse memories" flips `showMemories` in `Chat.svelte`.
   The modal searches via `searchMemoriesSemantic` (same helper
   the tool uses) and edits via `SupabaseService.updateMemory` /

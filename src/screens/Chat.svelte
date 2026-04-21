@@ -2771,7 +2771,12 @@
           </button>
           <!-- Memories modal — the human-facing browser for the
                memory table the reflection/recall agents read and
-               write behind the scenes. See src/screens/Memories.svelte. -->
+               write behind the scenes. See src/screens/Memories.svelte.
+               Uses the Feather "bookmark" glyph so it doesn't collide
+               with the adjacent Cookbook button (which owns the
+               "book" glyph). Semantically a bookmark — a thing
+               you flagged to remember — is closer to a memory than
+               a closed book anyway. -->
           <button
             class="secondary icon-btn"
             onclick={() => (showMemories = true)}
@@ -2780,8 +2785,7 @@
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
             </svg>
           </button>
           <button
