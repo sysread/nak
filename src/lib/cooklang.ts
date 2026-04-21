@@ -565,9 +565,15 @@ export function recipeToHtml(recipe: Recipe): string {
 
   const metaKeys = Object.keys(recipe.metadata);
   if (metaKeys.length > 0) {
+    // Each dt/dd pair gets its own <div> so CSS can style them as
+    // discrete chip-cards. HTML5 explicitly permits <div> children
+    // inside <dl> for grouping; without this wrapper the <dt>/<dd>
+    // siblings have no shared container to target.
     out.push('<dl class="cook-metadata">');
     for (const key of metaKeys) {
-      out.push(`<dt>${esc(key)}</dt><dd>${esc(recipe.metadata[key]!)}</dd>`);
+      out.push(
+        `<div class="cook-meta-item"><dt>${esc(key)}</dt><dd>${esc(recipe.metadata[key]!)}</dd></div>`,
+      );
     }
     out.push('</dl>');
   }

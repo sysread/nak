@@ -662,34 +662,151 @@
     min-width: 6rem;
     min-height: 1.1em;
   }
-  .cookbook-render :global(h3) {
-    margin: 1rem 0 0.25rem;
-    font-size: 0.95rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--subtle, var(--text));
-  }
-  .cookbook-render :global(ul),
-  .cookbook-render :global(ol) {
-    margin: 0.25rem 0 0.5rem 1.25rem;
-    padding: 0;
-  }
+  /* Rendered-recipe typography. Shared by the detail pane and the
+     edit-time preview column — both wrap the {@html} output in
+     `.cookbook-render`, so "what you see while editing" stays an
+     honest preview of the saved view. Every color below resolves
+     through theme variables (`--accent`, `--accent-weak`, `--bg-2`,
+     `--border`, `--muted`, `--text`), so the six accent palettes ×
+     light/dark combinations all flow through without extra work. */
+
+  /* Metadata strip — a row of chip-cards. Each `.cook-meta-item`
+     stacks a tiny uppercase label (dt) over a bolder value (dd).
+     flex-wrap keeps overflow honest when a recipe declares many
+     extra metadata keys (cuisine, course, …) beyond the usual
+     servings / prep / cook trio. */
   .cookbook-render :global(dl.cook-metadata) {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 0.25rem 0.75rem;
-    margin: 0 0 0.75rem;
-    font-size: 0.85rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 0.25rem 0 1rem;
+  }
+  .cookbook-render :global(dl.cook-metadata .cook-meta-item) {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1rem;
+    padding: 0.35rem 0.65rem;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    min-width: 3.5rem;
   }
   .cookbook-render :global(dl.cook-metadata dt) {
+    margin: 0;
+    font-size: 0.68rem;
     font-weight: 600;
-    text-transform: capitalize;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
   }
   .cookbook-render :global(dl.cook-metadata dd) {
     margin: 0;
-  }
-  .cookbook-render :global(.cook-qty) {
     font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--text);
+  }
+
+  /* Section heading (Ingredients / Cookware / Instructions). Promoted
+     from "muted label" to "new section" — accent color plus a thin
+     accent-weak rule. The letter-spacing and uppercase are preserved
+     from the old style so the page still reads as a recipe card, not
+     a blog post. */
+  .cookbook-render :global(h3) {
+    margin: 1.25rem 0 0.5rem;
+    padding-bottom: 0.35rem;
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    border-bottom: 1px solid var(--accent-weak);
+  }
+
+  /* Per-section subheading inside Ingredients / Instructions
+     (e.g. "Soup" / "Finishing" / "For serving"). An accent bar on the
+     left gives the subsections hierarchy without competing with the
+     h3 above. */
+  .cookbook-render :global(h4.cook-section) {
+    margin: 0.9rem 0 0.35rem;
+    padding: 0 0 0 0.55rem;
+    font-size: 0.9rem;
+    border-left: 3px solid var(--accent);
+    color: var(--text);
+  }
+
+  /* Ingredient / cookware bullets — drop the browser disc in favour
+     of a small accent dot drawn via ::before. `top` is set in `em`
+     so the marker tracks line-height regardless of font-size. */
+  .cookbook-render :global(ul.cook-ingredients),
+  .cookbook-render :global(ul.cook-cookware) {
+    list-style: none;
+    margin: 0.25rem 0 0.75rem;
+    padding: 0;
+  }
+  .cookbook-render :global(ul.cook-ingredients li),
+  .cookbook-render :global(ul.cook-cookware li) {
+    position: relative;
+    padding: 0.15rem 0 0.15rem 1rem;
+  }
+  .cookbook-render :global(ul.cook-ingredients li::before),
+  .cookbook-render :global(ul.cook-cookware li::before) {
+    content: '';
+    position: absolute;
+    left: 0.2rem;
+    top: 0.7em;
+    width: 0.35rem;
+    height: 0.35rem;
+    border-radius: 50%;
+    background: var(--accent);
+    opacity: 0.75;
+  }
+
+  /* Quantity chip — tiny inline pill that picks up the accent tint.
+     Lets a skimming eye lock onto the numbers first ("1 cup… 2 tsp…")
+     before resolving the ingredient name. `tabular-nums` keeps mixed
+     quantities like "1½" and "6-8" visually even. */
+  .cookbook-render :global(.cook-qty) {
+    display: inline-block;
+    padding: 0.05rem 0.45rem;
+    margin-right: 0.25rem;
+    background: var(--accent-weak);
+    color: var(--text);
+    border-radius: 999px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Instruction steps — replace the browser-default "1." marker with
+     a circular accent-weak badge via CSS counters. The hanging indent
+     keeps multi-line step text flowing under itself instead of
+     crashing into the badge. */
+  .cookbook-render :global(ol.cook-steps) {
+    list-style: none;
+    counter-reset: cook-step;
+    margin: 0.35rem 0 0.75rem;
+    padding: 0;
+  }
+  .cookbook-render :global(ol.cook-steps li) {
+    counter-increment: cook-step;
+    position: relative;
+    padding: 0.15rem 0 0.6rem 2.1rem;
+    line-height: 1.45;
+  }
+  .cookbook-render :global(ol.cook-steps li::before) {
+    content: counter(cook-step);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1.5rem;
+    height: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-weak);
+    color: var(--text);
+    font-size: 0.8rem;
+    font-weight: 700;
+    border-radius: 50%;
   }
   .cookbook-edit-panes {
     display: grid;
