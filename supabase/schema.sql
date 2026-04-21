@@ -1765,18 +1765,28 @@ begin
   if jsonb_typeof(p_fires) <> 'array' or jsonb_array_length(p_fires) = 0 then
     return;
   end if;
-  -- Thread-ownership guard. RLS would hide reads of fires linked to
-  -- a thread the caller doesn't own, but RLS doesn't run on this
-  -- function's own INSERT inside `security invoker` once we've
-  -- already trusted `auth.uid()` for `user_id`. The thread_id field
-  -- is supplied by the client and would otherwise let a caller link
-  -- their own samskara_fires rows to threads they don't own,
-  -- corrupting cohort/reaction integrity. Verify ownership up front.
+  -- Thread-ownership guard. RLS hides READS of fires linked to a
+  -- thread the caller doesn't own, but doesn't constrain our own
+  -- INSERT here once we've already trusted `auth.uid()` for the
+  -- `user_id` column. p_thread_id is supplied by the client; without
+  -- a guard a caller could link their own samskara_fires rows to a
+  -- thread they don't own, corrupting cohort/reaction integrity.
+  --
+  -- Pattern matches the other thread-touching RPCs in this file
+  -- (mark_thread_reflected_if_claimed, save_thread_summary_if_claimed,
+  -- save_thread_embedding_if_claimed): silent skip on a non-owned
+  -- target rather than raising. Those RPCs embed
+  -- `user_id = auth.uid()` directly in their UPDATE's WHERE so an
+  -- unowned row has no effect; we do the moral equivalent here by
+  -- short-circuiting the INSERT when ownership doesn't match. A
+  -- buggy chat-loop caller would otherwise have to learn to handle
+  -- a propagated PostgrestException; a no-op write is the same
+  -- "nothing happened" semantics those siblings produce.
   if not exists (
     select 1 from public.threads t
     where t.id = p_thread_id and t.user_id = v_uid
   ) then
-    raise exception 'samskara_record_fires: thread % not owned by caller', p_thread_id;
+    return;
   end if;
   -- Insert one fire row per cohort member. The jsonb array is shape
   -- `[{"samskara_id": "...", "score": 0.42}, ...]` — minimal payload
@@ -2116,6 +2126,15 @@ begin
   -- Threshold formula: K_REGEN=5, log10 dampening, floor at 3 so a
   -- new corpus regenerates after as few as 3 mints rather than
   -- waiting on an unreachable threshold.
+  --
+  -- IMPORTANT for future readers (and LLM reviewers): in PostgreSQL
+  -- the unary `log(x)` is the BASE-10 logarithm, not the natural
+  -- log. The natural log is `ln(x)`. Most other languages have it
+  -- the other way (Math.log in JS = natural; Math.log10 = base 10),
+  -- so a naive grep-and-translate read of this line will mis-flag
+  -- it as inconsistent with the worker code that uses
+  -- `Math.log10(...)`. They agree. See PostgreSQL's "Mathematical
+  -- Functions and Operators" docs.
   v_threshold := greatest(3, ceil(5.0 * log(v_count + 10))::int);
 
   if v_last_regen is null then
