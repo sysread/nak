@@ -49,6 +49,18 @@ const UPDATE_POLL_MS = 5 * 60 * 1000;
 // already been claimed by the time the user clicked Reload.
 const RELOAD_FALLBACK_MS = 2000;
 
+// Escalation after the soft reload. If `location.reload()` is called
+// (by the controllerchange listener or the soft-reload timer above)
+// and we are STILL running this script N ms later, something ate the
+// navigation — typically a SW fetch handler that never resolves,
+// keeping the old page visible while the browser waits on a response
+// that won't come. The hard-reload path unregisters the SW and
+// navigates with a cache-busting query so the next fetch can't be
+// served by either the SW or the HTTP cache. Five seconds gives a
+// slow network / large bundle time to complete the soft reload
+// before we go nuclear.
+const HARD_RELOAD_FALLBACK_MS = 5000;
+
 interface UpdateState {
   /** True once a new SW is installed and waiting for `applyUpdate()`. */
   available: boolean;
@@ -153,18 +165,29 @@ export function initUpdateWatcher(): void {
  * `updateSW(true)`) so we can guarantee the page reloads no matter
  * what state the SW registration is in:
  *
- *   - No waiting SW: plain `location.reload()`. The browser refetches
- *     the bundle through whatever SW is active, which is fine if the
- *     banner was a false positive or the waiting SW already claimed.
+ *   - No waiting SW: plain `location.reload()` immediately, escalating
+ *     to a hard reload if the navigation is still pending after
+ *     HARD_RELOAD_FALLBACK_MS. Covers dev mode, registration errors,
+ *     and the edge case where the waiting SW already claimed.
  *   - Waiting SW exists: post SKIP_WAITING, then reload on
- *     `controllerchange` — OR after a 2-second timeout, whichever
+ *     `controllerchange` — OR after RELOAD_FALLBACK_MS, whichever
  *     comes first. The timeout is the critical bit: vite-plugin-pwa's
  *     helper awaits `controllerchange` indefinitely, which hangs the
  *     UI (spinning beach ball) if the handover never completes.
  *
- * The reload is unconditional, so clicking Reload always ends in a
- * fresh page load. If something's wrong with the SW state machine,
- * the hard reload is the worst case — not a hang.
+ * Escalation ladder, tiered so the common "it just works" path stays
+ * fast and the pathological paths self-recover:
+ *
+ *   T+0      post SKIP_WAITING
+ *   T+2s     soft reload (location.reload) if controllerchange didn't
+ *            fire yet
+ *   T+5s     hard reload (unregister SW + cache-busted navigate) if
+ *            we are STILL here — meaning something ate the soft
+ *            reload, typically a SW fetch handler that never resolves.
+ *
+ * Every tier is guarded by an idempotence flag so a late event doesn't
+ * re-trigger a navigation that's already in flight. Clicking Reload
+ * always ends in a fresh page load.
  */
 export async function applyUpdate(): Promise<void> {
   const registration = swRegistration;
@@ -178,37 +201,39 @@ export async function applyUpdate(): Promise<void> {
     controller: !!navigator.serviceWorker?.controller,
   });
 
+  // Arm the hard-reload escalation up-front so even the "no waiting
+  // SW" branch benefits from it. If the soft reload below navigates
+  // the tab within HARD_RELOAD_FALLBACK_MS, this timer never fires
+  // because setTimeout callbacks don't execute after navigation
+  // starts. If the tab is still alive when it fires, it's because
+  // something is holding navigation hostage.
+  window.setTimeout(() => {
+    void hardReload('hard-reload timeout');
+  }, HARD_RELOAD_FALLBACK_MS);
+
   if (!waiting) {
     // No SW to hand off to — just reload. This is the path for dev
     // mode, for registration errors, and for the edge case where the
     // waiting SW was claimed between the banner appearing and the
     // user clicking Reload.
     console.log('[update] applyUpdate: no waiting SW, plain reload');
-    window.location.reload();
+    softReload('no waiting SW');
     return;
   }
 
   // Attach the listener BEFORE posting SKIP_WAITING — if the new SW
   // claims fast enough to fire controllerchange synchronously after
   // skipWaiting resolves, a listener attached later would miss it.
-  let reloaded = false;
-  const reload = (reason: string): void => {
-    if (reloaded) return;
-    reloaded = true;
-    console.log('[update] applyUpdate: reloading', { reason });
-    window.location.reload();
-  };
-
   navigator.serviceWorker.addEventListener(
     'controllerchange',
-    () => reload('controllerchange'),
+    () => softReload('controllerchange'),
     { once: true }
   );
 
-  // Safety net — see RELOAD_FALLBACK_MS comment for the rationale.
-  // `setTimeout` runs even when the `controllerchange` listener does
-  // fire, but `reload()` is idempotent so the second call is a no-op.
-  window.setTimeout(() => reload('timeout'), RELOAD_FALLBACK_MS);
+  // Soft-reload safety net — see RELOAD_FALLBACK_MS comment for the
+  // rationale. `softReload` is idempotent so the listener + timeout
+  // racing to call it is fine.
+  window.setTimeout(() => softReload('soft-reload timeout'), RELOAD_FALLBACK_MS);
 
   console.log('[update] applyUpdate: posting SKIP_WAITING to waiting SW');
   try {
@@ -219,6 +244,50 @@ export async function applyUpdate(): Promise<void> {
     // still reload in RELOAD_FALLBACK_MS.
     console.warn('[update] applyUpdate: postMessage failed', err);
   }
+}
+
+// Idempotence guards for the two reload tiers. Module-scoped so a
+// late controllerchange firing after the soft-reload timer already
+// ran doesn't try to reload a second time, and so the hard-reload
+// timer doesn't re-enter while its async unregister is in flight.
+let softReloadFired = false;
+let hardReloadFired = false;
+
+function softReload(reason: string): void {
+  if (softReloadFired) return;
+  softReloadFired = true;
+  console.log('[update] softReload:', reason);
+  window.location.reload();
+}
+
+async function hardReload(reason: string): Promise<void> {
+  if (hardReloadFired) return;
+  hardReloadFired = true;
+  console.log('[update] hardReload:', reason);
+  // Unregister the SW so the next navigation can't be intercepted by
+  // whatever stuck fetch handler held the soft reload hostage. Any
+  // controlled clients (this tab included) lose SW control on the
+  // next navigation — which is what we're about to do anyway.
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (reg) {
+      const ok = await reg.unregister();
+      console.log('[update] hardReload: unregistered SW', { ok });
+    }
+  } catch (err) {
+    // Failing to unregister is survivable — the cache-buster below
+    // still forces a fresh index.html fetch, and most SW fetch
+    // handlers don't rewrite top-level navigations anyway.
+    console.warn('[update] hardReload: unregister failed', err);
+  }
+  // Cache-busting query so neither the HTTP cache nor a lingering SW
+  // fetch handler can return the stale bundle. `replace` (vs `href =`)
+  // keeps this navigation out of session history so Back doesn't land
+  // the user back on the frozen page.
+  const url = new URL(window.location.href);
+  url.searchParams.set('_update', String(Date.now()));
+  console.log('[update] hardReload: navigating to', url.toString());
+  window.location.replace(url.toString());
 }
 
 /**
