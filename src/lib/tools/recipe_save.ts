@@ -11,7 +11,11 @@
  */
 import type { ToolDef } from './types';
 import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../cooklang';
-import { notifyCookbookChanged } from '../cookbook-store.svelte';
+// Import from the plain-.ts sibling, not cookbook-store.svelte.ts —
+// this tool gets bundled into the reflection Web Worker via the
+// tool registry, and pulling a rune-using module in would crash the
+// worker with `$state is not defined` at load time.
+import { notifyCookbookChanged } from '../cookbook-events';
 
 export const recipeSave: ToolDef = {
   name: 'recipe_save',

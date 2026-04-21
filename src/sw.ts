@@ -23,7 +23,27 @@
 import { precacheAndRoute } from 'workbox-precaching';
 import { savePendingShare, type SharedFile } from './lib/share-store';
 
-declare const self: ServiceWorkerGlobalScope;
+declare const self: ServiceWorkerGlobalScope & {
+  __WB_DISABLE_DEV_LOGS?: boolean;
+};
+
+// Workbox ships a dev-mode log channel that fires one line per
+// precache lookup ("Router is responding to…", "Found a cached
+// response…", "No route found for…"). In a deployed PWA this
+// floods DevTools with DEBUG-level chatter that buries real errors —
+// the logs are only useful when you're actively debugging the SW
+// itself. Keep them on under localhost so local-dev stays
+// instrumentable; silence them everywhere else.
+//
+// Must be set before any workbox API that logs is called. The flag
+// is read lazily inside workbox's logger, so this assignment
+// before `precacheAndRoute` below is sufficient.
+if (
+  self.location.hostname !== 'localhost' &&
+  self.location.hostname !== '127.0.0.1'
+) {
+  self.__WB_DISABLE_DEV_LOGS = true;
+}
 
 // Scoped pathname for the share endpoint. On GitHub Pages the SW
 // scope is `/<repo>/`, so the effective share URL is

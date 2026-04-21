@@ -18,10 +18,20 @@
  * when the user never leaves the chat canvas. The event is the only
  * bridge from the tools layer to the UI; no direct import the other
  * way.
+ *
+ * The event name and dispatcher live in the plain-`.ts` sibling
+ * `cookbook-events.ts` — the `recipe_*` tools need to signal
+ * changes, and the tool registry gets bundled into the reflection
+ * Web Worker, which crashes with `$state is not defined` if it
+ * pulls a rune-using module into the worker bundle. We re-export
+ * both here so existing UI imports from `$lib/cookbook-store.svelte`
+ * keep resolving.
  */
 import type { Recipe, SupabaseService } from './supabase';
-
-export const COOKBOOK_CHANGE_EVENT = 'nak:recipes:changed';
+export {
+  COOKBOOK_CHANGE_EVENT,
+  notifyCookbookChanged,
+} from './cookbook-events';
 
 interface CookbookState {
   recipes: Recipe[];
@@ -55,15 +65,4 @@ export async function loadRecipes(supabase: SupabaseService): Promise<void> {
   } finally {
     cookbook.loading = false;
   }
-}
-
-/**
- * Fire-and-forget signal that something in the cookbook changed.
- * Called from recipe_* tool handlers after a successful write.
- * Listeners (the Cookbook modal, the drawer's Recipes tab) respond
- * by re-running `loadRecipes`. Guarded for SSR / non-browser runs.
- */
-export function notifyCookbookChanged(): void {
-  if (typeof window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent(COOKBOOK_CHANGE_EVENT));
 }
