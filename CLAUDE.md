@@ -181,29 +181,28 @@ recent commits (`git log --oneline`).
 
 ## Running the checks locally
 
-From a cold clone the minimum is `pnpm install && pnpm test` — every
-gating tool (vitest, svelte-check, ESLint, markdownlint-cli2) is a
-pnpm devDependency, so `pnpm install` is the only provisioning step
-required for the test suite to pass. `mise` adds the aqua-installed
-CLIs (`gh`, `supabase`) and task shortcuts on top; use it when you
-also need the deploy / sync flows.
+`mise run check` is self-sufficient from a fresh clone or worktree —
+every gate task `depends = ["deps"]`, which runs `pnpm install
+--frozen-lockfile`. You do not need a separate `pnpm install` step;
+the gate provisions its own npm devDependencies on demand. Cost is
+~500ms on an up-to-date tree.
 
 ```sh
-pnpm install          # one-time; provisions every dev tool
-pnpm test             # vitest run (includes the markdownlint guardrail)
-pnpm check            # svelte-check
-pnpm lint             # ESLint
-pnpm markdownlint     # markdownlint-cli2 only (fast iteration on docs)
-
-mise run check        # full local gate: pnpm test + check + lint
-mise run test         # alias for pnpm test
-mise run markdownlint # alias for pnpm markdownlint
+mise run check        # full local gate: deps + test + svelte-check + lint
+mise run test         # vitest run (auto-installs deps)
+mise run markdownlint # markdownlint-cli2 only (auto-installs deps)
+mise run dev          # Vite dev server (auto-installs deps)
+mise run build        # production PWA build (auto-installs deps)
 ```
 
+If you prefer raw pnpm (or mise isn't available — ephemeral
+sandboxes, first-time checkouts), the manual sequence is
+`pnpm install && pnpm test && pnpm check && pnpm lint`. The
+mise tasks are thin wrappers around those pnpm scripts; there's no
+hidden behaviour.
+
 `mise run check` is what CI runs (see `.github/workflows/tests.yml`),
-so a green `mise run check` locally is a green CI job. When mise is
-not available — ephemeral sandboxes, first-time checkouts — the
-equivalent sequence is `pnpm test && pnpm check && pnpm lint`.
+so a green `mise run check` locally is a green CI job.
 
 Always run the gate before committing — including for CSS- or
 markdown-only changes. The test suite includes a postcss parse of

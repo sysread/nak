@@ -8,12 +8,14 @@ pnpm = "9.12.0"
 "aqua:cli/cli"      = "latest"
 "aqua:supabase/cli" = "latest"
 
-# Note: markdownlint-cli2 is a pnpm devDependency — `pnpm install`
-# provisions it, and `tests/markdownlint.test.ts` runs it via
-# `pnpm exec`. No mise pin needed; keeping the doc-lint toolchain on
-# pnpm means a fresh clone can `pnpm install && pnpm test` without
-# provisioning mise first, which matters for agent-driven /
-# ephemeral-sandbox environments.
+# Note: markdownlint-cli2 is a pnpm devDependency — the `deps` task
+# below provisions it via `pnpm install --frozen-lockfile`, and every
+# gate task `depends` on `deps`. A fresh worktree therefore only needs
+# `mise run check` (or `mise run test`, `dev`, `build`); there is no
+# separate `pnpm install` step to remember. Keeping the doc-lint
+# toolchain on pnpm rather than mise also means a fresh clone can
+# `pnpm install && pnpm test` without provisioning mise first, which
+# matters for agent-driven / ephemeral-sandbox environments.
 
 [env]
 NODE_ENV = "development"
@@ -50,21 +52,36 @@ description = "Re-apply schema and Pages URL allowlist to the linked Supabase pr
 run = "node scripts/sync.mjs"
 raw = true
 
+[tasks.deps]
+description = "Sync npm devDependencies from the lockfile (idempotent)"
+# Chained as a `depends` on every task that needs vitest, svelte-check,
+# eslint, markdownlint-cli2, or any other npm-provided binary, so
+# `mise run <any gate>` is self-sufficient from a fresh worktree —
+# the user should never have to remember a second `pnpm install` step.
+# `--frozen-lockfile` keeps the lockfile as the source of truth: a
+# lockfile drift fails loudly rather than silently mutating. Cost is
+# ~500ms on an up-to-date tree, trivial compared to the gate runtime.
+run = "pnpm install --frozen-lockfile"
+
 [tasks.dev]
 description = "Run the Vite dev server"
+depends = ["deps"]
 run = "pnpm dev"
 raw = true
 
 [tasks.build]
 description = "Build the PWA for production"
+depends = ["deps"]
 run = "pnpm build"
 
 [tasks.test]
 description = "Run unit tests (includes the markdownlint guardrail via tests/markdownlint.test.ts)"
+depends = ["deps"]
 run = "pnpm test"
 
 [tasks.markdownlint]
 description = "Lint all tracked markdown via markdownlint-cli2"
+depends = ["deps"]
 # Globs are quoted so the CLI expands them, not the shell — consistent
 # behavior on fish / zsh / bash. Keep this invocation in sync with
 # tests/markdownlint.test.ts; the two run the same tool against the
@@ -73,11 +90,14 @@ run = "pnpm exec markdownlint-cli2 'docs/**/*.md' README.md CLAUDE.md"
 
 [tasks.check]
 description = "Full local gate — tests, svelte-check, ESLint"
-# `depends` runs `test` before this task's own `run` list fires, so the
-# order ends up: tests (which includes the markdownlint guardrail) →
-# svelte-check → ESLint. Markdownlint rides the test dep; there's no
-# second invocation here.
-depends = ["test"]
+# `depends` runs `deps` and `test` before this task's own `run` list
+# fires, so the order ends up: deps (pnpm install) → tests (which
+# includes the markdownlint guardrail) → svelte-check → ESLint.
+# Markdownlint rides the test dep; there's no second invocation here.
+# The explicit `deps` dep is belt-and-suspenders: `test` already
+# depends on it, but naming it here means a future edit that unchains
+# test from the gate won't silently skip the install step.
+depends = ["deps", "test"]
 run = [
   "pnpm check",
   "pnpm lint",
