@@ -19,9 +19,12 @@ export const recipeSave: ToolDef = {
     "Save a new recipe to the user's cookbook. `cooklang` is the raw " +
     'Cooklang source (https://cooklang.org/docs/spec/): @ingredient{qty%unit}, ' +
     `#cookware{}, ~timer{d%unit}, >> metadata: value. Max ${MAX_RECIPE_COOKLANG_CHARS} ` +
-    'chars. `source` is an optional free-form provenance string; `source_url` is ' +
-    'the URL if the recipe was imported from the web. Returns the created ' +
-    '{id, title, updated_at}.',
+    'chars. Group long recipes with `== Section Name ==` or `# Section Name` ' +
+    'headers (the renderer groups ingredients and numbered steps under each), ' +
+    'and wrap a long instruction across lines by prefixing continuation lines ' +
+    'with `> ` (merged into the previous step). `source` is an optional ' +
+    'free-form provenance string; `source_url` is the URL if the recipe was ' +
+    'imported from the web. Returns the created {id, title, updated_at}.',
   shortDescription: 'save a recipe to the cookbook',
   parameters: {
     type: 'object',

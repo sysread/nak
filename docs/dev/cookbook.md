@@ -138,3 +138,13 @@ at cookbook scale (tens to low hundreds of rows per user).
   ingredients list you see in the render is derived, not stored.
   This means a future parser bug is a pure read-path issue —
   nothing persisted needs migrating.
+- **Section model layers on top of the flat AST.** `== Name ==` and
+  `# Name` (line-start + space) introduce a section. The parser
+  records a per-step `section: string | null` plus a top-level
+  `sections: string[]` for declaration order, and leaves the flat
+  `ingredients / cookware / timers` lists untouched so existing
+  callers keep working. `recipeToHtml` groups by section when any
+  section exists and collapses to the flat layout when none do — no
+  data migration, no schema change, just a richer read. `>` at line
+  start is a continuation marker: the parser merges the line into
+  the previous step's text and references.

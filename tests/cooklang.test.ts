@@ -104,6 +104,7 @@ describe('parseCooklang — empty and edge cases', () => {
       ingredients: [],
       cookware: [],
       timers: [],
+      sections: [],
     });
   });
 
@@ -162,6 +163,164 @@ describe('recipeToPlainText', () => {
     const ingredientsBlock = text.split('Instructions')[0]!;
     expect(ingredientsBlock).toContain('- 2 tbsp oil');
     expect(ingredientsBlock).not.toContain('saucepan');
+  });
+});
+
+describe('parseCooklang — sections and continuations', () => {
+  it('recognises `== Section ==` as a section header', () => {
+    const r = parseCooklang('== Soup ==\nBring @water{1%L} to a boil.');
+    expect(r.sections).toEqual(['Soup']);
+    expect(r.steps).toHaveLength(1);
+    expect(r.steps[0]!.section).toBe('Soup');
+    expect(r.steps[0]!.text).toBe('Bring water to a boil.');
+  });
+
+  it('recognises `# Section` (space after hash) as an alias for == ==', () => {
+    const r = parseCooklang('# Finishing\nStir in the @butter{2%tbsp}.');
+    expect(r.sections).toEqual(['Finishing']);
+    expect(r.steps[0]!.section).toBe('Finishing');
+    // Ingredient should not have been left with a literal `#` in the text.
+    expect(r.steps[0]!.text).toBe('Stir in the butter.');
+  });
+
+  it('still treats `#cookware` (no space) as a cookware reference', () => {
+    // Regression guard: the `# Section` alias must not steal line-start
+    // cookware tokens from the existing parser.
+    const r = parseCooklang('Warm #saucepan{} on medium heat.');
+    expect(r.sections).toEqual([]);
+    expect(r.cookware).toEqual([{ name: 'saucepan' }]);
+    expect(r.steps[0]!.text).toBe('Warm saucepan on medium heat.');
+  });
+
+  it('merges `> continuation` into the previous step text', () => {
+    const r = parseCooklang(
+      'Sear the @chicken{1%lb} on both sides.\n> Remove to a plate; reduce heat to medium.'
+    );
+    expect(r.steps).toHaveLength(1);
+    expect(r.steps[0]!.text).toBe(
+      'Sear the chicken on both sides. Remove to a plate; reduce heat to medium.'
+    );
+  });
+
+  it('pulls continuation-line ingredients into the previous step and the flat list', () => {
+    const r = parseCooklang(
+      'Whisk the @eggs{3}.\n> Fold in @pecorino{60%g} and a pinch of @salt.'
+    );
+    expect(r.steps).toHaveLength(1);
+    const step = r.steps[0]!;
+    expect(step.ingredients.map((i) => i.name)).toEqual(['eggs', 'pecorino', 'salt']);
+    // Flat dedupe preserves all three as well.
+    expect(r.ingredients.map((i) => i.name)).toEqual(
+      expect.arrayContaining(['eggs', 'pecorino', 'salt'])
+    );
+  });
+
+  it('handles multiple sequential `>` continuation lines', () => {
+    const r = parseCooklang('Step one.\n> part two.\n> part three.');
+    expect(r.steps).toHaveLength(1);
+    expect(r.steps[0]!.text).toBe('Step one. part two. part three.');
+  });
+
+  it('promotes a leading `> line` to a standalone step when no prior step exists', () => {
+    const r = parseCooklang('> Preheat the @oven{} to 400F.');
+    expect(r.steps).toHaveLength(1);
+    expect(r.steps[0]!.text).toBe('Preheat the oven to 400F.');
+  });
+
+  it('drops a bare `>` with no body and no anchor', () => {
+    const r = parseCooklang('>\nStep one.');
+    expect(r.steps).toHaveLength(1);
+    expect(r.steps[0]!.text).toBe('Step one.');
+  });
+
+  it('keeps `>> metadata` working alongside `> continuation`', () => {
+    // The metadata matcher runs first; continuation must not steal
+    // `>>`-prefixed lines.
+    const r = parseCooklang('>> servings: 4\nStep one.\n> wraps.');
+    expect(r.metadata).toEqual({ servings: '4' });
+    expect(r.steps).toHaveLength(1);
+    expect(r.steps[0]!.text).toBe('Step one. wraps.');
+  });
+});
+
+describe('recipeToHtml — sections', () => {
+  it('renders <h4> sub-headings under both Ingredients and Instructions', () => {
+    const src = `== Soup ==
+Simmer @lentils{200%g} in @water{1%L}.
+
+# Finishing
+Stir in @butter{2%tbsp} and serve.`;
+    const html = cooklangToHtml(src);
+    // Ingredients block uses <h4> markers per section.
+    const ingredientsIdx = html.indexOf('<h3>Ingredients</h3>');
+    const instructionsIdx = html.indexOf('<h3>Instructions</h3>');
+    const ingredientsBlock = html.slice(ingredientsIdx, instructionsIdx);
+    expect(ingredientsBlock).toContain('<h4 class="cook-section">Soup</h4>');
+    expect(ingredientsBlock).toContain('<h4 class="cook-section">Finishing</h4>');
+    expect(ingredientsBlock).toContain('lentils');
+    expect(ingredientsBlock).toContain('butter');
+    // Instructions block uses the same markers and starts a fresh <ol>
+    // per section so numbering restarts at 1.
+    const instructionsBlock = html.slice(instructionsIdx);
+    expect(instructionsBlock).toContain('<h4 class="cook-section">Soup</h4>');
+    expect(instructionsBlock).toContain('<h4 class="cook-section">Finishing</h4>');
+    const olMatches = instructionsBlock.match(/<ol class="cook-steps">/g) ?? [];
+    expect(olMatches.length).toBe(2);
+  });
+
+  it('falls back to flat output when the source has no sections', () => {
+    const html = cooklangToHtml('Stir in @flour{200%g}.');
+    expect(html).toContain('<h3>Ingredients</h3>');
+    expect(html).not.toContain('<h4 class="cook-section">');
+    // Single <ol> for the single flat steps list.
+    expect((html.match(/<ol class="cook-steps">/g) ?? []).length).toBe(1);
+  });
+
+  it('round-trips a recipe mixing sections, aliases, and `> continuation`', () => {
+    const src = `>> servings: 4
+
+Bring a pot of @water{} to a boil.
+
+== Soup ==
+Add @lentils{200%g} and @onion{1}.
+> Simmer until tender, about ~{30%minutes}.
+
+# Finishing
+Stir in @butter{2%tbsp} and @salt.`;
+    const r = parseCooklang(src);
+    expect(r.sections).toEqual(['Soup', 'Finishing']);
+    // Head bucket has the initial boil step; Soup has one merged step.
+    const soupSteps = r.steps.filter((s) => s.section === 'Soup');
+    expect(soupSteps).toHaveLength(1);
+    expect(soupSteps[0]!.text).toBe(
+      'Add lentils and onion. Simmer until tender, about 30 minutes.'
+    );
+    const html = recipeToHtml(r);
+    expect(html).toContain('<h4 class="cook-section">Soup</h4>');
+    expect(html).toContain('<h4 class="cook-section">Finishing</h4>');
+  });
+});
+
+describe('recipeToPlainText — sections', () => {
+  it('emits section markers inside Instructions and keeps Ingredients flat', () => {
+    const src = `== Soup ==
+Simmer @lentils{200%g}.
+
+# Finishing
+Stir in @butter{2%tbsp}.`;
+    const text = recipeToPlainText('Lentil Soup', parseCooklang(src));
+    const ingredientsBlock = text.split('Instructions')[0]!;
+    // Ingredients stay flat — AnyList treats every line as a buyable
+    // item, so section labels in that block would poison the list.
+    expect(ingredientsBlock).not.toContain('== Soup ==');
+    expect(ingredientsBlock).not.toContain('== Finishing ==');
+    expect(ingredientsBlock).toContain('- 200 g lentils');
+    // Instructions carry the markers and restart numbering per section.
+    const instructionsBlock = text.slice(text.indexOf('Instructions'));
+    expect(instructionsBlock).toContain('== Soup ==');
+    expect(instructionsBlock).toContain('== Finishing ==');
+    expect(instructionsBlock).toContain('1. Simmer lentils.');
+    expect(instructionsBlock).toContain('1. Stir in butter.');
   });
 });
 

@@ -17,8 +17,10 @@ export const recipeUpdate: ToolDef = {
   description:
     'Update a recipe by id. Omit a field to leave it unchanged. Pass null for ' +
     '`source` or `source_url` to clear them. `cooklang` is capped at ' +
-    `${MAX_RECIPE_COOKLANG_CHARS} chars. Use recipe_list first to find ids. ` +
-    'Returns the updated row.',
+    `${MAX_RECIPE_COOKLANG_CHARS} chars. Long recipes can be grouped with ` +
+    '`== Section Name ==` or `# Section Name` headers, and long steps split ' +
+    'across lines by prefixing continuations with `> `. Use recipe_list first ' +
+    'to find ids. Returns the updated row.',
   shortDescription: 'edit a saved recipe',
   parameters: {
     type: 'object',

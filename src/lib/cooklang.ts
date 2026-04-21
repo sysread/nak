@@ -17,6 +17,24 @@
  *   -- line comment          → stripped at read-time
  *   [- block comment -]      → stripped at read-time
  *
+ * Extensions we implement on top of the narrow core spec:
+ *
+ *   == Section Name ==       → formal section delimiter (canonical
+ *                              Cooklang extension; CookCLI, cooklang-ts
+ *                              and others ship it). Starts a new
+ *                              section; subsequent steps carry its name.
+ *   # Section Name           → markdown-style alias for the same thing.
+ *                              The space after `#` is what disambiguates
+ *                              from `#cookware` (no space), so layering
+ *                              it on costs nothing. Kept because the LLM
+ *                              reaches for markdown headers by reflex
+ *                              when writing long recipes.
+ *   > continuation text      → AnyList's tradition for wrapping a long
+ *                              step across lines. Merged into the
+ *                              previous step's text so the renderer sees
+ *                              one numbered instruction instead of a
+ *                              shredded sequence.
+ *
  * What we deliberately don't implement:
  *
  *   - Shopping-list extensions — nak isn't a shopping list; AnyList is.
@@ -61,6 +79,14 @@ export interface Step {
   ingredients: Ingredient[];
   cookware: Cookware[];
   timers: Timer[];
+  /**
+   * Section this step belongs to, or `null` for the implicit head
+   * section (steps that appear before any `== Name ==` / `# Name`
+   * header). The renderer uses this to group the ingredients and
+   * instructions under sub-headings; absence of any section → the
+   * renderer falls back to flat output, matching pre-section behaviour.
+   */
+  section: string | null;
 }
 
 export interface Recipe {
@@ -72,6 +98,13 @@ export interface Recipe {
   ingredients: Ingredient[];
   cookware: Cookware[];
   timers: Timer[];
+  /**
+   * Section names in the order they first appeared in the source. An
+   * empty array means the source had no section headers — the
+   * renderer then emits a single flat ingredients list and one
+   * numbered instructions list, same as before sections existed.
+   */
+  sections: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +155,54 @@ function tryParseMetadata(line: string): { key: string; value: string } | null {
   const m = /^\s*>>\s*([^:]+?)\s*:\s*(.*?)\s*$/.exec(line);
   if (!m) return null;
   return { key: m[1]!, value: m[2]! };
+}
+
+/**
+ * Recognise a section header line. Returns the section name, or null
+ * if the line isn't a header and should be treated as content.
+ *
+ * Two accepted forms, intentionally liberal on padding:
+ *
+ *   == Section Name ==   canonical Cooklang extension. Any run of `=`
+ *                        on either side, optional inner whitespace.
+ *   # Section Name       markdown-style alias. The space after `#` is
+ *                        what separates this from `#cookware` (no space,
+ *                        immediately followed by a name char) — the
+ *                        inline cookware regex requires a name char
+ *                        right after `#`, so there's no collision.
+ *
+ * Multi-hash (`##`, `###`, etc.) is not matched on purpose — the LLM
+ * reaches for `#` without ceremony, and matching deeper levels would
+ * force us to decide what nesting means to the renderer. If a use case
+ * for sub-sections shows up, extend here; today flat is enough.
+ */
+function tryParseSectionHeader(line: string): string | null {
+  const fancy = /^==+\s*(.+?)\s*==+$/.exec(line);
+  if (fancy) {
+    const name = fancy[1]!.trim();
+    return name.length > 0 ? name : null;
+  }
+  const md = /^#\s+(.+?)\s*$/.exec(line);
+  if (md) {
+    const name = md[1]!.trim();
+    return name.length > 0 ? name : null;
+  }
+  return null;
+}
+
+/**
+ * Pull a `>` continuation marker off the front of a line. Returns the
+ * trailing text (possibly empty) when the line opens with `>` followed
+ * by whitespace or end-of-line, or null for non-continuation lines.
+ * `>>` is NOT matched here — metadata is tried first by the caller, so
+ * a genuine `>> key: value` header never reaches this function.
+ */
+function tryParseContinuation(line: string): string | null {
+  // `>` + end-of-line, or `>` + whitespace + body. Guard against `>>`
+  // (metadata) by requiring the second char to be whitespace or absent.
+  const m = /^>(?:\s+(.*))?$/.exec(line);
+  if (!m) return null;
+  return (m[1] ?? '').trim();
 }
 
 /**
@@ -240,24 +321,81 @@ export function parseCooklang(src: string): Recipe {
   const stripped = stripComments(src);
   const metadata: Record<string, string> = {};
   const steps: Step[] = [];
+  const sections: string[] = [];
   const allIngredients: Ingredient[] = [];
   const allCookware: Cookware[] = [];
   const allTimers: Timer[] = [];
+  // Tracks the section the next step will attach to. Starts null — the
+  // "implicit head section" that groups any steps written before the
+  // first explicit header.
+  let currentSection: string | null = null;
 
   for (const rawLine of stripped.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (line.length === 0) continue;
+
+    // Metadata first so a genuine `>> key: value` never reaches the
+    // continuation matcher (which would misread `>>foo` as `> >foo`).
     const meta = tryParseMetadata(line);
     if (meta) {
       metadata[meta.key] = meta.value;
       continue;
     }
+
+    // Section header: switches the bucket every following step lands
+    // in. The header line itself is not a step; it produces no text.
+    const sectionName = tryParseSectionHeader(line);
+    if (sectionName !== null) {
+      currentSection = sectionName;
+      if (!sections.includes(sectionName)) sections.push(sectionName);
+      continue;
+    }
+
+    // Continuation: merge into the previous step's text + references.
+    // If there is no previous step (e.g. a recipe that opens with a
+    // stray `> line`), fall through and treat the body as a fresh
+    // step — better a visible step than a silently-dropped line.
+    const continuation = tryParseContinuation(line);
+    if (continuation !== null) {
+      const prev = steps[steps.length - 1];
+      if (prev) {
+        if (continuation.length > 0) {
+          const tok = tokenizeLine(continuation);
+          prev.text = prev.text.length > 0 ? `${prev.text} ${tok.text}` : tok.text;
+          prev.ingredients.push(...tok.ingredients);
+          prev.cookware.push(...tok.cookware);
+          prev.timers.push(...tok.timers);
+          allIngredients.push(...tok.ingredients);
+          allCookware.push(...tok.cookware);
+          allTimers.push(...tok.timers);
+        }
+        continue;
+      }
+      // No anchor to merge into — let the rest of this iteration treat
+      // the continuation body as a regular step line. An empty body
+      // (bare `>`) degrades to nothing; skip to the next line.
+      if (continuation.length === 0) continue;
+      const tok = tokenizeLine(continuation);
+      steps.push({
+        text: tok.text,
+        ingredients: tok.ingredients,
+        cookware: tok.cookware,
+        timers: tok.timers,
+        section: currentSection,
+      });
+      allIngredients.push(...tok.ingredients);
+      allCookware.push(...tok.cookware);
+      allTimers.push(...tok.timers);
+      continue;
+    }
+
     const tok = tokenizeLine(line);
     steps.push({
       text: tok.text,
       ingredients: tok.ingredients,
       cookware: tok.cookware,
       timers: tok.timers,
+      section: currentSection,
     });
     allIngredients.push(...tok.ingredients);
     allCookware.push(...tok.cookware);
@@ -270,6 +408,7 @@ export function parseCooklang(src: string): Recipe {
     ingredients: dedupeIngredients(allIngredients),
     cookware: dedupeCookware(allCookware),
     timers: allTimers,
+    sections,
   };
 }
 
@@ -332,19 +471,93 @@ function formatQtyUnit(qty: string | null, unit: string | null): string {
 }
 
 /**
+ * Walk `steps` and bucket them by section, preserving the order
+ * sections first appeared. The returned array always leads with the
+ * implicit head bucket (`name: null`) when any unsectioned steps exist,
+ * so callers can render it before the named sections.
+ *
+ * This is the pivot point that keeps two concerns separate: the parser
+ * records only what the user wrote (a per-step section name); the
+ * renderer decides how to present grouping. A future "flat even when
+ * sections exist" toggle or a "sections only, ignore head bucket" mode
+ * would live here, not in the parser.
+ */
+function groupStepsBySection(
+  recipe: Recipe
+): Array<{ name: string | null; steps: Step[] }> {
+  const buckets = new Map<string | null, Step[]>();
+  const order: Array<string | null> = [];
+  for (const step of recipe.steps) {
+    const key = step.section;
+    if (!buckets.has(key)) {
+      buckets.set(key, []);
+      order.push(key);
+    }
+    buckets.get(key)!.push(step);
+  }
+  return order.map((name) => ({ name, steps: buckets.get(name)! }));
+}
+
+/**
+ * Collect every ingredient that appears in the given steps, deduping
+ * with the same `name|qty|unit` key the flat list uses. Extracted so
+ * the section-aware renderer can apply the dedupe *within* a section
+ * without cross-contaminating neighbouring sections — "1 cup flour" in
+ * Soup and "1 cup flour" in Bread should both render once, in their
+ * respective sub-lists.
+ */
+function dedupeFromSteps(steps: Step[]): Ingredient[] {
+  const seen = new Set<string>();
+  const out: Ingredient[] = [];
+  for (const step of steps) {
+    for (const ing of step.ingredients) {
+      const key = `${ing.name.toLowerCase()}|${ing.qty ?? ''}|${ing.unit ?? ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(ing);
+    }
+  }
+  return out;
+}
+
+/**
+ * Render an ingredient list as `<li>` markup — no surrounding `<ul>`,
+ * so the caller controls whether this sits under a heading or inside
+ * a sub-section block.
+ */
+function ingredientsListItems(ings: Ingredient[]): string {
+  const out: string[] = [];
+  for (const ing of ings) {
+    const qty = formatQtyUnit(ing.qty, ing.unit);
+    const qtyHtml = qty.length > 0 ? `<span class="cook-qty">${esc(qty)}</span> ` : '';
+    out.push(`<li>${qtyHtml}<span class="cook-name">${esc(ing.name)}</span></li>`);
+  }
+  return out.join('');
+}
+
+/**
  * Render a parsed recipe as a self-contained HTML fragment. Class names
  * scoped with `cook-` prefix so a host page's stylesheet can reach in
  * without a wrapping selector. Structure:
  *
  *   <dl class="cook-metadata">…</dl>
  *   <h3>Ingredients</h3>
+ *   [ <h4>Section</h4> ]?
  *   <ul class="cook-ingredients">…</ul>
  *   <h3>Cookware</h3>
  *   <ul class="cook-cookware">…</ul>
  *   <h3>Instructions</h3>
+ *   [ <h4>Section</h4> ]?
  *   <ol class="cook-steps">…</ol>
  *
- * A section is omitted entirely when its list is empty, so a
+ * Sub-headings (`<h4>`) appear under both Ingredients and Instructions
+ * only when the source used `== Name ==` or `# Name` headers. Absent
+ * any headers, output collapses to the original flat layout so an
+ * existing recipe with no sections renders identically to pre-sections
+ * behaviour. Cookware stays flat regardless — the global dedupe is
+ * what a cook wants, splitting pans across sections helps nobody.
+ *
+ * A block is omitted entirely when its list is empty, so a
  * freshly-typed metadata-only recipe doesn't render empty headers.
  */
 export function recipeToHtml(recipe: Recipe): string {
@@ -359,15 +572,27 @@ export function recipeToHtml(recipe: Recipe): string {
     out.push('</dl>');
   }
 
+  const buckets = groupStepsBySection(recipe);
+  const hasSections = recipe.sections.length > 0;
+
   if (recipe.ingredients.length > 0) {
     out.push('<h3>Ingredients</h3>');
-    out.push('<ul class="cook-ingredients">');
-    for (const ing of recipe.ingredients) {
-      const qty = formatQtyUnit(ing.qty, ing.unit);
-      const qtyHtml = qty.length > 0 ? `<span class="cook-qty">${esc(qty)}</span> ` : '';
-      out.push(`<li>${qtyHtml}<span class="cook-name">${esc(ing.name)}</span></li>`);
+    if (!hasSections) {
+      out.push('<ul class="cook-ingredients">');
+      out.push(ingredientsListItems(recipe.ingredients));
+      out.push('</ul>');
+    } else {
+      for (const bucket of buckets) {
+        const ings = dedupeFromSteps(bucket.steps);
+        if (ings.length === 0) continue;
+        if (bucket.name !== null) {
+          out.push(`<h4 class="cook-section">${esc(bucket.name)}</h4>`);
+        }
+        out.push('<ul class="cook-ingredients">');
+        out.push(ingredientsListItems(ings));
+        out.push('</ul>');
+      }
     }
-    out.push('</ul>');
   }
 
   if (recipe.cookware.length > 0) {
@@ -381,11 +606,28 @@ export function recipeToHtml(recipe: Recipe): string {
 
   if (recipe.steps.length > 0) {
     out.push('<h3>Instructions</h3>');
-    out.push('<ol class="cook-steps">');
-    for (const step of recipe.steps) {
-      out.push(`<li>${esc(step.text)}</li>`);
+    if (!hasSections) {
+      out.push('<ol class="cook-steps">');
+      for (const step of recipe.steps) {
+        out.push(`<li>${esc(step.text)}</li>`);
+      }
+      out.push('</ol>');
+    } else {
+      for (const bucket of buckets) {
+        if (bucket.steps.length === 0) continue;
+        if (bucket.name !== null) {
+          out.push(`<h4 class="cook-section">${esc(bucket.name)}</h4>`);
+        }
+        // Each section gets its own `<ol>` so numbering restarts at 1
+        // per section — that's how printed cookbooks lay out multi-part
+        // recipes and what the reader expects when sections exist.
+        out.push('<ol class="cook-steps">');
+        for (const step of bucket.steps) {
+          out.push(`<li>${esc(step.text)}</li>`);
+        }
+        out.push('</ol>');
+      }
     }
-    out.push('</ol>');
   }
 
   return out.join('');
@@ -414,11 +656,21 @@ export function cooklangToHtml(src: string): string {
  *   - 2 eggs
  *
  *   Instructions
+ *   == Soup ==
  *   1. …
  *   2. …
+ *   == Finishing ==
+ *   1. …
  *
  * Cookware is omitted — AnyList's shopping list doesn't track it, and
  * leaving it in produces a pasted list with unusable "saucepan" rows.
+ *
+ * Section headers appear only inside the Instructions block. The
+ * ingredients block stays flat because AnyList treats every line in
+ * the paste area as a buyable item — a stray "Finishing" row would
+ * sit in the shopping list forever. Instructions are human-readable
+ * prose, so section markers there are informational rather than
+ * hazardous.
  */
 export function recipeToPlainText(title: string, recipe: Recipe): string {
   const lines: string[] = [];
@@ -435,9 +687,25 @@ export function recipeToPlainText(title: string, recipe: Recipe): string {
   }
   if (recipe.steps.length > 0) {
     lines.push('Instructions');
-    recipe.steps.forEach((step, i) => {
-      lines.push(`${i + 1}. ${step.text}`);
-    });
+    if (recipe.sections.length === 0) {
+      recipe.steps.forEach((step, i) => {
+        lines.push(`${i + 1}. ${step.text}`);
+      });
+    } else {
+      // Emit each bucket as its own numbered run so the renderer and
+      // the plain-text export agree on "numbering restarts per
+      // section". Head-bucket steps (section === null) print before
+      // any `== Section ==` marker, matching the HTML layout.
+      for (const bucket of groupStepsBySection(recipe)) {
+        if (bucket.steps.length === 0) continue;
+        if (bucket.name !== null) {
+          lines.push(`== ${bucket.name} ==`);
+        }
+        bucket.steps.forEach((step, i) => {
+          lines.push(`${i + 1}. ${step.text}`);
+        });
+      }
+    }
   }
   return lines.join('\n').trimEnd();
 }

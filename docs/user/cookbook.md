@@ -43,6 +43,32 @@ and prep time.
 Single-word references can omit the braces — `@salt` is the same as
 `@salt{}`.
 
+### Sections and long steps
+
+Long recipes (soups with a garnish, breads with a starter and a dough,
+anything that runs past one phase) can be split into sections and
+rendered with sub-headings under both the ingredients and the
+instructions. Two forms work, pick whichever reads better to you:
+
+```cooklang
+== Soup ==
+Simmer @lentils{200%g} with @onion{1} in @water{1%L}.
+> Add a pinch of @salt partway through.
+
+# Finishing
+Stir in @butter{2%tbsp} and serve.
+```
+
+- `== Section Name ==` is the canonical form (also accepted by other
+  Cooklang tools like CookCLI).
+- `# Section Name` (with a space after `#`) is a markdown-style alias
+  — handy if you're used to writing headers that way. `#cookware` with
+  no space still means cookware, so the two don't collide.
+- A line starting with `>` (followed by a space and the rest of the
+  text) is a **continuation** of the previous step. Use it to break a
+  long instruction across two or three lines in the source without
+  fragmenting it in the rendered recipe.
+
 ## Opening the Cookbook
 
 Two entry points:
