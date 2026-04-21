@@ -2415,13 +2415,7 @@ h1 {
 
 .help-header {
   display: flex;
-  /* Baseline alignment so "Help" (1rem) and the smaller crumb /
-     chevron share a text baseline — without it, align-items:center
-     centers the boxes and the glyphs visibly stair-step because
-     the font-sizes differ. The back button opts back into center
-     alignment on its own since an icon-only button has no useful
-     text baseline. */
-  align-items: baseline;
+  align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.6rem;
   border-bottom: 1px solid var(--border);
@@ -2434,12 +2428,13 @@ h1 {
   padding: 0 0.25rem;
 }
 
-/* The current doc path, shown as a thin "breadcrumb" between the title
-   and the close button. Truncates with an ellipsis on narrow widths so
+/* The current doc path, shown as a breadcrumb between the title and
+   the close button. Matches the title's font-size so the three pieces
+   share a line; the muted color from .subtle is what distinguishes
+   it from the title. Truncates with an ellipsis on narrow widths so
    a deep path can't push the close button off-screen. */
 .help-crumb {
   flex: 1;
-  font-size: 0.8rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2447,24 +2442,19 @@ h1 {
 }
 
 /* Chevron between "Help" and the current filename, making the pair
-   read as a breadcrumb (Help › getting-started.md) rather than as
-   two mashed-together labels. Decorative — aria-hidden in the
-   markup — and fixed-width so the crumb's flex:1 still consumes
-   the remaining header space. */
+   read as a breadcrumb (Help › README.md) rather than as two mashed-
+   together labels. Decorative — aria-hidden in the markup — and
+   fixed-width so the crumb's flex:1 still consumes the remaining
+   header space. */
 .help-crumb-sep {
   flex: 0 0 auto;
-  font-size: 0.9rem;
 }
 
 /* Back button sits at the left edge of the header. Disabled styling
    mirrors the existing .secondary:disabled rules — no extra work
-   needed — so we only need layout tweaks here. The explicit
-   align-self overrides the header's baseline alignment, since the
-   button's only child is an SVG and its baseline would land at
-   the bottom of the icon. */
+   needed — so we only need layout tweaks here. */
 .help-back {
   flex: 0 0 auto;
-  align-self: center;
 }
 
 /* Close affordance. Duplicates .settings-close rather than sharing so
