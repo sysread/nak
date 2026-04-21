@@ -179,6 +179,24 @@ describe('tool registry', () => {
     expect(prompt).toContain('memory_recall');
   });
 
+  it('buildSystemPrompt carries the anti-sycophancy voice block', () => {
+    // Push back against the post-training tendency toward diplomatic
+    // smoothing, comfort-first phrasing, and unearned validation.
+    // Grep-style assertions on the semantic beats rather than exact
+    // copy so phrasing tweaks don't churn the test — but the three
+    // load-bearing ideas (correctness over comfort, direct
+    // corrections over rationalising, earned agreement only) must
+    // survive any future edit to the block.
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/correctness\s+over\s+comfort/i);
+    expect(prompt).toMatch(/(rationalis|rationaliz)ing/i);
+    expect(prompt).toMatch(/(unearned|earned)/i);
+    // And the explicit non-goal: plain-spoken, not cold. Drop this
+    // line and the block slides toward "robotic" — which is a
+    // different failure mode than the one we're fixing.
+    expect(prompt).toMatch(/not\s+cold|not\s+robotic|plain-spoken/i);
+  });
+
   it('buildSystemPrompt lists every tool (always-on + gated) but omits toggle_tools itself', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('memory_recall');
@@ -273,6 +291,31 @@ describe('tool registry', () => {
     const prompt = buildSystemPrompt({ webSearch: true });
     expect(prompt).toMatch(/search the live web/i);
     expect(prompt).toMatch(/no tool to call/i);
+  });
+
+  it('buildSystemPrompt warns that web-search results are not user-authored', () => {
+    // Regression guard: Venice inlines search results + its own framing
+    // ("you can use this real time information to answer the user's
+    // query above") into the user turn server-side. Without an explicit
+    // warning the model misreads that as a user instruction — observed
+    // live on the "Web Tool Test Request" thread where the reasoning
+    // trace quoted the Venice preamble back as 'and the user says:
+    // "..."'. The prompt must both call out the non-user origin and
+    // point at the <user_message> boundary tags that chat-loop.ts
+    // splices around the current turn.
+    const prompt = buildSystemPrompt({ webSearch: true });
+    expect(prompt).toMatch(/not from the user/i);
+    expect(prompt).toContain('<user_message>');
+    expect(prompt).toContain('</user_message>');
+  });
+
+  it('buildSystemPrompt omits the attribution warning when web search is off', () => {
+    // Without web search opted in, there's no Venice injection to warn
+    // about — and chat-loop.ts's tag wrapping doesn't run either, so a
+    // reference to <user_message> tags would be a dangling pointer.
+    const prompt = buildSystemPrompt();
+    expect(prompt).not.toContain('<user_message>');
+    expect(prompt).not.toMatch(/not from the user/i);
   });
 
   it('executeToolCall dispatches by name', async () => {

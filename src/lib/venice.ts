@@ -351,16 +351,33 @@ export class VeniceClient {
     // list never arrives and the superscripts become orphaned.
     // Flagged experimental in the Venice docs but it's the only way
     // to surface citations in our streaming pipeline.
+    // Disable Venice's platform-level system prompt. By default
+    // Venice prepends its own generic "you are a helpful assistant"
+    // framing to every request, which stacks on top of our
+    // `buildSystemPrompt()` output and can drag responses back
+    // toward the diplomatic / comfort-first tone our Voice block is
+    // specifically pushing away from. Nak's baseline system prompt
+    // is intentional and covers identity, tool framing, and voice
+    // on its own — Venice's prefix is redundant at best and
+    // counter-productive at worst. The flag is
+    // `include_venice_system_prompt`; it defaults to true server-
+    // side, so we have to explicitly opt out.
+    //
+    // Applies to every streamChat call (main chat + all sub-agents
+    // — recall, conversation_recall, reflection, summary,
+    // auto-title). Each of those prompts is self-sufficient; none
+    // of them benefit from a Venice generic preamble landing on top.
+    const veniceParams: Record<string, unknown> = {
+      include_venice_system_prompt: false,
+    };
     if (req.webSearch) {
-      const veniceParams: Record<string, unknown> = {
-        enable_web_search: req.webSearch,
-      };
+      veniceParams.enable_web_search = req.webSearch;
       if (req.webSearch !== 'off') {
         veniceParams.enable_web_citations = true;
         veniceParams.include_search_results_in_stream = true;
       }
-      body.venice_parameters = veniceParams;
     }
+    body.venice_parameters = veniceParams;
     let res: Response;
     try {
       res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {

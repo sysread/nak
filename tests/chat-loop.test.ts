@@ -227,6 +227,150 @@ describe('runChatLoop', () => {
     expect(seenRequests[0].reasoningEffort).toBeUndefined();
   });
 
+  it('wraps the last user message in <user_message> tags when web search is active', async () => {
+    // Venice's server-side web search inlines the search payload plus
+    // its own framing ("you can use this real time information to
+    // answer the user's query above") into what arrives as the user's
+    // turn, before the model ever sees it. Without a structural
+    // boundary the model misreads the Venice injection as a user
+    // instruction — observed live on the "Web Tool Test Request"
+    // thread. chat-loop.ts wraps the current user turn in
+    // <user_message>...</user_message> to give the model an
+    // unambiguous "here is where the human's words end" signal; the
+    // system prompt's attribution warning ties the tags back to the
+    // non-user origin.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [
+        { role: 'user', content: 'older turn' },
+        { role: 'assistant', content: 'older reply' },
+        { role: 'user', content: 'look up X' },
+      ],
+      signal: new AbortController().signal,
+      webSearch: 'auto',
+    });
+    const msgs = seenRequests[0].messages;
+    // System message rides first; the two user turns follow, only the
+    // most recent of which should be wrapped. An older user turn that
+    // Venice already processed on its own round doesn't need re-tagging
+    // and tagging it would just bloat the wire.
+    expect(msgs[0].role).toBe('system');
+    const users = msgs.filter((m) => m.role === 'user');
+    expect(users).toHaveLength(2);
+    expect(users[0].content).toBe('older turn');
+    expect(users[1].content).toBe('<user_message>look up X</user_message>');
+  });
+
+  it('leaves user messages untouched when web search is off', async () => {
+    // Without webSearch active there's no Venice injection to fence
+    // off — and the system prompt omits the attribution warning in
+    // that mode, so dangling <user_message> tags in the history
+    // would be meaningless.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      webSearch: 'off',
+    });
+    const users = seenRequests[0].messages.filter((m) => m.role === 'user');
+    expect(users[0].content).toBe('hi');
+  });
+
+  it('does not mutate the caller-supplied history when wrapping for web search', async () => {
+    // The loop rebuilds requestMessages every round, so wrapping has
+    // to be a projection over a fresh array, not an in-place edit of
+    // the caller's VeniceMessage objects. If we mutated, a second
+    // runChatLoop invocation — or the caller reusing the history
+    // array — would see the tags already baked in and double-wrap.
+    const venice = {
+      async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    const history = [{ role: 'user' as const, content: 'look up X' }];
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history,
+      signal: new AbortController().signal,
+      webSearch: 'auto',
+    });
+    expect(history[0].content).toBe('look up X');
+  });
+
+  it('wraps multimodal user content by bracketing the ContentPart array', async () => {
+    // Vision-capable user turns ride as `[{type:'text',text:'...'},
+    // {type:'image_url', image_url:{url:'...'}}]`. The boundary tags
+    // need to enclose *everything* the user actually sent — including
+    // images and any extracted-text prelude blocks — so the whole
+    // user-authored payload sits inside the <user_message> fence.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'what is in this image?' },
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } },
+          ],
+        },
+      ],
+      signal: new AbortController().signal,
+      webSearch: 'on',
+    });
+    const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
+    expect(Array.isArray(userMsg?.content)).toBe(true);
+    const parts = userMsg!.content as Array<{ type: string; text?: string }>;
+    expect(parts[0]).toEqual({ type: 'text', text: '<user_message>' });
+    expect(parts[parts.length - 1]).toEqual({
+      type: 'text',
+      text: '</user_message>',
+    });
+    // Original parts sit between the opening and closing tag parts.
+    expect(parts).toHaveLength(4);
+    expect(parts[1]).toEqual({ type: 'text', text: 'what is in this image?' });
+  });
+
   it('persists a plain text response in one round', async () => {
     const venice = mockVenice([
       [{ type: 'text', delta: 'Hello' }, { type: 'text', delta: ' there' }],

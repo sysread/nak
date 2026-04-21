@@ -488,6 +488,7 @@ describe('VeniceClient.streamChat', () => {
     const [, init] = fetchImpl.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.venice_parameters).toEqual({
+      include_venice_system_prompt: false,
       enable_web_search: 'on',
       enable_web_citations: true,
       include_search_results_in_stream: true,
@@ -517,6 +518,7 @@ describe('VeniceClient.streamChat', () => {
     const [, init] = fetchImpl.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.venice_parameters).toEqual({
+      include_venice_system_prompt: false,
       enable_web_search: 'auto',
       enable_web_citations: true,
       include_search_results_in_stream: true,
@@ -543,13 +545,21 @@ describe('VeniceClient.streamChat', () => {
     }
     const [, init] = fetchImpl.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.venice_parameters).toEqual({ enable_web_search: 'off' });
+    expect(body.venice_parameters).toEqual({
+      include_venice_system_prompt: false,
+      enable_web_search: 'off',
+    });
   });
 
-  it('omits venice_parameters entirely when webSearch is not set', async () => {
-    // Tests that don't care about web-search shouldn't carry the field —
-    // keeps the request body minimal and lets Venice's server-side
-    // default apply.
+  it('always disables the Venice platform system prompt, even when webSearch is unset', async () => {
+    // Venice's default platform system prompt stacks on top of ours
+    // and drags the voice back toward the generic "helpful assistant"
+    // phrasing that `buildSystemPrompt` is specifically pushing away
+    // from. We opt out unconditionally on every streamChat call so
+    // main chat + all sub-agents (recall, reflection, summary, auto-
+    // title) run under Nak's baseline alone. `venice_parameters` is
+    // therefore always present on the wire, even when the caller
+    // hasn't opted into web search.
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(sseStream(['data: [DONE]\n\n']), { status: 200 })
     );
@@ -562,7 +572,9 @@ describe('VeniceClient.streamChat', () => {
     }
     const [, init] = fetchImpl.mock.calls[0];
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body).not.toHaveProperty('venice_parameters');
+    expect(body.venice_parameters).toEqual({
+      include_venice_system_prompt: false,
+    });
   });
 
   it('forwards reasoningEffort as top-level reasoning_effort', async () => {
