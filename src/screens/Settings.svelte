@@ -839,9 +839,6 @@
             </label>
           {/each}
         </div>
-        <p class="subtle" style="font-size:0.8rem">
-          Stored on your Supabase profile so the choice follows you across browsers.
-        </p>
 
         <h3 class="pane-section">Default reasoning effort</h3>
         <p class="subtle">
@@ -906,10 +903,6 @@
           />
           <span>Enabled</span>
         </label>
-        <p class="subtle" style="font-size:0.8rem">
-          Stored on your Supabase profile so the choice follows you across
-          browsers.
-        </p>
         {#if webSearchError}<p class="error">{webSearchError}</p>{/if}
         {#if webSearchInfo}<p class="subtle">{webSearchInfo}</p>{/if}
 
