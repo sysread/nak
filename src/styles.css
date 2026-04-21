@@ -2419,6 +2419,17 @@ h1 {
   min-width: 0;
 }
 
+/* Chevron between "Help" and the current filename, making the pair
+   read as a breadcrumb (Help › getting-started.md) rather than as
+   two mashed-together labels. Decorative — aria-hidden in the
+   markup — and fixed-width so the crumb's flex:1 still consumes
+   the remaining header space. */
+.help-crumb-sep {
+  flex: 0 0 auto;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
 /* Back button sits at the left edge of the header. Disabled styling
    mirrors the existing .secondary:disabled rules — no extra work
    needed — so we only need layout tweaks here. */

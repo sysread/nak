@@ -267,6 +267,7 @@
         </svg>
       </button>
       <h1 class="help-title">Help</h1>
+      <span class="help-crumb-sep subtle" aria-hidden="true">›</span>
       <span class="help-crumb subtle" title={currentPath}>{currentPath}</span>
       <button
         type="button"
