@@ -29,6 +29,7 @@ import { SupabaseService } from '../supabase';
 import type { EmbeddingSource } from './types';
 import { createMemoriesSource } from './sources/memories';
 import { createThreadsSource } from './sources/threads';
+import { createSamskaraSubstrateSource } from './sources/samskara-substrate';
 import { LeaseCoordinator } from './lease';
 import {
   runOneCycle,
@@ -171,6 +172,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
   const sources: EmbeddingSource[] = [
     createMemoriesSource(supabase),
     createThreadsSource(supabase),
+    createSamskaraSubstrateSource(supabase),
   ];
   const napConfig: NapConfig = {
     leasePollMs: msg.leasePollMs,

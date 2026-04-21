@@ -61,6 +61,11 @@ changing a contract that other features depend on.
 - [Embeddings](./embeddings.md) — the Web-Worker embedding
   pipeline plus the canonical cross-tab-lock + claim-RPC
   pattern.
+- [Samskara](./samskara.md) — *(planned, in-flight on the
+  `samskara` branch)* the chat model's progressively-built
+  predictive model of the user. Substrate compounds into
+  samskaras compounds into a prose summary that lives
+  always-on in the system prompt.
 - [Settings](./settings.md) — the settings modal +
   `profiles.settings` JSONB + theme.
 - [Help](./help.md) — in-app rendering of `docs/user/`.

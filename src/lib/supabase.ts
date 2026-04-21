@@ -1721,4 +1721,350 @@ export class SupabaseService {
       void this.client.removeChannel(channel);
     };
   }
+
+  // Samskara RPCs --------------------------------------------------------
+  //
+  // Thin wrappers over the SQL functions defined in the samskara
+  // section of supabase/schema.sql. The sql functions own all the
+  // RLS-aware bookkeeping (claim guards, cohort weighting, the
+  // confidence formula); these methods just shape the arguments and
+  // unwrap the response.
+  //
+  // The chat-loop side (fire/record/getCompoundSummary) is read-light
+  // and called once per turn. The worker side
+  // (claim/save/decay/compound-regen) is the formation pipeline; see
+  // src/lib/agents/samskara/ for callers.
+
+  /**
+   * Top-K cosine fire over the user's samskaras. Ranks by
+   * `cosine * sqrt(health * confidence)` so weak-but-relevant samskaras
+   * can break through against strong-but-distant ones. The caller
+   * computes `kMax` as `ceil(K_BASE * log10(N + 10))` per the agreed
+   * log10 dampening on priming volume.
+   */
+  async samskaraFireTopK(
+    queryEmbedding: number[],
+    kMax: number
+  ): Promise<SamskaraFireRow[]> {
+    const { data, error } = await this.client.rpc('samskara_fire_top_k', {
+      p_query_embedding: queryEmbedding,
+      p_k_max: kMax,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as SamskaraFireRow[];
+  }
+
+  /**
+   * Persist the cohort fire log + bump per-samskara fire counters in
+   * one round trip. `fires` is an array of `{samskaraId, score}`
+   * objects; the RPC takes a jsonb wire shape so the caller doesn't
+   * need to learn Postgres array literals.
+   */
+  async samskaraRecordFires(
+    cohortId: string,
+    threadId: string,
+    fires: { samskaraId: string; score: number }[]
+  ): Promise<void> {
+    if (fires.length === 0) return;
+    const payload = fires.map((f) => ({ samskara_id: f.samskaraId, score: f.score }));
+    const { error } = await this.client.rpc('samskara_record_fires', {
+      p_cohort_id: cohortId,
+      p_thread_id: threadId,
+      p_fires: payload,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Apply a cohort reaction across confirm / disconfirm / neutral
+   * partitions. The RPC owns the cohort-aware reinforcement
+   * weighting (+1/sqrt(N) per member rather than full +1) so cohorts
+   * influence their members without dominating single-fire signal.
+   */
+  async samskaraApplyReaction(
+    cohortId: string,
+    confirmIds: string[],
+    disconfirmIds: string[],
+    neutralIds: string[]
+  ): Promise<void> {
+    const { error } = await this.client.rpc('samskara_apply_reaction', {
+      p_cohort_id: cohortId,
+      p_confirm_ids: confirmIds,
+      p_disconfirm_ids: disconfirmIds,
+      p_neutral_ids: neutralIds,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Insert the per-round substrate stub. The chat loop calls this at
+   * end-of-round with the just-persisted message ids; the assimilator
+   * worker phase fills in `situation`/`outcome`/`valence` later.
+   */
+  async samskaraRecordSubstrate(
+    threadId: string,
+    userMessageId: string,
+    assistantMessageId: string | null
+  ): Promise<string> {
+    const { data, error } = await this.client.rpc('samskara_record_substrate', {
+      p_thread_id: threadId,
+      p_user_message_id: userMessageId,
+      p_assistant_message_id: assistantMessageId,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data as string;
+  }
+
+  /**
+   * Read the cached compound summary row. NULL summary or absent row
+   * is the cold-start case; chat-loop reader treats both as "no
+   * compound block this turn." The caller decides any staleness
+   * ceiling on `lastRegenAt` — kept here for future use.
+   */
+  async samskaraGetCompoundSummary(): Promise<{
+    summary: string | null;
+    lastRegenAt: string | null;
+  } | null> {
+    const { data, error } = await this.client
+      .from('samskara_compound_summary')
+      .select('summary, last_regen_at')
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    if (!data) return null;
+    const row = data as { summary: string | null; last_regen_at: string | null };
+    return { summary: row.summary, lastRegenAt: row.last_regen_at };
+  }
+
+  /** Worker: claim the next substrate row needing assimilation. */
+  async samskaraClaimNextAssimilate(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{
+    id: string;
+    threadId: string;
+    userMessageId: string;
+    assistantMessageId: string | null;
+  } | null> {
+    const { data, error } = await this.client.rpc('samskara_claim_next_assimilate', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      id: string;
+      thread_id: string;
+      user_message_id: string;
+      assistant_message_id: string | null;
+    }[];
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      id: row.id,
+      threadId: row.thread_id,
+      userMessageId: row.user_message_id,
+      assistantMessageId: row.assistant_message_id,
+    };
+  }
+
+  /** Worker: save assimilator output IF claim still ours. */
+  async samskaraSaveAssimilation(
+    id: string,
+    holderId: string,
+    situation: string,
+    outcome: string | null,
+    valence: number | null
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc(
+      'samskara_save_assimilation_if_claimed',
+      {
+        p_id: id,
+        p_holder_id: holderId,
+        p_situation: situation,
+        p_outcome: outcome,
+        p_valence: valence,
+      }
+    );
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /** Worker: claim the next substrate row needing an embedding. */
+  async samskaraClaimNextSubstrateEmbed(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{ id: string; situation: string; outcome: string | null } | null> {
+    const { data, error } = await this.client.rpc(
+      'samskara_claim_next_substrate_embed',
+      { p_holder_id: holderId, p_ttl_seconds: ttlSeconds }
+    );
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      id: string;
+      situation: string;
+      outcome: string | null;
+    }[];
+    return rows.length > 0 ? rows[0] : null;
+  }
+
+  /** Worker: save substrate embedding IF claim still ours. */
+  async samskaraSaveSubstrateEmbedding(
+    id: string,
+    holderId: string,
+    embedding: number[],
+    model: string
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc(
+      'samskara_save_substrate_embedding_if_claimed',
+      {
+        p_id: id,
+        p_holder_id: holderId,
+        p_embedding: embedding,
+        p_embedding_model: model,
+      }
+    );
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /** Worker: run the decay pass. Returns count of rows changed. */
+  async samskaraDecay(): Promise<number> {
+    const { data, error } = await this.client.rpc('samskara_decay');
+    if (error) throw new SupabaseError(error.message);
+    return typeof data === 'number' ? data : 0;
+  }
+
+  /** Worker: should we regenerate the compound summary right now? */
+  async samskaraShouldRegenCompound(): Promise<{
+    shouldRegen: boolean;
+    samskaraCount: number;
+    lastRegenAt: string | null;
+  }> {
+    const { data, error } = await this.client.rpc('samskara_should_regen_compound');
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      should_regen: boolean;
+      samskara_count: number;
+      last_regen_at: string | null;
+    }[];
+    if (rows.length === 0) {
+      return { shouldRegen: false, samskaraCount: 0, lastRegenAt: null };
+    }
+    const r = rows[0];
+    return {
+      shouldRegen: r.should_regen,
+      samskaraCount: r.samskara_count,
+      lastRegenAt: r.last_regen_at,
+    };
+  }
+
+  /** Worker: claim the compound-regen slot. False = another device has it. */
+  async samskaraClaimCompoundRegen(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('samskara_claim_compound_regen', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /** Worker: save the regenerated compound summary IF claim still ours. */
+  async samskaraSaveCompoundSummary(
+    holderId: string,
+    summary: string,
+    samskaraCount: number
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc(
+      'samskara_save_compound_summary_if_claimed',
+      {
+        p_holder_id: holderId,
+        p_summary: summary,
+        p_samskara_count: samskaraCount,
+      }
+    );
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Worker: read the substrate-pair candidates for the relator phase.
+   * Returns recent embedded substrate rows ordered by created_at desc;
+   * the relator phase finds nearest-neighbour pairs in JS rather than
+   * via SQL because pgvector's `<=>` operator on a self-cross-join is
+   * O(n^2) and the per-user substrate count stays small enough that
+   * the JS pass is fine.
+   */
+  async samskaraRecentEmbeddedSubstrate(limit: number): Promise<SamskaraSubstrateRow[]> {
+    const { data, error } = await this.client
+      .from('samskara_substrate')
+      .select('id, situation, outcome, valence, situation_embedding, created_at')
+      .not('situation_embedding', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as SamskaraSubstrateRow[];
+  }
+
+  /**
+   * Worker: read all live samskaras ordered by ranked weight, for the
+   * compound-summary regenerator. The caller passes a cap (computed
+   * via log10 of total count) so the prose stays bounded as the
+   * corpus grows.
+   */
+  async samskaraTopForSummary(limit: number): Promise<SamskaraSummaryRow[]> {
+    const { data, error } = await this.client
+      .from('samskaras')
+      .select('id, tier, prediction, inner_voice, valence, confidence, health')
+      .order('health', { ascending: false })
+      .order('confidence', { ascending: false })
+      .limit(limit);
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as SamskaraSummaryRow[];
+  }
+}
+
+/**
+ * Row shape returned by `samskara_fire_top_k`. The `score` column is
+ * the ranked weight `cosine * sqrt(health * confidence)`; callers
+ * include it in the priming block so the chat model can perceive the
+ * relative weight of each fired samskara.
+ */
+export interface SamskaraFireRow {
+  id: string;
+  prediction: string;
+  inner_voice: string | null;
+  valence: number | null;
+  confidence: number;
+  health: number;
+  score: number;
+}
+
+/**
+ * Substrate row shape for the relator phase. Includes the embedding
+ * because the pair-discovery step needs to compute cosine in JS (see
+ * samskaraRecentEmbeddedSubstrate above).
+ */
+export interface SamskaraSubstrateRow {
+  id: string;
+  situation: string;
+  outcome: string | null;
+  valence: number | null;
+  situation_embedding: number[];
+  created_at: string;
+}
+
+/**
+ * Samskara row projection for the compound-summarizer agent. Avoids
+ * shipping the 2048-dim embedding back just to throw it away.
+ */
+export interface SamskaraSummaryRow {
+  id: string;
+  tier: number;
+  prediction: string;
+  inner_voice: string | null;
+  valence: number | null;
+  confidence: number;
+  health: number;
 }

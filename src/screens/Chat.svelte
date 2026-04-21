@@ -1485,8 +1485,10 @@
       .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
       .map((p) => ({ role: 'system' as const, content: p.body }));
 
+    let userMessageId: string;
     try {
       const userMsg = await app.supabase.addMessage(threadId, 'user', text);
+      userMessageId = userMsg.id;
       // Persist attachment rows. Positional index matches the chip
       // order so the message list renders them the way the user queued
       // them. If the insert fails the user message is still saved and
@@ -1538,6 +1540,7 @@
       sendVerbosity,
       needsAutoTitle,
       originalText: text,
+      userMessageId,
     });
   }
 
@@ -1559,6 +1562,13 @@
     sendVerbosity: Verbosity;
     needsAutoTitle: boolean;
     originalText: string;
+    /**
+     * The Supabase id of the user message that opened this exchange.
+     * Threaded through to runChatLoop so the chat-loop can pair it
+     * with the terminal assistant message in the samskara substrate
+     * row written at end-of-turn.
+     */
+    userMessageId: string;
   }
 
   /**
@@ -1632,6 +1642,7 @@
           modelId: ctx.modelId,
           history: historyOnWire,
           signal: abortCtl.signal,
+          userMessageId: ctx.userMessageId,
           // Enabled → 'on' so every turn is grounded with live results
           // plus citations — 'auto' leaves too much up to the model's
           // self-assessment, and we kept seeing refusals on questions

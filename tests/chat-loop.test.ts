@@ -56,6 +56,14 @@ interface MockSupabase {
   createMemory: ReturnType<typeof vi.fn>;
   updateMemory: ReturnType<typeof vi.fn>;
   deleteMemory: ReturnType<typeof vi.fn>;
+  // Samskara — runChatLoop calls these unconditionally per turn. The
+  // defaults make the feature a no-op (no compound, no fires, no
+  // substrate write) so tests written before samskara existed keep
+  // passing.
+  samskaraGetCompoundSummary: ReturnType<typeof vi.fn>;
+  samskaraFireTopK: ReturnType<typeof vi.fn>;
+  samskaraRecordFires: ReturnType<typeof vi.fn>;
+  samskaraRecordSubstrate: ReturnType<typeof vi.fn>;
 }
 
 function mockSupabase(overrides: Partial<MockSupabase> = {}): {
@@ -101,6 +109,10 @@ function mockSupabase(overrides: Partial<MockSupabase> = {}): {
       updated_at: 't',
     })),
     deleteMemory: vi.fn(async () => undefined),
+    samskaraGetCompoundSummary: vi.fn(async () => null),
+    samskaraFireTopK: vi.fn(async () => []),
+    samskaraRecordFires: vi.fn(async () => undefined),
+    samskaraRecordSubstrate: vi.fn(async () => 'sub-stub'),
     ...overrides,
   };
   return { svc: mocks as unknown as SupabaseService, mocks, messagesOut };

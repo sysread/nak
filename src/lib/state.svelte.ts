@@ -28,6 +28,7 @@ import { embeddingManager } from './embeddings/manager';
 import { reflectionManager } from './agents/reflection/manager';
 import { summaryManager } from './agents/summary/manager';
 import { attachmentExpiryManager } from './agents/attachment_expiry/manager';
+import { samskaraManager } from './agents/samskara/manager';
 import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_TIER,
@@ -172,16 +173,19 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   //
   // The workers run concurrently: they partition the shared
   // `worker_leases` table on `worker_kind` ('embedding' / 'reflection'
-  // / 'summary' / 'attachment_expiry') so one device can hold every
-  // lease simultaneously without contention. The summary worker feeds
-  // the drawer's search feature — it writes `threads.summary`, which
-  // the embeddings worker then picks up to build the searchable
-  // vector. The attachment-expiry worker reclaims binaries from
-  // attachments on threads quieter than 30 days.
+  // / 'summary' / 'attachment_expiry' / 'samskara') so one device can
+  // hold every lease simultaneously without contention. The summary
+  // worker feeds the drawer's search feature — it writes
+  // `threads.summary`, which the embeddings worker then picks up to
+  // build the searchable vector. The attachment-expiry worker
+  // reclaims binaries from attachments on threads quieter than 30
+  // days. The samskara worker forms the chat model's progressively-
+  // built predictive model of the user; see docs/dev/samskara.md.
   void embeddingManager.start({ supabase: app.supabase, config });
   void reflectionManager.start({ supabase: app.supabase, config });
   void summaryManager.start({ supabase: app.supabase, config });
   void attachmentExpiryManager.start({ supabase: app.supabase, config });
+  void samskaraManager.start({ supabase: app.supabase, config });
 }
 
 export function lock(): void {
@@ -192,6 +196,7 @@ export function lock(): void {
   reflectionManager.stop();
   summaryManager.stop();
   attachmentExpiryManager.stop();
+  samskaraManager.stop();
   app.config = null;
   app.supabase = null;
   app.venice = null;

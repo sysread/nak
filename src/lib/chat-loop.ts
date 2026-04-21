@@ -43,6 +43,13 @@ import {
   type OpenAIToolCall,
   type ToolContext,
 } from './tools';
+import {
+  fireSamskaras,
+  formatPriming,
+  getCompoundSummary,
+  recordSubstrateStub,
+  type FireResult,
+} from './samskara';
 
 /** Upper bound on rounds to prevent a runaway tool-call loop. */
 export const MAX_ROUNDS = 5;
@@ -210,6 +217,15 @@ export interface ChatLoopOptions {
    * that don't recognize the field silently ignore it.
    */
   verbosity?: Verbosity;
+  /**
+   * Optional id of the user message that opened this turn. When set,
+   * the chat-loop pairs it with the terminal assistant message id and
+   * writes a samskara substrate stub at end-of-round (the formation
+   * worker enriches it later). When absent the substrate stub is
+   * skipped — older callers and tests don't need to know about
+   * samskara to keep working.
+   */
+  userMessageId?: string;
 }
 
 /** Non-error completion shape returned to the caller. */
@@ -285,6 +301,23 @@ function encodeToolContent(
 }
 
 /**
+ * Pull the plain-text portion of a user message off the wire shape.
+ * `VeniceMessage.content` is `string | ContentPart[]`; multimodal
+ * user messages with attachments arrive as the array form, in which
+ * case we concatenate the `'text'` parts. Empty string when the
+ * message has no text component (e.g. an image-only user message).
+ */
+function extractUserText(msg: VeniceMessage | undefined): string {
+  if (!msg || msg.role !== 'user') return '';
+  const c = msg.content;
+  if (typeof c === 'string') return c;
+  return c
+    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+    .map((p) => p.text)
+    .join('\n');
+}
+
+/**
  * Drive one user turn through as many rounds as the model asks for
  * (capped at MAX_ROUNDS). The function returns when the assistant
  * produces a terminal response (no tool_calls) or the cap trips.
@@ -301,6 +334,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     webSearch,
     reasoningEffort,
     verbosity,
+    userMessageId,
   } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
@@ -308,6 +342,31 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   let finalText = '';
   let roundsRun = 0;
   let stoppedByLimit = false;
+  // Track the last assistant row we persisted across rounds. End-of-
+  // turn samskara substrate writes pair the opening user message with
+  // whichever assistant row closed the turn — final text or terminal
+  // tool-using row, whichever the loop ends on.
+  let lastAssistantId: string | null = null;
+
+  // Samskara priming. Computed ONCE before the round loop so every
+  // round in this turn sees the same compound + fire signal — the
+  // user's input doesn't change across rounds, and recomputing per
+  // round would burn embedding calls and confuse the cohort tracking
+  // (one cohort id per user turn, not per round).
+  //
+  // Both calls run in parallel and either may resolve to null; the
+  // formatter renders whatever sections are present. Errors are
+  // already swallowed inside the helpers — a samskara failure should
+  // never block a chat turn.
+  const userText = extractUserText(history[history.length - 1]);
+  const [compoundSummary, fireResult] = await Promise.all([
+    getCompoundSummary(supabase),
+    fireSamskaras(supabase, venice, thread.id, userText, signal),
+  ]);
+  const samskaraAppendix = formatPriming({
+    compoundSummary,
+    fire: fireResult as FireResult | null,
+  });
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) break;
@@ -342,7 +401,14 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     const requestMessages: VeniceMessage[] = [
       {
         role: 'system',
-        content: buildSystemPrompt({ webSearch: webSearchActive }),
+        content: buildSystemPrompt({
+          webSearch: webSearchActive,
+          // Samskara appendix - pre-computed before the round loop so
+          // every round sees the same compound + fire block. Empty
+          // string when the user has no samskaras yet (cold start) and
+          // when both helpers returned null (rare network blip path).
+          promptAppendix: samskaraAppendix,
+        }),
       },
       ...projectedHistory,
     ];
@@ -399,6 +465,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           citations: roundCitations,
         });
         handlers?.onAssistantPersisted?.(msg);
+        lastAssistantId = msg.id;
       }
       finalText = roundText;
       break;
@@ -425,6 +492,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       }
     );
     handlers?.onAssistantPersisted?.(assistantMsg);
+    lastAssistantId = assistantMsg.id;
 
     // Kick every tool off in parallel so the wall-clock latency is
     // max(individual durations) rather than sum. Each promise catches
@@ -506,6 +574,18 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     if (round === MAX_ROUNDS - 1) {
       stoppedByLimit = true;
     }
+  }
+
+  // Samskara substrate stub. Written once per turn after the loop
+  // settles, paired with whichever assistant row closed the turn.
+  // Fire-and-forget: a substrate write failure is logged inside
+  // `recordSubstrateStub` but not surfaced — the formation pipeline
+  // simply has fewer rows to work from until the next round writes
+  // successfully. Skipped when the caller didn't supply
+  // userMessageId (older callers, tests) or when no assistant row
+  // landed at all (early abort, error path).
+  if (userMessageId && lastAssistantId !== null) {
+    void recordSubstrateStub(supabase, thread.id, userMessageId, lastAssistantId);
   }
 
   return { finalText, roundsRun, stoppedByLimit, toolsEnabled };

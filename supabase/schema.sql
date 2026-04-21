@@ -1332,6 +1332,807 @@ language sql security invoker as $$
   returning confidence;
 $$;
 
+-- Samskara ---------------------------------------------------------------
+--
+-- The chat model's progressively-built predictive model of the user.
+-- Per-round observations (substrate) compound through background
+-- clustering into emergent predictive claims (samskaras); cohorts of
+-- samskaras that fire together compound once more into higher-tier
+-- samskaras. The accumulated set is summarised into prose that lives
+-- always-on in the system prompt; per-turn cosine fire surfaces
+-- situationally-relevant samskaras on top.
+--
+-- See docs/dev/samskara.md for the full design including why the
+-- pieces are split this way, what each phase of the formation worker
+-- does, and the load-bearing gotchas (no health threshold at fire
+-- time, log10 dampening of compound regen, recursion cap at tier 2).
+--
+-- Conventions inherited from the rest of this file:
+--   - All tables RLS-scoped to `auth.uid() = user_id`.
+--   - All idempotent: `create table if not exists`, `add column if not
+--     exists`, drop-then-create policies and RPCs.
+--   - Vectors are `vector(2048)` to match memories/threads. Venice's
+--     bge-m3 model emits 1024 dims; the worker pads with zeros via
+--     `padEmbeddingForStorage` (see src/lib/models.ts). Cosine
+--     similarity is invariant to that padding.
+--
+-- Cross-device coordination uses two layers, same as memories:
+--   - The singleton `worker_kind='samskara'` lease in `worker_leases`
+--     keeps formation work on one device at a time.
+--   - Per-row claim columns on `samskara_substrate` and
+--     `samskara_compound_summary` cover the lease-handover race for
+--     work that crosses an LLM round-trip.
+
+create table if not exists public.samskara_substrate (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  thread_id uuid not null references public.threads(id) on delete cascade,
+  -- The user message that opened this round, plus the assistant
+  -- message that closed it. The assistant id is nullable because a
+  -- turn can be aborted or error out before the assistant row writes.
+  -- Both are soft pointers — substrate survives the messages it
+  -- references being deleted, since orphan substrate still carries
+  -- training signal.
+  user_message_id uuid not null,
+  assistant_message_id uuid,
+  -- Filled by the assimilator agent in the formation worker. NULL at
+  -- chat-loop write-time. `situation` is a third-person observation
+  -- of what happened ("user asked X about Y, expressing Z");
+  -- `outcome` is what the assistant did and how it landed; `valence`
+  -- is a continuous scalar roughly in [-1, 1] capturing how positive
+  -- or negative the round felt. Continuous on purpose — the user's
+  -- explicit guidance was that fixed affect categories defeat the
+  -- compounding design.
+  situation text,
+  outcome text,
+  valence real,
+  -- Embedded by the embeddings worker via the samskara_substrate
+  -- source. NULL until embedded; the worker polls for that condition.
+  -- Padded to 2048 from bge-m3's 1024 native dims; see memories'
+  -- preamble for the rationale.
+  situation_embedding vector(2048),
+  embedding_model text,
+  embedding_claim_holder text,
+  embedding_claim_expires timestamptz,
+  -- Separate claim pair for the assimilator phase of the formation
+  -- worker. Two phases write to this row at different times
+  -- (assimilator fills situation/outcome/valence; embedder fills
+  -- situation_embedding) so they need independent claims to avoid
+  -- contention.
+  assimilate_claim_holder text,
+  assimilate_claim_expires timestamptz,
+  created_at timestamptz not null default now()
+);
+
+-- Pending-substrate indexes the workers poll against. The assimilator
+-- needs `situation is null`; the embedder needs
+-- `situation_embedding is null AND situation is not null` (can't
+-- embed empty text). Partial indexes keep both queries cheap as the
+-- substrate table grows.
+create index if not exists samskara_substrate_pending_assimilate_idx
+  on public.samskara_substrate (user_id, created_at)
+  where situation is null;
+
+create index if not exists samskara_substrate_pending_embed_idx
+  on public.samskara_substrate (user_id, created_at)
+  where situation_embedding is null and situation is not null;
+
+create index if not exists samskara_substrate_user_created_idx
+  on public.samskara_substrate (user_id, created_at desc);
+
+alter table public.samskara_substrate enable row level security;
+
+drop policy if exists "samskara substrate self-selectable" on public.samskara_substrate;
+create policy "samskara substrate self-selectable" on public.samskara_substrate
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "samskara substrate self-insertable" on public.samskara_substrate;
+create policy "samskara substrate self-insertable" on public.samskara_substrate
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "samskara substrate self-updatable" on public.samskara_substrate;
+create policy "samskara substrate self-updatable" on public.samskara_substrate
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "samskara substrate self-deletable" on public.samskara_substrate;
+create policy "samskara substrate self-deletable" on public.samskara_substrate
+  for delete using (auth.uid() = user_id);
+
+-- Associations --
+--
+-- Pair-labels between substrate rows. Written by the relator phase of
+-- the formation worker. `(a_id, b_id, articulated_relation)` is unique
+-- so re-encountering the same relation between the same pair upserts
+-- onto the existing row and bumps `reinforcement` rather than
+-- duplicating. The `kind` enum drops scratch's `'orthogonal'` value —
+-- orthogonal pairs aren't written at all (the relator agent returns a
+-- skip verdict and the worker discards the result).
+create table if not exists public.samskara_associations (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  a_id uuid not null references public.samskara_substrate(id) on delete cascade,
+  b_id uuid not null references public.samskara_substrate(id) on delete cascade,
+  articulated_relation text not null,
+  -- Optional: lets us cluster associations by label embedding when
+  -- minting tier-1 samskaras. Filled by the embedder phase via the
+  -- same pattern as substrate. Keeping it nullable means the relator
+  -- phase can write the row immediately and the embedder catches up
+  -- later — same separation as substrate's `situation` vs
+  -- `situation_embedding` split.
+  relation_embedding vector(2048),
+  kind text not null check (
+    kind in ('pattern', 'contrast', 'prerequisite', 'consequence')
+  ),
+  reinforcement integer not null default 1,
+  last_reinforced_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  unique (user_id, a_id, b_id, articulated_relation)
+);
+
+create index if not exists samskara_associations_user_reinforced_idx
+  on public.samskara_associations (user_id, last_reinforced_at desc);
+
+alter table public.samskara_associations enable row level security;
+
+drop policy if exists "samskara associations self-selectable" on public.samskara_associations;
+create policy "samskara associations self-selectable" on public.samskara_associations
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "samskara associations self-insertable" on public.samskara_associations;
+create policy "samskara associations self-insertable" on public.samskara_associations
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "samskara associations self-updatable" on public.samskara_associations;
+create policy "samskara associations self-updatable" on public.samskara_associations
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "samskara associations self-deletable" on public.samskara_associations;
+create policy "samskara associations self-deletable" on public.samskara_associations
+  for delete using (auth.uid() = user_id);
+
+-- Samskaras --
+--
+-- The unit. Tier 1 are minted from substrate-cluster mints; tier 2
+-- are minted from cohort co-fire patterns of tier-1 samskaras (a
+-- compound is a samskara-of-samskaras). The `tier in (1, 2)` check is
+-- load-bearing — tier 3+ would be a compounds-of-compounds noise
+-- amplifier; lifting the cap should be a deliberate design change,
+-- not an oversight.
+create table if not exists public.samskaras (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  tier int not null check (tier in (1, 2)),
+  -- The minter agent's one-or-two-line predictive claim. This is what
+  -- the cosine fire query runs against (via `prediction_embedding`)
+  -- and what the priming block actually renders.
+  prediction text not null,
+  prediction_embedding vector(2048) not null,
+  -- Optional silent self-talk fragment in the LLM's voice. Rendered
+  -- in the priming block when present; truncated aggressively if the
+  -- token budget is tight.
+  inner_voice text,
+  -- Aggregated from substrate or child-samskara provenance. Same
+  -- continuous scalar as substrate — no enum.
+  valence real,
+  -- Bayesian-ish via reaction reinforcement. See
+  -- bump_samskara_confidence and decay_samskara_confidence for the
+  -- formula. Initial 0.5 leaves room for either direction.
+  confidence real not null default 0.5,
+  -- Decays over time and on disconfirm; clamped to [0, 1]. NO health
+  -- threshold filter at fire time — three near-dead samskaras
+  -- co-firing is exactly the cohort-reinforcement signal we want to
+  -- preserve. The fire RPC ranks by cosine * sqrt(health *
+  -- confidence) so weak-but-relevant samskaras can break through, and
+  -- the formatPriming token budget bounds the long tail in the
+  -- application layer.
+  health real not null default 1.0,
+  fire_count int not null default 0,
+  confirm_count int not null default 0,
+  disconfirm_count int not null default 0,
+  last_fired_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists samskaras_user_tier_idx
+  on public.samskaras (user_id, tier);
+
+create index if not exists samskaras_user_health_idx
+  on public.samskaras (user_id, health desc, confidence desc);
+
+alter table public.samskaras enable row level security;
+
+drop policy if exists "samskaras self-selectable" on public.samskaras;
+create policy "samskaras self-selectable" on public.samskaras
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "samskaras self-insertable" on public.samskaras;
+create policy "samskaras self-insertable" on public.samskaras
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "samskaras self-updatable" on public.samskaras;
+create policy "samskaras self-updatable" on public.samskaras
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "samskaras self-deletable" on public.samskaras;
+create policy "samskaras self-deletable" on public.samskaras
+  for delete using (auth.uid() = user_id);
+
+-- Provenance --
+--
+-- Audit trail for what each samskara was minted from. Kept even if
+-- the underlying substrate or association is deleted (no FK on
+-- `ref_id`) — debugging beats normalisation here. Three kinds:
+-- 'substrate' and 'association' for tier-1 mints, 'samskara' for
+-- tier-2 (compound) mints whose provenance points at their tier-1
+-- children.
+create table if not exists public.samskara_provenance (
+  samskara_id uuid not null references public.samskaras(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  kind text not null check (kind in ('substrate', 'association', 'samskara')),
+  ref_id uuid not null,
+  weight real not null default 1.0,
+  primary key (samskara_id, kind, ref_id)
+);
+
+alter table public.samskara_provenance enable row level security;
+
+drop policy if exists "samskara provenance self-selectable" on public.samskara_provenance;
+create policy "samskara provenance self-selectable" on public.samskara_provenance
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "samskara provenance self-insertable" on public.samskara_provenance;
+create policy "samskara provenance self-insertable" on public.samskara_provenance
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "samskara provenance self-deletable" on public.samskara_provenance;
+create policy "samskara provenance self-deletable" on public.samskara_provenance
+  for delete using (auth.uid() = user_id);
+
+-- Fires --
+--
+-- One row per samskara fired per turn. `cohort_id` is shared across
+-- the whole set fired together on a single turn — lets the reaction
+-- classifier and the tier-2 mint phase both operate on the cohort as
+-- a unit. `was_confirmed` starts NULL, set to true/false by the
+-- reaction classifier on the next user turn. Older unresolved fires
+-- (>10 minutes) are left at NULL and age out via decay rather than
+-- being force-classified by stale signal.
+create table if not exists public.samskara_fires (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  samskara_id uuid not null references public.samskaras(id) on delete cascade,
+  thread_id uuid not null references public.threads(id) on delete cascade,
+  cohort_id uuid not null,
+  fired_at timestamptz not null default now(),
+  -- The cosine * sqrt(health * confidence) ranking score at fire
+  -- time. Kept for analytics — useful when a debugging session asks
+  -- "why did this samskara fire here?".
+  score real not null,
+  was_confirmed boolean
+);
+
+create index if not exists samskara_fires_user_recent_idx
+  on public.samskara_fires (user_id, fired_at desc);
+
+create index if not exists samskara_fires_cohort_idx
+  on public.samskara_fires (cohort_id);
+
+create index if not exists samskara_fires_unresolved_idx
+  on public.samskara_fires (user_id, thread_id, fired_at desc)
+  where was_confirmed is null;
+
+alter table public.samskara_fires enable row level security;
+
+drop policy if exists "samskara fires self-selectable" on public.samskara_fires;
+create policy "samskara fires self-selectable" on public.samskara_fires
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "samskara fires self-insertable" on public.samskara_fires;
+create policy "samskara fires self-insertable" on public.samskara_fires
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "samskara fires self-updatable" on public.samskara_fires;
+create policy "samskara fires self-updatable" on public.samskara_fires
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "samskara fires self-deletable" on public.samskara_fires;
+create policy "samskara fires self-deletable" on public.samskara_fires
+  for delete using (auth.uid() = user_id);
+
+-- Compound summary cache --
+--
+-- Single row per user. The always-on prose block that lives at the
+-- top of every system prompt (see src/lib/samskara/index.ts's
+-- getCompoundSummary). Rewritten by the compound-regen phase of the
+-- formation worker on a hybrid trigger — see
+-- samskara_should_regen_compound for the exact predicate. Per-row
+-- claim columns let multiple devices coordinate the regen so two
+-- workers don't both call the fast model and then race to write.
+create table if not exists public.samskara_compound_summary (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  summary text,
+  samskara_count_at_regen int not null default 0,
+  last_regen_at timestamptz not null default now(),
+  regen_claim_holder text,
+  regen_claim_expires timestamptz
+);
+
+alter table public.samskara_compound_summary enable row level security;
+
+drop policy if exists "samskara compound summary self-selectable"
+  on public.samskara_compound_summary;
+create policy "samskara compound summary self-selectable"
+  on public.samskara_compound_summary
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "samskara compound summary self-insertable"
+  on public.samskara_compound_summary;
+create policy "samskara compound summary self-insertable"
+  on public.samskara_compound_summary
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "samskara compound summary self-updatable"
+  on public.samskara_compound_summary;
+create policy "samskara compound summary self-updatable"
+  on public.samskara_compound_summary
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "samskara compound summary self-deletable"
+  on public.samskara_compound_summary;
+create policy "samskara compound summary self-deletable"
+  on public.samskara_compound_summary
+  for delete using (auth.uid() = user_id);
+
+-- Samskara RPCs ----------------------------------------------------------
+--
+-- All `security invoker` with explicit `auth.uid()` guards inside, same
+-- pattern as the rest of this file. Drop-then-create because a few of
+-- these change return shape over time; `create or replace` can't
+-- handle that.
+
+-- Top-K fire query. Ranks by cosine * sqrt(health * confidence) so
+-- weak-but-relevant samskaras can break through against strong-but-
+-- distant ones. Returns enough columns for the priming formatter to
+-- render without a follow-up SELECT.
+--
+-- `k_max` is computed by the caller as
+-- `ceil(K_BASE * log10(live_samskara_count + 10))` — the log10 cap
+-- the user asked for as a way of softly bounding how much priming
+-- volume the chat-loop emits. Caller is trusted to pass a reasonable
+-- value; this RPC just honours it.
+drop function if exists public.samskara_fire_top_k(vector, int);
+create or replace function public.samskara_fire_top_k(
+  p_query_embedding vector(2048),
+  p_k_max int
+) returns table (
+  id uuid,
+  prediction text,
+  inner_voice text,
+  valence real,
+  confidence real,
+  health real,
+  score real
+)
+language sql stable security invoker as $$
+  select s.id,
+         s.prediction,
+         s.inner_voice,
+         s.valence,
+         s.confidence,
+         s.health,
+         (
+           (1 - (s.prediction_embedding <=> p_query_embedding))
+           * sqrt(greatest(s.health * s.confidence, 0.0))
+         )::real as score
+    from public.samskaras s
+   where s.user_id = auth.uid()
+     and s.prediction_embedding is not null
+   order by score desc
+   limit p_k_max
+$$;
+
+-- Record a cohort fire after the chat loop has selected its top-k.
+-- The caller passes the cohort id (a fresh uuid generated client-side
+-- so the chat loop already knows it) plus the score per samskara.
+-- Bumps `fire_count` and `last_fired_at` on each samskara as a side
+-- effect — the SQL `update ... in (select ...)` is one round trip and
+-- keeps the bookkeeping atomic with the fire-log insert.
+drop function if exists public.samskara_record_fires(uuid, uuid, jsonb);
+create or replace function public.samskara_record_fires(
+  p_cohort_id uuid,
+  p_thread_id uuid,
+  p_fires jsonb
+) returns void
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+begin
+  if jsonb_typeof(p_fires) <> 'array' or jsonb_array_length(p_fires) = 0 then
+    return;
+  end if;
+  -- Insert one fire row per cohort member. The jsonb array is shape
+  -- `[{"samskara_id": "...", "score": 0.42}, ...]` — minimal payload
+  -- since the rest is derivable from the samskara row.
+  insert into public.samskara_fires (
+    user_id, samskara_id, thread_id, cohort_id, score
+  )
+  select v_uid,
+         (elem->>'samskara_id')::uuid,
+         p_thread_id,
+         p_cohort_id,
+         (elem->>'score')::real
+    from jsonb_array_elements(p_fires) as elem;
+  -- Keep samskaras' fire bookkeeping in sync.
+  update public.samskaras
+     set fire_count = fire_count + 1,
+         last_fired_at = now(),
+         updated_at = now()
+   where user_id = v_uid
+     and id = any (
+       select (elem->>'samskara_id')::uuid
+         from jsonb_array_elements(p_fires) as elem
+     );
+end $$;
+
+-- Apply a reaction across a cohort. The reaction-classify phase calls
+-- this with the partition the fast-model agent produced — three id
+-- arrays (confirms / disconfirms / neutrals). Bumps confirm/disconfirm
+-- counts with cohort-aware reinforcement weights, recomputes
+-- confidence using the additive-Laplace shape (with the +2 bonus on
+-- confirms), and sets `was_confirmed` on the matching fire rows so
+-- they don't get re-classified on the next pass.
+--
+-- Cohort weight: a cohort of N receives `+1 / sqrt(N)` per member
+-- rather than full +1. This keeps a large cohort from dominating
+-- single-fire signal but still lets the cohort reinforce its members
+-- meaningfully. The choice of sqrt vs log vs linear was empirical in
+-- scratch's predecessor; revisit if cohort dynamics misbehave.
+drop function if exists public.samskara_apply_reaction(uuid, uuid[], uuid[], uuid[]);
+create or replace function public.samskara_apply_reaction(
+  p_cohort_id uuid,
+  p_confirm_ids uuid[],
+  p_disconfirm_ids uuid[],
+  p_neutral_ids uuid[]
+) returns void
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_cohort_n int;
+  v_weight real;
+begin
+  -- Cohort size is the count of fires for this cohort that we own,
+  -- not the size of any single id-array — neutral fires count toward
+  -- the cohort even though they don't shift confidence.
+  select count(*) into v_cohort_n
+    from public.samskara_fires
+   where user_id = v_uid and cohort_id = p_cohort_id;
+  if v_cohort_n = 0 then return; end if;
+  v_weight := 1.0 / sqrt(v_cohort_n::real);
+
+  if array_length(p_confirm_ids, 1) > 0 then
+    update public.samskaras
+       set confirm_count = confirm_count + greatest(round(v_weight * 100) / 100.0, 0.01),
+           confidence = (confirm_count + 2) / nullif(confirm_count + disconfirm_count + 3, 0)::real,
+           updated_at = now()
+     where user_id = v_uid
+       and id = any (p_confirm_ids);
+  end if;
+
+  if array_length(p_disconfirm_ids, 1) > 0 then
+    update public.samskaras
+       set disconfirm_count = disconfirm_count + greatest(round(v_weight * 100) / 100.0, 0.01),
+           confidence = (confirm_count + 1) / nullif(confirm_count + disconfirm_count + 3, 0)::real,
+           updated_at = now()
+     where user_id = v_uid
+       and id = any (p_disconfirm_ids);
+  end if;
+
+  -- Resolve all cohort fires we own. Neutrals get marked resolved too
+  -- so they don't re-trigger classification — they just don't shift
+  -- counts.
+  update public.samskara_fires
+     set was_confirmed = case
+       when samskara_id = any (p_confirm_ids) then true
+       when samskara_id = any (p_disconfirm_ids) then false
+       else null
+     end
+   where user_id = v_uid
+     and cohort_id = p_cohort_id;
+
+  -- Mark neutrals resolved by stamping a sentinel. NULL would let the
+  -- next pass re-pick them; we want them out of the unresolved pool.
+  -- Two-step because the case-expression above leaves neutrals at
+  -- NULL by design (we don't have a 'neutral' boolean state). Use a
+  -- separate UPDATE keyed on neutral_ids that sets was_confirmed to
+  -- false but tagged at the application layer via the cohort context.
+  -- Simpler: leave neutrals NULL but bump fired_at so the
+  -- unresolved-window predicate (>10 min) ages them out faster.
+  update public.samskara_fires
+     set fired_at = now() - interval '15 minutes'
+   where user_id = v_uid
+     and cohort_id = p_cohort_id
+     and samskara_id = any (p_neutral_ids);
+end $$;
+
+-- Insert one substrate stub at end-of-round. The chat loop calls this
+-- with just the thread + message ids; the assimilator phase fills in
+-- situation/outcome/valence later. Returns the new row id so the
+-- caller can include it in logs.
+drop function if exists public.samskara_record_substrate(uuid, uuid, uuid);
+create or replace function public.samskara_record_substrate(
+  p_thread_id uuid,
+  p_user_message_id uuid,
+  p_assistant_message_id uuid
+) returns uuid
+language plpgsql security invoker as $$
+declare
+  v_id uuid;
+begin
+  insert into public.samskara_substrate (
+    user_id, thread_id, user_message_id, assistant_message_id
+  ) values (
+    auth.uid(), p_thread_id, p_user_message_id, p_assistant_message_id
+  ) returning id into v_id;
+  return v_id;
+end $$;
+
+-- Claim the next substrate row needing assimilation. Same shape as
+-- `claim_next_pending_memory`: `for update skip locked` plus a
+-- holder/expiry stamp lets concurrent workers walk past locked rows.
+drop function if exists public.samskara_claim_next_assimilate(text, int);
+create or replace function public.samskara_claim_next_assimilate(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  id uuid,
+  thread_id uuid,
+  user_message_id uuid,
+  assistant_message_id uuid
+)
+language sql security invoker as $$
+  with candidate as (
+    select s.id
+      from public.samskara_substrate s
+     where s.user_id = auth.uid()
+       and s.situation is null
+       and (s.assimilate_claim_expires is null
+            or s.assimilate_claim_expires < now())
+     order by s.created_at asc
+     limit 1
+     for update skip locked
+  )
+  update public.samskara_substrate s
+     set assimilate_claim_holder = p_holder_id,
+         assimilate_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where s.id = c.id
+  returning s.id, s.thread_id, s.user_message_id, s.assistant_message_id;
+$$;
+
+-- Save assimilator output IF our claim is still valid. Returns false
+-- when the row was deleted, the claim expired, or another holder
+-- took over — the worker treats false as "skip and move on".
+drop function if exists public.samskara_save_assimilation_if_claimed(
+  uuid, text, text, text, real
+);
+create or replace function public.samskara_save_assimilation_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_situation text,
+  p_outcome text,
+  p_valence real
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.samskara_substrate
+     set situation = p_situation,
+         outcome = p_outcome,
+         valence = p_valence,
+         assimilate_claim_holder = null,
+         assimilate_claim_expires = null
+   where id = p_id
+     and user_id = auth.uid()
+     and assimilate_claim_holder = p_holder_id
+     and assimilate_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Substrate embedder claim/save — same shape as memories but on the
+-- substrate table's situation_embedding column. Picks rows where
+-- `situation_embedding is null AND situation is not null` — empty
+-- text would waste a Venice call.
+drop function if exists public.samskara_claim_next_substrate_embed(text, int);
+create or replace function public.samskara_claim_next_substrate_embed(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, situation text, outcome text)
+language sql security invoker as $$
+  with candidate as (
+    select s.id
+      from public.samskara_substrate s
+     where s.user_id = auth.uid()
+       and s.situation_embedding is null
+       and s.situation is not null
+       and (s.embedding_claim_expires is null
+            or s.embedding_claim_expires < now())
+     order by s.created_at asc
+     limit 1
+     for update skip locked
+  )
+  update public.samskara_substrate s
+     set embedding_claim_holder = p_holder_id,
+         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where s.id = c.id
+  returning s.id, s.situation, s.outcome;
+$$;
+
+drop function if exists public.samskara_save_substrate_embedding_if_claimed(
+  uuid, text, vector, text
+);
+create or replace function public.samskara_save_substrate_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.samskara_substrate
+     set situation_embedding = p_embedding,
+         embedding_model = p_embedding_model,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where id = p_id
+     and user_id = auth.uid()
+     and embedding_claim_holder = p_holder_id
+     and embedding_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Decay pass. Two updates, mirroring scratch's two paths: stale-fire
+-- decay (gentle, hiatus-tolerant) and disconfirm decay (sharper,
+-- gated on accumulated feedback). Health clamped to [0, 1]. Returns
+-- the count of rows changed so the worker can log meaningful churn.
+drop function if exists public.samskara_decay();
+create or replace function public.samskara_decay()
+returns int
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_stale int;
+  v_disconfirm int;
+begin
+  update public.samskaras
+     set health = greatest(0.0, health - 0.02),
+         updated_at = now()
+   where user_id = v_uid
+     and (last_fired_at is null
+          or last_fired_at < now() - interval '60 days');
+  get diagnostics v_stale = row_count;
+
+  update public.samskaras
+     set health = greatest(0.0, health - 0.10),
+         updated_at = now()
+   where user_id = v_uid
+     and disconfirm_count > confirm_count
+     and (disconfirm_count + confirm_count) >= 3;
+  get diagnostics v_disconfirm = row_count;
+
+  return v_stale + v_disconfirm;
+end $$;
+
+-- Compound-summary regeneration coordination.
+--
+-- Three RPCs. `samskara_should_regen_compound` returns a small
+-- decision payload the worker uses to decide whether to do work; the
+-- predicate combines a 6-hour staleness window with an event-count
+-- threshold dampened by `log10(samskara_count + 10)` so a chatty
+-- session doesn't thrash regeneration as the corpus grows. The two
+-- claim/save RPCs follow the standard claim-then-save shape so
+-- multiple devices coordinate.
+drop function if exists public.samskara_should_regen_compound();
+create or replace function public.samskara_should_regen_compound()
+returns table (
+  should_regen boolean,
+  samskara_count int,
+  last_regen_at timestamptz
+)
+language plpgsql stable security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_count int;
+  v_last_regen timestamptz;
+  v_count_at_regen int;
+  v_should boolean;
+  v_threshold int;
+begin
+  select count(*) into v_count
+    from public.samskaras
+   where user_id = v_uid;
+
+  select last_regen_at, samskara_count_at_regen
+    into v_last_regen, v_count_at_regen
+    from public.samskara_compound_summary
+   where user_id = v_uid;
+
+  -- Threshold formula: K_REGEN=5, log10 dampening, floor at 3 so a
+  -- new corpus regenerates after as few as 3 mints rather than
+  -- waiting on an unreachable threshold.
+  v_threshold := greatest(3, ceil(5.0 * log(v_count + 10))::int);
+
+  if v_last_regen is null then
+    v_should := v_count > 0;
+  else
+    v_should :=
+      (v_last_regen < now() - interval '6 hours')
+      or (v_count - coalesce(v_count_at_regen, 0) >= v_threshold);
+  end if;
+
+  return query select v_should, v_count, v_last_regen;
+end $$;
+
+drop function if exists public.samskara_claim_compound_regen(text, int);
+create or replace function public.samskara_claim_compound_regen(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_changed int;
+begin
+  -- Insert-or-update with claim guard. The compound row is
+  -- per-user (1:1) so a missing row is the cold-start case — we
+  -- create it claimed in the same statement.
+  insert into public.samskara_compound_summary (
+    user_id, regen_claim_holder, regen_claim_expires
+  ) values (
+    v_uid, p_holder_id, now() + make_interval(secs => p_ttl_seconds)
+  )
+  on conflict (user_id) do update
+     set regen_claim_holder = excluded.regen_claim_holder,
+         regen_claim_expires = excluded.regen_claim_expires
+   where samskara_compound_summary.regen_claim_expires is null
+      or samskara_compound_summary.regen_claim_expires < now()
+      or samskara_compound_summary.regen_claim_holder = excluded.regen_claim_holder;
+  get diagnostics v_changed = row_count;
+  return v_changed > 0;
+end $$;
+
+drop function if exists public.samskara_save_compound_summary_if_claimed(
+  text, text, int
+);
+create or replace function public.samskara_save_compound_summary_if_claimed(
+  p_holder_id text,
+  p_summary text,
+  p_samskara_count int
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_changed int;
+begin
+  update public.samskara_compound_summary
+     set summary = p_summary,
+         samskara_count_at_regen = p_samskara_count,
+         last_regen_at = now(),
+         regen_claim_holder = null,
+         regen_claim_expires = null
+   where user_id = v_uid
+     and regen_claim_holder = p_holder_id
+     and regen_claim_expires > now();
+  get diagnostics v_changed = row_count;
+  return v_changed > 0;
+end $$;
+
 -- Realtime subscriptions --------------------------------------------------
 --
 -- The client subscribes to INSERTs on `messages` (filtered by thread_id)
