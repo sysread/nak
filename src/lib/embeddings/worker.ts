@@ -68,7 +68,21 @@ interface StopMessage {
   type: 'stop';
 }
 
-type InboundMessage = StartMessage | StopMessage;
+/**
+ * Sent by the manager whenever the main-thread Supabase client rotates
+ * its refresh token (onAuthStateChange fires with a fresh session).
+ * The worker re-pins via setSession so all five Supabase clients in
+ * the tab (main + this worker + three agent workers) share whichever
+ * refresh token the main thread just minted. See the preamble comment
+ * on runWorker for why autoRefreshToken is off on this side.
+ */
+interface SessionMessage {
+  type: 'session';
+  accessToken: string;
+  refreshToken: string;
+}
+
+type InboundMessage = StartMessage | StopMessage | SessionMessage;
 
 interface LogOutbound {
   type: 'log';
@@ -93,15 +107,32 @@ function post(msg: LogOutbound | ProgressOutbound): void {
   workerGlobal.postMessage(msg);
 }
 
+// Module-scope handle to the currently-running worker's Supabase
+// client. Set by runWorker after its initial setSession succeeds,
+// cleared on teardown. The `session` inbound message handler uses
+// this to hand off rotated tokens without capturing runWorker's
+// closure. Null before the initial setSession completes — a stray
+// `session` message in that window is harmless because the start
+// message already carried the same tokens.
+let currentClient: SupabaseClient | null = null;
+
 async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> {
   // The worker's Supabase client is independent of the main thread's.
-  // persistSession:false avoids fighting over localStorage; we pin the
-  // session explicitly via setSession and let autoRefreshToken keep the
-  // access token live if the worker outlives its original token.
+  // persistSession:false avoids fighting over localStorage, and
+  // autoRefreshToken:false avoids racing the main thread for refresh-
+  // token rotation. Supabase's "detect and revoke compromised refresh
+  // tokens" flags any non-latest refresh token as replayed once the
+  // reuse window (default 10s) elapses and revokes the whole session
+  // family — with five independent clients per tab (main + this
+  // worker + three agent workers) each scheduling their own
+  // auto-refresh, that race fired regularly and logged the user out.
+  // Single source of truth: the main thread refreshes, its manager
+  // posts us a `session` message with the new tokens, and we re-pin
+  // via setSession. See docs/dev/auth-session.md.
   const client: SupabaseClient = createClient(msg.supabaseUrl, msg.supabaseAnonKey, {
     auth: {
       persistSession: false,
-      autoRefreshToken: true,
+      autoRefreshToken: false,
       detectSessionInUrl: false,
     },
   });
@@ -117,6 +148,9 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     });
     return;
   }
+  // Publish the live client so the module-scope 'session' handler can
+  // hand off rotated tokens. Cleared in the finally block below.
+  currentClient = client;
 
   const supabase = new SupabaseService(
     { supabaseUrl: msg.supabaseUrl, supabaseAnonKey: msg.supabaseAnonKey },
@@ -184,6 +218,10 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
       if (longestNap > 0) await sleep(longestNap, signal);
     }
   } finally {
+    // Unpublish before the release call — any late-arriving `session`
+    // message after teardown should be a no-op, not a setSession
+    // against a client whose loop has already exited.
+    currentClient = null;
     // Graceful release — best-effort, swallows errors. The server-side
     // TTL would clean up anyway but releasing explicitly lets another
     // device take over instantly on a lock/sign-out.
@@ -210,5 +248,21 @@ workerGlobal.addEventListener('message', (evt: MessageEvent<InboundMessage>) => 
       });
   } else if (msg.type === 'stop') {
     controller.abort();
+  } else if (msg.type === 'session') {
+    // Re-pin rotated tokens from the main thread. See runWorker's
+    // preamble for why the worker doesn't refresh on its own.
+    if (!currentClient) return;
+    void currentClient.auth
+      .setSession({
+        access_token: msg.accessToken,
+        refresh_token: msg.refreshToken,
+      })
+      .catch((err: Error) => {
+        post({
+          type: 'log',
+          level: 'warn',
+          message: `forwarded setSession failed: ${err.message}`,
+        });
+      });
   }
 });

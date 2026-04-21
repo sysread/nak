@@ -115,6 +115,44 @@ localStorage key (`v2`) rather than a migration.
   layer. If something else needs to be encrypted, route it through
   here rather than duplicating the AES-GCM / PBKDF2 scaffolding.
 
+## Refresh-token rotation across workers
+
+Nak runs five Supabase clients per tab: the main-thread client
+plus one in each of the embeddings, reflection, summary, and
+attachment-expiry Web Workers. Only the main-thread client
+refreshes. Each worker is built with `autoRefreshToken: false`
+and is pinned to the current session via `setSession(...)`; its
+manager subscribes to `app.supabase.onAuthChange` and forwards
+every rotated `{access_token, refresh_token}` pair to the worker
+as a `{type: 'session', ...}` message, which the worker re-pins
+via `setSession`.
+
+Why: with every client running its own `autoRefreshToken`, five
+refreshers race for the same refresh token. Supabase's "detect
+and revoke potentially compromised refresh tokens" feature flags
+any non-latest refresh token as replayed once the reuse interval
+(default 10s) elapses and revokes the **entire session family** —
+the user is then forced through the email/password prompt even
+though they haven't been idle long enough for the project's
+inactivity timeout to fire. Main-thread-as-sole-refresher
+eliminates the race.
+
+Bridge wiring:
+
+- Main → worker: `SupabaseService.onAuthChange` (`src/lib/supabase.ts`)
+  → `worker.postMessage({type: 'session', ...})`.
+- Worker: a module-scope `currentClient` handle set by
+  `runWorker` after the initial `setSession` succeeds and cleared
+  on teardown. The `session` message handler calls
+  `currentClient.auth.setSession(...)`. A stray `session` message
+  arriving before the initial setSession completes (or after
+  teardown) is a no-op — the start message carried the same
+  tokens, and the post-teardown case has no client to write to.
+
+Every manager unsubscribes in `stop()` before terminating the
+worker so a late-arriving auth event can't post into a null
+worker reference.
+
 ## Interactions with other features
 
 - **Chat** — `chat.md`'s screen mounts only after `activate()`
@@ -124,11 +162,14 @@ localStorage key (`v2`) rather than a migration.
   password (`changePassword`), which re-encrypts the config blob
   owned by this feature. The Keys pane also re-encrypts on
   update. Both call paths live in `settings.md`.
-- **Embeddings / reflection / summaries** — `activate()` fires
-  `embeddingManager.start()`, `reflectionManager.start()`, and
-  `summaryManager.start()` fire-and-forget; `lock()` calls
-  matching `stop()` on each. Those docs cover the worker lifecycle
-  from the worker side; this page owns the activate/lock pivot.
+- **Embeddings / reflection / summaries / attachment-expiry** —
+  `activate()` fires `embeddingManager.start()`,
+  `reflectionManager.start()`, `summaryManager.start()`, and
+  `attachmentExpiryManager.start()` fire-and-forget; `lock()`
+  calls matching `stop()` on each. The managers also bridge
+  refresh-token rotation to their workers (see above). Those
+  docs cover the worker lifecycle from the worker side; this
+  page owns the activate/lock pivot and the auth bridge.
 
 ## Gotchas
 

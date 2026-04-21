@@ -88,6 +88,14 @@ export class EmbeddingManager {
    * spawn a worker that nobody asked for AND leak the lock.
    */
   private stopped = false;
+  /**
+   * Unsubscribe from the main-thread Supabase client's auth-state
+   * stream. Installed by postStart() so we can forward every rotated
+   * refresh token to the worker; torn down by stop() so we don't keep
+   * posting into a terminated worker. See `./worker.ts` for why the
+   * main thread is the sole refresher.
+   */
+  private authUnsubscribe: (() => void) | null = null;
 
   /**
    * Acquire the cross-tab lock and spawn the worker. Returns once the
@@ -178,6 +186,23 @@ export class EmbeddingManager {
       holderId: makeHolderId(),
       ...WORKER_DEFAULTS,
     });
+    // Forward every subsequent main-thread refresh to the worker so
+    // the two clients never diverge. With the worker's
+    // autoRefreshToken off (see `./worker.ts`), this bridge is how
+    // the worker learns about a rotated refresh token — without it
+    // the worker's pinned token would eventually be revoked by
+    // Supabase's replay detection once the main thread rotated it.
+    // onAuthChange fires immediately with INITIAL_SESSION on
+    // subscribe; re-sending those same tokens to the worker is a
+    // harmless no-op.
+    this.authUnsubscribe = opts.supabase.onAuthChange((next) => {
+      if (!this.worker || !next) return;
+      this.worker.postMessage({
+        type: 'session',
+        accessToken: next.access_token,
+        refreshToken: next.refresh_token,
+      });
+    });
   }
 
   /**
@@ -190,6 +215,14 @@ export class EmbeddingManager {
     // ours is waiting in the navigator.locks queue) bails out when it
     // finally gets granted.
     this.stopped = true;
+    // Unsubscribe before terminating so we don't queue a stale
+    // `session` message that never gets processed — and so a
+    // concurrently-arriving auth event doesn't try to post into a
+    // worker we just nulled out.
+    if (this.authUnsubscribe) {
+      this.authUnsubscribe();
+      this.authUnsubscribe = null;
+    }
     if (this.worker) {
       // Worker self-terminates on receiving `stop`; calling terminate()
       // too is belt-and-suspenders in case the worker is wedged inside a
