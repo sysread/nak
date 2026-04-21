@@ -488,6 +488,35 @@
     );
   }
 
+  /** One row of the per-currency spend summary at the top of the pane. */
+  interface CurrencyTotal {
+    currency: UsageCurrency;
+    amount: number;
+  }
+
+  /**
+   * Roll the per-model buckets up into one total per currency. We
+   * group rather than collapse so a user on a mixed USD + credits
+   * plan sees two totals — summing across currencies would be
+   * meaningless (a dollar and a credit aren't the same unit). USD
+   * sorts first so the cash total — the one that actually hit the
+   * user's card — reads as the primary figure; credit currencies
+   * fall in stable alpha order after.
+   */
+  function aggregateTotalsByCurrency(buckets: UsageBucket[]): CurrencyTotal[] {
+    const sums = new Map<UsageCurrency, number>();
+    for (const b of buckets) {
+      sums.set(b.currency, (sums.get(b.currency) ?? 0) + b.amount);
+    }
+    return Array.from(sums.entries())
+      .map(([currency, amount]) => ({ currency, amount }))
+      .sort((a, b) => {
+        if (a.currency === 'USD') return -1;
+        if (b.currency === 'USD') return 1;
+        return a.currency.localeCompare(b.currency);
+      });
+  }
+
   const tokenFormatter = new Intl.NumberFormat(undefined, {
     notation: 'compact',
     maximumFractionDigits: 1,
@@ -1130,19 +1159,28 @@
           {@const buckets = aggregateUsage(usageRows)}
           {@const maxTokens = buckets.reduce((m, b) => Math.max(m, b.tokens), 0)}
           {@const totalTokens = buckets.reduce((s, b) => s + b.tokens, 0)}
+          {@const totalsByCurrency = aggregateTotalsByCurrency(buckets)}
           <!--
-            Totals strip. We sum tokens unconditionally (a scalar
-            regardless of currency) but defer spend to per-row
-            formatting — a mixed-currency account can't sensibly be
-            collapsed to a single pill.
+            Totals strip. Tokens sum unconditionally (a scalar
+            regardless of currency); spend totals split into one
+            pill per currency so a mixed USD + credits plan doesn't
+            get meaninglessly collapsed into one number. Pills
+            reuse the same .credit muting the per-row pills do —
+            the USD total pops, credit totals fade.
           -->
           <p class="subtle usage-totals">
             {#if buckets.length === 0}
               No usage in this range.
             {:else}
               <strong>{formatTokens(totalTokens)}</strong> tokens across
-              <strong>{buckets.length}</strong>
-              {buckets.length === 1 ? 'model' : 'models'}.
+              <strong>{buckets.length}</strong>{buckets.length === 1 ? ' model' : ' models'}.
+              {#each totalsByCurrency as t (t.currency)}
+                <span
+                  class="usage-pill"
+                  class:credit={t.currency !== 'USD'}
+                  title={t.currency !== 'USD' ? currencyTitle(t.currency) : undefined}
+                >{formatAmount(t.amount, t.currency)}</span>
+              {/each}
             {/if}
           </p>
           {#if buckets.length > 0}

@@ -768,6 +768,10 @@ label {
 }
 
 .usage-pill {
+  /* `inline-block` is load-bearing for the totals-strip use of this
+     pill (which lives inline with text in a <p>). In the bar-chart
+     grid, grid items blockify anyway so this has no effect there. */
+  display: inline-block;
   background: var(--accent-weak);
   color: var(--text);
   border: 1px solid var(--border);
