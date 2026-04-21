@@ -53,6 +53,13 @@ export class SummaryManager {
   private worker: Worker | null = null;
   private lockResolver: (() => void) | null = null;
   private stopped = false;
+  /**
+   * Unsubscribe from the main-thread Supabase client's auth-state
+   * stream. Installed by postStart() so we can forward every rotated
+   * refresh token to the worker; torn down by stop(). See
+   * `./worker.ts` for why the main thread is the sole refresher.
+   */
+  private authUnsubscribe: (() => void) | null = null;
 
   async start(opts: StartOpts): Promise<void> {
     if (this.worker) return;
@@ -114,10 +121,27 @@ export class SummaryManager {
       holderId: makeHolderId(),
       ...WORKER_DEFAULTS,
     });
+    // Forward every subsequent main-thread refresh to the worker —
+    // its own autoRefreshToken is off, so this bridge is how it
+    // learns about rotated tokens. See `./worker.ts`.
+    this.authUnsubscribe = opts.supabase.onAuthChange((next) => {
+      if (!this.worker || !next) return;
+      this.worker.postMessage({
+        type: 'session',
+        accessToken: next.access_token,
+        refreshToken: next.refresh_token,
+      });
+    });
   }
 
   stop(): void {
     this.stopped = true;
+    // Unsubscribe before terminating so a concurrent auth event
+    // doesn't try to post into a worker we just nulled out.
+    if (this.authUnsubscribe) {
+      this.authUnsubscribe();
+      this.authUnsubscribe = null;
+    }
     if (this.worker) {
       this.worker.postMessage({ type: 'stop' });
       this.worker.terminate();

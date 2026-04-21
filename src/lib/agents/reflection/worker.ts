@@ -65,7 +65,21 @@ interface StopMessage {
   type: 'stop';
 }
 
-type InboundMessage = StartMessage | StopMessage;
+/**
+ * Sent by the manager whenever the main-thread Supabase client rotates
+ * its refresh token. The worker re-pins via setSession so all five
+ * Supabase clients in the tab (main + embeddings + this + summary +
+ * attachment-expiry) share whichever refresh token the main thread
+ * just minted. See runWorker's preamble for why autoRefreshToken is
+ * off on this side.
+ */
+interface SessionMessage {
+  type: 'session';
+  accessToken: string;
+  refreshToken: string;
+}
+
+type InboundMessage = StartMessage | StopMessage | SessionMessage;
 
 interface LogOutbound {
   type: 'log';
@@ -88,6 +102,15 @@ const workerGlobal = self as unknown as DedicatedWorkerGlobalScope;
 function post(msg: LogOutbound | ProgressOutbound): void {
   workerGlobal.postMessage(msg);
 }
+
+// Module-scope handle to the currently-running worker's Supabase
+// client. Set by runWorker after its initial setSession succeeds,
+// cleared on teardown. The `session` inbound message handler uses
+// this to hand off rotated tokens without capturing runWorker's
+// closure. Null before the initial setSession completes — a stray
+// `session` message in that window is harmless because the start
+// message already carried the same tokens.
+let currentClient: SupabaseClient | null = null;
 
 /**
  * Signal-aware sleep. Exits early on abort so a `stop` message
@@ -113,11 +136,16 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 
 async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> {
   // See embeddings/worker.ts for why we build a fresh client rather
-  // than receiving one — class instances don't structured-clone.
+  // than receiving one — class instances don't structured-clone. And
+  // see that file's runWorker preamble for why autoRefreshToken is
+  // off: five independent clients racing to rotate the refresh token
+  // tripped Supabase's replay-detection and revoked the session.
+  // The main thread refreshes; the manager forwards the new tokens
+  // via a `session` message that this worker re-pins via setSession.
   const client: SupabaseClient = createClient(msg.supabaseUrl, msg.supabaseAnonKey, {
     auth: {
       persistSession: false,
-      autoRefreshToken: true,
+      autoRefreshToken: false,
       detectSessionInUrl: false,
     },
   });
@@ -133,6 +161,9 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     });
     return;
   }
+  // Publish the live client so the module-scope 'session' handler can
+  // hand off rotated tokens. Cleared in the finally block below.
+  currentClient = client;
 
   const supabase = new SupabaseService(
     { supabaseUrl: msg.supabaseUrl, supabaseAnonKey: msg.supabaseAnonKey },
@@ -181,6 +212,10 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
       if (nap > 0) await sleep(nap, signal);
     }
   } finally {
+    // Unpublish before release so a late-arriving `session` message
+    // after teardown is a no-op rather than a setSession on a dead
+    // loop.
+    currentClient = null;
     // Graceful release — best-effort, swallows errors. The server-
     // side TTL would sweep anyway, but an explicit release lets
     // another device take over instantly on a lock/sign-out.
@@ -211,6 +246,22 @@ workerGlobal.addEventListener('message', (evt: MessageEvent<InboundMessage>) => 
       });
   } else if (msg.type === 'stop') {
     controller.abort();
+  } else if (msg.type === 'session') {
+    // Re-pin rotated tokens from the main thread. See runWorker's
+    // preamble for why the worker doesn't refresh on its own.
+    if (!currentClient) return;
+    void currentClient.auth
+      .setSession({
+        access_token: msg.accessToken,
+        refresh_token: msg.refreshToken,
+      })
+      .catch((err: Error) => {
+        post({
+          type: 'log',
+          level: 'warn',
+          message: `forwarded setSession failed: ${err.message}`,
+        });
+      });
   }
 });
 
