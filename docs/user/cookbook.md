@@ -98,11 +98,11 @@ composer and try again.
 ## Following along while you cook
 
 On the detail pane, click (or tap) any instruction step to highlight
-it with a soft wash in your theme's accent colour. Click again to
-clear it. You can highlight several steps at once — useful for "I'm
-on step 3 while the sauce reduces" parallel work. The highlights are
-local to your current view; switching to another recipe clears them
-automatically, and nothing is saved to the server.
+it with a soft wash in your theme's accent colour — a visual
+bookmark for the step you're on. Clicking another step moves the
+highlight; clicking the highlighted step again clears it. The
+highlight is local to your current view; switching to another recipe
+clears it automatically, and nothing is saved to the server.
 
 ## Editing and deleting
 

@@ -264,13 +264,18 @@
     return r ? cooklangToHtml(r.cooklang) : '';
   });
 
-  // Click an instruction step to toggle a theme-tinted highlight on it
-  // — a light "I'm on this step" marker for the reader cooking along.
-  // Delegation walks up from the click target to the nearest `<li>`,
-  // then verifies that li is inside an `ol.cook-steps` (so clicks on
-  // ingredient lists or cookware don't highlight). The state lives on
-  // the DOM node via a class toggle; no reactive state, no persistence
-  // — switching recipes replaces the HTML and wipes the highlights.
+  // Click an instruction step to move a theme-tinted highlight onto
+  // it — a light "I'm on this step" marker for the reader cooking
+  // along. Single-highlight: clicking a new step moves the marker;
+  // clicking the already-active step clears it. Delegation walks up
+  // from the click target to the nearest `<li>`, then verifies that
+  // li is inside an `ol.cook-steps` (so clicks on ingredient lists
+  // or cookware don't highlight). We clear across every `cook-steps`
+  // in the container, not just the clicked `<ol>`, because sectioned
+  // recipes split steps into one `<ol>` per section — "one at a
+  // time" is one-per-recipe, not one-per-section. The state lives on
+  // the DOM via a class; no reactive state, no persistence —
+  // switching recipes replaces the HTML and wipes the highlight.
   function onRenderClick(e: MouseEvent): void {
     const target = e.target;
     if (!(target instanceof Element)) return;
@@ -278,7 +283,16 @@
     if (!li) return;
     const ol = li.parentElement;
     if (!ol || !ol.classList.contains('cook-steps')) return;
-    li.classList.toggle('is-active');
+    const container = e.currentTarget;
+    if (!(container instanceof Element)) return;
+    // Capture before clearing so "click the active step to clear it"
+    // still works — otherwise the clear would remove the class and we
+    // couldn't tell the re-toggle case apart from a fresh click.
+    const wasActive = li.classList.contains('is-active');
+    for (const prev of container.querySelectorAll('ol.cook-steps li.is-active')) {
+      prev.classList.remove('is-active');
+    }
+    if (!wasActive) li.classList.add('is-active');
   }
 </script>
 
