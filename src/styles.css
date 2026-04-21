@@ -2587,7 +2587,10 @@ h1 {
 
 /* Chevron + path inside the title. Only job is to de-emphasize the
    path relative to "Help" — muted color and normal weight do that
-   without breaking inheritance of size and line-height from the h1. */
+   without breaking inheritance of size and line-height from the h1.
+   Spacing before the chevron is handled by a `&nbsp;` in the
+   template, since a regular space at the boundary between a text
+   node and an inline element gets collapsed. */
 .help-title .help-crumb {
   color: var(--muted);
   font-weight: normal;
