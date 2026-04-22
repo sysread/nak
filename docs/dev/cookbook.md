@@ -42,9 +42,10 @@ at cookbook scale (tens to low hundreds of rows per user).
 - `src/screens/Chat.svelte` — drawer tab switcher (`drawerTab`),
   Recipes list rendering, footer book icon, Cookbook modal mount,
   `COOKBOOK_CHANGE_EVENT` listener in `onMount`.
-- `src/styles.css` — `.sidebar-tabs`, `.sidebar-tab`,
-  `.recipe-drawer-list`, `.recipe-drawer-footer`. The tab pair styles
-  live with the rest of the sidebar chrome.
+- `src/styles.css` — `.sidebar-nav`, `.recipe-drawer-list`,
+  `.recipe-drawer-footer`. The nav section reuses `.thread` and
+  `.thread-row` for the button chrome and lives with the rest of
+  the sidebar styles.
 
 ## Entry points
 
