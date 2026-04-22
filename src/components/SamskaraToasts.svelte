@@ -64,10 +64,29 @@
   let nextId = 0;
 
   function adopt(detail: SamskaraMintEventDetail): void {
+    const emoji = valenceToEmoji(detail.valence);
+    const label = valenceToMoodLabel(detail.valence);
+    // Skip the swap when the incoming mint lands in the same
+    // valence band as what's already showing AND the tier hasn't
+    // changed. Without this, every mint bumps `id`, which keys the
+    // fly transition and re-plays the slide even when the emoji
+    // and the styling are identical - reads as visual noise when
+    // the model has been steady-state for a few mints in a row.
+    // tier is part of the comparison because tier-2 carries a halo
+    // (.mood-pill.tier-2) so a tier change IS visually meaningful
+    // even at the same valence.
+    if (
+      current !== null &&
+      current.emoji === emoji &&
+      current.label === label &&
+      current.tier === detail.tier
+    ) {
+      return;
+    }
     current = {
       id: ++nextId,
-      emoji: valenceToEmoji(detail.valence),
-      label: valenceToMoodLabel(detail.valence),
+      emoji,
+      label,
       tier: detail.tier,
     };
   }
