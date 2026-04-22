@@ -2543,21 +2543,26 @@
   <div class="center"><p class="subtle">Connecting…</p></div>
 {:else if !session}
   <Auth />
-{:else if showSettings}
-  <Settings
-    onClose={() => navigate({ modal: null })}
-    onOpenMemories={() => navigate({ modal: 'memories' })}
-  />
-{:else if showHelp}
-  <Help onClose={() => navigate({ modal: null, doc: null })} />
-{:else if showMemories}
-  <Memories onClose={() => navigate({ modal: null })} />
-{:else if showSamskara}
-  <Samskara onClose={() => navigate({ modal: null })} />
-{:else if showCookbook}
-  <Cookbook onClose={onCookbookModalClose} />
 {:else}
-  <div class="shell" class:drawer-open={drawerOpen}>
+  <!--
+    Modals render as overlays ALONGSIDE the chat shell, not in place
+    of it, so chat state (in-flight stream, AbortController, scroll
+    position, reactive effects) survives navigation into a modal.
+    The shell is hidden via `display: none` while a modal is active -
+    the DOM tree and every $state / $effect in this component stay
+    live, which is what keeps a mid-turn completion running to the
+    DB write while the user is looking at Settings / Samskara
+    diagnostics / Memories / etc. Without this, the else-if chain
+    would unmount the shell each time and ... it shouldn't kill the
+    script state by Svelte 5 semantics, but the user observed
+    completions stopping across modal navigation, and the safest
+    cure is to never let the branch swap happen in the first place.
+  -->
+  <div
+    class="shell"
+    class:drawer-open={drawerOpen}
+    class:shell-behind-modal={route.modal !== null}
+  >
     <div
       class="drawer-backdrop"
       onclick={closeDrawer}
@@ -3539,4 +3544,32 @@
        the underlying predictive model is meant to stay background.
        See docs/dev/samskara.md. -->
   <SamskaraToasts />
+
+  <!--
+    Modal overlays. Rendered alongside the shell (above via their
+    own fixed-position backdrops + z-index) so opening a modal
+    does NOT unmount the chat: in-flight completions, streaming
+    state, and every reactive effect in this component keep
+    running while the user navigates. The shell's
+    `.shell-behind-modal` class hides it via display:none when a
+    modal is active so the modal owns the viewport.
+  -->
+  {#if showSettings}
+    <Settings
+      onClose={() => navigate({ modal: null })}
+      onOpenMemories={() => navigate({ modal: 'memories' })}
+    />
+  {/if}
+  {#if showHelp}
+    <Help onClose={() => navigate({ modal: null, doc: null })} />
+  {/if}
+  {#if showMemories}
+    <Memories onClose={() => navigate({ modal: null })} />
+  {/if}
+  {#if showSamskara}
+    <Samskara onClose={() => navigate({ modal: null })} />
+  {/if}
+  {#if showCookbook}
+    <Cookbook onClose={onCookbookModalClose} />
+  {/if}
 {/if}

@@ -34,6 +34,7 @@
   import {
     SAMSKARA_MINT_EVENT,
     valenceToEmoji,
+    valenceToMoodLabel,
     type SamskaraMintEventDetail,
   } from '$lib/samskara/events';
   import { route } from '$lib/routing.svelte';
@@ -45,6 +46,11 @@
      *  new mint visibly replaces the old one. */
     id: number;
     emoji: string;
+    /** Short label (cheerful / content / neutral / uneasy / pensive)
+     *  that drives the tooltip. Derived at capture time from the
+     *  same valence the emoji came from, so the two stay
+     *  consistent even if valenceToEmoji's bands later shift. */
+    label: string;
     /** Tier is carried for future styling differentiation (tier-2
      *  could get a subtle halo, for instance). Not used visually
      *  today. */
@@ -61,6 +67,7 @@
     current = {
       id: ++nextId,
       emoji: valenceToEmoji(detail.valence),
+      label: valenceToMoodLabel(detail.valence),
       tier: detail.tier,
     };
   }
@@ -102,7 +109,8 @@
       <div
         class="mood-pill"
         class:tier-2={current.tier === 2}
-        aria-label={`Samskara formed (tier ${current.tier})`}
+        title={`feelin' ${current.label}`}
+        aria-label={`Samskara mood: ${current.label} (tier ${current.tier})`}
         in:fly={{ x: 24, duration: FLY_IN_MS, easing: cubicOut }}
         out:fly={{ x: 24, duration: FLY_OUT_MS, easing: cubicOut }}
       >
@@ -140,8 +148,12 @@
     border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
     border-radius: 50%;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
-    /* Glance cue, not interactive. No cursor, no hover scale, no
-       click handler. Keeps it understated. */
+    /* Re-enable pointer events for the pill itself (the container
+       is pointer-events:none so it doesn't block the message pane
+       beneath). Needed so the native tooltip on `title` fires on
+       hover - without this the hover never registers on the pill. */
+    pointer-events: auto;
+    cursor: default;
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
   }

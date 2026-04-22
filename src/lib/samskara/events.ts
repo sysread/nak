@@ -45,6 +45,22 @@ export function valenceToEmoji(valence: number): string {
 }
 
 /**
+ * Short lowercase mood tag for the same valence bands as
+ * valenceToEmoji. Surfaces in the mood pill's tooltip so the user
+ * can tell at a glance what the emoji is trying to say without
+ * having to decode the glyph itself. Five bands, same cutpoints as
+ * the emoji mapping so the two stay in lockstep; adjust both
+ * together if the boundaries change.
+ */
+export function valenceToMoodLabel(valence: number): string {
+  if (valence >= 0.6) return 'cheerful';
+  if (valence >= 0.2) return 'content';
+  if (valence > -0.2) return 'neutral';
+  if (valence > -0.6) return 'uneasy';
+  return 'pensive';
+}
+
+/**
  * Dispatch the mint event to the main thread's toast listener.
  * No-op when `window` is undefined — the samskara manager runs on the
  * main thread where `window` always exists in practice, but keeping

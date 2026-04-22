@@ -958,6 +958,17 @@ h1 {
   transition: grid-template-columns 180ms ease-out;
 }
 
+/* When a modal is open the shell is display:none so the modal
+   owns the viewport. Keeps the chat component mounted - every
+   $state, $effect, in-flight stream, and AbortController stays
+   alive - so a completion kicked off before the modal opens
+   continues to stream into streamingText and persist to Supabase
+   while the user is looking at the modal. On modal close the
+   shell reappears with the accumulated state intact. */
+.shell.shell-behind-modal {
+  display: none;
+}
+
 /* On desktop the sidebar is a normal grid column; the hamburger
    collapses it to zero width for more chat real estate. On mobile it's
    a slide-over drawer (see the media query below). Either way, the
