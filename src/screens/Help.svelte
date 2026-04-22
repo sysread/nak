@@ -23,18 +23,18 @@
   import Markdown from '../components/Markdown.svelte';
   import Scanner from '../components/Scanner.svelte';
   import { hasDoc, isExternalHref, loadDoc, resolveDocPath } from '$lib/docs';
+  import { route, navigate } from '$lib/routing.svelte';
 
   interface Props {
     onClose: () => void;
   }
   let { onClose }: Props = $props();
 
-  // Path of the doc currently rendered. Starts at the index so opening
-  // Help always lands on the table of contents.
-  let currentPath = $state('README.md');
-  // Navigation stack of visited docs. The top is the previous doc, so
-  // "Back" pops and replaces `currentPath`.
-  let history = $state<string[]>([]);
+  // Path of the doc currently rendered, mirrored into `route.doc` so
+  // browser back / forward walks the in-modal navigation one doc at a
+  // time and a refresh lands the reader on the same page. Absent URL
+  // param means "opened Help, no deep link" - start on the index.
+  const currentPath = $derived(route.doc ?? 'README.md');
   // Raw markdown for the current doc. Empty while we're still loading
   // the first time or between transitions.
   let content = $state('');
@@ -166,9 +166,9 @@
     return slug;
   }
 
-  function navigate(path: string, hash: string): void {
+  function navigateToDoc(path: string, hash: string): void {
     // Clicking a link to the page you're already on should just
-    // re-scroll to the requested anchor (if any) — don't push a
+    // re-scroll to the requested anchor (if any) - don't push a
     // duplicate onto the history stack.
     if (path === currentPath) {
       pendingHash = hash;
@@ -179,17 +179,13 @@
       content = same;
       return;
     }
-    history = [...history, currentPath];
     pendingHash = hash;
-    currentPath = path;
-  }
-
-  function goBack(): void {
-    if (history.length === 0) return;
-    const prev = history[history.length - 1];
-    history = history.slice(0, -1);
-    pendingHash = '';
-    currentPath = prev;
+    // Route through the global router - a new history entry means
+    // browser-back walks one doc at a time across the whole app.
+    // `doc: 'README.md'` is stored explicitly rather than as the
+    // absent-means-README default, so "back to the index" creates its
+    // own entry instead of collapsing onto the modal-open push.
+    navigate({ doc: path });
   }
 
   // Delegated click handler for the rendered markdown. Runs on
@@ -233,7 +229,7 @@
     // never fires on one. If a race ever slips through, a silent
     // no-op is preferable to trapping the reader in an error state.
     const resolved = resolveDocPath(currentPath, href);
-    if (resolved) navigate(resolved.path, resolved.hash);
+    if (resolved) navigateToDoc(resolved.path, resolved.hash);
   }
 </script>
 
@@ -253,19 +249,12 @@
 >
   <div class="help-shell" role="dialog" aria-modal="true" aria-label="Help">
     <header class="help-header">
-      <button
-        type="button"
-        class="secondary icon-btn help-back"
-        onclick={goBack}
-        disabled={history.length === 0}
-        title="Back"
-        aria-label="Back"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polyline points="15 18 9 12 15 6" />
-        </svg>
-      </button>
+      <!-- No in-modal back button; the browser's Back is the single
+           back affordance across the app now. Each doc-to-doc click
+           pushes a history entry via the global router so
+           browser-back walks them one at a time, and closing the
+           modal (X / Escape / backdrop click) pops out of Help
+           entirely. -->
       <h1 class="help-title" title={currentPath}>
         Help&nbsp;<span class="help-crumb">› {currentPath}</span>
       </h1>

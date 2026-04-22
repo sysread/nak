@@ -27,6 +27,7 @@
   } from '$lib/session';
   import { applyTheme } from '$lib/theme';
   import { initUpdateWatcher } from '$lib/update.svelte';
+  import { initRouting } from '$lib/routing.svelte';
   import Setup from './screens/Setup.svelte';
   import Unlock from './screens/Unlock.svelte';
   import Chat from './screens/Chat.svelte';
@@ -102,6 +103,16 @@
       window.clearInterval(idleTimer);
       media.removeEventListener('change', onSystemChange);
     };
+  });
+
+  // Install URL routing as soon as the app is unlocked. The setup /
+  // locked / edit-config phases stay URL-inert on purpose - they're
+  // gated by stored-config presence and session state, not by the
+  // address bar, so a stray ?modal=settings while locked would open
+  // nothing. initRouting is idempotent so re-running on every
+  // unlock->lock->unlock cycle is a no-op after the first.
+  $effect(() => {
+    if (app.phase === 'unlocked') initRouting();
   });
 </script>
 

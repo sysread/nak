@@ -2739,13 +2739,6 @@ h1 {
   font-weight: normal;
 }
 
-/* Back button sits at the left edge of the header. Disabled styling
-   mirrors the existing .secondary:disabled rules — no extra work
-   needed — so we only need layout tweaks here. */
-.help-back {
-  flex: 0 0 auto;
-}
-
 /* Close affordance. Duplicates .settings-close rather than sharing so
    Settings can evolve independently; the two files have to stay
    in visual lockstep anyway because users expect the same modal

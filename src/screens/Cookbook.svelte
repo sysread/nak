@@ -19,6 +19,7 @@
    */
   import { onMount, onDestroy } from 'svelte';
   import { app } from '$lib/state.svelte';
+  import { route, navigate } from '$lib/routing.svelte';
   import {
     cookbook,
     loadRecipes,
@@ -34,20 +35,16 @@
 
   interface Props {
     onClose: () => void;
-    /**
-     * When set, the modal mounts on the detail pane for this recipe id.
-     * Used by the drawer's Recipes tab so a click goes straight to the
-     * recipe's rendered view. Ignored if the id isn't in the current
-     * list (e.g. the user clicked a row that was deleted in another
-     * tab between the list render and the click).
-     */
-    initialRecipeId?: string | null;
   }
-  let { onClose, initialRecipeId = null }: Props = $props();
+  let { onClose }: Props = $props();
 
   type Pane = 'list' | 'detail' | 'edit';
-  // svelte-ignore state_referenced_locally
-  let pane = $state<Pane>(initialRecipeId ? 'detail' : 'list');
+  // Initial pane is driven by the router: opening cookbook with
+  // `?modal=cookbook&recipe=<id>` in the URL mounts us straight on
+  // the recipe's detail pane; a bare `?modal=cookbook` opens to the
+  // list. The `$effect` below keeps this in sync if `route.recipe`
+  // changes after mount (browser back / forward).
+  let pane = $state<Pane>(route.recipe ? 'detail' : 'list');
 
   // --- list pane state ---
   let query = $state('');
@@ -63,8 +60,7 @@
   });
 
   // --- detail / edit pane state ---
-  // svelte-ignore state_referenced_locally
-  let activeId = $state<string | null>(initialRecipeId);
+  let activeId = $state<string | null>(route.recipe);
   const activeRecipe = $derived.by(() =>
     activeId ? (cookbook.recipes.find((r) => r.id === activeId) ?? null) : null
   );
@@ -89,18 +85,41 @@
     await loadRecipes(app.supabase);
   }
 
+  // URL-driven sync. When `route.recipe` changes externally (browser
+  // back / forward while the modal is open), mirror the change into
+  // the modal's local pane+activeId. The in-modal openList / openDetail
+  // helpers below also call `navigate` so clicks walk in lockstep.
+  // Edit / new panes are intentionally not routed - they're transient
+  // form states, not bookmarkable.
+  $effect(() => {
+    const id = route.recipe;
+    if (id === activeId) return;
+    if (id === null) {
+      pane = 'list';
+      activeId = null;
+      editError = null;
+      copyFeedback = null;
+    } else {
+      activeId = id;
+      pane = 'detail';
+      copyFeedback = null;
+    }
+  });
+
   // --- pane transitions ---
   function openList(): void {
     pane = 'list';
     activeId = null;
     editError = null;
     copyFeedback = null;
+    navigate({ recipe: null });
   }
 
   function openDetail(id: string): void {
     activeId = id;
     pane = 'detail';
     copyFeedback = null;
+    navigate({ recipe: id });
   }
 
   function openNew(): void {
@@ -173,6 +192,10 @@
       }
       await refresh();
       pane = 'detail';
+      // Create flow lands us on a recipe id that wasn't in the URL;
+      // update flow keeps the same id. Either way we reconcile the
+      // router so refresh-from-here lands on this recipe's detail.
+      if (activeId) navigate({ recipe: activeId });
     } catch (err) {
       editError = err instanceof Error ? err.message : String(err);
     } finally {
