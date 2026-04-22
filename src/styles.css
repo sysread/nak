@@ -2336,6 +2336,12 @@ h1 {
   }
 }
 
+/* Soft drop shadow under the border softens the transition as the
+   message pane scrolls under the chrome - without it, content slides up
+   to a hard hairline that reads as harsh. Border + shadow are a deliberate
+   pair: the 1px line gives a crisp edge at any zoom level, the shadow
+   gives depth. 8% black reads as subtle on both themes (dark bg swallows
+   anything heavier; light bg exaggerates it). */
 .top-bar {
   display: flex;
   align-items: center;
@@ -2343,6 +2349,7 @@ h1 {
   gap: 0.75rem;
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--border);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
 }
 
 .title-wrap {
