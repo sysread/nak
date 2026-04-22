@@ -142,6 +142,16 @@ describe('coerceSettings', () => {
     expect(coerceSettings({}).webSearchEnabled).toBeUndefined();
   });
 
+  it('preserves webCitationsEnabled only for strict booleans', () => {
+    expect(coerceSettings({ webCitationsEnabled: true }).webCitationsEnabled).toBe(true);
+    expect(coerceSettings({ webCitationsEnabled: false }).webCitationsEnabled).toBe(false);
+    // Same tri-state shape as webSearchEnabled: non-boolean inputs are
+    // dropped so the caller-side default ("enabled") stays in charge.
+    expect(coerceSettings({ webCitationsEnabled: 'yes' }).webCitationsEnabled).toBeUndefined();
+    expect(coerceSettings({ webCitationsEnabled: 1 }).webCitationsEnabled).toBeUndefined();
+    expect(coerceSettings({}).webCitationsEnabled).toBeUndefined();
+  });
+
   it('passes through a valid defaultLogLevel', () => {
     for (const level of ['debug', 'info', 'warn', 'error']) {
       expect(coerceSettings({ defaultLogLevel: level })).toEqual({

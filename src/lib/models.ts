@@ -375,6 +375,21 @@ export function resolveVerbosity(
 }
 
 /**
+ * Resolve the web-citations preference for a given thread. Same
+ * override-wins shape as resolveTier / resolveReasoningEffort /
+ * resolveVerbosity - per-thread `web_citations_enabled` wins when
+ * explicitly set, otherwise fall back to the user's account default.
+ * The caller is still expected to only consult the result when web
+ * search itself is active; citations without a search are sourceless.
+ */
+export function resolveWebCitations(
+  threadEnabled: boolean | null,
+  defaultEnabled: boolean
+): boolean {
+  return threadEnabled ?? defaultEnabled;
+}
+
+/**
  * Reverse lookup: given a Venice model id (e.g. 'kimi-k2-5'), return the
  * ModelSpec whose `id` matches. Used by the per-message context-window
  * indicator — a message row stores the concrete id it was answered by,

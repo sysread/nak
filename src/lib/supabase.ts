@@ -62,6 +62,14 @@ export interface Thread {
    */
   tools_enabled: boolean;
   /**
+   * Per-thread override for Venice inline web citations. Null/absent
+   * means "use the user default" (profiles.settings.webCitationsEnabled
+   * → true). Independent of web-search — only gates the `[1]` / `[2]`
+   * markers in the answer body; grounding still happens either way.
+   * Only consulted when web search itself is active on this turn.
+   */
+  web_citations_enabled: boolean | null;
+  /**
    * Soft-hide flag. Archived threads still load — they just render under
    * the drawer's collapsed "Archive" section and lock out the composer.
    * Flipped by the archive / restore row actions; restore also bumps
@@ -90,6 +98,15 @@ function coerceThread(row: Record<string, unknown>): Thread {
     ? row.reasoning_effort
     : null;
   const verbosity = isVerbosity(row.verbosity) ? row.verbosity : null;
+  // Tri-state on the wire: null / true / false. Anything else (missing
+  // column on an older row, garbage) collapses to null = "inherit the
+  // user default".
+  const web_citations_enabled =
+    row.web_citations_enabled === true
+      ? true
+      : row.web_citations_enabled === false
+        ? false
+        : null;
   return {
     id: String(row.id),
     user_id: String(row.user_id),
@@ -98,6 +115,7 @@ function coerceThread(row: Record<string, unknown>): Thread {
     reasoning_effort,
     verbosity,
     tools_enabled: row.tools_enabled === true,
+    web_citations_enabled,
     archived: row.archived === true,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
@@ -359,6 +377,18 @@ export interface UserSettings {
    */
   webSearchEnabled?: boolean;
   /**
+   * User-level default for Venice inline web citations. Absent /
+   * true → `venice_parameters.enable_web_citations=true` rides along
+   * whenever web search is active, so the model emits `[1]` / `[2]`
+   * markers tied to the sources it pulled. Explicit `false` → the
+   * flag goes out as `false`, so grounding still happens but the
+   * answer body reads like a clean prose response. Only consulted
+   * when web search itself is active; citations without a search
+   * would be sourceless anyway. Per-thread override lives on
+   * `threads.web_citations_enabled`.
+   */
+  webCitationsEnabled?: boolean;
+  /**
    * Minimum level the Logs drawer should show by default. Absent
    * means "show everything" (the lowest tier, `debug`) — falling back
    * to DEFAULT_LOG_LEVEL in state.svelte.ts. The drawer seeds its own
@@ -421,6 +451,10 @@ export function coerceSettings(raw: unknown): UserSettings {
   // caller-side default ("enabled") kicks in.
   if (r.webSearchEnabled === false) out.webSearchEnabled = false;
   else if (r.webSearchEnabled === true) out.webSearchEnabled = true;
+  // Same tri-state shape as webSearchEnabled - absent means "use the
+  // caller default", which is true.
+  if (r.webCitationsEnabled === false) out.webCitationsEnabled = false;
+  else if (r.webCitationsEnabled === true) out.webCitationsEnabled = true;
   if (isLogLevel(r.defaultLogLevel)) out.defaultLogLevel = r.defaultLogLevel;
   return out;
 }
@@ -551,6 +585,12 @@ export class SupabaseService {
       if (patch.webSearchEnabled === undefined) delete merged.webSearchEnabled;
       else if (typeof patch.webSearchEnabled === 'boolean') {
         merged.webSearchEnabled = patch.webSearchEnabled;
+      }
+    }
+    if ('webCitationsEnabled' in patch) {
+      if (patch.webCitationsEnabled === undefined) delete merged.webCitationsEnabled;
+      else if (typeof patch.webCitationsEnabled === 'boolean') {
+        merged.webCitationsEnabled = patch.webCitationsEnabled;
       }
     }
     if ('defaultLogLevel' in patch) {
@@ -770,6 +810,7 @@ export class SupabaseService {
           reasoning_effort: null,
           verbosity: null,
           tools_enabled: false,
+          web_citations_enabled: null,
           archived: row.archived,
           created_at: row.updated_at,
           updated_at: row.updated_at,
@@ -899,6 +940,24 @@ export class SupabaseService {
     const { error } = await this.client
       .from('threads')
       .update({ verbosity })
+      .eq('id', threadId);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Pin the inline-citations preference for this thread, or clear the
+   * override (null) so the thread tracks the user default. No
+   * updated_at bump — same rationale as setThreadReasoningEffort /
+   * setThreadVerbosity: a silent preference toggle shouldn't promote
+   * the thread to the top of the sidebar.
+   */
+  async setThreadWebCitationsEnabled(
+    threadId: string,
+    enabled: boolean | null
+  ): Promise<void> {
+    const { error } = await this.client
+      .from('threads')
+      .update({ web_citations_enabled: enabled })
       .eq('id', threadId);
     if (error) throw new SupabaseError(error.message);
   }

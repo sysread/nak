@@ -43,6 +43,7 @@
     setSystemPrompts,
     setTheme,
     setWebSearchEnabled,
+    setWebCitationsEnabled,
   } from '$lib/state.svelte';
   import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
   import { route, navigate, buildSearch } from '$lib/routing.svelte';
@@ -81,6 +82,7 @@
     resolveReasoningEffort,
     resolveTier,
     resolveVerbosity,
+    resolveWebCitations,
     type ModelSpec,
     type ModelTier,
     type ReasoningEffort,
@@ -876,6 +878,8 @@
       // Only a literal `false` flips web search off — an absent value
       // keeps the enabled-by-default seed set in state.svelte.ts.
       setWebSearchEnabled(s.webSearchEnabled !== false);
+      // Same tri-state: absent / true = citations on, literal false = off.
+      setWebCitationsEnabled(s.webCitationsEnabled !== false);
       // Only (re)seed the active set if the user hasn't already started
       // toggling prompts on the current thread. Avoids clobbering their
       // per-thread selection when settings arrive late.
@@ -1129,6 +1133,17 @@
   const currentVerbosity = $derived<Verbosity>(
     resolveVerbosity(currentThread?.verbosity ?? null, defaultVerbosity)
   );
+  // Resolved inline-citations preference for the current thread.
+  // Per-thread override (`threads.web_citations_enabled`) wins, falling
+  // back to the user's account default. Read at send time too, so the
+  // composer toggle and the send path agree.
+  const defaultWebCitations = $derived<boolean>(app.webCitationsEnabled);
+  const currentWebCitations = $derived<boolean>(
+    resolveWebCitations(
+      currentThread?.web_citations_enabled ?? null,
+      defaultWebCitations
+    )
+  );
 
   async function startRename(): Promise<void> {
     if (!currentThread) return;
@@ -1256,6 +1271,33 @@
     }
   }
 
+  // Flip the inline-citations preference for the current thread.
+  // Toggling to the user's account default clears the per-thread
+  // override (null) so a later change to the account default
+  // propagates automatically - same discipline as setReasoning /
+  // setVerbosity. Auto-creates a draft if there's no active thread,
+  // so a fresh session can carry the choice through to the first send.
+  async function toggleWebCitations(): Promise<void> {
+    if (!app.supabase) return;
+    if (!currentThread) {
+      await newThread();
+      if (!currentThread) return;
+    }
+    const nextResolved = !currentWebCitations;
+    const next: boolean | null =
+      nextResolved === defaultWebCitations ? null : nextResolved;
+    if ((currentThread.web_citations_enabled ?? null) === next) return;
+    const threadId = currentThread.id;
+    const wasDraft = currentThread.isDraft === true;
+    patchThread(threadId, { web_citations_enabled: next });
+    if (wasDraft) return;
+    try {
+      await app.supabase.setThreadWebCitationsEnabled(threadId, next);
+    } catch (err) {
+      error = { text: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   /**
    * Best-effort: ask the fast model for a short title for this thread. Runs
    * after the first user+assistant round-trip. Any failure is swallowed —
@@ -1328,6 +1370,7 @@
       reasoning_effort: null,
       verbosity: null,
       tools_enabled: false,
+      web_citations_enabled: null,
       archived: false,
       created_at: now,
       updated_at: now,
@@ -1472,6 +1515,16 @@
       active?.verbosity ?? null,
       defaultVerbosity
     );
+    // Resolved inline-citations preference for this send. Per-thread
+    // override wins, else the user's account default. Only consulted
+    // by Venice when web search is active; keeping the resolve
+    // unconditional means the composer toggle's pressed state matches
+    // what lands on the wire regardless of whether this specific turn
+    // ends up with search running.
+    const sendWebCitations: boolean = resolveWebCitations(
+      active?.web_citations_enabled ?? null,
+      app.webCitationsEnabled
+    );
 
     // Pre-send guard on attachments. Block the send if any attachment
     // is still processing, is in an error state, or can't be read by
@@ -1611,6 +1664,7 @@
       systemMessages,
       sendReasoning,
       sendVerbosity,
+      sendWebCitations,
       needsAutoTitle,
       originalText: text,
       userMessageId,
@@ -1633,6 +1687,7 @@
     systemMessages: { role: 'system'; content: string }[];
     sendReasoning: ReasoningEffort | undefined;
     sendVerbosity: Verbosity;
+    sendWebCitations: boolean;
     needsAutoTitle: boolean;
     originalText: string;
     /**
@@ -1723,6 +1778,7 @@
           // so the field is pinned even against any future Venice-side
           // default change.
           webSearch: app.webSearchEnabled ? 'on' : 'off',
+          webCitations: ctx.sendWebCitations,
           reasoningEffort: ctx.sendReasoning,
           verbosity: ctx.sendVerbosity,
           handlers: {
@@ -3288,6 +3344,36 @@
                     <line x1="3" y1="12" x2="21" y2="12" />
                     <line x1="10" y1="12" x2="10" y2="14" />
                     <line x1="14" y1="12" x2="14" y2="14" />
+                  </svg>
+                </button>
+              {/if}
+
+              <!-- Inline-citations toggle: per-conversation override for
+                   `venice_parameters.enable_web_citations`. Hidden when
+                   global web search is off because citations without a
+                   search are sourceless - Venice ignores the flag. Renders
+                   even without a current thread; `toggleWebCitations` auto-
+                   creates a draft so the choice has somewhere to land,
+                   matching the model / reasoning / verbosity pickers. -->
+              {#if app.webSearchEnabled}
+                <button
+                  type="button"
+                  class="secondary icon-btn"
+                  class:on={currentWebCitations}
+                  onclick={toggleWebCitations}
+                  title={currentWebCitations
+                    ? 'Inline citations ON — click to disable [1]/[2] markers for this conversation'
+                    : 'Inline citations OFF — click to enable [1]/[2] markers for this conversation'}
+                  aria-label={currentWebCitations
+                    ? 'Disable inline citations'
+                    : 'Enable inline citations'}
+                  aria-pressed={currentWebCitations}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 21c3 0 7-1 7-8V5c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v6c0 1.1.9 2 2 2h3" />
+                    <path d="M15 21c3 0 7-1 7-8V5c0-1.1-.9-2-2-2h-4c-1.1 0-2 .9-2 2v6c0 1.1.9 2 2 2h3" />
                   </svg>
                 </button>
               {/if}

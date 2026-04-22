@@ -102,6 +102,16 @@ interface AppState {
    * false → 'off' when building each streamChat call.
    */
   webSearchEnabled: boolean;
+  /**
+   * Mirror of `profiles.settings.webCitationsEnabled`. Default for
+   * whether inline `[1]` / `[2]` source markers are requested on any
+   * turn that actually runs a search. Defaults to true so the
+   * citation behavior matches the pre-toggle status quo until the
+   * user opts out. Chat.svelte combines this with the per-thread
+   * `web_citations_enabled` override to derive the value passed to
+   * `venice_parameters.enable_web_citations` at send time.
+   */
+  webCitationsEnabled: boolean;
   error: string | null;
 }
 
@@ -122,6 +132,9 @@ export const app = $state<AppState>({
   // Enabled-by-default. A Supabase settings fetch on unlock overwrites
   // this with the user's stored preference (see Chat.svelte refreshSettings).
   webSearchEnabled: true,
+  // Same enabled-by-default seed as webSearchEnabled — refreshSettings
+  // overwrites from Supabase on unlock.
+  webCitationsEnabled: true,
   error: null,
 });
 
@@ -143,6 +156,10 @@ export function setSystemPrompts(prompts: SystemPrompt[]): void {
 
 export function setWebSearchEnabled(enabled: boolean): void {
   app.webSearchEnabled = enabled;
+}
+
+export function setWebCitationsEnabled(enabled: boolean): void {
+  app.webCitationsEnabled = enabled;
 }
 
 export function setDefaultLogLevel(level: LogLevel): void {
@@ -223,6 +240,7 @@ export function lock(): void {
   // Reset to the enabled-by-default seed — the next sign-in's
   // refreshSettings will overwrite with the stored preference.
   app.webSearchEnabled = true;
+  app.webCitationsEnabled = true;
   app.phase = 'locked';
   clearSession();
 }

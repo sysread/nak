@@ -2,7 +2,9 @@
 
 Nak routes chat requests to Venice. The **AI** pane in Settings picks
 the default model tier, the default reasoning effort, the default
-verbosity, and whether web-search is available to the model.
+verbosity, whether web-search is available to the model, and whether
+search-grounded answers come back with inline `[1]` / `[2]` source
+markers.
 
 ## Model tiers
 
@@ -28,6 +30,27 @@ controls how much hidden thinking happens before the reply.
 ## Per-thread overrides
 
 ## Web search
+
+## Inline citations
+
+When web search is active, Venice can interleave `[1]` / `[2]` source
+markers into the answer body that link back to the pages it pulled.
+Inline citations are enabled by default and are independent of the web-
+search toggle itself - turning citations off still lets the model
+ground its answer with live results, it just strips the markers so the
+reply reads as plain prose.
+
+- Pick the **default** in Settings → AI → *Inline citations*. Every
+  new conversation starts with whatever you set here.
+- Override **per conversation** from the composer's quote-marks
+  button (visible whenever global web search is on). The choice is
+  sticky - it's saved on the thread row in Supabase so it survives
+  refreshes and carries across devices. Toggling back to the default
+  clears the per-thread override so a later change to the default
+  propagates automatically.
+- The setting only does anything when web search is active for the
+  turn. Citations without a search are sourceless, so Venice ignores
+  the flag in that case.
 
 ## System prompts
 

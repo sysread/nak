@@ -218,6 +218,15 @@ export interface ChatLoopOptions {
    */
   webSearch?: WebSearchMode;
   /**
+   * Optional override for the inline-citations flag. Forwarded to
+   * every streamChat call as `venice_parameters.enable_web_citations`;
+   * Venice only honors it when web search is active. Caller
+   * (Chat.svelte) derives it from the user default crossed with the
+   * per-thread `web_citations_enabled` override. Undefined means
+   * "let venice.ts apply its own default" (currently: citations on).
+   */
+  webCitations?: boolean;
+  /**
    * Optional reasoning-effort knob forwarded to every streamChat call.
    * Caller (Chat.svelte) is expected to only set this on models whose
    * ModelSpec marks `supportsReasoning: true` — we don't re-check here
@@ -345,6 +354,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     signal,
     handlers,
     webSearch,
+    webCitations,
     reasoningEffort,
     verbosity,
     userMessageId,
@@ -449,6 +459,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       signal,
       tools: buildToolList(toolsEnabled),
       webSearch,
+      webCitations,
       reasoningEffort,
       verbosity,
     });

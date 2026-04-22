@@ -112,9 +112,11 @@ export interface Citation {
  *            send it explicitly so a user who flipped the setting off
  *            can't be overridden by a future server-side default change.
  *
- * Active modes ('on' / 'auto') additionally set
- * `venice_parameters.enable_web_citations=true` so sourced claims come
- * back attributed rather than silently merged into the answer.
+ * Active modes ('on' / 'auto') additionally gate
+ * `venice_parameters.enable_web_citations`; whether that flag lands
+ * `true` or `false` is controlled independently by
+ * {@link ChatRequest.webCitations} so a caller can keep grounding
+ * while suppressing the `[1]` / `[2]` markers in the answer body.
  *
  * Docs: https://docs.venice.ai/api-reference (§ venice_parameters).
  */
@@ -138,6 +140,17 @@ export interface ChatRequest {
    * default applies). See {@link WebSearchMode}.
    */
   webSearch?: WebSearchMode;
+  /**
+   * Whether to also request Venice's inline source attribution
+   * (`venice_parameters.enable_web_citations`). Only consulted when
+   * `webSearch` is active (`'on'` / `'auto'`) - citations without a
+   * search would be sourceless anyway. Undefined means "citations on"
+   * so callers that opted into web search but haven't opinionated on
+   * citations get the historical enabled-by-default behavior. Set
+   * `false` to keep grounding but suppress the `[1]` / `[2]` markers
+   * from the answer body.
+   */
+  webCitations?: boolean;
   /**
    * OpenAI-style reasoning_effort knob ('low' | 'medium' | 'high').
    * Forwarded as the top-level `reasoning_effort` body field; omitted
@@ -504,7 +517,13 @@ export class VeniceClient {
     if (req.webSearch) {
       veniceParams.enable_web_search = req.webSearch;
       if (req.webSearch !== 'off') {
-        veniceParams.enable_web_citations = true;
+        // Inline citations default to on for backwards-compat; the
+        // caller flips this off to keep grounding but strip the
+        // `[1]` / `[2]` markers from the answer body. Gated inside
+        // the active-search branch because citations without a
+        // search are sourceless - no `enable_web_search=off` request
+        // should ever carry a citations flag.
+        veniceParams.enable_web_citations = req.webCitations ?? true;
         veniceParams.include_search_results_in_stream = true;
       }
     }

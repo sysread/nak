@@ -26,6 +26,7 @@ function mkThread(overrides: Partial<Thread> = {}): Thread {
     reasoning_effort: null,
     verbosity: null,
     tools_enabled: false,
+    web_citations_enabled: null,
     archived: false,
     created_at: 'now',
     updated_at: 'now',
@@ -283,6 +284,34 @@ describe('runChatLoop', () => {
     expect(users).toHaveLength(2);
     expect(users[0].content).toBe('older turn');
     expect(users[1].content).toBe('<user_message>look up X</user_message>');
+  });
+
+  it('forwards webCitations to each streamChat call', async () => {
+    // Verifies the inline-citations preference Chat.svelte resolves from
+    // user default + per-thread override actually lands on the wire.
+    // Venice only honors it when web search is active, so chat-loop
+    // passes it through verbatim without any gating logic of its own.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      webSearch: 'on',
+      webCitations: false,
+    });
+    expect(seenRequests[0].webCitations).toBe(false);
+    expect(seenRequests[0].webSearch).toBe('on');
   });
 
   it('wraps the last user message even when web search is off', async () => {

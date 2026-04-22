@@ -131,6 +131,15 @@ alter table public.threads
 alter table public.threads
   add column if not exists verbosity text;
 
+-- Optional per-thread override for Venice inline web citations. Null means
+-- "use the user default" (profiles.settings.webCitationsEnabled, which
+-- itself defaults to true). Independent of the web-search toggle: this
+-- only gates the `venice_parameters.enable_web_citations` flag on the
+-- request body. Turning citations off still lets the model ground its
+-- answer with live search; it just won't emit inline [1]/[2] markers.
+alter table public.threads
+  add column if not exists web_citations_enabled boolean;
+
 create index if not exists threads_user_updated_idx
   on public.threads (user_id, updated_at desc);
 

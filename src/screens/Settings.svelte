@@ -38,6 +38,7 @@
     setSystemPrompts,
     setTheme,
     setWebSearchEnabled,
+    setWebCitationsEnabled,
   } from '$lib/state.svelte';
   import { LOG_LEVELS, LOG_LEVEL_LABELS, type LogLevel } from '$lib/logger.svelte';
   import {
@@ -261,6 +262,43 @@
       webSearchEnabled = !next;
       setWebSearchEnabled(!next);
       webSearchError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // --- Inline citations pane ---
+  // Mirror of app.webCitationsEnabled. Persisted on Supabase
+  // `profiles.settings.webCitationsEnabled`. Enabled-by-default: an
+  // empty settings jsonb means inline citations are on, so we only
+  // write a literal `false` to flip them off. Independent of the web
+  // search toggle above - a user can keep grounding on but strip the
+  // `[1]` / `[2]` markers from answers.
+  let webCitationsEnabled = $state<boolean>(app.webCitationsEnabled);
+  let webCitationsError = $state<string | null>(null);
+  let webCitationsInfo = $state<string | null>(null);
+
+  $effect(() => {
+    webCitationsEnabled = app.webCitationsEnabled;
+  });
+
+  async function onToggleWebCitations(): Promise<void> {
+    webCitationsError = null;
+    webCitationsInfo = null;
+    if (!app.supabase) {
+      webCitationsError = 'Not connected to Supabase yet.';
+      return;
+    }
+    const next = !webCitationsEnabled;
+    webCitationsEnabled = next;
+    setWebCitationsEnabled(next);
+    try {
+      await app.supabase.updateSettings({ webCitationsEnabled: next });
+      webCitationsInfo = next
+        ? 'Inline citations enabled — answers carry [1] / [2] markers when web search fires.'
+        : 'Inline citations disabled — search still grounds answers, but the markers are stripped.';
+    } catch (err) {
+      webCitationsEnabled = !next;
+      setWebCitationsEnabled(!next);
+      webCitationsError = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -989,6 +1027,28 @@
         </label>
         {#if webSearchError}<p class="error">{webSearchError}</p>{/if}
         {#if webSearchInfo}<p class="subtle">{webSearchInfo}</p>{/if}
+
+        <h3 class="pane-section">Inline citations</h3>
+        <p class="subtle">
+          When web search is active, Venice can interleave
+          <code>[1]</code> / <code>[2]</code> source markers into the
+          answer body via
+          <code>venice_parameters.enable_web_citations</code>. Enabled
+          by default. Turning this off keeps grounding - the model
+          still reads live search results - but strips the markers so
+          the reply reads as plain prose. Overridable per-conversation
+          from the composer.
+        </p>
+        <label class="form-row toggle-row">
+          <input
+            type="checkbox"
+            checked={webCitationsEnabled}
+            onchange={onToggleWebCitations}
+          />
+          <span>Enabled</span>
+        </label>
+        {#if webCitationsError}<p class="error">{webCitationsError}</p>{/if}
+        {#if webCitationsInfo}<p class="subtle">{webCitationsInfo}</p>{/if}
 
         <h3 class="pane-section">System prompts</h3>
         <p class="subtle">
