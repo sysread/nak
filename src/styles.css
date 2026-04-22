@@ -1261,13 +1261,25 @@ h1 {
 }
 
 /* Chats / Recipes drawer nav. Rendered as a vertical pair of
-   thread-row-styled buttons above the search input - the button
-   chrome comes from `.thread` + `.thread-row`, so the nav items
-   visually match the list rows they switch between. This rule
-   only supplies the separation between the nav section and the
-   search input directly below it. */
+   thread-row-styled buttons above the search input - the hover /
+   active chrome comes from `.thread`, so an active tab reads as
+   a selected row. Sizing is scoped to match the search input
+   directly below it rather than the list rows further down:
+   conversations and recipes are compound rows (title button +
+   trailing `...` menu button) so matching their footprint would
+   leave the nav misaligned with its neighbour. Dropping the
+   `.thread-row` horizontal inset and the `.thread` vertical
+   padding puts the nav buttons on the same left edge and the
+   same vertical rhythm as `.sidebar-search-input`. */
 .sidebar-nav {
   margin-bottom: 0.5rem;
+}
+.sidebar-nav .thread-row {
+  padding: 0;
+}
+.sidebar-nav .thread {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.88rem;
 }
 
 /* Recipes drawer list — same row chrome as threads so the switch
