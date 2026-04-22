@@ -104,6 +104,7 @@
   import ToolCalls from '../components/ToolCalls.svelte';
   import MessageAttachments from '../components/MessageAttachments.svelte';
   import ExtractedTextDrawer from '../components/ExtractedTextDrawer.svelte';
+  import SamskaraToasts from '../components/SamskaraToasts.svelte';
   import { VeniceError, type Citation, type VeniceMessage } from '$lib/venice';
 
   const DEFAULT_TITLE = 'New conversation';
@@ -3424,4 +3425,10 @@
        without the transcript being a containing block for its
        fixed positioning. -->
   <ExtractedTextDrawer />
+  <!-- Top-right toast stack for samskara-formation events. Listens
+       on a window CustomEvent dispatched by SamskaraManager when
+       the formation worker reports a fresh mint. Subtle by design -
+       the underlying predictive model is meant to stay background.
+       See docs/dev/samskara.md. -->
+  <SamskaraToasts />
 {/if}

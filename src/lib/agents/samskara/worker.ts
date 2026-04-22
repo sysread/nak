@@ -76,9 +76,16 @@ interface ProgressOutbound {
   result: string;
 }
 
+interface MintOutbound {
+  type: 'mint';
+  tier: 1 | 2;
+  /** Continuous [-1, 1]. Main-thread toast renders emoji per band. */
+  valence: number;
+}
+
 const workerGlobal = self as unknown as DedicatedWorkerGlobalScope;
 
-function post(msg: LogOutbound | ProgressOutbound): void {
+function post(msg: LogOutbound | ProgressOutbound | MintOutbound): void {
   workerGlobal.postMessage(msg);
 }
 
@@ -176,6 +183,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
           phase,
           signal,
           onLeaseLost,
+          onMint: (info) => post({ type: 'mint', tier: info.tier, valence: info.valence }),
         };
         const result = await runOneCycle(ctx);
         post({ type: 'progress', phase, result });

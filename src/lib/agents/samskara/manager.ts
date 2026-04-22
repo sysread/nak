@@ -17,6 +17,7 @@ import type { AppConfig } from '../../config';
 import type { SupabaseService } from '../../supabase';
 import { MODELS } from '../../models';
 import { makeHolderId } from '../../embeddings/manager';
+import { notifySamskaraMint } from '../../samskara/events';
 
 export interface StartOpts {
   supabase: SupabaseService;
@@ -98,12 +99,28 @@ export class SamskaraManager {
       name: 'nak-samskara',
     });
     worker.addEventListener('message', (evt: MessageEvent) => {
-      const data = evt.data as { type?: string; level?: string; message?: string };
+      const data = evt.data as {
+        type?: string;
+        level?: string;
+        message?: string;
+        tier?: number;
+        valence?: number;
+      };
       if (!data || typeof data !== 'object') return;
       if (data.type === 'log' && typeof data.message === 'string') {
         const level = data.level === 'error' ? 'error' : data.level === 'warn' ? 'warn' : 'log';
         // eslint-disable-next-line no-console
         console[level]('[samskara-worker]', data.message);
+      } else if (
+        data.type === 'mint' &&
+        (data.tier === 1 || data.tier === 2) &&
+        typeof data.valence === 'number'
+      ) {
+        // Bubble to the UI toast listener via a window CustomEvent. The
+        // toast component is the only listener today, but decoupling via
+        // the event bus means future surfaces (debug inspector, audio
+        // cue) can subscribe without touching this file.
+        notifySamskaraMint({ tier: data.tier, valence: data.valence });
       }
     });
     this.worker = worker;

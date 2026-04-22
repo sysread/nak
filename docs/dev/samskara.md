@@ -518,15 +518,23 @@ pinned at 5.
   fires older than 10 minutes are left unresolved and
   age out via decay rather than being force-classified
   by a stale next-turn read.
-- **Samskara is opaque to the user in v1.** No UI
-  surface, no tool to inspect, no settings to tune.
-  Visibility is via structured logs only (every
-  fire with score / cohort, every mint, every
-  reaction decision, every decay event). When debugging
-  user-reported "the assistant is acting weird," logs
-  are the only window. Keep them dense and stable -
-  changing the log shape breaks debugging workflows
-  that don't have a UI substitute.
+- **Samskara is almost-opaque to the user in v1.** The
+  only UI surface is a subtle top-right toast stack
+  (`src/components/SamskaraToasts.svelte`) that shows
+  a single emoji per mint, valence-mapped via
+  `valenceToEmoji` in `src/lib/samskara/events.ts`,
+  auto-dismissed after ~4s. No inspector, no tool to
+  introspect, no settings to tune. Deep visibility is
+  still via structured logs only (every fire with
+  score / cohort, every mint, every reaction decision,
+  every decay event) - the toasts are a glance cue,
+  not a debugging surface. Keep the logs dense and
+  stable - changing the log shape breaks debugging
+  workflows that don't have a UI substitute. Keep the
+  toasts text-free - leaking the raw prediction would
+  invite the user to reason about their own bias model,
+  which defeats the "absorption over disclaimer"
+  framing decided in the design discussion.
 - **Cap recursion at tier 2.** A tier-3 mint
   (compounds-of-compounds) is mathematically
   defensible but pragmatically a noise amplifier and

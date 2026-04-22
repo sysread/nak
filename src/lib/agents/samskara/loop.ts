@@ -85,6 +85,13 @@ export interface CycleContext {
   phase: SamskaraPhase;
   signal: AbortSignal;
   onLeaseLost: () => void;
+  /**
+   * Called after a new samskara commits, so the main thread can surface
+   * a subtle toast. Fired only after the DB insert and provenance
+   * upsert both succeed, not on empty-phase or error paths. Optional so
+   * unit tests and non-UI contexts can omit it.
+   */
+  onMint?: (info: { tier: 1 | 2; valence: number }) => void;
 }
 
 export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
@@ -390,6 +397,9 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
   } catch {
     return 'error';
   }
+  // Notify the main thread. Swallowed-by-ctx when the caller didn't
+  // wire the callback (tests); otherwise bubbles a subtle toast.
+  ctx.onMint?.({ tier: 1, valence: minted.valence });
   return 'progress';
 }
 
