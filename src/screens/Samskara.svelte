@@ -211,6 +211,83 @@
     if (r.embeddingModel === null) return 'assimilated, pending embed';
     return 'assimilated + embedded';
   }
+
+  // Copy-to-clipboard: build one self-contained JSON blob that
+  // mirrors what the panel renders, so pasting it into a separate
+  // conversation gives an assistant enough context to reason about
+  // the samskara state without needing DB access. The blob includes
+  // a capture timestamp + the build fingerprint so a pasted report
+  // can be correlated with a specific deploy. Opaque ids are kept
+  // so the reader can cross-reference against the log drawer.
+  let copyState = $state<'idle' | 'copied' | 'error'>('idle');
+  let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function buildSnapshot(): string {
+    const snapshot = {
+      capturedAt: new Date().toISOString(),
+      buildCommit: __APP_COMMIT__,
+      buildTime: __APP_BUILD_TIME__,
+      threadId,
+      counts,
+      compoundSummary: compound,
+      substrate: substrate.map((r) => ({
+        id: r.id,
+        createdAt: r.createdAt,
+        userMessageId: r.userMessageId,
+        assistantMessageId: r.assistantMessageId,
+        status: assimilationStatus(r),
+        situation: r.situation,
+        outcome: r.outcome,
+        valence: r.valence,
+        embeddingModel: r.embeddingModel,
+      })),
+      cohortFires: cohortGroups.map((g) => ({
+        cohortId: g.cohortId,
+        firedAt: g.firedAt,
+        resolution: resolutionLabel(g.wasConfirmed, g.firedAt),
+        wasConfirmed: g.wasConfirmed,
+        members: g.fires.map((f) => ({
+          id: f.id,
+          samskaraId: f.samskaraId,
+          score: f.score,
+          samskara: f.samskara,
+        })),
+      })),
+    };
+    return JSON.stringify(snapshot, null, 2);
+  }
+
+  async function copySnapshot(): Promise<void> {
+    const text = buildSnapshot();
+    try {
+      await navigator.clipboard.writeText(text);
+      copyState = 'copied';
+    } catch {
+      // Fallback: some browsers (older Safari in non-secure contexts,
+      // or when the Clipboard API is blocked) reject writeText. A
+      // hidden textarea + execCommand('copy') still works in those
+      // environments; good enough for a debug surface.
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        copyState = 'copied';
+      } catch {
+        copyState = 'error';
+      } finally {
+        document.body.removeChild(ta);
+      }
+    }
+    if (copyResetTimer !== null) clearTimeout(copyResetTimer);
+    copyResetTimer = setTimeout(() => {
+      copyState = 'idle';
+      copyResetTimer = null;
+    }, 2000);
+  }
 </script>
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
@@ -246,6 +323,21 @@
           disabled={loading}
         >
           {loading ? 'Loading…' : 'Refresh'}
+        </button>
+        <button
+          type="button"
+          class="secondary"
+          onclick={() => void copySnapshot()}
+          disabled={loading}
+          title="Copy everything on this panel as a JSON blob for pasting into a chat / bug report"
+        >
+          {#if copyState === 'copied'}
+            Copied!
+          {:else if copyState === 'error'}
+            Copy failed
+          {:else}
+            Copy JSON
+          {/if}
         </button>
       </div>
     </header>
