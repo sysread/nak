@@ -1082,15 +1082,12 @@ h1 {
     padding: 0.5rem;
   }
 
-  /* Desktop centers the shell at 80% to track the message column; on
-     mobile the message cards go to 100% / align-self: stretch (see the
-     duplicate `.msg.user` / `.msg.assistant` block below), so the
-     shell needs to match or the input reads as narrower than the
-     transcript. */
-  .composer-shell {
-    width: 100%;
-    max-width: 100%;
-  }
+  /* Mobile `.composer-shell` sizing lives in a second @media block
+     further down the stylesheet, *after* the desktop `.composer-shell`
+     declaration. Putting it here instead fails silently: the desktop
+     rule ships later in source order with equal specificity, so it
+     wins on every viewport even when this @media matches. Same cascade
+     trap the `.msg.user` / `.msg.assistant` mobile override sidesteps. */
 
   /* The toggle is already compact, but shrink its glyphs a touch so the
      three-button group never edges into the title on narrow viewports. */
@@ -2018,6 +2015,19 @@ h1 {
 
 .composer-shell:focus-within {
   border-color: var(--accent);
+}
+
+/* Mobile override for `.composer-shell`. Must live *after* the base
+   declaration above - same-specificity rules in source order would
+   otherwise let the 80%-centered desktop sizing win on mobile even
+   when the media query matches, leaving the input visibly narrower
+   than the 100%-stretch message cards. Parallels the duplicate
+   `.msg.user` / `.msg.assistant` mobile block for the same reason. */
+@media (max-width: 720px) {
+  .composer-shell {
+    width: 100%;
+    max-width: 100%;
+  }
 }
 
 .composer-textarea {
