@@ -245,6 +245,26 @@ input, textarea, select {
   font-family: inherit;
 }
 
+/* In light mode, the body-level text-shadow thickener (see the
+   ':root[data-theme=light] body' rule above) doesn't reliably reach
+   the text rendered inside native form controls - WebKit in particular
+   draws input/textarea content through a path that drops inherited
+   text-shadow, leaving composer and settings fields looking notably
+   thinner and lighter than surrounding body copy against the cream
+   bg. Re-apply the thickener on the form controls themselves, and
+   drop the ink a shade darker than --text so the contrast matches
+   what the reader expects from body text. font-weight is deliberately
+   left alone: Lekton only ships 400 and 700, and anything in between
+   routes through synthesized faux-bold (see the @font-face comments
+   at the top of this file). */
+:root[data-theme='light'] input,
+:root[data-theme='light'] textarea,
+:root[data-theme='light'] select,
+:root[data-theme='light'] .composer-textarea {
+  color: #17130e;
+  text-shadow: 0 0 0.015em currentColor;
+}
+
 textarea {
   resize: vertical;
   min-height: 2.4rem;
