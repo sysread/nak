@@ -109,6 +109,85 @@
     logs.entries.filter((e) => entryMatches(e, levelFilter, search.trim()))
   );
 
+  // Copy-to-clipboard for the currently-filtered entry set. Feeds
+  // the same "paste a JSON blob into chat" workflow as the
+  // Samskara diagnostics panel; keeps what the user is looking at,
+  // not the full raw buffer, so a search-narrowed view doesn't
+  // bury the 10 relevant lines under 1990 unrelated ones. Details
+  // are normalized to a clone-safe shape because Error instances
+  // and circular objects don't survive JSON.stringify cleanly.
+  let copyState = $state<'idle' | 'copied' | 'error'>('idle');
+  let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function normalizeDetail(d: unknown): unknown {
+    if (d instanceof Error) {
+      return { name: d.name, message: d.message, stack: d.stack ?? null };
+    }
+    if (d === null || typeof d !== 'object') return d;
+    try {
+      // Round-trip through JSON to strip functions / symbols /
+      // non-enumerable props and catch circular refs early.
+      return JSON.parse(JSON.stringify(d));
+    } catch {
+      try {
+        return String(d);
+      } catch {
+        return '[unserializable]';
+      }
+    }
+  }
+
+  function buildLogSnapshot(): string {
+    const payload = {
+      capturedAt: new Date().toISOString(),
+      buildCommit: __APP_COMMIT__,
+      buildTime: __APP_BUILD_TIME__,
+      levelFilter,
+      searchFilter: search,
+      totalEntries: logs.entries.length,
+      shownEntries: visible.length,
+      entries: visible.map((e) => ({
+        id: e.id,
+        timestamp: new Date(e.timestamp).toISOString(),
+        level: e.level,
+        source: e.source,
+        message: e.message,
+        details: e.details.map(normalizeDetail),
+      })),
+    };
+    return JSON.stringify(payload, null, 2);
+  }
+
+  async function copyLogs(): Promise<void> {
+    const text = buildLogSnapshot();
+    try {
+      await navigator.clipboard.writeText(text);
+      copyState = 'copied';
+    } catch {
+      // Fallback for browsers that reject writeText (old Safari,
+      // non-secure contexts). Same shape the Samskara panel uses.
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        copyState = 'copied';
+      } catch {
+        copyState = 'error';
+      } finally {
+        document.body.removeChild(ta);
+      }
+    }
+    if (copyResetTimer !== null) clearTimeout(copyResetTimer);
+    copyResetTimer = setTimeout(() => {
+      copyState = 'idle';
+      copyResetTimer = null;
+    }, 2000);
+  }
+
   function formatTimestamp(ms: number): string {
     const d = new Date(ms);
     const hh = String(d.getHours()).padStart(2, '0');
@@ -282,17 +361,33 @@
             {/each}
           </select>
         </label>
-        <button
-          type="button"
-          class="secondary logs-clear"
-          onclick={() => {
-            logs.clear();
-            expanded = new Set();
-          }}
-          title="Clear all log entries"
-        >
-          Clear
-        </button>
+        <div class="logs-row-actions">
+          <button
+            type="button"
+            class="secondary logs-copy"
+            onclick={() => void copyLogs()}
+            title="Copy the currently filtered entries as a JSON blob for pasting into chat / a bug report"
+          >
+            {#if copyState === 'copied'}
+              Copied!
+            {:else if copyState === 'error'}
+              Copy failed
+            {:else}
+              Copy
+            {/if}
+          </button>
+          <button
+            type="button"
+            class="secondary logs-clear"
+            onclick={() => {
+              logs.clear();
+              expanded = new Set();
+            }}
+            title="Clear all log entries"
+          >
+            Clear
+          </button>
+        </div>
       </div>
       <div class="logs-controls-row">
         <input
@@ -433,20 +528,31 @@
     justify-content: space-between;
   }
 
-  /* Shared size for all three controls. Native <select> chrome
-     (especially the chevron) would otherwise render taller than a
-     plain <input>, leaving the dropdown visibly out of line with
-     the search box. Explicit height + box-sizing + line-height
+  /* Shared size for every control in the header. Native <select>
+     chrome (especially the chevron) would otherwise render taller
+     than a plain <input>, leaving the dropdown visibly out of line
+     with the search box. Explicit height + box-sizing + line-height
      pins the visible box regardless of the browser's default
      padding. */
   .logs-level select,
   .logs-search,
+  .logs-copy,
   .logs-clear {
     box-sizing: border-box;
     height: 28px;
     line-height: 1.2;
     font-size: 0.8rem;
     padding: 0 0.5rem;
+  }
+
+  /* Group Copy + Clear so they read as a pair of row-1 actions
+     rather than independent items competing with the dropdown for
+     attention. Gap matches the controls-row's own gap so the
+     visual rhythm stays uniform across the whole header. */
+  .logs-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
   }
 
   /* Reserve room for the native chevron so the selected label
