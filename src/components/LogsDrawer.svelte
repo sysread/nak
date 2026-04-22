@@ -1,15 +1,19 @@
 <!--
-  Left-side drawer that renders the in-app log buffer. Opened from the
-  scroll-icon button in the top bar (Chat.svelte). Wired via the
-  `logsDrawer` singleton in `$lib/logger.svelte.ts` - this component
-  reads `logsDrawer.state.open` and `logs.entries` reactively.
+  Right-side drawer that renders the in-app log buffer. Opened from
+  the scroll-icon button on the right end of the top bar in
+  Chat.svelte. Wired via the `logsDrawer` singleton in
+  `$lib/logger.svelte.ts` - this component reads
+  `logsDrawer.state.open` and `logs.entries` reactively.
 
-  The drawer mirrors the pattern of ExtractedTextDrawer (right side)
-  but horizontally inverted. Overlay backdrop dismisses on click;
-  Escape closes too. It sits above the transcript via fixed
-  positioning so it overlays the sidebar too, not just the main
-  column - log debugging deserves a full-height panel regardless of
-  whether the threads sidebar is currently showing.
+  Same side and size footprint as ExtractedTextDrawer. Only one of
+  the two is opened at a time in practice (logs is a debugging
+  tool, extracted-text is a document-reading tool), so the stacking
+  case of both simultaneously open is tolerated but not optimized
+  for. Overlay backdrop dismisses on click; Escape closes too. Sits
+  above the transcript via fixed positioning so it overlays the
+  sidebar too, not just the main column - log debugging deserves a
+  full-height panel regardless of whether the threads sidebar is
+  currently showing.
 
   Entry rendering strategy:
   - Plain-string details render inline as a second line under the
@@ -200,7 +204,7 @@
   <aside
     class="logs-drawer"
     aria-label="Application logs"
-    transition:fly={{ x: -360, duration: 220, easing: cubicOut }}
+    transition:fly={{ x: 360, duration: 220, easing: cubicOut }}
   >
     <header class="logs-header">
       <h2 class="logs-title">Logs</h2>
@@ -314,7 +318,7 @@
   .logs-overlay {
     position: fixed;
     inset: 0;
-    background: color-mix(in srgb, var(--bg-0) 55%, transparent);
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
     /* Sit above the transcript and sidebar but below the drawer itself
        so a click on the drawer doesn't dismiss it. */
     z-index: 40;
@@ -323,17 +327,21 @@
     cursor: pointer;
   }
 
+  /* Right-anchored so the scroll-icon button on the right end of the
+     top bar opens a panel that visually extends from the pointer.
+     Shell bg + left-facing shadow match the sidebar's mirror-image
+     styling on the opposite edge. */
   .logs-drawer {
     position: fixed;
     top: 0;
-    left: 0;
+    right: 0;
     bottom: 0;
     width: min(520px, 96vw);
     display: flex;
     flex-direction: column;
-    background: var(--bg-1);
-    border-right: 1px solid var(--border);
-    box-shadow: 8px 0 24px color-mix(in srgb, #000 18%, transparent);
+    background: var(--bg-2);
+    border-left: 1px solid var(--border);
+    box-shadow: -8px 0 24px color-mix(in srgb, #000 18%, transparent);
     z-index: 41;
   }
 
@@ -358,7 +366,7 @@
     align-items: center;
     padding: 0.5rem 0.9rem;
     border-bottom: 1px solid var(--border);
-    background: var(--bg-0);
+    background: var(--bg);
   }
 
   .logs-level select {
@@ -385,7 +393,7 @@
     font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
     font-size: 0.78rem;
     line-height: 1.4;
-    background: var(--bg-0);
+    background: var(--bg);
   }
 
   .logs-empty {

@@ -161,12 +161,12 @@ A chat turn goes:
   instantiates `app.supabase` + `app.venice`. A separate
   in-screen gate (`{:else if !session} <Auth />`) handles the
   Supabase auth step. See `./auth-session.md`.
-- **Logging** - `Chat.svelte` mounts `<LogsDrawer />` on the
-  left edge (mirror of `<ExtractedTextDrawer />` on the
-  right) and owns the scroll-icon button in the top bar
-  that toggles it. Every diagnostic breadcrumb from any
-  worker or tool surfaces there without needing devtools.
-  See `./logging.md`.
+- **Logging** - `Chat.svelte` mounts `<LogsDrawer />` on
+  the right edge (same side as `<ExtractedTextDrawer />`)
+  and owns the document-glyph button at the right end of
+  the top bar that toggles it. Every diagnostic
+  breadcrumb from any worker or tool surfaces there
+  without needing devtools. See `./logging.md`.
 
 ## Gotchas
 

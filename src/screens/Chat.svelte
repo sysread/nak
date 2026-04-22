@@ -2967,26 +2967,6 @@
             <path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
           </svg>
         </button>
-        <!-- Logs drawer toggle. Document-glyph icon so the button reads
-             as "open the reading panel" rather than "new document".
-             Wired to the logsDrawer rune singleton; the LogsDrawer
-             component mounted at Chat root watches the same state. -->
-        <button
-          class="secondary icon-btn logs-toggle"
-          onclick={() => logsDrawer.toggle()}
-          title={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
-          aria-label={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
-          aria-expanded={logsDrawer.state.open}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-            <line x1="16" y1="13" x2="8" y2="13" />
-            <line x1="16" y1="17" x2="8" y2="17" />
-            <line x1="10" y1="9" x2="8" y2="9" />
-          </svg>
-        </button>
         <div class="title-wrap">
           {#if !currentThread}
             <div class="subtle">Start a new conversation</div>
@@ -3011,6 +2991,29 @@
             >{currentThread.title || 'Untitled'}</button>
           {/if}
         </div>
+        <!-- Logs drawer toggle. Document-glyph icon so the button reads
+             as "open the reading panel" rather than "new document".
+             Placed after `.title-wrap` so the flex layout parks it on
+             the right edge, aligned with the right-anchored drawer it
+             opens. Wired to the logsDrawer rune singleton; the
+             LogsDrawer component mounted at Chat root watches the
+             same state. -->
+        <button
+          class="secondary icon-btn logs-toggle"
+          onclick={() => logsDrawer.toggle()}
+          title={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
+          aria-label={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
+          aria-expanded={logsDrawer.state.open}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+            <line x1="10" y1="9" x2="8" y2="9" />
+          </svg>
+        </button>
       </div>
       <div class="messages-wrap">
         <div

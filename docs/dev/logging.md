@@ -18,9 +18,11 @@ Two jobs, one module:
    `console.warn` / `console.error` level mapping.
 2. **Feed a capped in-app ring buffer.** The `logs` rune store
    exposes an `entries` array read by `LogsDrawer.svelte`. The
-   drawer sits on the left edge of the Chat screen (mirror of
-   `ExtractedTextDrawer` on the right) and renders the buffer with
-   level filtering, substring search, and a clear button.
+   drawer sits on the right edge of the Chat screen (same side
+   as `ExtractedTextDrawer`; in practice only one of the two is
+   open at a time, so simultaneous-stack layout is tolerated but
+   not optimized for) and renders the buffer with level
+   filtering, substring search, and a clear button.
 
 ## Files
 

@@ -55,13 +55,12 @@ original page in a new tab.
 
 ## The log drawer
 
-The document-shaped button at the top of the chat column (next to the
-hamburger and the "new conversation" bubble) opens the **log drawer**
-on the left side of the screen. The drawer is a live feed of
-everything Nak writes to its internal logs - service-worker updates,
-reflection / summary / embedding worker progress, recall-agent
-breadcrumbs, and anything else a background subsystem wants to tell
-you about.
+The document-shaped button at the right end of the chat top bar
+opens the **log drawer** on the right side of the screen. The
+drawer is a live feed of everything Nak writes to its internal
+logs - service-worker updates, reflection / summary / embedding
+worker progress, recall-agent breadcrumbs, and anything else a
+background subsystem wants to tell you about.
 
 Useful when:
 
