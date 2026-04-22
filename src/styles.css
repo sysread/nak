@@ -1018,6 +1018,16 @@ h1 {
     padding: 0.5rem;
   }
 
+  /* Desktop centers the shell at 80% to track the message column; on
+     mobile the message cards go to 100% / align-self: stretch (see the
+     duplicate `.msg.user` / `.msg.assistant` block below), so the
+     shell needs to match or the input reads as narrower than the
+     transcript. */
+  .composer-shell {
+    width: 100%;
+    max-width: 100%;
+  }
+
   /* The toggle is already compact, but shrink its glyphs a touch so the
      three-button group never edges into the title on narrow viewports. */
   .model-toggle-btn {
@@ -1910,7 +1920,12 @@ h1 {
    with the input. Focus-within lights up the border in --accent. */
 
 .composer {
-  padding: 0.75rem 1rem 1rem;
+  /* Horizontal padding mirrors `.messages` (1.2rem) so the inner shell
+     and the message list sit over the same gutters - otherwise a 1rem
+     vs 1.2rem mismatch would drift the composer's outer edge ~0.2rem
+     wider than the transcript and the two stacks read as two columns
+     rather than one. */
+  padding: 0.75rem 1.2rem 1rem;
 }
 
 .composer-shell {
@@ -1922,6 +1937,13 @@ h1 {
   flex-direction: column;
   gap: 0.45rem;
   transition: border-color 120ms ease-out;
+  /* Match the `.msg.user` / `.msg.assistant` column: 80% centered. With
+     `.composer`'s horizontal padding now aligned to `.messages`, the
+     shell's outer edges land on the same vertical lines as every
+     message card above it - list and input read as one column. */
+  width: 80%;
+  max-width: 80%;
+  margin-inline: auto;
 }
 
 .composer-shell:focus-within {
