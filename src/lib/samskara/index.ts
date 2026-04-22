@@ -67,11 +67,21 @@ export async function getCompoundSummary(
     log.debug('compound summary read failed', err);
     return null;
   }
-  if (!row || !row.summary || row.summary.length === 0) return null;
+  if (!row || !row.summary || row.summary.length === 0) {
+    log.debug('compound summary: empty (cold start)');
+    return null;
+  }
   if (row.lastRegenAt) {
     const ageMs = Date.now() - new Date(row.lastRegenAt).getTime();
-    if (ageMs > STALE_CEILING_HOURS * 60 * 60 * 1000) return null;
+    if (ageMs > STALE_CEILING_HOURS * 60 * 60 * 1000) {
+      log.debug('compound summary: stale, ignoring', {
+        ageHours: Math.round(ageMs / 3_600_000),
+        ceilingHours: STALE_CEILING_HOURS,
+      });
+      return null;
+    }
   }
+  log.debug('compound summary: loaded', { chars: row.summary.length });
   return row.summary;
 }
 
@@ -99,8 +109,12 @@ export async function fireSamskaras(
   signal?: AbortSignal
 ): Promise<FireResult | null> {
   const trimmed = userText.trim();
-  if (trimmed.length === 0) return null;
+  if (trimmed.length === 0) {
+    log.debug('fire: empty user text, skipping');
+    return null;
+  }
 
+  log.debug('fire: embedding user text', { chars: trimmed.length });
   let rawEmbedding: number[] | undefined;
   try {
     const resp = await venice.embed({
@@ -113,7 +127,10 @@ export async function fireSamskaras(
     log.debug('fire embed failed', err);
     return null;
   }
-  if (!rawEmbedding || rawEmbedding.length === 0) return null;
+  if (!rawEmbedding || rawEmbedding.length === 0) {
+    log.debug('fire: embed returned empty vector');
+    return null;
+  }
 
   // Pad for query — pgvector requires the query embedding to match
   // the column dim exactly. Same helper memories use; cosine is
@@ -135,7 +152,10 @@ export async function fireSamskaras(
     log.debug('fire RPC failed', err);
     return null;
   }
-  if (!rows || rows.length === 0) return null;
+  if (!rows || rows.length === 0) {
+    log.debug('fire: top-k returned 0 rows (corpus empty or no matches)');
+    return null;
+  }
 
   const cohortId = generateCohortId();
   const fired = rows.map((r) => ({
@@ -147,6 +167,12 @@ export async function fireSamskaras(
     health: r.health,
     score: r.score,
   }));
+  log.info('fire: cohort formed', {
+    cohortId,
+    threadId,
+    size: fired.length,
+    topScore: fired[0]?.score,
+  });
 
   // Persist the cohort. Errors here are logged but not surfaced —
   // the priming block still renders even if the fire log write
@@ -180,6 +206,11 @@ export async function recordSubstrateStub(
 ): Promise<void> {
   try {
     await supabase.samskaraRecordSubstrate(threadId, userMessageId, assistantMessageId);
+    log.debug('substrate stub recorded', {
+      threadId,
+      userMessageId,
+      assistantMessageId,
+    });
   } catch (err) {
     log.debug('substrate stub write failed', err);
   }

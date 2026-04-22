@@ -119,12 +119,24 @@ export class SamskaraManager {
         message?: string;
         tier?: number;
         valence?: number;
+        phase?: string;
+        result?: string;
       };
       if (!data || typeof data !== 'object') return;
       if (data.type === 'log' && typeof data.message === 'string') {
         const level: 'info' | 'warn' | 'error' =
           data.level === 'error' ? 'error' : data.level === 'warn' ? 'warn' : 'info';
         workerLog[level](data.message);
+      } else if (
+        data.type === 'progress' &&
+        typeof data.phase === 'string' &&
+        typeof data.result === 'string'
+      ) {
+        // Per-cycle heartbeat. One debug line per phase advance so the
+        // user can watch the worker round-robin in the Logs drawer;
+        // detailed per-phase decisions are emitted from loop.ts under
+        // the same source tag.
+        workerLog.debug(`cycle: ${data.phase} -> ${data.result}`);
       } else if (
         data.type === 'mint' &&
         (data.tier === 1 || data.tier === 2) &&

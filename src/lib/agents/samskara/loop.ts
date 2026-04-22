@@ -26,6 +26,14 @@ import { VeniceError } from '../../venice';
 import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from '../../models';
 import type { LeaseCoordinator } from '../../embeddings/lease';
 import type { SamskaraAgent } from './agent';
+import { createLogger } from '../../logger.svelte';
+
+// Per-phase decision breadcrumbs. Kept at debug level so the feed is
+// cheap to tail while the feature is new and gets filtered out with a
+// single dropdown step once the pipeline is trusted. Shared source
+// tag with the manager so the Logs drawer groups worker output
+// regardless of which file emitted it.
+const log = createLogger('samskara-worker');
 
 /** All worker phases. Iteration order is significant - see PHASES below. */
 export type SamskaraPhase =
@@ -149,10 +157,17 @@ async function runAssimilatePhase(ctx: CycleContext): Promise<CycleResult> {
       ctx.holderId,
       ctx.claimTtlSeconds
     );
-  } catch {
+  } catch (err) {
+    log.debug('assimilate: claim RPC failed', err);
     return 'error';
   }
   if (!claim) return 'empty-phase';
+  log.debug('assimilate: claimed substrate', {
+    substrateId: claim.id,
+    threadId: claim.threadId,
+    userMessageId: claim.userMessageId,
+    assistantMessageId: claim.assistantMessageId,
+  });
 
   // Fetch the two messages this substrate row anchors. assistantMessageId
   // can be null (a turn that errored before the assistant row landed); in
@@ -189,7 +204,15 @@ async function runAssimilatePhase(ctx: CycleContext): Promise<CycleResult> {
   }
 
   const result = await ctx.agent.assimilate(userMsg, assistantMsg, ctx.signal);
-  if (!result) return 'error';
+  if (!result) {
+    log.debug('assimilate: agent returned null', { substrateId: claim.id });
+    return 'error';
+  }
+  log.debug('assimilate: agent returned', {
+    substrateId: claim.id,
+    situation: shorten(result.situation),
+    valence: result.valence,
+  });
 
   let saved: boolean;
   try {
@@ -200,9 +223,11 @@ async function runAssimilatePhase(ctx: CycleContext): Promise<CycleResult> {
       result.outcome,
       result.valence
     );
-  } catch {
+  } catch (err) {
+    log.debug('assimilate: save failed', err);
     return 'error';
   }
+  if (!saved) log.debug('assimilate: save rejected (claim expired?)', { substrateId: claim.id });
   return saved ? 'progress' : 'save-rejected';
 }
 
@@ -248,17 +273,32 @@ async function runPairRelatePhase(ctx: CycleContext): Promise<CycleResult> {
       bestIdx = i;
     }
   }
-  if (bestIdx < 0 || bestSim < 0.3) return 'empty-phase';
+  if (bestIdx < 0 || bestSim < 0.3) {
+    log.debug('pair-relate: no viable pair', {
+      candidates: recent.length,
+      bestSim: bestSim === -Infinity ? null : bestSim,
+    });
+    return 'empty-phase';
+  }
 
   const partner = recent[bestIdx];
+  log.debug('pair-relate: selected pair', {
+    seedId: seed.id,
+    partnerId: partner.id,
+    cosine: bestSim,
+  });
   const result = await ctx.agent.relate(
     { situation: seed.situation, outcome: seed.outcome },
     { situation: partner.situation, outcome: partner.outcome },
     ctx.signal
   );
-  if (!result) return 'error';
+  if (!result) {
+    log.debug('pair-relate: agent returned null');
+    return 'error';
+  }
   if (result.kind === 'orthogonal' || result.label.length === 0) {
     // Agent declined. Not an error; drain.
+    log.debug('pair-relate: agent declined', { kind: result.kind });
     return 'empty-phase';
   }
 
@@ -292,10 +332,20 @@ async function runPairRelatePhase(ctx: CycleContext): Promise<CycleResult> {
           ignoreDuplicates: false,
         }
       );
-    if (error) return 'error';
-  } catch {
+    if (error) {
+      log.debug('pair-relate: upsert error', error);
+      return 'error';
+    }
+  } catch (err) {
+    log.debug('pair-relate: upsert threw', err);
     return 'error';
   }
+  log.debug('pair-relate: associated', {
+    aId,
+    bId,
+    kind: result.kind,
+    label: shorten(result.label),
+  });
   return 'progress';
 }
 
@@ -311,18 +361,26 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
   let recent: SamskaraSubstrateRow[];
   try {
     recent = await ctx.supabase.samskaraRecentEmbeddedSubstrate(8);
-  } catch {
+  } catch (err) {
+    log.debug('mint-tier1: substrate fetch failed', err);
     return 'error';
   }
-  if (recent.length < 4) return 'empty-phase';
+  if (recent.length < 4) {
+    log.debug('mint-tier1: insufficient substrate', { have: recent.length, need: 4 });
+    return 'empty-phase';
+  }
 
   const cluster = {
     sample_labels: [],
     sample_situations: recent.slice(0, 5).map((r) => r.situation),
     reinforcement: recent.length,
   };
+  log.debug('mint-tier1: asking agent', { substrateCount: recent.length });
   const minted = await ctx.agent.mint(cluster, ctx.signal);
-  if (!minted) return 'empty-phase';
+  if (!minted) {
+    log.debug('mint-tier1: agent declined');
+    return 'empty-phase';
+  }
 
   // Embed the prediction so future fire queries can match against it.
   let predEmbedding: number[];
@@ -344,6 +402,7 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
   // unique-key level (we have none today beyond the primary key) so
   // this can produce near-duplicates — the minter's confirm:false
   // path is the dedup mechanism.
+  let samskaraId = '';
   try {
     const client = (ctx.supabase as unknown as {
       client: {
@@ -371,7 +430,11 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
       })
       .select('id')
       .single();
-    if (error || !data) return 'error';
+    if (error || !data) {
+      log.debug('mint-tier1: samskaras insert failed', error);
+      return 'error';
+    }
+    samskaraId = data.id;
     // Provenance: link this samskara back to the substrate rows that
     // fed it. ignoreDuplicates handles re-runs cleanly.
     const provRows = recent.slice(0, 5).map((r) => ({
@@ -394,9 +457,16 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
       onConflict: 'samskara_id,kind,ref_id',
       ignoreDuplicates: true,
     });
-  } catch {
+  } catch (err) {
+    log.debug('mint-tier1: insert threw', err);
     return 'error';
   }
+  log.info('mint-tier1: minted samskara', {
+    id: samskaraId,
+    prediction: shorten(minted.prediction),
+    valence: minted.valence,
+    confidence: minted.confidence,
+  });
   // Notify the main thread. Swallowed-by-ctx when the caller didn't
   // wire the callback (tests); otherwise bubbles a subtle toast.
   ctx.onMint?.({ tier: 1, valence: minted.valence });
@@ -471,9 +541,15 @@ async function runReactionClassifyPhase(ctx: CycleContext): Promise<CycleResult>
       .limit(1);
     if (error || !data || data.length === 0) return 'empty-phase';
     candidate = data[0];
-  } catch {
+  } catch (err) {
+    log.debug('reaction-classify: candidate query failed', err);
     return 'error';
   }
+  log.debug('reaction-classify: candidate cohort', {
+    cohortId: candidate.cohort_id,
+    threadId: candidate.thread_id,
+    firedAt: candidate.fired_at,
+  });
 
   // Fetch the full cohort + the surrounding messages.
   const cohortClient = (ctx.supabase as unknown as {
@@ -564,7 +640,10 @@ async function runReactionClassifyPhase(ctx: CycleContext): Promise<CycleResult>
     nextUserMsg,
     ctx.signal
   );
-  if (!result) return 'error';
+  if (!result) {
+    log.debug('reaction-classify: agent returned null');
+    return 'error';
+  }
 
   try {
     await ctx.supabase.samskaraApplyReaction(
@@ -573,9 +652,17 @@ async function runReactionClassifyPhase(ctx: CycleContext): Promise<CycleResult>
       result.disconfirm,
       result.neutral
     );
-  } catch {
+  } catch (err) {
+    log.debug('reaction-classify: apply RPC failed', err);
     return 'error';
   }
+  log.info('reaction-classify: applied', {
+    cohortId: candidate.cohort_id,
+    cohortSize: cohort.length,
+    confirm: result.confirm.length,
+    disconfirm: result.disconfirm.length,
+    neutral: result.neutral.length,
+  });
   return 'progress';
 }
 
@@ -583,9 +670,11 @@ async function runReactionClassifyPhase(ctx: CycleContext): Promise<CycleResult>
 async function runDecayPhase(ctx: CycleContext): Promise<CycleResult> {
   try {
     await ctx.supabase.samskaraDecay();
-  } catch {
+  } catch (err) {
+    log.debug('decay: RPC failed', err);
     return 'error';
   }
+  log.debug('decay: applied');
   return 'progress';
 }
 
@@ -599,9 +688,14 @@ async function runCompoundRegenPhase(ctx: CycleContext): Promise<CycleResult> {
   let decision;
   try {
     decision = await ctx.supabase.samskaraShouldRegenCompound();
-  } catch {
+  } catch (err) {
+    log.debug('compound-regen: shouldRegen RPC failed', err);
     return 'error';
   }
+  log.debug('compound-regen: decision', {
+    shouldRegen: decision.shouldRegen,
+    samskaraCount: decision.samskaraCount,
+  });
   if (!decision.shouldRegen) return 'empty-phase';
 
   let claimed: boolean;
@@ -610,10 +704,14 @@ async function runCompoundRegenPhase(ctx: CycleContext): Promise<CycleResult> {
       ctx.holderId,
       ctx.regenClaimTtlSeconds
     );
-  } catch {
+  } catch (err) {
+    log.debug('compound-regen: claim RPC failed', err);
     return 'error';
   }
-  if (!claimed) return 'empty-phase';
+  if (!claimed) {
+    log.debug('compound-regen: another holder has the claim');
+    return 'empty-phase';
+  }
 
   // Read up to log10-capped count for the summary input. Floor at 8
   // so even a tiny corpus produces a coherent paragraph.
@@ -621,10 +719,12 @@ async function runCompoundRegenPhase(ctx: CycleContext): Promise<CycleResult> {
   let rows;
   try {
     rows = await ctx.supabase.samskaraTopForSummary(cap);
-  } catch {
+  } catch (err) {
+    log.debug('compound-regen: topForSummary failed', err);
     return 'error';
   }
   if (rows.length === 0) return 'empty-phase';
+  log.debug('compound-regen: synthesizing', { rows: rows.length, cap });
 
   const summary = await ctx.agent.summarizeCompound(
     rows.map((r) => ({
@@ -636,7 +736,10 @@ async function runCompoundRegenPhase(ctx: CycleContext): Promise<CycleResult> {
     })),
     ctx.signal
   );
-  if (!summary) return 'error';
+  if (!summary) {
+    log.debug('compound-regen: agent returned null');
+    return 'error';
+  }
 
   try {
     const saved = await ctx.supabase.samskaraSaveCompoundSummary(
@@ -644,13 +747,33 @@ async function runCompoundRegenPhase(ctx: CycleContext): Promise<CycleResult> {
       summary,
       decision.samskaraCount
     );
+    if (saved) {
+      log.info('compound-regen: saved summary', {
+        samskaraCount: decision.samskaraCount,
+        chars: summary.length,
+      });
+    } else {
+      log.debug('compound-regen: save rejected (claim expired?)');
+    }
     return saved ? 'progress' : 'save-rejected';
-  } catch {
+  } catch (err) {
+    log.debug('compound-regen: save threw', err);
     return 'error';
   }
 }
 
 // --- Math helpers --------------------------------------------------------
+
+/**
+ * Truncate a string for inline log details. Keeps the drawer
+ * readable when a samskara's prediction or a situation summary runs
+ * long - the full text is still in the DB, so the log breadcrumb
+ * just needs enough to identify which row the line refers to.
+ */
+function shorten(s: string, max = 80): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 1)}...`;
+}
 
 /**
  * Cosine similarity between two equal-length vectors. Used by the
