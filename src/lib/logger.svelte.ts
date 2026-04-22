@@ -39,6 +39,33 @@
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+/** Runtime predicate. Used when coercing persisted settings jsonb that
+ *  carries a caller-supplied `defaultLogLevel` — any other shape falls
+ *  back to the hard-coded default in state.svelte.ts. */
+export function isLogLevel(v: unknown): v is LogLevel {
+  return v === 'debug' || v === 'info' || v === 'warn' || v === 'error';
+}
+
+/** Ordered tier list, most permissive first. Exported so UI dropdowns
+ *  and the Appearance pane stay in sync with the type definition
+ *  without duplicating the literal order. */
+export const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'] as const;
+
+/** Display labels. The `+` suffix on the lower tiers makes the
+ *  cascading-minimum semantics obvious: selecting `Info+` shows info,
+ *  warn, and error. `Error` has no `+` because there's nothing above
+ *  it to include. */
+export const LOG_LEVEL_LABELS: Record<LogLevel, string> = {
+  debug: 'Debug+',
+  info: 'Info+',
+  warn: 'Warn+',
+  error: 'Error',
+};
+
+/** Default for a fresh profile. `'debug'` shows everything; users who
+ *  want a quieter drawer can lift the floor in the Appearance pane. */
+export const DEFAULT_LOG_LEVEL: LogLevel = 'debug';
+
 export interface LogEntry {
   /** Monotonic, buffer-local. Used as the `{#each}` key so re-renders
    *  don't reshuffle DOM when entries at the head are dropped. */

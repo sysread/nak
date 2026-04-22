@@ -39,6 +39,7 @@
     setDefaultModel,
     setDefaultReasoningEffort,
     setDefaultVerbosity,
+    setDefaultLogLevel,
     setSystemPrompts,
     setTheme,
     setWebSearchEnabled,
@@ -863,6 +864,7 @@
       if (s.defaultModel) setDefaultModel(s.defaultModel);
       if (s.defaultReasoningEffort) setDefaultReasoningEffort(s.defaultReasoningEffort);
       if (s.defaultVerbosity) setDefaultVerbosity(s.defaultVerbosity);
+      if (s.defaultLogLevel) setDefaultLogLevel(s.defaultLogLevel);
       // If the server has a theme choice and it differs from the cached one,
       // apply it now. setTheme also re-caches, so subsequent loads are fast.
       if (s.colorMode || s.accent) {

@@ -72,9 +72,13 @@ Useful when:
 
 Controls inside the drawer:
 
-- **Level dropdown** - choose the minimum severity to show (All /
-  Info+ / Warn+ / Error only). Matches the filter behaviour of the
-  browser devtools console.
+- **Level dropdown** - choose the minimum severity to show (Debug+
+  / Info+ / Warn+ / Error). The `+` means "this level and
+  everything more severe", matching the filter behaviour of the
+  browser devtools console. The drawer opens at whatever you've
+  set as your **Default log level** in Settings > Appearance;
+  changing the dropdown here is a within-session override that
+  resets on the next open.
 - **Search box** - case-insensitive substring match against the
   source tag, the message, and any structured details attached to
   the entry.

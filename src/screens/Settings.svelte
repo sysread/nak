@@ -34,10 +34,12 @@
     setDefaultModel,
     setDefaultReasoningEffort,
     setDefaultVerbosity,
+    setDefaultLogLevel,
     setSystemPrompts,
     setTheme,
     setWebSearchEnabled,
   } from '$lib/state.svelte';
+  import { LOG_LEVELS, LOG_LEVEL_LABELS, type LogLevel } from '$lib/logger.svelte';
   import {
     MODELS,
     REASONING_EFFORTS,
@@ -265,6 +267,7 @@
   // --- Appearance pane ---
   let colorMode = $state<ColorMode>(app.colorMode);
   let accent = $state<Accent>(app.accent);
+  let defaultLogLevel = $state<LogLevel>(app.defaultLogLevel);
   let appearanceError = $state<string | null>(null);
   let appearanceInfo = $state<string | null>(null);
 
@@ -278,6 +281,27 @@
     accent = next;
     setTheme(colorMode, next);
     await persistTheme();
+  }
+  // Default log level lives in Appearance because it's a pure
+  // presentation preference - what the drawer starts out showing. The
+  // LogsDrawer seeds its own filter from app.defaultLogLevel each
+  // time it opens; per-session overrides via the drawer's own
+  // dropdown are deliberately not persisted.
+  async function onPickLogLevel(next: LogLevel): Promise<void> {
+    defaultLogLevel = next;
+    setDefaultLogLevel(next);
+    appearanceError = null;
+    appearanceInfo = null;
+    if (!app.supabase) {
+      appearanceError = 'Not connected to Supabase — log level saved locally only.';
+      return;
+    }
+    try {
+      await app.supabase.updateSettings({ defaultLogLevel: next });
+      appearanceInfo = 'Saved.';
+    } catch (err) {
+      appearanceError = err instanceof Error ? err.message : String(err);
+    }
   }
   async function persistTheme(): Promise<void> {
     appearanceError = null;
@@ -1104,6 +1128,27 @@
               <span class="swatch-label">{ACCENT_LABELS[a]}</span>
             </button>
           {/each}
+        </div>
+
+        <h3 class="pane-section">Default log level</h3>
+        <p class="subtle">
+          Minimum severity the Logs drawer shows when you open it. Raise this
+          to cut noise; lower it to see debug breadcrumbs from every worker.
+          Affects the drawer's initial filter only - you can still pick a
+          different level within the drawer itself.
+        </p>
+        <div class="form-row">
+          <select
+            aria-label="Default minimum log level"
+            value={defaultLogLevel}
+            onchange={(e) => {
+              void onPickLogLevel((e.currentTarget as HTMLSelectElement).value as LogLevel);
+            }}
+          >
+            {#each LOG_LEVELS as level (level)}
+              <option value={level}>{LOG_LEVEL_LABELS[level]}</option>
+            {/each}
+          </select>
         </div>
 
         {#if appearanceError}<p class="error">{appearanceError}</p>{/if}

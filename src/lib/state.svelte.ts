@@ -46,6 +46,7 @@ import {
   type Accent,
   type ColorMode,
 } from './theme';
+import { DEFAULT_LOG_LEVEL, type LogLevel } from './logger.svelte';
 
 export type AppPhase = 'loading' | 'setup' | 'locked' | 'unlocked' | 'edit-config';
 
@@ -79,6 +80,14 @@ interface AppState {
   colorMode: ColorMode;
   accent: Accent;
   /**
+   * Default minimum level for the in-app Logs drawer. Seeded to
+   * {@link DEFAULT_LOG_LEVEL} on activate(), then overwritten from
+   * Supabase `profiles.settings.defaultLogLevel` on unlock. LogsDrawer
+   * reads this at open time; the user can still raise or lower the
+   * threshold within a session via the drawer's own dropdown.
+   */
+  defaultLogLevel: LogLevel;
+  /**
    * System-prompt library, loaded from Supabase `profiles.settings`. A
    * prompt's `enabledByDefault` flag seeds the per-thread active set in
    * Chat.svelte; the active set itself is not stored here because it's
@@ -108,6 +117,7 @@ export const app = $state<AppState>({
   defaultVerbosity: DEFAULT_VERBOSITY,
   colorMode: cachedTheme?.mode ?? DEFAULT_MODE,
   accent: cachedTheme?.accent ?? DEFAULT_ACCENT,
+  defaultLogLevel: DEFAULT_LOG_LEVEL,
   systemPrompts: [],
   // Enabled-by-default. A Supabase settings fetch on unlock overwrites
   // this with the user's stored preference (see Chat.svelte refreshSettings).
@@ -133,6 +143,10 @@ export function setSystemPrompts(prompts: SystemPrompt[]): void {
 
 export function setWebSearchEnabled(enabled: boolean): void {
   app.webSearchEnabled = enabled;
+}
+
+export function setDefaultLogLevel(level: LogLevel): void {
+  app.defaultLogLevel = level;
 }
 
 /**
@@ -162,6 +176,7 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.defaultModel = DEFAULT_TIER;
   app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
   app.defaultVerbosity = DEFAULT_VERBOSITY;
+  app.defaultLogLevel = DEFAULT_LOG_LEVEL;
   app.phase = 'unlocked';
   app.error = null;
   if (opts.persist !== false) saveSession(config);
@@ -203,6 +218,7 @@ export function lock(): void {
   app.defaultModel = DEFAULT_TIER;
   app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
   app.defaultVerbosity = DEFAULT_VERBOSITY;
+  app.defaultLogLevel = DEFAULT_LOG_LEVEL;
   app.systemPrompts = [];
   // Reset to the enabled-by-default seed — the next sign-in's
   // refreshSettings will overwrite with the stored preference.

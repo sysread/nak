@@ -25,6 +25,7 @@ import {
   type Verbosity,
 } from './models';
 import { isAccent, isColorMode, type Accent, type ColorMode } from './theme';
+import { isLogLevel, type LogLevel } from './logger.svelte';
 import type { OpenAIToolCall } from './tools/types';
 import type { Citation, TokenUsage } from './venice';
 
@@ -357,6 +358,14 @@ export interface UserSettings {
    * later changes its server-side default.
    */
   webSearchEnabled?: boolean;
+  /**
+   * Minimum level the Logs drawer should show by default. Absent
+   * means "show everything" (the lowest tier, `debug`) — falling back
+   * to DEFAULT_LOG_LEVEL in state.svelte.ts. The drawer seeds its own
+   * filter from this value at open time; within-session overrides via
+   * the drawer's dropdown are not persisted.
+   */
+  defaultLogLevel?: LogLevel;
 }
 
 /**
@@ -412,6 +421,7 @@ export function coerceSettings(raw: unknown): UserSettings {
   // caller-side default ("enabled") kicks in.
   if (r.webSearchEnabled === false) out.webSearchEnabled = false;
   else if (r.webSearchEnabled === true) out.webSearchEnabled = true;
+  if (isLogLevel(r.defaultLogLevel)) out.defaultLogLevel = r.defaultLogLevel;
   return out;
 }
 
@@ -541,6 +551,12 @@ export class SupabaseService {
       if (patch.webSearchEnabled === undefined) delete merged.webSearchEnabled;
       else if (typeof patch.webSearchEnabled === 'boolean') {
         merged.webSearchEnabled = patch.webSearchEnabled;
+      }
+    }
+    if ('defaultLogLevel' in patch) {
+      if (patch.defaultLogLevel === undefined) delete merged.defaultLogLevel;
+      else if (isLogLevel(patch.defaultLogLevel)) {
+        merged.defaultLogLevel = patch.defaultLogLevel;
       }
     }
     const { error } = await this.client

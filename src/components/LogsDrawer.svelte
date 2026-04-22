@@ -33,16 +33,27 @@
   import {
     logs,
     logsDrawer,
+    LOG_LEVELS,
+    LOG_LEVEL_LABELS,
     type LogEntry,
     type LogLevel,
   } from '$lib/logger.svelte';
+  import { app } from '$lib/state.svelte';
 
   const drawer = logsDrawer;
 
   // Visible-level threshold. `debug` is the most permissive (shows
   // all); stepping up hides the lower tiers. Matches devtools-console
   // filter semantics so users don't have to re-learn the dropdown.
-  let levelFilter = $state<LogLevel>('debug');
+  // Seeded from app.defaultLogLevel and re-seeded every time the
+  // drawer opens, so the Appearance setting is the source of truth
+  // at open time. Users can still override within a session; the
+  // override lasts until close/reopen.
+  let levelFilter = $state<LogLevel>(app.defaultLogLevel);
+
+  $effect(() => {
+    if (drawer.state.open) levelFilter = app.defaultLogLevel;
+  });
 
   let search = $state('');
 
@@ -229,10 +240,9 @@
       <label class="logs-level">
         <span class="visually-hidden">Minimum level</span>
         <select bind:value={levelFilter} aria-label="Minimum log level">
-          <option value="debug">All</option>
-          <option value="info">Info+</option>
-          <option value="warn">Warn+</option>
-          <option value="error">Error only</option>
+          {#each LOG_LEVELS as level (level)}
+            <option value={level}>{LOG_LEVEL_LABELS[level]}</option>
+          {/each}
         </select>
       </label>
       <input
@@ -369,21 +379,32 @@
     background: var(--bg);
   }
 
+  /* Shared size for all three controls in the row. Native <select>
+     chrome (especially the chevron) would otherwise render taller
+     than a plain <input>, leaving the dropdown visibly out of line
+     with the search box. Explicit height + box-sizing + line-height
+     pins the visible box regardless of the browser's default
+     padding. */
+  .logs-level select,
+  .logs-search,
+  .logs-clear {
+    box-sizing: border-box;
+    height: 28px;
+    line-height: 1.2;
+    font-size: 0.8rem;
+    padding: 0 0.5rem;
+  }
+
+  /* Reserve room for the native chevron so the selected label
+     doesn't crowd it. Without padding-right the chevron overlaps
+     "Debug+" on compact widths. */
   .logs-level select {
-    font-size: 0.82rem;
-    padding: 0.25rem 0.4rem;
+    padding-right: 1.4rem;
   }
 
   .logs-search {
     flex: 1 1 auto;
     min-width: 0;
-    font-size: 0.82rem;
-    padding: 0.25rem 0.5rem;
-  }
-
-  .logs-clear {
-    font-size: 0.78rem;
-    padding: 0.25rem 0.55rem;
   }
 
   .logs-body {
@@ -391,7 +412,7 @@
     overflow: auto;
     padding: 0.4rem 0;
     font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
-    font-size: 0.78rem;
+    font-size: 0.7rem;
     line-height: 1.4;
     background: var(--bg);
   }
@@ -442,12 +463,12 @@
 
   .log-level-badge {
     flex-shrink: 0;
-    font-size: 0.7rem;
+    font-size: 0.62rem;
     font-weight: 600;
     padding: 0 0.35rem;
     border-radius: 2px;
     letter-spacing: 0.04em;
-    min-width: 3.2rem;
+    min-width: 2.9rem;
     text-align: center;
   }
 
@@ -471,13 +492,13 @@
   .log-time {
     flex-shrink: 0;
     color: var(--muted);
-    font-size: 0.72rem;
+    font-size: 0.64rem;
   }
 
   .log-source {
     flex-shrink: 0;
     color: var(--accent);
-    font-size: 0.72rem;
+    font-size: 0.64rem;
   }
 
   .log-message {
@@ -508,7 +529,7 @@
     border-radius: var(--radius, 4px);
     white-space: pre-wrap;
     word-break: break-word;
-    font-size: 0.75rem;
+    font-size: 0.68rem;
     max-height: 40vh;
     overflow: auto;
   }

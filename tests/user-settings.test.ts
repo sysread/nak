@@ -141,4 +141,19 @@ describe('coerceSettings', () => {
     // Missing key is an absent opt-out signal — treated as "use the default".
     expect(coerceSettings({}).webSearchEnabled).toBeUndefined();
   });
+
+  it('passes through a valid defaultLogLevel', () => {
+    for (const level of ['debug', 'info', 'warn', 'error']) {
+      expect(coerceSettings({ defaultLogLevel: level })).toEqual({
+        defaultLogLevel: level,
+      });
+    }
+  });
+
+  it('drops an unknown defaultLogLevel value', () => {
+    expect(coerceSettings({ defaultLogLevel: 'trace' })).toEqual({});
+    expect(coerceSettings({ defaultLogLevel: '' })).toEqual({});
+    expect(coerceSettings({ defaultLogLevel: null })).toEqual({});
+    expect(coerceSettings({ defaultLogLevel: 0 })).toEqual({});
+  });
 });
