@@ -44,6 +44,7 @@
     setWebSearchEnabled,
   } from '$lib/state.svelte';
   import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
+  import { route, navigate, buildSearch } from '$lib/routing.svelte';
   import {
     DEFAULT_THREAD_PAGE_SIZE,
     RECENT_THREAD_CUTOFF_MS,
@@ -111,25 +112,24 @@
 
   let session = $state<Session | null>(null);
   let sessionLoaded = $state(false);
-  let showSettings = $state(false);
-  let showHelp = $state(false);
-  let showMemories = $state(false);
-  let showCookbook = $state(false);
+  // Modal flags + sidebar tab + active thread id all derive from the
+  // URL-driven `route` state (see src/lib/routing.svelte.ts). That
+  // keeps back / forward / refresh working: each user-visible nav is
+  // a pushState, and on mount we parse the URL back into `route`
+  // before anything reads it. Writes go through `navigate({...})`
+  // rather than direct assignment so the push-vs-replace decision is
+  // explicit per call site.
+  const showSettings = $derived(route.modal === 'settings');
+  const showHelp = $derived(route.modal === 'help');
+  const showMemories = $derived(route.modal === 'memories');
+  const showCookbook = $derived(route.modal === 'cookbook');
   /**
-   * Recipe id the Cookbook modal should open to when `showCookbook`
-   * flips true. Reset to null after the modal closes so the next
-   * open from, say, the footer button lands on the list pane.
+   * Sidebar drawer tab. Backed by `route.drawer` - absent in the URL
+   * means "chats" (the default). 'recipes' renders the cookbook list
+   * in place of the thread list. Tab switches use replaceState so a
+   * chats<->recipes flip doesn't fill history with UI-chrome entries.
    */
-  let cookbookOpenId = $state<string | null>(null);
-  /**
-   * Sidebar drawer tab. 'chats' renders the existing thread list;
-   * 'recipes' replaces the list with the user's cookbook. The tab
-   * state stays local to this component — swapping between a
-   * conversation and a recipe doesn't round-trip through app state,
-   * and the drawer closes cleanly (returning to 'chats') on next
-   * open.
-   */
-  let drawerTab = $state<'chats' | 'recipes'>('chats');
+  const drawerTab = $derived<'chats' | 'recipes'>(route.drawer ?? 'chats');
   /** Recipe-side search, separate from conversation search. */
   let recipeDrawerQuery = $state('');
   const visibleDrawerRecipes = $derived.by(() => {
@@ -139,8 +139,8 @@
   });
 
   function onPickRecipesTab(): void {
-    drawerTab = 'recipes';
-    // Load lazily — a user who never opens the Recipes tab shouldn't
+    navigate({ drawer: 'recipes' }, { replace: true });
+    // Load lazily - a user who never opens the Recipes tab shouldn't
     // pay for an extra Supabase round trip on every unlock. Once
     // loaded the list is kept fresh by the COOKBOOK_CHANGE_EVENT
     // listener registered in onMount below.
@@ -149,14 +149,22 @@
     }
   }
 
+  // When the user (or a popstate pop) lands on `?drawer=recipes`
+  // without having gone through onPickRecipesTab, still make sure the
+  // recipe list is fetched so the drawer isn't blank.
+  $effect(() => {
+    if (route.drawer !== 'recipes') return;
+    if (!app.supabase) return;
+    if (cookbook.recipes.length !== 0 || cookbook.loading) return;
+    void loadRecipes(app.supabase);
+  });
+
   function openRecipeFromDrawer(id: string): void {
-    cookbookOpenId = id;
-    showCookbook = true;
+    navigate({ modal: 'cookbook', recipe: id });
   }
 
   function onCookbookModalClose(): void {
-    showCookbook = false;
-    cookbookOpenId = null;
+    navigate({ modal: null, recipe: null });
   }
 
   function onCookbookStoreChanged(): void {
@@ -169,6 +177,16 @@
   }
 
   let activeThreadId = $state<string | null>(null);
+  // URL->component reconciliation. When `route.cid` changes without
+  // going through selectThread - i.e. the user hit Back/Forward and
+  // popstate fired syncFromUrl - pull the current thread to match.
+  // selectThread itself sets `activeThreadId` first and then navigates,
+  // so this effect sees them already in sync and no-ops. Called with
+  // `null` when the URL clears the cid (leaving chat with no thread).
+  $effect(() => {
+    if (route.cid === activeThreadId) return;
+    void selectThread(route.cid);
+  });
   let messages = $state<Message[]>([]);
   let streamingText = $state('');
   // Live companions to streamingText during a turn. `streamingReasoning`
@@ -761,13 +779,14 @@
       },
       onDelete: (id) => {
         removeThread(id);
-        // Another device just deleted the thread we're looking at —
+        // Another device just deleted the thread we're looking at -
         // close it rather than keep rendering messages that no
         // longer have a home.
         if (activeThreadId === id) {
           activeThreadId = null;
           messages = [];
           setSessionThreadId(null);
+          navigate({ cid: null });
         }
       },
     });
@@ -812,7 +831,10 @@
       if (!shared) return;
       composer = composer ? `${composer}\n\n${shared}` : shared;
       if (location.search.includes('share=pending')) {
-        const clean = location.pathname + location.hash;
+        // buildSearch drops only the routing keys we own, so
+        // ?share=pending gets stripped while routed state
+        // (?cid=..., ?modal=..., etc.) rides through untouched.
+        const clean = location.pathname + buildSearch(route) + location.hash;
         history.replaceState(null, '', clean);
       }
       await tick();
@@ -892,13 +914,26 @@
       archivedLoading = false;
       if (!threadRestoreAttempted) {
         threadRestoreAttempted = true;
-        // On first load within a tab, restore whichever conversation was
-        // open last time. Only kicks in if the id still exists in a
-        // loaded bucket — a thread buried deep in Older would miss, and
-        // that's acceptable (the user opens the drawer and clicks it).
+        // URL wins: if the inbound URL already set `route.cid`, the
+        // reconcile $effect will have kicked off selectThread for it
+        // already - all we do here is confirm the thread actually
+        // exists in a loaded bucket. If it doesn't (stale bookmark,
+        // or a thread deleted elsewhere), strip it from the URL so
+        // the sidebar doesn't render a phantom highlight.
+        if (route.cid) {
+          if (!findThread(route.cid)) {
+            navigate({ cid: null }, { replace: true });
+          }
+          return;
+        }
+        // URL was bare - fall back to the sessionStorage copy of the
+        // last-open thread. Same existence check, then mirror the id
+        // into the URL via replaceState so refresh-from-here is
+        // stable (no more dependence on sessionStorage once the URL
+        // holds the id).
         const restored = getSessionThreadId();
         if (restored && findThread(restored)) {
-          void selectThread(restored);
+          navigate({ cid: restored }, { replace: true });
           return;
         }
       }
@@ -906,6 +941,7 @@
         activeThreadId = null;
         messages = [];
         setSessionThreadId(null);
+        navigate({ cid: null });
       }
     } catch {
       // Best-effort: supabase-js re-throws the raw fetch TypeError
@@ -984,12 +1020,16 @@
     if (activeThreadId === draft.id) {
       activeThreadId = real.id;
       setSessionThreadId(real.id);
+      navigate({ cid: real.id }, { replace: true });
     }
     return real;
   }
 
-  async function selectThread(id: string): Promise<void> {
-    if (!app.supabase) return;
+  async function selectThread(id: string | null): Promise<void> {
+    // No-op if the target matches our current state. Prevents a
+    // feedback loop with the route-reconciling effect above, which
+    // calls selectThread when route.cid changes externally.
+    if (id === activeThreadId) return;
     // Abandoned-draft cleanup: if the previously active thread was a draft
     // (never sent, never renamed), drop it from the sidebar rather than
     // leaving an empty placeholder behind once the user moves on.
@@ -1001,10 +1041,15 @@
     }
     activeThreadId = id;
     setSessionThreadId(id);
+    // Mirror the active thread into the URL. `navigate` no-ops when
+    // route.cid is already `id` (e.g. this call originated from a
+    // popstate-driven reconcile effect), so the back stack doesn't
+    // grow on browser-back navigations.
+    navigate({ cid: id });
     messages = [];
     streamingText = '';
     // Re-seed the active prompt set from defaults whenever the user
-    // switches threads — per-thread toggles are not persisted, so a
+    // switches threads - per-thread toggles are not persisted, so a
     // thread switch is effectively a fresh start for this UI state.
     resetActivePromptsToDefaults();
     // Opening a thread starts in follow-bottom mode; the autoscroll
@@ -1015,18 +1060,25 @@
     // the new one.
     toolTimings = {};
     // On mobile the drawer is modal, so dismiss it once a thread is chosen.
-    // On desktop the sidebar is a persistent column — leave it open.
+    // On desktop the sidebar is a persistent column - leave it open.
     if (
+      id !== null &&
       typeof window !== 'undefined' &&
       window.matchMedia('(max-width: 720px)').matches
     ) {
       drawerOpen = false;
     }
-    // Drafts aren't in Supabase yet — no messages to fetch.
+    if (id === null) return;
+    if (!app.supabase) return;
+    // Drafts aren't in Supabase yet - no messages to fetch.
     const t = findThread(id);
     if (t?.isDraft) return;
     try {
-      messages = await app.supabase.listMessages(id);
+      const fetched = await app.supabase.listMessages(id);
+      // The user may have hopped threads while we were awaiting - guard
+      // against a late response stomping newer state.
+      if (activeThreadId !== id) return;
+      messages = fetched;
     } catch (err) {
       error = { text: err instanceof Error ? err.message : String(err) };
     }
@@ -1291,6 +1343,7 @@
         activeThreadId = null;
         messages = [];
         setSessionThreadId(null);
+        navigate({ cid: null });
       }
     } catch (err) {
       error = { text: err instanceof Error ? err.message : String(err) };
@@ -1452,12 +1505,13 @@
     // want to recover from.
     let needsAutoTitle = false;
     if (!active) {
-      // No thread selected — create one on the fly.
+      // No thread selected - create one on the fly.
       const t = await app.supabase.createThread(DEFAULT_TITLE);
       rebucketThread(t);
       threadId = t.id;
       activeThreadId = t.id;
       setSessionThreadId(t.id);
+      navigate({ cid: t.id }, { replace: true });
       needsAutoTitle = true;
     } else if (active.isDraft) {
       // First send on a draft — materialize it now, preserving any model
@@ -2483,18 +2537,15 @@
   <Auth />
 {:else if showSettings}
   <Settings
-    onClose={() => (showSettings = false)}
-    onOpenMemories={() => {
-      showSettings = false;
-      showMemories = true;
-    }}
+    onClose={() => navigate({ modal: null })}
+    onOpenMemories={() => navigate({ modal: 'memories' })}
   />
 {:else if showHelp}
-  <Help onClose={() => (showHelp = false)} />
+  <Help onClose={() => navigate({ modal: null, doc: null })} />
 {:else if showMemories}
-  <Memories onClose={() => (showMemories = false)} />
+  <Memories onClose={() => navigate({ modal: null })} />
 {:else if showCookbook}
-  <Cookbook onClose={onCookbookModalClose} initialRecipeId={cookbookOpenId} />
+  <Cookbook onClose={onCookbookModalClose} />
 {:else}
   <div class="shell" class:drawer-open={drawerOpen}>
     <div
@@ -2522,7 +2573,7 @@
             class="sidebar-tab"
             class:active={drawerTab === 'chats'}
             aria-selected={drawerTab === 'chats'}
-            onclick={() => (drawerTab = 'chats')}
+            onclick={() => navigate({ drawer: null }, { replace: true })}
           >Chats</button>
           <button
             type="button"
@@ -2764,7 +2815,7 @@
             <button
               type="button"
               class="secondary"
-              onclick={() => (showCookbook = true)}
+              onclick={() => navigate({ modal: 'cookbook' })}
             >Open cookbook</button>
           </div>
         </div>
@@ -2780,7 +2831,7 @@
                pipeline). See src/screens/Help.svelte. -->
           <button
             class="secondary icon-btn"
-            onclick={() => (showHelp = true)}
+            onclick={() => navigate({ modal: 'help' })}
             title="Help"
             aria-label="Help"
           >
@@ -2801,7 +2852,7 @@
                a closed book anyway. -->
           <button
             class="secondary icon-btn"
-            onclick={() => (showMemories = true)}
+            onclick={() => navigate({ modal: 'memories' })}
             title="Memories"
             aria-label="Memories"
           >
@@ -2812,7 +2863,7 @@
           </button>
           <button
             class="secondary icon-btn"
-            onclick={() => (showCookbook = true)}
+            onclick={() => navigate({ modal: 'cookbook' })}
             title="Cookbook"
             aria-label="Cookbook"
           >
@@ -2828,7 +2879,7 @@
           </button>
           <button
             class="secondary icon-btn"
-            onclick={() => (showSettings = true)}
+            onclick={() => navigate({ modal: 'settings' })}
             title="Settings"
             aria-label="Settings"
           >
