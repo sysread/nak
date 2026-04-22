@@ -1,24 +1,32 @@
 <script lang="ts">
   /**
-   * Subtle top-right toast stack for samskara-formation events.
+   * Sticky mood indicator for samskara-formation events.
    *
    * Listens on `window` for `SAMSKARA_MINT_EVENT` (dispatched by
-   * SamskaraManager when the worker reports a mint commit). Each
-   * event pushes a new toast onto the stack; the stack renders
-   * newest-first (top) and each toast auto-dismisses after
-   * `DISMISS_MS`. Tap / click dismisses early.
+   * SamskaraManager when the worker reports a mint commit). Renders
+   * a single emoji that reflects the most recent mint's valence and
+   * stays visible for the duration of the current conversation.
+   * Swaps to the newer emoji when another mint fires; clears when
+   * the user switches threads (tracked via `route.cid`).
    *
-   * Rendered as a fixed-position column in the top-right corner, below
-   * where the UpdateBanner sits so both can coexist on a rare version-
-   * deploy overlap. Safe-area insets clear the iOS notch on installed
-   * PWA.
+   * Earlier revision auto-dismissed each toast after 4s and stacked
+   * up to six at once. User feedback: the emoji was vanishing before
+   * they could connect it to whatever it was reacting to. Keeping
+   * the latest one in place until the next mint (or a thread
+   * switch) turns it into a persistent "current mood" glance rather
+   * than a fleeting alert.
    *
-   * Deliberately minimal chrome - one emoji per toast, no text, no
-   * border. The predictive-model formation is opaque to the user
-   * beyond this glance; anything more would either leak the raw
-   * prediction text (privacy-unfriendly) or invite the user to reason
-   * about their own bias model (see the "opaque to the user" gotcha
-   * in docs/dev/samskara.md).
+   * Rendered as a fixed-position pill in the top-right corner, below
+   * where the UpdateBanner sits so both can coexist on a rare
+   * version-deploy overlap. Safe-area insets clear the iOS notch on
+   * installed PWA.
+   *
+   * Deliberately minimal chrome - one emoji, no text, no border.
+   * The predictive-model formation is opaque to the user beyond this
+   * glance; anything more would either leak the raw prediction text
+   * (privacy-unfriendly) or invite the user to reason about their
+   * own bias model (see the "opaque to the user" gotcha in
+   * docs/dev/samskara.md).
    */
   import { onMount } from 'svelte';
   import { fly } from 'svelte/transition';
@@ -28,100 +36,99 @@
     valenceToEmoji,
     type SamskaraMintEventDetail,
   } from '$lib/samskara/events';
+  import { route } from '$lib/routing.svelte';
 
-  interface Toast {
+  interface Mood {
     /** Stable key for Svelte's keyed each. Monotonic counter beats
-     *  Date.now() because back-to-back mints in the same ms still get
-     *  distinct ids. */
+     *  Date.now() because back-to-back mints in the same ms still
+     *  get distinct ids, and the key drives the fly transition so a
+     *  new mint visibly replaces the old one. */
     id: number;
     emoji: string;
-    /** Tier is carried for future styling differentiation (tier-2 could
-     *  get a subtle halo, for instance). Not used visually in v1. */
+    /** Tier is carried for future styling differentiation (tier-2
+     *  could get a subtle halo, for instance). Not used visually
+     *  today. */
     tier: 1 | 2;
   }
 
-  /** Visible lifetime before the toast fades out. Long enough for a
-   *  glance, short enough not to linger when several fire in quick
-   *  succession. */
-  const DISMISS_MS = 4_000;
-  /** Transition durations - intro slightly shorter than outro so the
-   *  outgoing toast doesn't clip while the next one slides in. */
   const FLY_IN_MS = 220;
   const FLY_OUT_MS = 320;
 
-  let toasts = $state<Toast[]>([]);
+  let current = $state<Mood | null>(null);
   let nextId = 0;
 
-  function dismiss(id: number): void {
-    toasts = toasts.filter((t) => t.id !== id);
-  }
-
-  function push(detail: SamskaraMintEventDetail): void {
-    const id = ++nextId;
-    const toast: Toast = {
-      id,
+  function adopt(detail: SamskaraMintEventDetail): void {
+    current = {
+      id: ++nextId,
       emoji: valenceToEmoji(detail.valence),
       tier: detail.tier,
     };
-    // Newest on top - prepend so the stack reads top-down as "most
-    // recent first". A cap prevents a flurry of mints from piling up
-    // off-screen on a small viewport.
-    toasts = [toast, ...toasts].slice(0, 6);
-    window.setTimeout(() => dismiss(id), DISMISS_MS);
   }
 
   onMount(() => {
     const handler = (evt: Event): void => {
       const ce = evt as CustomEvent<SamskaraMintEventDetail>;
       if (!ce.detail) return;
-      push(ce.detail);
+      adopt(ce.detail);
     };
     window.addEventListener(SAMSKARA_MINT_EVENT, handler);
     return () => {
       window.removeEventListener(SAMSKARA_MINT_EVENT, handler);
     };
   });
+
+  // Clear on thread switch. The "current mood" belongs to the
+  // conversation the user is currently reading; carrying a mood
+  // across threads reads as incoherent because a samskara that
+  // fired in thread A has no narrative relationship to thread B.
+  // Reads route.cid reactively so the effect re-runs whenever the
+  // active thread id changes; also fires once on mount (current is
+  // already null at that point, so the assignment is a no-op).
+  $effect(() => {
+    const _ = route.cid;
+    void _;
+    current = null;
+  });
 </script>
 
 <div
-  class="samskara-toasts"
+  class="samskara-mood"
   aria-live="polite"
-  aria-atomic="false"
+  aria-atomic="true"
   aria-label="Samskara formation activity"
 >
-  {#each toasts as toast (toast.id)}
-    <button
-      type="button"
-      class="toast"
-      class:tier-2={toast.tier === 2}
-      onclick={() => dismiss(toast.id)}
-      aria-label={`Samskara formed (tier ${toast.tier})`}
-      in:fly={{ x: 24, duration: FLY_IN_MS, easing: cubicOut }}
-      out:fly={{ x: 24, duration: FLY_OUT_MS, easing: cubicOut }}
-    >
-      <span class="emoji" aria-hidden="true">{toast.emoji}</span>
-    </button>
-  {/each}
+  {#if current}
+    {#key current.id}
+      <div
+        class="mood-pill"
+        class:tier-2={current.tier === 2}
+        aria-label={`Samskara formed (tier ${current.tier})`}
+        in:fly={{ x: 24, duration: FLY_IN_MS, easing: cubicOut }}
+        out:fly={{ x: 24, duration: FLY_OUT_MS, easing: cubicOut }}
+      >
+        <span class="emoji" aria-hidden="true">{current.emoji}</span>
+      </div>
+    {/key}
+  {/if}
 </div>
 
 <style>
-  /* Fixed column in the top-right. Offset just below the UpdateBanner
-     slot (3rem gives clearance for the banner pill + a breath of space)
-     so both coexist on the rare overlap. z-index 90 sits above the
-     drawer (20) and modals (30) but below the update banner (100). */
-  .samskara-toasts {
+  /* Fixed pill in the top-right. Offset just below the UpdateBanner
+     slot (3rem gives clearance for the banner pill + a breath of
+     space) so both coexist on the rare overlap. z-index 90 sits
+     above the drawer (20) and modals (30) but below the update
+     banner (100). pointer-events:none on the container so the
+     indicator never blocks clicks on message-pane content beneath
+     it - this is a glance cue, not a control. */
+  .samskara-mood {
     position: fixed;
     top: calc(env(safe-area-inset-top, 0px) + 3rem);
     right: calc(env(safe-area-inset-right, 0px) + 0.75rem);
     z-index: 90;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
     pointer-events: none;
   }
 
-  .toast {
-    pointer-events: auto;
+  .mood-pill {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -133,30 +140,18 @@
     border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
     border-radius: 50%;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
-    cursor: pointer;
-    transition: transform 120ms var(--ease, ease-out);
-    /* Keep it understated - this is a glance cue, not a call to
-       action. Pointer feedback is the only affordance we lean on. */
+    /* Glance cue, not interactive. No cursor, no hover scale, no
+       click handler. Keeps it understated. */
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
-  }
-
-  .toast:hover,
-  .toast:focus-visible {
-    transform: scale(1.06);
-    outline: none;
-  }
-
-  .toast:active {
-    transform: scale(0.96);
   }
 
   /* Tier-2 reserved hook - lands when compound-of-compounds minting
      ships (see runMintTier2Phase in loop.ts). Currently identical to
      tier-1 because no tier-2 mints fire; the class is here so the
-     visual differentiation can happen without another worker/ UI
+     visual differentiation can happen without another worker/UI
      round trip when the phase wakes up. */
-  .toast.tier-2 {
+  .mood-pill.tier-2 {
     box-shadow:
       0 4px 12px rgba(0, 0, 0, 0.22),
       0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
