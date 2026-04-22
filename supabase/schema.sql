@@ -1490,6 +1490,18 @@ drop policy if exists "samskara associations self-deletable" on public.samskara_
 create policy "samskara associations self-deletable" on public.samskara_associations
   for delete using (auth.uid() = user_id);
 
+-- Auto-populate user_id on insert from the caller's session. The
+-- pair-relate phase in src/lib/agents/samskara/loop.ts upserts
+-- rows via a raw .from('samskara_associations').upsert(...) call
+-- that only sets (a_id, b_id, articulated_relation, kind,
+-- reinforcement, last_reinforced_at) - it does NOT set user_id.
+-- Without this default, user_id lands as NULL, the RLS `with
+-- check (auth.uid() = user_id)` policy fails, and the upsert
+-- returns a 42501. Idempotent: `set default` overwrites any
+-- prior default, so re-running the schema is safe.
+alter table public.samskara_associations
+  alter column user_id set default auth.uid();
+
 -- Samskaras --
 --
 -- The unit. Tier 1 are minted from substrate-cluster mints; tier 2
@@ -1558,6 +1570,16 @@ drop policy if exists "samskaras self-deletable" on public.samskaras;
 create policy "samskaras self-deletable" on public.samskaras
   for delete using (auth.uid() = user_id);
 
+-- Auto-populate user_id from auth.uid() on insert. mint-tier1 in
+-- src/lib/agents/samskara/loop.ts inserts rows directly via
+-- .from('samskaras').insert({...}) and doesn't set user_id.
+-- Same RLS-failure symptom as samskara_associations above. The
+-- default + the RLS `with check (auth.uid() = user_id)` policy
+-- combine so callers can't accidentally or maliciously attribute
+-- a samskara to someone else - the session identity wins.
+alter table public.samskaras
+  alter column user_id set default auth.uid();
+
 -- Provenance --
 --
 -- Audit trail for what each samskara was minted from. Kept even if
@@ -1588,6 +1610,13 @@ create policy "samskara provenance self-insertable" on public.samskara_provenanc
 drop policy if exists "samskara provenance self-deletable" on public.samskara_provenance;
 create policy "samskara provenance self-deletable" on public.samskara_provenance
   for delete using (auth.uid() = user_id);
+
+-- Auto-populate user_id from auth.uid() on insert. Same reason as
+-- the samskaras and samskara_associations defaults: the mint
+-- phase upserts into this table with only (samskara_id, kind,
+-- ref_id, weight) set.
+alter table public.samskara_provenance
+  alter column user_id set default auth.uid();
 
 -- Fires --
 --
@@ -2115,13 +2144,21 @@ declare
   v_threshold int;
 begin
   select count(*) into v_count
-    from public.samskaras
-   where user_id = v_uid;
+    from public.samskaras s
+   where s.user_id = v_uid;
 
-  select last_regen_at, samskara_count_at_regen
+  -- Table alias required: `last_regen_at` is also the name of one
+  -- of this function's RETURNS TABLE output columns, and PL/pgSQL
+  -- treats those as implicit variables inside the function body.
+  -- Without `c.`-qualification on the select list, Postgres raises
+  -- 42702 "column reference 'last_regen_at' is ambiguous" the
+  -- moment the query is planned. Same reason this function
+  -- qualifies the user_id predicate even though only one table is
+  -- in scope: explicit is safer than magical.
+  select c.last_regen_at, c.samskara_count_at_regen
     into v_last_regen, v_count_at_regen
-    from public.samskara_compound_summary
-   where user_id = v_uid;
+    from public.samskara_compound_summary c
+   where c.user_id = v_uid;
 
   -- Threshold formula: K_REGEN=5, log10 dampening, floor at 3 so a
   -- new corpus regenerates after as few as 3 mints rather than
