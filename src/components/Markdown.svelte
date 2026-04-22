@@ -23,10 +23,19 @@
   // Re-render on every content change. The renderer is pure and fast enough
   // for streaming: re-parsing a 2KB buffer on each SSE delta is well under
   // a frame, and $derived caches between non-changing updates elsewhere.
+  //
+  // Trim outer whitespace at render time so existing chat rows persisted
+  // before the write-side trim (see SupabaseService.addMessage) still
+  // render flush. Leading whitespace in particular is load-bearing here:
+  // marked treats four-space indents as code blocks, so a response
+  // that arrived as "    Here is the answer" would render as a single-
+  // line code block instead of prose. Trim is safe even for docs and
+  // cookbook bodies - leading/trailing whitespace in a markdown source
+  // is never meaningful.
   const html = $derived.by(() => {
     // Track `langVersion` so late-arriving grammars trigger a re-render.
     void langVersion;
-    return renderMarkdown(content ?? '');
+    return renderMarkdown((content ?? '').trim());
   });
 
   // Static icon markup for the code-fence "Copy" button. We can't emit

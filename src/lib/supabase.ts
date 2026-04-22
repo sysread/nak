@@ -1609,7 +1609,17 @@ export class SupabaseService {
       citations?: Citation[] | null;
     } = {}
   ): Promise<Message> {
-    const row: Record<string, unknown> = { thread_id: threadId, role, content };
+    // Trim outer whitespace at the write boundary. LLM responses
+    // sometimes land with a leading newline or indent (often from
+    // Venice's SSE parser peeling the reasoning channel off the
+    // content stream), which the markdown renderer interprets as a
+    // code-indent and sets the whole reply at a blockquote offset.
+    // User inputs occasionally carry trailing blank lines from
+    // mobile autocomplete or paste. Trimming at insert keeps the DB
+    // canonical; the Markdown component trims at render too so
+    // existing rows benefit without a backfill.
+    const trimmedContent = content.trim();
+    const row: Record<string, unknown> = { thread_id: threadId, role, content: trimmedContent };
     if (opts.tool_calls !== undefined) row.tool_calls = opts.tool_calls;
     if (opts.tool_call_id !== undefined) row.tool_call_id = opts.tool_call_id;
     if (opts.name !== undefined) row.name = opts.name;
