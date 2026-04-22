@@ -18,9 +18,9 @@
    * corpus-wide samskara list (same reason). When/if the user asks
    * for those, they're additional sections below the existing ones.
    */
+  import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
   import { route } from '$lib/routing.svelte';
-  import { createLogger } from '$lib/logger.svelte';
   import type {
     SamskaraSubstrateDiagnosticRow,
     SamskaraFireDiagnosticRow,
@@ -31,10 +31,10 @@
   }
   let { onClose }: Props = $props();
 
-  // Source tag reuses 'samskara' so diagnostic reads appear alongside
-  // the other chat-loop-side samskara breadcrumbs in the Logs drawer.
-  // Useful when the user opens both panels to watch a fire happen.
-  const log = createLogger('samskara');
+  // Deliberately NO createLogger here. The diagnostics screen is the
+  // observer; its own fetches would clutter the drawer the user is
+  // likely watching alongside it. Errors surface in the in-component
+  // `error` state instead.
 
   interface CompoundSummary {
     summary: string | null;
@@ -56,7 +56,13 @@
   let counts = $state<Counts | null>(null);
   let substrate = $state<SamskaraSubstrateDiagnosticRow[]>([]);
   let fires = $state<SamskaraFireDiagnosticRow[]>([]);
-  const threadId = $derived(route.cid);
+  // Snapshot route.cid ONCE at mount. The modal is full-screen so
+  // the user can't switch threads without first closing us; a fresh
+  // open re-runs onMount. Intentionally NOT reactive to avoid the
+  // effect-retriggering stampede that an earlier version produced
+  // during the cold-load path when route.cid + app.supabase were
+  // both still settling.
+  const threadId = route.cid;
 
   // Group fires by cohort so the renderer draws "one cohort" cards
   // instead of one row per (cohort, samskara) pair. Cohort order
@@ -91,6 +97,20 @@
     return [...groups.values()];
   });
 
+  // Sequenced fetch. Earlier version ran 4 top-level queries in
+  // Promise.all and the counts helper ran 6 more underneath, for a
+  // fan-out of up to 9 concurrent Supabase calls. On a cold-load
+  // path those all hit `@supabase/gotrue-js`'s navigator.locks-
+  // based auth-token lock at once, alongside the main-thread
+  // refreshSettings and five worker clients. The lock's 5s timeout
+  // triggered, supabase-js force-acquired, and in-flight fetches
+  // failed with "TypeError: Failed to fetch". Running the queries
+  // sequentially keeps the lock uncontested; the full modal loads
+  // in ~500-800ms, which is fine for an explicitly-opened panel.
+  //
+  // Each section is wrapped independently so a single-query failure
+  // doesn't blank the whole screen. The section either renders its
+  // data or shows its own "couldn't load" line.
   async function refresh(): Promise<void> {
     if (!app.supabase) {
       error = 'Not connected to Supabase yet.';
@@ -99,37 +119,49 @@
     }
     loading = true;
     error = null;
-    log.debug('diagnostics: fetching', { threadId });
+    const sb = app.supabase;
+
     try {
-      // One thread-scoped thread id is the slow path; the rest run in
-      // parallel. When no thread is selected we still fetch compound
-      // summary + corpus counters (with a zero-thread stand-in) so
-      // the modal remains useful on the empty state.
-      const effectiveThread = threadId ?? '00000000-0000-0000-0000-000000000000';
-      const [c, n, sub, fir] = await Promise.all([
-        app.supabase.samskaraGetCompoundSummary(),
-        app.supabase.samskaraDiagnosticsCounts(effectiveThread),
-        threadId ? app.supabase.samskaraListSubstrateForThread(threadId) : Promise.resolve([]),
-        threadId ? app.supabase.samskaraListFiresForThread(threadId) : Promise.resolve([]),
-      ]);
-      compound = c;
-      counts = n;
-      substrate = sub;
-      fires = fir;
-      log.debug('diagnostics: loaded', {
-        substrate: sub.length,
-        fires: fir.length,
-        totalSamskaras: n.totalSamskaras,
-      });
+      compound = await sb.samskaraGetCompoundSummary();
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-      log.warn('diagnostics: fetch failed', err);
-    } finally {
-      loading = false;
+      compound = null;
+      error = `Compound summary: ${err instanceof Error ? err.message : String(err)}`;
     }
+
+    try {
+      // When no thread is selected we still fetch corpus counters
+      // with a zero-UUID stand-in, so the modal's Overview remains
+      // useful on the empty state.
+      const effectiveThread = threadId ?? '00000000-0000-0000-0000-000000000000';
+      counts = await sb.samskaraDiagnosticsCounts(effectiveThread);
+    } catch (err) {
+      counts = null;
+      error = error ?? `Counts: ${err instanceof Error ? err.message : String(err)}`;
+    }
+
+    if (threadId) {
+      try {
+        substrate = await sb.samskaraListSubstrateForThread(threadId);
+      } catch (err) {
+        substrate = [];
+        error = error ?? `Substrate: ${err instanceof Error ? err.message : String(err)}`;
+      }
+
+      try {
+        fires = await sb.samskaraListFiresForThread(threadId);
+      } catch (err) {
+        fires = [];
+        error = error ?? `Fires: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    } else {
+      substrate = [];
+      fires = [];
+    }
+
+    loading = false;
   }
 
-  $effect(() => {
+  onMount(() => {
     void refresh();
   });
 

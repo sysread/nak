@@ -2167,10 +2167,15 @@ export class SupabaseService {
   }
 
   /**
-   * Corpus-level counters for the diagnostics overview. Each head-only
-   * count is a single round trip; the four together are cheap. Kept
-   * as a composite method so the caller gets one awaitable and one
-   * failure mode to handle.
+   * Corpus-level counters for the diagnostics overview. Six head-only
+   * count queries, awaited sequentially on purpose. Parallel Promise.all
+   * here produced 6 concurrent auth-lock acquisitions in
+   * `@supabase/gotrue-js`, which - stacked with the main-thread
+   * refreshSettings and five worker clients on a cold-load path -
+   * tripped the 5s lock timeout and failed every in-flight fetch.
+   * Running sequentially takes ~300ms total warm, which is fine for a
+   * diagnostics-only call. If this ever matters for UX, fold the six
+   * counts into a single Postgres RPC instead.
    */
   async samskaraDiagnosticsCounts(threadId: string): Promise<{
     totalSamskaras: number;
@@ -2181,22 +2186,41 @@ export class SupabaseService {
     associations: number;
   }> {
     const client = this.client;
-    const [totalR, t1R, t2R, subR, fireR, assocR] = await Promise.all([
-      client.from('samskaras').select('id', { count: 'exact', head: true }),
-      client.from('samskaras').select('id', { count: 'exact', head: true }).eq('tier', 1),
-      client.from('samskaras').select('id', { count: 'exact', head: true }).eq('tier', 2),
-      client
-        .from('samskara_substrate')
-        .select('id', { count: 'exact', head: true })
-        .eq('thread_id', threadId),
-      client
-        .from('samskara_fires')
-        .select('id', { count: 'exact', head: true })
-        .eq('thread_id', threadId),
-      client.from('samskara_associations').select('id', { count: 'exact', head: true }),
-    ]);
-    const pickError = totalR.error ?? t1R.error ?? t2R.error ?? subR.error ?? fireR.error ?? assocR.error;
-    if (pickError) throw new SupabaseError(pickError.message);
+
+    const totalR = await client
+      .from('samskaras')
+      .select('id', { count: 'exact', head: true });
+    if (totalR.error) throw new SupabaseError(totalR.error.message);
+
+    const t1R = await client
+      .from('samskaras')
+      .select('id', { count: 'exact', head: true })
+      .eq('tier', 1);
+    if (t1R.error) throw new SupabaseError(t1R.error.message);
+
+    const t2R = await client
+      .from('samskaras')
+      .select('id', { count: 'exact', head: true })
+      .eq('tier', 2);
+    if (t2R.error) throw new SupabaseError(t2R.error.message);
+
+    const subR = await client
+      .from('samskara_substrate')
+      .select('id', { count: 'exact', head: true })
+      .eq('thread_id', threadId);
+    if (subR.error) throw new SupabaseError(subR.error.message);
+
+    const fireR = await client
+      .from('samskara_fires')
+      .select('id', { count: 'exact', head: true })
+      .eq('thread_id', threadId);
+    if (fireR.error) throw new SupabaseError(fireR.error.message);
+
+    const assocR = await client
+      .from('samskara_associations')
+      .select('id', { count: 'exact', head: true });
+    if (assocR.error) throw new SupabaseError(assocR.error.message);
+
     return {
       totalSamskaras: totalR.count ?? 0,
       tier1Samskaras: t1R.count ?? 0,
