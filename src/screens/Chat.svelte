@@ -104,7 +104,11 @@
   import ToolCalls from '../components/ToolCalls.svelte';
   import MessageAttachments from '../components/MessageAttachments.svelte';
   import ExtractedTextDrawer from '../components/ExtractedTextDrawer.svelte';
+  import LogsDrawer from '../components/LogsDrawer.svelte';
   import SamskaraToasts from '../components/SamskaraToasts.svelte';
+  import { logsDrawer, createLogger } from '$lib/logger.svelte';
+
+  const log = createLogger('chat');
   import { VeniceError, type Citation, type VeniceMessage } from '$lib/venice';
 
   const DEFAULT_TITLE = 'New conversation';
@@ -1513,11 +1517,11 @@
           const rows = await app.supabase.addAttachments(userMsg.id, newRows);
           userMsg.attachments = rows;
         } catch (err) {
-          // Non-fatal: surface a console warning but keep going. The
-          // user's typed text still gets a reply — the attachments
-          // just won't make it into history.
+          // Non-fatal: surface a warning but keep going. The user's
+          // typed text still gets a reply — the attachments just
+          // won't make it into history.
 
-          console.warn('[attachments] persistAttachments failed', err);
+          log.warn('persistAttachments failed', err);
           userMsg.attachments = [];
         }
       } else {
@@ -2907,6 +2911,26 @@
             <path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
           </svg>
         </button>
+        <!-- Logs drawer toggle. Document-glyph icon so the button reads
+             as "open the reading panel" rather than "new document".
+             Wired to the logsDrawer rune singleton; the LogsDrawer
+             component mounted at Chat root watches the same state. -->
+        <button
+          class="secondary icon-btn logs-toggle"
+          onclick={() => logsDrawer.toggle()}
+          title={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
+          aria-label={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
+          aria-expanded={logsDrawer.state.open}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+            <line x1="10" y1="9" x2="8" y2="9" />
+          </svg>
+        </button>
         <div class="title-wrap">
           {#if !currentThread}
             <div class="subtle">Start a new conversation</div>
@@ -3430,6 +3454,12 @@
        without the transcript being a containing block for its
        fixed positioning. -->
   <ExtractedTextDrawer />
+  <!-- Global left-side drawer for the in-app log buffer. Controlled
+       by the `logsDrawer` rune singleton; the scroll-icon button in
+       the top bar toggles it. Mounted at Chat root for the same
+       reason as ExtractedTextDrawer - overlay positioning can't sit
+       inside a containing block. -->
+  <LogsDrawer />
   <!-- Top-right toast stack for samskara-formation events. Listens
        on a window CustomEvent dispatched by SamskaraManager when
        the formation worker reports a fresh mint. Subtle by design -

@@ -17,6 +17,9 @@ import type { Agent } from '../types';
 import type { SupabaseService } from '../../supabase';
 import type { LeaseCoordinator } from '../../embeddings/lease';
 import type { ReflectionInput, ReflectionOutput } from './agent';
+import { createLogger } from '../../logger.svelte';
+
+const log = createLogger('reflection-worker');
 
 export type CycleResult =
   /** Just took the lease on this cycle — no work yet, caller should recurse immediately. */
@@ -94,13 +97,12 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   }
   if (!claim) return 'empty-queue';
 
-  // Task pickup — one log per claimed thread so the dev console can
-  // surface the worker's activity. Keep the headline on .log (always
+  // Task pickup — one log per claimed thread so the log drawer can
+  // surface the worker's activity. Keep the headline on .info (always
   // on) and the specifics on .debug (filter-out-able when not
   // actively debugging).
-  // eslint-disable-next-line no-console
-  console.log(
-    `[reflection-worker] picked up thread ${claim.threadId} @ msg ${claim.terminalMsgId}`
+  log.info(
+    `picked up thread ${claim.threadId} @ msg ${claim.terminalMsgId}`
   );
 
   // Run the agent. The agent itself catches its own errors and
@@ -115,9 +117,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       signal: ctx.signal,
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.debug(
-      `[reflection-worker] thread ${claim.threadId} threw unexpectedly:`,
+    log.debug(
+      `thread ${claim.threadId} threw unexpectedly`,
       err instanceof Error ? err.message : String(err)
     );
     return 'error';
@@ -136,9 +137,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   // mark because last_reflected_msg_id is the "definitely done"
   // pointer, and the run didn't definitely complete.
   if (runResult.stoppedReason === 'error') {
-    // eslint-disable-next-line no-console
-    console.debug(
-      `[reflection-worker] thread ${claim.threadId} agent reported error:`,
+    log.debug(
+      `thread ${claim.threadId} agent reported error`,
       runResult.error ?? '(no message)'
     );
     return 'error';
@@ -154,26 +154,23 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       claim.terminalMsgId
     );
     if (marked) {
-      // eslint-disable-next-line no-console
-      console.log(
-        `[reflection-worker] finished thread ${claim.threadId} ` +
+      log.info(
+        `finished thread ${claim.threadId} ` +
           `(${runResult.toolCalls} tool calls over ${runResult.output.inputMessageCount} messages)`
       );
       // Final text is discarded per the prompt ("reply with a single
       // word") but useful breadcrumb when actively debugging —
-      // surface it on .debug so a noisy production console stays
+      // surface it on .debug so a noisy production drawer stays
       // quiet.
       if (runResult.output.finalText.length > 0) {
-        // eslint-disable-next-line no-console
-        console.debug(
-          `[reflection-worker] thread ${claim.threadId} final text:`,
+        log.debug(
+          `thread ${claim.threadId} final text`,
           runResult.output.finalText
         );
       }
     } else {
-      // eslint-disable-next-line no-console
-      console.debug(
-        `[reflection-worker] claim lost on thread ${claim.threadId} — ` +
+      log.debug(
+        `claim lost on thread ${claim.threadId} - ` +
           'another device took over mid-reflection; any memories already written stay'
       );
     }
@@ -185,9 +182,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     // the reflection. Re-reflection is safe: the agent will find
     // its own already-written memories via memory_search and
     // memory_update rather than duplicate.
-    // eslint-disable-next-line no-console
-    console.debug(
-      `[reflection-worker] mark RPC threw for thread ${claim.threadId}:`,
+    log.debug(
+      `mark RPC threw for thread ${claim.threadId}`,
       err instanceof Error ? err.message : String(err)
     );
     return 'error';

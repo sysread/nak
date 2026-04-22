@@ -18,6 +18,16 @@ import type { SupabaseService } from '../../supabase';
 import { MODELS } from '../../models';
 import { makeHolderId } from '../../embeddings/manager';
 import { notifySamskaraMint } from '../../samskara/events';
+import {
+  appendFromWorker,
+  createLogger,
+  isWorkerLogMessage,
+} from '../../logger.svelte';
+
+// See reflection/manager.ts for why this exists. Covers legacy
+// `{type:'log'}` messages; structured `nak-log` entries land in the
+// main-thread buffer directly via appendFromWorker.
+const workerLog = createLogger('samskara-worker');
 
 export interface StartOpts {
   supabase: SupabaseService;
@@ -99,6 +109,10 @@ export class SamskaraManager {
       name: 'nak-samskara',
     });
     worker.addEventListener('message', (evt: MessageEvent) => {
+      if (isWorkerLogMessage(evt.data)) {
+        appendFromWorker(evt.data.entry);
+        return;
+      }
       const data = evt.data as {
         type?: string;
         level?: string;
@@ -108,9 +122,9 @@ export class SamskaraManager {
       };
       if (!data || typeof data !== 'object') return;
       if (data.type === 'log' && typeof data.message === 'string') {
-        const level = data.level === 'error' ? 'error' : data.level === 'warn' ? 'warn' : 'log';
-        // eslint-disable-next-line no-console
-        console[level]('[samskara-worker]', data.message);
+        const level: 'info' | 'warn' | 'error' =
+          data.level === 'error' ? 'error' : data.level === 'warn' ? 'warn' : 'info';
+        workerLog[level](data.message);
       } else if (
         data.type === 'mint' &&
         (data.tier === 1 || data.tier === 2) &&

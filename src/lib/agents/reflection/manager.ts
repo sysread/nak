@@ -23,6 +23,17 @@ import type { AppConfig } from '../../config';
 import type { SupabaseService } from '../../supabase';
 import { VENICE_REFLECTION_MODEL } from '../../models';
 import { makeHolderId } from '../../embeddings/manager';
+import {
+  appendFromWorker,
+  createLogger,
+  isWorkerLogMessage,
+} from '../../logger.svelte';
+
+// Logger used for the legacy freeform `{type:'log'}` messages the
+// worker entry still emits directly (setSession failure, lease-lost
+// warning). Structured `nak-log` entries bypass this and land in the
+// buffer with their original source intact.
+const workerLog = createLogger('reflection-worker');
 
 export interface StartOpts {
   /**
@@ -132,12 +143,22 @@ export class ReflectionManager {
       name: 'nak-reflection',
     });
     worker.addEventListener('message', (evt: MessageEvent) => {
+      if (isWorkerLogMessage(evt.data)) {
+        // Structured log from the worker - route it into the main-
+        // thread log drawer. The worker already mirrored to its own
+        // console on the way out.
+        appendFromWorker(evt.data.entry);
+        return;
+      }
       const data = evt.data as { type?: string; level?: string; message?: string };
       if (!data || typeof data !== 'object') return;
       if (data.type === 'log' && typeof data.message === 'string') {
-        const level = data.level === 'error' ? 'error' : data.level === 'warn' ? 'warn' : 'log';
-        // eslint-disable-next-line no-console
-        console[level]('[reflection-worker]', data.message);
+        // Legacy freeform log shape emitted from worker.ts itself
+        // (setSession failure, lease-lost warning). Funnel it
+        // through the same logger so the drawer catches these too.
+        const level: 'info' | 'warn' | 'error' =
+          data.level === 'error' ? 'error' : data.level === 'warn' ? 'warn' : 'info';
+        workerLog[level](data.message);
       }
       // `progress` messages are informational — the UI doesn't
       // render them yet. Ignored so a future indicator can

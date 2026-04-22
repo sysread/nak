@@ -53,6 +53,46 @@ original page in a new tab.
 
 ## Stop and resume
 
+## The log drawer
+
+The document-shaped button at the top of the chat column (next to the
+hamburger and the "new conversation" bubble) opens the **log drawer**
+on the left side of the screen. The drawer is a live feed of
+everything Nak writes to its internal logs - service-worker updates,
+reflection / summary / embedding worker progress, recall-agent
+breadcrumbs, and anything else a background subsystem wants to tell
+you about.
+
+Useful when:
+
+- A reply took an unusually long time and you want to see whether a
+  background worker was blocked.
+- The "new version" banner behaves unexpectedly - every service-
+  worker state transition lands in the drawer.
+- You filed a bug and the maintainers asked for log context.
+
+Controls inside the drawer:
+
+- **Level dropdown** - choose the minimum severity to show (All /
+  Info+ / Warn+ / Error only). Matches the filter behaviour of the
+  browser devtools console.
+- **Search box** - case-insensitive substring match against the
+  source tag, the message, and any structured details attached to
+  the entry.
+- **Clear** - drops the current buffer. The live feed continues to
+  populate from the next log event onward.
+
+Each entry shows the level, the local time it was captured, the
+subsystem it came from (e.g. `[reflection-worker]`), and the message.
+When the message carried structured details - an error stack, a JSON
+payload, a captured object - a caret appears at the left of the row;
+click to expand / collapse the pretty-printed detail.
+
+Every drawer entry is also written to the browser's devtools console
+at the matching level, so if you are more comfortable filtering there
+the drawer doesn't take anything away - it just adds an in-app view
+that travels with the PWA install.
+
 ## When the model is rate-limited
 
 Venice occasionally returns a 429 "model overloaded" response when the

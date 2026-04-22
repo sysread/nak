@@ -22,6 +22,9 @@
  */
 import type { ToolDef } from './types';
 import { ConversationRecallAgent } from '../agents/conversation_recall/agent';
+import { createLogger } from '../logger.svelte';
+
+const log = createLogger('conversation-recall-agent');
 
 export const conversationRecall: ToolDef = {
   name: 'conversation_recall',
@@ -67,12 +70,11 @@ export const conversationRecall: ToolDef = {
         ? args.topic.trim()
         : null;
 
-    // Breadcrumb matches `[recall-agent]` — the two recall agents run
+    // Breadcrumb matches `recall-agent` — the two recall agents run
     // the same shape of task, and having consistent log prefixes lets
-    // the dev console be eyeballed for "something is happening on a
+    // the log drawer be eyeballed for "something is happening on a
     // recall right now" without remembering two distinct tags.
-    // eslint-disable-next-line no-console
-    console.log(`[conversation-recall-agent] picked up thread ${ctx.threadId}`);
+    log.info(`picked up thread ${ctx.threadId}`);
 
     const agent = new ConversationRecallAgent(ctx.venice, ctx.supabase);
     const result = await agent.run({
@@ -83,22 +85,19 @@ export const conversationRecall: ToolDef = {
     });
 
     if (result.stoppedReason === 'error') {
-      // eslint-disable-next-line no-console
-      console.debug(
-        `[conversation-recall-agent] thread ${ctx.threadId} errored:`,
+      log.debug(
+        `thread ${ctx.threadId} errored`,
         result.error ?? '(no message)'
       );
     } else {
-      // eslint-disable-next-line no-console
-      console.log(
-        `[conversation-recall-agent] finished thread ${ctx.threadId} ` +
+      log.info(
+        `finished thread ${ctx.threadId} ` +
           `(kind=${result.output.note.kind}, ${result.toolCalls} tool calls ` +
           `over ${result.output.inputMessageCount} messages)`
       );
       if (result.output.note.kind === 'note') {
-        // eslint-disable-next-line no-console
-        console.debug(
-          `[conversation-recall-agent] thread ${ctx.threadId} note:`,
+        log.debug(
+          `thread ${ctx.threadId} note`,
           result.output.note.note
         );
       }

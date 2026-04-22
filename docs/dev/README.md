@@ -69,6 +69,8 @@ changing a contract that other features depend on.
 - [Settings](./settings.md) — the settings modal +
   `profiles.settings` JSONB + theme.
 - [Help](./help.md) — in-app rendering of `docs/user/`.
+- [Logging](./logging.md) — the `createLogger` surface, the
+  in-app log drawer, and the worker-to-main log relay.
 
 ### Build & deploy
 
