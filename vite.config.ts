@@ -1,4 +1,10 @@
-import { defineConfig } from 'vite';
+// vitest/config's defineConfig merges Vite's UserConfig with the
+// `test` block Vitest consumes. Importing from 'vite' was fine
+// before `worker:` was added below, but the extra top-level key
+// flipped TypeScript's overload resolution onto a stricter path
+// that rejected `test` as unknown. This import gives us a single
+// type that knows about both surfaces.
+import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { VitePWA } from 'vite-plugin-pwa';
 import path from 'node:path';
@@ -49,6 +55,24 @@ export default defineConfig({
     // `lifecycle_function_unavailable` on mount. Narrow to `browser`
     // during tests only so `pnpm build` / `pnpm dev` stay unaffected.
     conditions: process.env.VITEST ? ['browser'] : [],
+  },
+  // Vite 5 does NOT apply the top-level `plugins` array to worker
+  // bundles. Each Web Worker (embeddings / reflection / summary /
+  // attachment-expiry / samskara) transitively imports
+  // src/lib/logger.svelte.ts, which declares its reactive buffer at
+  // module scope via `$state(...)`. Without the Svelte plugin in
+  // the worker build, that rune reaches the browser as a bare
+  // identifier and every worker crashes at load with "Uncaught
+  // ReferenceError: $state is not defined" - silently for four of
+  // them (reflection / summary / embedding / attachment-expiry emit
+  // no main-thread progress heartbeat when dead) and loudly for
+  // samskara once its manager started routing progress messages.
+  // The factory form (`() => [svelte()]`) is required so the worker
+  // bundle gets its own plugin instance rather than sharing state
+  // with the main bundle. See
+  // https://vite.dev/guide/features.html#web-workers
+  worker: {
+    plugins: () => [svelte()],
   },
   plugins: [
     svelte(),
