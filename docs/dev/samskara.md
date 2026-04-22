@@ -453,6 +453,12 @@ pinned at 5.
 - **Auth-session** - same as every worker. The
   samskara worker requires a live session; lock()
   releases the lease.
+- **Logging** - the samskara worker's manager and the
+  chat-loop-side helpers in `src/lib/samskara/` emit
+  breadcrumbs through `createLogger` (`samskara-worker`,
+  `samskara`). Worker-context entries postMessage
+  main-thread and land in the in-app log drawer. See
+  `./logging.md`.
 
 ## Gotchas
 

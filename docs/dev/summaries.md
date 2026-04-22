@@ -120,6 +120,11 @@ a thread is worth opening without fetching full message history.
   missing summary means the recall agent sees only the
   thread title; quality degrades accordingly. See
   `./conversation-recall.md`.
+- **Logging** - the loop driver emits progress and error
+  breadcrumbs through `createLogger('summary-worker')`.
+  Worker-side entries postMessage main-thread and
+  surface in the in-app log drawer alongside main-thread
+  entries. See `./logging.md`.
 
 ## Gotchas
 

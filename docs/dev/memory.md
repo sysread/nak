@@ -178,6 +178,12 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   the summary loop (see `src/lib/agents/reflection/loop.ts` and
   `src/lib/agents/summary/loop.ts` — they mirror each other
   on purpose).
+- **Logging** - the reflection worker's loop driver and
+  the `memory_recall` agent both emit breadcrumbs through
+  `createLogger` (`reflection-worker`, `recall-agent`).
+  Worker-side entries relay main-thread via postMessage
+  and surface in the in-app log drawer alongside
+  main-thread logs. See `./logging.md`.
 
 ## Gotchas
 

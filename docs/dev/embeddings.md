@@ -164,6 +164,12 @@ extension.
   lack of session exits the worker cleanly; the next
   `activate()` call will spin it up again. See
   `./auth-session.md`.
+- **Logging** - the loop driver emits progress and error
+  breadcrumbs through `createLogger('embed-worker')`.
+  Worker-context entries postMessage to the main thread
+  as `{type: 'nak-log'}` and appear in the in-app log
+  drawer indistinguishably from main-thread entries with
+  the same source tag. See `./logging.md`.
 
 ## Gotchas
 

@@ -138,6 +138,11 @@ via-parent-of-parent pattern —
   and must hydrate itself) and (b) defense against a local race
   where the attachment-less echo arrives before the sender's own
   `appendMessage(userMsg)` can upgrade the row.
+- **Logging**: the attachment-expiry worker's manager
+  emits breadcrumbs through
+  `createLogger('attachment-expiry-worker')`. Worker-side
+  entries postMessage main-thread and appear in the
+  in-app log drawer. See `./logging.md`.
 
 ## Gotchas
 

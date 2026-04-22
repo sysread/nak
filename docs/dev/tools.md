@@ -150,6 +150,13 @@ thread's `tools_enabled` master switch:
   deletes are user-directed) and NOT `memory_recall` or any
   `*_recall` (recursion with no purpose — reflection already has
   the whole conversation in context). See `./memory.md`.
+- **Logging** - the two recall tools
+  (`memory_recall`, `conversation_recall`) emit
+  diagnostic breadcrumbs via `createLogger`. New tools
+  should follow suit rather than calling `console.*`
+  directly - the `no-console` ESLint rule enforces this
+  outside `src/lib/logger.svelte.ts`. See
+  `./logging.md`.
 
 ## Gotchas
 

@@ -149,6 +149,11 @@ docs imported via `import.meta.glob`.
   bearing schema pattern (idempotent alters, RLS
   policies, claim RPCs, partial claim indexes) is
   enforced here on deploy. See `./architecture.md`.
+- **Logging** - `src/lib/update.svelte.ts` is the
+  noisiest main-thread log source. Its `update` source
+  tag is the load-bearing signal when debugging
+  spurious-banner and reload-hang reports against the
+  in-app log drawer. See `./logging.md`.
 
 ## Gotchas
 

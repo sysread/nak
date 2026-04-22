@@ -126,6 +126,11 @@ Both signals are background; recall is the read-time consumer.
   `conversation_search` is shared by chat and the recall agent:
   it lives in the registry and is also exposed via
   `conversationRecallToolbox`. See `./tools.md`.
+- **Logging** - the conversation-recall agent emits
+  progress breadcrumbs through
+  `createLogger('conversation-recall-agent')`. Entries
+  land in the in-app log drawer alongside main-thread
+  logs. See `./logging.md`.
 
 ## Gotchas
 
