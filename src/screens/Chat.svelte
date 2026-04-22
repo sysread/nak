@@ -906,8 +906,18 @@
         messages = [];
         setSessionThreadId(null);
       }
-    } catch (err) {
-      error = { text: err instanceof Error ? err.message : String(err) };
+    } catch {
+      // Best-effort: supabase-js re-throws the raw fetch TypeError
+      // ("Failed to fetch") on a network blip rather than surfacing it
+      // in the { error } envelope. This runs on every auth-state event
+      // (initial session, TOKEN_REFRESHED, tab visibility resume on
+      // mobile) plus at end-of-turn, so painting a banner the user
+      // can't dismiss on a transient offline moment is the wrong
+      // trade. The realtime subscribeToThreads channel also keeps the
+      // sidebar fresh in steady state, and the next auth event will
+      // re-attempt the full fetch; a legitimately-broken fetch that
+      // leaves the drawer empty will self-heal the next time the user
+      // comes back online.
     }
   }
 
