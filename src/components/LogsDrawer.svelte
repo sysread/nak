@@ -266,32 +266,43 @@
       </button>
     </header>
     <div class="logs-controls">
-      <label class="logs-level">
-        <span class="visually-hidden">Minimum level</span>
-        <select bind:value={levelFilter} aria-label="Minimum log level">
-          {#each LOG_LEVELS as level (level)}
-            <option value={level}>{LOG_LEVEL_LABELS[level]}</option>
-          {/each}
-        </select>
-      </label>
-      <input
-        type="search"
-        class="logs-search"
-        placeholder="Search"
-        bind:value={search}
-        aria-label="Search logs"
-      />
-      <button
-        type="button"
-        class="secondary logs-clear"
-        onclick={() => {
-          logs.clear();
-          expanded = new Set();
-        }}
-        title="Clear all log entries"
-      >
-        Clear
-      </button>
+      <!-- Two-row layout: compact controls on top, full-width search
+           below. The level dropdown was truncating to 'Det' on the
+           single-row version because flex competition with the
+           grow-1 search input left it auto-sizing against its
+           initially-measured content. Splitting the rows gives the
+           dropdown room to breathe and keeps Clear reachable on
+           narrow viewports without a horizontal scroll. -->
+      <div class="logs-controls-row">
+        <label class="logs-level">
+          <span class="visually-hidden">Minimum level</span>
+          <select bind:value={levelFilter} aria-label="Minimum log level">
+            {#each LOG_LEVELS as level (level)}
+              <option value={level}>{LOG_LEVEL_LABELS[level]}</option>
+            {/each}
+          </select>
+        </label>
+        <button
+          type="button"
+          class="secondary logs-clear"
+          onclick={() => {
+            logs.clear();
+            expanded = new Set();
+          }}
+          title="Clear all log entries"
+        >
+          Clear
+        </button>
+      </div>
+      <div class="logs-controls-row">
+        <input
+          type="search"
+          class="logs-search"
+          placeholder="Search"
+          bind:value={search}
+          aria-label="Search logs"
+        />
+      </div>
     </div>
     <div
       class="logs-body"
@@ -401,17 +412,31 @@
 
   .logs-controls {
     display: flex;
+    flex-direction: column;
     gap: 0.4rem;
-    align-items: center;
     padding: 0.5rem 0.9rem;
     border-bottom: 1px solid var(--border);
     background: var(--bg);
   }
 
-  /* Shared size for all three controls in the row. Native <select>
-     chrome (especially the chevron) would otherwise render taller
-     than a plain <input>, leaving the dropdown visibly out of line
-     with the search box. Explicit height + box-sizing + line-height
+  /* Row 1 spaces the level dropdown and Clear button to opposite
+     ends so there's a visible separation between "filter what's
+     shown" and "destroy what's shown". Row 2 is just the search
+     input stretched to the full drawer width. */
+  .logs-controls-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .logs-controls-row:first-child {
+    justify-content: space-between;
+  }
+
+  /* Shared size for all three controls. Native <select> chrome
+     (especially the chevron) would otherwise render taller than a
+     plain <input>, leaving the dropdown visibly out of line with
+     the search box. Explicit height + box-sizing + line-height
      pins the visible box regardless of the browser's default
      padding. */
   .logs-level select,
@@ -425,15 +450,19 @@
   }
 
   /* Reserve room for the native chevron so the selected label
-     doesn't crowd it. Without padding-right the chevron overlaps
-     "Debug+" on compact widths. */
+     doesn't crowd it, and a min-width so every option in
+     LOG_LEVEL_LABELS (widest is "Debug+") fits even though some
+     browsers auto-size the select from the currently-selected
+     option rather than the widest. */
   .logs-level select {
-    padding-right: 1.4rem;
+    padding-right: 1.6rem;
+    min-width: 6rem;
   }
 
   .logs-search {
     flex: 1 1 auto;
     min-width: 0;
+    width: 100%;
   }
 
   .logs-body {
