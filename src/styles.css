@@ -265,6 +265,24 @@ input, textarea, select {
   text-shadow: 0 0 0.015em currentColor;
 }
 
+/* Password fields specifically - the browser's masking bullet (U+2022)
+   renders as a thin dot at Lekton-Regular's weight, and on a small
+   mobile screen it's genuinely hard to count the characters you've
+   typed or see where the caret is. Bumping to 700 routes to Lekton's
+   real Bold TTF (not synthesized - the @font-face block at the top
+   of this file ships both 400 and 700), which gives the dots enough
+   visual mass to read at a glance. Widened letter-spacing keeps the
+   thicker dots from smearing into a solid line, and a slightly larger
+   font-size nudges the glyph itself bigger. SecretInput swaps the
+   type to 'text' when the user clicks reveal, so this rule does not
+   apply to the revealed state - revealed text reads fine at the
+   regular weight and doesn't need the boost. */
+input[type='password'] {
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
+}
+
 textarea {
   resize: vertical;
   min-height: 2.4rem;
