@@ -35,6 +35,30 @@ import { createLogger } from '../../logger.svelte';
 // regardless of which file emitted it.
 const log = createLogger('samskara-worker');
 
+/**
+ * Cosine-similarity threshold above which a proposed mint-tier1 claim
+ * is treated as a near-duplicate of an existing samskara. Tuned on
+ * observed corpus behaviour (April 2026): genuine paraphrases of the
+ * same underlying claim clustered well above 0.9 on Venice's large
+ * embedder, so 0.85 leaves a margin while still collapsing the class
+ * of "heirloom wheat alchemist" vs "heritage grains dough whisperer"
+ * near-clones that a real conversation surfaces within minutes.
+ *
+ * The threshold is intentionally MINT-only. The fire path has no
+ * similarity filter; weak-but-related samskaras still need to reach
+ * the priming block so cohort reinforcement can happen.
+ */
+const MINT_DEDUP_COSINE = 0.85;
+
+/**
+ * Health nudge applied to a reinforced samskara on a dedup hit. Small
+ * by design - re-observing a similar claim is a weak positive signal
+ * (the user didn't actively confirm it), so the main confidence swing
+ * still comes from reaction-classify's confirm/disconfirm path. The
+ * RPC caps the resulting health at 1.0.
+ */
+const MINT_DEDUP_HEALTH_BUMP = 0.02;
+
 /** All worker phases. Iteration order is significant - see PHASES below. */
 export type SamskaraPhase =
   | 'assimilate'
@@ -397,11 +421,42 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
 
+  // Dedup guard. The minter agent only sees the five-row substrate
+  // sample and has no visibility into the existing samskara corpus,
+  // so it cheerfully produces reworded versions of claims that are
+  // already present. Query the nearest existing samskara by cosine
+  // on `prediction_embedding`; when the similarity exceeds the
+  // threshold, reinforce that row (health bump + substrate
+  // provenance) instead of minting a twin. A failure of the dedup
+  // check itself is non-fatal - we'd rather mint a possible twin
+  // than drop a valid signal, and the one-shot collapse RPC is
+  // available as a cleanup lane.
+  try {
+    const nearest = await ctx.supabase.samskaraNearestByPrediction(predEmbedding, 1);
+    if (nearest.length > 0 && nearest[0].cosine >= MINT_DEDUP_COSINE) {
+      const substrateIds = recent.slice(0, 5).map((r) => r.id);
+      await ctx.supabase.samskaraReinforceExisting(
+        nearest[0].id,
+        substrateIds,
+        MINT_DEDUP_HEALTH_BUMP
+      );
+      log.info('mint-tier1: dedup-reinforced existing', {
+        id: nearest[0].id,
+        cosine: nearest[0].cosine,
+        candidate: shorten(minted.prediction),
+      });
+      return 'progress';
+    }
+  } catch (err) {
+    log.debug('mint-tier1: dedup check failed, proceeding with mint', err);
+  }
+
   // Insert via raw client so we can write provenance in the same
-  // round trip. The samskaras row insert is idempotent only at the
-  // unique-key level (we have none today beyond the primary key) so
-  // this can produce near-duplicates — the minter's confirm:false
-  // path is the dedup mechanism.
+  // round trip. The dedup guard above catches the common case of
+  // near-duplicates; the raw insert still has no uniqueness
+  // constraint on prediction text, so a genuine novel claim whose
+  // embedding happens to sit just below MINT_DEDUP_COSINE will land
+  // here as a new row. That's the intended behaviour.
   let samskaraId = '';
   try {
     const client = (ctx.supabase as unknown as {

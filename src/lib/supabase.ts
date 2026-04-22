@@ -2047,6 +2047,71 @@ export class SupabaseService {
   }
 
   /**
+   * Worker: find the nearest existing samskaras by cosine similarity
+   * on `prediction_embedding`. Used by the mint-tier1 dedup guard to
+   * avoid creating near-duplicate twins - the minter agent only sees
+   * the immediate substrate sample and has no visibility into the
+   * existing corpus, so without this check a rewording of "user
+   * prefers ancient grains" lands as a separate samskara instead of
+   * reinforcing the original.
+   */
+  async samskaraNearestByPrediction(
+    embedding: number[],
+    kMax: number
+  ): Promise<{ id: string; cosine: number; tier: number }[]> {
+    const { data, error } = await this.client.rpc(
+      'samskara_nearest_by_prediction',
+      {
+        p_query_embedding: embedding,
+        p_k_max: kMax,
+      }
+    );
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as { id: string; cosine: number; tier: number }[];
+  }
+
+  /**
+   * Worker: reinforce an existing samskara on a dedup hit. Bumps
+   * health by a small amount and appends substrate provenance rows
+   * for the observations that prompted the re-statement. Returns
+   * false when the id doesn't exist or isn't owned by the caller.
+   * Confidence is NOT touched here - re-observing is a weak signal;
+   * the real confidence swing stays with reaction-classify.
+   */
+  async samskaraReinforceExisting(
+    samskaraId: string,
+    substrateIds: string[],
+    healthBump: number
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('samskara_reinforce_existing', {
+      p_samskara_id: samskaraId,
+      p_substrate_ids: substrateIds,
+      p_health_bump: healthBump,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Maintenance: collapse existing tier-1 near-duplicates. Walks the
+   * user's samskaras newest-first; for each row, finds an older row
+   * with cosine similarity >= threshold on `prediction_embedding`;
+   * migrates fires + provenance to the older "winner"; folds the
+   * loser's counters in; deletes the loser. Returns the number of
+   * rows collapsed. Idempotent - a second call after a clean pass
+   * returns 0. Safe to run while the worker is live; a concurrent
+   * mint-tier1 can at worst re-create a twin we just removed, which
+   * the next run collapses.
+   */
+  async samskaraCollapseDuplicates(threshold = 0.9): Promise<number> {
+    const { data, error } = await this.client.rpc('samskara_collapse_duplicates', {
+      p_threshold: threshold,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return typeof data === 'number' ? data : 0;
+  }
+
+  /**
    * Worker: read all live samskaras ordered by ranked weight, for the
    * compound-summary regenerator. The caller passes a cap (computed
    * via log10 of total count) so the prose stays bounded as the

@@ -2239,6 +2239,184 @@ begin
   return v_changed > 0;
 end $$;
 
+-- Mint-time dedup support -------------------------------------------------
+--
+-- `samskara_nearest_by_prediction` and `samskara_reinforce_existing`
+-- back the mint-tier1 dedup guard in src/lib/agents/samskara/loop.ts.
+-- Backstory: the mint-tier1 phase used to insert unconditionally
+-- whenever the minter agent returned a non-null candidate; because
+-- the agent's input is limited to a five-row substrate sample and
+-- never the existing samskara corpus, near-duplicate paraphrases of
+-- the same claim would accumulate - a single cohort fire could easily
+-- contain 20+ worded-differently restatements of "user shares
+-- detailed heritage-grain bread recipes." The guard queries the
+-- nearest existing samskara by cosine on `prediction_embedding`, and
+-- when the similarity exceeds the threshold it reinforces the
+-- existing row (health bump + appended substrate provenance) instead
+-- of minting a twin. The long-tail fire behaviour (no health-
+-- threshold filter) is unchanged; this only affects MINT, not FIRE.
+create or replace function public.samskara_nearest_by_prediction(
+  p_query_embedding vector(2048),
+  p_k_max int
+) returns table (
+  id uuid,
+  cosine real,
+  tier int
+)
+language sql stable security invoker as $$
+  -- Returns the k nearest samskaras by cosine similarity against the
+  -- supplied prediction embedding. Ordered by pgvector's cosine
+  -- distance ascending so the most-similar row comes first; the
+  -- caller reads `cosine` (1 - distance) for a threshold check. Does
+  -- NOT filter by tier because a tier-2 compound duplicating a tier-1
+  -- prediction is still a duplicate worth collapsing; callers that
+  -- want tier-aware behaviour can post-filter on the return.
+  select s.id,
+         (1 - (s.prediction_embedding <=> p_query_embedding))::real as cosine,
+         s.tier
+    from public.samskaras s
+   where s.user_id = auth.uid()
+     and s.prediction_embedding is not null
+   order by s.prediction_embedding <=> p_query_embedding asc
+   limit p_k_max
+$$;
+
+-- Reinforce an existing samskara on re-observation. Called by the
+-- mint-tier1 dedup path when the proposed prediction is semantically
+-- too close to an existing row. Appends substrate provenance so the
+-- audit trail still names the new observations, and nudges health up
+-- by a small amount - capped at 1.0 - because a re-observation is a
+-- weak positive signal (the user didn't actively confirm, they just
+-- said something similar enough that the minter wanted to restate
+-- the claim). Heavy reinforcement still goes through reaction-
+-- classify's confirm/disconfirm path, which touches confidence.
+create or replace function public.samskara_reinforce_existing(
+  p_samskara_id uuid,
+  p_substrate_ids uuid[],
+  p_health_bump real
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_exists boolean;
+begin
+  -- Ownership check yields an explicit boolean to the caller so
+  -- "reinforced" vs "no such samskara" are distinguishable. RLS would
+  -- silently filter an unowned row out of the update, which is fine
+  -- for safety but useless for observability.
+  select exists(
+    select 1 from public.samskaras s
+    where s.id = p_samskara_id and s.user_id = v_uid
+  ) into v_exists;
+  if not v_exists then
+    return false;
+  end if;
+
+  update public.samskaras
+     set health = least(1.0, health + p_health_bump),
+         updated_at = now()
+   where id = p_samskara_id and user_id = v_uid;
+
+  -- Extend the provenance chain with the substrate rows that
+  -- triggered this re-observation. Weight 0.5 (half of a fresh mint's
+  -- 1.0) encodes "this is a re-observation, not the canonical
+  -- evidence." `on conflict do nothing` keeps the function idempotent
+  -- under duplicate callers or retries.
+  if p_substrate_ids is not null and array_length(p_substrate_ids, 1) > 0 then
+    insert into public.samskara_provenance (samskara_id, user_id, kind, ref_id, weight)
+    select p_samskara_id, v_uid, 'substrate', sid, 0.5
+      from unnest(p_substrate_ids) as sid
+      on conflict (samskara_id, kind, ref_id) do nothing;
+  end if;
+
+  return true;
+end $$;
+
+-- One-shot maintenance: collapse tier-1 near-duplicates that already
+-- accumulated before the mint-tier1 dedup guard landed. Walks tier-1
+-- samskaras newest-first; for each row, finds an OLDER samskara with
+-- cosine similarity >= p_threshold on `prediction_embedding` and -
+-- if one exists - migrates fires + provenance to the older "winner",
+-- folds the loser's counters into the winner, and deletes the loser.
+-- Idempotent (re-running after a clean pass finds no more twins and
+-- returns 0). Safe to run while the worker is live: a concurrent
+-- mint-tier1 could at worst re-create one of the twins we just
+-- removed, which the next invocation catches.
+create or replace function public.samskara_collapse_duplicates(
+  p_threshold real default 0.9
+) returns int
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_collapsed int := 0;
+  v_row record;
+  v_winner uuid;
+begin
+  -- Newer-first iteration guarantees we always collapse INTO the
+  -- oldest representative of a cluster - otherwise a run could
+  -- preserve a newer twin and retire the canonical oldest one,
+  -- confusing the audit trail and losing the earliest created_at
+  -- timestamp that compound-regen relies on for recency weighting.
+  for v_row in
+    select id, prediction_embedding, created_at
+      from public.samskaras
+     where user_id = v_uid
+       and tier = 1
+       and prediction_embedding is not null
+     order by created_at desc
+  loop
+    select id into v_winner
+      from public.samskaras
+     where user_id = v_uid
+       and tier = 1
+       and prediction_embedding is not null
+       and created_at < v_row.created_at
+       and (1 - (prediction_embedding <=> v_row.prediction_embedding))::real >= p_threshold
+     order by prediction_embedding <=> v_row.prediction_embedding asc
+     limit 1;
+
+    if v_winner is null then
+      continue;
+    end if;
+
+    -- Retarget fires. Every fire row that pointed at the loser now
+    -- counts toward the winner so cohort history is preserved.
+    update public.samskara_fires
+       set samskara_id = v_winner
+     where samskara_id = v_row.id and user_id = v_uid;
+
+    -- Copy loser's provenance to the winner (dedup via the primary
+    -- key). The loser's remaining provenance rows cascade-delete
+    -- when the loser row itself is deleted below.
+    insert into public.samskara_provenance (samskara_id, user_id, kind, ref_id, weight)
+    select v_winner, user_id, kind, ref_id, weight
+      from public.samskara_provenance
+     where samskara_id = v_row.id
+      on conflict (samskara_id, kind, ref_id) do nothing;
+
+    -- Fold counters. `greatest` with nullable timestamps yields the
+    -- later timestamp or NULL if both are NULL (Postgres greatest()
+    -- ignores NULLs rather than propagating them, unlike arithmetic).
+    update public.samskaras w
+       set fire_count = w.fire_count + l.fire_count,
+           confirm_count = w.confirm_count + l.confirm_count,
+           disconfirm_count = w.disconfirm_count + l.disconfirm_count,
+           last_fired_at = greatest(w.last_fired_at, l.last_fired_at),
+           updated_at = now()
+      from public.samskaras l
+     where w.id = v_winner
+       and l.id = v_row.id
+       and w.user_id = v_uid;
+
+    delete from public.samskaras
+     where id = v_row.id and user_id = v_uid;
+
+    v_collapsed := v_collapsed + 1;
+  end loop;
+
+  return v_collapsed;
+end $$;
+
 -- Realtime subscriptions --------------------------------------------------
 --
 -- The client subscribes to INSERTs on `messages` (filtered by thread_id)

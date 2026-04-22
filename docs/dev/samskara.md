@@ -363,18 +363,39 @@ sleep (60s).
   prediction, inner_voice, valence, confidence} | null`. v1
   treats the most recent few embedded substrate rows as a
   cluster and asks the minter whether they support a
-  prediction. The agent returns `confirm: false` to refuse weak
-  clusters; that path is the primary dedup mechanism (no
-  DB-level uniqueness on prediction text). The minter prompt
-  explicitly invites negative predictions ("user tends to NOT
-  do Y") and assistant-behaviour predictions ("user expects the
-  assistant to ask before suggesting code") alongside the
-  standard positive shape. Prediction is embedded via Venice
-  and the row is inserted with provenance in two writes.
+  prediction. The agent's `confirm: false` path is a weak
+  first-line filter (it refuses clusters it thinks are too
+  thin) but it can only see the five-row sample, never the
+  existing samskara corpus, so on its own it produces near-
+  duplicate twins of older claims as the sample drifts. A
+  second dedup guard runs after the prediction is embedded:
+  `samskara_nearest_by_prediction` returns the closest
+  existing samskara by cosine on `prediction_embedding`; when
+  the similarity exceeds `MINT_DEDUP_COSINE` (0.85), the loop
+  calls `samskara_reinforce_existing` - appending substrate
+  provenance and nudging health up by `MINT_DEDUP_HEALTH_BUMP`
+  (0.02, capped at 1.0) - instead of inserting a twin. Only
+  genuinely novel predictions fall through to the insert path.
+  The minter prompt explicitly invites negative predictions
+  ("user tends to NOT do Y") and assistant-behaviour
+  predictions ("user expects the assistant to ask before
+  suggesting code") alongside the standard positive shape.
   Successful mints fire an `onMint` callback into the worker
   loop context; the worker forwards to the manager via
   `postMessage`, and the manager re-emits as
-  `SAMSKARA_MINT_EVENT` for the toast UI to pick up.
+  `SAMSKARA_MINT_EVENT` for the toast UI to pick up. Dedup-
+  reinforcement does NOT fire `onMint` (no new samskara
+  landed), though it does log at info-level so the Logs drawer
+  shows "dedup-reinforced existing" breadcrumbs.
+
+  A third tool - `samskara_collapse_duplicates(threshold)` -
+  handles the one-shot cleanup case: a corpus that accumulated
+  near-duplicates before the dedup guard landed can be flattened
+  by walking tier-1 rows newest-first, finding older twins at >=
+  threshold similarity, migrating fires + provenance to the older
+  row, folding counters, and deleting the loser. Idempotent; the
+  diagnostics modal exposes it as a "Collapse duplicates"
+  button.
 - **Mint-tier2** - stubbed for v1. Returns `'empty-phase'` so
   the rotation drains past it cheaply. Schema and provenance
   `kind='samskara'` support it; real cohort patterns need to

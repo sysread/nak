@@ -121,6 +121,16 @@ The screen shows:
   into samskaras, with their lifecycle state (pending assimilation
   / pending embed / fully baked).
 
+The toolbar also has a **Collapse duplicates** button. This is a
+one-shot maintenance action: tier-1 samskaras whose predictions are
+paraphrases of each other (>= 0.9 cosine similarity on their
+embeddings) are merged into the oldest one, with fires and
+provenance migrated over. It's idempotent - a second click after a
+clean pass reports "No duplicates" - and is mostly only useful if
+your corpus accumulated duplicates before the dedup-on-mint guard
+was in place. New samskaras are dedup-checked at mint time so the
+need for cleanup should fall off over time.
+
 Opens via the fist button in the log drawer header; closes via the
 ×, Escape, or clicking the backdrop.
 
