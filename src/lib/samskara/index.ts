@@ -49,7 +49,22 @@ export { formatPriming, topKForCorpusSize } from './format';
 export async function getCompoundSummary(
   supabase: SupabaseService
 ): Promise<string | null> {
-  const row = await supabase.samskaraGetCompoundSummary();
+  // Swallow fetch/RPC failures. supabase-js re-throws the raw fetch
+  // TypeError ("Failed to fetch") when the network blips, which
+  // without this guard bubbled up through chat-loop's Promise.all
+  // priming block and surfaced as a "TypeError: Failed to fetch"
+  // banner at turn-start or when sending the next message after a
+  // completion. The chat-loop's contract (see chat-loop.ts above the
+  // priming block) is that samskara helpers never fail a turn;
+  // fireSamskaras already swallows, this now matches.
+  let row;
+  try {
+    row = await supabase.samskaraGetCompoundSummary();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.debug('[samskara] compound summary read failed:', err);
+    return null;
+  }
   if (!row || !row.summary || row.summary.length === 0) return null;
   if (row.lastRegenAt) {
     const ageMs = Date.now() - new Date(row.lastRegenAt).getTime();
