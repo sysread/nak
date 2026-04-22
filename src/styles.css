@@ -2638,10 +2638,12 @@ h1 {
   margin-bottom: 0.15rem;
 }
 
-/* Composer toolbox button. Grey when tools are off; --ok green when on.
-   Flashes with a keyframe pulse when the LLM toggles state (see
-   `.toolbox-btn.flash`). User clicks don't flash — the state swap is
-   feedback enough. */
+/* Composer toggle buttons - the tools master switch and the inline-
+   citations override. Grey when off; --ok green (color + border) when
+   on. The tools button also uses `.toolbox-btn.flash` to pulse when
+   the LLM flips state via toggle_tools; user clicks don't flash, the
+   state swap is feedback enough. The citations button never flashes
+   because only the user can change it - no LLM path. */
 
 .toolbox-btn {
   display: inline-flex;

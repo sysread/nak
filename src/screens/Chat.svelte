@@ -3358,7 +3358,7 @@
               {#if app.webSearchEnabled}
                 <button
                   type="button"
-                  class="secondary icon-btn"
+                  class="secondary toolbox-btn"
                   class:on={currentWebCitations}
                   onclick={toggleWebCitations}
                   title={currentWebCitations
