@@ -675,6 +675,16 @@ label {
   outline-offset: -4px;
 }
 
+/* In light mode the unselected-swatch border dropped from the warm
+   dark-tan (#c4b691) the old palette used to neutral zinc-300, so
+   the step up to var(--text) on the selected swatch reads less
+   distinctly than it did on cream. Thicken the inset accent ring
+   by 1px to restore the selected/unselected delta without changing
+   the swatch geometry. */
+:root[data-theme='light'] .accent-option.selected {
+  outline-width: 3px;
+}
+
 .swatch {
   display: block;
   width: 1.5rem;
@@ -1119,7 +1129,10 @@ h1 {
   font-size: 0.9rem;
   color: var(--text);
   background: transparent;
-  border: 0;
+  /* Reserve a 1px border on every row so the light-mode active-state
+     border (see below) doesn't shift row height when a thread is
+     selected. Transparent by default; the .active rule paints it. */
+  border: 1px solid transparent;
   width: 100%;
   text-align: left;
   /* Single-line titles with ellipsis. `min-width: 0` is load-bearing:
@@ -1139,6 +1152,16 @@ h1 {
 .thread.active {
   background: var(--accent-weak);
   color: var(--text);
+}
+
+/* Selected thread borrows the hairline-on-accent-weak pattern used
+   for .msg.user: pale accent-weak tint doesn't hold an edge against
+   the near-white sidebar, so the bubble visually dissolves into the
+   bg. A --border-colored edge frames the selection. Dark mode's
+   accent-weak is a deep navy panel that reads as distinctly selected
+   on its own, so scope to light mode. */
+:root[data-theme='light'] .thread.active {
+  border-color: var(--border);
 }
 
 /* Thread rows need `position: relative` to anchor the per-row actions
@@ -1260,33 +1283,26 @@ h1 {
   padding: 0.55rem 0.6rem;
 }
 
-/* Chats / Recipes tab pair at the top of the drawer. Visually
-   understated — the drawer is primarily a thread list, so the tab
-   affordance is a secondary signal that sits above the search
-   input without dominating the header. */
-.sidebar-tabs {
-  display: flex;
-  gap: 0.25rem;
+/* Chats / Recipes drawer nav. Rendered as a vertical pair of
+   thread-row-styled buttons above the search input - the hover /
+   active chrome comes from `.thread`, so an active tab reads as
+   a selected row. Sizing is scoped to match the search input
+   directly below it rather than the list rows further down:
+   conversations and recipes are compound rows (title button +
+   trailing `...` menu button) so matching their footprint would
+   leave the nav misaligned with its neighbour. Dropping the
+   `.thread-row` horizontal inset and the `.thread` vertical
+   padding puts the nav buttons on the same left edge and the
+   same vertical rhythm as `.sidebar-search-input`. */
+.sidebar-nav {
   margin-bottom: 0.5rem;
 }
-.sidebar-tab {
-  flex: 1;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text);
-  padding: 0.3rem 0.5rem;
-  font-size: 0.85rem;
-  border-radius: var(--radius);
-  cursor: pointer;
+.sidebar-nav .thread-row {
+  padding: 0;
 }
-.sidebar-tab.active {
-  background: var(--accent-weak);
-  border-color: var(--accent);
-}
-.sidebar-tab:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-weak);
+.sidebar-nav .thread {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.88rem;
 }
 
 /* Recipes drawer list — same row chrome as threads so the switch
@@ -2320,6 +2336,12 @@ h1 {
   }
 }
 
+/* Soft drop shadow under the border softens the transition as the
+   message pane scrolls under the chrome - without it, content slides up
+   to a hard hairline that reads as harsh. Border + shadow are a deliberate
+   pair: the 1px line gives a crisp edge at any zoom level, the shadow
+   gives depth. 8% black reads as subtle on both themes (dark bg swallows
+   anything heavier; light bg exaggerates it). */
 .top-bar {
   display: flex;
   align-items: center;
@@ -2327,6 +2349,7 @@ h1 {
   gap: 0.75rem;
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--border);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
 }
 
 .title-wrap {

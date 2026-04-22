@@ -2560,29 +2560,39 @@
     <aside class="sidebar">
       <header class="sidebar-header">
         <!-- Tab switcher between conversation threads and the
-             cookbook. The drawer reuses its chrome for both — one
-             list-and-search column, with the list content swapping
-             by tab. Keeping both lists here avoids a second
-             top-level drawer affordance for a feature whose
-             relationship to Chats is "two sibling collections of
-             user-owned items". -->
-        <div class="sidebar-tabs" role="tablist" aria-label="Drawer section">
-          <button
-            type="button"
-            role="tab"
-            class="sidebar-tab"
-            class:active={drawerTab === 'chats'}
-            aria-selected={drawerTab === 'chats'}
-            onclick={() => navigate({ drawer: null }, { replace: true })}
-          >Chats</button>
-          <button
-            type="button"
-            role="tab"
-            class="sidebar-tab"
-            class:active={drawerTab === 'recipes'}
-            aria-selected={drawerTab === 'recipes'}
-            onclick={() => onPickRecipesTab()}
-          >Recipes</button>
+             cookbook. Rendered as a vertical pair of thread-row-
+             styled buttons above the search input so the nav items
+             visually belong to the same "row in a list" family as
+             the conversations or recipes they switch between.
+             Keeping both lists here avoids a second top-level drawer
+             affordance for a feature whose relationship to Chats is
+             "two sibling collections of user-owned items". Clicks
+             route through the URL router - Chats clears the drawer
+             param (absent = default) and Recipes goes through the
+             lazy-load wrapper; both use replaceState so a chats
+             <-> recipes flip doesn't fill the back stack with UI
+             chrome. -->
+        <div class="sidebar-nav" role="tablist" aria-label="Drawer section">
+          <div class="row thread-row">
+            <button
+              type="button"
+              role="tab"
+              class="thread grow"
+              class:active={drawerTab === 'chats'}
+              aria-selected={drawerTab === 'chats'}
+              onclick={() => navigate({ drawer: null }, { replace: true })}
+            >Chats</button>
+          </div>
+          <div class="row thread-row">
+            <button
+              type="button"
+              role="tab"
+              class="thread grow"
+              class:active={drawerTab === 'recipes'}
+              aria-selected={drawerTab === 'recipes'}
+              onclick={() => onPickRecipesTab()}
+            >Recipes</button>
+          </div>
         </div>
         {#if drawerTab === 'chats'}
           <!-- Search replaces the old "+ New thread" button — the
