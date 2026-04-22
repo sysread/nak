@@ -73,18 +73,24 @@
 
 :root[data-theme='light'] {
   color-scheme: light;
-  --bg: #f7f2e4;       /* warm cream / latte */
-  --bg-2: #efe8d2;
+  --bg: #fafafa;       /* near-white page (zinc-50) */
+  --bg-2: #f1f1f3;     /* slightly deeper grey for sidebar */
   --surface: #ffffff;
-  /* Borders sit between near-identical warm tones (cream page bg vs.
-     slightly deeper sidebar bg vs. white surfaces) so they need more
+  /* Borders sit between near-identical light tones (off-white page vs.
+     slightly deeper grey sidebar vs. white surfaces) so they need more
      contrast than the dark-theme equivalent to register as a line
-     rather than a seam. Previous value #d9cfb8 disappeared against
-     the sidebar tint; this darker tan holds its edge across all
-     three surfaces. */
-  --border: #c4b691;
-  --text: #2b2620;
-  --muted: #75695a;
+     rather than a seam. zinc-300 holds its edge across all three
+     surfaces without looking heavy. */
+  --border: #d4d4d8;
+  --text: #18181b;
+  /* --muted must clear WCAG AA on every light surface including the
+     deeper sidebar (--bg-2). zinc-500 (#71717a) falls just under 4.5:1
+     on #f1f1f3; zinc-600 (#52525b) clears ~6.9:1 on the sidebar and
+     ~7.4:1 on the page. (Syntax-highlighting --tok-comment uses zinc-500
+     instead - code blocks live on --surface #ffffff where 4.8:1 is
+     safe, and the lighter tone preserves the "de-emphasized" visual
+     hierarchy readers expect from code comments.) */
+  --muted: #52525b;
   --danger: #b91c1c;
   --ok: #15803d;
   --warn: #b45309;
@@ -93,18 +99,17 @@
   --ink-on-danger: #ffffff;
   --accent: #1d4ed8;
   --accent-weak: #dbeafe;
-  /* Modal elevation. Light theme uses a conventional soft drop shadow
-     — no back-light. The cream page reads as paper; modals read as
-     paper held slightly above it. Kept warmer than pure black
-     (`#000` at 18% would punch visually on cream) so the edge looks
-     diffused rather than cut-out. */
+  /* Modal elevation. Light theme uses a conventional soft drop shadow -
+     no back-light. Cards read as paper lifted off the page. Neutral
+     black at low opacity because the page is near-white; a warm tint
+     would read as dirty against the cool grey surfaces. */
   --shadow-modal:
-    0 18px 48px rgba(60, 40, 20, 0.18),
-    0 4px 12px rgba(60, 40, 20, 0.1);
+    0 18px 48px rgba(0, 0, 0, 0.12),
+    0 4px 12px rgba(0, 0, 0, 0.06);
 }
 
 /* Accent pairings. Each name maps to a pastel on dark (>= 9:1 on #0b0d10)
-   and a sharp hue on light (>= 5:1 on #f7f2e4). `--accent-weak` is a
+   and a sharp hue on light (>= 5:1 on #fafafa). `--accent-weak` is a
    same-hue tint for selected-row backgrounds, quote bubbles, etc. */
 
 :root[data-theme='dark'][data-accent='blue']   { --accent: #8ab4ff; --accent-weak: #1f3a55; }
@@ -126,8 +131,9 @@
    to avoid synthesized faux-bold), so reaching for font-weight: 500
    would route back through that same synthesis path. A sub-pixel
    text-shadow thickens strokes uniformly and deterministically across
-   browsers — just enough to give the text the same visual density
-   against cream that the regular face has against the dark-mode bg. */
+   browsers - just enough to give the text the same visual density
+   against the light bg that the regular face has against the dark-mode
+   bg. */
 :root[data-theme='light'] body {
   text-shadow: 0 0 0.01em currentColor;
 }
@@ -250,7 +256,7 @@ input, textarea, select {
    the text rendered inside native form controls - WebKit in particular
    draws input/textarea content through a path that drops inherited
    text-shadow, leaving composer and settings fields looking notably
-   thinner and lighter than surrounding body copy against the cream
+   thinner and lighter than surrounding body copy against the light
    bg. Re-apply the thickener on the form controls themselves, and
    drop the ink a shade darker than --text so the contrast matches
    what the reader expects from body text. font-weight is deliberately
@@ -261,7 +267,7 @@ input, textarea, select {
 :root[data-theme='light'] textarea,
 :root[data-theme='light'] select,
 :root[data-theme='light'] .composer-textarea {
-  color: #17130e;
+  color: #09090b;
   text-shadow: 0 0 0.015em currentColor;
 }
 
@@ -769,7 +775,7 @@ label {
      outliers. Saturation / lightness are fixed here so the gradient
      stays on one axis — color carries "how unusual is this row?",
      length still carries "how many tokens?". Values chosen to read
-     on both the cream light surface and the dark navy dark surface
+     on both the light surface and the dark navy dark surface
      without mode-specific overrides. */
   background: linear-gradient(
     90deg,
@@ -820,10 +826,9 @@ label {
    Same geometry as the base pill so the spend column stays
    vertically aligned; only the fill and text color change. `--bg-2`
    + `--muted` gives a visibly "secondary" read against the brighter
-   `--accent-weak` USD fills, without reaching for a raw grey that
-   would look out of place against the cream-and-navy theme palette.
+   `--accent-weak` USD fills.
    Dark mode: #8b94a3 on #13171c ≈ 6.7:1 contrast. Light mode:
-   #75695a on #efe8d2 ≈ 5.5:1. Both clear WCAG AA for body text. */
+   #52525b on #f1f1f3 ≈ 6.9:1. Both clear WCAG AA for body text. */
 .usage-pill.credit {
   background: var(--bg-2);
   color: var(--muted);
@@ -1653,13 +1658,13 @@ h1 {
 }
 
 :root[data-theme='light'] {
-  --tok-comment:  #75695a;
+  --tok-comment:  #71717a;
   --tok-keyword:  #7e22ce;
   --tok-string:   #15803d;
   --tok-number:   #c2410c;
   --tok-fn:       #1d4ed8;
-  --tok-variable: #2b2620;
-  --tok-punc:     #75695a;
+  --tok-variable: #18181b;
+  --tok-punc:     #71717a;
   --tok-tag:      #be185d;
   --tok-attr:     #0f766e;
   --tok-regex:    #c2410c;
@@ -1753,8 +1758,8 @@ h1 {
 
 /* User bubbles borrow the assistant hairline in light mode only. On
    the dark-theme near-black bg the accent-weak tint reads as a clearly
-   distinct panel on its own; on cream, pale-blue-on-cream loses the
-   edge and the bubble bleeds into the page. */
+   distinct panel on its own; on the near-white page a pale accent
+   tint loses the edge and the bubble bleeds into the page. */
 :root[data-theme='light'] .msg.user {
   border: 1px solid var(--border);
 }
