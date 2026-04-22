@@ -676,13 +676,18 @@ label {
 
 .usage-chart {
   display: grid;
-  /* Columns: [sku] [bar] [tokens] [pill]. `min-content` on the sku
-     column right-aligns the model ids into a tight stack; `1fr` on
-     the bar column lets it flex to fill, `max-content` pins the
-     numeric label and pill widths to their content so they stack
-     cleanly. Row gap separates bars vertically without needing per-
-     row margins. */
-  grid-template-columns: max-content 1fr max-content max-content;
+  /* Columns: [sku] [bar] [tokens] [pill]. The sku column sizes to
+     max-content so the widest model id fits on a single line with
+     no wrap; wrapping a model name across two lines reads as
+     broken (the hyphens inside a slug are meaningful, not soft
+     wrap points). `minmax(0, ...)` on sku and bar lets both
+     columns shrink below their content width when the pane is
+     narrower than the natural layout - the sku cell then falls
+     back to horizontal scroll (see .usage-sku) rather than wrap.
+     `max-content` pins the numeric label and pill widths so the
+     rightmost columns stay aligned. Row gap separates bars
+     vertically without needing per-row margins. */
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) max-content max-content;
   gap: 0.35rem 0.75rem;
   align-items: center;
   margin: 0 0 0.75rem;
@@ -712,11 +717,19 @@ label {
   font-family: inherit;
   font-size: 0.85rem;
   color: var(--text);
-  /* Prevent a pathological long sku from blowing out the column —
-     break on arbitrary chars so a dash or underscore can wrap rather
-     than push the bar off the right side of the pane. */
-  max-width: 14rem;
-  overflow-wrap: anywhere;
+  /* Keep the full sku on one line. Wrapping on internal hyphens/
+     underscores fractures names like `venice-uncensored-1.1` across
+     two rows and reads as broken layout, not as readable text. The
+     grid column is sized to max-content (see .usage-chart) so on a
+     wide enough pane the whole name fits unclipped; when the pane
+     is too narrow to give each sku its natural width the column
+     clamps and this cell falls back to horizontal scroll. `min-
+     width: 0` is load-bearing: without it the grid item refuses to
+     shrink below its intrinsic content width and the clamp on the
+     column never engages. */
+  white-space: nowrap;
+  overflow-x: auto;
+  min-width: 0;
 }
 
 .usage-bar-cell {
