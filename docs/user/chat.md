@@ -96,6 +96,34 @@ at the matching level, so if you are more comfortable filtering there
 the drawer doesn't take anything away - it just adds an in-app view
 that travels with the PWA install.
 
+### Samskara diagnostics
+
+The small fist icon at the top of the log drawer opens a dedicated
+**samskara diagnostics** screen - a read-only window into the
+samskara pipeline for the current conversation. Useful while
+vetting the feature or debugging a "why did the model seem to
+already expect X" moment.
+
+The screen shows:
+
+- **Overview counters** - total samskaras (split by tier), total
+  pair associations across the corpus, and per-chat counts for
+  substrate records and cohort fires.
+- **Compound summary** - the prose block currently riding in every
+  system prompt, plus how many samskaras it covers and when the
+  worker last regenerated it.
+- **Cohort fires** - each "cohort" is one turn's worth of
+  predictions that fired together. Cards are marked confirmed /
+  disconfirmed / waiting / aged out so you can see whether the
+  reaction-classify phase has caught up. Each prediction shows its
+  ranking score, tier, valence, confidence, and health.
+- **Substrate** - the per-turn records the worker is assimilating
+  into samskaras, with their lifecycle state (pending assimilation
+  / pending embed / fully baked).
+
+Opens via the fist button in the log drawer header; closes via the
+×, Escape, or clicking the backdrop.
+
 ## When the model is rate-limited
 
 Venice occasionally returns a 429 "model overloaded" response when the

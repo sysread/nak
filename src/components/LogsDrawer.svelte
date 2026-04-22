@@ -39,6 +39,7 @@
     type LogLevel,
   } from '$lib/logger.svelte';
   import { app } from '$lib/state.svelte';
+  import { navigate } from '$lib/routing.svelte';
 
   const drawer = logsDrawer;
 
@@ -219,6 +220,34 @@
   >
     <header class="logs-header">
       <h2 class="logs-title">Logs</h2>
+      <!-- Samskara diagnostics shortcut. Icon is a stylized fist -
+           "Summary of inner turmoil for this chat" per the original
+           ask. Closes the drawer on click because the modal it opens
+           takes the full screen; reopening the drawer after is a
+           deliberate user action. -->
+      <button
+        type="button"
+        class="secondary icon-btn"
+        aria-label="Samskara diagnostics"
+        title="Samskara diagnostics"
+        onclick={() => {
+          drawer.close();
+          navigate({ modal: 'samskara' });
+        }}
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
+             fill="none" stroke="currentColor" stroke-width="1.8"
+             stroke-linecap="round" stroke-linejoin="round">
+          <!-- Closed fist, knuckles up, thumb wrapped on the left.
+               The four vertical strokes read as curled fingers; the
+               half-circle on the left is the thumb bulge. -->
+          <rect x="6" y="10" width="13" height="9" rx="2" />
+          <line x1="9.5" y1="12.5" x2="9.5" y2="16.5" />
+          <line x1="12.5" y1="12.5" x2="12.5" y2="16.5" />
+          <line x1="15.5" y1="12.5" x2="15.5" y2="16.5" />
+          <path d="M6 13c-2 0-2 3 0 3" />
+        </svg>
+      </button>
       <button
         type="button"
         class="secondary icon-btn"

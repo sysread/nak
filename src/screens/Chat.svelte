@@ -89,6 +89,7 @@
   import Auth from './Auth.svelte';
   import Help from './Help.svelte';
   import Memories from './Memories.svelte';
+  import Samskara from './Samskara.svelte';
   import Settings from './Settings.svelte';
   import Cookbook from './Cookbook.svelte';
   import {
@@ -128,6 +129,7 @@
   const showHelp = $derived(route.modal === 'help');
   const showMemories = $derived(route.modal === 'memories');
   const showCookbook = $derived(route.modal === 'cookbook');
+  const showSamskara = $derived(route.modal === 'samskara');
   /**
    * Sidebar drawer tab. Backed by `route.drawer` - absent in the URL
    * means "chats" (the default). 'recipes' renders the cookbook list
@@ -2550,6 +2552,8 @@
   <Help onClose={() => navigate({ modal: null, doc: null })} />
 {:else if showMemories}
   <Memories onClose={() => navigate({ modal: null })} />
+{:else if showSamskara}
+  <Samskara onClose={() => navigate({ modal: null })} />
 {:else if showCookbook}
   <Cookbook onClose={onCookbookModalClose} />
 {:else}

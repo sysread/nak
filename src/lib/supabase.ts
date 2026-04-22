@@ -1840,15 +1840,28 @@ export class SupabaseService {
   async samskaraGetCompoundSummary(): Promise<{
     summary: string | null;
     lastRegenAt: string | null;
+    samskaraCountAtRegen: number;
   } | null> {
+    // samskara_count_at_regen is purely a diagnostics hook — the
+    // getter the chat loop uses discards it, but the Samskara
+    // diagnostics screen wants to show "summary covers N samskaras".
+    // Cheap to return regardless; no reason to fork into two methods.
     const { data, error } = await this.client
       .from('samskara_compound_summary')
-      .select('summary, last_regen_at')
+      .select('summary, last_regen_at, samskara_count_at_regen')
       .maybeSingle();
     if (error) throw new SupabaseError(error.message);
     if (!data) return null;
-    const row = data as { summary: string | null; last_regen_at: string | null };
-    return { summary: row.summary, lastRegenAt: row.last_regen_at };
+    const row = data as {
+      summary: string | null;
+      last_regen_at: string | null;
+      samskara_count_at_regen: number | null;
+    };
+    return {
+      summary: row.summary,
+      lastRegenAt: row.last_regen_at,
+      samskaraCountAtRegen: row.samskara_count_at_regen ?? 0,
+    };
   }
 
   /** Worker: claim the next substrate row needing assimilation. */
@@ -2039,6 +2052,160 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
     return (data ?? []) as SamskaraSummaryRow[];
   }
+
+  // Diagnostics reads --------------------------------------------------
+  //
+  // These power the Samskara diagnostics screen (src/screens/Samskara.svelte).
+  // They're pure selects against the user's own rows (RLS handles the
+  // scoping) so they're safe to call from the main thread whenever the
+  // user opens the diagnostics modal. None of them are on the chat-
+  // loop hot path; they only run when a human asks to see them.
+
+  /**
+   * All substrate rows anchored to a thread, newest first. Used by the
+   * diagnostics screen to narrate which turns the samskara pipeline
+   * has seen for this conversation and where each row sits in the
+   * assimilate -> embed lifecycle. Embedding column deliberately
+   * omitted (2048 floats per row x N rows is a lot of wire traffic
+   * for a human-readable panel).
+   */
+  async samskaraListSubstrateForThread(
+    threadId: string
+  ): Promise<SamskaraSubstrateDiagnosticRow[]> {
+    const { data, error } = await this.client
+      .from('samskara_substrate')
+      .select(
+        'id, user_message_id, assistant_message_id, situation, outcome, valence, embedding_model, created_at'
+      )
+      .eq('thread_id', threadId)
+      .order('created_at', { ascending: false });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      id: string;
+      user_message_id: string;
+      assistant_message_id: string | null;
+      situation: string | null;
+      outcome: string | null;
+      valence: number | null;
+      embedding_model: string | null;
+      created_at: string;
+    }[];
+    return rows.map((r) => ({
+      id: r.id,
+      userMessageId: r.user_message_id,
+      assistantMessageId: r.assistant_message_id,
+      situation: r.situation,
+      outcome: r.outcome,
+      valence: r.valence,
+      embeddingModel: r.embedding_model,
+      createdAt: r.created_at,
+    }));
+  }
+
+  /**
+   * All fires anchored to a thread, newest first, with the joined
+   * samskara payload so the diagnostics screen can render each cohort
+   * without a follow-up round trip. Supabase embed syntax pulls the
+   * FK'd row under `samskaras`. Grouping by cohort is left to the
+   * renderer.
+   */
+  async samskaraListFiresForThread(
+    threadId: string
+  ): Promise<SamskaraFireDiagnosticRow[]> {
+    const { data, error } = await this.client
+      .from('samskara_fires')
+      .select(
+        'id, cohort_id, samskara_id, score, fired_at, was_confirmed, samskaras(tier, prediction, inner_voice, valence, confidence, health)'
+      )
+      .eq('thread_id', threadId)
+      .order('fired_at', { ascending: false });
+    if (error) throw new SupabaseError(error.message);
+    // supabase-js types the embed as an array even for N:1 FK'd rows
+    // at the type layer — at runtime it's a single object when the
+    // relationship resolves to one row. Treat either shape uniformly
+    // and pick the first match; null when the FK target was deleted.
+    interface EmbeddedSamskara {
+      tier: number;
+      prediction: string;
+      inner_voice: string | null;
+      valence: number | null;
+      confidence: number;
+      health: number;
+    }
+    const rows = (data ?? []) as unknown as {
+      id: string;
+      cohort_id: string;
+      samskara_id: string;
+      score: number;
+      fired_at: string;
+      was_confirmed: boolean | null;
+      samskaras: EmbeddedSamskara | EmbeddedSamskara[] | null;
+    }[];
+    return rows.map((r) => {
+      const joined = Array.isArray(r.samskaras)
+        ? (r.samskaras[0] ?? null)
+        : r.samskaras;
+      return {
+        id: r.id,
+        cohortId: r.cohort_id,
+        samskaraId: r.samskara_id,
+        score: r.score,
+        firedAt: r.fired_at,
+        wasConfirmed: r.was_confirmed,
+        samskara: joined
+          ? {
+              tier: joined.tier,
+              prediction: joined.prediction,
+              innerVoice: joined.inner_voice,
+              valence: joined.valence,
+              confidence: joined.confidence,
+              health: joined.health,
+            }
+          : null,
+      };
+    });
+  }
+
+  /**
+   * Corpus-level counters for the diagnostics overview. Each head-only
+   * count is a single round trip; the four together are cheap. Kept
+   * as a composite method so the caller gets one awaitable and one
+   * failure mode to handle.
+   */
+  async samskaraDiagnosticsCounts(threadId: string): Promise<{
+    totalSamskaras: number;
+    tier1Samskaras: number;
+    tier2Samskaras: number;
+    substrateInThread: number;
+    firesInThread: number;
+    associations: number;
+  }> {
+    const client = this.client;
+    const [totalR, t1R, t2R, subR, fireR, assocR] = await Promise.all([
+      client.from('samskaras').select('id', { count: 'exact', head: true }),
+      client.from('samskaras').select('id', { count: 'exact', head: true }).eq('tier', 1),
+      client.from('samskaras').select('id', { count: 'exact', head: true }).eq('tier', 2),
+      client
+        .from('samskara_substrate')
+        .select('id', { count: 'exact', head: true })
+        .eq('thread_id', threadId),
+      client
+        .from('samskara_fires')
+        .select('id', { count: 'exact', head: true })
+        .eq('thread_id', threadId),
+      client.from('samskara_associations').select('id', { count: 'exact', head: true }),
+    ]);
+    const pickError = totalR.error ?? t1R.error ?? t2R.error ?? subR.error ?? fireR.error ?? assocR.error;
+    if (pickError) throw new SupabaseError(pickError.message);
+    return {
+      totalSamskaras: totalR.count ?? 0,
+      tier1Samskaras: t1R.count ?? 0,
+      tier2Samskaras: t2R.count ?? 0,
+      substrateInThread: subR.count ?? 0,
+      firesInThread: fireR.count ?? 0,
+      associations: assocR.count ?? 0,
+    };
+  }
 }
 
 /**
@@ -2083,4 +2250,46 @@ export interface SamskaraSummaryRow {
   valence: number | null;
   confidence: number;
   health: number;
+}
+
+/**
+ * Substrate row as shown in the diagnostics screen. Excludes the
+ * embedding vector (too fat for a human-readable panel) and renames
+ * to camelCase at the boundary so the component doesn't ship snake-
+ * case identifiers into the UI.
+ */
+export interface SamskaraSubstrateDiagnosticRow {
+  id: string;
+  userMessageId: string;
+  assistantMessageId: string | null;
+  situation: string | null;
+  outcome: string | null;
+  valence: number | null;
+  /** Set once the embedding has landed; also a de-facto "embedded?" flag. */
+  embeddingModel: string | null;
+  createdAt: string;
+}
+
+/**
+ * Fire row with its joined samskara payload, for diagnostics
+ * rendering. Grouping by `cohortId` is the renderer's job - the DB
+ * query returns one row per (cohort_id, samskara_id) pair.
+ */
+export interface SamskaraFireDiagnosticRow {
+  id: string;
+  cohortId: string;
+  samskaraId: string;
+  score: number;
+  firedAt: string;
+  wasConfirmed: boolean | null;
+  /** Null only when the samskara was deleted after the fire logged;
+   *  the row keeps pointing to the now-orphaned id. */
+  samskara: {
+    tier: number;
+    prediction: string;
+    innerVoice: string | null;
+    valence: number | null;
+    confidence: number;
+    health: number;
+  } | null;
 }

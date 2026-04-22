@@ -32,7 +32,7 @@
  * owns.
  */
 
-export type Modal = 'settings' | 'cookbook' | 'help' | 'memories';
+export type Modal = 'settings' | 'cookbook' | 'help' | 'memories' | 'samskara';
 export type DrawerTab = 'chats' | 'recipes';
 
 export interface Route {
@@ -44,7 +44,7 @@ export interface Route {
 }
 
 const ROUTED_KEYS = ['cid', 'drawer', 'modal', 'recipe', 'doc'] as const;
-const MODAL_VALUES: readonly Modal[] = ['settings', 'cookbook', 'help', 'memories'];
+const MODAL_VALUES: readonly Modal[] = ['settings', 'cookbook', 'help', 'memories', 'samskara'];
 const DRAWER_VALUES: readonly DrawerTab[] = ['chats', 'recipes'];
 
 export const route = $state<Route>({

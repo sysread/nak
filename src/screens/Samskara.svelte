@@ -1,0 +1,653 @@
+<script lang="ts">
+  /*
+   * Samskara diagnostics modal. Read-only window into the samskara
+   * pipeline's state for the currently-selected conversation, plus
+   * corpus-level counters and the compound summary that's being
+   * injected into every system prompt.
+   *
+   * Reached from the fist-icon button in the Logs drawer footer;
+   * opens via `navigate({ modal: 'samskara' })` and reads `route.cid`
+   * to know which thread to fetch for. Non-thread-scoped sections
+   * (counters, compound summary) render regardless, so the modal is
+   * still useful on the empty thread-picker state.
+   *
+   * Chrome mirrors Memories/Help (single scrolling column). The panel
+   * deliberately does NOT show substrate embeddings (2048 floats per
+   * row is too fat to wire), fires older than the current thread (a
+   * full history view is out of scope for this first cut), or any
+   * corpus-wide samskara list (same reason). When/if the user asks
+   * for those, they're additional sections below the existing ones.
+   */
+  import { app } from '$lib/state.svelte';
+  import { route } from '$lib/routing.svelte';
+  import { createLogger } from '$lib/logger.svelte';
+  import type {
+    SamskaraSubstrateDiagnosticRow,
+    SamskaraFireDiagnosticRow,
+  } from '$lib/supabase';
+
+  interface Props {
+    onClose: () => void;
+  }
+  let { onClose }: Props = $props();
+
+  // Source tag reuses 'samskara' so diagnostic reads appear alongside
+  // the other chat-loop-side samskara breadcrumbs in the Logs drawer.
+  // Useful when the user opens both panels to watch a fire happen.
+  const log = createLogger('samskara');
+
+  interface CompoundSummary {
+    summary: string | null;
+    lastRegenAt: string | null;
+    samskaraCountAtRegen: number;
+  }
+  interface Counts {
+    totalSamskaras: number;
+    tier1Samskaras: number;
+    tier2Samskaras: number;
+    substrateInThread: number;
+    firesInThread: number;
+    associations: number;
+  }
+
+  let loading = $state(true);
+  let error = $state<string | null>(null);
+  let compound = $state<CompoundSummary | null>(null);
+  let counts = $state<Counts | null>(null);
+  let substrate = $state<SamskaraSubstrateDiagnosticRow[]>([]);
+  let fires = $state<SamskaraFireDiagnosticRow[]>([]);
+  const threadId = $derived(route.cid);
+
+  // Group fires by cohort so the renderer draws "one cohort" cards
+  // instead of one row per (cohort, samskara) pair. Cohort order
+  // preserved from the original array (newest fired_at first).
+  interface CohortGroup {
+    cohortId: string;
+    firedAt: string;
+    wasConfirmed: boolean | null;
+    fires: SamskaraFireDiagnosticRow[];
+  }
+  const cohortGroups: CohortGroup[] = $derived.by(() => {
+    const groups = new Map<string, CohortGroup>();
+    for (const f of fires) {
+      const existing = groups.get(f.cohortId);
+      if (existing) {
+        existing.fires.push(f);
+        // Within a cohort every row shares cohort_id + fired_at +
+        // was_confirmed, so the first wins. Ordering inside the
+        // cohort is highest-score-first.
+      } else {
+        groups.set(f.cohortId, {
+          cohortId: f.cohortId,
+          firedAt: f.firedAt,
+          wasConfirmed: f.wasConfirmed,
+          fires: [f],
+        });
+      }
+    }
+    for (const g of groups.values()) {
+      g.fires.sort((a, b) => b.score - a.score);
+    }
+    return [...groups.values()];
+  });
+
+  async function refresh(): Promise<void> {
+    if (!app.supabase) {
+      error = 'Not connected to Supabase yet.';
+      loading = false;
+      return;
+    }
+    loading = true;
+    error = null;
+    log.debug('diagnostics: fetching', { threadId });
+    try {
+      // One thread-scoped thread id is the slow path; the rest run in
+      // parallel. When no thread is selected we still fetch compound
+      // summary + corpus counters (with a zero-thread stand-in) so
+      // the modal remains useful on the empty state.
+      const effectiveThread = threadId ?? '00000000-0000-0000-0000-000000000000';
+      const [c, n, sub, fir] = await Promise.all([
+        app.supabase.samskaraGetCompoundSummary(),
+        app.supabase.samskaraDiagnosticsCounts(effectiveThread),
+        threadId ? app.supabase.samskaraListSubstrateForThread(threadId) : Promise.resolve([]),
+        threadId ? app.supabase.samskaraListFiresForThread(threadId) : Promise.resolve([]),
+      ]);
+      compound = c;
+      counts = n;
+      substrate = sub;
+      fires = fir;
+      log.debug('diagnostics: loaded', {
+        substrate: sub.length,
+        fires: fir.length,
+        totalSamskaras: n.totalSamskaras,
+      });
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      log.warn('diagnostics: fetch failed', err);
+    } finally {
+      loading = false;
+    }
+  }
+
+  $effect(() => {
+    void refresh();
+  });
+
+  // --- formatters ---------------------------------------------------------
+
+  function formatRelative(iso: string | null | undefined): string {
+    if (!iso) return 'never';
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return iso ?? 'never';
+    const diffMs = Date.now() - then;
+    const diffSec = Math.round(diffMs / 1000);
+    if (diffSec < 60) return `${diffSec}s ago`;
+    const diffMin = Math.round(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHr = Math.round(diffMin / 60);
+    if (diffHr < 24) return `${diffHr}h ago`;
+    const diffDay = Math.round(diffHr / 24);
+    if (diffDay < 30) return `${diffDay}d ago`;
+    const diffMo = Math.round(diffDay / 30);
+    if (diffMo < 12) return `${diffMo}mo ago`;
+    const diffYr = Math.round(diffMo / 12);
+    return `${diffYr}y ago`;
+  }
+
+  function formatValence(v: number | null): string {
+    if (v === null) return '—';
+    const sign = v > 0 ? '+' : '';
+    return `${sign}${v.toFixed(2)}`;
+  }
+
+  // Three-state label for a cohort's resolution status. The data
+  // model stores was_confirmed as boolean | null with null meaning
+  // "reaction-classify hasn't looked at this cohort yet". Distinguish
+  // "recently fired, waiting" from "aged out without resolution" by
+  // the 10-minute window the classifier uses.
+  function resolutionLabel(wasConfirmed: boolean | null, firedAt: string): string {
+    if (wasConfirmed === true) return 'confirmed';
+    if (wasConfirmed === false) return 'disconfirmed';
+    const ageMs = Date.now() - new Date(firedAt).getTime();
+    if (ageMs < 60 * 1000) return 'waiting (in-flight)';
+    if (ageMs < 10 * 60 * 1000) return 'waiting (resolution window open)';
+    return 'aged out (no reaction)';
+  }
+
+  function assimilationStatus(r: SamskaraSubstrateDiagnosticRow): string {
+    if (r.situation === null) return 'pending assimilation';
+    if (r.embeddingModel === null) return 'assimilated, pending embed';
+    return 'assimilated + embedded';
+  }
+</script>
+
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
+
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<div
+  class="center samskara-backdrop"
+  onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+>
+  <div class="samskara-shell" role="dialog" aria-modal="true" aria-label="Samskara diagnostics">
+    <button
+      type="button"
+      class="samskara-close"
+      onclick={onClose}
+      aria-label="Close diagnostics"
+      title="Close"
+    >×</button>
+
+    <header class="samskara-header">
+      <h1 class="samskara-title">Samskara diagnostics</h1>
+      <p class="subtle samskara-blurb">
+        Read-only view into the samskara pipeline. Predictions this
+        chat fired, substrate the worker recorded, and the compound
+        summary currently riding in every system prompt. See
+        <em>docs/dev/samskara.md</em> for the underlying design.
+      </p>
+      <div class="samskara-toolbar">
+        <button
+          type="button"
+          class="secondary"
+          onclick={() => void refresh()}
+          disabled={loading}
+        >
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
+      </div>
+    </header>
+
+    <section class="samskara-body">
+      {#if error}
+        <p class="error">{error}</p>
+      {/if}
+
+      <!-- Overview counts. Three thread-scoped numbers (substrate,
+           fires, total samskaras) + three corpus-wide (total /
+           tier-1 / tier-2 / associations) so you can see at a glance
+           whether the pipeline is producing anything. -->
+      <h2 class="pane-section">Overview</h2>
+      {#if counts}
+        <div class="counts-grid">
+          <div class="count-card">
+            <div class="count-value">{counts.totalSamskaras}</div>
+            <div class="count-label">Samskaras (total)</div>
+            <div class="count-sub">
+              tier 1: {counts.tier1Samskaras} · tier 2: {counts.tier2Samskaras}
+            </div>
+          </div>
+          <div class="count-card">
+            <div class="count-value">{counts.associations}</div>
+            <div class="count-label">Pair associations</div>
+          </div>
+          <div class="count-card">
+            <div class="count-value">{counts.substrateInThread}</div>
+            <div class="count-label">Substrate in this chat</div>
+          </div>
+          <div class="count-card">
+            <div class="count-value">{counts.firesInThread}</div>
+            <div class="count-label">Fires in this chat</div>
+            <div class="count-sub">
+              {cohortGroups.length} cohort{cohortGroups.length === 1 ? '' : 's'}
+            </div>
+          </div>
+        </div>
+      {:else if !error}
+        <p class="subtle">Loading counts…</p>
+      {/if}
+
+      <!-- Compound summary: the prose block always injected. Shows
+           what the model actually sees as its predictive-self model
+           this session. Stale / empty cases rendered explicitly so
+           "nothing shown" reads as data rather than a bug. -->
+      <h2 class="pane-section">Compound summary (always on in system prompt)</h2>
+      {#if compound === null && !loading && !error}
+        <p class="subtle">No compound summary yet - the worker builds one once you have ~5 samskaras.</p>
+      {:else if compound}
+        {#if compound.summary}
+          <div class="compound-block">
+            <pre class="compound-text">{compound.summary}</pre>
+            <p class="subtle compound-meta">
+              Covers {compound.samskaraCountAtRegen} samskara{compound.samskaraCountAtRegen === 1 ? '' : 's'} ·
+              regenerated {formatRelative(compound.lastRegenAt)}
+            </p>
+          </div>
+        {:else}
+          <p class="subtle">Summary row exists but is empty. Worker hasn't written yet.</p>
+        {/if}
+      {/if}
+
+      <!-- Cohort fires for this thread. Each card is one cohort (one
+           turn's worth of fired predictions), expandable into its
+           individual samskaras sorted by score. Resolution state is
+           the key diagnostic - confirmed/disconfirmed/waiting tells
+           you whether reaction-classify has caught up. -->
+      <h2 class="pane-section">
+        Cohort fires {threadId ? 'in this chat' : '(no chat selected)'}
+      </h2>
+      {#if !threadId}
+        <p class="subtle">Open a conversation to see fires scoped to it.</p>
+      {:else if cohortGroups.length === 0 && !loading}
+        <p class="subtle">No samskaras have fired in this chat yet.</p>
+      {:else}
+        <ul class="cohort-list">
+          {#each cohortGroups as group (group.cohortId)}
+            <li class="cohort-card">
+              <header class="cohort-head">
+                <span class="cohort-time">{formatRelative(group.firedAt)}</span>
+                <span class="cohort-status status-{group.wasConfirmed === true ? 'confirm' : group.wasConfirmed === false ? 'disconfirm' : 'pending'}">
+                  {resolutionLabel(group.wasConfirmed, group.firedAt)}
+                </span>
+                <span class="cohort-count">
+                  {group.fires.length} prediction{group.fires.length === 1 ? '' : 's'}
+                </span>
+              </header>
+              <ul class="fire-list">
+                {#each group.fires as fire (fire.id)}
+                  <li class="fire-row">
+                    <div class="fire-head">
+                      <span class="fire-tier">T{fire.samskara?.tier ?? '?'}</span>
+                      <span class="fire-score" title="cosine * sqrt(health * confidence)">
+                        score {fire.score.toFixed(3)}
+                      </span>
+                      {#if fire.samskara}
+                        <span class="fire-meta">
+                          val {formatValence(fire.samskara.valence)} ·
+                          conf {fire.samskara.confidence.toFixed(2)} ·
+                          health {fire.samskara.health.toFixed(2)}
+                        </span>
+                      {:else}
+                        <span class="fire-meta subtle">samskara deleted since fire</span>
+                      {/if}
+                    </div>
+                    {#if fire.samskara}
+                      <p class="fire-prediction">{fire.samskara.prediction}</p>
+                      {#if fire.samskara.innerVoice}
+                        <p class="fire-inner-voice">
+                          <em>{fire.samskara.innerVoice}</em>
+                        </p>
+                      {/if}
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+
+      <!-- Substrate: per-turn rows recorded at end-of-round. Shown
+           with their lifecycle state (pending assimilation / pending
+           embed / fully baked) so you can see the enrichment
+           pipeline walking forward behind the chat. -->
+      <h2 class="pane-section">
+        Substrate {threadId ? 'in this chat' : '(no chat selected)'}
+      </h2>
+      {#if !threadId}
+        <p class="subtle">Open a conversation to see its substrate.</p>
+      {:else if substrate.length === 0 && !loading}
+        <p class="subtle">No substrate recorded for this chat yet.</p>
+      {:else}
+        <ul class="substrate-list">
+          {#each substrate as row (row.id)}
+            <li class="substrate-card">
+              <header class="substrate-head">
+                <span class="substrate-time">{formatRelative(row.createdAt)}</span>
+                <span class="substrate-status status-{row.situation === null ? 'pending' : row.embeddingModel === null ? 'partial' : 'done'}">
+                  {assimilationStatus(row)}
+                </span>
+                {#if row.valence !== null}
+                  <span class="substrate-meta">valence {formatValence(row.valence)}</span>
+                {/if}
+              </header>
+              {#if row.situation}
+                <p class="substrate-situation">{row.situation}</p>
+              {/if}
+              {#if row.outcome}
+                <p class="substrate-outcome subtle"><em>Outcome:</em> {row.outcome}</p>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
+  </div>
+</div>
+
+<style>
+  .samskara-backdrop {
+    position: fixed;
+    inset: 0;
+    background: color-mix(in srgb, #000 50%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    padding: 1rem;
+  }
+
+  .samskara-shell {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-modal);
+    width: 100%;
+    max-width: 52rem;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    height: min(44rem, 88vh);
+    overflow: hidden;
+  }
+
+  .samskara-close {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    z-index: 2;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.4rem;
+    line-height: 1;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    cursor: pointer;
+  }
+
+  .samskara-close:hover {
+    background: var(--bg-2);
+  }
+
+  .samskara-header {
+    padding: 1rem 1.25rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-2);
+    padding-right: 3rem;
+  }
+
+  .samskara-title {
+    font-size: 1.1rem;
+    margin: 0 0 0.25rem;
+  }
+
+  .samskara-blurb {
+    margin: 0 0 0.6rem;
+    font-size: 0.85rem;
+  }
+
+  .samskara-toolbar {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .samskara-body {
+    padding: 1rem 1.25rem 1.5rem;
+    overflow-y: auto;
+    min-width: 0;
+    font-size: 0.9rem;
+  }
+
+  .pane-section {
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin: 1.2rem 0 0.5rem;
+  }
+  .pane-section:first-child {
+    margin-top: 0;
+  }
+
+  .counts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: 0.6rem;
+  }
+
+  .count-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 0.6rem 0.75rem;
+  }
+
+  .count-value {
+    font-size: 1.3rem;
+    font-weight: 600;
+  }
+
+  .count-label {
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-top: 0.2rem;
+  }
+
+  .count-sub {
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-top: 0.15rem;
+  }
+
+  .compound-block {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 0.6rem 0.75rem;
+  }
+
+  .compound-text {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+    font-size: 0.88rem;
+    line-height: 1.45;
+  }
+
+  .compound-meta {
+    margin: 0.5rem 0 0;
+    font-size: 0.75rem;
+  }
+
+  .cohort-list,
+  .fire-list,
+  .substrate-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .fire-list {
+    gap: 0.35rem;
+    margin-top: 0.5rem;
+  }
+
+  .cohort-card,
+  .substrate-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 0.6rem 0.75rem;
+  }
+
+  .cohort-head,
+  .substrate-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    font-size: 0.78rem;
+  }
+
+  .cohort-time,
+  .substrate-time {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cohort-count {
+    color: var(--muted);
+    margin-left: auto;
+  }
+
+  /* Status pills. Colors echo the log-level badges (green-ish accent
+     for good, warm red for bad, muted for in-progress / stale) so
+     users reading both panels pick up the vocabulary by osmosis. */
+  .cohort-status,
+  .substrate-status {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0 0.4rem;
+    border-radius: 2px;
+    letter-spacing: 0.03em;
+  }
+  .status-confirm {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    color: var(--accent);
+  }
+  .status-disconfirm {
+    background: color-mix(in srgb, #d14343 22%, transparent);
+    color: #d14343;
+  }
+  .status-pending {
+    background: color-mix(in srgb, #d89614 22%, transparent);
+    color: #d89614;
+  }
+  .status-partial {
+    background: color-mix(in srgb, #d89614 18%, transparent);
+    color: #d89614;
+  }
+  .status-done {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent);
+  }
+
+  .fire-row {
+    border-top: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
+    padding-top: 0.35rem;
+  }
+  .fire-row:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .fire-head {
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+    flex-wrap: wrap;
+    font-size: 0.75rem;
+  }
+
+  .fire-tier {
+    font-weight: 600;
+    color: var(--accent);
+  }
+
+  .fire-score {
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+  }
+
+  .fire-meta {
+    font-size: 0.72rem;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .fire-prediction {
+    margin: 0.25rem 0 0;
+    font-size: 0.85rem;
+    line-height: 1.4;
+  }
+
+  .fire-inner-voice {
+    margin: 0.15rem 0 0;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  .substrate-situation {
+    margin: 0.3rem 0 0;
+    font-size: 0.85rem;
+    line-height: 1.4;
+  }
+
+  .substrate-outcome {
+    margin: 0.2rem 0 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+  }
+</style>
