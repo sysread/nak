@@ -657,6 +657,16 @@ label {
   outline-offset: -4px;
 }
 
+/* In light mode the unselected-swatch border dropped from the warm
+   dark-tan (#c4b691) the old palette used to neutral zinc-300, so
+   the step up to var(--text) on the selected swatch reads less
+   distinctly than it did on cream. Thicken the inset accent ring
+   by 1px to restore the selected/unselected delta without changing
+   the swatch geometry. */
+:root[data-theme='light'] .accent-option.selected {
+  outline-width: 3px;
+}
+
 .swatch {
   display: block;
   width: 1.5rem;
@@ -1091,7 +1101,10 @@ h1 {
   font-size: 0.9rem;
   color: var(--text);
   background: transparent;
-  border: 0;
+  /* Reserve a 1px border on every row so the light-mode active-state
+     border (see below) doesn't shift row height when a thread is
+     selected. Transparent by default; the .active rule paints it. */
+  border: 1px solid transparent;
   width: 100%;
   text-align: left;
   /* Single-line titles with ellipsis. `min-width: 0` is load-bearing:
@@ -1111,6 +1124,16 @@ h1 {
 .thread.active {
   background: var(--accent-weak);
   color: var(--text);
+}
+
+/* Selected thread borrows the hairline-on-accent-weak pattern used
+   for .msg.user: pale accent-weak tint doesn't hold an edge against
+   the near-white sidebar, so the bubble visually dissolves into the
+   bg. A --border-colored edge frames the selection. Dark mode's
+   accent-weak is a deep navy panel that reads as distinctly selected
+   on its own, so scope to light mode. */
+:root[data-theme='light'] .thread.active {
+  border-color: var(--border);
 }
 
 /* Thread rows need `position: relative` to anchor the per-row actions
