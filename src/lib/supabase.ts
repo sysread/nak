@@ -1471,6 +1471,33 @@ export class SupabaseService {
   }
 
   /**
+   * Scored variant of `searchMemoriesByEmbedding`. Same ranking
+   * formula, but returns the boosted similarity score per row so the
+   * caller can threshold in application code. Used by the opening-
+   * turn memory-recall priming in chat-loop.ts — the main
+   * `memory_search` path continues to use the unscored RPC.
+   */
+  async searchMemoriesByEmbeddingScored(
+    queryEmbedding: number[],
+    limit: number
+  ): Promise<Array<{ id: string; label: string; data: string; similarity: number }>> {
+    const { data, error } = await this.client.rpc(
+      'search_memories_by_embedding_scored',
+      {
+        query_embedding: queryEmbedding,
+        match_limit: limit,
+      }
+    );
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as Array<{
+      id: string;
+      label: string;
+      data: string;
+      similarity: number;
+    }>;
+  }
+
+  /**
    * ILIKE fallback, scoped to rows the worker hasn't embedded yet. Used
    * by `memory_search` to fill in results for just-created memories —
    * without this, a memory the user wrote seconds ago would be invisible

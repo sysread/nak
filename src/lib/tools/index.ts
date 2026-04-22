@@ -225,18 +225,23 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     'register when they want one.',
     '',
     // --- Recall cadence -------------------------------------------
-    // Three rules, in order the model should fire them. Keep this
-    // block terse; the model reads every turn and extra prose here
-    // is tokens paid forever.
-    'When a conversation opens, call `memory_recall` once to refresh',
-    "yourself on the user\u2019s preferences and communication style before",
-    'responding. Call `memory_recall` again as soon as the user lands on',
-    'a clear topic \u2014 the first pass may have missed memories that only',
-    'become relevant once you know what the conversation is about. When',
-    'the user opens a new topic, also call `conversation_recall`',
+    // Rules the model should fire on. Keep this block terse; the
+    // model reads every turn and extra prose here is tokens paid
+    // forever.
+    //
+    // The "conversation opens" case is NOT in this list - the chat
+    // loop pre-recalls relevant memories for the first user message
+    // and injects them as a <think> block the model sees in history.
+    // See src/lib/opening-recall.ts. The rules below cover the mid-
+    // conversation triggers that pre-injection can't catch.
+    'Call `memory_recall` when the user lands on a clear topic, when',
+    'they introduce new information about themselves mid-conversation,',
+    'or when they open a new topic - in each case, relevant memories',
+    "may exist that weren't pulled in by the opening-turn pre-recall.",
+    'When the user opens a new topic, also call `conversation_recall`',
     '(optionally passing `topic`) so you can pull details from prior',
-    "conversations where you discussed something similar. Don\u2019t make",
-    "the user repeat themselves if the answer is already in your history.",
+    "conversations where you discussed something similar. Don't make",
+    'the user repeat themselves if the answer is already in your history.',
     '',
     // --- Toggle framing -------------------------------------------
     'You have additional tools beyond recall, but they are disabled by',

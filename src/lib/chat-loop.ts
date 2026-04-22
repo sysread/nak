@@ -50,6 +50,7 @@ import {
   recordSubstrateStub,
   type FireResult,
 } from './samskara';
+import { recallOpeningMemories } from './opening-recall';
 
 /** Upper bound on rounds to prevent a runaway tool-call loop. */
 export const MAX_ROUNDS = 5;
@@ -371,42 +372,88 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // tool-using row, whichever the loop ends on.
   let lastAssistantId: string | null = null;
 
-  // Samskara priming. Computed ONCE before the round loop so every
-  // round in this turn sees the same compound + fire signal — the
-  // user's input doesn't change across rounds, and recomputing per
-  // round would burn embedding calls and confuse the cohort tracking
-  // (one cohort id per user turn, not per round).
+  // Turn-open priming. Computed ONCE before the round loop so every
+  // round in this turn sees the same compound + fire + opening-recall
+  // block - the user's input doesn't change across rounds, and
+  // recomputing per round would burn embedding calls and confuse the
+  // cohort tracking (one cohort id per user turn, not per round).
   //
-  // Both calls run in parallel and either may resolve to null; the
-  // formatter renders whatever sections are present. Errors are
-  // already swallowed inside the helpers — a samskara failure should
-  // never block a chat turn.
+  // Three pieces run in parallel:
+  //   1. Samskara compound summary (cached prose row, fast SELECT).
+  //   2. Samskara fire (one embed + one cosine RPC + one log write).
+  //   3. Opening-turn memory recall (one embed + one scored cosine
+  //      RPC). Gated on "is this the first assistant turn of this
+  //      thread?" so mid-conversation turns don't pay the tax. The
+  //      model handles later-turn recall itself via the memory_recall
+  //      tool, so auto-injection on every turn would be double work.
   //
-  // Bounded wait. The cosine fire involves one Venice embed call
-  // plus one Supabase RPC; the compound summary is a single SELECT.
-  // Common case lands in 100-300 ms. Cap at SAMSKARA_PRIMING_TIMEOUT_MS
-  // so a slow Venice doesn't add visible latency to the user's first
-  // token. The underlying Promises keep running on timeout so the
-  // fire-log RPC inside fireSamskaras still completes — the worst
-  // case is one cohort logged but never reaction-classified, which
-  // the worker's resolution-window discards naturally.
+  // Any piece may resolve to null/empty; the formatter and the
+  // conditional history.push below render whatever sections are
+  // present. Errors are already swallowed inside each helper - a
+  // priming failure should never block a chat turn.
+  //
+  // Bounded wait. All three calls race the same timeout. The cosine
+  // fire involves one Venice embed plus one Supabase RPC; the
+  // compound summary is a single SELECT; the opening recall is one
+  // embed plus one RPC. Common case lands in 100-300 ms. Cap at
+  // SAMSKARA_PRIMING_TIMEOUT_MS so a slow Venice doesn't add visible
+  // latency to the user's first token. The underlying Promises keep
+  // running on timeout so the fire-log RPC inside fireSamskaras still
+  // completes - the worst case is one cohort logged but never
+  // reaction-classified, which the worker's resolution-window
+  // discards naturally.
   const userText = extractUserText(history[history.length - 1]);
-  const primingWork = (async (): Promise<string> => {
-    const [compoundSummary, fireResult] = await Promise.all([
+  // "Opening turn" = no assistant messages in history yet. A fresh
+  // thread on turn 1 matches; a thread where the user edited their
+  // first message before any reply also matches (correctly - the
+  // model still hasn't seen anything). Later turns fall through to
+  // the model's own memory_recall cadence.
+  const isOpeningTurn = history.every((m) => m.role !== 'assistant');
+  interface PrimingBundle {
+    samskaraAppendix: string;
+    openingRecallBlock: string | null;
+  }
+  const primingWork = (async (): Promise<PrimingBundle> => {
+    const [compoundSummary, fireResult, openingRecallBlock] = await Promise.all([
       getCompoundSummary(supabase),
       fireSamskaras(supabase, venice, thread.id, userText, signal),
+      isOpeningTurn
+        ? recallOpeningMemories(supabase, venice, userText, signal)
+        : Promise.resolve<string | null>(null),
     ]);
-    return formatPriming({
-      compoundSummary,
-      fire: fireResult as FireResult | null,
-    });
+    return {
+      samskaraAppendix: formatPriming({
+        compoundSummary,
+        fire: fireResult as FireResult | null,
+      }),
+      openingRecallBlock,
+    };
   })();
-  const samskaraAppendix = await Promise.race([
+  const priming = await Promise.race<PrimingBundle>([
     primingWork,
-    new Promise<string>((resolve) =>
-      setTimeout(() => resolve(''), SAMSKARA_PRIMING_TIMEOUT_MS)
+    new Promise<PrimingBundle>((resolve) =>
+      setTimeout(
+        () => resolve({ samskaraAppendix: '', openingRecallBlock: null }),
+        SAMSKARA_PRIMING_TIMEOUT_MS
+      )
     ),
   ]);
+  const samskaraAppendix = priming.samskaraAppendix;
+
+  // Push the opening-recall <think> block onto local history as an
+  // ephemeral assistant turn. Not persisted - the round loop only
+  // writes assistant rows that the model itself generated; this
+  // synthetic turn lives only for the duration of this chat-loop
+  // call, same contract as the <user_message> tag wrapping. Strict
+  // role alternation is broken here (user -> assistant-think ->
+  // assistant-reply), but Venice tolerates that on the wire and the
+  // model reads the <think> block as its own prior recollection.
+  if (priming.openingRecallBlock !== null) {
+    history.push({
+      role: 'assistant',
+      content: priming.openingRecallBlock,
+    });
+  }
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) break;

@@ -1029,6 +1029,37 @@ language sql stable security invoker as $$
    limit match_limit
 $$;
 
+-- Scored sibling of search_memories_by_embedding. Same ranking formula,
+-- but returns the boosted similarity score alongside each row so the
+-- caller can threshold in application code. Used by the opening-turn
+-- memory-recall priming in chat-loop.ts, which needs a minimum-score
+-- gate to avoid injecting noise on turns that don't actually look like
+-- anything the user's memories cover. Kept as a separate function so
+-- the main memory_search path (and the Memories browser) stays on the
+-- unscored RPC and doesn't have to care about a column it never uses.
+drop function if exists public.search_memories_by_embedding_scored(vector, int);
+create or replace function public.search_memories_by_embedding_scored(
+  query_embedding vector(2048),
+  match_limit int
+) returns table (
+  id uuid,
+  label text,
+  data text,
+  similarity real
+)
+language sql stable security invoker as $$
+  select id, label, data,
+         ((1 - (embedding <=> query_embedding))
+           * (1 + 0.15 * ln(1 + confidence)))::real as similarity
+    from public.memories
+   where user_id = auth.uid()
+     and embedding is not null
+     and confidence >= 0.05
+   order by (1 - (embedding <=> query_embedding))
+          * (1 + 0.15 * ln(1 + confidence)) desc
+   limit match_limit
+$$;
+
 -- Reflection pipeline RPCs -----------------------------------------------
 --
 -- The reflection agent's worker runs on the same claim/lease pattern as
