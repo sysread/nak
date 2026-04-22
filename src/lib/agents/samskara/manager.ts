@@ -82,21 +82,29 @@ export class SamskaraManager {
   private authUnsubscribe: (() => void) | null = null;
 
   async start(opts: StartOpts): Promise<void> {
-    if (this.worker) return;
+    if (this.worker) {
+      workerLog.debug('start: skipped, worker already running');
+      return;
+    }
     this.stopped = false;
+    workerLog.debug('start: requested');
     if (typeof navigator === 'undefined' || !navigator.locks) {
+      workerLog.debug('start: navigator.locks unavailable, spawning without cross-tab lock');
       this.spawn(opts);
       return;
     }
+    workerLog.debug('start: requesting cross-tab lock nak:samskara-worker');
     await navigator.locks.request(
       'nak:samskara-worker',
       { mode: 'exclusive' },
       () =>
         new Promise<void>((resolveLock) => {
           if (this.stopped) {
+            workerLog.debug('start: lock callback fired after stop, releasing');
             resolveLock();
             return;
           }
+          workerLog.debug('start: cross-tab lock acquired, spawning worker');
           this.lockResolver = resolveLock;
           this.spawn(opts);
         })
@@ -150,16 +158,30 @@ export class SamskaraManager {
       }
     });
     this.worker = worker;
-    void this.postStart(opts);
+    // Catch postStart rejections so a thrown getSession (e.g. an
+    // auth-lock timeout during cold-load) doesn't leave the worker
+    // spawned-but-unstarted with the cross-tab lock still held. A
+    // silent unhandled-rejection used to be the wedged-but-alive
+    // failure mode that left substrate pending forever.
+    void this.postStart(opts).catch((err: Error) => {
+      workerLog.error('postStart failed, tearing down worker', err);
+      this.stop();
+    });
   }
 
   private async postStart(opts: StartOpts): Promise<void> {
-    if (!this.worker) return;
+    if (!this.worker) {
+      workerLog.debug('postStart: no worker, bailing');
+      return;
+    }
+    workerLog.debug('postStart: fetching session');
     const session = await opts.supabase.getSession();
     if (!session) {
+      workerLog.warn('postStart: no session, stopping worker');
       this.stop();
       return;
     }
+    workerLog.debug('postStart: posting start message to worker');
     this.worker.postMessage({
       type: 'start',
       supabaseUrl: opts.config.supabaseUrl,

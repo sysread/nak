@@ -114,6 +114,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
       detectSessionInUrl: false,
     },
   });
+  post({ type: 'log', level: 'info', message: 'worker: setSession starting' });
   const { error: sessionError } = await client.auth.setSession({
     access_token: msg.accessToken,
     refresh_token: msg.refreshToken,
@@ -127,6 +128,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     return;
   }
   currentClient = client;
+  post({ type: 'log', level: 'info', message: 'worker: setSession ok, entering main loop' });
 
   const supabase = new SupabaseService(
     { supabaseUrl: msg.supabaseUrl, supabaseAnonKey: msg.supabaseAnonKey },
