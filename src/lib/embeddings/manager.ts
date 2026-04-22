@@ -17,6 +17,18 @@
 import type { AppConfig } from '../config';
 import type { SupabaseService } from '../supabase';
 import { VENICE_EMBEDDING_MODEL } from '../models';
+import {
+  appendFromWorker,
+  createLogger,
+  isWorkerLogMessage,
+} from '../logger.svelte';
+
+// See agents/reflection/manager.ts for why this exists. Structured
+// `nak-log` messages from the worker land straight in the main-thread
+// buffer with their original `embed-worker` source tag; legacy
+// freeform `{type:'log'}` messages go through this logger too so the
+// drawer catches both shapes.
+const workerLog = createLogger('embed-worker');
 
 export interface StartOpts {
   /**
@@ -144,14 +156,21 @@ export class EmbeddingManager {
       name: 'nak-embeddings',
     });
     worker.addEventListener('message', (evt: MessageEvent) => {
+      if (isWorkerLogMessage(evt.data)) {
+        // Structured log from the worker - route into the main-thread
+        // buffer. The worker already mirrored to its own console.
+        appendFromWorker(evt.data.entry);
+        return;
+      }
       const data = evt.data as { type?: string; level?: string; message?: string };
       if (!data || typeof data !== 'object') return;
       if (data.type === 'log' && typeof data.message === 'string') {
-        // Keep worker logs visible at the same console level so failures
-        // are surfaceable without attaching a debugger.
-        const level = data.level === 'error' ? 'error' : data.level === 'warn' ? 'warn' : 'log';
-        // eslint-disable-next-line no-console
-        console[level]('[embed-worker]', data.message);
+        // Legacy freeform log shape emitted by the worker entry itself.
+        // Keep visible at the same level so failures are still
+        // surfaceable without attaching a debugger.
+        const level: 'info' | 'warn' | 'error' =
+          data.level === 'error' ? 'error' : data.level === 'warn' ? 'warn' : 'info';
+        workerLog[level](data.message);
       }
       // `progress` messages are currently informational — the UI doesn't
       // render them yet. Ignored on purpose so a future indicator can

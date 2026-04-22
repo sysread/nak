@@ -34,6 +34,9 @@ import {
 import { topKForCorpusSize } from './format';
 import { K_BASE, STALE_CEILING_HOURS } from './types';
 import type { FireResult } from './types';
+import { createLogger } from '../logger.svelte';
+
+const log = createLogger('samskara');
 
 export type { FireResult, FiredSamskara, PrimingInput } from './types';
 export { K_BASE, PRIMING_CHAR_BUDGET, STALE_CEILING_HOURS } from './types';
@@ -61,8 +64,7 @@ export async function getCompoundSummary(
   try {
     row = await supabase.samskaraGetCompoundSummary();
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.debug('[samskara] compound summary read failed:', err);
+    log.debug('compound summary read failed', err);
     return null;
   }
   if (!row || !row.summary || row.summary.length === 0) return null;
@@ -108,8 +110,7 @@ export async function fireSamskaras(
     });
     rawEmbedding = resp.data[0]?.embedding;
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.debug('[samskara] fire embed failed:', err);
+    log.debug('fire embed failed', err);
     return null;
   }
   if (!rawEmbedding || rawEmbedding.length === 0) return null;
@@ -131,8 +132,7 @@ export async function fireSamskaras(
   try {
     rows = await supabase.samskaraFireTopK(padded, kMax);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.debug('[samskara] fire RPC failed:', err);
+    log.debug('fire RPC failed', err);
     return null;
   }
   if (!rows || rows.length === 0) return null;
@@ -159,8 +159,7 @@ export async function fireSamskaras(
       fired.map((f) => ({ samskaraId: f.id, score: f.score }))
     );
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.debug('[samskara] fire log write failed:', err);
+    log.debug('fire log write failed', err);
   }
 
   return { cohortId, fired };
@@ -182,8 +181,7 @@ export async function recordSubstrateStub(
   try {
     await supabase.samskaraRecordSubstrate(threadId, userMessageId, assistantMessageId);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.debug('[samskara] substrate stub write failed:', err);
+    log.debug('substrate stub write failed', err);
   }
 }
 

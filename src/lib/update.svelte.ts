@@ -23,15 +23,19 @@
  * roughly every 24h; our polling shortens that window so a new deploy
  * is noticed within minutes instead of after next-day page load.
  *
- * Diagnostic logging: every state transition in this module logs to
- * the console under the `[update]` prefix. The volume is low (register
- * once, poll every 5 min, state changes are rare) and the symptoms
- * we've debugged against — spurious banners, reload-button hangs —
- * are all state-machine bugs that can only be explained by the
- * *order* of events. Keep the logs even in production.
+ * Diagnostic logging: every state transition in this module logs
+ * through the `update` logger (see `./logger.svelte`). The volume is
+ * low (register once, poll every 5 min, state changes are rare) and
+ * the symptoms we've debugged against - spurious banners, reload-
+ * button hangs - are all state-machine bugs that can only be
+ * explained by the *order* of events. Keep the logs even in
+ * production.
  */
 
 import { registerSW } from 'virtual:pwa-register';
+import { createLogger } from './logger.svelte';
+
+const log = createLogger('update');
 
 // How often to ping the browser's SW registration to re-check for a
 // new precache manifest. Five minutes is a compromise — short enough
@@ -95,7 +99,7 @@ export function initUpdateWatcher(): void {
   started = true;
   if (typeof window === 'undefined') return;
 
-  console.log('[update] initUpdateWatcher: registering service worker', {
+  log.info('initUpdateWatcher: registering service worker', {
     commit: updateState.commit,
     buildTime: updateState.buildTime,
     existingController: !!navigator.serviceWorker?.controller,
@@ -111,7 +115,7 @@ export function initUpdateWatcher(): void {
       // differ. We log the state rather than trying to suppress it
       // here: hiding the banner requires knowing whether the waiting
       // SW's build fingerprint matches ours, which we don't have.
-      console.log('[update] onNeedRefresh: waiting SW detected', {
+      log.info('onNeedRefresh: waiting SW detected', {
         hasRegistration: !!swRegistration,
         waiting: !!swRegistration?.waiting,
         installing: !!swRegistration?.installing,
@@ -121,7 +125,7 @@ export function initUpdateWatcher(): void {
       updateState.available = true;
     },
     onRegisteredSW(swUrl, registration) {
-      console.log('[update] onRegisteredSW', {
+      log.info('onRegisteredSW', {
         swUrl,
         hasRegistration: !!registration,
         waiting: !!registration?.waiting,
@@ -134,9 +138,9 @@ export function initUpdateWatcher(): void {
       // no-op when the cached SW script matches the server's copy, so
       // the cost is one HEAD-ish request per tick.
       const poll = (reason: string): void => {
-        console.log('[update] poll:', reason);
+        log.info('poll', reason);
         registration.update().catch((err) => {
-          console.warn('[update] poll failed', err);
+          log.warn('poll failed', err);
         });
       };
       window.setInterval(() => poll('interval'), UPDATE_POLL_MS);
@@ -151,7 +155,7 @@ export function initUpdateWatcher(): void {
       // Best-effort: a registration failure (blocked by an extension,
       // broken https, etc.) shouldn't crash the app. The user simply
       // won't see update banners; page reloads still work.
-      console.warn('[update] onRegisterError', error);
+      log.warn('onRegisterError', error);
     },
   });
 }
@@ -193,7 +197,7 @@ export async function applyUpdate(): Promise<void> {
   const registration = swRegistration;
   const waiting = registration?.waiting ?? null;
 
-  console.log('[update] applyUpdate: start', {
+  log.info('applyUpdate: start', {
     hasRegistration: !!registration,
     hasWaiting: !!waiting,
     installing: !!registration?.installing,
@@ -216,7 +220,7 @@ export async function applyUpdate(): Promise<void> {
     // mode, for registration errors, and for the edge case where the
     // waiting SW was claimed between the banner appearing and the
     // user clicking Reload.
-    console.log('[update] applyUpdate: no waiting SW, plain reload');
+    log.info('applyUpdate: no waiting SW, plain reload');
     softReload('no waiting SW');
     return;
   }
@@ -235,14 +239,14 @@ export async function applyUpdate(): Promise<void> {
   // racing to call it is fine.
   window.setTimeout(() => softReload('soft-reload timeout'), RELOAD_FALLBACK_MS);
 
-  console.log('[update] applyUpdate: posting SKIP_WAITING to waiting SW');
+  log.info('applyUpdate: posting SKIP_WAITING to waiting SW');
   try {
     waiting.postMessage({ type: 'SKIP_WAITING' });
   } catch (err) {
     // postMessage can't really fail on a ServiceWorker object, but if
     // somehow it does, fall through to the timeout — the page will
     // still reload in RELOAD_FALLBACK_MS.
-    console.warn('[update] applyUpdate: postMessage failed', err);
+    log.warn('applyUpdate: postMessage failed', err);
   }
 }
 
@@ -256,14 +260,14 @@ let hardReloadFired = false;
 function softReload(reason: string): void {
   if (softReloadFired) return;
   softReloadFired = true;
-  console.log('[update] softReload:', reason);
+  log.info('softReload', reason);
   window.location.reload();
 }
 
 async function hardReload(reason: string): Promise<void> {
   if (hardReloadFired) return;
   hardReloadFired = true;
-  console.log('[update] hardReload:', reason);
+  log.info('hardReload', reason);
   // Unregister the SW so the next navigation can't be intercepted by
   // whatever stuck fetch handler held the soft reload hostage. Any
   // controlled clients (this tab included) lose SW control on the
@@ -272,13 +276,13 @@ async function hardReload(reason: string): Promise<void> {
     const reg = await navigator.serviceWorker?.getRegistration();
     if (reg) {
       const ok = await reg.unregister();
-      console.log('[update] hardReload: unregistered SW', { ok });
+      log.info('hardReload: unregistered SW', { ok });
     }
   } catch (err) {
     // Failing to unregister is survivable — the cache-buster below
     // still forces a fresh index.html fetch, and most SW fetch
     // handlers don't rewrite top-level navigations anyway.
-    console.warn('[update] hardReload: unregister failed', err);
+    log.warn('hardReload: unregister failed', err);
   }
   // Cache-busting query so neither the HTTP cache nor a lingering SW
   // fetch handler can return the stale bundle. `replace` (vs `href =`)
@@ -286,7 +290,7 @@ async function hardReload(reason: string): Promise<void> {
   // the user back on the frozen page.
   const url = new URL(window.location.href);
   url.searchParams.set('_update', String(Date.now()));
-  console.log('[update] hardReload: navigating to', url.toString());
+  log.info('hardReload: navigating to', url.toString());
   window.location.replace(url.toString());
 }
 
@@ -302,12 +306,12 @@ async function hardReload(reason: string): Promise<void> {
  * server path, plus users whose browsers block service workers.
  */
 export async function checkForUpdates(): Promise<void> {
-  console.log('[update] checkForUpdates: manual check', {
+  log.info('checkForUpdates: manual check', {
     hasRegistration: !!swRegistration,
   });
   if (swRegistration) {
     await swRegistration.update();
-    console.log('[update] checkForUpdates: registration.update() resolved', {
+    log.info('checkForUpdates: registration.update() resolved', {
       waiting: !!swRegistration.waiting,
       installing: !!swRegistration.installing,
     });

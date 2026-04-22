@@ -25,6 +25,9 @@
  */
 import type { ToolDef } from './types';
 import { RecallAgent } from '../agents/recall/agent';
+import { createLogger } from '../logger.svelte';
+
+const log = createLogger('recall-agent');
 
 export const memoryRecall: ToolDef = {
   name: 'memory_recall',
@@ -53,10 +56,9 @@ export const memoryRecall: ToolDef = {
   },
   async execute(_args, ctx) {
     // Task pickup log — mirrors the breadcrumbs on the reflection /
-    // embedding workers so the dev console can surface "something is
+    // embedding workers so the log drawer can surface "something is
     // happening" without us needing per-tool timing instrumentation.
-    // eslint-disable-next-line no-console
-    console.log(`[recall-agent] picked up thread ${ctx.threadId}`);
+    log.info(`picked up thread ${ctx.threadId}`);
 
     const agent = new RecallAgent(ctx.venice, ctx.supabase);
     const result = await agent.run({
@@ -67,22 +69,19 @@ export const memoryRecall: ToolDef = {
     });
 
     if (result.stoppedReason === 'error') {
-      // eslint-disable-next-line no-console
-      console.debug(
-        `[recall-agent] thread ${ctx.threadId} errored:`,
+      log.debug(
+        `thread ${ctx.threadId} errored`,
         result.error ?? '(no message)'
       );
     } else {
-      // eslint-disable-next-line no-console
-      console.log(
-        `[recall-agent] finished thread ${ctx.threadId} ` +
+      log.info(
+        `finished thread ${ctx.threadId} ` +
           `(kind=${result.output.note.kind}, ${result.toolCalls} tool calls ` +
           `over ${result.output.inputMessageCount} messages)`
       );
       if (result.output.note.kind === 'note') {
-        // eslint-disable-next-line no-console
-        console.debug(
-          `[recall-agent] thread ${ctx.threadId} note:`,
+        log.debug(
+          `thread ${ctx.threadId} note`,
           result.output.note.note
         );
       }

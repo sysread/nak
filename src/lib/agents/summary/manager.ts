@@ -14,6 +14,16 @@ import type { AppConfig } from '../../config';
 import type { SupabaseService } from '../../supabase';
 import { VENICE_SUMMARY_MODEL } from '../../models';
 import { makeHolderId } from '../../embeddings/manager';
+import {
+  appendFromWorker,
+  createLogger,
+  isWorkerLogMessage,
+} from '../../logger.svelte';
+
+// See reflection/manager.ts for why this exists. The logger covers the
+// legacy `{type:'log'}` messages the worker entry still emits
+// directly; structured `nak-log` entries go straight into the buffer.
+const workerLog = createLogger('summary-worker');
 
 export interface StartOpts {
   supabase: SupabaseService;
@@ -89,13 +99,18 @@ export class SummaryManager {
       name: 'nak-summary',
     });
     worker.addEventListener('message', (evt: MessageEvent) => {
+      if (isWorkerLogMessage(evt.data)) {
+        // Structured log from the worker - the worker already mirrored
+        // to its own console, so just append to the main-thread buffer.
+        appendFromWorker(evt.data.entry);
+        return;
+      }
       const data = evt.data as { type?: string; level?: string; message?: string };
       if (!data || typeof data !== 'object') return;
       if (data.type === 'log' && typeof data.message === 'string') {
-        const level =
-          data.level === 'error' ? 'error' : data.level === 'warn' ? 'warn' : 'log';
-        // eslint-disable-next-line no-console
-        console[level]('[summary-worker]', data.message);
+        const level: 'info' | 'warn' | 'error' =
+          data.level === 'error' ? 'error' : data.level === 'warn' ? 'warn' : 'info';
+        workerLog[level](data.message);
       }
     });
     this.worker = worker;

@@ -16,6 +16,9 @@ import { VeniceError } from '../venice';
 import { padEmbeddingForStorage } from '../models';
 import type { EmbeddingSource } from './types';
 import type { LeaseCoordinator } from './lease';
+import { createLogger } from '../logger.svelte';
+
+const log = createLogger('embed-worker');
 
 export type CycleResult =
   /** Just took the lease on this cycle — no work yet, caller should recurse immediately. */
@@ -87,15 +90,13 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   }
   if (!claimed) return 'empty-queue';
 
-  // Task pickup — one log per claimed row so the dev console can
-  // surface the worker's activity. .log for the headline, .debug
+  // Task pickup — one log per claimed row so the log drawer can
+  // surface the worker's activity. .info for the headline, .debug
   // for the input preview (which can be noisy and is only useful
   // when actively debugging an embedding).
-  // eslint-disable-next-line no-console
-  console.log(`[embed-worker] picked up ${ctx.source.name} row ${claimed.id}`);
-  // eslint-disable-next-line no-console
-  console.debug(
-    `[embed-worker] row ${claimed.id} input (${claimed.input.length} chars):`,
+  log.info(`picked up ${ctx.source.name} row ${claimed.id}`);
+  log.debug(
+    `row ${claimed.id} input (${claimed.input.length} chars)`,
     claimed.input.length > 200 ? claimed.input.slice(0, 200) + '…' : claimed.input
   );
 
@@ -126,12 +127,10 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
   if (saved) {
-    // eslint-disable-next-line no-console
-    console.log(`[embed-worker] finished ${ctx.source.name} row ${claimed.id}`);
+    log.info(`finished ${ctx.source.name} row ${claimed.id}`);
   } else {
-    // eslint-disable-next-line no-console
-    console.debug(
-      `[embed-worker] save rejected for ${ctx.source.name} row ${claimed.id} — ` +
+    log.debug(
+      `save rejected for ${ctx.source.name} row ${claimed.id} - ` +
         'row was edited, claim expired, or the row was deleted'
     );
   }

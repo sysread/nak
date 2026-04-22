@@ -15,6 +15,9 @@ import type { Agent } from '../types';
 import type { SupabaseService } from '../../supabase';
 import type { LeaseCoordinator } from '../../embeddings/lease';
 import type { SummaryInput, SummaryOutput } from './agent';
+import { createLogger } from '../../logger.svelte';
+
+const log = createLogger('summary-worker');
 
 export type CycleResult =
   /** Just took the lease on this cycle — no work yet, caller recurses. */
@@ -74,9 +77,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   }
   if (!claim) return 'empty-queue';
 
-  // eslint-disable-next-line no-console
-  console.log(
-    `[summary-worker] picked up thread ${claim.threadId} @ msg ${claim.terminalMsgId}`
+  log.info(
+    `picked up thread ${claim.threadId} @ msg ${claim.terminalMsgId}`
   );
 
   let runResult;
@@ -88,9 +90,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       signal: ctx.signal,
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.debug(
-      `[summary-worker] thread ${claim.threadId} threw unexpectedly:`,
+    log.debug(
+      `thread ${claim.threadId} threw unexpectedly`,
       err instanceof Error ? err.message : String(err)
     );
     return 'error';
@@ -98,9 +99,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
 
   if (runResult.stoppedReason === 'aborted') return 'empty-queue';
   if (runResult.stoppedReason === 'error') {
-    // eslint-disable-next-line no-console
-    console.debug(
-      `[summary-worker] thread ${claim.threadId} agent reported error:`,
+    log.debug(
+      `thread ${claim.threadId} agent reported error`,
       runResult.error ?? '(no message)'
     );
     return 'error';
@@ -124,23 +124,20 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       claim.terminalMsgId
     );
     if (saved) {
-      // eslint-disable-next-line no-console
-      console.log(
-        `[summary-worker] finished thread ${claim.threadId} ` +
+      log.info(
+        `finished thread ${claim.threadId} ` +
           `(${runResult.output.inputMessageCount} messages in)`
       );
     } else {
-      // eslint-disable-next-line no-console
-      console.debug(
-        `[summary-worker] claim lost on thread ${claim.threadId} — ` +
+      log.debug(
+        `claim lost on thread ${claim.threadId} - ` +
           'another device took over mid-summary'
       );
     }
     return saved ? 'summarised' : 'claim-lost';
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.debug(
-      `[summary-worker] save RPC threw for thread ${claim.threadId}:`,
+    log.debug(
+      `save RPC threw for thread ${claim.threadId}`,
       err instanceof Error ? err.message : String(err)
     );
     return 'error';

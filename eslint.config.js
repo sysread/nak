@@ -54,14 +54,13 @@ export default [
     },
   },
   {
-    // update.svelte.ts is the diagnostic surface for the service-worker
-    // update lifecycle — every state transition logs under `[update]`
-    // so spurious-banner and reload-hang reports leave a trail we can
-    // read. The volume is low (register once, poll every 5 min, rare
-    // state changes) and the logs are load-bearing for debugging, so
-    // the module is allowlisted for `console.log` rather than peppered
-    // with inline disables.
-    files: ['src/lib/update.svelte.ts'],
+    // logger.svelte.ts is the one place in the codebase that is
+    // *expected* to call `console.*` directly - every other caller
+    // routes through its `createLogger` / `log` surface. The module
+    // mirrors every log-level call to the corresponding console
+    // method so dev-tools filtering still works alongside the in-app
+    // drawer.
+    files: ['src/lib/logger.svelte.ts'],
     rules: {
       'no-console': 'off',
     },
