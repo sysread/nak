@@ -99,7 +99,7 @@
   .extracted-text-overlay {
     position: fixed;
     inset: 0;
-    background: color-mix(in srgb, var(--bg-0) 55%, transparent);
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
     /* Sit above the transcript but below the drawer itself so a click
        on the drawer doesn't dismiss it. */
     z-index: 40;
@@ -108,6 +108,9 @@
     cursor: pointer;
   }
 
+  /* Shell bg matches the threads sidebar (--bg-2) so the drawer reads
+     as a peer panel rather than floating chrome. The body below
+     drops back to --bg for contrast against the header. */
   .extracted-text-drawer {
     position: fixed;
     top: 0;
@@ -116,7 +119,7 @@
     width: min(480px, 92vw);
     display: flex;
     flex-direction: column;
-    background: var(--bg-1);
+    background: var(--bg-2);
     border-left: 1px solid var(--border);
     box-shadow: -8px 0 24px color-mix(in srgb, #000 18%, transparent);
     z-index: 41;
@@ -151,7 +154,7 @@
     font-size: 0.85rem;
     line-height: 1.45;
     color: var(--text);
-    background: var(--bg-0);
+    background: var(--bg);
   }
 
   .extracted-text-empty {
