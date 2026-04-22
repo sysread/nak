@@ -1260,33 +1260,14 @@ h1 {
   padding: 0.55rem 0.6rem;
 }
 
-/* Chats / Recipes tab pair at the top of the drawer. Visually
-   understated — the drawer is primarily a thread list, so the tab
-   affordance is a secondary signal that sits above the search
-   input without dominating the header. */
-.sidebar-tabs {
-  display: flex;
-  gap: 0.25rem;
+/* Chats / Recipes drawer nav. Rendered as a vertical pair of
+   thread-row-styled buttons above the search input - the button
+   chrome comes from `.thread` + `.thread-row`, so the nav items
+   visually match the list rows they switch between. This rule
+   only supplies the separation between the nav section and the
+   search input directly below it. */
+.sidebar-nav {
   margin-bottom: 0.5rem;
-}
-.sidebar-tab {
-  flex: 1;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text);
-  padding: 0.3rem 0.5rem;
-  font-size: 0.85rem;
-  border-radius: var(--radius);
-  cursor: pointer;
-}
-.sidebar-tab.active {
-  background: var(--accent-weak);
-  border-color: var(--accent);
-}
-.sidebar-tab:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-weak);
 }
 
 /* Recipes drawer list — same row chrome as threads so the switch
