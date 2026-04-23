@@ -59,7 +59,18 @@ yarn-error.log*
 .nak/
 
 # claude
-.claude/
+# Default to ignoring everything inside .claude/ so local per-session
+# state (sessions/, settings.local.json, statsig/, etc.) doesn't leak
+# into the repo. The pattern matches contents rather than the dir
+# itself (`.claude/**`, not `.claude/`) so the `!` exceptions below
+# can re-include the project-level config that every session should
+# see: settings.json and the hooks/ tree. Git's rule is that an
+# excluded *directory* can't have its contents re-included, so the
+# `**` form is load-bearing here.
+.claude/**
+!.claude/settings.json
+!.claude/hooks/
+!.claude/hooks/**
 .mcp.json
 
 # scratch docs
