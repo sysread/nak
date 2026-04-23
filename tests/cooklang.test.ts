@@ -324,6 +324,192 @@ Stir in @butter{2%tbsp}.`;
   });
 });
 
+describe('parseCooklang — declaration lines', () => {
+  it('marks a line starting with `@` as a declaration, not a step', () => {
+    const r = parseCooklang('@flour{200%g}');
+    expect(r.steps).toHaveLength(1);
+    expect(r.steps[0]!.kind).toBe('declaration');
+    expect(r.steps[0]!.text).toBe('');
+    // Ingredient still contributes to the flat list.
+    expect(r.ingredients).toEqual([{ name: 'flour', qty: '200', unit: 'g' }]);
+  });
+
+  it('keeps a prose-first line that happens to reference ingredients as an instruction', () => {
+    const r = parseCooklang('Add @flour{200%g} to the bowl.');
+    expect(r.steps).toHaveLength(1);
+    expect(r.steps[0]!.kind).toBe('instruction');
+    expect(r.steps[0]!.text).toBe('Add flour to the bowl.');
+  });
+
+  it('recognises declaration lines with trailing prose modifiers', () => {
+    const r = parseCooklang(
+      '@chicken thighs{1%lb}, bone-in and skin-on preferred for richer broth'
+    );
+    expect(r.steps).toHaveLength(1);
+    expect(r.steps[0]!.kind).toBe('declaration');
+    expect(r.ingredients).toEqual([{ name: 'chicken thighs', qty: '1', unit: 'lb' }]);
+  });
+
+  it('when declarations exist, instruction inline references do not double-count ingredients', () => {
+    const src = `@chicken{1%lb}
+--
+Sear @chicken{1%lb} for ~{5%minutes}.`;
+    const r = parseCooklang(src);
+    // Only the declared chicken row makes it into the ingredient list;
+    // the instruction's `@chicken` is a cross-reference, not a new row.
+    expect(r.ingredients).toEqual([{ name: 'chicken', qty: '1', unit: 'lb' }]);
+    // Timers and cookware still come from instructions as usual.
+    expect(r.timers).toHaveLength(1);
+  });
+
+  it('falls back to pure-Cooklang behaviour when no declarations exist', () => {
+    const r = parseCooklang('Add @flour{200%g} and @salt.');
+    // No declarations — ingredients come from the instruction mention.
+    expect(r.ingredients.map((i) => i.name)).toEqual(['flour', 'salt']);
+    expect(r.steps[0]!.kind).toBe('instruction');
+  });
+
+  it('drops declarations from the HTML Instructions block', () => {
+    const html = cooklangToHtml('@flour{200%g}\n--\nStir in water.');
+    expect(html).toContain('<h3>Ingredients</h3>');
+    expect(html).toContain('<h3>Instructions</h3>');
+    // One <li>, containing the prose step, never the empty declaration text.
+    const stepMatches = html.match(/<ol class="cook-steps">.*?<\/ol>/s)?.[0] ?? '';
+    expect(stepMatches).toContain('Stir in water.');
+    expect(stepMatches).not.toMatch(/<li><\/li>/);
+  });
+
+  it('drops declarations from the plain-text Instructions block', () => {
+    const text = recipeToPlainText(
+      'Test',
+      parseCooklang('@flour{200%g}\n--\nStir in water.')
+    );
+    const instructionsBlock = text.slice(text.indexOf('Instructions'));
+    expect(instructionsBlock).toContain('1. Stir in water.');
+    // No step for the declaration line.
+    expect(instructionsBlock).not.toMatch(/^\s*\d+\. flour\s*$/m);
+    expect(instructionsBlock).not.toContain('2.');
+  });
+});
+
+describe('parseCooklang — dash-only section reset', () => {
+  it('clears the current section so subsequent steps attach to the head bucket', () => {
+    const src = `# Soup
+@chicken{1%lb}
+
+--
+
+Cover and cook ~{6%hours}.`;
+    const r = parseCooklang(src);
+    expect(r.sections).toEqual(['Soup']);
+    // The declaration belongs to Soup; the instruction is section-less.
+    const declaration = r.steps.find((s) => s.kind === 'declaration');
+    const instruction = r.steps.find((s) => s.kind === 'instruction');
+    expect(declaration?.section).toBe('Soup');
+    expect(instruction?.section).toBe(null);
+  });
+
+  it('accepts `---`, `----`, etc. as the same reset (any run of 2+ dashes)', () => {
+    const r = parseCooklang('# A\n@egg{1}\n---\nBeat the egg.');
+    const instruction = r.steps.find((s) => s.kind === 'instruction');
+    expect(instruction?.section).toBe(null);
+    expect(instruction?.text).toBe('Beat the egg.');
+  });
+
+  it('does NOT treat a line-end `--` comment as a section reset', () => {
+    // Regression guard: `Step one. -- aside` was a comment pre-change
+    // and must remain one (trailing `--` strips to end of line).
+    const r = parseCooklang('# A\nStep one. -- aside');
+    expect(r.steps).toHaveLength(1);
+    expect(r.steps[0]!.text).toBe('Step one.');
+    expect(r.steps[0]!.section).toBe('A');
+  });
+
+  it('is tolerant of surrounding whitespace on the reset line', () => {
+    const r = parseCooklang('# A\n@egg{1}\n   --   \nBeat it.');
+    const instruction = r.steps.find((s) => s.kind === 'instruction');
+    expect(instruction?.section).toBe(null);
+  });
+});
+
+describe('recipeToHtml — cookbook-style round trip', () => {
+  it('renders the user-reported crock-pot recipe shape correctly', () => {
+    const src = `>> servings: 6-8
+>> prep: 15 min
+
+# Soup
+@chicken thighs{1%lb}, bone-in and skin-on preferred for richer broth
+@red lentils{1%cup} dried, rinsed
+@chicken broth{6%cups}
+
+# Finishing
+@fresh parsley{1/4%cup} chopped
+@sumac{1%tbsp}
+
+# For serving
+@French bread{1%loaf}
+
+--
+
+Add @chicken thighs{1%lb}, @red lentils{1%cup}, and @chicken broth{6%cups} to the #crock pot{}.
+> Cook on low for ~{6%hours} to ~{8%hours}.
+Ladle into bowls; top with @fresh parsley{1/4%cup} and @sumac{1%tbsp}.
+Warm the @French bread{1%loaf} before serving.`;
+    const recipe = parseCooklang(src);
+
+    // Each section's declared ingredients live in their own sub-list.
+    const html = recipeToHtml(recipe);
+    const ingredientsBlock = html.slice(
+      html.indexOf('<h3>Ingredients</h3>'),
+      html.indexOf('<h3>Cookware</h3>') > -1
+        ? html.indexOf('<h3>Cookware</h3>')
+        : html.indexOf('<h3>Instructions</h3>')
+    );
+    expect(ingredientsBlock).toContain('<h4 class="cook-section">Soup</h4>');
+    expect(ingredientsBlock).toContain('<h4 class="cook-section">Finishing</h4>');
+    expect(ingredientsBlock).toContain('<h4 class="cook-section">For serving</h4>');
+    // Head bucket (post-reset instruction bucket) must NOT emit its own
+    // un-labelled ingredient sub-list — those ingredients are already
+    // captured by the declared rows above.
+    const beforeFirstH4 = ingredientsBlock.slice(
+      0,
+      ingredientsBlock.indexOf('<h4 class="cook-section">')
+    );
+    expect(beforeFirstH4).not.toContain('<ul class="cook-ingredients">');
+
+    // Instructions render flat (no `For serving` heading leaked into
+    // them), with the `>` continuation merged into step 1.
+    const instructionsBlock = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    expect(instructionsBlock).not.toContain('<h4 class="cook-section">For serving</h4>');
+    expect(instructionsBlock).not.toContain('<h4 class="cook-section">Soup</h4>');
+    // Exactly one <ol> — the flat numbered list.
+    expect((instructionsBlock.match(/<ol class="cook-steps">/g) ?? []).length).toBe(1);
+    // Step 1 merged its continuation.
+    expect(instructionsBlock).toMatch(/Add chicken thighs[^<]*Cook on low/);
+    // All four prose sentences made it into the list.
+    const liCount = (instructionsBlock.match(/<li>/g) ?? []).length;
+    expect(liCount).toBe(3);
+  });
+
+  it('copy-plain-text output has one numbered instruction per prose line (not per declaration)', () => {
+    const src = `# Soup
+@flour{1%cup}
+@water{1%cup}
+
+--
+
+Mix @flour{1%cup} and @water{1%cup}.
+Cook until thick.`;
+    const text = recipeToPlainText('Test', parseCooklang(src));
+    const instructionsBlock = text.slice(text.indexOf('Instructions'));
+    expect(instructionsBlock).toContain('1. Mix flour and water.');
+    expect(instructionsBlock).toContain('2. Cook until thick.');
+    // No flour/water entries in the numbered list.
+    expect(instructionsBlock).not.toMatch(/^\s*\d+\. flour\s*$/m);
+    expect(instructionsBlock).not.toMatch(/^\s*\d+\. water\s*$/m);
+  });
+});
+
 describe('recipeToHtml — structured smoke test', () => {
   it('round-trips a realistic multi-line recipe', () => {
     const src = `>> servings: 4

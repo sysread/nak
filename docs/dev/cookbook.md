@@ -149,3 +149,22 @@ at cookbook scale (tens to low hundreds of rows per user).
   data migration, no schema change, just a richer read. `>` at line
   start is a continuation marker: the parser merges the line into
   the previous step's text and references.
+- **Declaration lines vs. instruction steps.** A line whose first
+  non-whitespace character is `@` is an ingredient declaration (Step
+  with `kind: 'declaration'` and empty `text`). Its ingredients flow
+  into the flat and per-section ingredient lists, but the renderers
+  skip it in the Instructions block. Lets the LLM write cookbook-style
+  recipes — a declaration block of `@ingredient{qty%unit}` lines
+  followed by prose instructions — without those declarations landing
+  as numbered steps. When ANY declaration exists, the ingredient
+  render uses declarations only; inline `@ingredient` references in
+  instruction prose are cross-references, not new ingredients, so
+  they don't double-count against the declared rows.
+- **Dash-only section reset.** A line whose non-whitespace content is
+  only dashes (2+, e.g. `--`, `---`) clears the current `section`. Used
+  to end a cookbook-style declaration block so the instructions below
+  don't inherit the last `# Section` heading. The check runs BEFORE
+  line-level `--` comment stripping (otherwise the dashes would
+  collapse to empty and be indistinguishable from a blank line). This
+  is an additive extension — a dash-only line used to be a no-op
+  comment, so no existing recipe parses differently.

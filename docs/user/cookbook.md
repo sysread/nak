@@ -69,6 +69,45 @@ Stir in @butter{2%tbsp} and serve.
   long instruction across two or three lines in the source without
   fragmenting it in the rendered recipe.
 
+### Cookbook-style: declarations plus flat instructions
+
+Pure Cooklang references ingredients inline in the instruction prose.
+Cookbook-style recipes often do it the other way around: list the
+ingredients first, then write the instructions. Nak supports that shape
+directly.
+
+```cooklang
+# Soup
+@chicken thighs{1%lb}, bone-in for richer broth
+@red lentils{1%cup} rinsed
+@chicken broth{6%cups}
+
+# Finishing
+@fresh parsley{1/4%cup} chopped
+@sumac{1%tbsp}
+
+--
+
+Add @chicken thighs{1%lb}, @red lentils{1%cup}, and @chicken broth{6%cups}
+to the #crock pot{}.
+> Cook on low for ~{6%hours}.
+
+Ladle into bowls and top with @fresh parsley{1/4%cup} and @sumac{1%tbsp}.
+```
+
+- Any line whose first non-whitespace character is `@` is an
+  **ingredient declaration**. The ingredient goes into the ingredients
+  list and the per-section grouping, but the line itself is not
+  numbered as an instruction.
+- A line made up of only dashes (e.g. `--`, `---`) is a **section
+  reset**. It ends the current `# Section` so the prose below it
+  renders as a flat numbered instruction list without inheriting the
+  last section heading.
+- The two styles can be mixed. When declarations exist, the ingredient
+  list is authored from them alone — references inside instruction
+  prose are treated as cross-references, not as new ingredients, so
+  they don't double-count.
+
 ## Opening the Cookbook
 
 Two entry points:

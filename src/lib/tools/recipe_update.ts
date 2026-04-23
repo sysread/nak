@@ -19,9 +19,13 @@ export const recipeUpdate: ToolDef = {
     'Update a recipe by id. Omit a field to leave it unchanged. Pass null for ' +
     '`source` or `source_url` to clear them. `cooklang` is capped at ' +
     `${MAX_RECIPE_COOKLANG_CHARS} chars. Long recipes can be grouped with ` +
-    '`== Section Name ==` or `# Section Name` headers, and long steps split ' +
-    'across lines by prefixing continuations with `> `. Use recipe_list first ' +
-    'to find ids. Returns the updated row.',
+    '`== Section Name ==` or `# Section Name` headers. A line whose first ' +
+    'non-whitespace character is `@` is an ingredient declaration (goes in ' +
+    'the ingredients list, not in the numbered instructions); a dash-only ' +
+    'line (e.g. `--` alone) resets the section so subsequent prose renders ' +
+    'as flat numbered instructions. Long steps split across lines by ' +
+    'prefixing continuations with `> `. Use recipe_list first to find ids. ' +
+    'Returns the updated row.',
   shortDescription: 'edit a saved recipe',
   parameters: {
     type: 'object',

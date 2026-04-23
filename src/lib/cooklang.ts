@@ -34,6 +34,27 @@
  *                              previous step's text so the renderer sees
  *                              one numbered instruction instead of a
  *                              shredded sequence.
+ *   @-first declaration line → a line whose first non-whitespace char
+ *                              is `@` is an ingredient declaration:
+ *                              it contributes to the ingredients list
+ *                              (and per-section ingredient grouping) but
+ *                              is NOT rendered as a numbered instruction
+ *                              step. Matches the cookbook-style "list
+ *                              of ingredients at the top, instructions
+ *                              below" the LLM reaches for naturally.
+ *                              A line that starts with prose and
+ *                              references ingredients inline (`Add the
+ *                              @chicken{1%lb} to the pot.`) is still a
+ *                              regular instruction step.
+ *   ---- (dash-only line)    → section reset: a line whose non-whitespace
+ *                              content is only dashes (2+) clears the
+ *                              current section so subsequent steps attach
+ *                              to the implicit head bucket. Lets a source
+ *                              say "end of declaration block, start of
+ *                              instructions" without another named
+ *                              section. Previously a no-op (the comment
+ *                              pass stripped `--` to empty), so this is
+ *                              additive and breaks no existing recipe.
  *
  * What we deliberately don't implement:
  *
@@ -87,6 +108,17 @@ export interface Step {
    * renderer falls back to flat output, matching pre-section behaviour.
    */
   section: string | null;
+  /**
+   * `'instruction'` for a regular numbered step (prose with inline
+   * references). `'declaration'` for a line whose first non-whitespace
+   * char is `@` — the line contributes ingredients/cookware/timers to
+   * the flat + per-section lists but does NOT render in the numbered
+   * instructions output. The field is kept on Step (rather than split
+   * into a separate `declarations: Step[]` array) so the section-
+   * aware ingredient dedupe can walk a single steps list in source
+   * order without losing which section each declaration belongs to.
+   */
+  kind: 'instruction' | 'declaration';
 }
 
 export interface Recipe {
@@ -110,21 +142,6 @@ export interface Recipe {
 // ---------------------------------------------------------------------------
 // Parse
 // ---------------------------------------------------------------------------
-
-/**
- * Strip `--` line comments and `[- … -]` block comments. Block
- * comments are handled first because a `--` that lives inside a block
- * comment must be ignored too. The spec allows block comments to span
- * lines, so this operates on the whole source at once.
- */
-function stripComments(src: string): string {
-  // Block comments: non-greedy, dot-matches-newline via `[\s\S]*?`.
-  let out = src.replace(/\[-[\s\S]*?-\]/g, '');
-  // Line comments: from `--` to end of line. Leave the newline so line
-  // numbers (if we ever surface them in errors) stay intact.
-  out = out.replace(/--[^\n]*/g, '');
-  return out;
-}
 
 /**
  * Split `qty%unit` into its pieces. Both sides optional. The `%` is the
@@ -203,6 +220,46 @@ function tryParseContinuation(line: string): string | null {
   const m = /^>(?:\s+(.*))?$/.exec(line);
   if (!m) return null;
   return (m[1] ?? '').trim();
+}
+
+/**
+ * Recognise a "section reset" line: non-whitespace content is only
+ * dashes (2+). Triggered BEFORE comment stripping, because the line
+ * comment pass (`--` to end of line) would otherwise erase the dashes
+ * and leave an empty line that we can't distinguish from a blank.
+ *
+ * Why this extension: the LLM naturally writes recipes as an
+ * ingredient-declaration block (one `@name{qty%unit}` per line, grouped
+ * by `# Section` headers) followed by a horizontal rule and then the
+ * actual cooking prose. Without a reset marker, the instructions
+ * inherit whatever section was last declared (usually "For serving" or
+ * similar), which mis-groups them under a sub-heading that isn't
+ * theirs. A dash-only line says "end of declarations, flat instructions
+ * follow" and leaves no ambiguity for the parser or the reader.
+ *
+ * Previously a dash-only line was a no-op comment, so this is additive:
+ * no recipe that parsed before now parses differently.
+ */
+function isSectionReset(line: string): boolean {
+  return /^\s*-{2,}\s*$/.test(line);
+}
+
+/**
+ * Recognise an ingredient-declaration line: first non-whitespace char
+ * is `@`. Declaration lines contribute ingredients (and incidental
+ * cookware / timers, though those are rare in a declaration block) to
+ * the recipe's flat + per-section lists, but do NOT render as numbered
+ * instruction steps.
+ *
+ * The heuristic is deliberately narrow — "starts with `@`" — rather
+ * than "contains only ingredient references and prose modifiers".
+ * Detecting "this prose has a verb" is brittle, and a cook who really
+ * wants a step to lead with an ingredient can rephrase ("Add @salt"
+ * instead of "@salt to taste"). The LLM's cookbook-style output
+ * always puts a prose verb first on genuine instruction lines.
+ */
+function isDeclarationLine(line: string): boolean {
+  return /^\s*@/.test(line);
 }
 
 /**
@@ -318,7 +375,12 @@ function tokenizeLine(line: string): LineTokens {
  * the user hasn't started writing yet).
  */
 export function parseCooklang(src: string): Recipe {
-  const stripped = stripComments(src);
+  // Block comments are stripped up front (they can span lines, so
+  // per-line handling can't see their extent). Line-level `--`
+  // comments are stripped per-line below, AFTER the dash-only reset
+  // check — otherwise `--` alone on a line would be erased to empty
+  // and indistinguishable from a blank line.
+  const blockStripped = src.replace(/\[-[\s\S]*?-\]/g, '');
   const metadata: Record<string, string> = {};
   const steps: Step[] = [];
   const sections: string[] = [];
@@ -330,8 +392,23 @@ export function parseCooklang(src: string): Recipe {
   // first explicit header.
   let currentSection: string | null = null;
 
-  for (const rawLine of stripped.split(/\r?\n/)) {
-    const line = rawLine.trim();
+  for (const rawLine of blockStripped.split(/\r?\n/)) {
+    const preStrip = rawLine.trim();
+
+    // Dash-only section reset runs BEFORE line-comment stripping. A
+    // line that is only dashes would otherwise be erased to empty by
+    // the `--` pass and collapse into a normal blank line — losing
+    // the author's intent to "end the current section".
+    if (preStrip.length > 0 && isSectionReset(preStrip)) {
+      currentSection = null;
+      continue;
+    }
+
+    // Line-level `--` comment stripping, applied per-line here so the
+    // reset check above can see the raw dashes. Leaves any text before
+    // `--` intact so `Add @salt. -- to taste` still yields the step
+    // "Add salt.".
+    const line = preStrip.replace(/--[^\n]*$/, '').trim();
     if (line.length === 0) continue;
 
     // Metadata first so a genuine `>> key: value` never reaches the
@@ -357,14 +434,20 @@ export function parseCooklang(src: string): Recipe {
     // step — better a visible step than a silently-dropped line.
     const continuation = tryParseContinuation(line);
     if (continuation !== null) {
+      // A continuation only merges into an instruction step — a
+      // declaration-only line has no rendered prose for the
+      // continuation to extend, and grafting a `>` body onto the
+      // ingredient block would re-introduce the "ingredients mixed
+      // into instructions" confusion this parser is trying to avoid.
       const prev = steps[steps.length - 1];
-      if (prev) {
+      const anchor = prev && prev.kind === 'instruction' ? prev : undefined;
+      if (anchor) {
         if (continuation.length > 0) {
           const tok = tokenizeLine(continuation);
-          prev.text = prev.text.length > 0 ? `${prev.text} ${tok.text}` : tok.text;
-          prev.ingredients.push(...tok.ingredients);
-          prev.cookware.push(...tok.cookware);
-          prev.timers.push(...tok.timers);
+          anchor.text = anchor.text.length > 0 ? `${anchor.text} ${tok.text}` : tok.text;
+          anchor.ingredients.push(...tok.ingredients);
+          anchor.cookware.push(...tok.cookware);
+          anchor.timers.push(...tok.timers);
           allIngredients.push(...tok.ingredients);
           allCookware.push(...tok.cookware);
           allTimers.push(...tok.timers);
@@ -382,6 +465,7 @@ export function parseCooklang(src: string): Recipe {
         cookware: tok.cookware,
         timers: tok.timers,
         section: currentSection,
+        kind: 'instruction',
       });
       allIngredients.push(...tok.ingredients);
       allCookware.push(...tok.cookware);
@@ -389,23 +473,40 @@ export function parseCooklang(src: string): Recipe {
       continue;
     }
 
+    // Declaration-only line: ingredients/cookware/timers contribute to
+    // the flat + per-section lists, but no numbered instruction step
+    // is emitted. See `isDeclarationLine` for why "starts with `@`" is
+    // the right heuristic.
+    const declaration = isDeclarationLine(line);
     const tok = tokenizeLine(line);
     steps.push({
-      text: tok.text,
+      text: declaration ? '' : tok.text,
       ingredients: tok.ingredients,
       cookware: tok.cookware,
       timers: tok.timers,
       section: currentSection,
+      kind: declaration ? 'declaration' : 'instruction',
     });
     allIngredients.push(...tok.ingredients);
     allCookware.push(...tok.cookware);
     allTimers.push(...tok.timers);
   }
 
+  // If the author used declaration-style lines anywhere, the ingredient
+  // list is authored (not derived from prose mentions): only declaration
+  // steps contribute. Instruction lines that re-mention `@chicken` for
+  // cross-reference would otherwise double-count against the declared
+  // row. Cookware and timers are always the full union — those appear
+  // naturally in instructions, not in declaration blocks.
+  const hasDeclarations = steps.some((s) => s.kind === 'declaration');
+  const ingredientSource = hasDeclarations
+    ? steps.filter((s) => s.kind === 'declaration').flatMap((s) => s.ingredients)
+    : allIngredients;
+
   return {
     metadata,
     steps,
-    ingredients: dedupeIngredients(allIngredients),
+    ingredients: dedupeIngredients(ingredientSource),
     cookware: dedupeCookware(allCookware),
     timers: allTimers,
     sections,
@@ -505,11 +606,20 @@ function groupStepsBySection(
  * without cross-contaminating neighbouring sections — "1 cup flour" in
  * Soup and "1 cup flour" in Bread should both render once, in their
  * respective sub-lists.
+ *
+ * Mirrors the flat-level rule: if the bucket contains any declaration
+ * lines, the section's ingredient list is authored (only declarations
+ * count). Otherwise, all steps in the bucket contribute — same as the
+ * pre-declaration behaviour. This prevents a mixed bucket from
+ * double-counting a declared `@chicken{1%lb}` against an instruction's
+ * `Add @chicken...` cross-reference.
  */
 function dedupeFromSteps(steps: Step[]): Ingredient[] {
+  const hasDeclarations = steps.some((s) => s.kind === 'declaration');
+  const source = hasDeclarations ? steps.filter((s) => s.kind === 'declaration') : steps;
   const seen = new Set<string>();
   const out: Ingredient[] = [];
-  for (const step of steps) {
+  for (const step of source) {
     for (const ing of step.ingredients) {
       const key = `${ing.name.toLowerCase()}|${ing.qty ?? ''}|${ing.unit ?? ''}`;
       if (seen.has(key)) continue;
@@ -580,6 +690,13 @@ export function recipeToHtml(recipe: Recipe): string {
 
   const buckets = groupStepsBySection(recipe);
   const hasSections = recipe.sections.length > 0;
+  // When declarations exist anywhere in the source, the ingredient
+  // render is authored from declarations only. An instruction-only
+  // bucket (e.g. the implicit head bucket after a dash-only reset that
+  // holds the post-declaration prose) must NOT emit its own ingredient
+  // sub-list — doing so would duplicate the declared names under a
+  // leading un-named group.
+  const hasDeclarations = recipe.steps.some((s) => s.kind === 'declaration');
 
   if (recipe.ingredients.length > 0) {
     out.push('<h3>Ingredients</h3>');
@@ -589,6 +706,8 @@ export function recipeToHtml(recipe: Recipe): string {
       out.push('</ul>');
     } else {
       for (const bucket of buckets) {
+        const bucketHasDeclarations = bucket.steps.some((s) => s.kind === 'declaration');
+        if (hasDeclarations && !bucketHasDeclarations) continue;
         const ings = dedupeFromSteps(bucket.steps);
         if (ings.length === 0) continue;
         if (bucket.name !== null) {
@@ -610,17 +729,23 @@ export function recipeToHtml(recipe: Recipe): string {
     out.push('</ul>');
   }
 
-  if (recipe.steps.length > 0) {
+  // Only instruction-kind steps render in the Instructions block.
+  // Declarations contributed their ingredients to the section-aware
+  // Ingredients render above; their `text` is empty and their role in
+  // the numbered instruction list is zero.
+  const instructionSteps = recipe.steps.filter((s) => s.kind === 'instruction');
+  if (instructionSteps.length > 0) {
     out.push('<h3>Instructions</h3>');
     if (!hasSections) {
       out.push('<ol class="cook-steps">');
-      for (const step of recipe.steps) {
+      for (const step of instructionSteps) {
         out.push(`<li>${esc(step.text)}</li>`);
       }
       out.push('</ol>');
     } else {
       for (const bucket of buckets) {
-        if (bucket.steps.length === 0) continue;
+        const bucketInstructions = bucket.steps.filter((s) => s.kind === 'instruction');
+        if (bucketInstructions.length === 0) continue;
         if (bucket.name !== null) {
           out.push(`<h4 class="cook-section">${esc(bucket.name)}</h4>`);
         }
@@ -628,7 +753,7 @@ export function recipeToHtml(recipe: Recipe): string {
         // per section — that's how printed cookbooks lay out multi-part
         // recipes and what the reader expects when sections exist.
         out.push('<ol class="cook-steps">');
-        for (const step of bucket.steps) {
+        for (const step of bucketInstructions) {
           out.push(`<li>${esc(step.text)}</li>`);
         }
         out.push('</ol>');
@@ -691,10 +816,15 @@ export function recipeToPlainText(title: string, recipe: Recipe): string {
     }
     lines.push('');
   }
-  if (recipe.steps.length > 0) {
+  // Declaration steps are filtered out — they contributed their
+  // ingredients to the Ingredients block above and have no text to
+  // number here. Same filter the HTML renderer uses so the two
+  // outputs agree on step count and numbering.
+  const instructionSteps = recipe.steps.filter((s) => s.kind === 'instruction');
+  if (instructionSteps.length > 0) {
     lines.push('Instructions');
     if (recipe.sections.length === 0) {
-      recipe.steps.forEach((step, i) => {
+      instructionSteps.forEach((step, i) => {
         lines.push(`${i + 1}. ${step.text}`);
       });
     } else {
@@ -703,11 +833,12 @@ export function recipeToPlainText(title: string, recipe: Recipe): string {
       // section". Head-bucket steps (section === null) print before
       // any `== Section ==` marker, matching the HTML layout.
       for (const bucket of groupStepsBySection(recipe)) {
-        if (bucket.steps.length === 0) continue;
+        const bucketInstructions = bucket.steps.filter((s) => s.kind === 'instruction');
+        if (bucketInstructions.length === 0) continue;
         if (bucket.name !== null) {
           lines.push(`== ${bucket.name} ==`);
         }
-        bucket.steps.forEach((step, i) => {
+        bucketInstructions.forEach((step, i) => {
           lines.push(`${i + 1}. ${step.text}`);
         });
       }
