@@ -643,7 +643,11 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // No tool calls → this is the final assistant message. Persist and
     // exit; no need for a tool round.
     if (roundCalls.length === 0) {
-      if (roundText.length > 0) {
+      // Persist when there is text, reasoning, or both. A response with
+      // only reasoning_content (content === "") is valid - kimi-k2 and
+      // some other models emit reasoning-only turns - and must be saved
+      // so the streaming bubble isn't orphaned when the stream closes.
+      if (roundText.length > 0 || roundReasoning.length > 0) {
         // Citations priority:
         //   1. `roundCitations` from the outer stream - only non-null
         //      when the main chat request itself asked Venice for
