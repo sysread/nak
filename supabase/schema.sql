@@ -141,6 +141,16 @@ alter table public.threads
 alter table public.threads
   drop column if exists web_citations_enabled;
 
+-- "User has renamed this thread explicitly, don't auto-rename."
+-- Flipped true when the user renames via the title input or materializes
+-- a draft with an explicit title. Consulted by the chat loop to decide
+-- whether to inject the title-note + rename instructions that drive the
+-- `update_title` tool - when true, the model never sees the rename prompt
+-- at all, so it can't clobber the user's choice. Non-null with a default
+-- so existing rows pick up `false` without a backfill.
+alter table public.threads
+  add column if not exists title_manually_set boolean not null default false;
+
 create index if not exists threads_user_updated_idx
   on public.threads (user_id, updated_at desc);
 

@@ -22,8 +22,13 @@
    *   3. When the stream completes: insert an assistant message row,
    *      clear streamingText, refresh the thread list so the sidebar
    *      ordering reflects updated_at.
-   *   4. First exchange of a new thread triggers `autoTitle` in the
-   *      background — see that helper for the tradeoffs.
+   *   4. Conversation titles are named by the model itself via the
+   *      always-on `update_title` tool (see src/lib/tools/update_title.ts).
+   *      The chat-loop injects a per-turn system-prompt note telling the
+   *      model the current title and when to call the tool; a manual
+   *      rename via the title input pins the title (sets
+   *      `title_manually_set=true`) so the model never sees the note
+   *      again on that thread.
    *
    * Model selection:
    *   - The top-right toggle sets a per-thread override (threads.model).
@@ -74,7 +79,6 @@
     DEFAULT_VERBOSITY,
     MODELS,
     TIERS,
-    UTILITY_TIER,
     VENICE_EMBEDDING_MODEL,
     padEmbeddingForStorage,
     resolveReasoningEffort,
@@ -1038,11 +1042,19 @@
    */
   async function materializeIfDraft(draft: Thread, title?: string): Promise<Thread> {
     if (!draft.isDraft || !app.supabase) return draft;
+    // An explicit `title` argument only comes from the commitRename path —
+    // i.e. the user typed a title into the input on a draft thread. That's
+    // a manual rename by any other name, so the materialised row carries
+    // title_manually_set=true. A draft that materialises on first-send
+    // carries the placeholder title and stays flag=false, leaving the
+    // update_title tool free to pick a real title on the first round.
+    const titleManuallySet = title !== undefined;
     const real = await app.supabase.createThread(
       title ?? draft.title,
       draft.model,
       draft.reasoning_effort,
-      draft.verbosity
+      draft.verbosity,
+      titleManuallySet
     );
     // Swap the draft for the real thread: remove from drafts, insert
     // into Recent (a freshly-created thread always lands inside the
@@ -1178,10 +1190,19 @@
         return;
       }
       const threadId = currentThread.id;
-      await app.supabase.renameThread(threadId, next);
+      // Manual rename: flip title_manually_set=true server-side so the
+      // chat loop stops sending the model the auto-rename instruction.
+      // A user's explicit title choice wins over the model's ongoing
+      // topic-drift inference for the rest of this thread's life.
+      await app.supabase.renameThread(threadId, next, { manuallySet: true });
       // Rename also bumps `updated_at` server-side (see
       // renameThread); re-bucket so the drawer ordering tracks.
-      const updated = { ...currentThread, title: next, updated_at: new Date().toISOString() };
+      const updated = {
+        ...currentThread,
+        title: next,
+        title_manually_set: true,
+        updated_at: new Date().toISOString(),
+      };
       rebucketThread(updated);
     } catch (err) {
       error = { text: err instanceof Error ? err.message : String(err) };
@@ -1281,71 +1302,6 @@
     }
   }
 
-  /**
-   * Best-effort: ask the fast model for a short title for this thread. Runs
-   * after the first user+assistant round-trip. Any failure is swallowed —
-   * the thread simply keeps the default title.
-   */
-  async function autoTitle(threadId: string, firstUserMsg: string): Promise<void> {
-    if (!app.venice || !app.supabase) return;
-    markTitling(threadId, true);
-    let raw = '';
-    try {
-      try {
-        for await (const ev of app.venice.streamChat({
-          model: MODELS[UTILITY_TIER].id,
-          messages: [
-            {
-              role: 'system',
-              content:
-                'Return a 3–6 word title summarizing this conversation. No trailing punctuation. No quotes. Plain text.',
-            },
-            { role: 'user', content: firstUserMsg.slice(0, 1000) },
-          ],
-          maxTokens: 24,
-        })) {
-          // Title generation never sends tools; any non-text event is
-          // ignored. Keeping the filter explicit makes the intent clear.
-          if (ev.type === 'text') raw += ev.delta;
-        }
-      } catch (err) {
-        // Title is best-effort; if Venice balks the thread keeps its
-        // placeholder and the next send retries. Log so a pattern of
-        // failures ("titles never stick") is diagnosable from the log
-        // drawer rather than invisible.
-        log.warn('autoTitle streamChat failed', err);
-        return;
-      }
-      const title = raw
-        .trim()
-        .replace(/^["'“”‘’]+|["'“”‘’.!?]+$/g, '')
-        .trim()
-        .slice(0, 80);
-      if (!title) return;
-      try {
-        await app.supabase.renameThread(threadId, title);
-        const existing = findThread(threadId);
-        if (existing) {
-          rebucketThread({
-            ...existing,
-            title,
-            updated_at: new Date().toISOString(),
-          });
-        }
-      } catch (err) {
-        // Rename failure is non-fatal to the current exchange - the
-        // title stays on the placeholder and the transcript reads
-        // normally. Log so a persistent Supabase fault surfaces in
-        // the log drawer instead of silently leaving every new
-        // thread titled "New conversation".
-        log.warn('autoTitle renameThread failed', err);
-      }
-    } finally {
-      // Always clear the indicator, including early returns above.
-      markTitling(threadId, false);
-    }
-  }
-
   async function newThread(): Promise<void> {
     if (!app.supabase) return;
     if (currentIsEmpty) return;
@@ -1364,6 +1320,7 @@
       verbosity: null,
       tools_enabled: false,
       archived: false,
+      title_manually_set: false,
       created_at: now,
       updated_at: now,
       isDraft: true,
@@ -1535,17 +1492,6 @@
     }
 
     let threadId: string;
-    // True when this send should trigger auto-titling after the
-    // assistant replies. Historically this was "is this the first
-    // user/assistant exchange?", but that made auto-title strictly
-    // one-shot — if the first attempt failed (Venice 503, network
-    // blip, etc.), the thread stayed stuck on DEFAULT_TITLE
-    // permanently. New contract: any send on a thread that's still
-    // carrying the default title qualifies. The title-gen cost is
-    // trivial (one short utility-tier call) and the only cases where
-    // the gate fires more than once are the ones we specifically
-    // want to recover from.
-    let needsAutoTitle = false;
     if (!active) {
       // No thread selected - create one on the fly.
       const t = await app.supabase.createThread(DEFAULT_TITLE);
@@ -1554,21 +1500,13 @@
       activeThreadId = t.id;
       setSessionThreadId(t.id);
       navigate({ cid: t.id }, { replace: true });
-      needsAutoTitle = true;
     } else if (active.isDraft) {
       // First send on a draft — materialize it now, preserving any model
       // choice the user already made from the dropdown.
       const real = await materializeIfDraft(active);
       threadId = real.id;
-      needsAutoTitle = true;
     } else {
       threadId = active.id;
-      // Used to also require `messages.length === 0` — dropped so a
-      // send on a thread whose initial auto-title failed can recover
-      // on any subsequent send. The gate is "title is still the
-      // placeholder", which is automatically false once a title has
-      // landed (or the user renamed the thread manually).
-      needsAutoTitle = active.title === DEFAULT_TITLE;
     }
 
     // Snapshot the queued attachments and clear the composer chips.
@@ -1648,7 +1586,6 @@
       systemMessages,
       sendReasoning,
       sendVerbosity,
-      needsAutoTitle,
       originalText: text,
       userMessageId,
     });
@@ -1670,7 +1607,6 @@
     systemMessages: { role: 'system'; content: string }[];
     sendReasoning: ReasoningEffort | undefined;
     sendVerbosity: Verbosity;
-    needsAutoTitle: boolean;
     originalText: string;
     /**
      * The Supabase id of the user message that opened this exchange.
@@ -1846,6 +1782,24 @@
                 t.error = true;
               }
             },
+            onTitleChange: (title) => {
+              // The `update_title` tool just renamed this thread mid-
+              // turn. Patch the local thread row and re-bucket the
+              // drawer so the new title shows up immediately - without
+              // this the drawer and title-bar keep showing the old
+              // title (or the "New conversation" placeholder on a
+              // fresh thread) until the end-of-turn refreshThreads()
+              // call lands, which can be several seconds later on a
+              // slow exchange.
+              const existing = findThread(ctx.threadId);
+              if (existing) {
+                rebucketThread({
+                  ...existing,
+                  title,
+                  updated_at: new Date().toISOString(),
+                });
+              }
+            },
             onToolsEnabledChange: (enabled) => {
               patchThread(ctx.threadId, { tools_enabled: enabled });
               // Brief flash on the composer toolbox so a human eye
@@ -1886,21 +1840,6 @@
       }
       if (loopResult.stoppedByLimit && !loopResult.finalText) {
         error = { text: 'Stopped: tool-call loop hit the 5-round limit.' };
-      }
-      if (ctx.needsAutoTitle && loopResult.finalText.length > 0) {
-        // Title from the thread's *opening* user turn, not the one
-        // we just sent. Matters for the retry-on-next-send case: if
-        // the first auto-title attempt failed and we're now on turn
-        // N, the latest user message is a follow-up that won't
-        // summarize the conversation well. For a genuinely new
-        // thread the two are identical because the just-appended
-        // message is also the first. `ctx.originalText` is the
-        // fallback — `messages` is reactive state we've already
-        // appended to, so the find() should always hit.
-        const seed =
-          messages.find((m) => m.role === 'user')?.content ?? ctx.originalText;
-        // Fire-and-forget: don't block the UI on title generation.
-        void autoTitle(ctx.threadId, seed);
       }
       streamingText = '';
       streamingReasoning = '';
@@ -2040,10 +1979,6 @@
       .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
       .map((p) => ({ role: 'system' as const, content: p.body }));
     const currentUserId = session?.user.id ?? active.user_id;
-    // Auto-title eligibility same as send(): any thread still on the
-    // default placeholder qualifies. A regenerated first turn is a
-    // valid trigger for a retry of a previously-failed auto-title.
-    const needsAutoTitle = active.title === DEFAULT_TITLE;
 
     // Pin to the bottom so the new completion streams into view even
     // if the user had scrolled up to inspect the greyed range.
@@ -2057,7 +1992,6 @@
       systemMessages,
       sendReasoning,
       sendVerbosity,
-      needsAutoTitle,
       originalText: userMessage.content,
       userMessageId: userMessage.id,
     });
@@ -2328,17 +2262,6 @@
   // not carry across conversations.
   let activePromptIds = $state<Set<string>>(new Set());
 
-  // Thread ids currently having their title auto-generated by the Fast
-  // tier. Used to swap the title text for a Scanner in the sidebar and
-  // the top bar so the user gets feedback that something is happening.
-  let titlingThreadIds = $state<Set<string>>(new Set());
-  function markTitling(threadId: string, on: boolean): void {
-    const next = new Set(titlingThreadIds);
-    if (on) next.add(threadId);
-    else next.delete(threadId);
-    titlingThreadIds = next;
-  }
-
   function resetActivePromptsToDefaults(): void {
     activePromptIds = new Set(
       app.systemPrompts.filter((p) => p.enabledByDefault).map((p) => p.id)
@@ -2430,18 +2353,75 @@
    */
   type MessageBlock =
     | { kind: 'plain'; message: Message }
-    | { kind: 'tool-group'; assistant: Message; resultsByCallId: Record<string, Message> };
+    | { kind: 'tool-group'; assistant: Message; resultsByCallId: Record<string, Message> }
+    // Rendered as a single faded "Renamed to X" line where an
+    // `update_title` call fired. Carries a stable `key` so the #each
+    // keyed loop can distinguish multiple renames within one turn
+    // (unlikely, but the model could do it). `assistantId` anchors
+    // the block to its originating assistant row for debugging /
+    // future deep-link needs.
+    | { kind: 'rename'; key: string; assistantId: string; title: string };
 
-  // `toggle_tools` is a housekeeping call — the LLM flips tools on/off
-  // as it decides whether it needs the full catalog for the next turn.
-  // The user already sees the state change (toolbox button flashes and
-  // updates its active state via onToolsEnabledChange), and the call
-  // itself carries no reply-relevant content. Rendering it as a tool
-  // row just adds noise to the transcript, so we hide it from the
-  // render plan. The underlying `tool_calls` and tool-result rows
-  // still live in the message store and go out on the wire on replay
-  // — this is purely a display filter.
-  const HIDDEN_TOOL_NAMES = new Set(['toggle_tools']);
+  // Tool names rendered as something other than a standard tool-call
+  // card:
+  //   - `toggle_tools` is pure housekeeping (the LLM flips tools on/off
+  //     between turns). Rendering it as a tool row adds noise and the
+  //     user already sees the state via the composer toolbox flash, so
+  //     it's suppressed from the render plan entirely.
+  //   - `update_title` is surfaced as a `rename` block instead of a
+  //     standard tool card - see the block builder below. It's listed
+  //     here so the standard tool-group path skips it.
+  // The underlying `tool_calls` and tool-result rows still live in the
+  // message store and go out on the wire on replay; this is purely a
+  // display filter.
+  const HIDDEN_TOOL_NAMES = new Set(['toggle_tools', 'update_title']);
+
+  /**
+   * Pull the sanitised title out of an update_title call + its
+   * optional result row. Prefers the tool-result (post-sanitisation,
+   * post-persist) because that's exactly what was written to the DB;
+   * falls back to the call's raw arguments when the result hasn't
+   * landed yet (mid-turn, before persistence finishes). Returns null
+   * if neither source yields a non-empty title - in which case the
+   * rename block is skipped entirely rather than rendering an empty
+   * indicator.
+   */
+  function titleFromRenameCall(
+    call: { function: { arguments: string } },
+    result: Message | undefined
+  ): string | null {
+    if (result) {
+      try {
+        const parsed = JSON.parse(result.content) as unknown;
+        if (
+          parsed &&
+          typeof parsed === 'object' &&
+          'title' in parsed &&
+          typeof (parsed as { title: unknown }).title === 'string'
+        ) {
+          const t = (parsed as { title: string }).title.trim();
+          if (t) return t;
+        }
+      } catch {
+        // fall through to args
+      }
+    }
+    try {
+      const parsed = JSON.parse(call.function.arguments || '{}') as unknown;
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        'title' in parsed &&
+        typeof (parsed as { title: unknown }).title === 'string'
+      ) {
+        const t = (parsed as { title: string }).title.trim();
+        if (t) return t;
+      }
+    } catch {
+      // malformed JSON on the wire is the model's fault; skip the block
+    }
+    return null;
+  }
 
   const messageBlocks = $derived.by<MessageBlock[]>(() => {
     // First pass: index tool rows by their tool_call_id.
@@ -2464,6 +2444,16 @@
         const visibleCalls = m.tool_calls.filter(
           (c) => !HIDDEN_TOOL_NAMES.has(c.function.name)
         );
+        // Pull the rename calls off separately so they render as their
+        // own dedicated block below. A turn can contain both rename +
+        // other tools; the two render paths coexist, with the rename
+        // indicator appearing AFTER the assistant/tool-group block for
+        // the turn it fired on (reads as "here's the response. and by
+        // the way, renamed").
+        const renameCalls = m.tool_calls.filter(
+          (c) => c.function.name === 'update_title'
+        );
+
         // If every call on this turn is hidden, we either drop the
         // whole row (no body, nothing to show) or demote it to a
         // plain block so any assistant text still reaches the user.
@@ -2473,17 +2463,32 @@
           if (m.content && m.content.trim().length > 0) {
             blocks.push({ kind: 'plain', message: m });
           }
-          continue;
+        } else {
+          const scoped: Record<string, Message> = {};
+          for (const call of visibleCalls) {
+            const r = resultsByCallId[call.id];
+            if (r) scoped[call.id] = r;
+          }
+          // Copy the message so we can narrow tool_calls to just the
+          // visible ones without mutating the store-owned row.
+          const narrowed: Message = { ...m, tool_calls: visibleCalls };
+          blocks.push({ kind: 'tool-group', assistant: narrowed, resultsByCallId: scoped });
         }
-        const scoped: Record<string, Message> = {};
-        for (const call of visibleCalls) {
-          const r = resultsByCallId[call.id];
-          if (r) scoped[call.id] = r;
+
+        // Emit one rename block per successful update_title call on
+        // this turn. Placed AFTER the main block (see comment above on
+        // reading order).
+        for (const call of renameCalls) {
+          const title = titleFromRenameCall(call, resultsByCallId[call.id]);
+          if (title !== null) {
+            blocks.push({
+              kind: 'rename',
+              key: call.id,
+              assistantId: m.id,
+              title,
+            });
+          }
         }
-        // Copy the message so we can narrow tool_calls to just the
-        // visible ones without mutating the store-owned row.
-        const narrowed: Message = { ...m, tool_calls: visibleCalls };
-        blocks.push({ kind: 'tool-group', assistant: narrowed, resultsByCallId: scoped });
       } else {
         blocks.push({ kind: 'plain', message: m });
       }
@@ -2861,11 +2866,7 @@
               ontouchcancel={cancelLongPress}
               title={t.title || 'Untitled'}
             >
-              {#if titlingThreadIds.has(t.id)}
-                <Scanner label="Generating title" size={0.85} />
-              {:else}
-                {t.title || 'Untitled'}
-              {/if}
+              {t.title || 'Untitled'}
             </button>
             <button
               class="secondary thread-actions-btn"
@@ -3205,10 +3206,6 @@
               onblur={commitRename}
               maxlength="80"
             />
-          {:else if titlingThreadIds.has(currentThread.id)}
-            <div class="title-btn" aria-label="Generating title">
-              <Scanner label="Generating title" />
-            </div>
           {:else}
             <button
               class="title-btn"
@@ -3247,7 +3244,7 @@
           bind:this={messagesEl}
           onscroll={onMessagesScroll}
         >
-          {#each messageBlocks as block (block.kind === 'plain' ? block.message.id : block.assistant.id)}
+          {#each messageBlocks as block (block.kind === 'plain' ? block.message.id : block.kind === 'rename' ? `rename:${block.key}` : block.assistant.id)}
             {#if block.kind === 'tool-group'}
               <!-- Tool-group bubble: reuse AssistantBody for the markdown
                    / reasoning / citations triad, with `<ToolCalls>`
@@ -3271,6 +3268,19 @@
                     nowMs={nowMs}
                   />
                 </AssistantBody>
+              </div>
+            {:else if block.kind === 'rename'}
+              <!-- Low-emphasis inline indicator for an `update_title`
+                   tool call. Not a full tool-call card - just a faded
+                   line telling the user the conversation was renamed,
+                   at the point in the transcript where it happened.
+                   The drawer + title bar have already been patched by
+                   the chat-loop's onTitleChange handler, so this is
+                   purely the "audit trail" surface. Styled in the
+                   .renamed-to block at the bottom of this file's
+                   <style> block to match other subdued chat chrome. -->
+              <div class="renamed-to" role="note" aria-label="Conversation renamed">
+                Renamed to <em>{block.title}</em>
               </div>
             {:else if block.message.role === 'assistant'}
               <div class="msg assistant" class:disabled={pendingDeleteSet.has(block.message.id)}>

@@ -39,6 +39,7 @@ import {
   buildSystemPrompt,
   executeToolCall,
   toggleTools,
+  updateTitle,
   type OpenAIToolCall,
   type ToolContext,
 } from './tools';
@@ -87,6 +88,64 @@ export const SAMSKARA_PRIMING_TIMEOUT_MS = 1500;
  */
 const USER_MSG_OPEN = '<user_message>';
 const USER_MSG_CLOSE = '</user_message>';
+
+/** Placeholder string threads ship with from schema.sql + draft creation. */
+const DEFAULT_THREAD_TITLE = 'New conversation';
+
+/**
+ * Per-turn note fed to the model via the system-prompt appendix so it
+ * can decide whether to call the `update_title` tool. Two shapes:
+ *
+ *   - Placeholder title: tell the model to look through any opening
+ *     greeting and pick a title for the real topic of the conversation.
+ *     This is the "Hello -> Saying hi to the user" case - the first
+ *     assistant reply is the first point at which there IS a real topic
+ *     to title.
+ *   - Real title: tell the model to call update_title only if the topic
+ *     has meaningfully shifted. Cosmetic drift is not a reason to
+ *     rename.
+ *
+ * Wrapped in `---` fences rather than `<note>` tags. The tag form was
+ * considered and rejected: a user typing `</note>` in their own message
+ * could escape the block and inject instructions. The fence is
+ * imperfect too (a user could paste a matching `---` block), but the
+ * exploit requires more intent, and the worst case is a bad title
+ * rather than arbitrary prompt injection.
+ *
+ * Returns null when the user has manually renamed the thread - once
+ * they've committed to a title, we stop asking the model to touch it.
+ * The `update_title` tool stays in the always-on catalog either way
+ * (cheap to leave available; model won't call it without the
+ * instruction), but the prompt-level suppression is the real gate.
+ */
+function buildTitleNote(thread: Thread): string | null {
+  if (thread.title_manually_set) return null;
+  const isPlaceholder = thread.title === DEFAULT_THREAD_TITLE;
+  const lines: string[] = ['---'];
+  if (isPlaceholder) {
+    lines.push(
+      `Conversation title: "${thread.title}" (placeholder).`,
+      'This conversation has no title yet. Before responding, call the',
+      '`update_title` tool with a concise 3-6 word title describing the',
+      'actual topic of the conversation. If the opening user message is',
+      'a greeting or pleasantry, look past it to the real topic the',
+      'user is asking about (based on their message and your intended',
+      'reply). No trailing punctuation, no quotes, plain text.'
+    );
+  } else {
+    lines.push(
+      `Conversation title: "${thread.title}".`,
+      'If the conversation has meaningfully shifted away from this',
+      'topic, call the `update_title` tool with a better 3-6 word',
+      'title before responding. Cosmetic drift is not a reason to',
+      'rename; only call update_title when the new topic genuinely',
+      "doesn't fit the current title. No trailing punctuation, no",
+      'quotes, plain text.'
+    );
+  }
+  lines.push('---');
+  return lines.join('\n');
+}
 
 /**
  * Return a shallow copy of `messages` with the last role='user'
@@ -193,6 +252,14 @@ export interface ChatLoopHandlers {
    * flash on the composer toolbox button.
    */
   onToolsEnabledChange?(enabled: boolean): void;
+  /**
+   * The thread title changed mid-turn (triggered by an `update_title`
+   * call from the model). Fires with the sanitised title the handler
+   * actually wrote. The UI uses this to patch the thread row and
+   * re-bucket the drawer immediately, instead of waiting for the
+   * end-of-turn `refreshThreads()` to pick the new title up.
+   */
+  onTitleChange?(title: string): void;
 }
 
 export interface ChatLoopOptions {
@@ -469,7 +536,18 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       )
     ),
   ]);
-  const samskaraAppendix = priming.samskaraAppendix;
+  // The title note and the samskara block are both per-turn appendices
+  // to the baseline system prompt. Concatenate with a blank-line spacer
+  // when both are present so the model sees them as distinct sections
+  // rather than one run-on block. Either can be empty - the note is
+  // null when the user has manually renamed (no instruction to inject),
+  // samskara is empty on cold-start or timeout - and the filter+join
+  // handles any combination cleanly.
+  const titleNote = buildTitleNote(thread);
+  const appendixParts = [titleNote, priming.samskaraAppendix].filter(
+    (s): s is string => typeof s === 'string' && s.length > 0
+  );
+  const promptAppendix = appendixParts.join('\n\n');
 
   // Push the opening-recall <think> block onto local history as an
   // ephemeral assistant turn. Not persisted - the round loop only
@@ -514,11 +592,14 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       {
         role: 'system',
         content: buildSystemPrompt({
-          // Samskara appendix - pre-computed before the round loop so
-          // every round sees the same compound + fire block. Empty
-          // string when the user has no samskaras yet (cold start) and
-          // when both helpers returned null (rare network blip path).
-          promptAppendix: samskaraAppendix,
+          // Per-turn appendix - pre-computed before the round loop so
+          // every round sees the same block. Currently concatenates
+          // (in order): the title note (buildTitleNote above, guiding
+          // `update_title` tool calls), and the samskara compound +
+          // fire block. Empty string when both are absent (manually-
+          // named thread with no samskaras, cold start, or priming
+          // timeout).
+          promptAppendix: promptAppendix,
         }),
       },
       ...projectedHistory,
@@ -654,6 +735,15 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           if (next !== toolsEnabled) {
             toolsEnabled = next;
             handlers?.onToolsEnabledChange?.(toolsEnabled);
+          }
+        }
+        // update_title returns the sanitised title; forward so the UI
+        // can patch the drawer row immediately rather than waiting for
+        // the end-of-turn refreshThreads() to pick up the change.
+        if (call.function.name === updateTitle.name) {
+          const newTitle = (value as { title?: string })?.title;
+          if (typeof newTitle === 'string' && newTitle.length > 0) {
+            handlers?.onTitleChange?.(newTitle);
           }
         }
         return { call, ok: true as const, value };

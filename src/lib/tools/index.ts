@@ -38,6 +38,7 @@ import { recipeList } from './recipe_list';
 import { recipeGet } from './recipe_get';
 import { recipeUpdate } from './recipe_update';
 import { recipeDelete } from './recipe_delete';
+import { updateTitle } from './update_title';
 
 /** Every tool the main chat model can see, recall tools first. */
 export const TOOLS: readonly ToolDef[] = [
@@ -45,6 +46,7 @@ export const TOOLS: readonly ToolDef[] = [
   memoryRecall,
   conversationRecall,
   webSearch,
+  updateTitle,
   memorySearch,
   memoryCreate,
   memoryUpdate,
@@ -69,12 +71,20 @@ export const TOOLS: readonly ToolDef[] = [
  * level capability that must fire even when the thread has
  * `tools_enabled=false`, and the tool is read-only (no DB writes; it
  * just runs a sub-completion with Venice's server-side search on).
+ *
+ * `update_title` is here because the rename-on-topic-shift behaviour
+ * needs to fire on the very first turn of a fresh thread - when
+ * `tools_enabled` is false by default and the gated catalog isn't on
+ * the wire. Gating it would mean a toggle_tools round-trip before the
+ * model could set the initial title, which defeats the "single-call
+ * adaptive title" point of the whole design.
  */
 const ALWAYS_ON: readonly ToolDef[] = [
   toggleTools,
   memoryRecall,
   conversationRecall,
   webSearch,
+  updateTitle,
 ];
 
 const alwaysOnNames = new Set(ALWAYS_ON.map((t) => t.name));
@@ -415,6 +425,6 @@ export async function executeToolboxCall(
   return tool.execute(args, ctx);
 }
 
-export { toggleTools };
+export { toggleTools, updateTitle };
 export type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
 export type { OpenAIToolCall } from './types';

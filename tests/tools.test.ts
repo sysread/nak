@@ -116,15 +116,25 @@ describe('tool registry', () => {
   });
 
   it('buildToolList returns the always-on set when disabled', () => {
-    // Always-on is toggle_tools + the recall pair + web_search. The
-    // recall tools are reflex-level — the system prompt tells the
-    // model to call them at the top of a new topic, so they can't
-    // sit behind a prefatory toggle round-trip. web_search joins them
-    // for the same reason: time-sensitive questions should fire a
-    // search without needing tools to be toggled on first.
+    // Always-on: toggle_tools + the recall pair + web_search +
+    // update_title. The recall tools are reflex-level - the system
+    // prompt tells the model to call them at the top of a new topic,
+    // so they can't sit behind a prefatory toggle round-trip.
+    // web_search joins them for the same reason: time-sensitive
+    // questions should fire a search without needing tools to be
+    // toggled on first. update_title has to fire on the very first
+    // turn of a fresh thread (when tools_enabled=false by default),
+    // so gating it would mean a toggle round-trip before the model
+    // could name the conversation.
     const list = buildToolList(false);
     expect(list.map((t) => t.function.name).sort()).toEqual(
-      ['conversation_recall', 'memory_recall', 'toggle_tools', 'web_search']
+      [
+        'conversation_recall',
+        'memory_recall',
+        'toggle_tools',
+        'update_title',
+        'web_search',
+      ]
     );
   });
 

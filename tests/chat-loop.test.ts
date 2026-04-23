@@ -27,6 +27,7 @@ function mkThread(overrides: Partial<Thread> = {}): Thread {
     verbosity: null,
     tools_enabled: false,
     archived: false,
+    title_manually_set: false,
     created_at: 'now',
     updated_at: 'now',
     ...overrides,

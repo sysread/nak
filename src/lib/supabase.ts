@@ -70,6 +70,16 @@ export interface Thread {
    * updated_at so the thread jumps to the top of the Chats list.
    */
   archived: boolean;
+  /**
+   * True once the user has explicitly renamed the thread (via the title
+   * input, or by materializing a draft with an explicit title). The chat
+   * loop reads this to suppress the title-note / `update_title`
+   * instruction in the system prompt — once the user has committed to a
+   * title, the model never sees the prompt that would let it clobber
+   * their choice. Defaults to false; flipped true by the manual rename
+   * path and never reset by the auto-title flow.
+   */
+  title_manually_set: boolean;
   created_at: string;
   updated_at: string;
   /**
@@ -101,6 +111,7 @@ function coerceThread(row: Record<string, unknown>): Thread {
     verbosity,
     tools_enabled: row.tools_enabled === true,
     archived: row.archived === true,
+    title_manually_set: row.title_manually_set === true,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
@@ -753,6 +764,7 @@ export class SupabaseService {
           verbosity: null,
           tools_enabled: false,
           archived: row.archived,
+          title_manually_set: false,
           created_at: row.updated_at,
           updated_at: row.updated_at,
         },
@@ -816,7 +828,8 @@ export class SupabaseService {
     title: string,
     model: ModelTier | null = null,
     reasoningEffort: ReasoningEffort | null = null,
-    verbosity: Verbosity | null = null
+    verbosity: Verbosity | null = null,
+    titleManuallySet = false
   ): Promise<Thread> {
     const session = await this.getSession();
     if (!session) throw new SupabaseError('Not authenticated.');
@@ -828,6 +841,7 @@ export class SupabaseService {
         model,
         reasoning_effort: reasoningEffort,
         verbosity,
+        title_manually_set: titleManuallySet,
       })
       .select()
       .single();
@@ -835,10 +849,38 @@ export class SupabaseService {
     return coerceThread(data as Record<string, unknown>);
   }
 
-  async renameThread(threadId: string, title: string): Promise<void> {
+  /**
+   * Rename a thread. The `manuallySet` flag is the signal that separates
+   * the two callers:
+   *
+   *   - `false` (default): the `update_title` tool path. Writes the title
+   *     but leaves `title_manually_set` alone — so a model-initiated
+   *     rename is still considered "up for revision" on a future topic
+   *     shift.
+   *   - `true`: the user's title input / commitRename. Writes the title
+   *     AND flips the sticky flag so the chat loop will stop feeding the
+   *     rename instruction to the model. Once the user has picked a
+   *     title, that choice wins permanently.
+   *
+   * Explicitly a single method rather than two (renameThread /
+   * renameThreadManually) so there's one RPC round-trip per rename
+   * regardless of path.
+   */
+  async renameThread(
+    threadId: string,
+    title: string,
+    opts: { manuallySet?: boolean } = {}
+  ): Promise<void> {
+    const patch: Record<string, unknown> = {
+      title,
+      updated_at: new Date().toISOString(),
+    };
+    if (opts.manuallySet === true) {
+      patch.title_manually_set = true;
+    }
     const { error } = await this.client
       .from('threads')
-      .update({ title, updated_at: new Date().toISOString() })
+      .update(patch)
       .eq('id', threadId);
     if (error) throw new SupabaseError(error.message);
   }

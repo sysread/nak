@@ -1830,6 +1830,31 @@ h1 {
   opacity: 0.55;
 }
 
+/* Subdued inline indicator emitted by the chat-loop when the LLM
+   called the `update_title` tool mid-turn. Sits in the transcript at
+   the position the call fired (after the assistant block that
+   contained it, matching the rename block builder in Chat.svelte).
+   Visually low-emphasis: muted color, smaller text, no bubble
+   chrome - the rename itself is an aside, not a conversational
+   turn. Centered to match the .msg card alignment so it lines up
+   with surrounding bubbles. The italic on <em> makes the new title
+   pop against the surrounding prose without adding weight. */
+.renamed-to {
+  align-self: center;
+  width: 80%;
+  max-width: 80%;
+  padding: 0.15rem 0.2rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: normal;
+  text-align: center;
+  line-height: 1.4;
+}
+.renamed-to em {
+  color: var(--text);
+  font-style: italic;
+}
+
 /* Inline failure notice in the transcript. Rendered where the
    streaming bubble was when an exchange failed, so a user on mobile
    (with the composer banner often below the keyboard) still sees the
