@@ -64,6 +64,7 @@ function fakeSupabase(overrides: Partial<SupabaseService> = {}): SupabaseService
     samskaraSaveAssimilation: vi.fn(async () => true),
     samskaraRecentEmbeddedSubstrate: vi.fn(async () => []),
     samskaraDecay: vi.fn(async () => 0),
+    samskaraCollapseByCofiring: vi.fn(async () => 0),
     samskaraShouldRegenCompound: vi.fn(async () => ({
       shouldRegen: false,
       samskaraCount: 0,
@@ -256,6 +257,46 @@ describe('napForResult', () => {
   });
 });
 
+describe('samskara runOneCycle - dedup phase', () => {
+  it('returns empty-phase when the RPC collapses nothing', async () => {
+    const { coordinator } = buildCoordinator();
+    const collapse = vi.fn(async () => 0);
+    const supabase = fakeSupabase({
+      samskaraCollapseByCofiring: collapse,
+    } as Partial<SupabaseService>);
+    const ctx = buildCtx({ coordinator, supabase, phase: 'dedup' });
+    await runOneCycle(ctx); // acquired-lease
+    const result = await runOneCycle(ctx);
+    expect(collapse).toHaveBeenCalled();
+    expect(result).toBe<CycleResult>('empty-phase');
+  });
+
+  it('reports progress when the RPC collapses at least one pair', async () => {
+    const { coordinator } = buildCoordinator();
+    const collapse = vi.fn(async () => 3);
+    const supabase = fakeSupabase({
+      samskaraCollapseByCofiring: collapse,
+    } as Partial<SupabaseService>);
+    const ctx = buildCtx({ coordinator, supabase, phase: 'dedup' });
+    await runOneCycle(ctx);
+    const result = await runOneCycle(ctx);
+    expect(result).toBe<CycleResult>('progress');
+  });
+
+  it('returns error when the RPC throws', async () => {
+    const { coordinator } = buildCoordinator();
+    const supabase = fakeSupabase({
+      samskaraCollapseByCofiring: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    } as Partial<SupabaseService>);
+    const ctx = buildCtx({ coordinator, supabase, phase: 'dedup' });
+    await runOneCycle(ctx);
+    const result = await runOneCycle(ctx);
+    expect(result).toBe<CycleResult>('error');
+  });
+});
+
 describe('PHASES', () => {
   it('lists every phase in the deliberate rotation order', () => {
     expect(PHASES).toEqual([
@@ -265,6 +306,7 @@ describe('PHASES', () => {
       'mint-tier2',
       'reaction-classify',
       'decay',
+      'dedup',
       'compound-regen',
     ]);
   });

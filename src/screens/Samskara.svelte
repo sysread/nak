@@ -257,14 +257,16 @@
     return JSON.stringify(snapshot, null, 2);
   }
 
-  // One-shot cleanup of near-duplicate tier-1 samskaras. Needed to
-  // clean up the pre-dedup-guard corpus (April 2026 diagnostic showed
-  // 148 tier-1 rows where single cohort fires contained 20+ reworded
-  // versions of the same claim). The RPC is idempotent - a second
-  // click after a clean pass returns 0 - so re-running is safe. We
-  // still confirm because it deletes rows; a mistake isn't
-  // catastrophic (provenance + fires are migrated to the keeper) but
-  // a surprise is worth avoiding.
+  // Manual trigger for the co-firing-based dedup RPC. The samskara
+  // worker runs the same RPC each rotation as its `dedup` phase, so
+  // this button is a "do it now without waiting for the 60s idle
+  // tick" escape hatch rather than the only way collapses happen.
+  // Per-call cap (20 merges) is enforced inside the RPC; click a few
+  // times in a row if the diagnostic panel still shows redundancy.
+  // Idempotent - a second click against a clean pool returns 0 - so
+  // re-running is safe. We still confirm because it deletes rows; a
+  // mistake isn't catastrophic (provenance + fires are migrated to
+  // the keeper) but a surprise is worth avoiding.
   let collapseState = $state<'idle' | 'running' | 'done' | 'error'>('idle');
   let collapsedCount = $state<number | null>(null);
   let collapseResetTimer: ReturnType<typeof setTimeout> | null = null;
@@ -272,11 +274,14 @@
   async function collapseDuplicates(): Promise<void> {
     if (!app.supabase) return;
     const ok = window.confirm(
-      'Collapse near-duplicate samskaras?\n\n' +
-        'Tier-1 samskaras with >= 0.9 prediction-similarity are merged ' +
-        'into their oldest representative. Fires and provenance move ' +
-        'with the merge. The losers are deleted. Idempotent - safe to ' +
-        're-run.'
+      'Collapse redundant samskaras?\n\n' +
+        'Tier-1 samskaras that reliably co-fire in the same cohort ' +
+        '(Hebbian redundancy) are merged into their oldest ' +
+        'representative. Fires and provenance move with the merge; ' +
+        'losers are deleted. A population-count safety cap kicks in ' +
+        'if the pool is still over target after the co-firing pass. ' +
+        'Capped at 20 merges per click - re-click to drain further. ' +
+        'Idempotent.'
     );
     if (!ok) return;
     collapseState = 'running';
@@ -286,7 +291,7 @@
       collapseResetTimer = null;
     }
     try {
-      const n = await app.supabase.samskaraCollapseDuplicates(0.9);
+      const n = await app.supabase.samskaraCollapseByCofiring();
       collapsedCount = n;
       collapseState = 'done';
       // Reload so the counters + cohort list reflect the post-collapse
@@ -390,16 +395,16 @@
           class="secondary"
           onclick={() => void collapseDuplicates()}
           disabled={loading || collapseState === 'running'}
-          title="One-shot cleanup: merge tier-1 samskaras with >= 0.9 prediction-similarity into their oldest representative. Idempotent."
+          title="Merge tier-1 samskaras that reliably co-fire together (primary) and trim the pool to target count (safety cap). Same RPC the background worker runs each rotation; this is the manual 'do it now' trigger. Capped at 20 merges per click."
         >
           {#if collapseState === 'running'}
             Collapsing…
           {:else if collapseState === 'done'}
-            {collapsedCount === 0 ? 'No duplicates' : `Collapsed ${collapsedCount}`}
+            {collapsedCount === 0 ? 'Nothing redundant' : `Collapsed ${collapsedCount}`}
           {:else if collapseState === 'error'}
             Collapse failed
           {:else}
-            Collapse duplicates
+            Collapse redundant
           {/if}
         </button>
       </div>

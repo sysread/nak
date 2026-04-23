@@ -2191,19 +2191,38 @@ export class SupabaseService {
   }
 
   /**
-   * Maintenance: collapse existing tier-1 near-duplicates. Walks the
-   * user's samskaras newest-first; for each row, finds an older row
-   * with cosine similarity >= threshold on `prediction_embedding`;
-   * migrates fires + provenance to the older "winner"; folds the
-   * loser's counters in; deletes the loser. Returns the number of
-   * rows collapsed. Idempotent - a second call after a clean pass
-   * returns 0. Safe to run while the worker is live; a concurrent
-   * mint-tier1 can at worst re-create a twin we just removed, which
-   * the next run collapses.
+   * Maintenance: collapse redundant tier-1 samskaras. Primary signal
+   * is co-firing behaviour (two samskaras that reliably fire in the
+   * same cohort are Hebbianly bound and merge into one); embedding
+   * cosine acts as an anti-spurious-cofire floor. If the primary
+   * pass leaves the tier-1 pool above `targetCount`, a safety-cap
+   * second pass greedily merges by pure embedding similarity down
+   * to the target. Returns the number of rows collapsed. Idempotent
+   * - a second call after a clean pass returns 0. Safe to run while
+   * the worker is live; a concurrent mint-tier1 can at worst
+   * re-create a twin we just removed, which the next run collapses.
+   *
+   * Defaults mirror the RPC's own defaults; the worker phase calls
+   * with all defaults, and the manual button in the diagnostics
+   * modal does the same. Exposed as parameters so a future UI knob
+   * (or a dev console) can dial aggressiveness without a schema
+   * edit.
    */
-  async samskaraCollapseDuplicates(threshold = 0.9): Promise<number> {
-    const { data, error } = await this.client.rpc('samskara_collapse_duplicates', {
-      p_threshold: threshold,
+  async samskaraCollapseByCofiring(opts?: {
+    minCofires?: number;
+    minCofireRatio?: number;
+    cosineFloor?: number;
+    targetCount?: number;
+    capCosineFloor?: number;
+    maxCollapses?: number;
+  }): Promise<number> {
+    const { data, error } = await this.client.rpc('samskara_collapse_by_cofiring', {
+      p_min_cofires: opts?.minCofires ?? 3,
+      p_min_cofire_ratio: opts?.minCofireRatio ?? 0.5,
+      p_cosine_floor: opts?.cosineFloor ?? 0.7,
+      p_target_count: opts?.targetCount ?? 150,
+      p_cap_cosine_floor: opts?.capCosineFloor ?? 0.6,
+      p_max_collapses: opts?.maxCollapses ?? 20,
     });
     if (error) throw new SupabaseError(error.message);
     return typeof data === 'number' ? data : 0;

@@ -67,6 +67,7 @@ export type SamskaraPhase =
   | 'mint-tier2'
   | 'reaction-classify'
   | 'decay'
+  | 'dedup'
   | 'compound-regen';
 
 /**
@@ -74,8 +75,13 @@ export type SamskaraPhase =
  * phase depends on enriched substrate; pair-relate next because
  * mint depends on association rows; mint-tier1 before mint-tier2
  * because tier 2 depends on tier-1 cohort patterns; reaction-classify
- * is independent and can run any time; decay is cheap; compound-regen
- * runs last so it sees the freshest tier-2 state.
+ * is independent and can run any time; decay is cheap; dedup runs
+ * after decay so it sees up-to-date health values (a collapsed loser
+ * folds its counters into the winner regardless, but scheduling this
+ * way means a user looking at the debug panel between phases sees
+ * decay-then-merge in that order rather than the reverse); compound-
+ * regen runs last so its summary input reflects the freshest tier-2
+ * state AND the post-dedup tier-1 pool.
  */
 export const PHASES: readonly SamskaraPhase[] = [
   'assimilate',
@@ -84,6 +90,7 @@ export const PHASES: readonly SamskaraPhase[] = [
   'mint-tier2',
   'reaction-classify',
   'decay',
+  'dedup',
   'compound-regen',
 ];
 
@@ -155,6 +162,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
         return await runReactionClassifyPhase(ctx);
       case 'decay':
         return await runDecayPhase(ctx);
+      case 'dedup':
+        return await runDedupPhase(ctx);
       case 'compound-regen':
         return await runCompoundRegenPhase(ctx);
     }
@@ -730,6 +739,39 @@ async function runDecayPhase(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
   log.debug('decay: applied');
+  return 'progress';
+}
+
+/**
+ * Dedup phase. Calls `samskara_collapse_by_cofiring` which uses
+ * co-firing evidence as its primary redundancy signal with an
+ * embedding-cosine sanity floor, plus a population-count safety cap
+ * that activates above the target tier-1 count. SQL-only, no LLM.
+ *
+ * Runs each rotation: the RPC caps itself at 20 collapses per call
+ * via `p_max_collapses`, so a genuinely over-populated pool drains
+ * across many cycles rather than one giant transaction. Returns
+ * 'empty-phase' when no collapses happened - that keeps the cycle
+ * driver's napping behaviour accurate (a string of empty phases
+ * means nothing to do, so sleep longer).
+ *
+ * Parameters are the wrapper's defaults on purpose: the worker is
+ * the primary caller, and tuning happens via the schema defaults
+ * or the wrapper's opts if an ad-hoc run needs it.
+ */
+async function runDedupPhase(ctx: CycleContext): Promise<CycleResult> {
+  let collapsed: number;
+  try {
+    collapsed = await ctx.supabase.samskaraCollapseByCofiring();
+  } catch (err) {
+    log.debug('dedup: RPC failed', err);
+    return 'error';
+  }
+  if (collapsed === 0) {
+    log.debug('dedup: nothing to collapse');
+    return 'empty-phase';
+  }
+  log.info('dedup: collapsed samskaras', { collapsed });
   return 'progress';
 }
 

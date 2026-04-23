@@ -191,15 +191,18 @@ The screen shows:
   into samskaras, with their lifecycle state (pending assimilation
   / pending embed / fully baked).
 
-The toolbar also has a **Collapse duplicates** button. This is a
-one-shot maintenance action: tier-1 samskaras whose predictions are
-paraphrases of each other (>= 0.9 cosine similarity on their
-embeddings) are merged into the oldest one, with fires and
-provenance migrated over. It's idempotent - a second click after a
-clean pass reports "No duplicates" - and is mostly only useful if
-your corpus accumulated duplicates before the dedup-on-mint guard
-was in place. New samskaras are dedup-checked at mint time so the
-need for cleanup should fall off over time.
+The toolbar also has a **Collapse redundant** button. The samskara
+worker runs the same consolidation pass automatically each
+rotation, so this is a "do it now without waiting for the
+background pass" trigger rather than the only way merges happen.
+Two things trigger a merge: tier-1 samskaras that reliably fire in
+the same cohort (i.e. behaviourally redundant - one captures what
+the other captures, regardless of how the text reads), and a
+population-count safety cap if the tier-1 pool is still above
+target after the co-firing pass. Merged losers have their fires
+and provenance migrated to the winner (the older row). Capped at
+20 merges per click - re-click to drain further. Idempotent; a
+second click against a clean pool reports "Nothing redundant".
 
 Opens via the fist button in the log drawer header; closes via the
 ×, Escape, or clicking the backdrop.

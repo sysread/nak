@@ -97,8 +97,8 @@ toast is just a glance cue that the bias model is forming.
   advances exactly one phase per cycle. The outer worker
   rotates through `PHASES` (assimilate, pair-relate,
   mint-tier1, mint-tier2 [stubbed], reaction-classify, decay,
-  compound-regen) and treats an all-empty rotation as the idle
-  signal.
+  dedup, compound-regen) and treats an all-empty rotation as
+  the idle signal.
 - `src/lib/agents/samskara/worker.ts` - the Web Worker entry
   point. Builds its own Supabase + Venice clients from the
   `start` message (class instances don't structured-clone),
@@ -113,12 +113,15 @@ toast is just a glance cue that the bias model is forming.
   worker messages into `SAMSKARA_MINT_EVENT` CustomEvents on
   `window`.
 - `supabase/schema.sql` (samskara section) - six tables with
-  RLS, the `worker_kind='samskara'` lease partition, and
-  thirteen RPCs covering fire, cohort log, reaction apply,
+  RLS, the `worker_kind='samskara'` lease partition, and the
+  RPC surface covering fire, cohort log, reaction apply,
   substrate record, assimilate claim/save, substrate-embed
-  claim/save, decay, and the three compound-regen coordinators.
-  Follows the project's idempotent-apply conventions (`if not
-  exists`, drop-then-create for policies and functions).
+  claim/save, decay, co-firing-based dedup collapse, and the
+  three compound-regen coordinators. A private
+  `_samskara_merge_pair(winner, loser, user)` helper backs the
+  dedup RPC; underscore-prefixed to signal internal-only. Follows
+  the project's idempotent-apply conventions (`if not exists`,
+  drop-then-create for policies and functions).
 
 ## Entry points
 
@@ -388,14 +391,11 @@ sleep (60s).
   landed), though it does log at info-level so the Logs drawer
   shows "dedup-reinforced existing" breadcrumbs.
 
-  A third tool - `samskara_collapse_duplicates(threshold)` -
-  handles the one-shot cleanup case: a corpus that accumulated
-  near-duplicates before the dedup guard landed can be flattened
-  by walking tier-1 rows newest-first, finding older twins at >=
-  threshold similarity, migrating fires + provenance to the older
-  row, folding counters, and deleting the loser. Idempotent; the
-  diagnostics modal exposes it as a "Collapse duplicates"
-  button.
+  A third tool - `samskara_collapse_by_cofiring(...)` - handles
+  ongoing redundancy consolidation. It's the same RPC the
+  background dedup phase runs each rotation (see below); the
+  diagnostics modal exposes it as a "Collapse redundant" button
+  for on-demand triggering. Idempotent.
 - **Mint-tier2** - stubbed for v1. Returns `'empty-phase'` so
   the rotation drains past it cheaply. Schema and provenance
   `kind='samskara'` support it; real cohort patterns need to
@@ -412,6 +412,16 @@ sleep (60s).
   skips them on subsequent passes.
 - **Decay** - `samskara_decay()` RPC, no LLM. Three paths; see
   the Decay formula below.
+- **Dedup** - `samskara_collapse_by_cofiring(...)` RPC, no LLM.
+  Two-pass: a primary co-firing-based pass merges tier-1 pairs
+  that reliably activate in the same cohort (Hebbian
+  redundancy), and a population-count safety cap falls through
+  to pure embedding-cosine greedy merge when the pool still
+  exceeds target. Each pass preserves the older row as winner,
+  retargets fires + provenance, folds counters, deletes the
+  loser. Per-call capped at 20 merges so one RPC never runs
+  unboundedly; repeated rotations drain any backlog.
+  See the Dedup formula below for parameters and rationale.
 - **Compound-regen** - three-step dance. First
   `samskara_should_regen_compound()` returns a decision payload
   (cheap). If `should_regen`, try to claim via
@@ -482,6 +492,57 @@ where a samskara fires constantly but never gets explicit
 confirm or disconfirm (neutrals only). The existing two paths
 never touch it; this gentle nudge crowds it out without
 artificially perturbing user-facing behaviour.
+
+### Dedup formula
+
+Two passes per `samskara_collapse_by_cofiring()` call.
+
+**Primary pass: behavioural redundancy.** A tier-1 pair (A, B)
+merges when all three hold:
+
+```text
+cofires(A, B) >= p_min_cofires            -- default 3
+cofires(A, B) / min(fires_A, fires_B)
+                >= p_min_cofire_ratio     -- default 0.5
+cosine(embed_A, embed_B)
+                >= p_cosine_floor         -- default 0.70
+```
+
+Co-fires are counted by self-joining `samskara_fires` on
+`cohort_id`. The ratio normalization matters: two samskaras that
+*always* fire together when either fires are duplicates; two that
+often co-fire but also fire independently are adjacent-but-
+distinct. The cosine floor is a sanity check against situational
+overlap (e.g. "tech tester" and "barley science" both firing on a
+debug-panel-about-baking turn without being the same habit). Pairs
+are merged in descending (ratio, cosine) order so the strongest
+redundancies consolidate first.
+
+**Safety cap: population overflow.** If the tier-1 count still
+exceeds `p_target_count` (default 150) after the primary pass,
+fall through to pure embedding-cosine greedy merge in ascending
+cosine-distance order, refusing to merge pairs with cosine below
+`p_cap_cosine_floor` (default 0.60). This guards against a
+diverse-but-overflowing pool where no pair meets the co-firing
+bar but the count is still growing without bound.
+
+**Per-call cap.** `p_max_collapses` (default 20) bounds work per
+invocation. The background dedup phase calls the RPC each
+rotation; a genuinely over-populated pool drains across many
+cycles rather than one giant transaction. The manual "Collapse
+redundant" button in the diagnostics modal is the same RPC; click
+repeatedly to drain further.
+
+**Winner selection.** Always the older row, matching the
+mint-tier1 dedup-reinforce semantics. Fires, provenance, and
+counters fold into the winner via the private
+`_samskara_merge_pair(winner, loser, user)` helper; the loser is
+deleted.
+
+Spirit note: co-firing as the primary signal maps onto Hebbian
+binding - habits that reliably co-activate consolidate into one
+habit, regardless of how similar their descriptions sound. Text
+embedding becomes a sanity floor, not the primary gate.
 
 ### Compound-regen trigger
 

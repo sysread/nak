@@ -2416,87 +2416,240 @@ begin
   return true;
 end $$;
 
--- One-shot maintenance: collapse tier-1 near-duplicates that already
--- accumulated before the mint-tier1 dedup guard landed. Walks tier-1
--- samskaras newest-first; for each row, finds an OLDER samskara with
--- cosine similarity >= p_threshold on `prediction_embedding` and -
--- if one exists - migrates fires + provenance to the older "winner",
--- folds the loser's counters into the winner, and deletes the loser.
--- Idempotent (re-running after a clean pass finds no more twins and
--- returns 0). Safe to run while the worker is live: a concurrent
--- mint-tier1 could at worst re-create one of the twins we just
--- removed, which the next invocation catches.
-create or replace function public.samskara_collapse_duplicates(
-  p_threshold real default 0.9
+-- Retire the earlier threshold-only collapse RPC. Superseded by
+-- `samskara_collapse_by_cofiring` below, which uses behavioural
+-- redundancy (co-firing in the same cohort) as its primary signal
+-- instead of embedding similarity alone. The single-argument shape
+-- is named explicitly so the drop is unambiguous even if a future
+-- overload gets introduced; `if exists` keeps the schema re-apply
+-- clean on databases that never had the old function.
+drop function if exists public.samskara_collapse_duplicates(real);
+
+-- Internal helper: merge `p_loser_id` into `p_winner_id` for the
+-- given user. Retargets fires, copies provenance (primary-key
+-- dedup via `on conflict do nothing`), folds counters into the
+-- winner, then deletes the loser. Exists as a helper because the
+-- collapse RPC below runs two passes (co-firing pass + safety
+-- cap), both of which need the same merge semantics. RLS applies;
+-- callers that don't pass the right user_id simply no-op because
+-- the updates and delete filter on it.
+--
+-- Not intended for direct client use - the underscore prefix is
+-- the callsite signal. Declared `security invoker` so the caller's
+-- auth.uid() governs RLS the same way it would in an inlined
+-- merge; the winner/loser lookups below require the caller to own
+-- both rows, which the enclosing RPC guarantees.
+create or replace function public._samskara_merge_pair(
+  p_winner_id uuid,
+  p_loser_id uuid,
+  p_user_id uuid
+) returns void
+language plpgsql security invoker as $$
+begin
+  -- Retarget fires. Every fire row that pointed at the loser now
+  -- counts toward the winner so cohort history is preserved.
+  update public.samskara_fires
+     set samskara_id = p_winner_id
+   where samskara_id = p_loser_id and user_id = p_user_id;
+
+  -- Copy loser's provenance to the winner (dedup via the composite
+  -- primary key). Loser's remaining provenance rows cascade-delete
+  -- when the loser row itself is deleted below.
+  insert into public.samskara_provenance (samskara_id, user_id, kind, ref_id, weight)
+  select p_winner_id, user_id, kind, ref_id, weight
+    from public.samskara_provenance
+   where samskara_id = p_loser_id
+    on conflict (samskara_id, kind, ref_id) do nothing;
+
+  -- Fold counters. `greatest` with nullable timestamps yields the
+  -- later timestamp or NULL if both are NULL (Postgres greatest()
+  -- ignores NULLs rather than propagating them, unlike arithmetic).
+  update public.samskaras w
+     set fire_count = w.fire_count + l.fire_count,
+         confirm_count = w.confirm_count + l.confirm_count,
+         disconfirm_count = w.disconfirm_count + l.disconfirm_count,
+         last_fired_at = greatest(w.last_fired_at, l.last_fired_at),
+         updated_at = now()
+    from public.samskaras l
+   where w.id = p_winner_id
+     and l.id = p_loser_id
+     and w.user_id = p_user_id;
+
+  delete from public.samskaras
+   where id = p_loser_id and user_id = p_user_id;
+end $$;
+
+-- Maintenance: collapse redundant tier-1 samskaras using co-firing
+-- as the primary signal, with an embedding-similarity safety cap.
+--
+-- Primary pass ("behavioural redundancy"). Two samskaras that
+-- reliably co-fire in the same cohort are Hebbianly bound — they
+-- activate together, so one of them is functionally the other.
+-- A pair is merged when:
+--   - they've co-fired in at least `p_min_cofires` cohorts, AND
+--   - cofires / min(fires_a, fires_b) >= `p_min_cofire_ratio`
+--     (the normalization prevents a pair that always fires together
+--     BUT also fires independently from being flagged; pure-cofire
+--     counts are confounded by samskaras that fire in nearly every
+--     cohort for situational reasons), AND
+--   - prediction-embedding cosine >= `p_cosine_floor` as a sanity
+--     floor against spurious co-fires (e.g. "tech tester" and
+--     "barley science" both firing on a debug-panel-about-baking
+--     turn without being the same habit).
+-- The winner is always the older row so the audit trail and
+-- compound-regen's recency weighting stay aligned with the existing
+-- mint-tier1 dedup-reinforce behaviour.
+--
+-- Safety cap ("population overflow"). If the primary pass leaves
+-- the tier-1 pool above `p_target_count`, fall through to a pure
+-- embedding-cosine greedy merge down to the target, refusing to
+-- merge pairs with cosine < `p_cap_cosine_floor`. This guards
+-- against a diverse-but-overflowing pool where no pair meets the
+-- co-firing bar but the count is still growing without bound.
+--
+-- Per-call cap. `p_max_collapses` bounds work per invocation so a
+-- single RPC never chains through a pathological pool. The
+-- background worker calls this each rotation; repeated calls drain
+-- the backlog without any individual call blocking the worker
+-- loop.
+--
+-- Idempotent under repeated calls. Safe to run while the worker is
+-- live: a concurrent mint-tier1 could at worst re-create a twin
+-- this call just removed, which the next invocation catches.
+create or replace function public.samskara_collapse_by_cofiring(
+  p_min_cofires int default 3,
+  p_min_cofire_ratio real default 0.5,
+  p_cosine_floor real default 0.70,
+  p_target_count int default 150,
+  p_cap_cosine_floor real default 0.60,
+  p_max_collapses int default 20
 ) returns int
 language plpgsql security invoker as $$
 declare
   v_uid uuid := auth.uid();
   v_collapsed int := 0;
-  v_row record;
+  v_pair record;
   v_winner uuid;
+  v_loser uuid;
+  v_current_count int;
 begin
-  -- Newer-first iteration guarantees we always collapse INTO the
-  -- oldest representative of a cluster - otherwise a run could
-  -- preserve a newer twin and retire the canonical oldest one,
-  -- confusing the audit trail and losing the earliest created_at
-  -- timestamp that compound-regen relies on for recency weighting.
-  for v_row in
-    select id, prediction_embedding, created_at
-      from public.samskaras
-     where user_id = v_uid
-       and tier = 1
-       and prediction_embedding is not null
-     order by created_at desc
+  -- PRIMARY PASS: behavioural redundancy via co-firing.
+  --
+  -- Candidate pair enumeration self-joins samskara_fires on
+  -- cohort_id with `f1.samskara_id < f2.samskara_id` to emit each
+  -- unordered pair exactly once. Filtered by min-cofires at the
+  -- GROUP BY step to keep the candidate set small, then enriched
+  -- with embedding cosine and fire counts before the ratio and
+  -- cosine-floor checks. Ordered by ratio desc, cosine desc so the
+  -- strongest redundancies merge first and the max-collapses cap
+  -- bites on the most defensible merges when it bites.
+  for v_pair in
+    with pair_cofires as (
+      select
+        least(f1.samskara_id, f2.samskara_id) as a_id,
+        greatest(f1.samskara_id, f2.samskara_id) as b_id,
+        count(*)::int as cofires
+      from public.samskara_fires f1
+      join public.samskara_fires f2
+        on f1.cohort_id = f2.cohort_id
+       and f1.samskara_id < f2.samskara_id
+      where f1.user_id = v_uid
+        and f2.user_id = v_uid
+      group by 1, 2
+      having count(*) >= p_min_cofires
+    )
+    select
+      pc.a_id,
+      pc.b_id,
+      sa.created_at as a_created_at,
+      sb.created_at as b_created_at,
+      pc.cofires,
+      (pc.cofires::real / greatest(least(sa.fire_count, sb.fire_count), 1)::real)::real as ratio,
+      (1 - (sa.prediction_embedding <=> sb.prediction_embedding))::real as cosine
+    from pair_cofires pc
+    join public.samskaras sa on sa.id = pc.a_id
+    join public.samskaras sb on sb.id = pc.b_id
+    where sa.user_id = v_uid
+      and sb.user_id = v_uid
+      and sa.tier = 1
+      and sb.tier = 1
+      and sa.prediction_embedding is not null
+      and sb.prediction_embedding is not null
+      and (pc.cofires::real / greatest(least(sa.fire_count, sb.fire_count), 1)::real) >= p_min_cofire_ratio
+      and (1 - (sa.prediction_embedding <=> sb.prediction_embedding))::real >= p_cosine_floor
+    order by ratio desc, cosine desc
   loop
-    select id into v_winner
-      from public.samskaras
-     where user_id = v_uid
-       and tier = 1
-       and prediction_embedding is not null
-       and created_at < v_row.created_at
-       and (1 - (prediction_embedding <=> v_row.prediction_embedding))::real >= p_threshold
-     order by prediction_embedding <=> v_row.prediction_embedding asc
-     limit 1;
+    exit when v_collapsed >= p_max_collapses;
 
-    if v_winner is null then
+    if v_pair.a_created_at <= v_pair.b_created_at then
+      v_winner := v_pair.a_id;
+      v_loser  := v_pair.b_id;
+    else
+      v_winner := v_pair.b_id;
+      v_loser  := v_pair.a_id;
+    end if;
+
+    -- Skip if either side already disappeared (consumed by an
+    -- earlier merge this pass). The candidate set was computed up
+    -- front; the pool shrinks as we iterate.
+    if not exists (select 1 from public.samskaras where id = v_winner and user_id = v_uid)
+       or not exists (select 1 from public.samskaras where id = v_loser and user_id = v_uid)
+    then
       continue;
     end if;
 
-    -- Retarget fires. Every fire row that pointed at the loser now
-    -- counts toward the winner so cohort history is preserved.
-    update public.samskara_fires
-       set samskara_id = v_winner
-     where samskara_id = v_row.id and user_id = v_uid;
-
-    -- Copy loser's provenance to the winner (dedup via the primary
-    -- key). The loser's remaining provenance rows cascade-delete
-    -- when the loser row itself is deleted below.
-    insert into public.samskara_provenance (samskara_id, user_id, kind, ref_id, weight)
-    select v_winner, user_id, kind, ref_id, weight
-      from public.samskara_provenance
-     where samskara_id = v_row.id
-      on conflict (samskara_id, kind, ref_id) do nothing;
-
-    -- Fold counters. `greatest` with nullable timestamps yields the
-    -- later timestamp or NULL if both are NULL (Postgres greatest()
-    -- ignores NULLs rather than propagating them, unlike arithmetic).
-    update public.samskaras w
-       set fire_count = w.fire_count + l.fire_count,
-           confirm_count = w.confirm_count + l.confirm_count,
-           disconfirm_count = w.disconfirm_count + l.disconfirm_count,
-           last_fired_at = greatest(w.last_fired_at, l.last_fired_at),
-           updated_at = now()
-      from public.samskaras l
-     where w.id = v_winner
-       and l.id = v_row.id
-       and w.user_id = v_uid;
-
-    delete from public.samskaras
-     where id = v_row.id and user_id = v_uid;
-
+    perform public._samskara_merge_pair(v_winner, v_loser, v_uid);
     v_collapsed := v_collapsed + 1;
   end loop;
+
+  -- SAFETY CAP: fall through to pure-embedding greedy merge when
+  -- the pool is still over target.
+  select count(*) into v_current_count
+    from public.samskaras
+   where user_id = v_uid and tier = 1;
+
+  if v_current_count > p_target_count then
+    for v_pair in
+      select
+        sa.id as a_id,
+        sb.id as b_id,
+        sa.created_at as a_created_at,
+        sb.created_at as b_created_at,
+        (1 - (sa.prediction_embedding <=> sb.prediction_embedding))::real as cosine
+      from public.samskaras sa
+      join public.samskaras sb
+        on sa.user_id = sb.user_id
+       and sa.id < sb.id
+      where sa.user_id = v_uid
+        and sa.tier = 1
+        and sb.tier = 1
+        and sa.prediction_embedding is not null
+        and sb.prediction_embedding is not null
+        and (1 - (sa.prediction_embedding <=> sb.prediction_embedding))::real >= p_cap_cosine_floor
+      order by sa.prediction_embedding <=> sb.prediction_embedding asc
+    loop
+      exit when v_collapsed >= p_max_collapses;
+      exit when v_current_count <= p_target_count;
+
+      if v_pair.a_created_at <= v_pair.b_created_at then
+        v_winner := v_pair.a_id;
+        v_loser  := v_pair.b_id;
+      else
+        v_winner := v_pair.b_id;
+        v_loser  := v_pair.a_id;
+      end if;
+
+      if not exists (select 1 from public.samskaras where id = v_winner and user_id = v_uid)
+         or not exists (select 1 from public.samskaras where id = v_loser and user_id = v_uid)
+      then
+        continue;
+      end if;
+
+      perform public._samskara_merge_pair(v_winner, v_loser, v_uid);
+      v_collapsed := v_collapsed + 1;
+      v_current_count := v_current_count - 1;
+    end loop;
+  end if;
 
   return v_collapsed;
 end $$;
