@@ -210,16 +210,22 @@
   let streamingReasoning = $state('');
   let streamingCitations = $state<Citation[] | null>(null);
   let streamingReasoningOpen = $state(false);
-  // Inline error bubble rendered in the message list when an exchange
-  // fails. Distinct from the `error` banner above the composer: the
-  // banner lives off-screen on mobile when the keyboard is up, which
-  // made the previous "disappear silently" bug invisible to the user -
-  // they'd see reasoning start and the streaming bubble vanish with no
-  // explanation. The inline bubble renders at the bottom of the
-  // transcript where the streaming output was, so the failure is
-  // visible where the user is already looking. Cleared at the start
+  // Inline error surface for chat exchange failures. Rendered as a
+  // prominent red bubble at the bottom of the transcript - inside
+  // `.messages` - so it travels with the conversation flow and
+  // stays visible regardless of what the composer / keyboard are
+  // doing. This is the canonical place for send-path errors; the
+  // `error` banner above the composer is reserved for non-exchange
+  // problems (attachment upload, thread rename, pre-send guards)
+  // that don't have a transcript anchor. On a rate-limit, an
+  // optional `retry` closure is attached and the bubble renders a
+  // refresh button alongside the dismiss X. Cleared at the start
   // of every new send.
-  let streamingError = $state<string | null>(null);
+  interface StreamingError {
+    text: string;
+    retry?: () => void;
+  }
+  let streamingError = $state<StreamingError | null>(null);
   // Timer id for the delayed-close on first content arrival. Separated
   // from the text-flush timer because they have different lifetimes —
   // the close fires once per round, the flush fires on every delta.
@@ -1605,10 +1611,10 @@
       // Pre-exchange failure (user message persist). No retry here -
       // the user's row didn't land, so "retry" would mean "try persist
       // again," which is a different UX than "retry the LLM call."
+      // Surface on the inline bubble so the failure shows up in the
+      // transcript where the user expected their message to land.
       log.error('send failed before exchange', err);
-      const text = describeError(err);
-      error = { text };
-      streamingError = text;
+      streamingError = { text: describeError(err) };
       sending = false;
       return;
     }
@@ -1878,26 +1884,21 @@
       streamingContentStarted = false;
       // Rate-limit is the one error where re-sending the same request
       // a moment later is the right fix - Venice's message literally
-      // says "try again later." Park a retry closure on the banner so
-      // the refresh button is the only action needed; other failure
-      // kinds (auth, parse, the user's abort) would just repeat the
-      // error, so we omit the retry for them.
+      // says "try again later." Park a retry closure on the inline
+      // bubble so the refresh button sits next to the error text the
+      // user is already reading; other failure kinds (auth, parse,
+      // the user's abort) would just repeat the error on retry, so
+      // we omit the closure for them and the bubble renders dismiss-
+      // only.
       if (err instanceof VeniceError && err.kind === 'rate_limit') {
-        const text = formatRateLimitMessage(err);
-        error = {
-          text,
+        streamingError = {
+          text: formatRateLimitMessage(err),
           retry: () => {
             void runExchange(ctx);
           },
         };
-        streamingError = text;
       } else {
-        const text = describeError(err);
-        error = { text };
-        // Inline bubble: survives long enough for the user to read it
-        // even if the composer keyboard pushed the banner off-screen.
-        // Cleared at the next send start.
-        streamingError = text;
+        streamingError = { text: describeError(err) };
       }
     } finally {
       sending = false;
@@ -3139,18 +3140,41 @@
             {/if}
           {/each}
           {#if streamingError}
-            <!-- Inline error bubble, rendered in the transcript where
-                 the streaming output was when the exchange failed. The
-                 error banner above the composer covers the same info,
-                 but on mobile with the keyboard up it's easy to miss -
-                 this inline version lands where the user is already
-                 looking. Dismissed by the next successful send (or
-                 manually via the X). Role-agnostic "error" styling so
-                 it reads as a system notice rather than a model reply. -->
+            <!-- Canonical error surface for chat send-path failures.
+                 Rendered in the transcript where the streaming output
+                 was, so it follows the conversation flow regardless
+                 of what the composer or keyboard are doing. Carries
+                 the retry button when `streamingError.retry` is set
+                 (rate-limit errors, currently). The `.error-bar`
+                 banner above the composer is reserved for non-
+                 exchange errors (attachment upload, thread rename,
+                 pre-send guards) that don't have a transcript anchor.
+                 Dismissed by the next successful send (or manually
+                 via the X). -->
             <div class="msg assistant msg-error" role="alert">
               <div class="msg-error-body">
                 <span class="msg-error-icon" aria-hidden="true">!</span>
-                <div class="msg-error-text">{streamingError}</div>
+                <div class="msg-error-text">{streamingError.text}</div>
+                {#if streamingError.retry}
+                  <button
+                    type="button"
+                    class="secondary icon-btn msg-error-retry"
+                    onclick={streamingError.retry}
+                    disabled={sending}
+                    aria-label="Retry"
+                    title="Retry"
+                  >
+                    <!-- Refresh / circular-arrow icon (Feather "refresh-cw"). -->
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                         stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="23 4 23 10 17 10" />
+                      <polyline points="1 20 1 14 7 14" />
+                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+                      <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
+                    </svg>
+                  </button>
+                {/if}
                 <button
                   type="button"
                   class="secondary icon-btn msg-error-dismiss"

@@ -1856,6 +1856,7 @@ h1 {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.msg-error-retry,
 .msg-error-dismiss {
   flex: 0 0 auto;
   color: var(--danger);
