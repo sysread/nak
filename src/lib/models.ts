@@ -223,38 +223,42 @@ export const UTILITY_TIER: ModelTier = 'fast';
 export const VENICE_REFLECTION_MODEL = MODELS.fast.id;
 
 /**
- * Model the memory-recall agent runs against. Same rationale as
- * reflection — the task is "read the live conversation, search
- * memories, produce a short note" and leans on long-context reading,
- * not reasoning. Tracks the fast tier so a retune of the fast slot
- * carries recall forward automatically. Kept as a distinct constant
- * from `VENICE_REFLECTION_MODEL` so a future decision to pin recall
- * to a different model (e.g. a cheaper tier once it's proven good
- * enough) doesn't require editing reflection call sites.
+ * Model the memory-recall agent runs against. Pinned to
+ * mistral-small-3-2-24b-instruct: the task is "read the live
+ * conversation, search memories, produce a short note" - bounded
+ * synthesis, no reasoning required. Input is capped by
+ * MAX_RECALL_CHARS in the agent before the call, so the 256k context
+ * window is not a constraint in practice. Kept as a distinct constant
+ * from VENICE_REFLECTION_MODEL so recall and reflection can be tuned
+ * independently if one regresses.
  */
-export const VENICE_RECALL_MODEL = MODELS.fast.id;
+export const VENICE_RECALL_MODEL = 'mistral-small-3-2-24b-instruct';
 
 /**
  * Model the conversation-recall agent runs against. Same rationale as
- * memory recall: "read the live conversation, run one or more
- * `conversation_search` queries against prior threads, produce a
- * short first-person note." Long-context reading, not reasoning, so
- * the fast tier fits. Kept as a distinct constant from
- * `VENICE_RECALL_MODEL` so the two recall surfaces can be pinned to
- * different models independently if one regresses.
+ * VENICE_RECALL_MODEL - bounded synthesis, 256k context is sufficient
+ * after the MAX_RECALL_CHARS cap. Kept distinct from VENICE_RECALL_MODEL
+ * so the two recall surfaces can be pinned to different models
+ * independently if one regresses.
  */
-export const VENICE_CONVERSATION_RECALL_MODEL = MODELS.fast.id;
+export const VENICE_CONVERSATION_RECALL_MODEL = 'mistral-small-3-2-24b-instruct';
 
 /**
  * Model the thread-summary agent runs against. The task is "read the
- * conversation, write 2–3 sentences" — cheap, bounded, and leans on
- * long-context reading, not reasoning. Tracks the fast tier for the
- * same reason reflection does: a retune of the fast slot carries
- * forward without editing call sites. A summary agent with a
- * reasoning-heavy model would be overkill — the output is going into
- * a single embedding vector, not a prose answer.
+ * conversation, write 2-3 sentences" - cheap, bounded (MAX_INPUT_MESSAGES
+ * = 120), and doesn't require reasoning. mistral-small-3-2-24b-instruct
+ * is well within spec; the output goes into a single embedding vector.
  */
-export const VENICE_SUMMARY_MODEL = MODELS.fast.id;
+export const VENICE_SUMMARY_MODEL = 'mistral-small-3-2-24b-instruct';
+
+/**
+ * Model the samskara formation agent runs against. The task is five
+ * short JSON-out phases (assimilate, relate, mint, classify, compound
+ * summary) - small prompts with maxTokens 200-500 per phase. Structured
+ * output on bounded context; no reasoning required. mistral-small handles
+ * this comfortably.
+ */
+export const VENICE_SAMSKARA_MODEL = 'mistral-small-3-2-24b-instruct';
 
 /**
  * Model the `web_search` tool runs against for its sub-completion.

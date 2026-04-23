@@ -15,7 +15,7 @@
  */
 import type { AppConfig } from '../../config';
 import type { SupabaseService } from '../../supabase';
-import { MODELS } from '../../models';
+import { VENICE_SAMSKARA_MODEL } from '../../models';
 import { makeHolderId } from '../../embeddings/manager';
 import { notifySamskaraMint } from '../../samskara/events';
 import {
@@ -189,9 +189,7 @@ export class SamskaraManager {
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       veniceApiKey: opts.config.veniceApiKey,
-      // Fast tier — every phase is a small JSON-out call; the smart
-      // tier would be wasteful and slow.
-      fastModel: MODELS.fast.id,
+      fastModel: VENICE_SAMSKARA_MODEL,
       holderId: makeHolderId(),
       ...WORKER_DEFAULTS,
     });

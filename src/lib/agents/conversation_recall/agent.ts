@@ -29,6 +29,7 @@ import { runHeadlessToolLoop } from '../../tools/run';
 import { VENICE_CONVERSATION_RECALL_MODEL } from '../../models';
 import {
   trimToLastUserTurn,
+  trimToCharBudget,
   parseRecallOutput,
   type RecallNote,
 } from '../recall/agent';
@@ -119,7 +120,7 @@ export class ConversationRecallAgent
 
     try {
       const allMessages = await this.supabase.listMessages(req.input.threadId);
-      const slice = trimToLastUserTurn(allMessages);
+      const slice = trimToCharBudget(trimToLastUserTurn(allMessages));
 
       if (slice.length === 0) {
         // No user turn in the thread — nothing to recall for. Skip the

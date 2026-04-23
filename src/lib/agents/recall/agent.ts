@@ -121,6 +121,36 @@ export function trimToLastUserTurn(messages: Message[]): Message[] {
   return [];
 }
 
+// ~50k tokens at 4 chars/token - well under mistral-small's 256k window
+// while still covering conversations many times longer than any seen today.
+const MAX_RECALL_CHARS = 200_000;
+
+/**
+ * Trim a message list to fit within a character budget, keeping the
+ * most recent messages. Iterates from the end (newest) backward,
+ * accumulating character counts, and drops everything older than what
+ * fits. Recent context is more relevant to recall than early history.
+ *
+ * Always keeps at least the last message (the final user turn from
+ * trimToLastUserTurn) even if it alone exceeds the budget - recall
+ * needs something to work with.
+ *
+ * Character count includes tool_calls JSON for assistant rows, since
+ * those are serialized onto the wire and consume tokens.
+ */
+export function trimToCharBudget(messages: Message[], budget = MAX_RECALL_CHARS): Message[] {
+  if (messages.length === 0) return [];
+  let chars = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    chars += (m.content?.length ?? 0) + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0);
+    if (chars > budget && i < messages.length - 1) {
+      return messages.slice(i + 1);
+    }
+  }
+  return messages;
+}
+
 /**
  * Parse the model's final text into a RecallNote. Tolerant: we strip
  * markdown code fences first because prompt-only JSON discipline
@@ -192,7 +222,7 @@ export class RecallAgent implements Agent<RecallInput, RecallOutput> {
 
     try {
       const allMessages = await this.supabase.listMessages(req.input.threadId);
-      const slice = trimToLastUserTurn(allMessages);
+      const slice = trimToCharBudget(trimToLastUserTurn(allMessages));
 
       if (slice.length === 0) {
         // No user turn in the thread — nothing to recall for.
