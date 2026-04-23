@@ -27,17 +27,18 @@ Click the × on a chip to remove it before sending.
 
 ## What the model actually sees
 
-- **Images**. Inlined into the request on vision-capable tiers (see
-  the model picker — the **Balanced** tier is vision-capable today).
+- **Images**. On vision-capable tiers (Balanced and Smart), images
+  are inlined into the request as image data — the model sees the
+  pixels natively. On the Fast tier (text-only), Nak automatically
+  calls a vision sub-model on the model's behalf: the model receives
+  a note listing the attached image filenames and calls the built-in
+  `analyze_image` tool to get a text description. Either way, you
+  do not need to switch tiers just because you are sending an image.
 - **Documents, code, and other files**. Nak calls Venice's text
   parser at upload time to pull readable text out, then prepends
   that text to your message as a fenced block tagged with the
   filename. The model sees the filename alongside the extracted
   content.
-
-If you try to send an image while a non-vision tier is selected, Nak
-blocks the send and explains which file is unreadable — either
-switch to a vision tier or remove the file.
 
 ## After sending
 

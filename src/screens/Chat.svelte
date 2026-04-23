@@ -57,6 +57,7 @@
     type ThreadCursor,
     type ThreadSearchHit,
     type Message,
+    type Attachment,
     type NewAttachment,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
@@ -1495,12 +1496,15 @@
       error = { text: `"${erroredChip.filename}": ${erroredChip.error}` };
       return;
     }
-    const unreadable = readyAttachments.find((a) => !isConsumableBy(a, tierSpec));
+    // Images are handled on all tiers via analyze_image(). Only block
+    // non-image attachments with no extractable text - those are a real
+    // dead end with no tool fallback.
+    const unreadable = readyAttachments.find(
+      (a) => !isImageMimeType(a.mime_type) && !isConsumableBy(a, tierSpec)
+    );
     if (unreadable) {
       error = {
-        text: isImageMimeType(unreadable.mime_type)
-          ? `"${unreadable.filename}" is an image and the ${tierSpec.label} tier can't see images. Switch to a vision-capable tier or remove the file.`
-          : `"${unreadable.filename}" has no extractable text — the model won't be able to read it. Remove it to send.`,
+        text: `"${unreadable.filename}" has no extractable text — the model won't be able to read it. Remove it to send.`,
       };
       return;
     }
@@ -1545,6 +1549,9 @@
       .map((p) => ({ role: 'system' as const, content: p.body }));
 
     let userMessageId: string;
+    // Hoisted so the runExchange call below can pass the DB-hydrated
+    // attachment rows to ToolContext without reaching into the try scope.
+    let persistedAttachments: Attachment[] = [];
     try {
       const userMsg = await app.supabase.addMessage(threadId, 'user', text);
       userMessageId = userMsg.id;
@@ -1560,6 +1567,7 @@
         try {
           const rows = await app.supabase.addAttachments(userMsg.id, newRows);
           userMsg.attachments = rows;
+          persistedAttachments = rows;
         } catch (err) {
           // Non-fatal: surface a warning but keep going. The user's
           // typed text still gets a reply — the attachments just
@@ -1602,6 +1610,9 @@
       sendVerbosity,
       originalText: text,
       userMessageId,
+      // Pass the DB-hydrated attachment rows so analyze_image can find
+      // image bytes by filename inside ToolContext.
+      sendAttachments: persistedAttachments,
     });
   }
 
@@ -1629,6 +1640,13 @@
      * row written at end-of-turn.
      */
     userMessageId: string;
+    /**
+     * DB-hydrated attachments for the current user message. Forwarded
+     * to runChatLoop -> ToolContext so analyze_image can read image
+     * bytes by filename. Optional - absent on the regenerate path,
+     * which populates this from the persisted message row instead.
+     */
+    sendAttachments?: Attachment[];
   }
 
   /**
@@ -1714,6 +1732,7 @@
           history: historyOnWire,
           signal: abortCtl.signal,
           userMessageId: ctx.userMessageId,
+          currentMessageAttachments: ctx.sendAttachments,
           reasoningEffort: ctx.sendReasoning,
           verbosity: ctx.sendVerbosity,
           handlers: {
@@ -2046,6 +2065,10 @@
       sendVerbosity,
       originalText: userMessage.content,
       userMessageId: userMessage.id,
+      // userMessage.attachments is already hydrated by listMessages so
+      // analyze_image can reach image bytes on a regenerate just as it
+      // can on a fresh send.
+      sendAttachments: userMessage.attachments ?? [],
     });
   }
 

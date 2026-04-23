@@ -124,18 +124,20 @@ describe('tool registry', () => {
 
   it('buildToolList with no enabled toolboxes returns only the always-on set', () => {
     // Always-on: toggle_toolbox + the recall pair + web_search +
-    // update_title. The recall tools are reflex-level - the system
-    // prompt tells the model to call them at the top of a new topic,
-    // so they can't sit behind a prefatory toggle round-trip.
+    // update_title + analyze_image. The recall tools are reflex-level
+    // - the system prompt tells the model to call them at the top of a
+    // new topic, so they can't sit behind a prefatory toggle round-trip.
     // web_search joins them for the same reason: time-sensitive
     // questions should fire a search without the user first enabling a
     // toolbox. update_title has to fire on the very first turn of a
     // fresh thread (toolboxes_enabled=[] by default), so gating it
     // would mean a toggle round-trip before the model could name the
-    // conversation.
+    // conversation. analyze_image must be always-on so the model can
+    // reach it on any tier when the user sends an image.
     const list = buildToolList([]);
     expect(list.map((t) => t.function.name).sort()).toEqual(
       [
+        'analyze_image',
         'conversation_recall',
         'memory_recall',
         'toggle_toolbox',

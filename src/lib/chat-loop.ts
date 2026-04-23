@@ -26,7 +26,7 @@
  */
 
 import type { ReasoningEffort, Verbosity } from './models';
-import type { SupabaseService, Message, Thread } from './supabase';
+import type { SupabaseService, Attachment, Message, Thread } from './supabase';
 import type {
   VeniceClient,
   VeniceMessage,
@@ -321,6 +321,15 @@ export interface ChatLoopOptions {
    * samskara to keep working.
    */
   userMessageId?: string;
+  /**
+   * Hydrated Attachment[] for the user message that opened this turn.
+   * Threaded into ToolContext so analyze_image can find image bytes by
+   * filename without a DB query inside the tool. Optional - callers
+   * that don't deal in attachments (tests, background agents) pass
+   * nothing and ctx.attachments will be undefined; the tool guards
+   * with ctx.attachments ?? [].
+   */
+  currentMessageAttachments?: Attachment[];
 }
 
 /** Non-error completion shape returned to the caller. */
@@ -470,6 +479,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     reasoningEffort,
     verbosity,
     userMessageId,
+    currentMessageAttachments,
   } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
@@ -746,6 +756,9 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         userId,
         threadId: thread.id,
         signal: ctl.signal,
+        // Pass current message's attachments so analyze_image can find
+        // image bytes by filename without a DB query inside the tool.
+        attachments: currentMessageAttachments,
       };
       let args: Record<string, unknown>;
       try {

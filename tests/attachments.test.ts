@@ -85,10 +85,13 @@ describe('isConsumableBy', () => {
     ).toBe(true);
   });
 
-  it('rejects an image on a non-vision tier with no extracted text', () => {
+  it('accepts an image on a non-vision tier - analyze_image() handles it', () => {
+    // Images are always consumable regardless of vision support: vision
+    // tiers inline them; non-vision tiers get a note instructing the
+    // model to call analyze_image().
     expect(
       isConsumableBy({ mime_type: 'image/png', extracted_text: null }, noVision)
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('accepts any attachment with non-empty extracted text', () => {
@@ -177,7 +180,11 @@ describe('buildUserVeniceContent', () => {
     expect(arr[1].type).toBe('image_url');
   });
 
-  it('skips images on non-vision tiers but keeps extracted text', () => {
+  it('skips image inlining on non-vision tiers but prepends an analyze_image note', () => {
+    // On non-vision tiers images are not inlined as image_url parts.
+    // Instead, a one-line note listing the image filenames is prepended
+    // so the model knows to call analyze_image(). Extracted text from
+    // non-image files still appears as a fenced block.
     const result = buildUserVeniceContent(
       'check these',
       [
@@ -193,7 +200,8 @@ describe('buildUserVeniceContent', () => {
     );
     expect(typeof result).toBe('string');
     expect(result as string).toContain('```[b.pdf]');
-    expect(result as string).not.toContain('a.png');
+    expect(result as string).toContain('a.png');
+    expect(result as string).toContain('analyze_image()');
     expect(result as string).not.toContain('image_url');
   });
 

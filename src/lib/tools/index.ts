@@ -49,6 +49,7 @@ import { recipeGet } from './recipe_get';
 import { recipeUpdate } from './recipe_update';
 import { recipeDelete } from './recipe_delete';
 import { updateTitle } from './update_title';
+import { analyzeImage } from './analyze_image';
 
 /**
  * Always-on toolbox. Rides with every request regardless of the
@@ -80,7 +81,7 @@ export const alwaysOnToolbox: Toolbox = {
     'Reflex-level tools that ride every request without being toggled. ' +
     'Includes recall (memory + prior conversations), live web search, the ' +
     'title-rename convenience, and the toggle_toolbox meta-tool itself.',
-  tools: [toggleToolbox, memoryRecall, conversationRecall, webSearch, updateTitle],
+  tools: [toggleToolbox, memoryRecall, conversationRecall, webSearch, updateTitle, analyzeImage],
 };
 
 /** Save-and-read recipes against the cookbook CRUD. */

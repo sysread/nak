@@ -133,69 +133,48 @@ export interface ModelSpec {
 export const MODELS: Record<ModelTier, ModelSpec> = {
   smart: {
     tier: 'smart',
-    // kimi-k2-6 is Moonshot's latest multimodal model — native
-    // vision + reasoning, 256k context. Smart is the only tier on
-    // this id; Balanced runs kimi-k2-5 because k2-6 is frequently
-    // overloaded on Venice and we didn't want the default tier
-    // taking 503s. Users who want the newest model explicitly
-    // choose Smart.
-    id: 'kimi-k2-6',
+    id: 'zai-org-glm-5-1',
     label: 'Smart',
     icon: '🧠',
-    description: 'Kimi K2.6 with deep thinking. Best for hard problems.',
-    contextWindow: 256_000,
+    description: 'GLM-5.1 with deep thinking. Best for hard problems.',
+    contextWindow: 200_000,
     supportsReasoning: true,
-    supportsVision: true,
+    // Vision support unknown at retarget time - set false to route
+    // images through analyze_image(). Flip to true if Venice confirms
+    // native vision support for this id.
+    supportsVision: false,
     defaultReasoningEffort: 'high',
   },
   balanced: {
     tier: 'balanced',
-    // Retargeted off kimi-k2-6 because that id is frequently
-    // "overloaded" on Venice's backend — user-visible 503s in the
-    // middle of a conversation. kimi-k2-5 is the previous-generation
-    // sibling: same vision support, same 256k context, same
-    // reasoning knob, less contention. Smart stays on k2-6 so when
-    // the user really wants the newest model they can pick it; the
-    // tiers now differ by both model and reasoning effort, which
-    // still gives the "quick thinking" vs "deep thinking" shape the
-    // tier names imply.
-    //
-    // Fallback if k2-5 develops the same overload problem (or has a
-    // provider-side outage long enough to matter): swap id to
-    // 'qwen3-5-35b-a3b'. Same capability envelope on Venice —
-    // vision, reasoning_effort, long context — so the swap is one
-    // line here plus a description tweak. Remember to pin
-    // 'kimi-k2-5' at 256_000 in RETIRED_MODEL_CONTEXT_WINDOWS on
-    // the way out so historical assistant rows answered under k2-5
-    // don't lose their context-ring indicator.
-    id: 'kimi-k2-5',
+    id: 'minimax-m27',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
     // SCALES because the scales glyph is all thin strokes in every major
     // emoji font, and it vanishes against the toggle background in both
     // themes; yin-yang is a solid bi-tonal disc that reads at any size.
     icon: '\u262F\uFE0F',
-    description: 'Kimi K2.5 with light thinking. Good default for most turns.',
-    contextWindow: 256_000,
+    description: 'MiniMax M27 with light thinking. Good default for most turns.',
+    contextWindow: 198_000,
     supportsReasoning: true,
-    supportsVision: true,
+    // Vision support unknown at retarget time - set false to route
+    // images through analyze_image(). Flip to true if Venice confirms
+    // native vision support for this id.
+    supportsVision: false,
     defaultReasoningEffort: 'low',
   },
   fast: {
     tier: 'fast',
-    id: 'grok-41-fast',
+    id: 'mistral-small-2603',
     label: 'Fast',
     icon: '\u26A1\uFE0F',
-    description: 'Fastest; ~1M-token context. Text only.',
-    contextWindow: 1_000_000,
+    description: 'Mistral Small. Fast, vision-capable, 256k context.',
+    contextWindow: 256_000,
     supportsReasoning: true,
-    // grok-4.1-fast is text-only on Venice today. Attach an image and
-    // the pre-send guard blocks until the user switches tier.
-    supportsVision: false,
-    // No tier-level default — fast defers entirely to the user's
-    // chosen reasoning effort. Setting 'low' here would conflict
-    // with users who want fast-but-still-thinking; letting the user
-    // default apply keeps that behavior predictable.
+    // mistral-small-2603 supports vision natively on Venice and is also
+    // the model analyze_image() calls for its vision sub-completions on
+    // all tiers (see VISION_ANALYSIS_MODEL below).
+    supportsVision: true,
   },
 };
 
@@ -250,6 +229,16 @@ export const VENICE_CONVERSATION_RECALL_MODEL = 'mistral-small-3-2-24b-instruct'
  * is well within spec; the output goes into a single embedding vector.
  */
 export const VENICE_SUMMARY_MODEL = 'mistral-small-3-2-24b-instruct';
+
+/**
+ * Vision model the analyze_image tool calls for its sub-completions.
+ * Intentionally decoupled from any user-facing tier so a tier retarget
+ * doesn't silently break image analysis. mistral-small-2603 supports
+ * vision natively on Venice and is the Fast tier model; using it here
+ * means analyze_image() works correctly even when the main model (smart
+ * or balanced) does not have native vision support.
+ */
+export const VISION_ANALYSIS_MODEL = 'mistral-small-2603';
 
 /**
  * Model the samskara formation agent runs against. The task is five
@@ -430,9 +419,11 @@ const RETIRED_MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   'arcee-trinity-large-thinking': 256_000,
   'gemma-4-uncensored': 198_000,
   'zai-org-glm-5': 198_000,
-  // kimi-k2-5 is not retired — Balanced currently fronts it. If
-  // that tier moves again, add it here at whatever window Venice
-  // reported at retirement time.
+  'kimi-k2-5': 256_000,
+  // Retired Smart-tier ids.
+  'kimi-k2-6': 256_000,
+  // Retired Fast-tier ids.
+  'grok-41-fast': 1_000_000,
 };
 
 /**

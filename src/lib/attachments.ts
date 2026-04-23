@@ -115,9 +115,13 @@ export function toNewAttachment(a: LocalAttachment, position: number): NewAttach
  */
 export function isConsumableBy(
   a: Pick<Attachment | LocalAttachment, 'mime_type' | 'extracted_text'>,
-  spec: Pick<ModelSpec, 'supportsVision'>
+  _spec: Pick<ModelSpec, 'supportsVision'>
 ): boolean {
-  if (isImageMimeType(a.mime_type) && spec.supportsVision) return true;
+  // Images are always consumable: vision tiers inline them directly;
+  // non-vision tiers receive a note instructing the model to call
+  // analyze_image(). The spec parameter is retained for API compatibility
+  // but is no longer consulted for the image branch.
+  if (isImageMimeType(a.mime_type)) return true;
   if (typeof a.extracted_text === 'string' && a.extracted_text.trim().length > 0) {
     return true;
   }
@@ -327,8 +331,24 @@ export function buildUserVeniceContent(
         `\`\`\`[${a.filename}]\n${a.extracted_text}\n\`\`\``
     );
 
-  const composedText =
-    extractedBlocks.length > 0 ? `${extractedBlocks.join('\n\n')}\n\n${text}` : text;
+  // On non-vision tiers, images are invisible to the model on the wire
+  // (inlineImages will be empty below). Prepend a note so the model
+  // knows the attachments exist and knows to call analyze_image() to
+  // see them. On vision tiers imageNote is null and composedText is
+  // identical to the previous behaviour.
+  const imageAttachments = attachments.filter((a) => isImageMimeType(a.mime_type));
+  const imageNote =
+    !spec.supportsVision && imageAttachments.length > 0
+      ? `Attached images: [${imageAttachments.map((a) => a.filename).join(', ')}] - call analyze_image() to see them.`
+      : null;
+
+  const composedText = [
+    imageNote,
+    extractedBlocks.length > 0 ? extractedBlocks.join('\n\n') : null,
+    text,
+  ]
+    .filter((s): s is string => s !== null)
+    .join('\n\n');
 
   const inlineImages = spec.supportsVision
     ? attachments.filter(
