@@ -142,16 +142,17 @@
 <style>
   /* Fixed pill in the top-right. Offset just below the UpdateBanner
      slot (3rem gives clearance for the banner pill + a breath of
-     space) so both coexist on the rare overlap. z-index 90 sits
-     above the drawer (20) and modals (30) but below the update
-     banner (100). pointer-events:none on the container so the
-     indicator never blocks clicks on message-pane content beneath
-     it - this is a glance cue, not a control. */
+     space) so both coexist on the rare overlap. z-index 25 sits
+     above the nav layer (20) but below drawers (40), modals (30),
+     and the update banner (100) - this is a passive glance cue and
+     should never float over interactive surfaces. pointer-events:none
+     on the container so the indicator never blocks clicks on content
+     beneath it. */
   .samskara-mood {
     position: fixed;
     top: calc(env(safe-area-inset-top, 0px) + 3rem);
     right: calc(env(safe-area-inset-right, 0px) + 0.75rem);
-    z-index: 90;
+    z-index: 25;
     pointer-events: none;
   }
 
