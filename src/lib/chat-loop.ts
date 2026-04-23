@@ -94,23 +94,34 @@ const DEFAULT_THREAD_TITLE = 'New conversation';
 
 /**
  * Per-turn note fed to the model via the system-prompt appendix so it
- * can decide whether to call the `update_title` tool. Two shapes:
+ * can decide whether to call the `update_title` tool. Two shapes,
+ * weighted very differently:
  *
- *   - Placeholder title: tell the model to look through any opening
- *     greeting and pick a title for the real topic of the conversation.
- *     This is the "Hello -> Saying hi to the user" case - the first
- *     assistant reply is the first point at which there IS a real topic
- *     to title.
- *   - Real title: tell the model to call update_title only if the topic
- *     has meaningfully shifted. Cosmetic drift is not a reason to
- *     rename.
+ *   - Placeholder title ("New conversation"): the model MUST call
+ *     update_title this turn. Earlier phrasing ("before responding,
+ *     call the update_title tool...") was too soft and the model
+ *     routinely skipped the rename in favour of just answering the
+ *     user, leaving threads stuck on the placeholder across several
+ *     turns even after clear topics had been introduced. The
+ *     placeholder shape uses an imperative markdown header, labels
+ *     the action "required this turn", and spells out the observable
+ *     failure mode so the model treats it as a hard requirement
+ *     rather than a nudge it can skip. The block is also placed last
+ *     in the appendix (see appendixParts in runChatLoop) so it sits
+ *     closest to the user turn - the position where instruction-
+ *     following is strongest.
+ *   - Real title: a terse one-liner telling the model to rename only
+ *     on a meaningful topic shift. Kept short because it fires on
+ *     every non-placeholder turn and we don't want to pay tokens or
+ *     prompt weight for what is almost always a no-op.
  *
- * Wrapped in `---` fences rather than `<note>` tags. The tag form was
- * considered and rejected: a user typing `</note>` in their own message
- * could escape the block and inject instructions. The fence is
- * imperfect too (a user could paste a matching `---` block), but the
- * exploit requires more intent, and the worst case is a bad title
- * rather than arbitrary prompt injection.
+ * The placeholder block uses a markdown `##` header rather than
+ * `<note>` tags. The tag form was considered and rejected: a user
+ * typing `</note>` in their own message could escape the block and
+ * inject instructions. A header is imperfect too (a user could paste
+ * a matching `##` line) but the exploit requires more intent, and
+ * the worst case is a bad title rather than arbitrary prompt
+ * injection.
  *
  * Returns null when the user has manually renamed the thread - once
  * they've committed to a title, we stop asking the model to touch it.
@@ -121,30 +132,29 @@ const DEFAULT_THREAD_TITLE = 'New conversation';
 function buildTitleNote(thread: Thread): string | null {
   if (thread.title_manually_set) return null;
   const isPlaceholder = thread.title === DEFAULT_THREAD_TITLE;
-  const lines: string[] = ['---'];
   if (isPlaceholder) {
-    lines.push(
-      `Conversation title: "${thread.title}" (placeholder).`,
-      'This conversation has no title yet. Before responding, call the',
-      '`update_title` tool with a concise 3-6 word title describing the',
-      'actual topic of the conversation. If the opening user message is',
-      'a greeting or pleasantry, look past it to the real topic the',
-      'user is asking about (based on their message and your intended',
-      'reply). No trailing punctuation, no quotes, plain text.'
-    );
-  } else {
-    lines.push(
-      `Conversation title: "${thread.title}".`,
-      'If the conversation has meaningfully shifted away from this',
-      'topic, call the `update_title` tool with a better 3-6 word',
-      'title before responding. Cosmetic drift is not a reason to',
-      'rename; only call update_title when the new topic genuinely',
-      "doesn't fit the current title. No trailing punctuation, no",
-      'quotes, plain text.'
-    );
+    return [
+      '## Required this turn: title this conversation',
+      '',
+      `The thread title is still the "${DEFAULT_THREAD_TITLE}"`,
+      'placeholder. Before generating any reply to the user, call the',
+      '`update_title` tool with a concise 3-6 word title describing',
+      'what the user is actually asking about. If the opening message',
+      'is a greeting or pleasantry, look past it to the real topic of',
+      'the conversation - infer it from their message and from the',
+      'reply you are about to write.',
+      '',
+      'This is not optional. Until you call `update_title`, the thread',
+      "stays labelled as the placeholder in the user's conversation",
+      'drawer - which is a visible bug. No trailing punctuation, no',
+      'quotes, plain text.',
+    ].join('\n');
   }
-  lines.push('---');
-  return lines.join('\n');
+  return [
+    `Current conversation title: "${thread.title}". If the topic has`,
+    'meaningfully shifted, call `update_title` with a better 3-6 word',
+    'title. Cosmetic drift is not a reason to rename.',
+  ].join('\n');
 }
 
 /**
@@ -580,8 +590,16 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // null when the user has manually renamed (no instruction to inject),
   // samskara is empty on cold-start or timeout - and the filter+join
   // handles any combination cleanly.
+  //
+  // Order: samskara priming first, title note last. The title note's
+  // placeholder shape is a "you must act this turn" directive that
+  // benefits from being the closest block to the user turn, where the
+  // model's instruction-following is strongest. Burying it above the
+  // samskara Calibration/Fire sections (as the previous order did)
+  // made the model gloss over the rename and answer the user directly,
+  // leaving threads parked on "New conversation" across several turns.
   const titleNote = buildTitleNote(thread);
-  const appendixParts = [titleNote, priming.samskaraAppendix].filter(
+  const appendixParts = [priming.samskaraAppendix, titleNote].filter(
     (s): s is string => typeof s === 'string' && s.length > 0
   );
   const promptAppendix = appendixParts.join('\n\n');
@@ -634,12 +652,13 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           // model will actually see on the wire this round.
           enabledToolboxes: toolboxesEnabled,
           // Per-turn appendix - pre-computed before the round loop so
-          // every round sees the same block. Currently concatenates
-          // (in order): the title note (buildTitleNote above, guiding
-          // `update_title` tool calls), and the samskara compound +
-          // fire block. Empty string when both are absent (manually-
-          // named thread with no samskaras, cold start, or priming
-          // timeout).
+          // every round sees the same block. Concatenates (in order):
+          // the samskara compound + fire block, and the title note
+          // (buildTitleNote above, guiding `update_title` tool calls).
+          // Title goes last so its "required this turn" directive is
+          // the closest block to the user turn. Empty string when
+          // both are absent (manually-named thread with no samskaras,
+          // cold start, or priming timeout).
           promptAppendix: promptAppendix,
         }),
       },
