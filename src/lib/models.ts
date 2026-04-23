@@ -165,15 +165,12 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
   },
   fast: {
     tier: 'fast',
-    id: 'mistral-small-2603',
+    id: 'qwen3-5-35b-a3b',
     label: 'Fast',
     icon: '\u26A1\uFE0F',
-    description: 'Mistral Small. Fast, vision-capable, 256k context.',
+    description: 'Qwen3.5 35B-A3B. Fast, vision-capable, 256k context.',
     contextWindow: 256_000,
     supportsReasoning: true,
-    // mistral-small-2603 supports vision natively on Venice and is also
-    // the model analyze_image() calls for its vision sub-completions on
-    // all tiers (see VISION_ANALYSIS_MODEL below).
     supportsVision: true,
   },
 };

@@ -28,7 +28,7 @@ describe('MODELS', () => {
   it('has the three tiers with the expected Venice model ids', () => {
     expect(MODELS.smart.id).toBe('zai-org-glm-5-1');
     expect(MODELS.balanced.id).toBe('minimax-m27');
-    expect(MODELS.fast.id).toBe('mistral-small-2603');
+    expect(MODELS.fast.id).toBe('qwen3-5-35b-a3b');
   });
   it('differentiates smart and balanced by reasoning effort', () => {
     expect(MODELS.smart.defaultReasoningEffort).toBe('high');
@@ -42,7 +42,7 @@ describe('MODELS', () => {
       expect(MODELS[t].label.length).toBeGreaterThan(0);
       expect(MODELS[t].contextWindow).toBeGreaterThan(0);
     }
-    // fast (mistral-small-2603) is a 256k-context model.
+    // fast (qwen3-5-35b-a3b) is a 256k-context model.
     expect(MODELS.fast.contextWindow).toBe(256_000);
   });
 });
@@ -231,7 +231,7 @@ describe('findContextWindowById', () => {
   it('returns the window for a currently-fronted model id', () => {
     expect(findContextWindowById('zai-org-glm-5-1')).toBe(MODELS.smart.contextWindow);
     expect(findContextWindowById('minimax-m27')).toBe(MODELS.balanced.contextWindow);
-    expect(findContextWindowById('mistral-small-2603')).toBe(MODELS.fast.contextWindow);
+    expect(findContextWindowById('qwen3-5-35b-a3b')).toBe(MODELS.fast.contextWindow);
   });
 
   // Historical assistant rows carry ids that used to front a tier — if
