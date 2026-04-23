@@ -18,8 +18,14 @@
     text: string;
     label?: string;
     ariaLabel?: string;
+    /**
+     * Greys the button out and blocks clicks. Used by the
+     * regenerate-from-here flow on Chat.svelte to lock action-bar
+     * controls while the replacement turn is in flight.
+     */
+    disabled?: boolean;
   }
-  let { text, label = 'Copy', ariaLabel }: Props = $props();
+  let { text, label = 'Copy', ariaLabel, disabled = false }: Props = $props();
 
   let copied = $state(false);
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -53,6 +59,7 @@
   class="copy-btn"
   class:copied
   onclick={onClick}
+  {disabled}
   aria-label={copied ? 'Copied' : (ariaLabel ?? label)}
   title={copied ? 'Copied' : (ariaLabel ?? label)}
 >

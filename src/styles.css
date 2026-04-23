@@ -1816,6 +1816,20 @@ h1 {
   border: 1px solid var(--border);
 }
 
+/* Pending-delete bubble. Set on .msg by Chat.svelte when the user
+   has clicked regenerate-from-here on this row (or a row before it)
+   and the replacement turn hasn't landed yet. Visual greying is the
+   only effect at this layer - the per-button disabled state is
+   handled by the action-bar buttons themselves taking the `disabled`
+   prop, so structural toggles (reasoning panel header, tool-call
+   expand rows, body-side citation `^N^` clicks) stay clickable and
+   the user can still inspect what's about to be replaced. Cleared
+   along with the row itself when the new completion lands; on abort
+   or error the class drops back off and the bubble restores. */
+.msg.disabled {
+  opacity: 0.55;
+}
+
 /* Inline failure notice in the transcript. Rendered where the
    streaming bubble was when an exchange failed, so a user on mobile
    (with the composer banner often below the keyboard) still sees the

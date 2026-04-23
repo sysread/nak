@@ -194,6 +194,19 @@
     void selectThread(route.cid);
   });
   let messages = $state<Message[]>([]);
+  /**
+   * Message ids that the user has clicked "regenerate" on but whose
+   * row hasn't been deleted from the DB yet. The chat-loop's wire
+   * history filter skips these so they don't reach Venice; the
+   * transcript greys them out and disables their action-bar buttons
+   * so the user can read what's about to be replaced. Cleared (and
+   * the rows actually deleted) when the replacement turn lands
+   * cleanly; cleared without a delete on abort or error so the rows
+   * un-grey and stay usable. Backed by a derived Set for O(1) lookup
+   * during the per-message render.
+   */
+  let pendingDeleteIds = $state<string[]>([]);
+  const pendingDeleteSet = $derived(new Set(pendingDeleteIds));
   let streamingText = $state('');
   // Live companions to streamingText during a turn. `streamingReasoning`
   // is the running buffer of `delta.reasoning_content` chunks for the
@@ -1697,9 +1710,19 @@
     // (assistant row + tool result from a prior round) sees them.
     // toVeniceMessage is safe to call on rows without attachments —
     // they come back as plain strings either way.
+    //
+    // The pendingDeleteSet filter excludes rows the user marked for
+    // regenerate-from-here. The rows still exist in the DB at this
+    // point (deletion is deferred until the new completion lands so
+    // an abort can restore them), but they must not reach the wire -
+    // otherwise Venice would see "user, asst-bad, [regenerate
+    // request]" and just continue from asst-bad instead of
+    // re-rolling.
     const historyOnWire: VeniceMessage[] = [
       ...ctx.systemMessages,
-      ...messages.map((m) => toVeniceMessage(m, { visionSpec: ctx.tierSpec })),
+      ...messages
+        .filter((m) => !pendingDeleteSet.has(m.id))
+        .map((m) => toVeniceMessage(m, { visionSpec: ctx.tierSpec })),
     ];
 
     // Throttle streamingText updates to ~2Hz while the response
@@ -1844,6 +1867,23 @@
           pending = null;
         }
       }
+      // Regenerate-from-here commit. Runs only when a real reply
+      // landed - a stopped-by-limit-with-no-text outcome is treated
+      // as a failure (handled below + by the catch on the outer try)
+      // so the greyed rows can be restored. Local prune first for
+      // instant UI feedback; the DB delete chases it. A delete
+      // failure here propagates to the outer catch, which will
+      // surface the message - the new completion is still safely
+      // persisted by the chat loop's per-row writes, so the only
+      // user-visible effect is that the old rows linger until the
+      // next refresh.
+      if (pendingDeleteIds.length > 0 && loopResult.finalText.length > 0) {
+        const idsToDelete = pendingDeleteIds;
+        pendingDeleteIds = [];
+        const drop = new Set(idsToDelete);
+        messages = messages.filter((m) => !drop.has(m.id));
+        await app.supabase.deleteMessages(idsToDelete);
+      }
       if (loopResult.stoppedByLimit && !loopResult.finalText) {
         error = { text: 'Stopped: tool-call loop hit the 5-round limit.' };
       }
@@ -1882,6 +1922,12 @@
       streamingCitations = null;
       streamingReasoningOpen = false;
       streamingContentStarted = false;
+      // Restore any rows the user had marked for regenerate-from-here.
+      // Failure means no replacement landed (or the post-loop delete
+      // itself blew up, in which case the old rows are still
+      // canonical), so un-greying lets the user read them again and
+      // either retry the regenerate or copy the content out.
+      pendingDeleteIds = [];
       // Rate-limit is the one error where re-sending the same request
       // a moment later is the right fix - Venice's message literally
       // says "try again later." Park a retry closure on the inline
@@ -1911,6 +1957,110 @@
         reasoningCloseTimer = 0;
       }
     }
+  }
+
+  /**
+   * Regenerate-from-here. Marks the clicked assistant row plus every
+   * row after it as pending-delete (so the wire history filter skips
+   * them and the transcript greys them out), then re-runs the chat
+   * loop using the user message that opened the now-greyed range as
+   * the turn anchor.
+   *
+   * Range rules (matches the user-facing spec):
+   *   - On the LATEST assistant message: the replaced range is just
+   *     that message and any tool/intermediate rows from the same
+   *     completion round - i.e. everything from the most recent user
+   *     message forward.
+   *   - On an OLDER assistant message: the range still starts from
+   *     the most recent user message before the clicked row, but it
+   *     extends to the END of the conversation - every subsequent
+   *     user turn and assistant round goes too. The replacement is
+   *     a single new exchange from that user message.
+   *
+   * Both cases reduce to "find the user message that opened the
+   * clicked turn, then mark everything after it for replacement,"
+   * which is what the walk-back below computes.
+   *
+   * Samskara / opening-recall: nothing to do here. Neither is
+   * persisted as a message row, so the chat loop will rebuild them
+   * from scratch on the new call - using the unchanged user-message
+   * embedding, so the priming is materially the same as the first
+   * time. End-of-turn substrate writes a new row; the orphaned old
+   * row still carries training signal (schema-documented).
+   */
+  async function regenerateFrom(assistantMessageId: string): Promise<void> {
+    if (sending || !app.supabase || !app.venice) return;
+    const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
+    if (!active || active.isDraft || active.archived) return;
+    const clickedIdx = messages.findIndex((m) => m.id === assistantMessageId);
+    if (clickedIdx === -1) return;
+    // Walk back to the user message that opened this turn. Skip
+    // assistant + tool rows from the same and earlier rounds. We stop
+    // at the first user row we see - everything after it (inclusive
+    // of intermediate tool/assistant rows AND any later turns) is the
+    // replace range.
+    let userIdx = -1;
+    for (let i = clickedIdx; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        userIdx = i;
+        break;
+      }
+    }
+    // Defensive: an assistant row without a preceding user message
+    // shouldn't exist (every assistant turn requires a user trigger),
+    // but bail rather than send an empty turn if the data is somehow
+    // shaped that way.
+    if (userIdx === -1) return;
+    const userMessage = messages[userIdx];
+    const replaceRange = messages.slice(userIdx + 1);
+    if (replaceRange.length === 0) return;
+    pendingDeleteIds = replaceRange.map((m) => m.id);
+
+    // Resolve send-time context the same way send() does. The
+    // toggles the user has set RIGHT NOW apply to the regenerate -
+    // model swap, reasoning effort, verbosity, system-prompt set.
+    // That's intentional: a regenerate is a deliberate "try this
+    // turn again" gesture, and the user often wants to re-run with
+    // a different model or a tweaked system prompt.
+    const tier = resolveTier(active.model ?? null, defaultTier);
+    const tierSpec = MODELS[tier];
+    const modelId = tierSpec.id;
+    const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
+      ? resolveReasoningEffort(
+          active.reasoning_effort ?? null,
+          defaultReasoning,
+          tierSpec.defaultReasoningEffort
+        )
+      : undefined;
+    const sendVerbosity: Verbosity = resolveVerbosity(
+      active.verbosity ?? null,
+      defaultVerbosity
+    );
+    const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
+      .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
+      .map((p) => ({ role: 'system' as const, content: p.body }));
+    const currentUserId = session?.user.id ?? active.user_id;
+    // Auto-title eligibility same as send(): any thread still on the
+    // default placeholder qualifies. A regenerated first turn is a
+    // valid trigger for a retry of a previously-failed auto-title.
+    const needsAutoTitle = active.title === DEFAULT_TITLE;
+
+    // Pin to the bottom so the new completion streams into view even
+    // if the user had scrolled up to inspect the greyed range.
+    followBottom = true;
+
+    await runExchange({
+      threadId: active.id,
+      currentUserId,
+      modelId,
+      tierSpec,
+      systemMessages,
+      sendReasoning,
+      sendVerbosity,
+      needsAutoTitle,
+      originalText: userMessage.content,
+      userMessageId: userMessage.id,
+    });
   }
 
   /**
@@ -3104,13 +3254,15 @@
                    snippet-slotted between the body and the action bar.
                    The bubble itself still lives here so the component
                    stays focused on per-message body concerns. -->
-              <div class="msg assistant">
+              <div class="msg assistant" class:disabled={pendingDeleteSet.has(block.assistant.id)}>
                 <AssistantBody
                   content={block.assistant.content}
                   reasoning={block.assistant.reasoning}
                   citations={block.assistant.citations}
                   model={block.assistant.model}
                   usage={block.assistant.usage}
+                  disabled={pendingDeleteSet.has(block.assistant.id) || sending}
+                  onRegenerate={() => { void regenerateFrom(block.assistant.id); }}
                 >
                   <ToolCalls
                     calls={block.assistant.tool_calls ?? []}
@@ -3121,17 +3273,19 @@
                 </AssistantBody>
               </div>
             {:else if block.message.role === 'assistant'}
-              <div class="msg assistant">
+              <div class="msg assistant" class:disabled={pendingDeleteSet.has(block.message.id)}>
                 <AssistantBody
                   content={block.message.content}
                   reasoning={block.message.reasoning}
                   citations={block.message.citations}
                   model={block.message.model}
                   usage={block.message.usage}
+                  disabled={pendingDeleteSet.has(block.message.id) || sending}
+                  onRegenerate={() => { void regenerateFrom(block.message.id); }}
                 />
               </div>
             {:else}
-              <div class="msg {block.message.role}">
+              <div class="msg {block.message.role}" class:disabled={pendingDeleteSet.has(block.message.id)}>
                 <Markdown content={block.message.content} />
                 {#if block.message.role === 'user' && block.message.attachments && block.message.attachments.length > 0}
                   <MessageAttachments attachments={block.message.attachments} />

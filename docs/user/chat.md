@@ -57,6 +57,40 @@ tool, so they never pay the latency or quota cost of a search.
 
 ## Regenerating a response
 
+The circular-arrow button at the right edge of an assistant message's
+action bar re-runs the model on that turn. Click it and the message
+greys out, its action buttons disable, and a fresh response streams in
+below. Once the new reply lands, the greyed-out original is removed
+from the conversation (and the database) - the replacement takes its
+place.
+
+The button is on every assistant message, not just the last one. What
+gets replaced depends on which message you click:
+
+- **The latest reply.** Just that reply (and any tool calls or
+  intermediate reasoning rounds that produced it) is greyed out and
+  replaced. Your prompt stays put; the model gets another shot at
+  answering it.
+- **An older reply.** The clicked message AND every message after it -
+  including any later prompts you typed and their replies - are
+  greyed out and replaced by a single new response to the prompt that
+  came before the clicked message. Useful when you realise an earlier
+  turn went off the rails and you want to roll back the conversation
+  rather than try to talk the model out of it. (The greyed messages
+  stay readable while the new reply streams in, so you can copy
+  anything you want to preserve before they're removed.)
+
+The regenerate runs against your current settings - model, reasoning
+effort, verbosity, active system prompts. So if you switch to a
+different tier and then click regenerate on an older message, the
+new response comes from the new model. Tool use (web search, etc.)
+re-evaluates from scratch too; the new turn might fetch different
+sources than the original.
+
+If the regenerated turn fails partway (network drop, rate limit, you
+hit Stop), the greyed messages restore to normal and nothing is
+deleted. Try again, or carry on as if you hadn't clicked.
+
 ## Copying, editing, and deleting messages
 
 ## Stop and resume

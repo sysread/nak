@@ -1650,6 +1650,29 @@ export class SupabaseService {
   }
 
   /**
+   * Hard-delete a contiguous batch of message rows. Used by the
+   * regenerate-from-here flow: the rows for the discarded turn(s) stay
+   * in the DB while the replacement is in flight (so a mid-stream
+   * abort or error can un-grey them without data loss), then are
+   * deleted in one shot once the new completion lands.
+   *
+   * `message_attachments` rows cascade via the FK's ON DELETE CASCADE
+   * (schema.sql). `samskara_substrate` does NOT cascade by design - an
+   * orphan substrate row still carries training signal for the
+   * formation pipeline, so we leave it.
+   *
+   * No-op when `ids` is empty so callers don't have to guard.
+   */
+  async deleteMessages(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const { error } = await this.client
+      .from('messages')
+      .delete()
+      .in('id', ids);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
    * Realtime: stream INSERTs for a single thread's messages. Keeps a
    * thread open on two devices in sync — when device A's chat-loop
    * commits a user / assistant / tool row, device B sees it land in

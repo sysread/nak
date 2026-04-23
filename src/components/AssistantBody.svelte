@@ -46,6 +46,22 @@
     usage?: Message['usage'];
     /** Tool-group card (ToolCalls component). Rendered between body and actions. */
     children?: Snippet;
+    /**
+     * Set true when this message is in the regenerate-from-here
+     * pending-delete range. Greys the bubble (via the parent's
+     * `.msg.disabled` class) and disables every button in the action
+     * bar so the user can read what's about to be replaced but can't
+     * trigger a parallel action against it. Structural toggles
+     * (reasoning panel header, tool-call expand rows, body-side
+     * `^N^` clicks) stay live so inspection still works.
+     */
+    disabled?: boolean;
+    /**
+     * Click handler for the regenerate button. When omitted the
+     * button is hidden, so callers without a meaningful regenerate
+     * target (e.g. a future preview pane) just don't pass one.
+     */
+    onRegenerate?: () => void;
   }
 
   const {
@@ -55,6 +71,8 @@
     model = null,
     usage = null,
     children,
+    disabled = false,
+    onRegenerate,
   }: Props = $props();
 
   let citationsOpen = $state(false);
@@ -163,7 +181,7 @@
 
 {#if content}
   <div class="msg-actions">
-    <CopyButton text={content} ariaLabel="Copy message" />
+    <CopyButton text={content} ariaLabel="Copy message" {disabled} />
     {#if showCitationsControls}
       <!-- Citations toggle — numbered badge doubles as count AND the
            "source list" affordance. Inline-linked in the markdown as
@@ -178,6 +196,7 @@
         class="copy-btn citations-toggle"
         class:active={citationsOpen}
         class:unavailable={citationsUnavailable}
+        {disabled}
         onclick={() => {
           citationsOpen = !citationsOpen;
         }}
@@ -214,6 +233,47 @@
     {/if}
     {#if usage && contextWindow}
       <ContextRing totalTokens={usage.total_tokens} contextWindow={contextWindow} />
+    {/if}
+    {#if onRegenerate}
+      <!-- Regenerate-from-here. Sits at the right edge of the action
+           bar so the destructive control is far from the high-traffic
+           Copy button on the left, and so its position is stable
+           across messages with and without the citations / context
+           ring controls in between. The handler greys this message
+           plus every message after it (see Chat.svelte's
+           regenerateFrom), then re-runs the chat loop from the user
+           message that opened the now-greyed range. The greyed rows
+           don't disappear until the new completion lands cleanly -
+           an abort or error restores them so nothing is lost. -->
+      <button
+        type="button"
+        class="copy-btn regenerate-btn"
+        {disabled}
+        onclick={onRegenerate}
+        title="Regenerate this response (replaces this and any following messages)"
+        aria-label="Regenerate response"
+      >
+        <!-- Feather "refresh-cw": same glyph used by the rate-limit
+             retry button in the inline error bubble. Reusing it keeps
+             "this is a re-do" visually consistent across the two
+             surfaces that re-fire a request. -->
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <polyline points="23 4 23 10 17 10" />
+          <polyline points="1 20 1 14 7 14" />
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+          <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
+        </svg>
+      </button>
     {/if}
   </div>
 {/if}
