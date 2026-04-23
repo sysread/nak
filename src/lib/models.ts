@@ -220,7 +220,7 @@ export const VENICE_RECALL_MODEL = 'qwen3-5-35b-a3b';
  * so the two recall surfaces can be pinned to different models
  * independently if one regresses.
  */
-export const VENICE_CONVERSATION_RECALL_MODEL = 'mistral-small-3-2-24b-instruct';
+export const VENICE_CONVERSATION_RECALL_MODEL = 'qwen3-5-35b-a3b';
 
 /**
  * Model the thread-summary agent runs against. The task is "read the
