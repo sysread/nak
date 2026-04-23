@@ -233,12 +233,11 @@ export const VENICE_SUMMARY_MODEL = 'mistral-small-3-2-24b-instruct';
 /**
  * Vision model the analyze_image tool calls for its sub-completions.
  * Intentionally decoupled from any user-facing tier so a tier retarget
- * doesn't silently break image analysis. mistral-small-2603 supports
- * vision natively on Venice and is the Fast tier model; using it here
- * means analyze_image() works correctly even when the main model (smart
- * or balanced) does not have native vision support.
+ * doesn't silently break image analysis. Switched from mistral-small-2603
+ * to qwen3-5-122b-a10b after mistral-small consistently missed detail in
+ * testing - the larger model is more thorough on dense or text-heavy images.
  */
-export const VISION_ANALYSIS_MODEL = 'mistral-small-2603';
+export const VISION_ANALYSIS_MODEL = 'e2ee-qwen3-5-122b-a10b';
 
 /**
  * Model the samskara formation agent runs against. The task is five
