@@ -210,6 +210,16 @@
   let streamingReasoning = $state('');
   let streamingCitations = $state<Citation[] | null>(null);
   let streamingReasoningOpen = $state(false);
+  // Inline error bubble rendered in the message list when an exchange
+  // fails. Distinct from the `error` banner above the composer: the
+  // banner lives off-screen on mobile when the keyboard is up, which
+  // made the previous "disappear silently" bug invisible to the user -
+  // they'd see reasoning start and the streaming bubble vanish with no
+  // explanation. The inline bubble renders at the bottom of the
+  // transcript where the streaming output was, so the failure is
+  // visible where the user is already looking. Cleared at the start
+  // of every new send.
+  let streamingError = $state<string | null>(null);
   // Timer id for the delayed-close on first content arrival. Separated
   // from the text-flush timer because they have different lifetimes —
   // the close fires once per round, the flush fires on every delta.
@@ -1279,7 +1289,12 @@
           // ignored. Keeping the filter explicit makes the intent clear.
           if (ev.type === 'text') raw += ev.delta;
         }
-      } catch {
+      } catch (err) {
+        // Title is best-effort; if Venice balks the thread keeps its
+        // placeholder and the next send retries. Log so a pattern of
+        // failures ("titles never stick") is diagnosable from the log
+        // drawer rather than invisible.
+        log.warn('autoTitle streamChat failed', err);
         return;
       }
       const title = raw
@@ -1298,8 +1313,13 @@
             updated_at: new Date().toISOString(),
           });
         }
-      } catch {
-        /* ignore */
+      } catch (err) {
+        // Rename failure is non-fatal to the current exchange - the
+        // title stays on the placeholder and the transcript reads
+        // normally. Log so a persistent Supabase fault surfaces in
+        // the log drawer instead of silently leaving every new
+        // thread titled "New conversation".
+        log.warn('autoTitle renameThread failed', err);
       }
     } finally {
       // Always clear the indicator, including early returns above.
@@ -1582,10 +1602,13 @@
       }
       appendMessage(userMsg);
     } catch (err) {
-      // Pre-exchange failure (user message persist). No retry here —
+      // Pre-exchange failure (user message persist). No retry here -
       // the user's row didn't land, so "retry" would mean "try persist
       // again," which is a different UX than "retry the LLM call."
-      error = { text: err instanceof Error ? err.message : String(err) };
+      log.error('send failed before exchange', err);
+      const text = describeError(err);
+      error = { text };
+      streamingError = text;
       sending = false;
       return;
     }
@@ -1659,6 +1682,7 @@
       return;
     }
     error = null;
+    streamingError = null;
     sending = true;
     streamingText = '';
     abortCtl = new AbortController();
@@ -1839,26 +1863,41 @@
       streamingContentStarted = false;
       await refreshThreads();
     } catch (err) {
+      // Final-fallback diagnostic. Everything from the pre-stream
+      // fetch down through SSE parse, tool dispatch, and persistence
+      // funnels here. Log unconditionally so the in-app log drawer
+      // has a breadcrumb - on mobile there's no devtools, so an
+      // unlogged catch at this boundary is effectively a silent
+      // swallow. `err` lands in the drawer's expandable detail so
+      // the stack survives.
+      log.error('chat exchange failed', err);
       streamingText = '';
       streamingReasoning = '';
       streamingCitations = null;
       streamingReasoningOpen = false;
       streamingContentStarted = false;
       // Rate-limit is the one error where re-sending the same request
-      // a moment later is the right fix — Venice's message literally
+      // a moment later is the right fix - Venice's message literally
       // says "try again later." Park a retry closure on the banner so
       // the refresh button is the only action needed; other failure
       // kinds (auth, parse, the user's abort) would just repeat the
       // error, so we omit the retry for them.
       if (err instanceof VeniceError && err.kind === 'rate_limit') {
+        const text = formatRateLimitMessage(err);
         error = {
-          text: formatRateLimitMessage(err),
+          text,
           retry: () => {
             void runExchange(ctx);
           },
         };
+        streamingError = text;
       } else {
-        error = { text: err instanceof Error ? err.message : String(err) };
+        const text = describeError(err);
+        error = { text };
+        // Inline bubble: survives long enough for the user to read it
+        // even if the composer keyboard pushed the banner off-screen.
+        // Cleared at the next send start.
+        streamingError = text;
       }
     } finally {
       sending = false;
@@ -1881,6 +1920,35 @@
    * layers so the user sees only the provider's reason; fall back to
    * the raw message when parsing fails — any text beats a blank banner.
    */
+  /**
+   * Render an unknown thrown value as a non-empty human string. The
+   * naive `err.message` fallback broke on the "reasoning streams then
+   * vanishes silently" bug: an Error with an empty `.message` (or a
+   * non-Error thrown value) left the error banner with empty text,
+   * which the user read as "no error at all". Cascade down to `name`,
+   * then a JSON dump, then the literal `String(err)`, so something
+   * always lands. Never returns an empty string.
+   */
+  function describeError(err: unknown): string {
+    if (err instanceof Error) {
+      const msg = err.message?.trim();
+      if (msg) return msg;
+      if (err.name) return err.name;
+      return 'Error';
+    }
+    if (typeof err === 'string') return err || 'Unknown error';
+    if (err && typeof err === 'object') {
+      try {
+        const s = JSON.stringify(err);
+        if (s && s !== '{}') return s;
+      } catch {
+        // fall through
+      }
+    }
+    const s = String(err ?? '');
+    return s || 'Unknown error';
+  }
+
   function formatRateLimitMessage(err: VeniceError): string {
     const prefix = `Venice rate limit hit (HTTP ${err.status ?? 429}). `;
     const detail = err.message.startsWith(prefix)
@@ -3070,6 +3138,29 @@
               </div>
             {/if}
           {/each}
+          {#if streamingError}
+            <!-- Inline error bubble, rendered in the transcript where
+                 the streaming output was when the exchange failed. The
+                 error banner above the composer covers the same info,
+                 but on mobile with the keyboard up it's easy to miss -
+                 this inline version lands where the user is already
+                 looking. Dismissed by the next successful send (or
+                 manually via the X). Role-agnostic "error" styling so
+                 it reads as a system notice rather than a model reply. -->
+            <div class="msg assistant msg-error" role="alert">
+              <div class="msg-error-body">
+                <span class="msg-error-icon" aria-hidden="true">!</span>
+                <div class="msg-error-text">{streamingError}</div>
+                <button
+                  type="button"
+                  class="secondary icon-btn msg-error-dismiss"
+                  onclick={() => { streamingError = null; }}
+                  aria-label="Dismiss error"
+                  title="Dismiss"
+                >×</button>
+              </div>
+            </div>
+          {/if}
           {#if sending || streamingText || streamingReasoning}
             <div class="msg assistant">
               <!-- Live reasoning panel. Open when `streamingReasoningOpen`

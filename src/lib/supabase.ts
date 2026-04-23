@@ -25,7 +25,9 @@ import {
   type Verbosity,
 } from './models';
 import { isAccent, isColorMode, type Accent, type ColorMode } from './theme';
-import { isLogLevel, type LogLevel } from './logger.svelte';
+import { isLogLevel, createLogger, type LogLevel } from './logger.svelte';
+
+const log = createLogger('supabase');
 import type { OpenAIToolCall } from './tools/types';
 import type { Citation, TokenUsage } from './venice';
 
@@ -1678,7 +1680,16 @@ export class SupabaseService {
           filter: `thread_id=eq.${threadId}`,
         },
         (payload: { new: Message }) => {
-          onInsert(payload.new);
+          // Defend the realtime channel: if onInsert throws, the
+          // postgres_changes subscription dies silently (no error
+          // surfaced anywhere) and the transcript stops receiving
+          // echoes for this thread until the user re-selects it.
+          // Log and swallow so subsequent echoes still arrive.
+          try {
+            onInsert(payload.new);
+          } catch (err) {
+            log.error('subscribeToMessages onInsert threw', err);
+          }
         }
       )
       .subscribe();

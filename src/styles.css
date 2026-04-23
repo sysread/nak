@@ -1816,6 +1816,51 @@ h1 {
   border: 1px solid var(--border);
 }
 
+/* Inline failure notice in the transcript. Rendered where the
+   streaming bubble was when an exchange failed, so a user on mobile
+   (with the composer banner often below the keyboard) still sees the
+   error in the part of the screen they're looking at. Overrides the
+   assistant card's surface fill with a danger-tinted background and
+   a danger-colored border so it reads as a system alert, not a
+   model reply. */
+.msg.assistant.msg-error {
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.msg-error-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+.msg-error-icon {
+  flex: 0 0 auto;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 50%;
+  background: var(--danger);
+  color: var(--on-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+.msg-error-text {
+  flex: 1;
+  /* Preserve the server's newlines (stack traces, multi-line JSON
+     errors) so the user can see structure without opening the log
+     drawer. `overflow-wrap` keeps a long single token from blowing
+     past the bubble's right edge. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.msg-error-dismiss {
+  flex: 0 0 auto;
+  color: var(--danger);
+}
+
 /* Post-message action panel. Sits inside each assistant bubble,
    right-aligned, separated from the reply body by a hairline so the
    transition from "content" to "controls" reads cleanly. Using border

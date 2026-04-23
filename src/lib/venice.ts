@@ -25,6 +25,9 @@
 
 import type { ReasoningEffort, Verbosity } from './models';
 import type { OpenAIToolDef, OpenAIToolCall } from './tools/types';
+import { createLogger } from './logger.svelte';
+
+const log = createLogger('venice');
 
 /**
  * One entry in an OpenAI-compatible multimodal `content` array. Used for
@@ -664,6 +667,18 @@ export class VeniceClient {
           if (parsed.finishReason) finished = true;
         }
       }
+    } catch (err) {
+      // SSE parse failures, network interruptions mid-stream, and
+      // reader.read() rejections all land here. The error is re-
+      // thrown so the for-await consumer in chat-loop.ts sees it
+      // (and runExchange's outer catch surfaces it to the user),
+      // but we log at the source layer too so the log drawer shows
+      // the error with `venice` as the source tag. Mobile users
+      // without devtools depend on this breadcrumb to tell a stream
+      // failure apart from a later persistence failure - they have
+      // identical downstream symptoms without it.
+      log.error('streamChat SSE loop failed', err);
+      throw err;
     } finally {
       reader.releaseLock();
     }
