@@ -12,7 +12,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { runChatLoop, MAX_ROUNDS, toVeniceMessage } from '../src/lib/chat-loop';
-import type { ChatRequest, StreamEvent } from '../src/lib/venice';
+import type { ChatRequest, StreamEvent, Citation } from '../src/lib/venice';
 import type { VeniceClient } from '../src/lib/venice';
 import type { SupabaseService, Thread, Message } from '../src/lib/supabase';
 import type { OpenAIToolCall } from '../src/lib/tools';
@@ -26,7 +26,6 @@ function mkThread(overrides: Partial<Thread> = {}): Thread {
     reasoning_effort: null,
     verbosity: null,
     tools_enabled: false,
-    web_citations_enabled: null,
     archived: false,
     created_at: 'now',
     updated_at: 'now',
@@ -272,7 +271,6 @@ describe('runChatLoop', () => {
         { role: 'user', content: 'look up X' },
       ],
       signal: new AbortController().signal,
-      webSearch: 'auto',
     });
     const msgs = seenRequests[0].messages;
     // System message rides first; the two user turns follow, only the
@@ -286,11 +284,12 @@ describe('runChatLoop', () => {
     expect(users[1].content).toBe('<user_message>look up X</user_message>');
   });
 
-  it('forwards webCitations to each streamChat call', async () => {
-    // Verifies the inline-citations preference Chat.svelte resolves from
-    // user default + per-thread override actually lands on the wire.
-    // Venice only honors it when web search is active, so chat-loop
-    // passes it through verbatim without any gating logic of its own.
+  it('never sets webSearch or webCitations on the outer stream request', async () => {
+    // The main chat loop is web-search-agnostic now. Every request
+    // goes out with `venice_parameters.enable_web_search` unset so
+    // Venice doesn't run a search on the model's behalf. Live search
+    // only happens through the `web_search` tool, which runs its own
+    // sub-completion with the flags set.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -307,49 +306,18 @@ describe('runChatLoop', () => {
       modelId: 'm',
       history: [{ role: 'user', content: 'hi' }],
       signal: new AbortController().signal,
-      webSearch: 'on',
-      webCitations: false,
     });
-    expect(seenRequests[0].webCitations).toBe(false);
-    expect(seenRequests[0].webSearch).toBe('on');
+    expect(seenRequests[0].webSearch).toBeUndefined();
+    expect(seenRequests[0].webCitations).toBeUndefined();
   });
 
-  it('wraps the last user message even when web search is off', async () => {
-    // Wrapping used to be gated on an active webSearch mode, on the
-    // theory that "no search = no Venice injection". That theory
-    // broke when enable_web_scraping was turned always-on in
-    // venice.ts: now any user message that contains a URL gets the
-    // full scraped page inlined, even with search off. Wrapping
-    // unconditionally keeps the <user_message> boundary reliable
-    // across both injection paths and leaves the model with a
-    // single invariant to rely on, rather than two mutually
-    // exclusive prompt regimes keyed on a flag the model can't see.
-    const seenRequests: ChatRequest[] = [];
-    const venice = {
-      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
-        seenRequests.push(req);
-        yield { type: 'text', delta: 'ok' };
-      },
-    } as unknown as VeniceClient;
-    const { svc } = mockSupabase();
-    await runChatLoop({
-      venice,
-      supabase: svc,
-      thread: mkThread(),
-      userId: 'u-1',
-      modelId: 'm',
-      history: [{ role: 'user', content: 'hi' }],
-      signal: new AbortController().signal,
-      webSearch: 'off',
-    });
-    const users = seenRequests[0].messages.filter((m) => m.role === 'user');
-    expect(users[0].content).toBe('<user_message>hi</user_message>');
-  });
-
-  it('wraps the last user message when no webSearch option is supplied', async () => {
-    // The chat-loop option is optional; test callers that never
-    // pass `webSearch` still get the wrap, because scraping is
-    // always on in venice.ts regardless of caller opt-in.
+  it('wraps the last user message unconditionally', async () => {
+    // Wrapping is unconditional because `enable_web_scraping` is
+    // always on in venice.ts — any user message that contains a URL
+    // gets the full scraped page inlined regardless of web-search
+    // state. The <user_message> boundary gives the model a single
+    // invariant for telling its own words from platform-injected
+    // reference material.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -371,7 +339,7 @@ describe('runChatLoop', () => {
     expect(users[0].content).toBe('<user_message>hi</user_message>');
   });
 
-  it('does not mutate the caller-supplied history when wrapping for web search', async () => {
+  it('does not mutate the caller-supplied history when wrapping', async () => {
     // The loop rebuilds requestMessages every round, so wrapping has
     // to be a projection over a fresh array, not an in-place edit of
     // the caller's VeniceMessage objects. If we mutated, a second
@@ -392,7 +360,6 @@ describe('runChatLoop', () => {
       modelId: 'm',
       history,
       signal: new AbortController().signal,
-      webSearch: 'auto',
     });
     expect(history[0].content).toBe('look up X');
   });
@@ -427,7 +394,6 @@ describe('runChatLoop', () => {
         },
       ],
       signal: new AbortController().signal,
-      webSearch: 'on',
     });
     const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
     expect(Array.isArray(userMsg?.content)).toBe(true);
@@ -505,6 +471,118 @@ describe('runChatLoop', () => {
       reasoning: 'weighing options...',
       citations: [{ index: 1, url: 'https://a.example', title: 'A' }],
     });
+  });
+
+  it('harvests tool-sourced citations and persists them on the terminal assistant row', async () => {
+    // The web_search tool returns `{answer, citations}`. Chat-loop
+    // inspects each tool result, accumulates the citations into a
+    // turn-scoped list with contiguous 1-based indexes, and persists
+    // them on the final assistant row's `citations` column. That's
+    // how the same CitationsPanel / ^N^ superscript rendering the old
+    // always-on search path used keeps working when search is a tool
+    // call instead of a venice_parameter.
+    //
+    // Round sequence in the mocked Venice queue:
+    //   R1 (main chat)    : model emits a web_search tool_call
+    //   R2 (sub-call)     : web_search.execute() runs a nested
+    //                        streamChat that yields text + citations
+    //   R3 (main chat)    : model sees the tool result, emits final text
+    const call = mkCall('web_search', { query: 'current bitcoin price' });
+    const citations: Citation[] = [
+      { index: 1, url: 'https://coinbase.example/btc', title: 'BTC price' },
+    ];
+    const venice = mockVenice([
+      [{ type: 'tool_call', toolCall: call }],
+      [
+        { type: 'text', delta: 'Bitcoin is around $70k today.' },
+        { type: 'citations', citations },
+      ],
+      [{ type: 'text', delta: 'Bitcoin is at ~$70k today ^1^.' }],
+    ]);
+    const { svc, mocks } = mockSupabase();
+    const citationUpdates: Citation[][] = [];
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread({ tools_enabled: false }),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'what is btc at' }],
+      signal: new AbortController().signal,
+      handlers: {
+        onCitationsUpdate: (cites) => citationUpdates.push(cites),
+      },
+    });
+    // Last addMessage call is the terminal assistant row; its opts
+    // carry the harvested citations.
+    const addCalls = mocks.addMessage.mock.calls;
+    const finalCall = addCalls[addCalls.length - 1];
+    expect(finalCall[1]).toBe('assistant');
+    expect(finalCall[3].citations).toEqual([
+      {
+        index: 1,
+        url: 'https://coinbase.example/btc',
+        title: 'BTC price',
+      },
+    ]);
+    // Handler fired during the tool round, before the terminal
+    // assistant was persisted.
+    expect(citationUpdates.length).toBeGreaterThanOrEqual(1);
+    expect(citationUpdates[citationUpdates.length - 1]).toHaveLength(1);
+  });
+
+  it('renumbers citations contiguously across multiple web_search calls in one round', async () => {
+    // Two web_search invocations in parallel, each returning a
+    // single index=1 citation. The harvester has to rewrite indexes
+    // so the rendered panel reads 1, 2 — not 1, 1. Matches the
+    // CitationsPanel's expectation that indexes are unique within a
+    // message.
+    //
+    // Round sequence:
+    //   R1 main : two parallel web_search tool_calls
+    //   R2 / R3 : sub-calls for each web_search (order not guaranteed
+    //             because the tools run concurrently, but the content
+    //             each yields is equivalent for this assertion)
+    //   R4 main : final text
+    const c1 = mkCall('web_search', { query: 'a' }, 'call_a');
+    const c2 = mkCall('web_search', { query: 'b' }, 'call_b');
+    const venice = mockVenice([
+      [
+        { type: 'tool_call', toolCall: c1 },
+        { type: 'tool_call', toolCall: c2 },
+      ],
+      [
+        { type: 'text', delta: 'first' },
+        {
+          type: 'citations',
+          citations: [{ index: 1, url: 'https://example.com/x' }],
+        },
+      ],
+      [
+        { type: 'text', delta: 'second' },
+        {
+          type: 'citations',
+          citations: [{ index: 1, url: 'https://example.com/y' }],
+        },
+      ],
+      [{ type: 'text', delta: 'done' }],
+    ]);
+    const { svc, mocks } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread({ tools_enabled: false }),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'q' }],
+      signal: new AbortController().signal,
+    });
+    const addCalls = mocks.addMessage.mock.calls;
+    const finalCall = addCalls[addCalls.length - 1];
+    const finalCitations = finalCall[3].citations as Citation[];
+    expect(finalCitations.map((c) => c.index)).toEqual([1, 2]);
+    // Every citation's `url` survived the renumbering intact.
+    expect(finalCitations.every((c) => typeof c.url === 'string' && c.url.length > 0)).toBe(true);
   });
 
   it('persists null reasoning when the turn produced none', async () => {

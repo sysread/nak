@@ -34,16 +34,24 @@ model answered a specific way without regenerating.
 
 ### Citations and sources
 
-When web-search is on (see [Settings](./settings.md)), Nak asks
-Venice to ground replies in live sources. Sourced claims come back
-marked with small `^N^` superscripts in the text. Click one and
-Nak expands the sources list under the message and flashes the
-matching row so you can see which URL the model leaned on.
+Nak has a `web_search` tool the model can reach for when a question
+benefits from live web data - news, prices, sports scores, releases
+past its training cutoff, today's weather. When the model invokes
+the tool, you see a tool-call card in the transcript for the
+search, then the final answer. Any sources the search surfaced
+come back as citations attached to the reply.
 
-A "sources" button in the action bar (badge = count of cited sources)
-expands the same panel on demand. Each row shows the title, date
-where provided, and a short snippet; click the title to open the
-original page in a new tab.
+Sourced claims may be marked with small `^N^` superscripts in the
+text. Click one and Nak expands the sources list under the message
+and flashes the matching row so you can see which URL the model
+leaned on. A "sources" button in the action bar (badge = count of
+cited sources) expands the same panel on demand. Each row shows
+the title, date where provided, and a short snippet; click the
+title to open the original page in a new tab.
+
+There is no on/off toggle for web search - the model decides per
+turn. Questions that don't need current facts won't trigger the
+tool, so they never pay the latency or quota cost of a search.
 
 ## Thinking and reasoning effort
 

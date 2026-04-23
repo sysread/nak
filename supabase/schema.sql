@@ -131,14 +131,15 @@ alter table public.threads
 alter table public.threads
   add column if not exists verbosity text;
 
--- Optional per-thread override for Venice inline web citations. Null means
--- "use the user default" (profiles.settings.webCitationsEnabled, which
--- itself defaults to true). Independent of the web-search toggle: this
--- only gates the `venice_parameters.enable_web_citations` flag on the
--- request body. Turning citations off still lets the model ground its
--- answer with live search; it just won't emit inline [1]/[2] markers.
+-- Removed 2026-04: web citations are now sourced from the client-side
+-- `web_search` tool (see src/lib/tools/web_search.ts), not from a per-
+-- thread or per-user toggle. The main chat loop never sets
+-- `venice_parameters.enable_web_search` any more, so a per-thread
+-- override for citations has nothing to override. Drop is idempotent
+-- so re-applying on a fresh DB or a DB that never had the column is
+-- a no-op.
 alter table public.threads
-  add column if not exists web_citations_enabled boolean;
+  drop column if exists web_citations_enabled;
 
 create index if not exists threads_user_updated_idx
   on public.threads (user_id, updated_at desc);

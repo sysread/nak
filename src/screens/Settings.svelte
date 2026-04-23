@@ -37,8 +37,6 @@
     setDefaultLogLevel,
     setSystemPrompts,
     setTheme,
-    setWebSearchEnabled,
-    setWebCitationsEnabled,
   } from '$lib/state.svelte';
   import { LOG_LEVELS, LOG_LEVEL_LABELS, type LogLevel } from '$lib/logger.svelte';
   import {
@@ -222,83 +220,6 @@
       promptsSaveState = 'idle';
     } finally {
       promptsSaving = false;
-    }
-  }
-
-  // --- Web search pane ---
-  // Mirror of app.webSearchEnabled. Persisted on Supabase
-  // `profiles.settings.webSearchEnabled`. Enabled-by-default: an empty
-  // settings jsonb means web search is on, so we only write a literal
-  // `false` to flip it off.
-  let webSearchEnabled = $state<boolean>(app.webSearchEnabled);
-  let webSearchError = $state<string | null>(null);
-  let webSearchInfo = $state<string | null>(null);
-
-  // Follow the global flag if it changes while Settings is mounted —
-  // a late-arriving refreshSettings() in Chat.svelte shouldn't leave
-  // the checkbox stale.
-  $effect(() => {
-    webSearchEnabled = app.webSearchEnabled;
-  });
-
-  async function onToggleWebSearch(): Promise<void> {
-    webSearchError = null;
-    webSearchInfo = null;
-    if (!app.supabase) {
-      webSearchError = 'Not connected to Supabase yet.';
-      return;
-    }
-    const next = !webSearchEnabled;
-    webSearchEnabled = next;
-    // Optimistic in-memory flip so any in-flight send reflects the new
-    // choice. Supabase settles below; on failure we roll back both.
-    setWebSearchEnabled(next);
-    try {
-      await app.supabase.updateSettings({ webSearchEnabled: next });
-      webSearchInfo = next
-        ? 'Web search enabled — the model can pull live citations when they help.'
-        : 'Web search disabled.';
-    } catch (err) {
-      webSearchEnabled = !next;
-      setWebSearchEnabled(!next);
-      webSearchError = err instanceof Error ? err.message : String(err);
-    }
-  }
-
-  // --- Inline citations pane ---
-  // Mirror of app.webCitationsEnabled. Persisted on Supabase
-  // `profiles.settings.webCitationsEnabled`. Enabled-by-default: an
-  // empty settings jsonb means inline citations are on, so we only
-  // write a literal `false` to flip them off. Independent of the web
-  // search toggle above - a user can keep grounding on but strip the
-  // `[1]` / `[2]` markers from answers.
-  let webCitationsEnabled = $state<boolean>(app.webCitationsEnabled);
-  let webCitationsError = $state<string | null>(null);
-  let webCitationsInfo = $state<string | null>(null);
-
-  $effect(() => {
-    webCitationsEnabled = app.webCitationsEnabled;
-  });
-
-  async function onToggleWebCitations(): Promise<void> {
-    webCitationsError = null;
-    webCitationsInfo = null;
-    if (!app.supabase) {
-      webCitationsError = 'Not connected to Supabase yet.';
-      return;
-    }
-    const next = !webCitationsEnabled;
-    webCitationsEnabled = next;
-    setWebCitationsEnabled(next);
-    try {
-      await app.supabase.updateSettings({ webCitationsEnabled: next });
-      webCitationsInfo = next
-        ? 'Inline citations enabled — answers carry [1] / [2] markers when web search fires.'
-        : 'Inline citations disabled — search still grounds answers, but the markers are stripped.';
-    } catch (err) {
-      webCitationsEnabled = !next;
-      setWebCitationsEnabled(!next);
-      webCitationsError = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -766,9 +687,9 @@
   }
 
   // Picking a radio applies the choice immediately — no Save button.
-  // Optimistic in-memory flip (same pattern as onToggleWebSearch) so the
-  // radio reflects the new tier right away; on persistence failure we
-  // roll the UI and the global flag back to the previous value.
+  // Optimistic in-memory flip so the radio reflects the new tier right
+  // away; on persistence failure we roll the UI and the global flag
+  // back to the previous value.
   async function onPickModel(next: ModelTier): Promise<void> {
     modelError = null;
     modelInfo = null;
@@ -934,7 +855,7 @@
              matches the Appearance pane's "touch it and it sticks"
              behavior. -->
         <h2>AI</h2>
-        <p class="subtle">Default model, system prompts, and web search.</p>
+        <p class="subtle">Default model and system prompts.</p>
 
         <h3 class="pane-section">Default model</h3>
         <p class="subtle">
@@ -1008,47 +929,6 @@
         </div>
         {#if modelError}<p class="error">{modelError}</p>{/if}
         {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
-
-        <h3 class="pane-section">Web search</h3>
-        <p class="subtle">
-          Venice grounds every answer with live web results plus inline
-          source citations. Enabled by default — each request goes out
-          with <code>enable_web_search=on</code> and
-          <code>enable_web_citations=true</code>. Toggle off to send
-          <code>enable_web_search=off</code> on every request instead.
-        </p>
-        <label class="form-row toggle-row">
-          <input
-            type="checkbox"
-            checked={webSearchEnabled}
-            onchange={onToggleWebSearch}
-          />
-          <span>Enabled</span>
-        </label>
-        {#if webSearchError}<p class="error">{webSearchError}</p>{/if}
-        {#if webSearchInfo}<p class="subtle">{webSearchInfo}</p>{/if}
-
-        <h3 class="pane-section">Inline citations</h3>
-        <p class="subtle">
-          When web search is active, Venice can interleave
-          <code>[1]</code> / <code>[2]</code> source markers into the
-          answer body via
-          <code>venice_parameters.enable_web_citations</code>. Enabled
-          by default. Turning this off keeps grounding - the model
-          still reads live search results - but strips the markers so
-          the reply reads as plain prose. Overridable per-conversation
-          from the composer.
-        </p>
-        <label class="form-row toggle-row">
-          <input
-            type="checkbox"
-            checked={webCitationsEnabled}
-            onchange={onToggleWebCitations}
-          />
-          <span>Enabled</span>
-        </label>
-        {#if webCitationsError}<p class="error">{webCitationsError}</p>{/if}
-        {#if webCitationsInfo}<p class="subtle">{webCitationsInfo}</p>{/if}
 
         <h3 class="pane-section">System prompts</h3>
         <p class="subtle">

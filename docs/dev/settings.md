@@ -116,7 +116,14 @@ every update) so it's covered here rather than in its own file.
   - `accent`: `Accent`
   - `systemPrompts`: `SystemPrompt[]` with `{id, name, body,
     enabledByDefault}`
-  - `webSearchEnabled`: boolean; absent defaults to `true`
+
+  Removed 2026-04: `webSearchEnabled` and `webCitationsEnabled`
+  moved to the `web_search` tool (see `./tools.md`). The main
+  chat loop no longer sets `venice_parameters.enable_web_search`
+  on any request, so a per-user toggle has nothing to gate. The
+  `threads.web_citations_enabled` column dropped at the same
+  time (see `supabase/schema.sql`).
+
   `coerceSettings` in `supabase.ts` validates on read, dropping
   unknown / mistyped fields.
 - **`localStorage['nak:theme:v1']`** — `<mode>|<accent>`.
@@ -127,10 +134,10 @@ every update) so it's covered here rather than in its own file.
   `./auth-session.md`.
 - **Reactive state** — `app.defaultModel`,
   `app.defaultReasoningEffort`, `app.defaultVerbosity`,
-  `app.colorMode`, `app.accent`, `app.systemPrompts`,
-  `app.webSearchEnabled`. Seeded to defaults on `activate()`;
-  overwritten from `profiles.settings` by Chat's
-  `refreshSettings` right after the Supabase session lands.
+  `app.colorMode`, `app.accent`, `app.systemPrompts`. Seeded
+  to defaults on `activate()`; overwritten from
+  `profiles.settings` by Chat's `refreshSettings` right after
+  the Supabase session lands.
 
 ## Contracts
 
@@ -186,8 +193,8 @@ every update) so it's covered here rather than in its own file.
   `./auth-session.md`.
 - **Chat** — chat reads every AI-pane setting
   (`defaultModel`, `defaultReasoningEffort`, `defaultVerbosity`,
-  `systemPrompts`, `webSearchEnabled`) from the state store.
-  Settings writes those values. See `./chat.md`.
+  `systemPrompts`) from the state store. Settings writes those
+  values. See `./chat.md`.
 - **Architecture** — the reactive state store
   (`state.svelte.ts`) is the bridge: Settings writes setters,
   other features read the corresponding `app.*` field. See
@@ -217,14 +224,8 @@ every update) so it's covered here rather than in its own file.
   `settings = '{}'`. `coerceSettings` returns every field
   undefined; the state store falls back to its seed values
   (`DEFAULT_TIER`, `DEFAULT_REASONING_EFFORT`, cached theme,
-  empty prompt list, web-search enabled). Any pane that
-  assumes a particular field exists has a bug.
-- **`webSearchEnabled` is tri-state on the wire.** Absent,
-  `true`, or `false`. Only `false` flips the feature off;
-  anything else leaves the app-side default (enabled) in
-  force. This means removing the key from the blob (by
-  setting the patch value to undefined) re-enables web
-  search on next load.
+  empty prompt list). Any pane that assumes a particular field
+  exists has a bug.
 - **Inline boot script in `index.html` is ES5.** Vite doesn't
   transform inline scripts. Keep the theme-cache read logic
   there simple; use `var`, avoid template literals and arrow

@@ -257,6 +257,17 @@ export const VENICE_CONVERSATION_RECALL_MODEL = MODELS.fast.id;
 export const VENICE_SUMMARY_MODEL = MODELS.fast.id;
 
 /**
+ * Model the `web_search` tool runs against for its sub-completion.
+ * The task is "summarize Venice-provided search results into 2-4
+ * sentences with ^N^ markers" - bounded synthesis, not reasoning. Fast
+ * tier matches the rationale of the other internal-agent constants
+ * above. Kept as a distinct constant so a future decision to pin web
+ * search to a different tier (if a fast retune regresses citation
+ * discipline) doesn't require editing tool internals.
+ */
+export const VENICE_WEB_SEARCH_MODEL = MODELS.fast.id;
+
+/**
  * Venice's embeddings model. Single constant rather than a tier because
  * Venice only ships one embeddings model today. If Venice ever introduces
  * a second model, this string becomes the current default and the
@@ -372,21 +383,6 @@ export function resolveVerbosity(
   defaultVerbosity: Verbosity
 ): Verbosity {
   return threadVerbosity ?? defaultVerbosity;
-}
-
-/**
- * Resolve the web-citations preference for a given thread. Same
- * override-wins shape as resolveTier / resolveReasoningEffort /
- * resolveVerbosity - per-thread `web_citations_enabled` wins when
- * explicitly set, otherwise fall back to the user's account default.
- * The caller is still expected to only consult the result when web
- * search itself is active; citations without a search are sourceless.
- */
-export function resolveWebCitations(
-  threadEnabled: boolean | null,
-  defaultEnabled: boolean
-): boolean {
-  return threadEnabled ?? defaultEnabled;
 }
 
 /**

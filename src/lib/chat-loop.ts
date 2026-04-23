@@ -31,7 +31,6 @@ import type {
   VeniceClient,
   VeniceMessage,
   TokenUsage,
-  WebSearchMode,
   Citation,
 } from './venice';
 import { buildUserVeniceContent } from './attachments';
@@ -168,10 +167,14 @@ export interface ChatLoopHandlers {
    */
   onReasoningUpdate?(text: string): void;
   /**
-   * Venice citations for the current round. Fires at most once per
-   * round (Venice sends the full list in one frame). Replaces whatever
-   * the previous round emitted — each assistant row carries only its
-   * own turn's citations.
+   * Citations to display under the in-flight assistant bubble. Fires
+   * whenever a round contributes new sources - either the outer
+   * stream emitted a `citations` frame (legacy main-chat search path,
+   * no longer active in the default chat loop) or a `web_search` tool
+   * call returned a `citations` array that the loop harvested onto
+   * the running `toolCitations` accumulator. The argument is the full
+   * running list with indexes renumbered contiguously from 1, so the
+   * UI can swap in whatever it has without tracking deltas.
    */
   onCitationsUpdate?(citations: Citation[]): void;
   /** A tool call has been received from the model and is about to execute. */
@@ -210,23 +213,6 @@ export interface ChatLoopOptions {
   history: VeniceMessage[];
   signal: AbortSignal;
   handlers?: ChatLoopHandlers;
-  /**
-   * Optional Venice web-search mode. When set, forwarded to every
-   * streamChat call in the loop as `venice_parameters.enable_web_search`.
-   * Caller (Chat.svelte) derives this from `app.webSearchEnabled`:
-   * enabled → 'auto', disabled → 'off'. Omitted here means "don't pass
-   * the field" — used by tests that don't care about web-search.
-   */
-  webSearch?: WebSearchMode;
-  /**
-   * Optional override for the inline-citations flag. Forwarded to
-   * every streamChat call as `venice_parameters.enable_web_citations`;
-   * Venice only honors it when web search is active. Caller
-   * (Chat.svelte) derives it from the user default crossed with the
-   * per-thread `web_citations_enabled` override. Undefined means
-   * "let venice.ts apply its own default" (currently: citations on).
-   */
-  webCitations?: boolean;
   /**
    * Optional reasoning-effort knob forwarded to every streamChat call.
    * Caller (Chat.svelte) is expected to only set this on models whose
@@ -324,6 +310,43 @@ function encodeToolContent(
 }
 
 /**
+ * Pick a `citations` array off a tool return value when the shape looks
+ * like one. Used by the chat loop to harvest web-search sources out of
+ * the `web_search` tool's `{answer, citations}` return and merge them
+ * onto the terminal assistant row's `citations` column. The check is
+ * structural rather than name-based so any future tool returning a
+ * similarly shaped payload rides the same path without another branch.
+ *
+ * Defensive about the field shape: Venice's Citation requires `url`
+ * and allows every other field to be absent, so we mirror that here.
+ * Anything without a string `url` is skipped rather than silently
+ * rendering an empty row.
+ */
+function extractToolCitations(value: unknown): Citation[] {
+  if (!value || typeof value !== 'object') return [];
+  const raw = (value as { citations?: unknown }).citations;
+  if (!Array.isArray(raw)) return [];
+  const out: Citation[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.url !== 'string' || e.url.length === 0) continue;
+    const cite: Citation = {
+      // Placeholder index - the caller rewrites this to a running
+      // 1-based global position so indexes stay contiguous across
+      // multiple tool calls within a turn.
+      index: 0,
+      url: e.url,
+    };
+    if (typeof e.title === 'string') cite.title = e.title;
+    if (typeof e.content === 'string') cite.content = e.content;
+    if (typeof e.date === 'string') cite.date = e.date;
+    out.push(cite);
+  }
+  return out;
+}
+
+/**
  * Pull the plain-text portion of a user message off the wire shape.
  * `VeniceMessage.content` is `string | ContentPart[]`; multimodal
  * user messages with attachments arrive as the array form, in which
@@ -354,8 +377,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     modelId,
     signal,
     handlers,
-    webSearch,
-    webCitations,
     reasoningEffort,
     verbosity,
     userMessageId,
@@ -371,6 +392,16 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // whichever assistant row closed the turn — final text or terminal
   // tool-using row, whichever the loop ends on.
   let lastAssistantId: string | null = null;
+
+  // Citations sourced from tool results over the whole turn. Accumulated
+  // across rounds with monotonic 1-based indexes so the rendered panel
+  // reads 1,2,3,... regardless of how many `web_search` calls fired or
+  // what per-call numbering each returned. Persisted on the terminal
+  // assistant row when `roundCitations` (Venice's direct citations on
+  // the outer stream) is empty - which is the common case now that the
+  // main chat-loop no longer sets `enable_web_search` on its own
+  // requests, so the only citation source is the tool path.
+  const toolCitations: Citation[] = [];
 
   // Turn-open priming. Computed ONCE before the round loop so every
   // round in this turn sees the same compound + fire + opening-recall
@@ -468,28 +499,21 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // pirate" prompt still wins on voice while the baseline tool
     // framing stays in force.
     //
-    // Advertise Venice's web-search augmentation to the model when
-    // the user hasn't opted out. In `auto` mode Venice only runs the
-    // search if the model signals intent — without this hint the
-    // model reads the gated-tool list as exhaustive and refuses.
-    //
     // The current user turn is ALWAYS wrapped in <user_message>
-    // boundary tags (see tagLastUserMessage above). Venice can inject
-    // content into the user's turn via two independent paths —
-    // `enable_web_search` (search payload + framing) and
-    // `enable_web_scraping` (full page content of any URL the user
-    // pasted). Scraping is always enabled in venice.ts, so the
-    // injection path is live on every request even when the user
-    // has opted out of live search. Wrapping unconditionally keeps
-    // the boundary reliable; the ~10 tokens per user turn are a
-    // cheap price for a signal the model can anchor on every time.
-    const webSearchActive = webSearch === 'auto' || webSearch === 'on';
+    // boundary tags (see tagLastUserMessage above). Venice's
+    // `enable_web_scraping` is always on in venice.ts, so any URL the
+    // user pastes lands inlined in the user turn alongside whatever
+    // they typed. Wrapping unconditionally keeps the boundary
+    // reliable; the ~10 tokens per user turn are a cheap price for a
+    // signal the model can anchor on every time. Live web search,
+    // previously also an `enable_web_search` injection on every
+    // request, now flows through the `web_search` tool instead - the
+    // main chat loop never sets those Venice parameters.
     const projectedHistory = tagLastUserMessage(history);
     const requestMessages: VeniceMessage[] = [
       {
         role: 'system',
         content: buildSystemPrompt({
-          webSearch: webSearchActive,
           // Samskara appendix - pre-computed before the round loop so
           // every round sees the same compound + fire block. Empty
           // string when the user has no samskaras yet (cold start) and
@@ -505,8 +529,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       messages: requestMessages,
       signal,
       tools: buildToolList(toolsEnabled),
-      webSearch,
-      webCitations,
       reasoningEffort,
       verbosity,
     });
@@ -541,6 +563,18 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // exit; no need for a tool round.
     if (roundCalls.length === 0) {
       if (roundText.length > 0) {
+        // Citations priority:
+        //   1. `roundCitations` from the outer stream - only non-null
+        //      when the main chat request itself asked Venice for
+        //      server-side search, which nak no longer does. Kept as
+        //      the first branch for defensive parity with the old
+        //      shape and so a future re-enablement of main-chat search
+        //      would Just Work without revisiting this line.
+        //   2. Accumulated tool citations from any `web_search` calls
+        //      that ran in the turn. This is the live path.
+        //   3. null - no citations to render.
+        const finalCitations =
+          roundCitations ?? (toolCitations.length > 0 ? toolCitations : null);
         const msg = await supabase.addMessage(thread.id, 'assistant', roundText, {
           model: modelId,
           usage: roundUsage,
@@ -550,7 +584,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           // (before the columns existed) distinguishable from "this
           // turn actually had none."
           reasoning: roundReasoning.length > 0 ? roundReasoning : null,
-          citations: roundCitations,
+          citations: finalCitations,
         });
         handlers?.onAssistantPersisted?.(msg);
         lastAssistantId = msg.id;
@@ -639,6 +673,12 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       content: roundText,
       tool_calls: roundCalls,
     });
+    // Snapshot the pre-settlement citation count so we can tell at the
+    // end of this round whether a tool contributed new sources and
+    // should therefore fire an `onCitationsUpdate` notification - the
+    // UI's live source-panel animates in the same way it did when
+    // Venice itself streamed citations on the outer completion.
+    const citationsBefore = toolCitations.length;
     for (const r of settled) {
       const content = r.ok
         ? encodeToolContent({ ok: true, value: r.value })
@@ -654,6 +694,26 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         tool_call_id: r.call.id,
         name: r.call.function.name,
       });
+      // Harvest citations from any tool that returned them (web_search
+      // is the intended source; the shape check is structural, not
+      // name-based, so a future tool returning `{..., citations: [...]}`
+      // rides the same path without another branch here). Indexes are
+      // rewritten to the running 1-based global position so the
+      // rendered CitationsPanel sees a contiguous list regardless of
+      // per-tool numbering.
+      if (r.ok) {
+        const extracted = extractToolCitations(r.value);
+        for (const cite of extracted) {
+          toolCitations.push({ ...cite, index: toolCitations.length + 1 });
+        }
+      }
+    }
+    if (toolCitations.length > citationsBefore) {
+      // Fire once per round that added citations; the handler
+      // snapshots the running list so the UI can render a live
+      // sources panel on the in-flight assistant bubble before the
+      // terminal assistant row is persisted.
+      handlers?.onCitationsUpdate?.(toolCitations.slice());
     }
 
     // Loop back for another round. The model will see the tool results

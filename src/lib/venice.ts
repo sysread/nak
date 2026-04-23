@@ -102,21 +102,27 @@ export interface Citation {
  * Venice-specific web-search mode, passed as
  * `venice_parameters.enable_web_search` on the request body.
  *
- *   'on'   — force a search on every turn. Our enabled-by-default value:
- *            relying on `auto` leaves too many model refusals ("I can't
- *            access the internet") on the table, since in auto mode the
- *            server only runs the search if the model signals intent.
+ *   'on'   — force a search on every turn.
  *   'auto' — let the model decide when a live search improves the answer.
  *   'off'  — disable the server-side tool entirely. Also the implicit
- *            Venice default when `venice_parameters` is omitted; we still
- *            send it explicitly so a user who flipped the setting off
- *            can't be overridden by a future server-side default change.
+ *            Venice default when the parameter is omitted.
  *
  * Active modes ('on' / 'auto') additionally gate
  * `venice_parameters.enable_web_citations`; whether that flag lands
  * `true` or `false` is controlled independently by
  * {@link ChatRequest.webCitations} so a caller can keep grounding
  * while suppressing the `[1]` / `[2]` markers in the answer body.
+ *
+ * Caller scoping: the main chat loop in `chat-loop.ts` deliberately
+ * does NOT set `webSearch` or `webCitations` on its `streamChat`
+ * calls. Venice treats `enable_web_search: 'on'` as unconditional
+ * (every request runs a search), so leaving the flag unset is the
+ * only way to keep the default chat path from burning quota on
+ * questions the model could have answered from weights. The sole
+ * caller that sets these is the `web_search` tool (see
+ * `src/lib/tools/web_search.ts`), which runs a one-shot sub-
+ * completion with search on and returns the answer + citations as a
+ * structured tool result.
  *
  * Docs: https://docs.venice.ai/api-reference (§ venice_parameters).
  */
@@ -137,7 +143,9 @@ export interface ChatRequest {
   /**
    * When set, populates `venice_parameters.enable_web_search` on the
    * request body. Omitted → field is not sent (Venice's server-side
-   * default applies). See {@link WebSearchMode}.
+   * default applies). See {@link WebSearchMode}. The main chat loop
+   * never sets this - only the `web_search` tool does, for the sub-
+   * completion it wraps.
    */
   webSearch?: WebSearchMode;
   /**
@@ -146,9 +154,10 @@ export interface ChatRequest {
    * `webSearch` is active (`'on'` / `'auto'`) - citations without a
    * search would be sourceless anyway. Undefined means "citations on"
    * so callers that opted into web search but haven't opinionated on
-   * citations get the historical enabled-by-default behavior. Set
-   * `false` to keep grounding but suppress the `[1]` / `[2]` markers
-   * from the answer body.
+   * citations get the enabled-by-default behavior. Set `false` to
+   * keep grounding but suppress the `[1]` / `[2]` markers from the
+   * answer body. Like `webSearch`, only the `web_search` tool sets
+   * this now.
    */
   webCitations?: boolean;
   /**

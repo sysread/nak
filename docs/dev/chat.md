@@ -107,7 +107,7 @@ A chat turn goes:
 
 - `runChatLoop(opts): Promise<ChatLoopResult>` — opts must carry
   `venice`, `supabase`, `thread`, `userId`, `modelId`, `history`,
-  `signal`, and optional `webSearch`, `reasoningEffort`,
+  `signal`, and optional `reasoningEffort`, `verbosity`,
   `handlers`. `history` is already in `VeniceMessage` shape
   (OpenAI roles, tool_calls, tool_call_id); the loop prepends its
   own system-prompt message each round and does NOT persist that
@@ -152,11 +152,10 @@ A chat turn goes:
   their next poll. See `./summaries.md` and `./memory.md`.
 - **Settings** — `Chat.svelte` reads `app.defaultModel`,
   `app.defaultReasoningEffort`, `app.defaultVerbosity`,
-  `app.systemPrompts`, `app.webSearchEnabled` from the state
-  store. Settings writes those values. System prompts
-  configured as `enabledByDefault` seed the per-thread active
-  set; per-thread toggles aren't persisted. See
-  `./settings.md`.
+  `app.systemPrompts` from the state store. Settings writes
+  those values. System prompts configured as `enabledByDefault`
+  seed the per-thread active set; per-thread toggles aren't
+  persisted. See `./settings.md`.
 - **Auth-session** — the screen renders only after `activate()`
   instantiates `app.supabase` + `app.venice`. A separate
   in-screen gate (`{:else if !session} <Auth />`) handles the
@@ -212,39 +211,39 @@ A chat turn goes:
   before being materialized, the realtime `INSERT` handler sees a
   thread it doesn't have, and the list gets out of order. The
   `isDraft` flag gates this; don't remove it.
-- **Venice can inject content into the user turn via two
-  independent paths.** Both happen server-side — we never see or
-  forward the injected content, so there is nothing to strip on
-  our side:
-  - `enable_web_scraping` (always on in `venice.ts`). When the
-    user's latest message contains any URLs, Venice fetches their
-    full content via Firecrawl and inlines the page text after
-    the user's prose. Firing condition: a URL in the message.
-    Independent of `enable_web_search` per Venice's docs; baseline
-    cost when no URLs are present is zero.
-  - `enable_web_search` (opt-in). When active, Venice splices a
-    search payload plus platform framing ("you can use this real
-    time information to answer the user's query above") into the
-    user turn.
+- **Venice can inject content into the user turn.** The
+  `enable_web_scraping` flag is always on in `venice.ts`, so
+  whenever the user's latest message contains a URL, Venice
+  fetches the full page content via Firecrawl and inlines it
+  after the user's prose. Baseline cost when no URLs are present
+  is zero; when a URL is there, the user nearly always wants it
+  read. Happens server-side — we never see or forward the
+  injected content, so there is nothing to strip on our side.
 
-  Without help, the model misreads both kinds of injection as
-  user-authored (observed: thanking the user for links they never
+  The other injection path, `enable_web_search`, is no longer
+  set by the main chat loop. Live web search now flows through
+  the `web_search` tool (see `./tools.md`), which runs its own
+  one-shot sub-completion with `enable_web_search: 'on'` +
+  `enable_web_citations: true` and returns `{answer, citations}`.
+  The chat loop harvests those citations into a turn-scoped list
+  and persists them on the terminal assistant row so the
+  `CitationsPanel` + `^N^` superscript rendering the old always-
+  on path fed keeps working.
+
+  Without help, the model misreads scraped content as user-
+  authored (observed: thanking the user for links they never
   sent, quoting snippets back as their words). Mitigation is
   two-part and unconditional: the system prompt's boundary block
-  — which sits before the webSearch-gated hint block, not inside
-  it — calls out the non-user origin and names both paths, and
-  `runChatLoop` always wraps the current turn's user text in
-  `<user_message>...</user_message>` via `tagLastUserMessage`.
-  The tags are request-time only, never persisted. If you add
-  another place that constructs wire messages for any Venice
-  call, apply the same wrap — the wrap is no longer gated on
-  `webSearch`, because scraping fires even with search off.
+  calls out the non-user origin, and `runChatLoop` always wraps
+  the current turn's user text in `<user_message>...</user_message>`
+  via `tagLastUserMessage`. The tags are request-time only,
+  never persisted. If you add another place that constructs wire
+  messages for any Venice call, apply the same wrap.
 
-  There is also a companion rule in the webSearch block and its
-  else branch: both branches mention the URL-scraping capability
-  so the model doesn't refuse "what does this page say?" with a
-  generic "I can't browse the web" on turns where search is off
-  but a scraped page is sitting in the user turn ready to read.
+  The system prompt unconditionally mentions URL scraping so the
+  model doesn't refuse "what does this page say?" with a generic
+  "I can't browse the web" when a scraped page is sitting in the
+  user turn ready to read.
 
 ## Where to go next
 

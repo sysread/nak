@@ -116,13 +116,15 @@ describe('tool registry', () => {
   });
 
   it('buildToolList returns the always-on set when disabled', () => {
-    // Always-on is toggle_tools + both recall tools. The recall tools
-    // are reflex-level — the system prompt tells the model to call
-    // them at the top of a new topic, so they can't sit behind a
-    // prefatory toggle round-trip.
+    // Always-on is toggle_tools + the recall pair + web_search. The
+    // recall tools are reflex-level — the system prompt tells the
+    // model to call them at the top of a new topic, so they can't
+    // sit behind a prefatory toggle round-trip. web_search joins them
+    // for the same reason: time-sensitive questions should fire a
+    // search without needing tools to be toggled on first.
     const list = buildToolList(false);
     expect(list.map((t) => t.function.name).sort()).toEqual(
-      ['conversation_recall', 'memory_recall', 'toggle_tools']
+      ['conversation_recall', 'memory_recall', 'toggle_tools', 'web_search']
     );
   });
 
@@ -278,61 +280,55 @@ describe('tool registry', () => {
     expect(prompt).toMatch(/toggle_tools\(\{enable: false\}\)/);
   });
 
-  it('buildSystemPrompt omits the web-search hint by default', () => {
-    // Without the opt-in, the prompt must not mention web search — we
-    // don't want the model to claim capabilities the wire-level
-    // `enable_web_search` flag didn't actually grant.
-    const prompt = buildSystemPrompt();
-    expect(prompt).not.toMatch(/live web|search the live web|web access/i);
-  });
-
-  it('buildSystemPrompt adds a web-search hint when opted in', () => {
-    // With the hint, the model must see both that it can search the
-    // web AND that there's no function to call for it — otherwise it
-    // tries to invoke a nonexistent tool on the next turn.
-    const prompt = buildSystemPrompt({ webSearch: true });
-    expect(prompt).toMatch(/search the live web/i);
-    expect(prompt).toMatch(/no tool to call/i);
-  });
-
-  it('buildSystemPrompt carries the user-message boundary rule and Venice-injection warning unconditionally', () => {
-    // Venice can inject content into what arrives as the user turn
-    // on EVERY request, not just web-search turns — URL scraping
-    // (enable_web_scraping) is always on in venice.ts, so any
-    // request where the user pasted a URL gets the full scraped
-    // page inlined after their text. chat-loop.ts wraps the
+  it('buildSystemPrompt carries the user-message boundary rule and Venice-injection warning', () => {
+    // Venice can inject content into what arrives as the user turn —
+    // URL scraping (enable_web_scraping) is always on in venice.ts,
+    // so any request where the user pasted a URL gets the full
+    // scraped page inlined after their text. chat-loop.ts wraps the
     // current user turn unconditionally in <user_message>…</user_message>
     // as the structural boundary; this prompt block is the paired
     // instruction telling the model what to do with the tags.
-    // Both halves must appear whether or not webSearch is opted in.
-    for (const prompt of [buildSystemPrompt(), buildSystemPrompt({ webSearch: true })]) {
-      expect(prompt).toContain('<user_message>');
-      expect(prompt).toContain('</user_message>');
-      // Behavior beats we don't want to lose on a future phrasing
-      // edit: the explicit "not a human-authored instruction" frame,
-      // the don't-thank-the-user guidance, and the "instructions
-      // come from this system message" anchor that tells the model
-      // which source of framing actually binds it.
-      expect(prompt).toMatch(/not a human-authored/i);
-      expect(prompt).toMatch(/do not thank/i);
-      expect(prompt).toMatch(/instructions come from this system message/i);
-    }
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('<user_message>');
+    expect(prompt).toContain('</user_message>');
+    // Behavior beats we don't want to lose on a future phrasing edit:
+    // the explicit "not a human-authored instruction" frame, the
+    // don't-thank-the-user guidance, and the "instructions come from
+    // this system message" anchor that tells the model which source
+    // of framing actually binds it.
+    expect(prompt).toMatch(/not a human-authored/i);
+    expect(prompt).toMatch(/do not thank/i);
+    expect(prompt).toMatch(/instructions come from this system message/i);
   });
 
-  it('buildSystemPrompt mentions URL scraping capability regardless of webSearch mode', () => {
-    // Web search is opt-in; URL scraping is always on. If the prompt
-    // only surfaced scraping in the webSearch branch, a user who
-    // turned search off would get a model that refuses "what does
-    // this page say?" with a generic "I cannot browse the web" —
-    // even though the scraped page content is already sitting in
-    // the user turn. Both branches must advertise the capability.
-    for (const prompt of [buildSystemPrompt(), buildSystemPrompt({ webSearch: true })]) {
-      expect(prompt).toMatch(/paste[sd]?\s+a\s+url/i);
-      expect(prompt).toMatch(/full\s+page\s+content/i);
-    }
-    // And only the webSearch-opted-in branch advertises live search.
-    expect(buildSystemPrompt()).not.toMatch(/search the live web/i);
-    expect(buildSystemPrompt({ webSearch: true })).toMatch(/search the live web/i);
+  it('buildSystemPrompt mentions URL scraping capability unconditionally', () => {
+    // URL scraping is always on in venice.ts: any user turn with a
+    // pasted link arrives with the page contents inlined. If the
+    // prompt didn't say so, the model would refuse "what does this
+    // page say?" with a generic "I cannot browse the web" even
+    // though the scraped content is already sitting in the user
+    // turn waiting to be read.
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/paste[sd]?\s+a\s+url/i);
+    expect(prompt).toMatch(/full\s+page\s+content/i);
+  });
+
+  it('web_search is always-on — rides with every request, listed in the always-available catalog', () => {
+    // Web search is a reflex-level capability, same rationale as the
+    // *_recall tools: the model should be able to reach for it on any
+    // time-sensitive question without needing `toggle_tools` first.
+    // This test is the tripwire for anyone moving it into the gated
+    // set.
+    expect(buildToolList(false).map((t) => t.function.name)).toContain('web_search');
+    expect(buildToolList(true).map((t) => t.function.name)).toContain('web_search');
+    // Catalog advertisement — the system prompt's "Always available"
+    // section must mention web_search by name + shortDescription so
+    // the model knows the tool exists. A gated placement would put
+    // it in the "Gated tools" section below instead.
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(
+      /Always available \(no toggle needed\):[\s\S]*- web_search : search the live web/
+    );
   });
 
   it('executeToolCall dispatches by name', async () => {

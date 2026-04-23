@@ -15,7 +15,7 @@ share the `ToolDef` shape and the `executeToolCall` /
 `executeToolboxCall` dispatchers, so adding a tool is a
 one-file-plus-index change.
 
-Two always-on surfaces ride with every request regardless of the
+Four always-on surfaces ride with every request regardless of the
 thread's `tools_enabled` master switch:
 
 - `toggle_tools` — the master switch itself. Without this, the
@@ -25,6 +25,17 @@ thread's `tools_enabled` master switch:
   topic. Both are read-only (they spawn a sub-agent and return a
   structured note) so there's no write risk from always exposing
   them.
+- `web_search` — runs a one-shot Venice sub-completion with
+  `enable_web_search: 'on'` + `enable_web_citations: true` and
+  returns `{answer, citations}`. Must be available without a
+  toggle round-trip because time-sensitive questions (news,
+  prices, today's weather) are the canonical case for search and
+  we don't want the model to refuse or hedge while waiting for
+  `tools_enabled=true`. Read-only (no DB writes). Deliberately
+  excluded from `memoryToolbox`, `recallToolbox`, and
+  `conversationRecallToolbox` — background agents have no reason
+  to reach for live web data, and giving them the tool would burn
+  search quota and pollute memories with scraped noise.
 
 ## Files
 
@@ -53,6 +64,12 @@ thread's `tools_enabled` master switch:
   `conversation_recall_toolbox.ts` — the read-only toolboxes
   assembled for the recall agents. Standalone files to break
   import cycles.
+- `src/lib/tools/web_search.ts` — wraps a Venice sub-completion
+  with server-side web search on. Chat-loop harvests the
+  returned `citations` array into the terminal assistant row's
+  `citations` column so `CitationsPanel` + `^N^` markdown
+  superscripts light up the same way they did under the old
+  always-on search path.
 
 ## Entry points
 
@@ -78,8 +95,8 @@ thread's `tools_enabled` master switch:
   they appear in the system-prompt catalog. Recall tools go
   first.
 - **`ALWAYS_ON`** — `toggle_tools` + `memory_recall` +
-  `conversation_recall`. These ship with every request regardless
-  of the thread's `tools_enabled` flag.
+  `conversation_recall` + `web_search`. These ship with every
+  request regardless of the thread's `tools_enabled` flag.
 - **`GATED_TOOLS`** — derived (`TOOLS \ ALWAYS_ON`). Shipped only
   when the thread's `tools_enabled` is true.
 - **`threads.tools_enabled`** — the per-thread master switch.
