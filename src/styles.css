@@ -2870,6 +2870,11 @@ h1 {
   border: 1px solid var(--border);
   color: var(--muted);
   cursor: pointer;
+  /* Required so the badge (position: absolute) anchors to this
+     button, not to .composer-bar which is the nearest positioned
+     ancestor otherwise - causing the badge to appear on the send
+     button in the top-right corner of the bar. */
+  position: relative;
 }
 
 .toolbox-btn:hover {
