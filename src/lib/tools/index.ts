@@ -37,6 +37,10 @@ import { memoryCreate } from './memory_create';
 import { memoryUpdate } from './memory_update';
 import { memoryDelete } from './memory_delete';
 import { memoryInvalidate } from './memory_invalidate';
+import { memoryReaffirm } from './memory_reaffirm';
+import { memoryDoubt } from './memory_doubt';
+import { memoryRelate } from './memory_relate';
+import { memoryUnrelate } from './memory_unrelate';
 import { memoryRecall } from './memory_recall';
 import { conversationSearch } from './conversation_search';
 import { conversationRecall } from './conversation_recall';
@@ -92,17 +96,33 @@ export const cookingToolbox: Toolbox = {
 };
 
 /**
- * User-facing memory CRUD. Contrast with `memoryToolbox` below, which
- * swaps `memory_delete` for `memory_invalidate` because agents
- * operating on their own authority only get soft-decay, not hard
- * delete. This toolbox is what the user's chat model gets when the
- * memories gate is on.
+ * User-facing memory CRUD plus the volitional-memory lever:
+ * reaffirm/doubt tools for graded confidence adjustment, and
+ * relate/unrelate for the memory-graph layer. The confidence pair sits
+ * alongside memory_invalidate in the reflection toolbox below; here in
+ * the chat toolbox they're the primary levers, and memory_delete stays
+ * as the user-authorised hard-delete (not present in the reflection
+ * toolbox).
+ *
+ * Contrast with `memoryToolbox` below, which swaps `memory_delete` for
+ * `memory_invalidate` because agents operating on their own authority
+ * only get soft-decay, not hard delete.
  */
 export const memoriesToolbox: Toolbox = {
   name: 'memories',
   description:
-    "Search, create, update, and delete the signed-in user's long-term memories.",
-  tools: [memorySearch, memoryCreate, memoryUpdate, memoryDelete],
+    "Search, create, update, delete, reaffirm, doubt, and link the " +
+    "signed-in user's long-term memories.",
+  tools: [
+    memorySearch,
+    memoryCreate,
+    memoryUpdate,
+    memoryDelete,
+    memoryReaffirm,
+    memoryDoubt,
+    memoryRelate,
+    memoryUnrelate,
+  ],
 };
 
 /** Search prior conversations by title + summary embedding. */
@@ -496,11 +516,21 @@ export async function executeToolCall(
 export const memoryToolbox: Toolbox = {
   name: 'memory',
   description:
-    "Create, read, and update the signed-in user's memories, and " +
-    'invalidate ones contradicted by new evidence. Vector + text search ' +
-    'is available via memory_search. Invalidation is reversible - ' +
-    'memory_invalidate halves confidence rather than hard-deleting.',
-  tools: [memorySearch, memoryCreate, memoryUpdate, memoryInvalidate],
+    "Create, read, update, and link the signed-in user's memories, and " +
+    'invalidate or doubt ones contradicted or weakened by new evidence. ' +
+    'Vector + text search via memory_search. Invalidation halves ' +
+    'confidence; the gentler reaffirm/doubt pair nudges it; memory_relate ' +
+    'and memory_unrelate manage edges in the memory graph.',
+  tools: [
+    memorySearch,
+    memoryCreate,
+    memoryUpdate,
+    memoryInvalidate,
+    memoryReaffirm,
+    memoryDoubt,
+    memoryRelate,
+    memoryUnrelate,
+  ],
 };
 
 // Re-export the recall agents' read-only toolboxes so callers that

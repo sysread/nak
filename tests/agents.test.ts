@@ -150,7 +150,10 @@ describe('Agent interface — EchoAgent as contract witness', () => {
     expect(result.output.createdId).toBe('mem-123');
     expect(result.toolCalls).toBe(1);
     expect(result.error).toBeUndefined();
-    expect(spies.createMemory).toHaveBeenCalledWith('note', 'body');
+    // createMemory's signature grew an optional `confidence` param
+    // for the volitional-memory layer; the Echo agent uses the vanilla
+    // memory_create tool, which passes undefined when absent.
+    expect(spies.createMemory).toHaveBeenCalledWith('note', 'body', undefined);
   });
 
   it('threads req.signal through to the tool context — abort cascades to tools', async () => {

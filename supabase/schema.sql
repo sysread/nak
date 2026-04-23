@@ -770,6 +770,80 @@ drop policy if exists "memories are self-deletable" on public.memories;
 create policy "memories are self-deletable" on public.memories
   for delete using (auth.uid() = user_id);
 
+-- memory_relations -------------------------------------------------------
+--
+-- The volitional-memory layer's graph. Each row is a directed edge the
+-- LLM (or the user) drew between two memories. Four kinds:
+--   supports      - target reinforces the source's claim.
+--   contradicts   - target disagrees with the source (stored
+--                   asymmetrically; the LLM chooses direction).
+--   generalises   - target is a broader version of the source.
+--   specialises   - target is a narrower/concrete case of the source.
+--
+-- Cycles are legal. Retrieval bounds traversal depth (1 hop in v1) and
+-- caps the fan-out per source so a runaway web of edges can't blow the
+-- priming budget. `get_memory_relations` below is the retrieval primitive
+-- the opening-recall and memory_search paths use.
+--
+-- `on delete cascade` on both foreign keys means deleting a memory
+-- sweeps its edges automatically — no orphan rows, no code-side cleanup.
+--
+-- The `(user_id, from_memory_id, to_memory_id, kind)` unique constraint
+-- prevents the LLM from double-inserting the same edge on a repeated
+-- tool call. The chat-side tool still rejects self-loops (from_id =
+-- to_id) at the wire boundary so the constraint-violation path stays for
+-- the "same edge twice" case the LLM might actually trip.
+--
+-- Companion to `memories.confidence`: relations annotate the graph,
+-- confidence annotates the node. Both surface in injected memory text
+-- and the Memories.svelte UI so Jeff can QA what the LLM has built.
+
+create table if not exists public.memory_relations (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  from_memory_id uuid not null references public.memories(id) on delete cascade,
+  to_memory_id uuid not null references public.memories(id) on delete cascade,
+  kind text not null check (
+    kind in ('supports', 'contradicts', 'generalises', 'specialises')
+  ),
+  note text,
+  created_at timestamptz not null default now(),
+  unique (user_id, from_memory_id, to_memory_id, kind)
+);
+
+create index if not exists memory_relations_from_idx
+  on public.memory_relations (user_id, from_memory_id);
+
+create index if not exists memory_relations_to_idx
+  on public.memory_relations (user_id, to_memory_id);
+
+alter table public.memory_relations enable row level security;
+
+drop policy if exists "memory_relations are self-selectable"
+  on public.memory_relations;
+create policy "memory_relations are self-selectable"
+  on public.memory_relations
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "memory_relations are self-insertable"
+  on public.memory_relations;
+create policy "memory_relations are self-insertable"
+  on public.memory_relations
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "memory_relations are self-updatable"
+  on public.memory_relations;
+create policy "memory_relations are self-updatable"
+  on public.memory_relations
+  for update using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "memory_relations are self-deletable"
+  on public.memory_relations;
+create policy "memory_relations are self-deletable"
+  on public.memory_relations
+  for delete using (auth.uid() = user_id);
+
 -- recipes ----------------------------------------------------------------
 --
 -- Cooklang recipes the user authors in Nak (often by asking the model to
@@ -1051,6 +1125,11 @@ end $$;
 -- agent re-learns the fact), just hidden from search. The ORDER BY
 -- uses DESC on the boosted score because higher score = more
 -- relevant.
+-- `confidence` rides the return row so callers formatting the result
+-- (opening-recall's <think> block, memory_search's tool-result JSON)
+-- can prefix a qualitative tag ([corroborated]/[hedged]/[shaky]) without
+-- a second round trip. Thresholds live in src/lib/memories.ts so SQL and
+-- TS aren't both claiming authority over the classification.
 drop function if exists public.search_memories_by_embedding(vector, int);
 create or replace function public.search_memories_by_embedding(
   query_embedding vector(2048),
@@ -1059,11 +1138,12 @@ create or replace function public.search_memories_by_embedding(
   id uuid,
   label text,
   data text,
+  confidence real,
   created_at timestamptz,
   updated_at timestamptz
 )
 language sql stable security invoker as $$
-  select id, label, data, created_at, updated_at
+  select id, label, data, confidence, created_at, updated_at
     from public.memories
    where user_id = auth.uid()
      and embedding is not null
@@ -1089,10 +1169,11 @@ create or replace function public.search_memories_by_embedding_scored(
   id uuid,
   label text,
   data text,
+  confidence real,
   similarity real
 )
 language sql stable security invoker as $$
-  select id, label, data,
+  select id, label, data, confidence,
          ((1 - (embedding <=> query_embedding))
            * (1 + 0.15 * ln(1 + confidence)))::real as similarity
     from public.memories
@@ -1414,6 +1495,100 @@ language sql security invoker as $$
    where id = p_id
      and user_id = auth.uid()
   returning confidence;
+$$;
+
+-- Volitional confidence adjustment RPCs ----------------------------------
+--
+-- Chat-side siblings of bump/decay. The reflection agent uses the
+-- stronger bump (+1.0) and decay (×0.5) tools because it's operating on
+-- settled evidence across a whole conversation; the chat-side tools
+-- (memory_reaffirm / memory_doubt) fire mid-turn on a single exchange,
+-- so their deltas are gentler on purpose. The intent is that the LLM
+-- can nudge confidence several times over a conversation without
+-- saturating the log-boost or crashing a memory below the 0.05 search
+-- floor in one move.
+--
+--   - reaffirm: +0.5, capped at 10.0. Takes ~8 reaffirms from the
+--     default 1.0 to cross 5.0 (the [corroborated] tag threshold).
+--   - doubt:    ×0.7, no floor. Five doubts from 1.0 lands around
+--     0.168, past the [shaky] threshold of 0.5 but still well above
+--     the 0.05 hide floor. Six gets you to 0.117; you'd need ~10 to
+--     drop below 0.05 from a fresh memory.
+
+drop function if exists public.reaffirm_memory_confidence(uuid);
+create or replace function public.reaffirm_memory_confidence(
+  p_id uuid
+) returns real
+language sql security invoker as $$
+  update public.memories
+     set confidence = least(confidence + 0.5, 10.0)
+   where id = p_id
+     and user_id = auth.uid()
+  returning confidence;
+$$;
+
+drop function if exists public.doubt_memory_confidence(uuid);
+create or replace function public.doubt_memory_confidence(
+  p_id uuid
+) returns real
+language sql security invoker as $$
+  update public.memories
+     set confidence = confidence * 0.7
+   where id = p_id
+     and user_id = auth.uid()
+  returning confidence;
+$$;
+
+-- Relation retrieval -----------------------------------------------------
+--
+-- Outbound edges for a batch of memory ids, joined to the target row's
+-- display fields so the caller can format the inline relation block
+-- without a second query per edge. Used by:
+--
+--   - opening-recall.ts (bounded traversal when building the priming
+--     <think> block).
+--   - the memory_search tool's response shaping (so the agent sees the
+--     graph alongside hits).
+--   - Memories.svelte (per-row edge list).
+--
+-- The RPC is RLS-scoped implicitly: the underlying table RLS filters by
+-- auth.uid(), and the memories join inherits the same filter. No need
+-- for an explicit user_id check in the where clause.
+--
+-- `to_confidence` rides the row for the same reason the search RPCs
+-- carry `confidence`: the formatter wants to tag the linked memory's
+-- confidence too ([hedged] support vs [corroborated] support is a
+-- meaningful distinction for the LLM reading the block).
+
+drop function if exists public.get_memory_relations(uuid[]);
+create or replace function public.get_memory_relations(
+  p_ids uuid[]
+) returns table (
+  id uuid,
+  from_memory_id uuid,
+  to_memory_id uuid,
+  kind text,
+  note text,
+  created_at timestamptz,
+  to_label text,
+  to_data text,
+  to_confidence real
+)
+language sql stable security invoker as $$
+  select r.id,
+         r.from_memory_id,
+         r.to_memory_id,
+         r.kind,
+         r.note,
+         r.created_at,
+         m.label as to_label,
+         m.data as to_data,
+         m.confidence as to_confidence
+    from public.memory_relations r
+    join public.memories m on m.id = r.to_memory_id
+   where r.from_memory_id = any(p_ids)
+     and r.user_id = auth.uid()
+   order by r.created_at asc;
 $$;
 
 -- Samskara ---------------------------------------------------------------

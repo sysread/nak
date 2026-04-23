@@ -1,11 +1,34 @@
 # Memory
 
 Long-term memory: the `memories` table, the `memory_*` CRUD
-tools (search / create / update / invalidate / delete), the
-top-level `memory_recall` tool, the reflection agent that
-writes memories after conversations settle, and the recall
-agent that reads them during live conversations.
-One coherent feature with a store, a writer, and a reader.
+tools (search / create / update / reaffirm / doubt / relate /
+unrelate / invalidate / delete), the top-level `memory_recall`
+tool, the reflection agent that writes memories after
+conversations settle, and the recall agent that reads them
+during live conversations. One coherent feature with a store,
+a writer, and a reader, plus a **volitional layer** the chat
+model can manipulate intentionally (confidence nudges and a
+relation graph).
+
+## Two layers: subconscious vs volitional
+
+The memory feature now has two layers that coexist in the same
+store:
+
+- **Subconscious** — what the reflection agent writes in the
+  background. Emergent, cross-thread, review-only from the chat
+  model's POV. Historically the whole feature.
+- **Volitional** — what the chat model manipulates mid-turn via
+  `memory_reaffirm` / `memory_doubt` (confidence nudges) and
+  `memory_relate` / `memory_unrelate` (graph edges). Explicit,
+  inspectable, LLM-editable. Retrieval now surfaces a qualitative
+  confidence tag (`[corroborated]` / `[hedged]` / `[shaky]`) and
+  outbound relations alongside each matched memory so the LLM
+  sees its own uncertainty and the graph it's been building.
+
+Samskara is the separate, fully-subconscious counterpart to
+this - see `./samskara.md`. Zero shared tables or RPCs; both
+ride the system prompt independently.
 
 ## Role in the app
 
@@ -46,6 +69,16 @@ in `docs/user/memory.md`. The dev side has four moving parts:
 - `src/lib/tools/memory_create.ts`, `memory_update.ts`,
   `memory_invalidate.ts`, `memory_delete.ts` — the CRUD surface.
   Invalidate halves confidence; delete hard-removes.
+- `src/lib/tools/memory_reaffirm.ts`, `memory_doubt.ts` — the
+  volitional confidence nudges. +0.5 cap 10.0 and ×0.7 no floor
+  respectively, matching the `reaffirm_memory_confidence` /
+  `doubt_memory_confidence` RPCs. Sit alongside the reflection-
+  only `memory_invalidate` (halving) in the `memoryToolbox`.
+- `src/lib/tools/memory_relate.ts`, `memory_unrelate.ts` — the
+  graph layer. Four kinds (supports / contradicts / generalises
+  / specialises); self-loops rejected at the tool boundary;
+  duplicate edges collapse to a no-op (unique constraint on
+  `(user_id, from, to, kind)`).
 - `src/lib/tools/memory_recall.ts` — top-level tool the main
   model calls; triggers `RecallAgent`.
 - `src/lib/agents/recall/agent.ts`, `prompt.ts` — the recall
@@ -104,10 +137,32 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   - `embedding_claim_holder`, `embedding_claim_expires` — per-row
     claim for the embeddings worker
   - `confidence real default 1.0` — starts at 1.0 on create;
-    `memory_invalidate` halves it; `memory_update` calls the
-    `bump_memory_confidence` RPC which adds 1.0 up to 10.0.
-    Search floors at 0.05 and applies a log boost so
-    corroborated memories rank higher.
+    `memory_invalidate` halves it (reflection-only, ×0.5);
+    `memory_update` calls the `bump_memory_confidence` RPC which
+    adds 1.0 up to 10.0; the chat-side `memory_reaffirm` calls
+    `reaffirm_memory_confidence` (+0.5 cap 10.0) and
+    `memory_doubt` calls `doubt_memory_confidence` (×0.7 no
+    floor). Search floors at 0.05 and applies a log boost so
+    corroborated memories rank higher. `classifyMemoryConfidence`
+    in `src/lib/memories.ts` is the single source of truth for
+    the qualitative-tag thresholds (>=5.0 corroborated, >=1.5
+    neutral/no-tag, >=0.5 hedged, <0.5 shaky).
+- **`memory_relations` table** — directed edges on the graph.
+  Columns: `id`, `user_id`, `from_memory_id`, `to_memory_id`,
+  `kind`, `note`, `created_at`. `kind in
+  ('supports','contradicts','generalises','specialises')` as a
+  check constraint. Unique constraint on `(user_id,
+  from_memory_id, to_memory_id, kind)` collapses duplicate
+  inserts. Both FKs have `on delete cascade`, so deleting a
+  memory cleans up all its edges (in and out) automatically.
+  Indexed on `(user_id, from_memory_id)` and `(user_id,
+  to_memory_id)` for forward and reverse traversal.
+- **`get_memory_relations(p_ids uuid[])` RPC** — the retrieval
+  primitive the opening-recall, `memory_search`, and
+  `Memories.svelte` paths all share. Returns outbound edges for
+  the supplied ids, joined to the target memory's label / data /
+  confidence fields, RLS-scoped by `auth.uid()` through the
+  underlying tables.
 - **Trigger `clear_memory_embedding_on_change`** — nulls
   `embedding`, `embedding_model`, and both claim columns when
   `label` or `data` changes. Ensures an in-flight worker save
@@ -141,6 +196,24 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   `decay_memory_confidence` RPC. Not destructive.
 - `memory_delete.execute({ id })` — hard delete. User-directed
   only; the reflection agent's toolbox excludes this tool.
+- `memory_reaffirm.execute({ id })` — +0.5 cap 10.0 via
+  `reaffirm_memory_confidence`. Gentler than the reflection
+  agent's bump (+1.0). Returns `{id, confidence}` post-bump.
+- `memory_doubt.execute({ id })` — ×0.7 no floor via
+  `doubt_memory_confidence`. Gentler than invalidate's halving.
+  Returns `{id, confidence}` post-decay.
+- `memory_relate.execute({ from_id, to_id, kind, note? })` —
+  inserts an edge. Rejects self-loops at the wire boundary.
+  Duplicate edges (unique-constraint violation) are mapped to
+  `{ok:true, already_exists:true, kind}` rather than an error.
+- `memory_unrelate.execute({ id })` — deletes an edge row.
+  Hard-delete; no soft variant. The `id` is the relation row's
+  id, not a memory id.
+- `memory_search.execute({ query, limit })` — vector search
+  merged with ILIKE. Result shape now includes `confidence`,
+  `confidence_tag` (nullable), and a `relations` array per row
+  hydrated from `get_memory_relations`. Up to 5 edges per
+  source (`SEARCH_RELATION_FANOUT`).
 - `RecallAgent.run(req): Promise<AgentRunResult<RecallOutput>>` —
   `RecallOutput` is a discriminated union:
   `{kind:'none'} | {kind:'note', note:string}`. The recall tool
@@ -230,6 +303,36 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   meaningless updates, but if you ever expose update to a
   looser caller, consider whether that counter needs
   gating.
+- **Confidence deltas are per-layer.** Reflection agent uses
+  the stronger bump (+1.0) and halving decay (×0.5) because it
+  operates on settled evidence; the chat-side reaffirm (+0.5)
+  and doubt (×0.7) are mid-turn nudges on a single exchange.
+  Do not collapse them without reconsidering the implied
+  "evidence strength" of each path.
+- **`memory_invalidate` stays alongside `memory_doubt`.** The
+  former halves; the latter multiplies by 0.7. Kept as separate
+  tools so the reflection agent can act decisively on
+  settled-evidence contradictions while the chat model has a
+  gentler lever mid-turn. If observation shows the two
+  collapse in practice, revisit.
+- **`contradicts` edges are stored asymmetrically.** Writing
+  `A contradicts B` does not auto-insert `B contradicts A`.
+  The LLM chooses whether the relationship is directional.
+  Retrieval only traverses outbound edges, so asymmetry
+  matters: if both directions should surface, both need to be
+  asserted.
+- **Relation cycles are legal.** The schema does not enforce
+  acyclicity. Opening-recall's bounded traversal (1 hop, cap 5
+  fan-out) is what prevents a cyclic graph from blowing the
+  priming budget; callers adding deeper traversal must add
+  their own cycle-bound.
+- **Tag leakage into the LLM's voice is expected.** The
+  qualitative tags (`[corroborated]` / `[hedged]` / `[shaky]`)
+  ride inline in the injected memory text on purpose - the
+  model's reply voice will pick up hedging cues from them. If
+  you're reviewing a PR and see the model suddenly qualifying
+  more, that's the volitional layer doing its job, not a
+  regression.
 
 ## Where to go next
 

@@ -21,9 +21,13 @@
    * dragging the others along.
    */
   import { app } from '$lib/state.svelte';
-  import { searchMemoriesSemantic } from '$lib/memories';
+  import {
+    searchMemoriesSemantic,
+    classifyMemoryConfidence,
+    type MemoryConfidenceTag,
+  } from '$lib/memories';
   import { MAX_MEMORY_DATA_CHARS } from '$lib/embeddings/types';
-  import type { Memory } from '$lib/supabase';
+  import type { Memory, MemoryRelation } from '$lib/supabase';
 
   interface Props {
     onClose: () => void;
@@ -85,6 +89,41 @@
   let currentAbort: AbortController | null = null;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Outbound relations keyed by source memory id. Hydrated in parallel
+  // with the search results so the render path reads a synchronous map
+  // per row rather than awaiting per-card. Cleared on every fresh
+  // search; updated locally when the user creates or deletes an edge
+  // so the UI reflects the change without a re-query.
+  const RELATION_KINDS = [
+    'supports',
+    'contradicts',
+    'generalises',
+    'specialises',
+  ] as const;
+  type RelationKind = (typeof RELATION_KINDS)[number];
+
+  // SvelteMap would give us reactivity without the reassignment trick,
+  // but this component doesn't import it yet and the trick is cheap at
+  // this scale (tens of rows). Reassigning the whole map on write is
+  // the idiomatic Svelte 5 pattern for non-rune containers.
+  let relationsByFrom = $state<Map<string, MemoryRelation[]>>(new Map());
+
+  // Inline relation picker state. Only one picker open at a time - same
+  // one-modal-at-a-time discipline as edits and delete confirmations.
+  let relatingFromId = $state<string | null>(null);
+  let pickerQuery = $state('');
+  let pickerCandidates = $state<Memory[]>([]);
+  let pickerKind = $state<RelationKind>('supports');
+  let pickerNote = $state('');
+  let pickerBusy = $state(false);
+  let pickerError = $state<string | null>(null);
+  const MAX_RELATION_NOTE_CHARS = 500;
+  // Debounced picker search. Shares the pattern of the main search
+  // debounce but with its own timer so typing in the picker input
+  // doesn't clobber the main list's debounce window.
+  let pickerDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let pickerAbort: AbortController | null = null;
+
   async function runSearch(q: string): Promise<void> {
     if (!app.supabase) {
       error = 'Not connected to Supabase yet.';
@@ -106,12 +145,226 @@
       });
       if (ctl.signal.aborted) return;
       results = hits;
+      // Hydrate outbound edges for every result in one batched RPC.
+      // Failures degrade silently to an empty map - the list is still
+      // usable without the graph layer, and a follow-up search will
+      // try again.
+      const nextMap = new Map<string, MemoryRelation[]>();
+      if (hits.length > 0 && app.supabase) {
+        try {
+          const edges = await app.supabase.listMemoryRelationsFor(
+            hits.map((m) => m.id)
+          );
+          if (!ctl.signal.aborted) {
+            for (const edge of edges) {
+              const list = nextMap.get(edge.from_memory_id);
+              if (list) list.push(edge);
+              else nextMap.set(edge.from_memory_id, [edge]);
+            }
+          }
+        } catch {
+          // Swallow - the list is more important than the edges.
+        }
+      }
+      if (!ctl.signal.aborted) relationsByFrom = nextMap;
     } catch (err) {
       if (ctl.signal.aborted) return;
       error = err instanceof Error ? err.message : String(err);
     } finally {
       if (currentAbort === ctl) currentAbort = null;
       if (!ctl.signal.aborted) loading = false;
+    }
+  }
+
+  /**
+   * Render the qualitative confidence tag for a memory. Returns one of
+   * 'corroborated' / 'hedged' / 'shaky' or null - the template uses the
+   * null branch to drop the badge entirely rather than show a blank.
+   * The numeric value still shows in the tooltip so curious users can
+   * see the raw number without cluttering the default view.
+   */
+  function confidenceTagFor(m: Memory): MemoryConfidenceTag {
+    return classifyMemoryConfidence(m.confidence);
+  }
+
+  function confidenceTooltip(m: Memory): string {
+    const tag = classifyMemoryConfidence(m.confidence);
+    const base = `confidence ${m.confidence.toFixed(2)}`;
+    return tag === null ? base : `${base} (${tag})`;
+  }
+
+  async function reaffirmMemory(m: Memory): Promise<void> {
+    if (!app.supabase) return;
+    try {
+      const next = await app.supabase.reaffirmMemoryConfidence(m.id);
+      if (next === null) return;
+      results = results.map((row) =>
+        row.id === m.id ? { ...row, confidence: next } : row
+      );
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function doubtMemory(m: Memory): Promise<void> {
+    if (!app.supabase) return;
+    try {
+      const next = await app.supabase.doubtMemoryConfidence(m.id);
+      if (next === null) return;
+      results = results.map((row) =>
+        row.id === m.id ? { ...row, confidence: next } : row
+      );
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  function startRelate(m: Memory): void {
+    relatingFromId = m.id;
+    pickerQuery = '';
+    pickerCandidates = [];
+    pickerKind = 'supports';
+    pickerNote = '';
+    pickerBusy = false;
+    pickerError = null;
+    // Same one-panel-open discipline as edits/deletes.
+    if (editingId) cancelEdit();
+    if (deletingId) cancelDelete();
+  }
+
+  function cancelRelate(): void {
+    if (pickerDebounceTimer !== null) {
+      clearTimeout(pickerDebounceTimer);
+      pickerDebounceTimer = null;
+    }
+    if (pickerAbort) {
+      pickerAbort.abort();
+      pickerAbort = null;
+    }
+    relatingFromId = null;
+    pickerQuery = '';
+    pickerCandidates = [];
+    pickerKind = 'supports';
+    pickerNote = '';
+    pickerBusy = false;
+    pickerError = null;
+  }
+
+  async function runPickerSearch(q: string, excludeId: string): Promise<void> {
+    if (!app.supabase) return;
+    if (pickerAbort) pickerAbort.abort();
+    const ctl = new AbortController();
+    pickerAbort = ctl;
+    try {
+      const hits = await searchMemoriesSemantic(q, 10, {
+        supabase: app.supabase,
+        venice: app.venice,
+        signal: ctl.signal,
+      });
+      if (ctl.signal.aborted) return;
+      // Drop the source memory from the candidates so the user can't
+      // self-loop - the tool schema rejects it, but we can prevent the
+      // user from even trying.
+      pickerCandidates = hits.filter((h) => h.id !== excludeId);
+    } catch {
+      // Silent - the picker just stays empty if search fails.
+    } finally {
+      if (pickerAbort === ctl) pickerAbort = null;
+    }
+  }
+
+  // Debounced picker search. Re-runs whenever the picker query changes
+  // or a picker is first opened.
+  $effect(() => {
+    if (!relatingFromId) return;
+    const q = pickerQuery.trim();
+    const sourceId = relatingFromId;
+    if (pickerDebounceTimer !== null) clearTimeout(pickerDebounceTimer);
+    pickerDebounceTimer = setTimeout(() => {
+      pickerDebounceTimer = null;
+      void runPickerSearch(q, sourceId);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      if (pickerDebounceTimer !== null) {
+        clearTimeout(pickerDebounceTimer);
+        pickerDebounceTimer = null;
+      }
+    };
+  });
+
+  async function submitRelation(toId: string): Promise<void> {
+    if (!app.supabase || !relatingFromId) return;
+    const fromId = relatingFromId;
+    const note = pickerNote.trim();
+    if (note.length > MAX_RELATION_NOTE_CHARS) {
+      pickerError = `Note must be ${MAX_RELATION_NOTE_CHARS} chars or fewer.`;
+      return;
+    }
+    pickerBusy = true;
+    pickerError = null;
+    try {
+      const created = await app.supabase.createMemoryRelation(
+        fromId,
+        toId,
+        pickerKind,
+        note.length > 0 ? note : null
+      );
+      // Hydrate the full edge row for the local map. We have the target
+      // memory's label/data/confidence in the candidate list the user
+      // just clicked, so synthesise the joined row without a refetch.
+      const target =
+        pickerCandidates.find((c) => c.id === toId) ??
+        results.find((r) => r.id === toId);
+      if (target) {
+        const edge: MemoryRelation = {
+          id: created.id,
+          from_memory_id: fromId,
+          to_memory_id: toId,
+          kind: created.kind,
+          note: note.length > 0 ? note : null,
+          created_at: new Date().toISOString(),
+          to_label: target.label,
+          to_data: target.data,
+          to_confidence: target.confidence,
+        };
+        const nextMap = new Map(relationsByFrom);
+        const list = nextMap.get(fromId);
+        nextMap.set(fromId, list ? [...list, edge] : [edge]);
+        relationsByFrom = nextMap;
+      }
+      cancelRelate();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Unique-constraint failure = the edge already exists. Treat as
+      // success from the UI's perspective; the user gets the same
+      // outcome they asked for.
+      if (msg.includes('duplicate key value') || msg.includes('unique constraint')) {
+        cancelRelate();
+      } else {
+        pickerError = msg;
+      }
+    } finally {
+      pickerBusy = false;
+    }
+  }
+
+  async function deleteRelation(
+    fromId: string,
+    relationId: string
+  ): Promise<void> {
+    if (!app.supabase) return;
+    try {
+      await app.supabase.deleteMemoryRelation(relationId);
+      const nextMap = new Map(relationsByFrom);
+      const list = nextMap.get(fromId);
+      if (list) {
+        const filtered = list.filter((e) => e.id !== relationId);
+        if (filtered.length > 0) nextMap.set(fromId, filtered);
+        else nextMap.delete(fromId);
+      }
+      relationsByFrom = nextMap;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -241,6 +494,17 @@
     try {
       await app.supabase.deleteMemory(id);
       results = results.filter((m) => m.id !== id);
+      // Mirror the DB-side ON DELETE CASCADE on memory_relations FKs
+      // so the UI doesn't show ghost edges pointing at (or from) a
+      // memory that no longer exists. Drops both outbound and inbound
+      // edges for the deleted memory.
+      const nextMap = new Map<string, MemoryRelation[]>();
+      for (const [fromId, edges] of relationsByFrom) {
+        if (fromId === id) continue;
+        const kept = edges.filter((e) => e.to_memory_id !== id);
+        if (kept.length > 0) nextMap.set(fromId, kept);
+      }
+      relationsByFrom = nextMap;
       // If the deleted row was also the one being edited (e.g. the
       // user hit Delete from inside the editor), tear the editor
       // down so it can't reference a row that no longer exists.
@@ -250,6 +514,7 @@
         editData = '';
         saveState = { kind: 'idle' };
       }
+      if (relatingFromId === id) cancelRelate();
       deletingId = null;
       deleteError = null;
     } catch (err) {
@@ -402,17 +667,77 @@
                 <div class="memory-view">
                   <div class="memory-header-row">
                     <span class="memory-card-label">{m.label}</span>
+                    {#if confidenceTagFor(m)}
+                      <span
+                        class="memory-confidence-tag tag-{confidenceTagFor(m)}"
+                        title={confidenceTooltip(m)}
+                      >{confidenceTagFor(m)}</span>
+                    {:else}
+                      <span
+                        class="subtle memory-confidence-chip"
+                        title={confidenceTooltip(m)}
+                      >~{m.confidence.toFixed(1)}</span>
+                    {/if}
                     <span class="subtle memory-card-meta" title={m.updated_at}>
                       {relativeTime(m.updated_at)}
                     </span>
                   </div>
                   <p class="memory-card-data">{m.data}</p>
+                  {#if (relationsByFrom.get(m.id) ?? []).length > 0}
+                    <ul class="memory-relations">
+                      {#each relationsByFrom.get(m.id) ?? [] as edge (edge.id)}
+                        <li class="memory-relation">
+                          <span class="memory-relation-kind kind-{edge.kind}">
+                            {edge.kind}
+                          </span>
+                          {#if classifyMemoryConfidence(edge.to_confidence)}
+                            <span
+                              class="memory-confidence-tag tag-{classifyMemoryConfidence(edge.to_confidence)}"
+                            >{classifyMemoryConfidence(edge.to_confidence)}</span>
+                          {/if}
+                          <span class="memory-relation-label">
+                            {edge.to_label}
+                          </span>
+                          {#if edge.note}
+                            <span class="subtle memory-relation-note">
+                              — {edge.note}
+                            </span>
+                          {/if}
+                          <button
+                            type="button"
+                            class="memory-relation-remove"
+                            aria-label="Remove relation"
+                            title="Remove relation"
+                            onclick={() => deleteRelation(m.id, edge.id)}
+                          >×</button>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
                   <div class="memory-card-actions">
                     <button
                       type="button"
                       class="secondary"
                       onclick={() => startEdit(m)}
                     >Edit</button>
+                    <button
+                      type="button"
+                      class="secondary"
+                      onclick={() => reaffirmMemory(m)}
+                      title="Nudge confidence upward (+0.5)"
+                    >Reaffirm</button>
+                    <button
+                      type="button"
+                      class="secondary"
+                      onclick={() => doubtMemory(m)}
+                      title="Nudge confidence downward (x0.7)"
+                    >Doubt</button>
+                    <button
+                      type="button"
+                      class="secondary"
+                      onclick={() => startRelate(m)}
+                      disabled={relatingFromId === m.id}
+                    >+ Relate</button>
                     {#if deletingId === m.id}
                       <span class="subtle memory-delete-prompt">Really delete?</span>
                       <button
@@ -433,6 +758,83 @@
                       >Delete</button>
                     {/if}
                   </div>
+                  {#if relatingFromId === m.id}
+                    <div class="memory-relate-picker">
+                      <div class="form-row">
+                        <label for="relate-kind-{m.id}">Kind</label>
+                        <select
+                          id="relate-kind-{m.id}"
+                          bind:value={pickerKind}
+                        >
+                          {#each RELATION_KINDS as kind}
+                            <option value={kind}>{kind}</option>
+                          {/each}
+                        </select>
+                      </div>
+                      <div class="form-row">
+                        <label for="relate-query-{m.id}">Target</label>
+                        <input
+                          id="relate-query-{m.id}"
+                          type="search"
+                          placeholder="Search memories to link..."
+                          bind:value={pickerQuery}
+                          autocomplete="off"
+                          spellcheck="false"
+                        />
+                      </div>
+                      {#if pickerCandidates.length > 0}
+                        <ul class="memory-relate-candidates">
+                          {#each pickerCandidates as cand (cand.id)}
+                            <li>
+                              <button
+                                type="button"
+                                class="memory-relate-candidate"
+                                disabled={pickerBusy}
+                                onclick={() => submitRelation(cand.id)}
+                              >
+                                {#if classifyMemoryConfidence(cand.confidence)}
+                                  <span
+                                    class="memory-confidence-tag tag-{classifyMemoryConfidence(cand.confidence)}"
+                                  >{classifyMemoryConfidence(cand.confidence)}</span>
+                                {/if}
+                                <span class="memory-relate-candidate-label">
+                                  {cand.label}
+                                </span>
+                                <span class="subtle memory-relate-candidate-data">
+                                  {cand.data}
+                                </span>
+                              </button>
+                            </li>
+                          {/each}
+                        </ul>
+                      {:else if pickerQuery.trim().length > 0}
+                        <p class="subtle memory-relate-empty">
+                          No candidates match "{pickerQuery.trim()}".
+                        </p>
+                      {/if}
+                      <div class="form-row">
+                        <label for="relate-note-{m.id}">Note (optional)</label>
+                        <input
+                          id="relate-note-{m.id}"
+                          type="text"
+                          maxlength={MAX_RELATION_NOTE_CHARS}
+                          bind:value={pickerNote}
+                          placeholder="Short rationale for the link..."
+                        />
+                      </div>
+                      {#if pickerError}
+                        <p class="error">{pickerError}</p>
+                      {/if}
+                      <div class="memory-edit-actions">
+                        <button
+                          type="button"
+                          class="secondary"
+                          onclick={cancelRelate}
+                          disabled={pickerBusy}
+                        >Cancel</button>
+                      </div>
+                    </div>
+                  {/if}
                   {#if deletingId === m.id && deleteError}
                     <p class="error">{deleteError}</p>
                   {/if}
@@ -655,4 +1057,200 @@
   /* `button.danger` is styled globally in styles.css — no local
      override needed. The confirmed-delete button picks up the red
      fill and ink-on-danger text color from there. */
+
+  /* Confidence indicators. The three tags (corroborated / hedged /
+     shaky) are the meaningful cases; neutral memories get a quiet
+     numeric chip instead so the user can still see the raw value. The
+     tag colours are restrained - this is diagnostic chrome, not a
+     headline element. */
+  .memory-confidence-tag,
+  .memory-confidence-chip {
+    font-size: 0.7rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    line-height: 1;
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+
+  .memory-confidence-tag {
+    text-transform: lowercase;
+    font-weight: 500;
+  }
+
+  .tag-corroborated {
+    background: var(--accent-bg, var(--bg-2));
+    border-color: var(--accent, var(--border));
+    color: var(--accent, var(--text));
+  }
+
+  .tag-hedged {
+    background: var(--bg-2);
+    color: var(--muted);
+  }
+
+  .tag-shaky {
+    background: var(--bg-2);
+    color: var(--muted);
+    border-style: dashed;
+  }
+
+  /* Relation list rendered under the memory body. Each row is one
+     outbound edge: kind label, optional confidence tag on the target,
+     the target's label, optional note, and a remove button. */
+  .memory-relations {
+    list-style: none;
+    margin: 0 0 0.6rem;
+    padding: 0.4rem 0 0;
+    border-top: 1px dashed var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .memory-relation {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    font-size: 0.82rem;
+    flex-wrap: wrap;
+  }
+
+  .memory-relation-kind {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.1rem 0.4rem;
+    border-radius: var(--radius);
+    background: var(--bg-2);
+    color: var(--muted);
+    flex: 0 0 auto;
+  }
+
+  /* Keep contradicts visually distinct - it's the one relation where
+     drawing the edge means the source and target actively disagree. A
+     faint red tint makes it scan differently from the supporting /
+     generalising ones without shouting. */
+  .kind-contradicts {
+    background: var(--danger-bg, var(--bg-2));
+    color: var(--danger, var(--muted));
+  }
+
+  .memory-relation-label {
+    font-weight: 500;
+    word-break: break-word;
+  }
+
+  .memory-relation-note {
+    font-size: 0.8rem;
+    word-break: break-word;
+    flex: 1 1 12rem;
+  }
+
+  .memory-relation-remove {
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    padding: 0 0.25rem;
+    font-size: 0.95rem;
+    line-height: 1;
+    cursor: pointer;
+    margin-left: auto;
+  }
+
+  .memory-relation-remove:hover {
+    color: var(--danger, var(--text));
+  }
+
+  /* Inline picker for the + Relate action. Same vertical flow as the
+     edit form so the two share a visual vocabulary. */
+  .memory-relate-picker {
+    margin-top: 0.5rem;
+    padding: 0.6rem 0.75rem;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .memory-relate-picker .form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .memory-relate-picker label {
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  .memory-relate-picker input,
+  .memory-relate-picker select {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.35rem 0.5rem;
+    font: inherit;
+    width: 100%;
+  }
+
+  .memory-relate-candidates {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 10rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .memory-relate-candidate {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    width: 100%;
+    text-align: left;
+    padding: 0.35rem 0.5rem;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font: inherit;
+    flex-wrap: wrap;
+  }
+
+  .memory-relate-candidate:hover:not(:disabled) {
+    background: var(--bg-2);
+  }
+
+  .memory-relate-candidate:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  .memory-relate-candidate-label {
+    font-weight: 500;
+    word-break: break-word;
+  }
+
+  .memory-relate-candidate-data {
+    font-size: 0.8rem;
+    flex: 1 1 12rem;
+    /* Elide long candidate bodies so the picker stays scannable - the
+       user is choosing a target by label, not reading full memories. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .memory-relate-empty {
+    margin: 0.25rem 0;
+    font-size: 0.85rem;
+  }
 </style>

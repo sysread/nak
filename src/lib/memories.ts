@@ -28,6 +28,58 @@ import type { SupabaseService, Memory } from './supabase';
 import type { VeniceClient } from './venice';
 import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from './models';
 
+/**
+ * Confidence thresholds used across the volitional-memory layer to turn
+ * the raw scalar into a qualitative tag the LLM reads. Single source of
+ * truth so retrieval (opening-recall, memory_search tool result),
+ * Memories.svelte's UI badge, and tests all agree on the boundaries.
+ *
+ * Defaults and dynamics (see supabase/schema.sql for the RPCs):
+ *   - memory_create default: 1.0 (-> no tag)
+ *   - memory_reaffirm: +0.5 cap 10.0
+ *   - memory_doubt:   x0.7 no floor
+ *   - memory_invalidate (reflection only): x0.5 no floor
+ *   - search-hide floor: confidence < 0.05 hides from search
+ *
+ * Eight reaffirms from default crosses [corroborated]; two doubts
+ * crosses into [hedged]; five crosses into [shaky].
+ */
+export const MEMORY_CONFIDENCE_CORROBORATED = 5.0;
+export const MEMORY_CONFIDENCE_NEUTRAL = 1.5;
+export const MEMORY_CONFIDENCE_HEDGED = 0.5;
+
+export type MemoryConfidenceTag = 'corroborated' | 'hedged' | 'shaky' | null;
+
+/**
+ * Map a numeric confidence onto a qualitative tag, or `null` when the
+ * value is in the "default trust, no tag" band. Kept as a pure
+ * classifier so callers can decide their own rendering (braces vs
+ * uppercase vs icon).
+ */
+export function classifyMemoryConfidence(
+  confidence: number
+): MemoryConfidenceTag {
+  if (confidence >= MEMORY_CONFIDENCE_CORROBORATED) return 'corroborated';
+  if (confidence >= MEMORY_CONFIDENCE_NEUTRAL) return null;
+  if (confidence >= MEMORY_CONFIDENCE_HEDGED) return 'hedged';
+  return 'shaky';
+}
+
+/**
+ * Render a confidence tag as a prose prefix. The bracketed form is
+ * what gets injected into the LLM-facing memory text (opening-recall's
+ * <think> block, memory_search's tool result), so the model reads its
+ * own uncertainty without having to reason about numbers.
+ *
+ * Returns empty string (not a space) when the value is in the neutral
+ * band - callers append this directly to the label and rely on a
+ * single-space separator inside the tag itself to keep spacing clean.
+ */
+export function formatMemoryConfidenceTag(confidence: number): string {
+  const tag = classifyMemoryConfidence(confidence);
+  return tag === null ? '' : `[${tag}] `;
+}
+
 export interface SearchMemoriesDeps {
   supabase: SupabaseService;
   venice: VeniceClient | null;

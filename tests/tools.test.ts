@@ -267,6 +267,10 @@ describe('tool registry', () => {
       'memory_create',
       'memory_update',
       'memory_delete',
+      'memory_reaffirm',
+      'memory_doubt',
+      'memory_relate',
+      'memory_unrelate',
     ]);
     expect(conversationsToolbox.tools.map((t) => t.name)).toEqual([
       'conversation_search',
@@ -652,7 +656,9 @@ describe('memory_create', () => {
   it('trims label and forwards data', async () => {
     const { svc, spies } = mockSupabase();
     await tool.execute({ label: '  note  ', data: 'body' }, ctxFor(svc));
-    expect(spies.createMemory).toHaveBeenCalledWith('note', 'body');
+    // Third arg is `confidence`, optional; omitting passes undefined
+    // through so the DB default (1.0) applies.
+    expect(spies.createMemory).toHaveBeenCalledWith('note', 'body', undefined);
   });
 
   it('rejects a missing label', async () => {
@@ -728,12 +734,18 @@ describe('memoryToolbox', () => {
     // erasing user data based on its own reading of the conversation.
     // memory_delete stays available to the main chat (user-directed
     // "forget X"). memory_invalidate halves confidence; recoverable.
+    // The volitional-memory additions (reaffirm/doubt/relate/unrelate)
+    // ride alongside - finer-grained nudges plus the graph layer.
     const names = memoryToolbox.tools.map((t) => t.name);
     expect(names).toEqual([
       'memory_search',
       'memory_create',
       'memory_update',
       'memory_invalidate',
+      'memory_reaffirm',
+      'memory_doubt',
+      'memory_relate',
+      'memory_unrelate',
     ]);
     expect(names).not.toContain('memory_delete');
     expect(names).not.toContain('toggle_tools');
@@ -840,7 +852,9 @@ describe('executeToolboxCall', () => {
   it('dispatches to the named tool within the given toolbox', async () => {
     const { svc, spies } = mockSupabase();
     await executeToolboxCall(memoryToolbox, 'memory_create', { label: 'x', data: 'y' }, ctxFor(svc));
-    expect(spies.createMemory).toHaveBeenCalledWith('x', 'y');
+    // createMemory now takes an optional third `confidence` arg; the
+    // tool passes `undefined` when the caller doesn't supply one.
+    expect(spies.createMemory).toHaveBeenCalledWith('x', 'y', undefined);
   });
 
   it("throws with the toolbox name in the message when the tool isn't in this toolbox", async () => {

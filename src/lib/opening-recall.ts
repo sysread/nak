@@ -37,12 +37,23 @@
  * settled thread - none of which want to see it.
  */
 
-import type { SupabaseService } from './supabase';
+import type { MemoryRelation, SupabaseService } from './supabase';
 import type { VeniceClient } from './venice';
 import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from './models';
 import { createLogger } from './logger.svelte';
+import { formatMemoryConfidenceTag } from './memories';
 
 const log = createLogger('opening-recall');
+
+/**
+ * Max outbound edges to render per matched memory in the opening-recall
+ * block. The fan-out cap keeps the <think> block bounded when a well-
+ * connected memory has many relations - the graph can grow over time
+ * but the priming budget can't. If more than this many edges exist, we
+ * show the first N (by created_at asc, as the RPC returns them) and let
+ * the rest surface via the Memories UI or a targeted memory_search.
+ */
+const OPENING_RECALL_RELATION_FANOUT = 5;
 
 /**
  * Minimum boosted similarity score for a memory to be injected.
@@ -102,7 +113,13 @@ export async function recallOpeningMemories(
 
   const padded = padEmbeddingForStorage(rawEmbedding);
 
-  let rows: Array<{ id: string; label: string; data: string; similarity: number }>;
+  let rows: Array<{
+    id: string;
+    label: string;
+    data: string;
+    confidence: number;
+    similarity: number;
+  }>;
   try {
     rows = await supabase.searchMemoriesByEmbeddingScored(
       padded,
@@ -119,6 +136,7 @@ export async function recallOpeningMemories(
   log.debug('scored results', {
     count: rows.length,
     scores: rows.map((r) => Number(r.similarity.toFixed(3))),
+    confidences: rows.map((r) => Number(r.confidence.toFixed(2))),
     labels: rows.map((r) => r.label),
   });
 
@@ -136,28 +154,87 @@ export async function recallOpeningMemories(
     return null;
   }
 
+  // Pull outbound edges for the matched memories in a single batched
+  // RPC, then group them back per source id. One round trip keeps the
+  // priming budget bounded regardless of how many memories matched.
+  // Failures degrade silently to "no relations" rather than wiping the
+  // whole recall block - edges are an enrichment, not a requirement.
+  let relationsByFrom = new Map<string, MemoryRelation[]>();
+  try {
+    const ids = matching.map((r) => r.id);
+    const edges = await supabase.listMemoryRelationsFor(ids);
+    relationsByFrom = groupRelationsByFrom(edges);
+  } catch (err) {
+    log.debug('relation fetch failed; continuing without edges', err);
+  }
+
   log.info('opening recall matched', {
     matched: matching.length,
     thresholdedOut: rows.length - matching.length,
     topScore: Number(matching[0].similarity.toFixed(3)),
     labels: matching.map((r) => r.label),
+    edgeCounts: matching.map((r) => relationsByFrom.get(r.id)?.length ?? 0),
   });
 
-  return formatThinkBlock(matching);
+  return formatThinkBlock(matching, relationsByFrom);
+}
+
+/**
+ * Bucket outbound relations by their `from_memory_id` so the formatter
+ * can walk the matched rows in order without re-scanning the edge list
+ * for each. Preserves the RPC's `order by created_at asc` ordering so
+ * the earliest-drawn edge renders first under its source.
+ */
+function groupRelationsByFrom(
+  edges: MemoryRelation[]
+): Map<string, MemoryRelation[]> {
+  const out = new Map<string, MemoryRelation[]>();
+  for (const edge of edges) {
+    const list = out.get(edge.from_memory_id);
+    if (list) list.push(edge);
+    else out.set(edge.from_memory_id, [edge]);
+  }
+  return out;
 }
 
 /**
  * Render the filtered memory rows as an assistant-content string
  * wrapped in <think>...</think>. The stem is a first-person musing
- * so the model reads it as its own prior recollection; the bullet
- * list that follows is the raw memory data verbatim (label + data)
- * because the model is better at integrating facts from structured
- * text than from a re-summarised blob.
+ * so the model reads it as its own prior recollection; each bullet is
+ * the matched memory prefixed by its qualitative confidence tag, with
+ * outbound edges indented under their source.
+ *
+ * Why the tag rides in the text itself: the model is better at picking
+ * up hedging cues from inline language than from out-of-band metadata.
+ * A [hedged] prefix nudges the reply toward "I think..." phrasing; a
+ * [corroborated] one toward confident assertion. That leakage into the
+ * model's voice is the intended effect of the volitional layer.
+ *
+ * Relations render as "  supports: [tag] <target label>: <target data>"
+ * so the LLM sees the graph, not just a bag of disconnected memories.
+ * Fan-out is capped per source by OPENING_RECALL_RELATION_FANOUT.
  */
 function formatThinkBlock(
-  rows: Array<{ label: string; data: string }>
+  rows: Array<{
+    id: string;
+    label: string;
+    data: string;
+    confidence: number;
+  }>,
+  relationsByFrom: Map<string, MemoryRelation[]>
 ): string {
-  const lines = rows.map((r) => `- ${r.label}: ${r.data}`);
+  const lines: string[] = [];
+  for (const r of rows) {
+    const tag = formatMemoryConfidenceTag(r.confidence);
+    lines.push(`- ${tag}${r.label}: ${r.data}`);
+    const edges = relationsByFrom.get(r.id) ?? [];
+    for (const edge of edges.slice(0, OPENING_RECALL_RELATION_FANOUT)) {
+      const toTag = formatMemoryConfidenceTag(edge.to_confidence);
+      lines.push(
+        `  ${edge.kind}: ${toTag}${edge.to_label}: ${edge.to_data}`
+      );
+    }
+  }
   return (
     "<think>Let's see, this is what I remember off the top of my head " +
     "about the user's prompt...\n" +

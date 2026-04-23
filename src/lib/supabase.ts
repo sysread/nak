@@ -130,13 +130,44 @@ function coerceThread(row: Record<string, unknown>): Thread {
  * exists on the table but we deliberately don't ship it to the client
  * (1024 floats is a lot of bytes for a list view). The embed-on-write
  * path will populate it server-side or via a dedicated client method.
+ *
+ * `confidence` is the volitional-memory layer's trust scalar. Default 1.0
+ * on create, capped at 10.0. The reflection agent's `memory_invalidate`
+ * halves it; the chat-side `memory_reaffirm` / `memory_doubt` tools
+ * nudge it (+0.5 and ×0.7 respectively). Below 0.05 the memory hides
+ * from search (soft-delete). The field is required everywhere `Memory`
+ * rides because the Memories UI and opening-recall both format a
+ * qualitative tag from it - see MEMORY_CONFIDENCE_* in src/lib/memories.ts.
  */
 export interface Memory {
   id: string;
   label: string;
   data: string;
+  confidence: number;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * A directed edge between two memories in the volitional-memory graph.
+ * The LLM draws these via the memory_relate tool; the user can add and
+ * remove them in the Memories UI. Retrieval traverses outbound edges
+ * one hop deep so the LLM sees linked context alongside a match.
+ *
+ * `to_label` / `to_data` / `to_confidence` are the target memory's
+ * display fields, joined in by `get_memory_relations` so consumers can
+ * render the edge inline without a second round-trip.
+ */
+export interface MemoryRelation {
+  id: string;
+  from_memory_id: string;
+  to_memory_id: string;
+  kind: 'supports' | 'contradicts' | 'generalises' | 'specialises';
+  note: string | null;
+  created_at: string;
+  to_label: string;
+  to_data: string;
+  to_confidence: number;
 }
 
 /**
@@ -991,7 +1022,7 @@ export class SupabaseService {
   async searchMemories(query: string, limit: number): Promise<Memory[]> {
     let q = this.client
       .from('memories')
-      .select('id, label, data, created_at, updated_at')
+      .select('id, label, data, confidence, created_at, updated_at')
       .order('updated_at', { ascending: false })
       .limit(limit);
     if (query && query.length > 0) {
@@ -1008,13 +1039,31 @@ export class SupabaseService {
     return (data ?? []) as Memory[];
   }
 
-  async createMemory(label: string, data: string): Promise<Memory> {
+  /**
+   * Insert a new memory. `confidence` is optional; omitting it defers to
+   * the schema default (1.0). The volitional-memory tools pass it
+   * explicitly when the LLM marks a memory as already-corroborated at
+   * birth; the Memories.svelte create flow and the reflection agent
+   * leave it unset.
+   */
+  async createMemory(
+    label: string,
+    data: string,
+    confidence?: number
+  ): Promise<Memory> {
     const session = await this.getSession();
     if (!session) throw new SupabaseError('Not authenticated.');
+    const payload: {
+      user_id: string;
+      label: string;
+      data: string;
+      confidence?: number;
+    } = { user_id: session.user.id, label, data };
+    if (confidence !== undefined) payload.confidence = confidence;
     const { data: row, error } = await this.client
       .from('memories')
-      .insert({ user_id: session.user.id, label, data })
-      .select('id, label, data, created_at, updated_at')
+      .insert(payload)
+      .select('id, label, data, confidence, created_at, updated_at')
       .single();
     if (error) throw new SupabaseError(error.message);
     return row as Memory;
@@ -1033,7 +1082,7 @@ export class SupabaseService {
       .from('memories')
       .update({ ...patch, updated_at: new Date().toISOString() })
       .eq('id', id)
-      .select('id, label, data, created_at, updated_at')
+      .select('id, label, data, confidence, created_at, updated_at')
       .single();
     if (error) throw new SupabaseError(error.message);
     return row as Memory;
@@ -1433,10 +1482,40 @@ export class SupabaseService {
   }
 
   /**
+   * Chat-side reaffirm: +0.5 capped at 10.0. Gentler than the reflection
+   * agent's bump (+1.0) because it fires mid-turn on a single exchange
+   * rather than on settled evidence across a conversation. Returns the
+   * post-adjustment value so the tool result can echo it to the LLM.
+   */
+  async reaffirmMemoryConfidence(id: string): Promise<number | null> {
+    const { data, error } = await this.client.rpc(
+      'reaffirm_memory_confidence',
+      { p_id: id }
+    );
+    if (error) throw new SupabaseError(error.message);
+    return typeof data === 'number' ? data : null;
+  }
+
+  /**
+   * Chat-side doubt: ×0.7 with no floor. Gentler than the reflection
+   * agent's decay (×0.5). Five doubts from 1.0 lands around 0.168
+   * ([shaky] tag territory) without crashing below the 0.05 search-hide
+   * floor in one hit.
+   */
+  async doubtMemoryConfidence(id: string): Promise<number | null> {
+    const { data, error } = await this.client.rpc('doubt_memory_confidence', {
+      p_id: id,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return typeof data === 'number' ? data : null;
+  }
+
+  /**
    * Cosine-similarity search via the `search_memories_by_embedding` RPC.
    * The RPC enforces `user_id = auth.uid()` in addition to RLS and hides
    * the `embedding` column from the response — 2048 floats per row is a
-   * lot to ship back just to throw away.
+   * lot to ship back just to throw away. Confidence rides the row so
+   * consumers can format the qualitative tag without a second round-trip.
    */
   async searchMemoriesByEmbedding(
     queryEmbedding: number[],
@@ -1460,7 +1539,15 @@ export class SupabaseService {
   async searchMemoriesByEmbeddingScored(
     queryEmbedding: number[],
     limit: number
-  ): Promise<Array<{ id: string; label: string; data: string; similarity: number }>> {
+  ): Promise<
+    Array<{
+      id: string;
+      label: string;
+      data: string;
+      confidence: number;
+      similarity: number;
+    }>
+  > {
     const { data, error } = await this.client.rpc(
       'search_memories_by_embedding_scored',
       {
@@ -1473,8 +1560,68 @@ export class SupabaseService {
       id: string;
       label: string;
       data: string;
+      confidence: number;
       similarity: number;
     }>;
+  }
+
+  /**
+   * Insert a new edge in the memory-relations graph. The unique
+   * constraint on (user_id, from_memory_id, to_memory_id, kind) means a
+   * repeated call for the same edge raises; the tool-side handler maps
+   * that to a friendlier "already exists" payload. Self-loops are
+   * rejected at the tool boundary, not here.
+   */
+  async createMemoryRelation(
+    fromId: string,
+    toId: string,
+    kind: MemoryRelation['kind'],
+    note: string | null
+  ): Promise<{ id: string; kind: MemoryRelation['kind'] }> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const { data, error } = await this.client
+      .from('memory_relations')
+      .insert({
+        user_id: session.user.id,
+        from_memory_id: fromId,
+        to_memory_id: toId,
+        kind,
+        note,
+      })
+      .select('id, kind')
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return data as { id: string; kind: MemoryRelation['kind'] };
+  }
+
+  /**
+   * Delete a single relation by id. RLS scopes the delete to the
+   * signed-in user's own rows; a wrong id (or another user's edge) is
+   * silently a no-op, matching the rest of the CRUD surface here.
+   */
+  async deleteMemoryRelation(id: string): Promise<void> {
+    const { error } = await this.client
+      .from('memory_relations')
+      .delete()
+      .eq('id', id);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Outbound edges for a batch of memory ids, joined to the target
+   * memory's display fields. Used by opening-recall (bounded traversal),
+   * the memory_search tool (graph context alongside hits), and
+   * Memories.svelte (per-row edge panel). Returns an empty array if
+   * `ids` is empty so callers can skip a conditional.
+   */
+  async listMemoryRelationsFor(ids: string[]): Promise<MemoryRelation[]> {
+    if (ids.length === 0) return [];
+    const { data, error } = await this.client.rpc('get_memory_relations', {
+      p_ids: ids,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as MemoryRelation[];
   }
 
   /**
@@ -1492,7 +1639,7 @@ export class SupabaseService {
     const pattern = `%${safe}%`;
     const { data, error } = await this.client
       .from('memories')
-      .select('id, label, data, created_at, updated_at')
+      .select('id, label, data, confidence, created_at, updated_at')
       .is('embedding', null)
       .or(`label.ilike.${pattern},data.ilike.${pattern}`)
       .order('updated_at', { ascending: false })

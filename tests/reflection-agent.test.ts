@@ -181,7 +181,10 @@ describe('ReflectionAgent — run() happy path', () => {
     });
 
     expect(result.toolCalls).toBe(1);
-    expect(spies.createMemory).toHaveBeenCalledWith('birthday', 'June');
+    // createMemory now accepts an optional third `confidence` arg; the
+    // reflection-side caller leaves it undefined so the schema default
+    // (1.0) applies - see src/lib/tools/memory_create.ts.
+    expect(spies.createMemory).toHaveBeenCalledWith('birthday', 'June', undefined);
   });
 });
 

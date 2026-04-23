@@ -90,6 +90,16 @@ From the list you can:
   *Unsaved changes*, *Saving…*, *Saved ✓*, or the error message
   if the write failed, so you never have to guess whether an edit
   landed on the server.
+- **Reaffirm or doubt a memory.** *Reaffirm* nudges confidence up
+  by 0.5; *Doubt* multiplies it by 0.7. The chip in the header
+  row shows the resulting tag (corroborated / hedged / shaky) or
+  a numeric value when it's in the neutral band.
+- **Link memories.** *+ Relate* opens an inline picker: choose a
+  relation kind (supports / contradicts / generalises /
+  specialises), search for a target memory to link to, optionally
+  add a short note, and click a candidate to create the edge.
+  Existing edges show up under each memory's body; the small ×
+  next to an edge removes it.
 - **Delete a memory.** *Delete* asks you to confirm inline before
   issuing a hard delete (the same operation the assistant's
   `memory_delete` tool performs).
@@ -126,9 +136,45 @@ can ask:
   below.
 
 The assistant has `memory_search`, `memory_create`, `memory_update`,
+`memory_reaffirm`, `memory_doubt`, `memory_relate`, `memory_unrelate`,
 `memory_invalidate`, and `memory_delete` as tools. Most requests
 map to a combination of those; you don't need to know the tool
 names.
+
+## Confidence and linked memories
+
+Each memory carries a **confidence score** in `[0.05, 10.0]`. New
+memories start at 1.0. The assistant can nudge it two ways mid-
+conversation:
+
+- **Reaffirm** adds 0.5 (capped at 10). Use when the current
+  exchange reinforces an existing memory.
+- **Doubt** multiplies by 0.7. Gentler than invalidation; expresses
+  mild uncertainty without erasing the memory.
+
+The score classifies into qualitative tags the assistant sees when
+memories are retrieved:
+
+- **corroborated** — confidence >= 5.0.
+- **hedged** — confidence between 0.5 and 1.5. The model will tend
+  to soften claims drawn from memories in this band.
+- **shaky** — confidence below 0.5. Close to the 0.05 search-hide
+  floor. The model hedges heavily or declines to rely on them.
+
+Memories can also be **linked** to each other in a small directed
+graph. Four relation kinds:
+
+- **supports** — target reinforces source. Two memories pointing
+  at the same pattern from different angles.
+- **contradicts** — target disagrees with source. Stored directional;
+  the assistant may choose to link only one way.
+- **generalises** — target is a broader version of source.
+- **specialises** — target is a concrete case of source.
+
+When the assistant recalls a memory, the first few outbound links
+ride along automatically so it sees linked context without a second
+lookup. The Memories browser renders the edges inline under each
+memory; you can add or remove any edge yourself.
 
 ## Forgetting
 
@@ -173,10 +219,12 @@ reads go the same way.
   facts, paste them into a conversation and ask the model to record
   them. There's no bulk upload — and the Memories browser is edit/
   delete only, not create.
-- **No invalidate-from-UI.** The in-app browser only offers hard
-  delete. To halve a memory's confidence instead of removing it,
-  ask the assistant to forget it — reflection and the assistant's
-  `memory_invalidate` tool handle the soft-delete path.
+- **No invalidate-from-UI.** The in-app browser offers *Doubt*
+  (gentle, ×0.7) and hard *Delete*, but not the reflection-tier
+  halving (×0.5) that `memory_invalidate` uses. To decay a
+  memory aggressively without deleting it, ask the assistant to
+  forget it — reflection and the assistant's `memory_invalidate`
+  tool handle that path.
 - **Model-dependent quality.** The reflection agent is as thoughtful
   as the fast model it runs on. Occasional noise is unavoidable;
   invalidate or delete anything that slipped in.
