@@ -202,16 +202,16 @@ export const UTILITY_TIER: ModelTier = 'fast';
 export const VENICE_REFLECTION_MODEL = MODELS.fast.id;
 
 /**
- * Model the memory-recall agent runs against. Pinned to
- * mistral-small-3-2-24b-instruct: the task is "read the live
- * conversation, search memories, produce a short note" - bounded
- * synthesis, no reasoning required. Input is capped by
+ * Model the memory-recall agent runs against. Uses qwen3-5-35b-a3b,
+ * matching the image-analysis tool's model tier. The task is "read
+ * the live conversation, search memories, produce a short note" -
+ * bounded synthesis, no reasoning required. Input is capped by
  * MAX_RECALL_CHARS in the agent before the call, so the 256k context
  * window is not a constraint in practice. Kept as a distinct constant
  * from VENICE_REFLECTION_MODEL so recall and reflection can be tuned
  * independently if one regresses.
  */
-export const VENICE_RECALL_MODEL = 'mistral-small-3-2-24b-instruct';
+export const VENICE_RECALL_MODEL = 'qwen3-5-35b-a3b';
 
 /**
  * Model the conversation-recall agent runs against. Same rationale as
