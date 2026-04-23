@@ -2864,6 +2864,7 @@
   <div
     class="shell"
     class:drawer-open={drawerOpen}
+    class:logs-open={logsDrawer.state.open}
     class:shell-behind-modal={route.modal !== null}
   >
     <div
@@ -3930,6 +3931,13 @@
         </div>
       </div>
     </main>
+    <!-- Right-edge logs panel. On desktop it's the third grid column
+         of .shell (mirror of the threads sidebar on the left); on
+         mobile it collapses into a fixed-position overlay drawer.
+         Visibility is driven by the `.shell.logs-open` class above,
+         which is bound to the `logsDrawer` rune singleton; the
+         scroll-icon button in the top bar toggles that state. -->
+    <LogsDrawer />
   </div>
   <!-- Global right-side drawer for the extracted-text preview.
        Controlled by the `extractedTextDrawer` rune store; any
@@ -3938,12 +3946,6 @@
        without the transcript being a containing block for its
        fixed positioning. -->
   <ExtractedTextDrawer />
-  <!-- Global left-side drawer for the in-app log buffer. Controlled
-       by the `logsDrawer` rune singleton; the scroll-icon button in
-       the top bar toggles it. Mounted at Chat root for the same
-       reason as ExtractedTextDrawer - overlay positioning can't sit
-       inside a containing block. -->
-  <LogsDrawer />
   <!-- Top-right toast stack for samskara-formation events. Listens
        on a window CustomEvent dispatched by SamskaraManager when
        the formation worker reports a fresh mint. Subtle by design -

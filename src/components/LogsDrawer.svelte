@@ -1,19 +1,24 @@
 <!--
-  Right-side drawer that renders the in-app log buffer. Opened from
-  the scroll-icon button on the right end of the top bar in
-  Chat.svelte. Wired via the `logsDrawer` singleton in
-  `$lib/logger.svelte.ts` - this component reads
-  `logsDrawer.state.open` and `logs.entries` reactively.
+  Right-edge logs panel. On desktop it's an in-flow grid column
+  inside .shell (mirror of the threads sidebar on the left); on
+  mobile it collapses into a fixed-position overlay drawer with a
+  click-to-dismiss backdrop. Opened from the scroll-icon button on
+  the right end of the top bar in Chat.svelte. Wired via the
+  `logsDrawer` singleton in `$lib/logger.svelte.ts` - this component
+  reads `logsDrawer.state.open` and `logs.entries` reactively. The
+  panel is always mounted; visibility is driven by the
+  `.shell.logs-open` class on the parent (grid column expansion on
+  desktop, transform translate on mobile). Layout/positioning CSS
+  lives in styles.css next to the sidebar's rules so both side
+  panels share one source of truth.
 
-  Same side and size footprint as ExtractedTextDrawer. Only one of
-  the two is opened at a time in practice (logs is a debugging
-  tool, extracted-text is a document-reading tool), so the stacking
-  case of both simultaneously open is tolerated but not optimized
-  for. Overlay backdrop dismisses on click; Escape closes too. Sits
-  above the transcript via fixed positioning so it overlays the
-  sidebar too, not just the main column - log debugging deserves a
-  full-height panel regardless of whether the threads sidebar is
-  currently showing.
+  ExtractedTextDrawer next door is still a pure overlay - it's a
+  read-this-then-go-away preview, not a debugging companion that
+  earns its own column.
+
+  Backdrop dismisses on click (mobile only - on desktop there is no
+  backdrop because the panel takes layout space). Escape closes from
+  any focus context.
 
   Entry rendering strategy:
   - Plain-string details render inline as a second line under the
@@ -28,8 +33,6 @@
   convention of every browser devtools console.
 -->
 <script lang="ts">
-  import { fly, fade } from 'svelte/transition';
-  import { cubicOut } from 'svelte/easing';
   import {
     logs,
     logsDrawer,
@@ -235,7 +238,7 @@
     expanded = next;
   }
 
-  function onOverlayKey(e: KeyboardEvent): void {
+  function onBackdropKey(e: KeyboardEvent): void {
     if (e.key === 'Escape') drawer.close();
   }
 
@@ -283,20 +286,28 @@
   });
 </script>
 
-{#if drawer.state.open}
-  <button
-    type="button"
-    class="logs-overlay"
-    aria-label="Close logs"
-    onclick={() => drawer.close()}
-    onkeydown={onOverlayKey}
-    transition:fade={{ duration: 150, easing: cubicOut }}
-  ></button>
-  <aside
-    class="logs-drawer"
-    aria-label="Application logs"
-    transition:fly={{ x: 360, duration: 220, easing: cubicOut }}
-  >
+<!-- Backdrop is always in the DOM but hidden via CSS on desktop and
+     when the panel is closed; only shows on mobile while
+     .shell.logs-open. Keeping it mounted means the background-fade
+     transition has a stable starting state to animate from. -->
+<button
+  type="button"
+  class="logs-backdrop"
+  aria-label="Close logs"
+  tabindex={drawer.state.open ? 0 : -1}
+  aria-hidden={!drawer.state.open}
+  onclick={() => drawer.close()}
+  onkeydown={onBackdropKey}
+></button>
+<!-- inert + aria-hidden when closed: the panel is always in the DOM
+     so the parent grid can animate column width, but focus, screen
+     readers, and pointer events should treat it as gone until open. -->
+<aside
+  class="logs-drawer"
+  aria-label="Application logs"
+  aria-hidden={!drawer.state.open}
+  inert={!drawer.state.open}
+>
     <header class="logs-header">
       <h2 class="logs-title">Logs</h2>
       <!-- Samskara diagnostics shortcut. Closes the drawer on click
@@ -456,38 +467,21 @@
         {/each}
       {/if}
     </div>
-  </aside>
-{/if}
+</aside>
 
 <style>
-  .logs-overlay {
-    position: fixed;
-    inset: 0;
-    background: color-mix(in srgb, var(--bg) 55%, transparent);
-    /* Sit above the transcript and sidebar but below the drawer itself
-       so a click on the drawer doesn't dismiss it. */
-    z-index: 40;
+  /* Layout / positioning of .logs-drawer + .logs-backdrop lives in
+     src/styles.css alongside the threads-sidebar rules so both side
+     panels share one source of truth. The styles below own only the
+     panel's internal rendering (header, controls, entry list). */
+
+  .logs-backdrop {
+    /* Visible only on mobile while .shell.logs-open (see styles.css).
+       Buttons get a default 1px border + padding from the global form
+       reset; clear it so the backdrop is a flat tappable surface. */
     border: 0;
     padding: 0;
     cursor: pointer;
-  }
-
-  /* Right-anchored so the scroll-icon button on the right end of the
-     top bar opens a panel that visually extends from the pointer.
-     Shell bg + left-facing shadow match the sidebar's mirror-image
-     styling on the opposite edge. */
-  .logs-drawer {
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(520px, 96vw);
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-2);
-    border-left: 1px solid var(--border);
-    box-shadow: -8px 0 24px color-mix(in srgb, #000 18%, transparent);
-    z-index: 41;
   }
 
   .logs-header {
