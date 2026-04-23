@@ -211,6 +211,19 @@
    */
   let pendingDeleteIds = $state<string[]>([]);
   const pendingDeleteSet = $derived(new Set(pendingDeleteIds));
+  /**
+   * Per-message animation-delay for the fade-out that plays after a
+   * regenerate lands. Keyed by message id, value is the delay in ms
+   * before that row begins its blur-and-fade. Rows are staggered
+   * newest-first (highest index in `messages` → delay 0) so the
+   * replaced tail visibly unwinds back toward the user's prompt.
+   * Absence of an id in this map means "not fading" - we check with
+   * a `!== undefined` guard rather than truthiness because delay 0
+   * is the first row's valid value. Populated at the start of the
+   * success-path cleanup and cleared once the animation's total
+   * runtime has elapsed and the rows are pruned from `messages`.
+   */
+  let fadeOutDelays = $state<Record<string, number>>({});
   let streamingText = $state('');
   // Live companions to streamingText during a turn. `streamingReasoning`
   // is the running buffer of `delta.reasoning_content` chunks for the
@@ -1824,19 +1837,50 @@
       // Regenerate-from-here commit. Runs only when a real reply
       // landed - a stopped-by-limit-with-no-text outcome is treated
       // as a failure (handled below + by the catch on the outer try)
-      // so the greyed rows can be restored. Local prune first for
-      // instant UI feedback; the DB delete chases it. A delete
-      // failure here propagates to the outer catch, which will
-      // surface the message - the new completion is still safely
-      // persisted by the chat loop's per-row writes, so the only
-      // user-visible effect is that the old rows linger until the
-      // next refresh.
+      // so the greyed rows can be restored.
+      //
+      // Sequence:
+      //   1. Compute a per-row animation-delay, staggered newest
+      //      first - highest index in `messages` gets delay 0, each
+      //      older row gets +250ms. This makes the tail visibly
+      //      unwind back toward the user's prompt rather than
+      //      collapsing all at once.
+      //   2. Kick off the DB delete in parallel with the fade so
+      //      the wall-clock cost of the two overlaps.
+      //   3. Wait for the total animation runtime, then prune the
+      //      rows from `messages` (which drops them from the DOM)
+      //      and clear both the fade delays and the pending-delete
+      //      id list in one state flip.
+      //
+      // A delete failure propagates to the outer catch. The new
+      // completion is already safely persisted by the chat loop's
+      // per-row writes; the only user-visible effect is that the
+      // old rows linger in the DB until the next refresh (the DOM
+      // has already moved on).
       if (pendingDeleteIds.length > 0 && loopResult.finalText.length > 0) {
         const idsToDelete = pendingDeleteIds;
-        pendingDeleteIds = [];
+        const indexOfId = new Map(
+          idsToDelete.map((id) => [id, messages.findIndex((m) => m.id === id)] as const)
+        );
+        const orderedNewestFirst = [...idsToDelete].sort(
+          (a, b) => (indexOfId.get(b) ?? 0) - (indexOfId.get(a) ?? 0)
+        );
+        const STAGGER_MS = 250;
+        const ANIM_MS = 500;
+        const delays: Record<string, number> = {};
+        orderedNewestFirst.forEach((id, i) => {
+          delays[id] = i * STAGGER_MS;
+        });
+        fadeOutDelays = delays;
+        const totalMs =
+          (orderedNewestFirst.length - 1) * STAGGER_MS + ANIM_MS;
+        const deletePromise = app.supabase.deleteMessages(idsToDelete);
+        await new Promise<void>((resolve) => window.setTimeout(resolve, totalMs));
         const drop = new Set(idsToDelete);
         messages = messages.filter((m) => !drop.has(m.id));
-        await app.supabase.deleteMessages(idsToDelete);
+        pendingDeleteIds = [];
+        fadeOutDelays = {};
+        await deletePromise;
       }
       if (loopResult.stoppedByLimit && !loopResult.finalText) {
         error = { text: 'Stopped: tool-call loop hit the 5-round limit.' };
@@ -1865,8 +1909,13 @@
       // Failure means no replacement landed (or the post-loop delete
       // itself blew up, in which case the old rows are still
       // canonical), so un-greying lets the user read them again and
-      // either retry the regenerate or copy the content out.
+      // either retry the regenerate or copy the content out. Also
+      // drop any fade-out delays so a row that happened to be
+      // mid-dissolve (delete-promise failure after fade started)
+      // snaps back to the .disabled appearance instead of staying
+      // frozen at 8px blur.
       pendingDeleteIds = [];
+      fadeOutDelays = {};
       // Rate-limit is the one error where re-sending the same request
       // a moment later is the right fix - Venice's message literally
       // says "try again later." Park a retry closure on the inline
@@ -3251,7 +3300,12 @@
                    snippet-slotted between the body and the action bar.
                    The bubble itself still lives here so the component
                    stays focused on per-message body concerns. -->
-              <div class="msg assistant" class:disabled={pendingDeleteSet.has(block.assistant.id)}>
+              <div
+                class="msg assistant"
+                class:disabled={pendingDeleteSet.has(block.assistant.id)}
+                class:fading-out={fadeOutDelays[block.assistant.id] !== undefined}
+                style:animation-delay={`${fadeOutDelays[block.assistant.id] ?? 0}ms`}
+              >
                 <AssistantBody
                   content={block.assistant.content}
                   reasoning={block.assistant.reasoning}
@@ -3283,7 +3337,12 @@
                 Renamed to <em>{block.title}</em>
               </div>
             {:else if block.message.role === 'assistant'}
-              <div class="msg assistant" class:disabled={pendingDeleteSet.has(block.message.id)}>
+              <div
+                class="msg assistant"
+                class:disabled={pendingDeleteSet.has(block.message.id)}
+                class:fading-out={fadeOutDelays[block.message.id] !== undefined}
+                style:animation-delay={`${fadeOutDelays[block.message.id] ?? 0}ms`}
+              >
                 <AssistantBody
                   content={block.message.content}
                   reasoning={block.message.reasoning}
@@ -3295,7 +3354,12 @@
                 />
               </div>
             {:else}
-              <div class="msg {block.message.role}" class:disabled={pendingDeleteSet.has(block.message.id)}>
+              <div
+                class="msg {block.message.role}"
+                class:disabled={pendingDeleteSet.has(block.message.id)}
+                class:fading-out={fadeOutDelays[block.message.id] !== undefined}
+                style:animation-delay={`${fadeOutDelays[block.message.id] ?? 0}ms`}
+              >
                 <Markdown content={block.message.content} />
                 {#if block.message.role === 'user' && block.message.attachments && block.message.attachments.length > 0}
                   <MessageAttachments attachments={block.message.attachments} />

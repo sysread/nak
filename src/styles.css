@@ -1818,16 +1818,50 @@ h1 {
 
 /* Pending-delete bubble. Set on .msg by Chat.svelte when the user
    has clicked regenerate-from-here on this row (or a row before it)
-   and the replacement turn hasn't landed yet. Visual greying is the
-   only effect at this layer - the per-button disabled state is
-   handled by the action-bar buttons themselves taking the `disabled`
-   prop, so structural toggles (reasoning panel header, tool-call
-   expand rows, body-side citation `^N^` clicks) stay clickable and
-   the user can still inspect what's about to be replaced. Cleared
-   along with the row itself when the new completion lands; on abort
-   or error the class drops back off and the bubble restores. */
+   and the replacement turn hasn't landed yet. Greys the body via
+   opacity so the rows read as "on the way out," and paints a red
+   outline so the danger of the pending replacement is legible at a
+   glance. Outline rather than border so we don't have to retrofit a
+   border slot onto role variants that don't already carry one (user
+   bubbles in dark mode, tool-group children). The per-button
+   disabled state is handled by the action-bar buttons themselves
+   taking the `disabled` prop, so structural toggles (reasoning
+   panel header, tool-call expand rows, body-side citation `^N^`
+   clicks) stay clickable and the user can still inspect what's
+   about to be replaced. Cleared along with the row itself when the
+   new completion lands (after the fade-out animation); on abort or
+   error the class drops back off and the bubble restores. */
 .msg.disabled {
   opacity: 0.55;
+  outline: 1px solid var(--danger);
+  outline-offset: -1px;
+}
+
+/* Fade-out animation applied to pending-delete rows once the
+   replacement turn lands cleanly, just before they're pruned from
+   the DOM. The parent sets animation-delay per element so the rows
+   cascade out newest-first with a 250ms stagger between them -
+   makes the replacement read as "the old thread is being undone
+   from the tail back toward the user's prompt" rather than a
+   simultaneous collapse. animation-fill-mode: forwards pins the
+   final (invisible + heavily blurred) state so rows don't flicker
+   back to the .disabled appearance between the animation's end
+   and the JS-side filter that removes them from the messages
+   array. pointer-events: none so dissolving rows can't absorb
+   stray clicks that would otherwise hit the incoming reply below. */
+@keyframes msg-fade-out {
+  from {
+    filter: blur(0);
+    opacity: 0.55;
+  }
+  to {
+    filter: blur(8px);
+    opacity: 0;
+  }
+}
+.msg.fading-out {
+  animation: msg-fade-out 500ms ease-in forwards;
+  pointer-events: none;
 }
 
 /* Subdued inline indicator emitted by the chat-loop when the LLM
