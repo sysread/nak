@@ -19,6 +19,7 @@ import {
   memoryToolbox,
   recallToolbox,
   type ToolContext,
+  type ToolDef,
 } from '../src/lib/tools';
 import { memoryRecall } from '../src/lib/tools/memory_recall';
 import type { SupabaseService, Message } from '../src/lib/supabase';
@@ -52,7 +53,7 @@ function ctxFor(svc: SupabaseService, venice: VeniceClient): ToolContext {
 
 describe('memory_recall — registry scoping', () => {
   it('is present in the main chat TOOLS list', () => {
-    expect(TOOLS.map((t) => t.name)).toContain('memory_recall');
+    expect(TOOLS.map((t: ToolDef) => t.name)).toContain('memory_recall');
   });
 
   it('is absent from memoryToolbox — reflection agent must not get recall', () => {

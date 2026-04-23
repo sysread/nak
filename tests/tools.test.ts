@@ -11,6 +11,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   TOOLS,
+  TOOLBOXES,
+  GATED_TOOLBOX_NAMES,
+  GATED_TOOLBOX_META,
+  alwaysOnToolbox,
+  cookingToolbox,
+  memoriesToolbox,
+  conversationsToolbox,
   buildToolList,
   buildSystemPrompt,
   buildToolboxWireList,
@@ -20,7 +27,7 @@ import {
   conversationRecallToolbox,
   toOpenAIToolDef,
   executeToolCall,
-  toggleTools,
+  toggleToolbox,
   type ToolContext,
   type Toolbox,
   type ToolDef,
@@ -35,7 +42,7 @@ import type { VeniceClient } from '../src/lib/venice';
 function mockSupabase(): {
   svc: SupabaseService;
   spies: {
-    setThreadToolsEnabled: ReturnType<typeof vi.fn>;
+    setThreadToolboxesEnabled: ReturnType<typeof vi.fn>;
     searchMemories: ReturnType<typeof vi.fn>;
     searchMemoriesByEmbedding: ReturnType<typeof vi.fn>;
     searchUnembeddedMemoriesByText: ReturnType<typeof vi.fn>;
@@ -46,7 +53,7 @@ function mockSupabase(): {
   };
 } {
   const spies = {
-    setThreadToolsEnabled: vi.fn(async () => undefined),
+    setThreadToolboxesEnabled: vi.fn(async () => undefined),
     searchMemories: vi.fn(async () => [
       { id: 'm1', label: 'foo', data: 'bar', created_at: 't', updated_at: 't' },
     ]),
@@ -103,9 +110,9 @@ function ctxFor(svc: SupabaseService, venice: VeniceClient = mockVenice()): Tool
 }
 
 describe('tool registry', () => {
-  it('exposes toggle_tools plus every memory + conversation tool', () => {
-    const names = TOOLS.map((t) => t.name);
-    expect(names).toContain('toggle_tools');
+  it('exposes toggle_toolbox plus every memory + conversation tool', () => {
+    const names = TOOLS.map((t: ToolDef) => t.name);
+    expect(names).toContain('toggle_toolbox');
     expect(names).toContain('memory_recall');
     expect(names).toContain('memory_search');
     expect(names).toContain('memory_create');
@@ -115,60 +122,163 @@ describe('tool registry', () => {
     expect(names).toContain('conversation_search');
   });
 
-  it('buildToolList returns the always-on set when disabled', () => {
-    // Always-on: toggle_tools + the recall pair + web_search +
+  it('buildToolList with no enabled toolboxes returns only the always-on set', () => {
+    // Always-on: toggle_toolbox + the recall pair + web_search +
     // update_title. The recall tools are reflex-level - the system
     // prompt tells the model to call them at the top of a new topic,
     // so they can't sit behind a prefatory toggle round-trip.
     // web_search joins them for the same reason: time-sensitive
-    // questions should fire a search without needing tools to be
-    // toggled on first. update_title has to fire on the very first
-    // turn of a fresh thread (when tools_enabled=false by default),
-    // so gating it would mean a toggle round-trip before the model
-    // could name the conversation.
-    const list = buildToolList(false);
+    // questions should fire a search without the user first enabling a
+    // toolbox. update_title has to fire on the very first turn of a
+    // fresh thread (toolboxes_enabled=[] by default), so gating it
+    // would mean a toggle round-trip before the model could name the
+    // conversation.
+    const list = buildToolList([]);
     expect(list.map((t) => t.function.name).sort()).toEqual(
       [
         'conversation_recall',
         'memory_recall',
-        'toggle_tools',
+        'toggle_toolbox',
         'update_title',
         'web_search',
       ]
     );
   });
 
-  it('buildToolList keeps the gated tools hidden when disabled', () => {
-    // Tripwire: if someone adds a gated tool to the always-on set by
-    // accident, the "tools_enabled=false → small wire payload" invariant
+  it('buildToolList hides gated tools until their toolbox is enabled', () => {
+    // Tripwire: if someone adds a gated tool to the always-on toolbox
+    // by accident, the "no toolboxes => small wire payload" invariant
     // breaks. Name every tool that MUST be gated here.
-    const disabled = buildToolList(false).map((t) => t.function.name);
+    const disabled = buildToolList([]).map((t) => t.function.name);
     for (const gated of [
       'memory_search',
       'memory_create',
       'memory_update',
       'memory_delete',
       'conversation_search',
+      'recipe_list',
+      'recipe_save',
     ]) {
       expect(disabled).not.toContain(gated);
     }
   });
 
-  it('buildToolList returns every tool when enabled', () => {
-    const list = buildToolList(true);
+  it('buildToolList(["cooking"]) exposes cooking tools and no other gated tools', () => {
+    const names = buildToolList(['cooking']).map((t) => t.function.name);
+    expect(names).toContain('recipe_list');
+    expect(names).toContain('recipe_save');
+    expect(names).toContain('recipe_get');
+    expect(names).toContain('recipe_update');
+    expect(names).toContain('recipe_delete');
+    // Memory + conversation CRUD stays gated behind their own
+    // toolboxes.
+    expect(names).not.toContain('memory_search');
+    expect(names).not.toContain('memory_create');
+    expect(names).not.toContain('conversation_search');
+    // Always-on tools ride along regardless of which toolbox is on.
+    expect(names).toContain('toggle_toolbox');
+    expect(names).toContain('memory_recall');
+  });
+
+  it('buildToolList(["memories", "conversations"]) exposes only those plus always-on', () => {
+    const names = buildToolList(['memories', 'conversations']).map((t) => t.function.name);
+    expect(names).toContain('memory_search');
+    expect(names).toContain('memory_create');
+    expect(names).toContain('memory_update');
+    expect(names).toContain('memory_delete');
+    expect(names).toContain('conversation_search');
+    expect(names).not.toContain('recipe_list');
+    expect(names).not.toContain('recipe_save');
+  });
+
+  it('buildToolList with every gated toolbox enabled returns the full catalog', () => {
+    const list = buildToolList(GATED_TOOLBOX_NAMES);
     expect(list.map((t) => t.function.name).sort()).toEqual(
-      TOOLS.map((t) => t.name).sort()
+      TOOLS.map((t: ToolDef) => t.name).sort()
     );
   });
 
+  it('buildToolList ignores unknown toolbox names silently', () => {
+    // A renamed or deleted toolbox should not break mid-flight. The
+    // wire builder drops unknowns and returns whatever else it
+    // recognised.
+    const names = buildToolList(['nonsense', 'cooking']).map((t) => t.function.name);
+    expect(names).toContain('recipe_list');
+    expect(names).not.toContain('memory_search');
+  });
+
+  it('buildToolList always includes always-on tools even when always_on is named explicitly', () => {
+    // `always_on` is implicit - listing it in the enabled array does
+    // nothing (we already include it) and does not enable any gated
+    // toolbox.
+    const names = buildToolList(['always_on']).map((t) => t.function.name);
+    expect(names).toContain('toggle_toolbox');
+    expect(names).toContain('web_search');
+    expect(names).not.toContain('recipe_list');
+    expect(names).not.toContain('memory_search');
+  });
+
+  it('TOOLBOXES exposes the canonical ordered list with always_on first', () => {
+    // Order is visible to the model (system-prompt catalog) and to the
+    // user (popover list). always_on first so the reflex-level
+    // surfaces are read before the gated catalog.
+    expect(TOOLBOXES[0]).toBe(alwaysOnToolbox);
+    expect(TOOLBOXES.map((tb) => tb.name)).toEqual([
+      'always_on',
+      'cooking',
+      'memories',
+      'conversations',
+    ]);
+  });
+
+  it('GATED_TOOLBOX_NAMES lists every gated toolbox and omits always_on', () => {
+    expect(GATED_TOOLBOX_NAMES).toEqual(['cooking', 'memories', 'conversations']);
+    expect(GATED_TOOLBOX_NAMES).not.toContain('always_on');
+  });
+
+  it('GATED_TOOLBOX_META mirrors names and descriptions, nothing else', () => {
+    // The UI popover reads this projection so Chat.svelte does not
+    // import tool definitions just to render a list. If the shape
+    // drifts from {name, description} the popover stops rendering
+    // descriptions and this catches it.
+    expect(GATED_TOOLBOX_META.map((m) => m.name)).toEqual([
+      'cooking',
+      'memories',
+      'conversations',
+    ]);
+    for (const m of GATED_TOOLBOX_META) {
+      expect(typeof m.description).toBe('string');
+      expect(m.description.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('cookingToolbox, memoriesToolbox, conversationsToolbox are pure CRUD subsets', () => {
+    expect(cookingToolbox.tools.map((t) => t.name)).toEqual([
+      'recipe_list',
+      'recipe_get',
+      'recipe_save',
+      'recipe_update',
+      'recipe_delete',
+    ]);
+    expect(memoriesToolbox.tools.map((t) => t.name)).toEqual([
+      'memory_search',
+      'memory_create',
+      'memory_update',
+      'memory_delete',
+    ]);
+    expect(conversationsToolbox.tools.map((t) => t.name)).toEqual([
+      'conversation_search',
+    ]);
+  });
+
   it('toOpenAIToolDef projects to the function-calling wire shape', () => {
-    const wire = toOpenAIToolDef(toggleTools);
+    const wire = toOpenAIToolDef(toggleToolbox);
     expect(wire).toEqual({
       type: 'function',
       function: {
-        name: toggleTools.name,
-        description: toggleTools.description,
-        parameters: toggleTools.parameters,
+        name: toggleToolbox.name,
+        description: toggleToolbox.description,
+        parameters: toggleToolbox.parameters,
       },
     });
   });
@@ -209,7 +319,7 @@ describe('tool registry', () => {
     expect(prompt).toMatch(/not\s+cold|not\s+robotic|plain-spoken/i);
   });
 
-  it('buildSystemPrompt lists every tool (always-on + gated) but omits toggle_tools itself', () => {
+  it('buildSystemPrompt lists every tool (always-on + gated) but omits toggle_toolbox itself', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('memory_recall');
     expect(prompt).toContain('conversation_recall');
@@ -218,47 +328,61 @@ describe('tool registry', () => {
     expect(prompt).toContain('memory_update');
     expect(prompt).toContain('memory_delete');
     expect(prompt).toContain('conversation_search');
-    // toggle_tools is the switch itself, not something to advertise in
-    // either catalog section — the prompt block that explains the
+    // toggle_toolbox is the switch itself, not something to advertise
+    // in either catalog section - the prompt block that explains the
     // toggle rule already names it.
-    expect(prompt).not.toMatch(/^- toggle_tools/m);
+    expect(prompt).not.toMatch(/^- toggle_toolbox/m);
   });
 
   it('buildSystemPrompt catalog lines are dynamically derived from the registry', () => {
-    // Every tool other than `toggle_tools` appears as a catalog line
-    // with its name + shortDescription, across the two sections
-    // (always-available and gated). If a tool is added to TOOLS but
-    // forgotten in either section, this test catches the drift — the
+    // Every tool other than `toggle_toolbox` appears as a catalog line
+    // with its name + shortDescription, across the always-on section
+    // and per-toolbox blocks. If a tool is added to a toolbox but
+    // forgotten in the prompt code, this test catches the drift - the
     // prompt is always the live view.
     const prompt = buildSystemPrompt();
-    const cataloged = TOOLS.filter((t) => t.name !== toggleTools.name);
+    const cataloged = TOOLS.filter((t: ToolDef) => t.name !== toggleToolbox.name);
     for (const tool of cataloged) {
       expect(prompt).toContain(`- ${tool.name} : ${tool.shortDescription}`);
     }
   });
 
-  it('buildSystemPrompt splits the catalog into Always-available and Gated sections', () => {
-    // The two sections exist and are ordered — always-on first. This
-    // matches the tool order on the wire (ALWAYS_ON is sent regardless
-    // of the toggle) and the reading order the model needs: "here's
-    // what you can call right now; here's what's behind the toggle."
-    const prompt = buildSystemPrompt();
-    const alwaysIdx = prompt.indexOf('Always available');
-    const gatedIdx = prompt.indexOf('Gated tools');
+  it('buildSystemPrompt groups gated tools under their toolbox with [x]/[ ] marks', () => {
+    // Unchecked first - default state. `always_on` header should not
+    // appear as a toolbox row; it has its own "Always available"
+    // section above.
+    const disabled = buildSystemPrompt({ enabledToolboxes: [] });
+    const alwaysIdx = disabled.indexOf('Always available');
+    const gatedIdx = disabled.indexOf('Toolboxes');
     expect(alwaysIdx).toBeGreaterThanOrEqual(0);
     expect(gatedIdx).toBeGreaterThan(alwaysIdx);
 
     // Recall pair lives under Always available; conversation_search
-    // lives under Gated. Slice the prompt by section and assert the
-    // tool names land in the right half.
-    const alwaysSection = prompt.slice(alwaysIdx, gatedIdx);
-    const gatedSection = prompt.slice(gatedIdx);
+    // lives under the conversations toolbox.
+    const alwaysSection = disabled.slice(alwaysIdx, gatedIdx);
+    const gatedSection = disabled.slice(gatedIdx);
     expect(alwaysSection).toMatch(/- memory_recall /);
     expect(alwaysSection).toMatch(/- conversation_recall /);
     expect(alwaysSection).not.toMatch(/- conversation_search /);
     expect(gatedSection).toMatch(/- conversation_search /);
     expect(gatedSection).toMatch(/- memory_search /);
     expect(gatedSection).not.toMatch(/- memory_recall /);
+
+    // Every gated toolbox gets a "[ ] name : description" line with
+    // its tools indented below.
+    expect(gatedSection).toMatch(/\[ \] cooking : /);
+    expect(gatedSection).toMatch(/\[ \] memories : /);
+    expect(gatedSection).toMatch(/\[ \] conversations : /);
+  });
+
+  it('buildSystemPrompt shows [x] marks for enabled toolboxes and [ ] for disabled ones', () => {
+    // The marks give the model visible current state without a second
+    // prompt section. A model reading "[x] cooking" knows it can
+    // invoke the cooking tools this turn without a toolbox flip.
+    const prompt = buildSystemPrompt({ enabledToolboxes: ['cooking'] });
+    expect(prompt).toMatch(/\[x\] cooking : /);
+    expect(prompt).toMatch(/\[ \] memories : /);
+    expect(prompt).toMatch(/\[ \] conversations : /);
   });
 
   it('buildSystemPrompt carries recall cadence rules', () => {
@@ -279,15 +403,16 @@ describe('tool registry', () => {
     expect(prompt).toMatch(/(don\u2019t|don't)\s+make\s+the\s+user\s+repeat/i);
   });
 
-  it('buildSystemPrompt explains the toggle_tools gating rule', () => {
-    // The policy used to live on toggle_tools' own description; it
-    // now belongs here so the model sees it before any tool schemas
-    // are on the wire (tools_enabled=false → only toggle_tools is
-    // sent). A drop here would let a model that doesn't already know
-    // about toggle_tools just try to call memory_search directly.
+  it('buildSystemPrompt explains the toggle_toolbox gating rule', () => {
+    // The policy used to live on the toggle tool's own description;
+    // it now belongs here so the model sees it before any gated
+    // schemas are on the wire (empty toolboxes_enabled => only the
+    // always-on set is sent). A drop here would let a model that
+    // doesn't already know about toggle_toolbox try to call
+    // memory_search directly.
     const prompt = buildSystemPrompt();
-    expect(prompt).toMatch(/toggle_tools\(\{enable: true\}\)/);
-    expect(prompt).toMatch(/toggle_tools\(\{enable: false\}\)/);
+    expect(prompt).toMatch(/toggle_toolbox\(/);
+    expect(prompt).toMatch(/enabled:\s*\[/);
   });
 
   it('buildSystemPrompt carries the user-message boundary rule and Venice-injection warning', () => {
@@ -323,18 +448,20 @@ describe('tool registry', () => {
     expect(prompt).toMatch(/full\s+page\s+content/i);
   });
 
-  it('web_search is always-on — rides with every request, listed in the always-available catalog', () => {
+  it('web_search is always-on - rides with every request, listed in the always-available catalog', () => {
     // Web search is a reflex-level capability, same rationale as the
     // *_recall tools: the model should be able to reach for it on any
-    // time-sensitive question without needing `toggle_tools` first.
-    // This test is the tripwire for anyone moving it into the gated
-    // set.
-    expect(buildToolList(false).map((t) => t.function.name)).toContain('web_search');
-    expect(buildToolList(true).map((t) => t.function.name)).toContain('web_search');
-    // Catalog advertisement — the system prompt's "Always available"
+    // time-sensitive question without needing a toolbox toggle first.
+    // This test is the tripwire for anyone moving it into a gated
+    // toolbox.
+    expect(buildToolList([]).map((t) => t.function.name)).toContain('web_search');
+    expect(buildToolList(GATED_TOOLBOX_NAMES).map((t) => t.function.name)).toContain(
+      'web_search'
+    );
+    // Catalog advertisement - the system prompt's "Always available"
     // section must mention web_search by name + shortDescription so
     // the model knows the tool exists. A gated placement would put
-    // it in the "Gated tools" section below instead.
+    // it inside one of the toolbox blocks further down.
     const prompt = buildSystemPrompt();
     expect(prompt).toMatch(
       /Always available \(no toggle needed\):[\s\S]*- web_search : search the live web/
@@ -343,8 +470,12 @@ describe('tool registry', () => {
 
   it('executeToolCall dispatches by name', async () => {
     const { svc, spies } = mockSupabase();
-    await executeToolCall('toggle_tools', { enable: true }, ctxFor(svc));
-    expect(spies.setThreadToolsEnabled).toHaveBeenCalledWith('t-1', true);
+    await executeToolCall(
+      'toggle_toolbox',
+      { enabled: ['cooking'] },
+      ctxFor(svc)
+    );
+    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', ['cooking']);
   });
 
   it('executeToolCall throws on an unknown tool', async () => {
@@ -355,24 +486,86 @@ describe('tool registry', () => {
   });
 });
 
-describe('toggle_tools', () => {
-  it('writes the boolean through to Supabase', async () => {
+describe('toggle_toolbox', () => {
+  it('writes the accepted name set through to Supabase', async () => {
     const { svc, spies } = mockSupabase();
-    const result = await toggleTools.execute({ enable: false }, ctxFor(svc));
-    expect(spies.setThreadToolsEnabled).toHaveBeenCalledWith('t-1', false);
-    expect(result).toEqual({ enabled: false });
+    const result = await toggleToolbox.execute(
+      { enabled: ['cooking', 'memories'] },
+      ctxFor(svc)
+    );
+    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', [
+      'cooking',
+      'memories',
+    ]);
+    expect(result).toEqual({ enabled: ['cooking', 'memories'] });
   });
 
-  it('coerces non-boolean enable values', async () => {
+  it('writes an empty array when passed {enabled: []}', async () => {
+    // Explicit "turn everything off" path. The model is supposed to
+    // call this when the current task is done with gated tools - we
+    // must not silently reject it as a no-op.
     const { svc, spies } = mockSupabase();
-    await toggleTools.execute({ enable: 'yes' as unknown as boolean }, ctxFor(svc));
-    // Boolean('yes') === true
-    expect(spies.setThreadToolsEnabled).toHaveBeenCalledWith('t-1', true);
+    const result = await toggleToolbox.execute({ enabled: [] }, ctxFor(svc));
+    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', []);
+    expect(result).toEqual({ enabled: [] });
+  });
+
+  it('silently drops unknown toolbox names', async () => {
+    // A typo or rename should not abort the chat turn; the tool
+    // return value tells the model what took effect so it can self-
+    // correct.
+    const { svc, spies } = mockSupabase();
+    const result = await toggleToolbox.execute(
+      { enabled: ['cooking', 'bogus', 'not_a_toolbox'] },
+      ctxFor(svc)
+    );
+    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', ['cooking']);
+    expect(result).toEqual({ enabled: ['cooking'] });
+  });
+
+  it('drops the always_on toolbox if the model tries to list it', async () => {
+    // always_on is implicit - listing it must not round-trip it into
+    // the persisted array, where it would be an unrecognised name on
+    // the next read.
+    const { svc, spies } = mockSupabase();
+    const result = await toggleToolbox.execute(
+      { enabled: ['always_on', 'cooking'] },
+      ctxFor(svc)
+    );
+    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', ['cooking']);
+    expect(result).toEqual({ enabled: ['cooking'] });
+  });
+
+  it('deduplicates repeated names while preserving first-seen order', async () => {
+    const { svc, spies } = mockSupabase();
+    const result = await toggleToolbox.execute(
+      { enabled: ['cooking', 'memories', 'cooking'] },
+      ctxFor(svc)
+    );
+    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', [
+      'cooking',
+      'memories',
+    ]);
+    expect(result).toEqual({ enabled: ['cooking', 'memories'] });
+  });
+
+  it('treats non-array and non-string input as empty', async () => {
+    // Defensive: the model might emit {enabled: null} or {enabled:
+    // "cooking"} on a bad schema pass. Drop silently rather than
+    // throwing - the turn keeps running and the model sees an empty
+    // accepted set.
+    const { svc, spies } = mockSupabase();
+    const result = await toggleToolbox.execute(
+      { enabled: 'cooking' as unknown as string[] },
+      ctxFor(svc)
+    );
+    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', []);
+    expect(result).toEqual({ enabled: [] });
   });
 });
 
 describe('memory_search', () => {
-  const tool = TOOLS.find((t) => t.name === 'memory_search')!;
+  const tool = TOOLS.find((t: ToolDef) => t.name === 'memory_search')!;
 
   it('embeds the trimmed query and runs vector + ILIKE-fallback in parallel', async () => {
     const { svc, spies } = mockSupabase();
@@ -452,7 +645,7 @@ describe('memory_search', () => {
 });
 
 describe('memory_create', () => {
-  const tool = TOOLS.find((t) => t.name === 'memory_create')!;
+  const tool = TOOLS.find((t: ToolDef) => t.name === 'memory_create')!;
 
   it('trims label and forwards data', async () => {
     const { svc, spies } = mockSupabase();
@@ -476,7 +669,7 @@ describe('memory_create', () => {
 });
 
 describe('memory_update', () => {
-  const tool = TOOLS.find((t) => t.name === 'memory_update')!;
+  const tool = TOOLS.find((t: ToolDef) => t.name === 'memory_update')!;
 
   it('forwards a label-only patch', async () => {
     const { svc, spies } = mockSupabase();
@@ -512,7 +705,7 @@ describe('memory_update', () => {
 });
 
 describe('memory_delete', () => {
-  const tool = TOOLS.find((t) => t.name === 'memory_delete')!;
+  const tool = TOOLS.find((t: ToolDef) => t.name === 'memory_delete')!;
 
   it('forwards the id', async () => {
     const { svc, spies } = mockSupabase();

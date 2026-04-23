@@ -122,7 +122,7 @@ Load-bearing patterns the schema uses repeatedly:
 
 - **Columns over migrations.** New per-row state is an
   `add column if not exists`, not a new table. E.g. `threads` has
-  grown `tools_enabled`, `archived`, `summary`, `embedding`, plus
+  grown `toolboxes_enabled`, `archived`, `summary`, `embedding`, plus
   reflection/summary/embedding claim columns — no migrations, just
   idempotent column adds.
 - **Claim-RPC pattern.** Any row a background worker might process

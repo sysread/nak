@@ -11,7 +11,7 @@
  * integration shape from the memory tools.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { TOOLS, type ToolContext } from '../src/lib/tools';
+import { TOOLS, type ToolContext, type ToolDef } from '../src/lib/tools';
 import { recipeSave } from '../src/lib/tools/recipe_save';
 import { recipeList } from '../src/lib/tools/recipe_list';
 import { recipeGet } from '../src/lib/tools/recipe_get';
@@ -46,7 +46,7 @@ function ctxFor(svc: Partial<SupabaseService>): ToolContext {
 
 describe('recipe tools — registry', () => {
   it('all five recipe tools are in the main TOOLS list', () => {
-    const names = TOOLS.map((t) => t.name);
+    const names = TOOLS.map((t: ToolDef) => t.name);
     expect(names).toContain('recipe_save');
     expect(names).toContain('recipe_list');
     expect(names).toContain('recipe_get');

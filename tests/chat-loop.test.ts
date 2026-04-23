@@ -25,7 +25,7 @@ function mkThread(overrides: Partial<Thread> = {}): Thread {
     model: null,
     reasoning_effort: null,
     verbosity: null,
-    tools_enabled: false,
+    toolboxes_enabled: [],
     archived: false,
     title_manually_set: false,
     created_at: 'now',
@@ -50,7 +50,7 @@ function mkCall(name: string, args: object = {}, id = `call_${name}`): OpenAIToo
  */
 interface MockSupabase {
   addMessage: ReturnType<typeof vi.fn>;
-  setThreadToolsEnabled: ReturnType<typeof vi.fn>;
+  setThreadToolboxesEnabled: ReturnType<typeof vi.fn>;
   searchMemories: ReturnType<typeof vi.fn>;
   searchMemoriesByEmbedding: ReturnType<typeof vi.fn>;
   searchUnembeddedMemoriesByText: ReturnType<typeof vi.fn>;
@@ -91,7 +91,7 @@ function mockSupabase(overrides: Partial<MockSupabase> = {}): {
       messagesOut.push(m);
       return m;
     }),
-    setThreadToolsEnabled: vi.fn(async () => undefined),
+    setThreadToolboxesEnabled: vi.fn(async () => undefined),
     searchMemories: vi.fn(async () => []),
     searchMemoriesByEmbedding: vi.fn(async () => []),
     searchUnembeddedMemoriesByText: vi.fn(async () => []),
@@ -505,7 +505,7 @@ describe('runChatLoop', () => {
     await runChatLoop({
       venice,
       supabase: svc,
-      thread: mkThread({ tools_enabled: false }),
+      thread: mkThread({ toolboxes_enabled: [] }),
       userId: 'u-1',
       modelId: 'm',
       history: [{ role: 'user', content: 'what is btc at' }],
@@ -572,7 +572,7 @@ describe('runChatLoop', () => {
     await runChatLoop({
       venice,
       supabase: svc,
-      thread: mkThread({ tools_enabled: false }),
+      thread: mkThread({ toolboxes_enabled: [] }),
       userId: 'u-1',
       modelId: 'm',
       history: [{ role: 'user', content: 'q' }],
@@ -622,7 +622,7 @@ describe('runChatLoop', () => {
     const result = await runChatLoop({
       venice,
       supabase: svc,
-      thread: mkThread({ tools_enabled: true }),
+      thread: mkThread({ toolboxes_enabled: ['cooking', 'memories', 'conversations'] }),
       userId: 'u-1',
       modelId: 'm',
       history: [{ role: 'user', content: 'what is my cat named?' }],
@@ -655,7 +655,7 @@ describe('runChatLoop', () => {
     await runChatLoop({
       venice,
       supabase: svc,
-      thread: mkThread({ tools_enabled: true }),
+      thread: mkThread({ toolboxes_enabled: ['cooking', 'memories', 'conversations'] }),
       userId: 'u-1',
       modelId: 'm',
       history: [],
@@ -667,13 +667,19 @@ describe('runChatLoop', () => {
     expect(elapsed).toBeLessThan(85);
   });
 
-  it('flips tools_enabled when the model calls toggle_tools', async () => {
+  it('updates toolboxes_enabled when the model calls toggle_toolbox', async () => {
     const venice = mockVenice([
-      [{ type: 'tool_call', toolCall: mkCall('toggle_tools', { enable: true }) }],
-      [{ type: 'text', delta: 'Tools are ready.' }],
+      [
+        {
+          type: 'tool_call',
+          toolCall: mkCall('toggle_toolbox', { enabled: ['cooking', 'memories'] }),
+        },
+      ],
+      [{ type: 'text', delta: 'Toolboxes are ready.' }],
     ]);
     const { svc, mocks } = mockSupabase();
-    const changes: boolean[] = [];
+    const changes: readonly string[][] = [];
+    const recorded: string[][] = [];
     const result = await runChatLoop({
       venice,
       supabase: svc,
@@ -683,12 +689,50 @@ describe('runChatLoop', () => {
       history: [],
       signal: new AbortController().signal,
       handlers: {
-        onToolsEnabledChange: (enabled) => changes.push(enabled),
+        onToolboxesEnabledChange: (enabled) => {
+          recorded.push([...enabled]);
+        },
       },
     });
-    expect(result.toolsEnabled).toBe(true);
-    expect(changes).toEqual([true]);
-    expect(mocks.setThreadToolsEnabled).toHaveBeenCalledWith('t-1', true);
+    void changes;
+    expect(result.toolboxesEnabled).toEqual(['cooking', 'memories']);
+    expect(recorded).toEqual([['cooking', 'memories']]);
+    expect(mocks.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', [
+      'cooking',
+      'memories',
+    ]);
+  });
+
+  it('does not fire onToolboxesEnabledChange when toggle_toolbox is a no-op', async () => {
+    // Calling toggle_toolbox with the same array the thread already
+    // has should persist (the model re-affirms its intent) but the UI
+    // notification must not flash - nothing visible changed.
+    const venice = mockVenice([
+      [
+        {
+          type: 'tool_call',
+          toolCall: mkCall('toggle_toolbox', { enabled: ['cooking'] }),
+        },
+      ],
+      [{ type: 'text', delta: 'OK.' }],
+    ]);
+    const { svc } = mockSupabase();
+    const recorded: string[][] = [];
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread({ toolboxes_enabled: ['cooking'] }),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [],
+      signal: new AbortController().signal,
+      handlers: {
+        onToolboxesEnabledChange: (enabled) => {
+          recorded.push([...enabled]);
+        },
+      },
+    });
+    expect(recorded).toEqual([]);
   });
 
   it('surfaces a tool error via onToolError and as a tool-result row', async () => {
@@ -706,7 +750,7 @@ describe('runChatLoop', () => {
     await runChatLoop({
       venice,
       supabase: svc,
-      thread: mkThread({ tools_enabled: true }),
+      thread: mkThread({ toolboxes_enabled: ['cooking', 'memories', 'conversations'] }),
       userId: 'u-1',
       modelId: 'm',
       history: [],
@@ -740,7 +784,7 @@ describe('runChatLoop', () => {
     const result = await runChatLoop({
       venice,
       supabase: svc,
-      thread: mkThread({ tools_enabled: true }),
+      thread: mkThread({ toolboxes_enabled: ['cooking', 'memories', 'conversations'] }),
       userId: 'u-1',
       modelId: 'm',
       history: [],
@@ -784,7 +828,7 @@ describe('runChatLoop', () => {
     await runChatLoop({
       venice,
       supabase: svc,
-      thread: mkThread({ tools_enabled: true }),
+      thread: mkThread({ toolboxes_enabled: ['cooking', 'memories', 'conversations'] }),
       userId: 'u-1',
       modelId: 'm',
       history: [],
@@ -845,7 +889,7 @@ describe('runChatLoop', () => {
     await runChatLoop({
       venice,
       supabase: svc,
-      thread: mkThread({ tools_enabled: true }),
+      thread: mkThread({ toolboxes_enabled: ['cooking', 'memories', 'conversations'] }),
       userId: 'u-1',
       modelId: 'zai-org-glm-5',
       history: [],
@@ -892,7 +936,7 @@ describe('runChatLoop', () => {
     await runChatLoop({
       venice,
       supabase: svc,
-      thread: mkThread({ tools_enabled: true }),
+      thread: mkThread({ toolboxes_enabled: ['cooking', 'memories', 'conversations'] }),
       userId: 'u-1',
       modelId: 'm',
       history: [],

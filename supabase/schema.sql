@@ -287,12 +287,45 @@ alter table public.messages
 alter table public.messages
   add column if not exists citations jsonb;
 
--- Per-thread master switch for tool availability. When false, only the
--- always-on `toggle_tools` meta-tool is sent with the request; when true,
--- every registered tool's schema is included. The LLM can flip this via
--- `toggle_tools`, or the user can flip it from the composer toolbox button.
+-- Per-thread set of enabled gated toolboxes. Stored as text[] so the
+-- toolbox dimension sits in the thread row without a second table.
+-- The always_on toolbox is implicit and is NOT represented here - its
+-- tools ride every request regardless. Names are validated client-
+-- side against `GATED_TOOLBOX_NAMES` in src/lib/tools/index.ts;
+-- unknown names are silently dropped on both the model path
+-- (`toggle_toolbox`) and the UI path (composer popover), so a renamed
+-- or deleted toolbox does not break mid-flight.
+--
+-- The LLM can flip this via the `toggle_toolbox` meta-tool; the user
+-- can flip it via the composer toolbox popover. Both paths write
+-- through the same column.
 alter table public.threads
-  add column if not exists tools_enabled boolean not null default false;
+  add column if not exists toolboxes_enabled text[] not null default '{}';
+
+-- Backfill from the legacy boolean `tools_enabled` column, then drop
+-- it. Runs in a guarded block so it's safe on projects that have
+-- already migrated (the information_schema probe short-circuits) and
+-- on projects that never had the boolean column (same). The array we
+-- backfill with is the full set of gated toolboxes at migration time
+-- (`cooking`, `memories`, `conversations`) - any thread that had
+-- tools_enabled=true gets the same capability set it had before. The
+-- list is hard-coded rather than derived because "everything that
+-- existed when we migrated" is a one-shot decision that must not
+-- drift when we add a new toolbox in a later release.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'threads'
+      and column_name = 'tools_enabled'
+  ) then
+    update public.threads
+      set toolboxes_enabled = array['cooking', 'memories', 'conversations']::text[]
+      where tools_enabled = true
+        and toolboxes_enabled = '{}'::text[];
+    alter table public.threads drop column tools_enabled;
+  end if;
+end $$;
 
 -- Soft-hide flag for the "Archive" drawer section. Archived threads still
 -- load into the sidebar and remain viewable, but the composer is disabled

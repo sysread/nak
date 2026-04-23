@@ -70,7 +70,7 @@ A chat turn goes:
 
 - **Threads** — `threads` table; `Thread` TS interface in
   `supabase.ts`. Fields the chat loop reads: `id`, `model`,
-  `reasoning_effort`, `verbosity`, `tools_enabled`, `archived`.
+  `reasoning_effort`, `verbosity`, `toolboxes_enabled`, `archived`.
   `created_at`/`updated_at` drive sidebar ordering. Drafts are
   never written to Supabase; the `isDraft?: boolean` app-local
   flag keeps them in memory only.
@@ -122,10 +122,10 @@ A chat turn goes:
   (fires once per call, after the accumulator has assembled the
   arguments JSON from its fragments), `{type:'usage', usage}`
   (fires once after the terminal event).
-- `ChatLoopHandlers` — the event surface the UI uses: text
+- `ChatLoopHandlers` - the event surface the UI uses: text
   updates, tool start/done/error, persistence events,
-  `onToolsEnabledChange` (for the composer toolbox flash when
-  `toggle_tools` fires). Every handler is optional; the loop
+  `onToolboxesEnabledChange` (for the composer toolbox flash when
+  `toggle_toolbox` fires). Every handler is optional; the loop
   runs cleanly with none of them.
 - `MAX_ROUNDS = 5` — guardrail on runaway tool loops. Exits with
   `stoppedByLimit: true`; the UI shows a "tool-use round cap
@@ -133,8 +133,8 @@ A chat turn goes:
 
 ## Interactions with other features
 
-- **Tools** — every round's `streamChat` call passes `tools:
-  buildToolList(toolsEnabled)`. Tool calls arrive as
+- **Tools** - every round's `streamChat` call passes `tools:
+  buildToolList(thread.toolboxes_enabled)`. Tool calls arrive as
   `StreamEvent` of type `tool_call`; `executeToolCall` dispatches
   them against the registry; results are persisted as
   `role='tool'` rows and echoed back in the next round's
@@ -201,11 +201,14 @@ A chat turn goes:
   passed in is the *opening* user turn, not the current one, so
   a retry titles the conversation's original topic rather than
   whatever follow-up triggered the retry.
-- **`toggle_tools` is the only tool that mutates the loop's
-  master switch in-flight.** Its return value is inspected
-  specifically (`call.function.name === toggleTools.name`) to
-  avoid a DB re-read. If you add another tool that also flips
-  thread state, it needs similar special-casing or a refetch.
+- **`toggle_toolbox` is the only tool that mutates the loop's
+  gated-toolbox set in-flight.** Its return value is inspected
+  specifically (`call.function.name === toggleToolbox.name`) to
+  avoid a DB re-read. The loop compares the new array to the
+  previous one (order-insensitive) and only fires the UI
+  notification on a real change. If you add another tool that
+  also flips thread state, it needs similar special-casing or a
+  refetch.
 - **Drafts must not enter realtime state.** The draft's in-memory
   id is a freshly-minted UUID; if a draft leaks into `addMessage`
   before being materialized, the realtime `INSERT` handler sees a

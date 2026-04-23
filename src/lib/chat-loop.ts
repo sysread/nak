@@ -38,7 +38,7 @@ import {
   buildToolList,
   buildSystemPrompt,
   executeToolCall,
-  toggleTools,
+  toggleToolbox,
   updateTitle,
   type OpenAIToolCall,
   type ToolContext,
@@ -197,6 +197,23 @@ function tagLastUserMessage(messages: VeniceMessage[]): VeniceMessage[] {
 }
 
 /**
+ * Order-insensitive equality for two toolbox-name arrays. Used to
+ * decide whether a `toggle_toolbox` result changed the thread's
+ * effective set - if it didn't (the model toggled to the same
+ * array), we skip the onToolboxesEnabledChange notification so the
+ * UI doesn't flash for a no-op. The toolbox name list is tiny (< 10
+ * entries) so the nested-loop cost is negligible.
+ */
+function sameToolboxSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const bSet = new Set(b);
+  for (const name of a) {
+    if (!bSet.has(name)) return false;
+  }
+  return true;
+}
+
+/**
  * Compose a child AbortController whose `.abort()` fires whenever the
  * parent signal aborts. Used to scope per-tool cancellation under the
  * outer send() signal: aborting the send cancels every in-flight tool
@@ -247,11 +264,13 @@ export interface ChatLoopHandlers {
   /** A tool-result row has been written (fires once per tool). */
   onToolResultPersisted?(message: Message): void;
   /**
-   * The tools_enabled master switch changed during the round (triggered
-   * by a toggle_tools call from the model). UI surfaces this as a
-   * flash on the composer toolbox button.
+   * The thread's gated-toolbox set changed during the round (triggered
+   * by a `toggle_toolbox` call from the model). UI surfaces this as
+   * a flash on the composer toolbox button. The handler receives the
+   * new enabled array verbatim; callers wanting a delta should diff
+   * against what they stored.
    */
-  onToolsEnabledChange?(enabled: boolean): void;
+  onToolboxesEnabledChange?(enabled: readonly string[]): void;
   /**
    * The thread title changed mid-turn (triggered by an `update_title`
    * call from the model). Fires with the sanitised title the handler
@@ -312,8 +331,12 @@ export interface ChatLoopResult {
   roundsRun: number;
   /** True if we stopped because of MAX_ROUNDS rather than a clean finish. */
   stoppedByLimit: boolean;
-  /** Current state of the master switch after the loop finished. */
-  toolsEnabled: boolean;
+  /**
+   * The thread's enabled gated-toolbox set at the end of the loop.
+   * Callers persist this back to local state so subsequent user sends
+   * see the same surface the model last saw.
+   */
+  toolboxesEnabled: readonly string[];
 }
 
 /**
@@ -450,7 +473,11 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
-  let toolsEnabled = thread.tools_enabled;
+  // Snapshot the thread's current toolbox set. Mutated in the loop
+  // whenever the model calls `toggle_toolbox` so later rounds see the
+  // new wire catalog. Returned to the caller at the end for local
+  // state rehydration.
+  let toolboxesEnabled: readonly string[] = thread.toolboxes_enabled;
   let finalText = '';
   let roundsRun = 0;
   let stoppedByLimit = false;
@@ -592,6 +619,10 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       {
         role: 'system',
         content: buildSystemPrompt({
+          // Pass the thread's current gated-toolbox set so the
+          // catalog block renders [x]/[ ] marks that match what the
+          // model will actually see on the wire this round.
+          enabledToolboxes: toolboxesEnabled,
           // Per-turn appendix - pre-computed before the round loop so
           // every round sees the same block. Currently concatenates
           // (in order): the title note (buildTitleNote above, guiding
@@ -609,7 +640,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       model: modelId,
       messages: requestMessages,
       signal,
-      tools: buildToolList(toolsEnabled),
+      tools: buildToolList(toolboxesEnabled),
       reasoningEffort,
       verbosity,
     });
@@ -732,13 +763,19 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       try {
         const value = await executeToolCall(call.function.name, args, ctx);
         handlers?.onToolDone?.(call, value);
-        // toggle_tools is the only tool that changes the master switch;
-        // observe its return value instead of a separate DB re-fetch.
-        if (call.function.name === toggleTools.name) {
-          const next = Boolean((value as { enabled?: boolean })?.enabled);
-          if (next !== toolsEnabled) {
-            toolsEnabled = next;
-            handlers?.onToolsEnabledChange?.(toolsEnabled);
+        // `toggle_toolbox` is the only tool that changes the gated-
+        // toolbox set; observe its return value instead of a separate
+        // DB re-fetch. The tool's execute handler already filtered the
+        // incoming names against the known toolbox list, so whatever
+        // we read back here is a valid array.
+        if (call.function.name === toggleToolbox.name) {
+          const raw = (value as { enabled?: unknown })?.enabled;
+          const next = Array.isArray(raw)
+            ? raw.filter((v): v is string => typeof v === 'string')
+            : [];
+          if (!sameToolboxSet(next, toolboxesEnabled)) {
+            toolboxesEnabled = next;
+            handlers?.onToolboxesEnabledChange?.(toolboxesEnabled);
           }
         }
         // update_title returns the sanitised title; forward so the UI
@@ -830,5 +867,5 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     void recordSubstrateStub(supabase, thread.id, userMessageId, lastAssistantId);
   }
 
-  return { finalText, roundsRun, stoppedByLimit, toolsEnabled };
+  return { finalText, roundsRun, stoppedByLimit, toolboxesEnabled };
 }

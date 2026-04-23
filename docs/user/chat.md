@@ -12,6 +12,34 @@ The paperclip button in the composer toolbar queues files for the
 next message — click the paperclip, paste an image, or drag-drop
 onto the composer. Full details in [Attachments](./attachments.md).
 
+### Toolboxes
+
+The leftmost icon in the composer toolbar is the **toolbox popover**.
+Nak's capabilities beyond plain chat are grouped into named toolboxes
+that you can enable per conversation:
+
+- **Cooking** — save, read, and edit recipes in the Cookbook.
+- **Memories** — search, create, update, and delete long-term
+  memories about you.
+- **Conversations** — search prior conversations for context.
+
+Click the toolbox icon to open the popover and check off the
+toolboxes you want active for this conversation. Each toolbox is
+independent — turn on just Cooking if you're meal-planning; turn on
+Memories + Conversations when you want Nak to reach into your
+history.
+
+The badge on the button counts how many toolboxes are currently on.
+When a toolbox is off, its tools aren't on the wire — the model
+can't accidentally write a recipe when you only asked for chat.
+Reflex-level tools (memory recall, conversation recall, web search)
+always ride along without needing a toolbox — you never have to
+enable a toolbox just to get the model to look something up.
+
+Nak can also flip toolboxes itself mid-conversation when it realises
+it needs a capability. When that happens, the toolbox button briefly
+pulses so you can see the change.
+
 ## Streaming responses
 
 Replies stream token-by-token. Under the hood, Nak keeps the markdown

@@ -1,70 +1,89 @@
 # Tools
 
-The tool-calling subsystem. One registry, two parallel executors
-(chat-side and headless-agent-side), and per-agent toolboxes that
-subset the registry for read-only or write-scoped roles. Every tool
-the model can invoke in any surface is declared here.
+The tool-calling subsystem. One registry organised into named
+toolboxes, two parallel executors (chat-side and headless-agent-
+side), and per-agent toolboxes that subset the registry for read-
+only or write-scoped roles. Every tool the model can invoke in any
+surface is declared here.
 
 ## Role in the app
 
-Tools give the model a way to actually do things — store a memory,
-search prior threads, flip the thread's toolbox on or off. The main
-chat loop exposes them to the primary model; background agents
-expose their own scoped subsets to their own models. Both paths
-share the `ToolDef` shape and the `executeToolCall` /
-`executeToolboxCall` dispatchers, so adding a tool is a
-one-file-plus-index change.
+Tools give the model a way to actually do things - store a memory,
+search prior threads, save a recipe, flip which toolboxes are
+active. The main chat loop exposes them to the primary model via
+named toolboxes; background agents expose their own scoped subsets
+to their own models. Both paths share the `ToolDef` shape and the
+`executeToolCall` / `executeToolboxCall` dispatchers, so adding a
+tool is a one-file-plus-toolbox-entry change.
 
-Four always-on surfaces ride with every request regardless of the
-thread's `tools_enabled` master switch:
+The main chat model sees toolboxes as the unit of enablement:
 
-- `toggle_tools` — the master switch itself. Without this, the
-  toggle model can never flip.
-- `memory_recall` and `conversation_recall` — reflex-level surfaces
+- **`always_on`** - reflex-level tools that ride every request
+  regardless of the thread's `toolboxes_enabled` array.
+- **`cooking`**, **`memories`**, **`conversations`** - gated
+  toolboxes. Included in the wire catalog only when their name
+  appears in `threads.toolboxes_enabled`.
+
+The always-on toolbox carries:
+
+- `toggle_toolbox` - the gating mechanism itself. Without it in the
+  always-on set, the model cannot enable any gated toolbox.
+- `memory_recall` and `conversation_recall` - reflex-level reads
   the system prompt asks the model to call at the top of a new
   topic. Both are read-only (they spawn a sub-agent and return a
   structured note) so there's no write risk from always exposing
   them.
-- `web_search` — runs a one-shot Venice sub-completion with
+- `web_search` - runs a one-shot Venice sub-completion with
   `enable_web_search: 'on'` + `enable_web_citations: true` and
   returns `{answer, citations}`. Must be available without a
   toggle round-trip because time-sensitive questions (news,
   prices, today's weather) are the canonical case for search and
-  we don't want the model to refuse or hedge while waiting for
-  `tools_enabled=true`. Read-only (no DB writes). Deliberately
-  excluded from `memoryToolbox`, `recallToolbox`, and
-  `conversationRecallToolbox` — background agents have no reason
+  we don't want the model to refuse or hedge while waiting for a
+  toolbox flip. Read-only (no DB writes). Deliberately excluded
+  from `memoryToolbox`, `recallToolbox`, and
+  `conversationRecallToolbox` - background agents have no reason
   to reach for live web data, and giving them the tool would burn
   search quota and pollute memories with scraped noise.
+- `update_title` - has to fire on the very first turn of a fresh
+  thread when `toolboxes_enabled=[]` by default; gating it would
+  mean a toolbox flip before the model could name the
+  conversation.
 
 ## Files
 
-- `src/lib/tools/index.ts` — the registry (`TOOLS`), catalog
-  builders (`buildToolList`, `buildSystemPrompt`), and the main
-  dispatcher `executeToolCall`. Also exports the read-only
-  toolboxes for the recall agents.
-- `src/lib/tools/run.ts` — `runHeadlessToolLoop`: the agent-side
+- `src/lib/tools/index.ts` - the toolbox definitions
+  (`alwaysOnToolbox`, `cookingToolbox`, `memoriesToolbox`,
+  `conversationsToolbox`), the ordered `TOOLBOXES` list, the
+  derived `GATED_TOOLBOX_NAMES` / `GATED_TOOLBOX_META`, the flat
+  `TOOLS` view used by tests, the catalog builders
+  (`buildToolList`, `buildSystemPrompt`), and the main dispatcher
+  `executeToolCall`. Also exports the agent-only toolboxes
+  (`memoryToolbox`, `recallToolbox`, `conversationRecallToolbox`).
+- `src/lib/tools/run.ts` - `runHeadlessToolLoop`: the agent-side
   executor. Parallel to the chat loop but without persistence or
   streaming callbacks.
-- `src/lib/tools/types.ts` — `ToolDef`, `Toolbox`, `ToolContext`,
+- `src/lib/tools/types.ts` - `ToolDef`, `Toolbox`, `ToolContext`,
   OpenAI wire types.
-- `src/lib/tools/toggle_tools.ts` — the master-switch tool.
-- `src/lib/tools/memory_*.ts` — the five memory tools (`search`,
+- `src/lib/tools/toggle_tools.ts` - the gating meta-tool
+  (`toggle_toolbox`). Validates incoming names against the current
+  `GATED_TOOLBOX_NAMES` set; unknown names are silently dropped
+  (the tool's return value tells the model what took effect).
+- `src/lib/tools/memory_*.ts` - the five memory tools (`search`,
   `create`, `update`, `invalidate`, `delete`) plus `memory_recall`
   (triggers the recall agent).
 - `src/lib/tools/conversation_search.ts`,
-  `conversation_recall.ts` — thread-level search + recall-agent
+  `conversation_recall.ts` - thread-level search + recall-agent
   trigger.
-- `src/lib/tools/recipe_*.ts` — five cookbook tools (`save`,
+- `src/lib/tools/recipe_*.ts` - five cookbook tools (`save`,
   `list`, `get`, `update`, `delete`). Mutating ones fire
   `notifyCookbookChanged` from `cookbook-store.svelte.ts` so the
   Cookbook modal + drawer tab refresh without the UI layer needing
   to import the tools module. See `./cookbook.md`.
 - `src/lib/tools/recall_toolbox.ts`,
-  `conversation_recall_toolbox.ts` — the read-only toolboxes
+  `conversation_recall_toolbox.ts` - the read-only toolboxes
   assembled for the recall agents. Standalone files to break
   import cycles.
-- `src/lib/tools/web_search.ts` — wraps a Venice sub-completion
+- `src/lib/tools/web_search.ts` - wraps a Venice sub-completion
   with server-side web search on. Chat-loop harvests the
   returned `citations` array into the terminal assistant row's
   `citations` column so `CitationsPanel` + `^N^` markdown
@@ -73,41 +92,56 @@ thread's `tools_enabled` master switch:
 
 ## Entry points
 
-- **Chat loop** — `chat-loop.ts` calls `buildToolList(toolsEnabled)`
-  on every round and `executeToolCall(name, args, ctx)` for each
-  `tool_call` event. The chat loop owns persistence of both the
-  assistant-with-tool-calls row and the per-call `role='tool'`
-  rows.
-- **Background agents** — each agent calls `runHeadlessToolLoop`
+- **Chat loop** - `chat-loop.ts` calls
+  `buildToolList(thread.toolboxes_enabled)` on every round and
+  `executeToolCall(name, args, ctx)` for each `tool_call` event.
+  The chat loop owns persistence of both the assistant-with-tool-
+  calls row and the per-call `role='tool'` rows.
+- **Background agents** - each agent calls `runHeadlessToolLoop`
   with its own toolbox. The loop extends an in-memory
   `VeniceMessage[]` each round and returns the final text + a few
   counters. No persistence happens inside.
-- **System prompt assembly** — `buildSystemPrompt` composes the
-  baseline system message the chat loop prepends each round. It
-  includes two dynamic tool-catalog sections (always-on and
-  gated) built from the registry, so adding a new tool extends
-  the prompt automatically.
+- **System prompt assembly** - `buildSystemPrompt({
+  enabledToolboxes, promptAppendix })` composes the baseline
+  system message the chat loop prepends each round. The catalog
+  section lists always-on tools first, then each gated toolbox
+  with a `[x]` or `[ ]` mark showing its current enabled state,
+  so the model sees the same picture the user does in the
+  composer popover.
 
 ## Data model
 
-- **Registry** (`TOOLS`) — ordered array of `ToolDef` objects.
-  Order is the order the model sees them in, which is the order
-  they appear in the system-prompt catalog. Recall tools go
-  first.
-- **`ALWAYS_ON`** — `toggle_tools` + `memory_recall` +
-  `conversation_recall` + `web_search`. These ship with every
-  request regardless of the thread's `tools_enabled` flag.
-- **`GATED_TOOLS`** — derived (`TOOLS \ ALWAYS_ON`). Shipped only
-  when the thread's `tools_enabled` is true.
-- **`threads.tools_enabled`** — the per-thread master switch.
-  Flipped by `toggle_tools` (model-driven) or the composer
-  toolbox button (user-driven). Single source of truth for both
-  paths.
-- **`Toolbox`** — a name + description + `tools: ToolDef[]`
-  subset. The `memoryToolbox` exports the reflection agent's
-  scope; `recallToolbox` and `conversationRecallToolbox` are each
-  one-tool read-only surfaces.
-- **`ToolContext`** — the record every `execute` handler receives
+- **Toolbox definitions** (`alwaysOnToolbox`, `cookingToolbox`,
+  `memoriesToolbox`, `conversationsToolbox`) - each is a `Toolbox`
+  with a stable name, a human-readable description (surfaced in
+  the UI popover and in the system-prompt catalog), and an
+  ordered `tools: ToolDef[]` array.
+- **`TOOLBOXES`** - ordered list: always-on first, then cooking,
+  memories, conversations. Order is visible to the model
+  (system-prompt catalog) and to the user (popover).
+- **`GATED_TOOLBOX_NAMES`** - `TOOLBOXES` minus `alwaysOnToolbox`.
+  The canonical name list for both writers (the `toggle_toolbox`
+  tool and the composer popover) to validate against.
+- **`GATED_TOOLBOX_META`** - `{name, description}[]` projection
+  that the UI popover reads; kept narrow so Chat.svelte does not
+  pull in tool definitions just to render a list.
+- **`TOOLS`** - flat, deduped view of every tool across
+  `TOOLBOXES`. Exported for test assertions; the wire builder
+  composes from `TOOLBOXES` so a tool's toolbox membership drives
+  enablement.
+- **`threads.toolboxes_enabled text[]`** - the per-thread set of
+  enabled gated toolbox names. Written by `toggle_toolbox` (model-
+  driven) and by the composer popover (user-driven). Empty array
+  means "only the always-on set on the wire." The `always_on`
+  name is implicit and is never stored here; writers drop it
+  silently, as they drop any unknown name, so a renamed or
+  deleted toolbox does not break mid-flight.
+- **`Toolbox`** - a name + description + `tools: ToolDef[]`
+  subset. The agent-only `memoryToolbox` exports the reflection
+  agent's scope (memory CRUD with `memory_invalidate` in place of
+  `memory_delete`); `recallToolbox` and `conversationRecallToolbox`
+  are each one-tool read-only surfaces.
+- **`ToolContext`** - the record every `execute` handler receives
   alongside the parsed args. Fields: `supabase`, `venice`,
   `userId`, `threadId`, `signal`. Assembled at call-time in the
   chat loop; agents assemble their own with a fixed `threadId`
@@ -115,64 +149,83 @@ thread's `tools_enabled` master switch:
 
 ## Contracts
 
-- `ToolDef` — `{ name, description, shortDescription, parameters,
-  execute }`. `description` ships on the wire; `shortDescription`
-  is a <50-char line used in the system-prompt catalog so the
-  model knows what's behind the toggle without needing the full
-  JSON schema.
-- `execute(args, ctx): Promise<unknown>` — the tool's handler.
+- `ToolDef` - `{ name, description, shortDescription, parameters,
+  execute }`. `description` ships on the wire;
+  `shortDescription` is a <50-char line used in the system-prompt
+  catalog so the model knows what's behind the toggle without
+  needing the full JSON schema.
+- `execute(args, ctx): Promise<unknown>` - the tool's handler.
   Errors thrown here land as `role='tool'` rows with an `error`
   key in the JSON content; the loop does not retry.
-- `buildToolList(toolsEnabled): OpenAIToolDef[]` — canonical way
-  to build the request's `tools` array. Enabled → full set;
-  disabled → `ALWAYS_ON` only. Callers should never construct
-  this array by hand.
-- `executeToolCall(name, args, ctx): Promise<ToolResult>` — the
-  main chat dispatcher. Throws on unknown tool name.
-- `executeToolboxCall(toolbox, name, args, ctx)` — the agent
+- `buildToolList(enabledToolboxes: readonly string[]):
+  OpenAIToolDef[]` - canonical way to build the request's `tools`
+  array. Always includes the always-on toolbox; then each gated
+  toolbox whose name appears in the input. Unknown names are
+  ignored; duplicates across toolboxes are deduped by tool name
+  (first-seen wins). Callers should never construct this array
+  by hand.
+- `buildSystemPrompt(opts?)` - `{ enabledToolboxes?,
+  promptAppendix? }`. The enabled toolbox list drives the
+  `[x]`/`[ ]` marks in the catalog; an absent `enabledToolboxes`
+  is treated as "none enabled."
+- `executeToolCall(name, args, ctx): Promise<ToolResult>` - the
+  main chat dispatcher. Throws on unknown tool name. Looks up the
+  tool across every toolbox in `TOOLBOXES` in order.
+- `executeToolboxCall(toolbox, name, args, ctx)` - the agent
   dispatcher. Scoped strictly to the toolbox's tools; throws with
   the toolbox name included so errors from, say, the memory agent
   don't look identical to errors from the main chat.
 - `toolbox.tools` is the authoritative subset. Two surfaces
   declaring the same tool name but different toolboxes are fine;
   the dispatcher reaches for the declared one.
-- `runHeadlessToolLoop(opts): Promise<HeadlessToolLoopResult>` —
+- `runHeadlessToolLoop(opts): Promise<HeadlessToolLoopResult>` -
   `opts.messages` is already composed by the caller (no system-
   prompt prepend). Returns `{ finalText, rounds, toolCalls,
   stoppedByLimit }`. Default `maxRounds` is 8.
+- **Toggle semantics.** The `toggle_toolbox` tool takes
+  `{enabled: string[]}` and replaces the thread's set. Passing
+  `{enabled: []}` disables every gated toolbox. The tool returns
+  `{enabled: <accepted-set>}` - the accepted set filters out
+  unknown names and the implicit `always_on` name. On the UI side
+  the composer popover writes through the same column via
+  `setThreadToolboxesEnabled(threadId, names)`.
 
 ## Interactions with other features
 
-- **Chat** — every tool call the main model emits is dispatched
-  here. The registry's ordering of recall tools first shapes the
-  system-prompt cadence the model learns. See `./chat.md`.
-- **Memory** — the five memory tools (`search`, `create`,
+- **Chat** - every tool call the main model emits is dispatched
+  here. `buildToolList(thread.toolboxes_enabled)` shapes the wire
+  catalog each round; `onToolboxesEnabledChange` fires whenever
+  the model flips the thread's enabled set so the UI can patch
+  its local thread row without a refetch. See `./chat.md`.
+- **Memory** - the five memory tools (`search`, `create`,
   `update`, `invalidate`, `delete`) ARE the memory CRUD
-  interface. Both the user-facing chat path and the reflection
-  agent's path dispatch through the tool harness. `memory_recall`
-  is a separate top-level tool that kicks off the recall agent.
-  See `./memory.md`.
-- **Conversation recall** — `conversation_recall` is a top-level
-  tool; the agent it triggers has its own read-only toolbox that
-  imports `conversation_search` directly from its file to avoid
-  the cycle tools/index → conversation_recall → agents/… →
-  tools/index. See `./conversation-recall.md`.
-- **Cookbook** — five `recipe_*` tools gated like the memory ones.
-  The store in `cookbook-store.svelte.ts` owns the reactive recipe
-  list; mutating tools fire a `window` `CustomEvent` so the UI
-  refreshes without a tools → UI import. See `./cookbook.md`.
-- **Reflection agent** — uses `memoryToolbox`, a write-scoped
+  interface. The user-facing `memoriesToolbox` packages
+  `search / create / update / delete`. The reflection agent's
+  `memoryToolbox` swaps `memory_delete` for `memory_invalidate`
+  because agents can only soft-decay, not hard-delete.
+  `memory_recall` is a separate always-on tool that kicks off the
+  recall agent. See `./memory.md`.
+- **Conversation recall** - `conversation_recall` is an always-
+  on tool; the agent it triggers has its own read-only toolbox
+  that imports `conversation_search` directly from its file to
+  avoid the cycle tools/index -> conversation_recall -> agents/...
+  -> tools/index. See `./conversation-recall.md`.
+- **Cookbook** - five `recipe_*` tools gated by the `cooking`
+  toolbox. The store in `cookbook-store.svelte.ts` owns the
+  reactive recipe list; mutating tools fire a `window`
+  `CustomEvent` so the UI refreshes without a tools -> UI import.
+  See `./cookbook.md`.
+- **Reflection agent** - uses `memoryToolbox`, a write-scoped
   subset of the memory tools: `create / update / invalidate /
   search`, but NOT `delete` (agent can only soft-invalidate; hard
   deletes are user-directed) and NOT `memory_recall` or any
-  `*_recall` (recursion with no purpose — reflection already has
+  `*_recall` (recursion with no purpose - reflection already has
   the whole conversation in context). See `./memory.md`.
-- **Logging** - the two recall tools
-  (`memory_recall`, `conversation_recall`) emit
-  diagnostic breadcrumbs via `createLogger`. New tools
-  should follow suit rather than calling `console.*`
-  directly - the `no-console` ESLint rule enforces this
-  outside `src/lib/logger.svelte.ts`. See
+- **Logging** - the two recall tools (`memory_recall`,
+  `conversation_recall`) emit diagnostic breadcrumbs via
+  `createLogger`. New tools should follow suit rather than
+  calling `console.*` directly - the `no-console` ESLint rule
+  enforces this outside `src/lib/logger.svelte.ts`. See
   `./logging.md`.
 
 ## Gotchas
@@ -195,33 +248,42 @@ thread's `tools_enabled` master switch:
 - **Circular-import dance around recall toolboxes.** `memory_recall`
   lives in `tools/index.ts` and triggers `agents/recall/agent.ts`,
   which needs a toolbox. If the agent imported the toolbox from
-  `tools/index.ts` the cycle would bite — the agent would load
+  `tools/index.ts` the cycle would bite - the agent would load
   before `memoryRecall` was defined, giving it an undefined
   toolbox. The fix: `recall_toolbox.ts` and
   `conversation_recall_toolbox.ts` are their own files,
   re-exported from `tools/index.ts` so consumers that read
   `$lib/tools` still see them. Don't inline them back into the
-  barrel.
-- **Catalog builders are the contract.** `buildSystemPrompt`'s
-  two catalog sections (`ALWAYS_ON_CATALOG`, `GATED_TOOLS`)
-  derive from the registry. If you add a tool and hand-edit the
-  system-prompt string instead of going through the registry,
-  the two drift and the model ends up with a catalog that
-  doesn't match the tools on the wire.
-- **`toggle_tools` belongs in `ALWAYS_ON` but not in the
-  always-on catalog.** It's the gating mechanism, not a
-  capability to describe alongside recall. `ALWAYS_ON_CATALOG`
-  filters it out; the toggle rule is explained in its own
-  prompt block.
-- **Recall tools are the only `ALWAYS_ON` non-toggle tools
-  because they're read-only.** Any new tool that wants
-  always-on behavior needs that same property or it should live
-  behind the gate.
+  barrel. For the same reason, `toggle_tools.ts` imports
+  `GATED_TOOLBOX_NAMES` and `alwaysOnToolbox` via a deferred
+  `await import('./index')` inside `execute()` rather than at the
+  top of the file.
+- **`toggle_toolbox` is in `always_on` but not in the catalog.**
+  It's the gating mechanism, not a capability to describe
+  alongside recall. `buildSystemPrompt` filters it out of the
+  always-on catalog block; the toggle rule is explained in its
+  own prompt paragraph with the exact call shape
+  (`toggle_toolbox({enabled: [...]})`).
+- **Unknown toolbox names are dropped silently.** Both writers
+  (`toggle_toolbox` and the composer popover) filter against
+  `GATED_TOOLBOX_NAMES`, so a renamed or deleted toolbox doesn't
+  break mid-flight. On the read side, `coerceThread` filters
+  non-string array elements out of `toolboxes_enabled` so a
+  drifting row can never poison the UI's `.includes()` checks.
+  Validation is at the edges; internal code trusts the shape.
+- **The `always_on` name is implicit.** Listing it in the
+  `enabled` array does nothing (we already include it) and
+  writers drop it. The stored array should never contain
+  `always_on`.
+- **Recall tools are the only `always_on` non-toggle tools
+  because they're read-only.** Any new tool that wants always-on
+  behavior needs that same property or it should live inside a
+  gated toolbox.
 
 ## Where to go next
 
-- `./chat.md` — the main caller of `executeToolCall` and the
+- `./chat.md` - the main caller of `executeToolCall` and the
   owner of persistence around tool rounds.
-- `./memory.md` — the memory tools + reflection agent + recall
+- `./memory.md` - the memory tools + reflection agent + recall
   agent story.
-- `./conversation-recall.md` — recall-agent-specific plumbing.
+- `./conversation-recall.md` - recall-agent-specific plumbing.

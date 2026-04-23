@@ -60,6 +60,7 @@
     type NewAttachment,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
+  import { GATED_TOOLBOX_META } from '$lib/tools';
   import { drainSharesForComposer } from '$lib/share-intake';
   import {
     arrayBufferToBase64,
@@ -1331,7 +1332,7 @@
       model: null,
       reasoning_effort: null,
       verbosity: null,
-      tools_enabled: false,
+      toolboxes_enabled: [],
       archived: false,
       title_manually_set: false,
       created_at: now,
@@ -1813,8 +1814,10 @@
                 });
               }
             },
-            onToolsEnabledChange: (enabled) => {
-              patchThread(ctx.threadId, { tools_enabled: enabled });
+            onToolboxesEnabledChange: (enabled) => {
+              patchThread(ctx.threadId, {
+                toolboxes_enabled: [...enabled],
+              });
               // Brief flash on the composer toolbox so a human eye
               // notices the LLM-initiated state flip. User-initiated
               // flips don't flash (the click itself is the feedback).
@@ -2304,6 +2307,7 @@
   let modelMenuOpen = $state(false);
   let reasoningMenuOpen = $state(false);
   let verbosityMenuOpen = $state(false);
+  let toolboxMenuOpen = $state(false);
 
   // IDs of system prompts active for the current thread. Seeded from
   // `enabledByDefault` when a thread is opened, not persisted. Swapping
@@ -2333,6 +2337,7 @@
     modelMenuOpen = false;
     reasoningMenuOpen = false;
     verbosityMenuOpen = false;
+    toolboxMenuOpen = false;
   }
 
   function onDocClick(e: MouseEvent): void {
@@ -2347,7 +2352,14 @@
         (tgt.closest('.thread-menu') || tgt.closest('.thread-actions-btn'));
       if (!inside) closeRowMenu();
     }
-    if (!promptsMenuOpen && !modelMenuOpen && !reasoningMenuOpen && !verbosityMenuOpen) return;
+    if (
+      !promptsMenuOpen &&
+      !modelMenuOpen &&
+      !reasoningMenuOpen &&
+      !verbosityMenuOpen &&
+      !toolboxMenuOpen
+    )
+      return;
     // "Inside" is scoped to the open popover and its trigger — not the
     // whole composer bar. Clicks on the bar's empty filler, the send
     // button, or the toolbox toggle all count as outside so the popover
@@ -2377,6 +2389,7 @@
       modelMenuOpen ||
       reasoningMenuOpen ||
       verbosityMenuOpen ||
+      toolboxMenuOpen ||
       openMenuThreadId !== null;
     if (!anyOpen) return;
     document.addEventListener('click', onDocClick);
@@ -2387,9 +2400,10 @@
     };
   });
 
-  // Brief pulse on the composer toolbox button when the LLM flips
-  // tools_enabled via toggle_tools. Set true on change, unset after the
-  // animation finishes — ~600ms is enough for the keyframe to complete.
+  // Brief pulse on the composer toolbox button when the LLM changes
+  // the thread's gated-toolbox set via `toggle_toolbox`. Set true on
+  // change, unset after the animation finishes - ~600ms is enough for
+  // the keyframe to complete.
   let toolboxFlash = $state(false);
 
   /**
@@ -2546,22 +2560,27 @@
   });
 
   /**
-   * Manual toolbox toggle — the user-driven path parallel to the
-   * toggle_tools tool. Writes straight through to Supabase + updates
-   * local state. Only meaningful on a real (non-draft) thread; drafts
-   * don't exist server-side until they materialize on send.
+   * User-driven toolbox toggle - parallel to the `toggle_toolbox`
+   * meta-tool's LLM path. Flips the named gated toolbox on or off in
+   * the current thread's `toolboxes_enabled` array, writes through
+   * to Supabase, and reverts on failure so the UI can't lie about
+   * server state. Only meaningful on a real (non-draft) thread;
+   * drafts don't exist server-side until they materialize on send.
    */
-  async function toggleToolsManually(): Promise<void> {
+  async function toggleToolboxManually(toolboxName: string): Promise<void> {
     if (!app.supabase || !currentThread || currentThread.isDraft) return;
-    const next = !currentThread.tools_enabled;
     const threadId = currentThread.id;
-    // Optimistic: update locally first so the button feels instant.
-    patchThread(threadId, { tools_enabled: next });
+    const current = currentThread.toolboxes_enabled;
+    const next = current.includes(toolboxName)
+      ? current.filter((n) => n !== toolboxName)
+      : [...current, toolboxName];
+    // Optimistic: update locally first so the checkbox feels instant.
+    patchThread(threadId, { toolboxes_enabled: next });
     try {
-      await app.supabase.setThreadToolsEnabled(threadId, next);
+      await app.supabase.setThreadToolboxesEnabled(threadId, next);
     } catch (err) {
       // Revert on failure so the UI doesn't lie about server state.
-      patchThread(threadId, { tools_enabled: !next });
+      patchThread(threadId, { toolboxes_enabled: current });
       error = { text: err instanceof Error ? err.message : String(err) };
     }
   }
@@ -3592,24 +3611,31 @@
           />
           <div class="composer-bar">
             <div class="composer-bar-left">
-              <!-- Tool master switch: on = every registered tool's schema
-                   rides along with the next send; off = only toggle_tools.
-                   Pulses on LLM-initiated flips via .flash (see CSS). Sits
-                   first in the row because whether tools are armed for
-                   this conversation is the most load-bearing decision on
-                   this toolbar — cost and capability both pivot on it. -->
+              <!-- Toolbox popover: each gated toolbox is an independent
+                   on/off. Badge shows how many are on for this thread.
+                   Pulses on LLM-initiated flips via .flash (see CSS).
+                   Sits first in the row because toolbox choice is the
+                   most load-bearing decision on this toolbar - cost and
+                   capability pivot on it. -->
               {#if currentThread && !currentThread.isDraft}
                 <button
                   type="button"
                   class="secondary toolbox-btn"
-                  class:on={currentThread.tools_enabled}
+                  class:on={currentThread.toolboxes_enabled.length > 0}
                   class:flash={toolboxFlash}
-                  onclick={toggleToolsManually}
-                  title={currentThread.tools_enabled
-                    ? 'Tools ON — click to disable'
-                    : 'Tools OFF — click to enable'}
-                  aria-label={currentThread.tools_enabled ? 'Disable tools' : 'Enable tools'}
-                  aria-pressed={currentThread.tools_enabled}
+                  onclick={() => {
+                    modelMenuOpen = false;
+                    reasoningMenuOpen = false;
+                    verbosityMenuOpen = false;
+                    promptsMenuOpen = false;
+                    toolboxMenuOpen = !toolboxMenuOpen;
+                  }}
+                  title={currentThread.toolboxes_enabled.length > 0
+                    ? `Toolboxes: ${currentThread.toolboxes_enabled.join(', ')}`
+                    : 'No toolboxes enabled - click to enable one'}
+                  aria-label="Toolboxes"
+                  aria-haspopup="true"
+                  aria-expanded={toolboxMenuOpen}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
                        stroke="currentColor" stroke-width="2"
@@ -3620,6 +3646,11 @@
                     <line x1="10" y1="12" x2="10" y2="14" />
                     <line x1="14" y1="12" x2="14" y2="14" />
                   </svg>
+                  {#if currentThread.toolboxes_enabled.length > 0}
+                    <span class="badge" aria-hidden="true"
+                      >{currentThread.toolboxes_enabled.length}</span
+                    >
+                  {/if}
                 </button>
               {/if}
 
@@ -3804,6 +3835,27 @@
                 <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
               </svg>
             </button>
+
+            {#if toolboxMenuOpen && currentThread && !currentThread.isDraft}
+              <div class="composer-menu composer-menu-left" role="menu">
+                <div class="menu-header">Toolboxes for this conversation</div>
+                {#each GATED_TOOLBOX_META as tb (tb.name)}
+                  <label class="menu-item">
+                    <input
+                      type="checkbox"
+                      checked={currentThread.toolboxes_enabled.includes(tb.name)}
+                      onchange={() => void toggleToolboxManually(tb.name)}
+                    />
+                    <span class="menu-item-label">
+                      <strong>{tb.name}</strong>
+                      <span class="subtle" style="display:block;font-size:0.75rem"
+                        >{tb.description}</span
+                      >
+                    </span>
+                  </label>
+                {/each}
+              </div>
+            {/if}
 
             {#if promptsMenuOpen}
               <div class="composer-menu composer-menu-left" role="menu">

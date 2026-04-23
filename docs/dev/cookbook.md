@@ -55,8 +55,11 @@ at cookbook scale (tens to low hundreds of rows per user).
   fetches from Supabase; subsequent switches are free). Clicking a
   row opens the Cookbook modal on the detail pane for that id via
   the `initialRecipeId` prop.
-- **LLM tool calls** — `recipe_save / list / get / update / delete`.
-  Gated behind `toggle_tools` like the memory tools.
+- **LLM tool calls** - `recipe_save / list / get / update / delete`,
+  grouped into the `cooking` toolbox. The model flips the toolbox
+  on with `toggle_toolbox({enabled: ["cooking", ...]})` before
+  reaching for any of the recipe tools; the user can do the same
+  from the composer toolbox popover.
 
 ## Data model
 

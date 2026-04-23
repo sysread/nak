@@ -57,12 +57,15 @@ export interface Thread {
    */
   verbosity: Verbosity | null;
   /**
-   * Master switch for tool availability on this thread. Flipped by the
-   * `toggle_tools` meta-tool (LLM-driven) or the composer toolbox button
-   * (user-driven). When false, only toggle_tools rides along with each
-   * request; when true, every registered tool's schema is included.
+   * Names of gated toolboxes active on this thread. Flipped by the
+   * `toggle_toolbox` meta-tool (LLM-driven) or the composer toolbox
+   * popover (user-driven). The always_on toolbox is implicit and is
+   * never represented here. Unknown names are dropped by both
+   * writers; an empty array means "only the always_on set." See
+   * `GATED_TOOLBOX_NAMES` in src/lib/tools/index.ts for the
+   * canonical name list.
    */
-  tools_enabled: boolean;
+  toolboxes_enabled: string[];
   /**
    * Soft-hide flag. Archived threads still load — they just render under
    * the drawer's collapsed "Archive" section and lock out the composer.
@@ -92,9 +95,11 @@ export interface Thread {
 
 /**
  * Coerce the raw row from Supabase. The `model` column is `text` without a
- * CHECK constraint, so scrub unexpected values to null. `tools_enabled`
- * defaults to false if the column is missing (older row before the
- * migration, or a coerce on a freshly-minted draft).
+ * CHECK constraint, so scrub unexpected values to null. `toolboxes_enabled`
+ * defaults to an empty array if the column is missing (older row before
+ * the migration, or a coerce on a freshly-minted draft) and non-string
+ * elements inside the array are filtered out so a drifting row can never
+ * poison the UI's `.includes()` checks.
  */
 function coerceThread(row: Record<string, unknown>): Thread {
   const model = isModelTier(row.model) ? row.model : null;
@@ -102,6 +107,9 @@ function coerceThread(row: Record<string, unknown>): Thread {
     ? row.reasoning_effort
     : null;
   const verbosity = isVerbosity(row.verbosity) ? row.verbosity : null;
+  const toolboxes_enabled = Array.isArray(row.toolboxes_enabled)
+    ? row.toolboxes_enabled.filter((v): v is string => typeof v === 'string')
+    : [];
   return {
     id: String(row.id),
     user_id: String(row.user_id),
@@ -109,7 +117,7 @@ function coerceThread(row: Record<string, unknown>): Thread {
     model,
     reasoning_effort,
     verbosity,
-    tools_enabled: row.tools_enabled === true,
+    toolboxes_enabled,
     archived: row.archived === true,
     title_manually_set: row.title_manually_set === true,
     created_at: String(row.created_at),
@@ -762,7 +770,7 @@ export class SupabaseService {
           model: null,
           reasoning_effort: null,
           verbosity: null,
-          tools_enabled: false,
+          toolboxes_enabled: [],
           archived: row.archived,
           title_manually_set: false,
           created_at: row.updated_at,
@@ -784,9 +792,9 @@ export class SupabaseService {
    * drawer UI needs (id, title, archived, updated_at, similarity), so
    * the model-facing `conversation_search` tool has to round-trip for
    * the summary. Deliberately a narrow projection rather than a
-   * `Thread[]` — the tool result set doesn't need user_id /
-   * tools_enabled / model / reasoning_effort, and surfacing those on
-   * tool results would be noise the LLM then has to filter.
+   * `Thread[]` - the tool result set doesn't need user_id /
+   * toolboxes_enabled / model / reasoning_effort, and surfacing those
+   * on tool results would be noise the LLM then has to filter.
    *
    * `.in('id', ids)` returns rows in the server's natural order, not
    * the caller's requested order — we re-sort against the input so
@@ -896,8 +904,8 @@ export class SupabaseService {
   /**
    * Pin the reasoning-effort level for this thread, or clear the override
    * (null) so the thread tracks the user default. Doesn't touch
-   * updated_at — flipping reasoning shouldn't promote the thread to the
-   * top of the sidebar, same rationale as setThreadToolsEnabled.
+   * updated_at - flipping reasoning shouldn't promote the thread to the
+   * top of the sidebar, same rationale as setThreadToolboxesEnabled.
    */
   async setThreadReasoningEffort(
     threadId: string,
@@ -928,22 +936,29 @@ export class SupabaseService {
   }
 
   /**
-   * Flip the thread's tool-availability master switch. Called from the
-   * toggle_tools meta-tool (LLM path) and from the composer toolbox button
-   * (user path). Doesn't touch updated_at — we don't want a toggle to
-   * promote the thread to the top of the sidebar.
+   * Replace the thread's set of enabled gated toolboxes. Called from
+   * the `toggle_toolbox` meta-tool (LLM path) and from the composer
+   * toolbox popover (user path). The array is the new set; any
+   * toolbox not listed is disabled. Doesn't touch updated_at - a
+   * toolbox flip shouldn't promote the thread to the top of the
+   * sidebar. Caller is responsible for pre-filtering to the known
+   * toolbox names (this method writes whatever it's given - the
+   * validation lives with the callers who know the valid name list).
    */
-  async setThreadToolsEnabled(threadId: string, enabled: boolean): Promise<void> {
+  async setThreadToolboxesEnabled(
+    threadId: string,
+    enabled: readonly string[]
+  ): Promise<void> {
     const { error } = await this.client
       .from('threads')
-      .update({ tools_enabled: enabled })
+      .update({ toolboxes_enabled: enabled })
       .eq('id', threadId);
     if (error) throw new SupabaseError(error.message);
   }
 
   /**
-   * Flip the thread's archived flag. Unlike setThreadToolsEnabled /
-   * setThreadReasoningEffort, this one DOES bump updated_at — both
+   * Flip the thread's archived flag. Unlike setThreadToolboxesEnabled /
+   * setThreadReasoningEffort, this one DOES bump updated_at - both
    * directions want the thread promoted to the top of whichever section
    * (Chats or Archive) it lands in, so the user immediately sees where
    * it went.

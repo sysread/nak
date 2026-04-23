@@ -7,7 +7,13 @@
  * fires, shape of the return value, and its registry placement.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { TOOLS, memoryToolbox, recallToolbox, type ToolContext } from '../src/lib/tools';
+import {
+  TOOLS,
+  memoryToolbox,
+  recallToolbox,
+  type ToolContext,
+  type ToolDef,
+} from '../src/lib/tools';
 import { webSearch } from '../src/lib/tools/web_search';
 import { VENICE_WEB_SEARCH_MODEL } from '../src/lib/models';
 import type { SupabaseService } from '../src/lib/supabase';
@@ -49,7 +55,7 @@ function mkVenice(handler: (req: ChatRequest) => StreamEvent[]): {
 
 describe('web_search — registry scoping', () => {
   it('is present in the main chat TOOLS list', () => {
-    expect(TOOLS.map((t) => t.name)).toContain('web_search');
+    expect(TOOLS.map((t: ToolDef) => t.name)).toContain('web_search');
   });
 
   it('is absent from memoryToolbox — reflection agent must not reach for live web data', () => {
