@@ -576,7 +576,11 @@
     overflow: auto;
     padding: 0.4rem 0;
     font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
-    font-size: 0.7rem;
+    /* Single knob for the whole stream. Children that used to be
+       rem-based are now em-based against this so a tweak here scales
+       the badge, timestamp, source tag, message, and structured
+       blocks together instead of pulling them out of proportion. */
+    font-size: 0.6rem;
     line-height: 1.4;
     background: var(--bg);
   }
@@ -627,7 +631,7 @@
 
   .log-level-badge {
     flex-shrink: 0;
-    font-size: 0.62rem;
+    font-size: 0.88em;
     font-weight: 600;
     padding: 0 0.35rem;
     border-radius: 2px;
@@ -656,13 +660,13 @@
   .log-time {
     flex-shrink: 0;
     color: var(--muted);
-    font-size: 0.64rem;
+    font-size: 0.92em;
   }
 
   .log-source {
     flex-shrink: 0;
     color: var(--accent);
-    font-size: 0.64rem;
+    font-size: 0.92em;
   }
 
   .log-message {
@@ -693,7 +697,7 @@
     border-radius: var(--radius, 4px);
     white-space: pre-wrap;
     word-break: break-word;
-    font-size: 0.68rem;
+    font-size: 0.97em;
     max-height: 40vh;
     overflow: auto;
   }
