@@ -2,27 +2,36 @@
  * Chat-side consumption of Web Share Target payloads.
  *
  * Called from Chat.svelte's onMount: drains anything the service
- * worker stashed in `share-store`, flattens it into a single string
- * the composer can take, and returns that string to the caller.
+ * worker stashed in `share-store`, splits it into a text part and a
+ * list of Files, and hands both back. Chat.svelte appends the text
+ * to the composer and pushes each File through `addAttachment()` -
+ * the same entry point the picker, drag-drop, and paste handlers
+ * use. That means a shared image lands as an image chip on the
+ * composer (downscaled and base64-encoded, ready for vision models),
+ * a shared PDF runs through Venice's text-parser, and so on, rather
+ * than dropping a useless `[shared file: foo.png, image/png, 132 KB]`
+ * placeholder into the prompt.
  *
  * Policy:
- *   - Text-like files (based on MIME prefix OR a small allow-list of
- *     extensions) are inlined in full so shared code snippets / text
- *     excerpts become part of the prompt the model sees.
- *   - Binary files (images, audio, PDFs, etc.) are described by
- *     name/type/size rather than dropped. Nak's composer today is
- *     text-only — dropping the raw bytes into the prompt would
- *     corrupt the message, and silently skipping them would hide
- *     the fact that the share happened. A visible "[shared file:
- *     foo.png, image/png, 132 KB]" line lets the user annotate or
- *     strip it before sending.
- *   - Title / text / url fields are normalized: some apps repeat
- *     the URL inside the text field (or vice versa), so we dedupe
- *     before concatenating.
+ *   - Title / text / url fields are normalized into the text part.
+ *     Some apps repeat the URL inside the text field (or vice versa),
+ *     so we dedupe before concatenating.
+ *   - Small text-like files (text/* MIME, a small allow-list of
+ *     application/* MIMEs, or a code/markup extension; AND <= 256 KB)
+ *     are inlined in full inside a fenced code block. Shared code
+ *     snippets and text excerpts are usually short and reading them
+ *     in-line in the prompt is what the user expects.
+ *   - Everything else - binary files (images, audio, PDFs), oversized
+ *     text files, or a text file whose bytes failed to decode - is
+ *     emitted as a File on the `files` array so the composer's
+ *     attachment pipeline handles it. That pipeline enforces the
+ *     per-file / per-message size caps and surfaces errors on the
+ *     preview chip, identical to any other attach pathway.
  *
  * The function is tolerant of empty payloads: `consumePendingShares`
  * resolves to `[]` on the common case (no share queued) and this
- * helper returns `''` so callers can short-circuit.
+ * helper returns `{ text: '', files: [] }` so callers can merge
+ * without null-guards.
  */
 
 import { consumePendingShares, type SharedFile, type SharedPayload } from './share-store';
@@ -30,9 +39,10 @@ import { consumePendingShares, type SharedFile, type SharedPayload } from './sha
 /**
  * Cap on inlined text-file size. 256 KB is enough for a long README
  * or a sizable source file without risking a megabyte paste that
- * silently exceeds the model's context window — oversized files are
- * described rather than inlined and the user can choose to re-share
- * a smaller excerpt.
+ * silently exceeds the model's context window. Anything larger is
+ * routed through the attachment pipeline instead, which runs the
+ * file through Venice text extraction and enforces the
+ * MAX_ATTACHMENT_BYTES / MAX_MESSAGE_AGGREGATE_BYTES caps.
  */
 const INLINE_TEXT_LIMIT_BYTES = 256 * 1024;
 
@@ -80,10 +90,25 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 
 /**
- * Drain the pending-shares queue and flatten the result into a
- * composer-ready string. Returns `''` when nothing is queued.
+ * Result shape produced by both the IDB-draining entry point and the
+ * pure formatter below. `text` is what the composer textarea should
+ * receive (empty string when nothing textual came through); `files`
+ * is the list of File objects the caller should feed into the
+ * composer's `addAttachment()` one at a time so the sequential
+ * aggregate-size check works the same way it does for picker /
+ * drag-drop inputs.
  */
-export async function drainSharesForComposer(): Promise<string> {
+export interface DrainedShares {
+  text: string;
+  files: File[];
+}
+
+/**
+ * Drain the pending-shares queue and split the result into composer
+ * text + a list of attachment-ready Files. Returns empty fields when
+ * nothing is queued.
+ */
+export async function drainSharesForComposer(): Promise<DrainedShares> {
   const payloads = await consumePendingShares();
   return formatSharesForComposer(payloads);
 }
@@ -95,18 +120,21 @@ export async function drainSharesForComposer(): Promise<string> {
  */
 export async function formatSharesForComposer(
   payloads: SharedPayload[]
-): Promise<string> {
-  if (!payloads.length) return '';
+): Promise<DrainedShares> {
+  if (!payloads.length) return { text: '', files: [] };
   const chunks: string[] = [];
+  const files: File[] = [];
   for (const payload of payloads) {
     const piece = await formatPayload(payload);
-    if (piece) chunks.push(piece);
+    if (piece.text) chunks.push(piece.text);
+    files.push(...piece.files);
   }
-  return chunks.join('\n\n---\n\n');
+  return { text: chunks.join('\n\n---\n\n'), files };
 }
 
-async function formatPayload(payload: SharedPayload): Promise<string> {
+async function formatPayload(payload: SharedPayload): Promise<DrainedShares> {
   const lines: string[] = [];
+  const files: File[] = [];
 
   const title = payload.title.trim();
   const text = payload.text.trim();
@@ -114,43 +142,68 @@ async function formatPayload(payload: SharedPayload): Promise<string> {
 
   if (title) lines.push(title);
   if (text) lines.push(text);
-  // Suppress the URL when it's already in the text — many Android
+  // Suppress the URL when it's already in the text - many Android
   // apps duplicate the link across both fields and we'd otherwise
   // paste it twice.
   if (url && !text.includes(url)) lines.push(url);
 
-  for (const file of payload.files) {
-    const rendered = await renderFile(file);
-    if (rendered) lines.push(rendered);
+  for (const shared of payload.files) {
+    const handled = await handleFile(shared);
+    if (handled.kind === 'inline') {
+      lines.push(handled.text);
+    } else {
+      files.push(handled.file);
+    }
   }
 
-  return lines.join('\n\n');
+  return { text: lines.join('\n\n'), files };
 }
 
-async function renderFile(file: SharedFile): Promise<string> {
+type HandledFile =
+  | { kind: 'inline'; text: string }
+  | { kind: 'attachment'; file: File };
+
+async function handleFile(shared: SharedFile): Promise<HandledFile> {
+  if (isTextLike(shared) && shared.blob.size <= INLINE_TEXT_LIMIT_BYTES) {
+    try {
+      const raw = await readBlobAsText(shared.blob);
+      // Trim trailing whitespace so the fence doesn't end with a
+      // dangling blank line, but preserve leading whitespace - some
+      // code files legitimately start with blank lines or BOM.
+      const body = raw.replace(/\s+$/, '');
+      const fence = pickFence(body);
+      const lang = languageFromName(shared.name);
+      const header = fileHeader(shared);
+      return {
+        kind: 'inline',
+        text: `${header}\n${fence}${lang}\n${body}\n${fence}`,
+      };
+    } catch {
+      // Reading the blob rejecting here is rare (basically only on a
+      // detached buffer). Fall through to the attachment path so the
+      // user at least gets a chip they can see and remove.
+    }
+  }
+  return { kind: 'attachment', file: toFile(shared) };
+}
+
+function fileHeader(file: SharedFile): string {
   const sizeLabel = formatBytes(file.blob.size);
-  const header = `[shared file: ${file.name || '(unnamed)'}${file.type ? `, ${file.type}` : ''}, ${sizeLabel}]`;
+  return `[shared file: ${file.name || '(unnamed)'}${file.type ? `, ${file.type}` : ''}, ${sizeLabel}]`;
+}
 
-  if (!isTextLike(file)) return header;
-  if (file.blob.size > INLINE_TEXT_LIMIT_BYTES) {
-    return `${header}\n(too large to inline — ${sizeLabel} exceeds ${formatBytes(INLINE_TEXT_LIMIT_BYTES)})`;
-  }
-
-  try {
-    const text = await readBlobAsText(file.blob);
-    // Trim trailing whitespace so the fence doesn't end with a
-    // dangling blank line, but preserve leading whitespace — some
-    // code files legitimately start with blank lines or BOM.
-    const body = text.replace(/\s+$/, '');
-    const fence = pickFence(body);
-    const lang = languageFromName(file.name);
-    return `${header}\n${fence}${lang}\n${body}\n${fence}`;
-  } catch {
-    // Reading the blob rejecting here is extremely rare (basically
-    // only on a detached buffer) — fall back to the header-only
-    // form so the user at least sees the file was shared.
-    return header;
-  }
+/**
+ * Wrap a SharedFile's Blob in a real File so `addAttachment(file: File)`
+ * accepts it. The share-store schema types the payload as Blob for
+ * portability, but some browsers preserve the original File object
+ * across the IDB round-trip - pass it through in that case rather
+ * than rewrapping and losing lastModified.
+ */
+function toFile(shared: SharedFile): File {
+  if (shared.blob instanceof File) return shared.blob;
+  const name = shared.name || 'shared-file';
+  const type = shared.type || shared.blob.type || 'application/octet-stream';
+  return new File([shared.blob], name, { type });
 }
 
 /**

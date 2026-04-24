@@ -915,11 +915,22 @@
     // `?share=pending` as a navigation signal. We drain unconditionally
     // though — so a share that arrived while the app was locked gets
     // picked up when the user eventually unlocks, even if the URL flag
-    // has since been stripped by a manual refresh. Content is merged
-    // into whatever the user already typed rather than clobbering it.
-    void drainSharesForComposer().then(async (shared) => {
-      if (!shared) return;
-      composer = composer ? `${composer}\n\n${shared}` : shared;
+    // has since been stripped by a manual refresh. Text content is
+    // appended to whatever the user already typed; binary / oversized
+    // files are fed into the composer's attachment pipeline so the
+    // model actually gets to see them (vs. a text placeholder).
+    void drainSharesForComposer().then(async ({ text, files }) => {
+      if (!text && files.length === 0) return;
+      if (text) {
+        composer = composer ? `${composer}\n\n${text}` : text;
+      }
+      // Sequential so the aggregate-size check inside addAttachment
+      // sees the running total from previous adds, matching the
+      // picker / drag-drop / paste paths.
+      for (const file of files) {
+
+        await addAttachment(file);
+      }
       if (location.search.includes('share=pending')) {
         // buildSearch drops only the routing keys we own, so
         // ?share=pending gets stripped while routed state

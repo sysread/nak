@@ -29,15 +29,17 @@ the composer, ready for you to edit and send.
 - **Plain text.** Any selection you share as plain text becomes the
   prompt body.
 - **Text-like files.** Source code, markdown, JSON, CSV, and other
-  text files are inlined inside a fenced code block so the model can
-  read them directly. Large files (over 256 KB) are described
-  instead of inlined so a single share can't blow past the model's
-  context window.
-- **Other files.** Images, audio, PDFs, and other binary files come
-  through as a one-line note — name, MIME type, size — rather than
-  being pasted. Nak's composer is text-only today, so this keeps
-  the share visible without corrupting the prompt. Edit or remove
-  the note before sending.
+  text files (up to 256 KB) are inlined inside a fenced code block
+  so the model can read them directly in the prompt. Larger text
+  files are routed through the attachment pipeline instead, so a
+  single share can't blow past the model's context window.
+- **Other files.** Images, audio, PDFs, and other binary files -
+  plus any text file too big to inline - land as attachments: the
+  same chips you'd see if you'd picked the files from the composer's
+  paperclip button or dragged them into the textarea. Images are
+  downscaled and readied for vision models; PDFs and other documents
+  are run through text extraction so their contents reach the model.
+  Remove a chip from the composer if you didn't mean to share it.
 
 ### Where the content lands
 
