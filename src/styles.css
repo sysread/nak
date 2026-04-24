@@ -2240,6 +2240,28 @@ h1 {
     flex-wrap: wrap;
     row-gap: 0.35rem;
   }
+
+  /* Collapse/expand the textarea around focus on mobile. The `.is-collapsed`
+     class is applied by Chat.svelte whenever the composer is blurred on a
+     narrow viewport; the matching $effect clears the inline height it writes
+     during auto-grow so this CSS-driven `height` wins. Both states use pixel
+     values (inline scrollHeight when focused, 2.4rem when collapsed) so the
+     transition actually interpolates - a height transition from/to `auto`
+     would snap. The collapsed box overrides the 5rem min-height floor that
+     seats the empty desktop composer at ~3 lines; on mobile, blurred, the
+     priority is reclaiming vertical space for the thread. `overflow: hidden`
+     clips any draft text that would otherwise spill past the single-line
+     crop.  */
+  .composer-textarea {
+    transition:
+      height 220ms cubic-bezier(0.2, 0, 0, 1),
+      min-height 220ms cubic-bezier(0.2, 0, 0, 1);
+  }
+  .composer-textarea.is-collapsed {
+    min-height: 0;
+    height: 2.4rem;
+    overflow: hidden;
+  }
 }
 
 .composer-textarea {

@@ -696,14 +696,43 @@
     }
   }
 
+  // Mobile composer collapse: on narrow viewports we collapse the
+  // textarea to a single line when blurred and expand it on focus so
+  // the composer stops hogging a third of the screen when the user is
+  // reading the thread. Desktop keeps the always-expanded behaviour.
+  // Breakpoint matches the `@media (max-width: 720px)` block in
+  // styles.css that drives the rest of the mobile composer layout.
+  let composerFocused = $state(false);
+  let composerIsMobile = $state(false);
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia('(max-width: 720px)');
+    const update = (): void => {
+      composerIsMobile = mql.matches;
+    };
+    update();
+    mql.addEventListener('change', update);
+    return () => mql.removeEventListener('change', update);
+  });
+
   // Auto-grow the composer so the caret is always visible as the user
-  // types. CSS caps the textarea at 40vh — once content exceeds that
+  // types. CSS caps the textarea at 40vh - once content exceeds that
   // the element scrolls internally. We reset height to auto first so
   // deletes shrink the box back down to the natural content height.
+  //
+  // On mobile when the textarea is blurred we skip the inline height
+  // write and let the `.is-collapsed` CSS rule pin the box to a single
+  // line; the CSS transition animates between the two states.
   $effect(() => {
     void composer;
+    void composerFocused;
+    void composerIsMobile;
     const el = composerEl;
     if (!el) return;
+    if (composerIsMobile && !composerFocused) {
+      el.style.height = '';
+      return;
+    }
     el.style.height = 'auto';
     el.style.height = `${el.scrollHeight}px`;
   });
@@ -3610,10 +3639,13 @@
           {/if}
           <textarea
             class="composer-textarea"
+            class:is-collapsed={composerIsMobile && !composerFocused}
             bind:value={composer}
             bind:this={composerEl}
             onkeydown={onKeydown}
             onpaste={onComposerPaste}
+            onfocus={() => (composerFocused = true)}
+            onblur={() => (composerFocused = false)}
             placeholder={currentThread?.archived
               ? 'Restore this conversation to continue.'
               : `Message… (${sendHint})`}

@@ -310,6 +310,29 @@ Commit messages follow the project's narrative style: a short imperative
 summary line, then a paragraph or two explaining *why*. Match the tone of
 recent commits (`git log --oneline`).
 
+### Default finishing procedure per environment
+
+These are the defaults - follow them without being asked. Deviate only when
+the user explicitly says to.
+
+**Claude Code on the web** (task-scoped sessions on a designated feature
+branch): the session is expected to land the work on `main`. When the feature
+is done:
+
+1. `git fetch origin main && git checkout main && git pull --ff-only origin main`
+2. `git checkout <feature-branch> && git rebase main` (resolve conflicts;
+   stop and ask if they're non-trivial)
+3. `git checkout main`; if the feature branch has a single commit, fast-forward
+   (`git merge --ff-only <feature-branch>`); if it has multiple commits, squash
+   (`git merge --squash <feature-branch> && git commit`) with a single narrative
+   message covering the whole change
+4. `git push origin main`
+5. Delete the feature branch locally and on origin
+
+**Claude Code CLI** (interactive local sessions): commit to whatever branch
+is currently checked out and stop. Do not rebase, do not merge, do not push,
+do not switch branches. The user drives integration themselves.
+
 **No AI attribution.** No `Co-Authored-By` lines, no "Generated
 with Claude Code" footers, no equivalent. The user's preference is
 strict on this.
