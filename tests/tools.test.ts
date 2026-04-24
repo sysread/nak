@@ -286,14 +286,65 @@ describe('tool registry', () => {
 
   it('toOpenAIToolDef projects to the function-calling wire shape', () => {
     const wire = toOpenAIToolDef(toggleToolbox);
-    expect(wire).toEqual({
-      type: 'function',
-      function: {
-        name: toggleToolbox.name,
-        description: toggleToolbox.description,
-        parameters: toggleToolbox.parameters,
-      },
-    });
+    expect(wire.type).toBe('function');
+    expect(wire.function.name).toBe(toggleToolbox.name);
+    expect(wire.function.description).toBe(toggleToolbox.description);
+    // The tool's own properties survive intact...
+    const params = wire.function.parameters as {
+      type: string;
+      properties: Record<string, unknown>;
+      required: string[];
+    };
+    expect(params.type).toBe('object');
+    expect(params.properties.enabled).toEqual(
+      (toggleToolbox.parameters as { properties: { enabled: unknown } }).properties.enabled
+    );
+    // ...plus the injected `activity` string everybody gets.
+    expect(params.properties.activity).toMatchObject({ type: 'string' });
+    expect(params.required).toContain('activity');
+  });
+
+  it('toOpenAIToolDef injects the activity param into every tool without mutating the source', () => {
+    // Every tool in the registry gets the injected `activity` string
+    // at the wire-projection seam (see src/lib/tools/dispatch.ts).
+    // The source ToolDef.parameters must NOT be mutated - otherwise
+    // successive calls would accumulate duplicates, and tests that
+    // read `.parameters` off the tool expecting pristine data would
+    // see a shifting shape.
+    for (const tool of TOOLS) {
+      const wire = toOpenAIToolDef(tool);
+      const params = wire.function.parameters as {
+        type?: string;
+        properties: Record<string, unknown>;
+        required: string[];
+      };
+      expect(params.properties.activity).toMatchObject({ type: 'string' });
+      expect(params.required).toContain('activity');
+      // Source untouched.
+      const source = tool.parameters as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+      expect(source.properties?.activity).toBeUndefined();
+      expect(source.required ?? []).not.toContain('activity');
+    }
+  });
+
+  it('buildSystemPrompt primes the model to write an activity sentence per call', () => {
+    // The UI surfaces the sentence above the tool name; the prompt is
+    // what makes the model supply a useful one. Grep-style assertions
+    // rather than exact copy so phrasing tweaks don't churn the test,
+    // but the load-bearing beats (the parameter name, the one-sentence
+    // requirement, the user-addressed framing) must survive any future
+    // edit to the block.
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('`activity`');
+    // The prompt assembles via `.join('\n')` so adjacent words in the
+    // source array are separated by newlines - match on \s+ rather
+    // than a literal space so phrasing tweaks that reflow the array
+    // don't churn the test.
+    expect(prompt).toMatch(/one\s+short\s+present-tense\s+sentence/i);
+    expect(prompt).toMatch(/addressed\s+to\s+the\s+user/i);
   });
 
   it('buildSystemPrompt opens with the Nak identity line', () => {

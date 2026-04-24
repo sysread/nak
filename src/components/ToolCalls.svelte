@@ -1,9 +1,18 @@
 <script lang="ts">
   /*
    * Nested tool-call display, rendered inside an assistant bubble when
-   * that turn invoked tools. One row per call:
+   * that turn invoked tools. One row per call. When the model provided
+   * an `activity` narration (injected into every tool schema in
+   * src/lib/tools/dispatch.ts), we show the sentence as the primary
+   * line with the tool name beneath it:
    *
-   *   [status-glyph]  [tool-name]  [duration-or-timer-pill]
+   *   [status-glyph]  Searching your memories...          [pill] [▸]
+   *                   memory_search
+   *
+   * Older persisted calls from before the `activity` injection existed
+   * don't carry the sentence - the assistant row's tool_calls JSON has
+   * no `activity` key. We fall back to the legacy single-line layout
+   * in that case rather than leaving an awkward empty primary line.
    *
    * Clicking a row expands it into a detail panel showing the arguments
    * (pretty-printed as a `json` fenced block) and the result (same).
@@ -113,6 +122,33 @@
     if (!result) return '_In progress…_';
     return '```json\n' + prettyJson(result.content) + '\n```';
   }
+
+  /**
+   * Pull the narration sentence out of a call's arguments JSON.
+   * Returns `null` when the key is missing (older persisted calls
+   * from before the `activity` injection existed, or a streaming call
+   * whose arguments haven't finished arriving yet), when it's not a
+   * string, or when it parses to an empty string. Callers fall back
+   * to the legacy tool-name-primary layout when this is null.
+   */
+  function activityFor(call: OpenAIToolCall): string | null {
+    const raw = call.function.arguments;
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && 'activity' in parsed) {
+        const value = (parsed as { activity: unknown }).activity;
+        if (typeof value === 'string') {
+          const trimmed = value.trim();
+          return trimmed.length > 0 ? trimmed : null;
+        }
+      }
+    } catch {
+      // Partial JSON during streaming is expected; the activity will
+      // appear on the next render once the fragments close.
+    }
+    return null;
+  }
 </script>
 
 <div class="tool-calls" role="group" aria-label="Tool calls">
@@ -120,6 +156,7 @@
   {#each calls as call (call.id)}
     {@const status = statusFor(call.id)}
     {@const isOpen = expanded[call.id] === true}
+    {@const activity = activityFor(call)}
     <div class="tool-call">
       <button
         type="button"
@@ -140,7 +177,14 @@
             ✗
           {/if}
         </span>
-        <span class="tool-name">{call.function.name}</span>
+        <span class="tool-call-main">
+          {#if activity}
+            <span class="tool-activity">{activity}</span>
+            <span class="tool-name-sub">{call.function.name}</span>
+          {:else}
+            <span class="tool-name">{call.function.name}</span>
+          {/if}
+        </span>
         {#if durationPill(call.id)}
           <span class="tool-pill">{durationPill(call.id)}</span>
         {/if}

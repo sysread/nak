@@ -438,6 +438,24 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     "gated toolbox off. If the user's request clearly doesn't need a",
     "toolbox, don't enable it.",
     '',
+    // --- Activity narration ---------------------------------------
+    // Every tool schema has an injected `activity` string parameter
+    // (see src/lib/tools/dispatch.ts). The UI renders it above the
+    // tool name as the primary line, so the user can see what the
+    // model is doing without clicking into the call details. This
+    // paragraph primes the model to write a useful sentence rather
+    // than echoing the tool name back.
+    'Every tool call takes a required `activity` parameter: one short',
+    'present-tense sentence (under ~100 characters), addressed to the',
+    'user, describing what this particular call is doing. Examples:',
+    '"Searching your memories for notes about the dishwasher",',
+    '"Saving that pancake recipe to your cookbook", "Checking the',
+    'live web for today’s weather in Halifax". The sentence shows up',
+    "prominently in the UI while the call runs, so make it specific",
+    'to the arguments you are passing, not a restatement of the tool',
+    "name. Don't narrate in the first person (\"I'm searching...\") -",
+    'lead with the verb.',
+    '',
     // --- Catalog --------------------------------------------------
     // One catalog, two tiers: always-on first, then each gated
     // toolbox with its current [x]/[ ] state. Built live from the

@@ -3016,6 +3016,42 @@ h1 {
   white-space: nowrap;
 }
 
+/* When the model supplied an `activity` narration (see
+   src/lib/tools/dispatch.ts for the injected schema), the row swaps
+   from a single tool-name line to a two-line layout: the sentence up
+   top as the primary label, the tool name as a muted subtitle below.
+   `.tool-call-main` owns the flex:1 that used to live on .tool-name
+   so the status glyph on the left and the pill/chevron on the right
+   keep their positions regardless of which layout is active. */
+.tool-call-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+}
+
+.tool-activity {
+  color: var(--text);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.tool-name-sub {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-family: var(--font-mono, inherit);
+  opacity: 0.85;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tool-pill {
   color: var(--muted);
   font-size: 0.78rem;

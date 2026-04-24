@@ -216,6 +216,18 @@ The gated `research` toolbox carries:
   `shortDescription` is a <50-char line used in the system-prompt
   catalog so the model knows what's behind the toggle without
   needing the full JSON schema.
+- **Injected `activity` param** - every tool's wire schema gets a
+  required `activity: string` property bolted on at the
+  `toOpenAIToolDef` seam in `dispatch.ts`. The model fills it with a
+  short present-tense sentence narrating the call, the chat UI
+  renders the sentence above the tool name in `ToolCalls.svelte`,
+  and the corresponding system-prompt block in `buildSystemPrompt`
+  primes the model to write a useful one. `ToolDef.parameters` stays
+  pristine - the injection happens at projection time - and handlers
+  never read `args.activity` (they ignore unknown keys the way
+  they've always ignored them). Older persisted calls predate the
+  injection; `ToolCalls.svelte` falls back to the legacy tool-name
+  primary line when the key is missing.
 - `execute(args, ctx): Promise<unknown>` - the tool's handler.
   Errors thrown here land as `role='tool'` rows with an `error`
   key in the JSON content; the loop does not retry.
