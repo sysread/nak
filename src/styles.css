@@ -1610,14 +1610,6 @@ h1 {
 .md > :first-child { margin-top: 0; }
 .md > :last-child  { margin-bottom: 0; }
 
-/* Reserve space for the absolutely-positioned `.copy-btn` at the top
-   right of assistant cards so a long first-line heading doesn't
-   render *under* the button. Only the first element needs the
-   clearance — subsequent lines already fall below it. */
-.msg.assistant .md > :first-child {
-  padding-right: 3.2rem;
-}
-
 .md p {
   margin: 0 0 0.6em;
 }

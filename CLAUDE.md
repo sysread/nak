@@ -240,6 +240,20 @@ check whether the target is now unused. Say so in the PR
 description even if you're not touching it in this change - the
 user has a strong preference for deleting what isn't paying rent.
 
+**When you move code, clean up the accommodations it leaves
+behind.** A relocated element usually had scaffolding around it -
+CSS clearance for an absolutely-positioned button that's now in a
+flex row, a z-index bump against an overlay that no longer exists,
+a wrapper whose only job was catching an event that now fires
+somewhere else, a parent `position: relative` that existed only to
+anchor the moved child. Before closing the task, scan the old
+neighborhood and delete what the prior form was load-bearing for.
+Otherwise the compensation silently outlives the thing it
+compensated for and distorts the new layout - often only visible on
+mobile, in dark mode, or at a viewport narrow enough to reveal what
+the stale gutter was hiding. A move is not done when the new site
+works; it's done when the old site no longer leaves a shadow.
+
 **Non-conforming code requires a comment.** If you have a good
 reason for diverging from the prevailing pattern, the reason goes
 inline. The reader has to be able to tell a deliberate divergence
