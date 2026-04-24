@@ -24,7 +24,14 @@
  * requests across every tool in parallel.
  */
 import type { Toolbox, ToolContext, OpenAIToolCall } from './types';
-import { buildToolboxWireList, executeToolboxCall } from './index';
+// Import from the leaf `./dispatch` rather than the `./index` barrel.
+// `./index` statically imports `research_docs`, which reaches into
+// `src/lib/docs.ts`. That module's non-eager `import.meta.glob` over
+// docs/user/**/*.md forces code-splitting, which is incompatible with
+// Vite's default IIFE worker format. The reflection agent uses
+// `runHeadlessToolLoop` from inside a Web Worker, so this import has
+// to stay on the IIFE-safe side of the graph.
+import { buildToolboxWireList, executeToolboxCall } from './dispatch';
 import type { VeniceClient, VeniceMessage, ResponseFormat } from '../venice';
 
 /** Upper bound on rounds a headless run can take. Prevents runaway loops. */

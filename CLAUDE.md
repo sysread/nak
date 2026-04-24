@@ -438,7 +438,7 @@ the gate provisions its own npm devDependencies on demand. Cost is
 ~500ms on an up-to-date tree.
 
 ```sh
-mise run check        # full local gate: deps + test + svelte-check + lint
+mise run check        # full local gate: deps + test + svelte-check + lint + build
 mise run test         # vitest run (auto-installs deps)
 mise run markdownlint # markdownlint-cli2 only (auto-installs deps)
 mise run dev          # Vite dev server (auto-installs deps)
@@ -447,9 +447,14 @@ mise run build        # production PWA build (auto-installs deps)
 
 If you prefer raw pnpm (or mise isn't available — ephemeral
 sandboxes, first-time checkouts), the manual sequence is
-`pnpm install && pnpm test && pnpm check && pnpm lint`. The
-mise tasks are thin wrappers around those pnpm scripts; there's no
-hidden behaviour.
+`pnpm install && pnpm test && pnpm check && pnpm lint && pnpm build`.
+The mise tasks are thin wrappers around those pnpm scripts; there's
+no hidden behaviour. `pnpm build` is in the gate because Vite
+failures (Rollup IIFE/code-splitting in worker bundles, PWA
+manifest injection, dynamic-import graphs tsc is happy with but
+Rollup chokes on) only surface at build time - catching them here
+prevents a green Tests run from landing on main and triggering a
+half-applied deploy (schema synced, bundle never built).
 
 `mise run check` is what CI runs (see `.github/workflows/tests.yml`),
 so a green `mise run check` locally is a green CI job.

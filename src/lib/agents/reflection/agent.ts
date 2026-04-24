@@ -24,7 +24,15 @@
 import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
 import type { VeniceClient, VeniceMessage } from '../../venice';
-import { memoryToolbox } from '../../tools';
+// Import from the leaf file rather than the `../../tools` barrel.
+// This file runs inside the reflection Web Worker, and the barrel
+// statically imports `research_docs`, which reaches into
+// `src/lib/docs.ts`. That module's non-eager `import.meta.glob` over
+// docs/user/**/*.md forces code-splitting on the per-doc chunks,
+// which is incompatible with Vite's default IIFE worker format and
+// fails the production build with "Invalid value 'iife' for option
+// 'output.format'". See `../../tools/memory_toolbox.ts`.
+import { memoryToolbox } from '../../tools/memory_toolbox';
 import { runHeadlessToolLoop } from '../../tools/run';
 import { VENICE_REFLECTION_MODEL } from '../../models';
 import { REFLECTION_PROMPT } from './prompt';

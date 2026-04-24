@@ -36,7 +36,6 @@ import { memorySearch } from './memory_search';
 import { memoryCreate } from './memory_create';
 import { memoryUpdate } from './memory_update';
 import { memoryDelete } from './memory_delete';
-import { memoryInvalidate } from './memory_invalidate';
 import { memoryReaffirm } from './memory_reaffirm';
 import { memoryDoubt } from './memory_doubt';
 import { memoryRelate } from './memory_relate';
@@ -55,6 +54,7 @@ import { recipeDelete } from './recipe_delete';
 import { updateTitle } from './update_title';
 import { analyzeImage } from './analyze_image';
 import { researchDocs } from './research_docs';
+import { memoryToolbox } from './memory_toolbox';
 
 /**
  * Always-on toolbox. Rides with every request regardless of the
@@ -251,20 +251,17 @@ function byName(name: string): ToolDef | undefined {
   return undefined;
 }
 
-/**
- * Translate a ToolDef into the OpenAI / Venice request shape. Venice
- * mirrors OpenAI's `/chat/completions` `tools` parameter exactly.
- */
-export function toOpenAIToolDef(t: ToolDef): OpenAIToolDef {
-  return {
-    type: 'function',
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: t.parameters,
-    },
-  };
-}
+// `toOpenAIToolDef`, `buildToolboxWireList`, and `executeToolboxCall`
+// live in `./dispatch` so the reflection agent worker can reach them
+// without walking the rest of this barrel (which statically imports
+// `research_docs` + lazy docs-glob, incompatible with the worker's
+// IIFE format). Re-exported below for callers that still import from
+// `$lib/tools`.
+import {
+  toOpenAIToolDef,
+  buildToolboxWireList,
+  executeToolboxCall,
+} from './dispatch';
 
 /**
  * The tools array we send with a request, built from the thread's
@@ -530,84 +527,16 @@ export async function executeToolCall(
   return tool.execute(args, ctx);
 }
 
-/**
- * The toolbox the memory-reflection agent (and any future memory-only
- * agent) ships to its model. Notably NOT identical to the main chat's
- * `memoriesToolbox`:
- *
- *   - `toggle_toolbox` is absent - chat-UX concern; agents don't need
- *     a context-window gate because their prompts and tool schemas
- *     aren't shared with the user-facing conversation.
- *   - `memory_recall` is absent - it spawns another agent, and giving
- *     reflection a nested recall pass would be recursion with no
- *     purpose (reflection already has the whole conversation in
- *     context). Main-chat tool only.
- *   - `conversation_recall` is absent for the same reason, and
- *     `conversation_search` has no business in a memory-mutation
- *     toolbox at all.
- *   - `memory_delete` is replaced by `memory_invalidate`. The agent's
- *     job is to react to new evidence, which sometimes means
- *     contradicting what it knew before - but we don't want autonomous
- *     hard deletes. `memory_invalidate` halves confidence (schema
- *     `decay_memory_confidence` RPC), which drives the row below the
- *     search floor without erasing it. Recoverable if the agent
- *     re-learns the fact. The main chat keeps hard-delete semantics
- *     because "forget X" is user-directed and unambiguous.
- */
-export const memoryToolbox: Toolbox = {
-  name: 'memory',
-  description:
-    "Create, read, update, and link the signed-in user's memories, and " +
-    'invalidate or doubt ones contradicted or weakened by new evidence. ' +
-    'Vector + text search via memory_search. Invalidation halves ' +
-    'confidence; the gentler reaffirm/doubt pair nudges it; memory_relate ' +
-    'and memory_unrelate manage edges in the memory graph.',
-  tools: [
-    memorySearch,
-    memoryCreate,
-    memoryUpdate,
-    memoryInvalidate,
-    memoryReaffirm,
-    memoryDoubt,
-    memoryRelate,
-    memoryUnrelate,
-  ],
-};
+// Re-export the agent-only toolboxes whose definitions live in their
+// own leaf files (`./memory_toolbox`, `./recall_toolbox`,
+// `./conversation_recall_toolbox`). `memoryToolbox` moved out of this
+// barrel because the reflection worker imports it - see its file
+// header for the IIFE/code-splitting failure mode that keeps it out
+// of `./index.ts`. The recall toolboxes live in their own files to
+// avoid a circular import - see those files' headers for why.
+export { memoryToolbox, recallToolbox, conversationRecallToolbox };
 
-// Re-export the recall agents' read-only toolboxes so callers that
-// import from `$lib/tools` see the same surface they do for
-// `memoryToolbox`. The actual definitions live in their own files
-// (`./recall_toolbox`, `./conversation_recall_toolbox`) to avoid a
-// circular import - see those files' headers for why.
-export { recallToolbox, conversationRecallToolbox };
-
-/**
- * OpenAI / Venice wire shape for every tool in a toolbox, in declared
- * order. Order matters only for human readability - the model
- * addresses tools by name - but preserving it keeps diffs and logs
- * predictable.
- */
-export function buildToolboxWireList(toolbox: Toolbox): OpenAIToolDef[] {
-  return toolbox.tools.map(toOpenAIToolDef);
-}
-
-/**
- * Dispatch a tool call against a specific toolbox. Unknown names
- * throw with the toolbox name included so errors from e.g. the memory
- * agent don't look identical to errors from the main chat - useful
- * when two surfaces share tool names but not toolboxes.
- */
-export async function executeToolboxCall(
-  toolbox: Toolbox,
-  name: string,
-  args: Record<string, unknown>,
-  ctx: ToolContext
-): Promise<ToolResult> {
-  const tool = toolbox.tools.find((t) => t.name === name);
-  if (!tool) throw new Error(`Unknown tool in toolbox '${toolbox.name}': ${name}`);
-  return tool.execute(args, ctx);
-}
-
+export { toOpenAIToolDef, buildToolboxWireList, executeToolboxCall };
 export { toggleToolbox, updateTitle };
 export type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
 export type { OpenAIToolCall } from './types';
