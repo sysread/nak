@@ -3,16 +3,19 @@
    * Nested tool-call display, rendered inside an assistant bubble when
    * that turn invoked tools. One row per call. When the model provided
    * an `activity` narration (injected into every tool schema in
-   * src/lib/tools/dispatch.ts), we show the sentence as the primary
-   * line with the tool name beneath it:
+   * src/lib/tools/dispatch.ts), the row stacks vertically: the
+   * sentence on a full-width line above the summary so it wraps freely
+   * on narrow viewports, with the status glyph + tool name + duration
+   * pill + chevron on the summary line below.
    *
-   *   [status-glyph]  Searching your memories...          [pill] [▸]
-   *                   memory_search
+   *   Searching your memories for notes about the dishwasher
+   *   [status-glyph]  memory_search                       [pill] [▸]
    *
    * Older persisted calls from before the `activity` injection existed
    * don't carry the sentence - the assistant row's tool_calls JSON has
    * no `activity` key. We fall back to the legacy single-line layout
-   * in that case rather than leaving an awkward empty primary line.
+   * in that case (status glyph + tool name + pill + chevron, no
+   * activity row above).
    *
    * Clicking a row expands it into a detail panel showing the arguments
    * (pretty-printed as a `json` fenced block) and the result (same).
@@ -194,30 +197,37 @@
         onclick={() => toggle(call.id)}
         aria-expanded={isOpen}
       >
-        <span class="tool-status status-{status}" aria-hidden="true">
-          {#if status === 'pending'}
-            <!-- Rotated via CSS animation when the status class is
-                 status-pending. Character choice favors glyphs that
-                 read clearly at small sizes in Lekton Mono. -->
-            ↻
-          {:else if status === 'ok'}
-            ✓
-          {:else}
-            ✗
-          {/if}
-        </span>
-        <span class="tool-call-main">
+        {#if activity}
+          <!-- Full-width row above the summary. Wraps freely so a long
+               sentence stays readable on narrow viewports - the previous
+               layout shared a row with the status glyph, name, duration
+               pill, and chevron, which on mobile left ~30ch and clipped
+               the activity behind ellipsis. -->
+          <span class="tool-activity">{activity}</span>
+        {/if}
+        <span class="tool-call-summary">
+          <span class="tool-status status-{status}" aria-hidden="true">
+            {#if status === 'pending'}
+              <!-- Rotated via CSS animation when the status class is
+                   status-pending. Character choice favors glyphs that
+                   read clearly at small sizes in Lekton Mono. -->
+              ↻
+            {:else if status === 'ok'}
+              ✓
+            {:else}
+              ✗
+            {/if}
+          </span>
           {#if activity}
-            <span class="tool-activity">{activity}</span>
             <span class="tool-name-sub">{call.function.name}</span>
           {:else}
             <span class="tool-name">{call.function.name}</span>
           {/if}
+          {#if durationPill(call.id)}
+            <span class="tool-pill">{durationPill(call.id)}</span>
+          {/if}
+          <span class="tool-chevron" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
         </span>
-        {#if durationPill(call.id)}
-          <span class="tool-pill">{durationPill(call.id)}</span>
-        {/if}
-        <span class="tool-chevron" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
       </button>
       {#if isOpen}
         <div class="tool-detail">
