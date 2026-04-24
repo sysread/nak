@@ -2122,6 +2122,75 @@
   }
 
   /**
+   * Resume an orphaned turn whose tail is an unfinished shape (see
+   * `incompleteTurnTail`). The typical path is: user opened a thread
+   * where the previous session hit an overload error after a tool
+   * round. The in-session rate-limit retry closure lives only in
+   * memory and doesn't survive a refresh, so without this handler
+   * the user's only recourse is to type a new prompt - which loses
+   * the anchoring of the original turn.
+   *
+   * Unlike `regenerateFrom`, nothing gets replaced or greyed out:
+   * the persisted tool rows are exactly what the model needs to
+   * pick up where it left off. We just rebuild the send-time
+   * context against the current settings and re-enter `runExchange`
+   * with no pendingDeletes, so `historyOnWire` includes every
+   * existing row and the chat loop fires a fresh completion that
+   * continues the turn.
+   */
+  async function retryIncompleteTurn(): Promise<void> {
+    if (sending || !app.supabase || !app.venice) return;
+    const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
+    if (!active || active.isDraft || active.archived) return;
+    // Walk back to the user message that opened this turn. Mirrors
+    // the walk in regenerateFrom - we need the userMessageId anchor
+    // for the samskara substrate write at end-of-turn.
+    let userIdx = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        userIdx = i;
+        break;
+      }
+    }
+    if (userIdx === -1) return;
+    const userMessage = messages[userIdx];
+
+    const tier = resolveTier(active.model ?? null, defaultTier);
+    const tierSpec = MODELS[tier];
+    const modelId = tierSpec.id;
+    const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
+      ? resolveReasoningEffort(
+          active.reasoning_effort ?? null,
+          defaultReasoning,
+          tierSpec.defaultReasoningEffort
+        )
+      : undefined;
+    const sendVerbosity: Verbosity = resolveVerbosity(
+      active.verbosity ?? null,
+      defaultVerbosity
+    );
+    const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
+      .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
+      .map((p) => ({ role: 'system' as const, content: p.body }));
+    const currentUserId = session?.user.id ?? active.user_id;
+
+    followBottom = true;
+
+    await runExchange({
+      threadId: active.id,
+      currentUserId,
+      modelId,
+      tierSpec,
+      systemMessages,
+      sendReasoning,
+      sendVerbosity,
+      originalText: userMessage.content,
+      userMessageId: userMessage.id,
+      sendAttachments: userMessage.attachments ?? [],
+    });
+  }
+
+  /**
    * Unwrap a Venice rate-limit error into a message fit for the banner.
    * The raw err.message is `Venice rate limit hit (HTTP 429). <detail>`
    * where <detail> is usually the OpenAI-compat envelope
@@ -2668,6 +2737,45 @@
       }
     }
     return blocks;
+  });
+
+  /**
+   * True when the persisted transcript ends in a shape that means the
+   * model never got to produce a final reply for the last user turn.
+   * Three tails qualify:
+   *
+   *   - `tool`: a tool round completed, and the next assistant round
+   *     failed before any text was persisted. This is the overload-
+   *     mid-turn case: the rate-limit banner that would normally park
+   *     a retry closure only lives in memory, so a page refresh wipes
+   *     the in-session retry button and leaves the transcript with
+   *     nothing after the tool result rows.
+   *   - `assistant` with `tool_calls`: the model emitted tool_calls
+   *     but the tool executions or the result-persist step failed
+   *     before any tool rows landed. Rare, but leaves the same
+   *     orphan-turn shape.
+   *   - `user`: the user message persisted but the first assistant
+   *     round never wrote anything (immediate failure, or refresh
+   *     during the very first round before any persistence).
+   *
+   * Suppressed while `sending` is true (a turn in progress has the
+   * same DB tail mid-exchange and we don't want the banner fighting
+   * the live streaming bubble), and while `streamingError` is set
+   * (its own banner already offers a retry where applicable, and
+   * double-rendering two retry prompts for the same failure is
+   * noisy).
+   */
+  const incompleteTurnTail = $derived.by<Message | null>(() => {
+    if (sending) return null;
+    if (streamingError) return null;
+    if (messages.length === 0) return null;
+    const last = messages[messages.length - 1];
+    if (last.role === 'tool') return last;
+    if (last.role === 'assistant' && last.tool_calls && last.tool_calls.length > 0) {
+      return last;
+    }
+    if (last.role === 'user') return last;
+    return null;
   });
 
   /**
@@ -3498,6 +3606,44 @@
               </div>
             {/if}
           {/each}
+          {#if incompleteTurnTail}
+            <!-- Post-refresh resume banner. The in-session rate-limit
+                 retry lives only on `streamingError.retry` and doesn't
+                 survive a page reload, so when a user refreshes after
+                 an overload-mid-turn failure the orphaned tool rows
+                 sit at the tail with no way to continue the turn short
+                 of typing a new prompt. This banner reattaches a retry
+                 affordance to that tail (see `incompleteTurnTail` for
+                 the exact shapes we treat as incomplete). Rendered as
+                 an informational bubble, not an error alert - the
+                 failure itself is already in the past. -->
+            <div class="msg assistant msg-incomplete" role="note">
+              <div class="msg-incomplete-body">
+                <div class="msg-incomplete-text">
+                  The response appears to have been cut off. Click to retry.
+                </div>
+                <button
+                  type="button"
+                  class="secondary icon-btn msg-incomplete-retry"
+                  onclick={() => { void retryIncompleteTurn(); }}
+                  disabled={sending}
+                  aria-label="Retry"
+                  title="Retry"
+                >
+                  <!-- Refresh / circular-arrow icon (Feather "refresh-cw"),
+                       matching the regenerate and rate-limit retry buttons. -->
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                       stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="23 4 23 10 17 10" />
+                    <polyline points="1 20 1 14 7 14" />
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+                    <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          {/if}
           {#if streamingError}
             <!-- Canonical error surface for chat send-path failures.
                  Rendered in the transcript where the streaming output

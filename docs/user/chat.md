@@ -259,6 +259,15 @@ tool-call results from the failed turn, so if the first attempt had
 already completed a tool round before the rate-limit hit, the retry
 resumes from there rather than starting over.
 
+The in-session retry button lives only in memory - refreshing the page
+or reopening Nak loses it. When that happens, if the failure left the
+conversation with a completed tool round (e.g. a web search) but no
+final reply, the thread opens with a muted "The response appears to
+have been cut off. Click to retry." banner at the bottom of the
+transcript. Its refresh-arrow button resumes the turn the same way
+the in-session retry would: the existing tool results stay, and the
+model picks up from them to produce the reply.
+
 ## Where to go next
 
 - [Threads](./threads.md) — managing the conversation list.

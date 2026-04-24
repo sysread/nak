@@ -2001,6 +2001,32 @@ h1 {
   color: var(--danger);
 }
 
+/* Post-refresh resume banner for an orphaned turn (last persisted
+   row is a tool result or a tool-invoking assistant, meaning the
+   next assistant round never landed). Reads as informational rather
+   than as an alert - the failure itself is in the past and all we're
+   offering is a "continue from here" affordance. Muted border +
+   surface fill so it sits adjacent to the conversation instead of
+   shouting like .msg-error. */
+.msg.assistant.msg-incomplete {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--muted);
+  font-style: italic;
+}
+.msg-incomplete-body {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.msg-incomplete-text {
+  flex: 1;
+}
+.msg-incomplete-retry {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
 /* Post-message action panel. Sits inside each assistant bubble,
    right-aligned, separated from the reply body by a hairline so the
    transition from "content" to "controls" reads cleanly. Using border
