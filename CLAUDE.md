@@ -358,7 +358,14 @@ When the feature is done:
    (`git merge --squash <feature-branch> && git commit`) with a single narrative
    message covering the whole change
 4. `git push origin main`
-5. Delete the feature branch locally and on origin
+5. Delete the feature branch locally (`git branch -d <feature-branch>`).
+   Do NOT try to delete the remote feature branch - Anthropic's GitHub
+   app doesn't carry the `delete_ref` scope, so `git push origin
+   --delete <feature-branch>` returns HTTP 403 by design. That's not a
+   fixable condition from inside the session; the user cleans up stale
+   remote branches on their own cadence. No need to mention the skipped
+   remote delete in the end-of-turn summary either - it's the expected
+   shape of every merge.
 
 **Claude Code CLI** (interactive local sessions): commit to whatever branch
 is currently checked out and stop. Do not rebase, do not merge, do not push,
