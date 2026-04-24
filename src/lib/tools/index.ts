@@ -150,9 +150,12 @@ export const conversationsToolbox: Toolbox = {
 /**
  * Research capabilities that aren't a fit for always-on. Today this is
  * just `research_docs` - a sub-agent that answers questions about Nak
- * itself by reading the bundled in-app help corpus. The tool is read-
- * only (no DB writes, no network fetch), so it could technically sit
- * in `alwaysOnToolbox`, but meta-questions about the app are a tiny
+ * itself by reading the bundled in-app help corpus, and (when the
+ * caller passes `include_internal_dev_docs: true`) the developer docs
+ * under `docs/dev/` so the same tool can field "how would I add
+ * feature X?" architecture questions. The tool is read-only (no DB
+ * writes, no network fetch), so it could technically sit in
+ * `alwaysOnToolbox`, but meta-questions about the app are a tiny
  * fraction of conversation turns. Gating it keeps the default request
  * payload smaller; the LLM can flip this toolbox on via
  * `toggle_toolbox` the moment a user turn looks like a meta-question
@@ -165,10 +168,11 @@ export const conversationsToolbox: Toolbox = {
 export const researchToolbox: Toolbox = {
   name: 'research',
   description:
-    'Research capabilities for answering meta-questions about Nak or ' +
-    'other research-adjacent lookups. Enable when the user asks how ' +
-    'to do something in Nak, what a setting does, or any other ' +
-    'question about the app itself.',
+    'Research capabilities for answering meta-questions about Nak - ' +
+    'how features work, what a setting does, how the app is built ' +
+    'internally - or other research-adjacent lookups. Enable when ' +
+    'the user asks how to do something in Nak, what a UI element ' +
+    'means, or wants to plan a change to Nak itself.',
   tools: [researchDocs],
 };
 

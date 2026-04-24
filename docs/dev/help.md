@@ -16,15 +16,24 @@ links open in a new browser tab. Heading anchors (`#section`)
 scroll within the current doc.
 
 Dev-facing docs under `docs/dev/` are **not** rendered in-app —
-they're GitHub-only. The glob at the top of `docs.ts` is scoped
-to `docs/user/**/*.md` for that reason.
+they're GitHub-only as far as the Help modal is concerned. The
+Help modal's glob at the top of `docs.ts` is scoped to
+`docs/user/**/*.md` for that reason. A parallel non-Help glob in
+the same file (`docs/dev/**/*.md`, exposed via `listDevDocs` /
+`loadDevDoc`) feeds the `research_docs` tool's
+`include_internal_dev_docs` opt-in path — that's a flat-corpus
+bundle for a sub-completion, not rendered anywhere. See
+`./tools.md`.
 
 ## Files
 
 - `src/lib/docs.ts` — bundle loader. `import.meta.glob` maps
   every `/docs/user/**/*.md` file into a lazy string-loader
   thunk; exports `hasDoc`, `loadDoc`, `resolveDocPath`,
-  `isExternalHref`.
+  `isExternalHref`. A parallel glob for `docs/dev/**/*.md`
+  with matching `listDevDocs` / `loadDevDoc` exports is not
+  used by the Help modal — it exists for the `research_docs`
+  tool's dev-docs opt-in path.
 - `src/screens/Help.svelte` — the modal. Renders via
   `<Markdown>`, intercepts internal link clicks, shows
   `<Scanner>` during transitions, assigns heading ids for

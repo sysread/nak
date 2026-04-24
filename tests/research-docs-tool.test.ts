@@ -3,8 +3,11 @@
  * user-facing doc under `docs/user/` into a system prompt for a one-
  * shot sub-completion on the fast tier; the sub-model returns a short
  * prose answer followed by a "Sources: ..." trailer that we parse back
- * into a structured tool result. This file exercises the tool surface
- * directly: registry placement, request shape, answer/sources parse,
+ * into a structured tool result. When the caller passes
+ * `include_internal_dev_docs: true`, the corpus expands to also cover
+ * `docs/dev/` so the same tool can field architecture / planning
+ * questions. This file exercises the tool surface directly: registry
+ * placement, request shape, dev-docs opt-in, answer/sources parse,
  * and cancellation wiring.
  */
 import { describe, it, expect, vi } from 'vitest';
@@ -24,6 +27,7 @@ import {
   parseResearchResult,
   VENICE_RESEARCH_DOCS_MODEL,
   RESEARCH_DOCS_SYSTEM_PROMPT_HEADER,
+  RESEARCH_DOCS_DEV_SYSTEM_PROMPT_HEADER,
 } from '../src/lib/tools/research_docs';
 import { MODELS } from '../src/lib/models';
 import type { SupabaseService } from '../src/lib/supabase';
@@ -102,7 +106,7 @@ describe('research_docs - registry scoping', () => {
     );
   });
 
-  it('requires a `query` parameter, treats `context_hint` as optional', () => {
+  it('requires a `query` parameter, treats `context_hint` and `include_internal_dev_docs` as optional', () => {
     // Lock additionalProperties=false so a hallucinated extra field
     // from the main model can't smuggle unchecked data into the
     // sub-call.
@@ -116,6 +120,10 @@ describe('research_docs - registry scoping', () => {
         context_hint: {
           type: 'string',
           description: expect.stringMatching(/caller context|sub-agent/i),
+        },
+        include_internal_dev_docs: {
+          type: 'boolean',
+          description: expect.stringMatching(/developer|docs\/dev|internal/i),
         },
       },
       required: ['query'],
@@ -163,6 +171,11 @@ describe('research_docs - execute() shape', () => {
     expect(sysContent).toContain(RESEARCH_DOCS_SYSTEM_PROMPT_HEADER);
     expect(sysContent).toMatch(/===== docs\/user\/README\.md =====/);
     expect(sysContent).toMatch(/===== docs\/user\/memory\.md =====/);
+    // Dev-docs opt-in defaults to false. Tripwire against a future
+    // edit that flips the default and silently balloons every
+    // research_docs call by 4x.
+    expect(sysContent).not.toContain('===== docs/dev/');
+    expect(sysContent).not.toContain(RESEARCH_DOCS_DEV_SYSTEM_PROMPT_HEADER);
     // Output cap is a soft contract - just ensure some bound is set so
     // a runaway completion doesn't blow out the tool budget.
     expect(typeof req.maxTokens).toBe('number');
@@ -238,6 +251,100 @@ describe('research_docs - execute() shape', () => {
   });
 });
 
+describe('research_docs - include_internal_dev_docs', () => {
+  it('swaps in the dev-aware system prompt header when the flag is true', async () => {
+    const { venice, seen } = mkVenice(() => [
+      { type: 'text', delta: 'arch answer\n\nSources: none' },
+    ]);
+    await researchDocs.execute(
+      { query: 'how is memory wired internally?', include_internal_dev_docs: true },
+      ctxFor(venice)
+    );
+    const sys = seen[0].messages.find((m) => m.role === 'system');
+    const sysContent = typeof sys?.content === 'string' ? sys.content : '';
+    expect(sysContent).toContain(RESEARCH_DOCS_DEV_SYSTEM_PROMPT_HEADER);
+    // The default user-docs header should NOT also be present - the
+    // two headers are mutually exclusive.
+    expect(sysContent).not.toContain(RESEARCH_DOCS_SYSTEM_PROMPT_HEADER);
+  });
+
+  it('bundles both user and dev docs into the system prompt when the flag is true', async () => {
+    const { venice, seen } = mkVenice(() => [
+      { type: 'text', delta: 'arch answer\n\nSources: none' },
+    ]);
+    await researchDocs.execute(
+      { query: 'q', include_internal_dev_docs: true },
+      ctxFor(venice)
+    );
+    const sys = seen[0].messages.find((m) => m.role === 'system');
+    const sysContent = typeof sys?.content === 'string' ? sys.content : '';
+    // Spot-check a doc from each tree. README.md exists in both; test
+    // both delimiters explicitly so a regression that e.g. accidentally
+    // replaced the user blob with the dev blob would fail loudly.
+    expect(sysContent).toMatch(/===== docs\/user\/README\.md =====/);
+    expect(sysContent).toMatch(/===== docs\/dev\/README\.md =====/);
+    expect(sysContent).toMatch(/===== docs\/dev\/architecture\.md =====/);
+    expect(sysContent).toMatch(/===== docs\/dev\/tools\.md =====/);
+  });
+
+  it('does not bundle dev docs when the flag is explicitly false', async () => {
+    const { venice, seen } = mkVenice(() => [
+      { type: 'text', delta: 'answer\n\nSources: none' },
+    ]);
+    await researchDocs.execute(
+      { query: 'q', include_internal_dev_docs: false },
+      ctxFor(venice)
+    );
+    const sys = seen[0].messages.find((m) => m.role === 'system');
+    const sysContent = typeof sys?.content === 'string' ? sys.content : '';
+    expect(sysContent).not.toContain('===== docs/dev/');
+  });
+
+  it('preserves tree prefixes on parsed sources when dev docs are in scope', async () => {
+    // Several filenames (README, memory, settings, attachments, chat,
+    // cookbook) exist in both trees. In dev-docs mode the caller needs
+    // the prefix to disambiguate - stripping it would turn
+    // "docs/dev/memory.md" into "memory.md" and make the source
+    // ambiguous with "docs/user/memory.md". This test locks the
+    // preservation behavior.
+    const { venice } = mkVenice(() => [
+      {
+        type: 'text',
+        delta:
+          'Memories live in IndexedDB locally, synced via Supabase.\n\n' +
+          'Sources: docs/user/memory.md, docs/dev/memory.md',
+      },
+    ]);
+    const result = (await researchDocs.execute(
+      { query: 'where do memories live?', include_internal_dev_docs: true },
+      ctxFor(venice)
+    )) as { answer: string; sources: string[] };
+    expect(result.sources).toEqual(['docs/user/memory.md', 'docs/dev/memory.md']);
+  });
+
+  it('raises the output token cap in dev mode to fit architecture answers', async () => {
+    // Dev-mode prompts explicitly allow longer answers (the 2-5
+    // sentence cap fits user-help questions but cramps architecture
+    // explanations). Assert that the cap is at least strictly larger
+    // than the default, without pinning an exact number - future
+    // tuning can lift either bound without churning this test.
+    const { venice: veniceDefault, seen: seenDefault } = mkVenice(() => [
+      { type: 'text', delta: 'x\n\nSources: none' },
+    ]);
+    await researchDocs.execute({ query: 'q' }, ctxFor(veniceDefault));
+
+    const { venice: veniceDev, seen: seenDev } = mkVenice(() => [
+      { type: 'text', delta: 'x\n\nSources: none' },
+    ]);
+    await researchDocs.execute(
+      { query: 'q', include_internal_dev_docs: true },
+      ctxFor(veniceDev)
+    );
+
+    expect(seenDev[0].maxTokens).toBeGreaterThan(seenDefault[0].maxTokens ?? 0);
+  });
+});
+
 describe('parseResearchResult', () => {
   it('returns empty fields on empty input', () => {
     expect(parseResearchResult('')).toEqual({ answer: '', sources: [] });
@@ -281,6 +388,19 @@ describe('parseResearchResult', () => {
     expect(parseResearchResult(raw)).toEqual({
       answer: 'Answer.',
       sources: ['memory.md', 'settings.md'],
+    });
+  });
+
+  it('keeps docs/user/ and docs/dev/ prefixes when keepPrefixes is true', () => {
+    // Dev-mode call path: multiple filenames collide across trees
+    // (memory.md, settings.md, README.md, etc.), so the prefix is the
+    // only signal telling them apart. Stripping it would make sources
+    // ambiguous.
+    const raw =
+      'Answer.\nSources: docs/user/memory.md, docs/dev/memory.md, docs/dev/architecture.md';
+    expect(parseResearchResult(raw, { keepPrefixes: true })).toEqual({
+      answer: 'Answer.',
+      sources: ['docs/user/memory.md', 'docs/dev/memory.md', 'docs/dev/architecture.md'],
     });
   });
 

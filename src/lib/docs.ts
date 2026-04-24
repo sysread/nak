@@ -1,12 +1,14 @@
 /**
- * User-doc loader for the in-app Help modal.
+ * Doc loaders for the in-app Help modal and the `research_docs` tool.
  *
  * Role:
- *   Vite picks up every `.md` under `docs/user/` at the project root and
- *   turns it into a raw-string chunk. This module exposes the glob map
- *   behind a tiny API the Help screen can drive — "does this doc exist",
- *   "give me its source", "turn this relative href into a canonical doc
- *   path", "is this href external".
+ *   Vite picks up every `.md` under `docs/user/` (and, separately,
+ *   `docs/dev/`) at the project root and turns each into a raw-string
+ *   chunk. This module exposes the glob maps behind a tiny API: the
+ *   Help screen drives the user-doc side ("does this doc exist", "give
+ *   me its source", "turn this relative href into a canonical doc
+ *   path"), and the `research_docs` tool drives both sides (flat
+ *   list + raw load, no path resolution).
  *
  * Why bundle instead of fetch at runtime:
  *   Nak is a PWA. If the docs lived under `public/` we'd still need to
@@ -14,13 +16,16 @@
  *   them into the normal Vite build graph, which means they ship with
  *   every release and work offline on the first install. Lazy (non-
  *   eager) loading keeps the initial bundle small — each doc is its own
- *   chunk and only lands when the user navigates to it.
+ *   chunk and only lands when the user navigates to it (Help modal) or
+ *   the research tool fires (fast-tier sub-completion).
  *
  * Path convention:
  *   `loadDoc` / `hasDoc` / `resolveDocPath` take and return paths
- *   *relative to* `docs/user/` — e.g. `README.md`, `settings.md`,
- *   `subdir/page.md`. The full `/docs/user/` prefix is an internal
- *   implementation detail of the glob map and never leaks out.
+ *   *relative to* `docs/user/`. `listDevDocs` / `loadDevDoc` mirror
+ *   that for `docs/dev/`. The full `/docs/<tree>/` prefix is an
+ *   internal implementation detail of the glob map and never leaks
+ *   out; callers that need to disambiguate across trees (only
+ *   `research_docs` today) prefix the returned path themselves.
  *
  * Security:
  *   `resolveDocPath` rejects anything that escapes the `docs/user/`
@@ -28,7 +33,11 @@
  *   means a malicious internal link like `../../secret.md` can't trick
  *   the loader into pulling a module it didn't intend to expose.
  *   Combined with `hasDoc`, the returned path is always a known,
- *   bundle-verified doc.
+ *   bundle-verified doc. The dev-doc surface deliberately skips the
+ *   resolve/hasDoc layer: the Help modal never renders dev docs, and
+ *   the research tool only iterates `listDevDocs()` output — no user
+ *   href is ever resolved against the dev tree, so there's no attack
+ *   surface to protect.
  */
 
 // The glob itself. Vite resolves `/`-prefixed globs against the project
@@ -125,4 +134,41 @@ export function resolveDocPath(currentPath: string, href: string): ResolvedDoc |
   // an empty string as "no anchor" without parsing.
   const hash = resolved.hash.startsWith('#') ? resolved.hash.slice(1) : '';
   return { path, hash };
+}
+
+// --- Developer docs --------------------------------------------------
+//
+// Parallel glob for `docs/dev/` - the architecture + per-feature dev
+// notes that ship alongside the user manual. Not reachable from the
+// Help modal (it renders only `docs/user/`); the single consumer is
+// the `research_docs` tool, which bundles this corpus into its sub-
+// completion system prompt when the caller passes
+// `include_internal_dev_docs: true`. Kept as its own glob rather than
+// a union with the user tree so the default research path (user docs
+// only) doesn't pay the ~200 KB dev-docs cost on every call.
+
+const devDocModules = import.meta.glob('/docs/dev/**/*.md', {
+  query: '?raw',
+  import: 'default',
+}) as Record<string, () => Promise<string>>;
+
+const DEV_DOC_PREFIX = '/docs/dev/';
+
+/** Every dev-doc path we know about (keys are relative to `docs/dev/`). */
+export function listDevDocs(): string[] {
+  return Object.keys(devDocModules)
+    .map((k) => k.slice(DEV_DOC_PREFIX.length))
+    .sort();
+}
+
+/**
+ * Load the raw markdown for a dev doc. Throws if the path isn't in
+ * the bundle - the single caller (`research_docs`) only ever passes
+ * paths returned by `listDevDocs()`, so a miss here is a bug rather
+ * than a user-input problem.
+ */
+export async function loadDevDoc(path: string): Promise<string> {
+  const loader = devDocModules[DEV_DOC_PREFIX + path];
+  if (!loader) throw new Error(`Unknown dev doc: ${path}`);
+  return await loader();
 }

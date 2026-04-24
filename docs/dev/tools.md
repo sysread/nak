@@ -73,6 +73,21 @@ The gated `research` toolbox carries:
   `toggle_toolbox` when it sees a meta-question and keeps it on
   for the rest of a research-oriented thread.
 
+  Dev-docs opt-in: passing `include_internal_dev_docs: true`
+  expands the bundled corpus to also carry every doc under
+  `docs/dev/` (architecture + per-feature dev notes, loaded via
+  `listDevDocs` / `loadDevDoc` from the same module). This lets
+  the tool field "how would I add feature X to Nak" planning
+  questions - the sub-model can cross-reference user-facing
+  behavior against internal design notes in a single pass. The
+  dev tree is ~4x the user tree's size, so opt-in per call rather
+  than always-on keeps the common case cheap. In dev mode the
+  sub-model is asked to cite sources with the tree prefix
+  (`docs/user/memory.md` vs `docs/dev/memory.md`) since several
+  filenames collide across the two trees, and
+  `parseResearchResult` preserves those prefixes when
+  `keepPrefixes: true` is passed.
+
 ## Files
 
 - `src/lib/tools/index.ts` - the toolbox definitions
@@ -126,7 +141,12 @@ The gated `research` toolbox carries:
   the sources array by `parseResearchResult`, exported for
   direct test coverage. Uses `listDocs` / `loadDoc` from
   `src/lib/docs.ts` so the bundled corpus is always identical
-  to what the Help modal renders.
+  to what the Help modal renders. When the caller passes
+  `include_internal_dev_docs: true` the bundle also carries
+  every `docs/dev/` file (loaded via `listDevDocs` / `loadDevDoc`
+  from the same module), swaps in a dev-aware system prompt
+  header that asks for tree-prefixed source cites, and lifts the
+  output token cap so architecture answers aren't cramped.
 
 ## Entry points
 
@@ -275,6 +295,13 @@ The gated `research` toolbox carries:
   added to the Help manual are automatically visible to the
   research tool on the next build - the Vite glob is the single
   source of truth. See `./help.md`.
+- **Dev docs** - `research_docs` also reaches into `docs/dev/`
+  via the parallel `listDevDocs` / `loadDevDoc` primitives in
+  `src/lib/docs.ts` when the caller opts in with
+  `include_internal_dev_docs: true`. Nothing else consumes that
+  glob; the Help modal is user-docs-only. Adding a new file
+  under `docs/dev/` makes it visible to the research tool on
+  the next build with no other wiring needed.
 
 ## Gotchas
 
