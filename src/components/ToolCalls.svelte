@@ -23,8 +23,14 @@
    *     error flag). That's how we know duration and whether to show
    *     the live ticker.
    *   - Replayed history (no timings; just the persisted tool row)
-   *     falls back to parsing the result content — a payload with an
+   *     falls back to parsing the result content - a payload with an
    *     `error` key renders as failure, otherwise success.
+   *   - Orphaned calls (no timings and no persisted result, or a
+   *     started-but-never-ended timing while the session is idle) are
+   *     cut-off leftovers: the stream died mid-turn before a result
+   *     landed. Parent signals that state via `sending === false` -
+   *     we render those as errors so the spinner doesn't animate
+   *     forever.
    *
    * Timings disappear on navigation (they're in-memory, owned by
    * Chat.svelte); reopening a conversation shows completed rows with
@@ -55,8 +61,17 @@
      * through frames on static history.
      */
     nowMs: number;
+    /**
+     * True iff the chat session is actively streaming right now. Used
+     * to distinguish "still in flight" from "stream died and never
+     * produced a result" - a call with no timing and no result reads
+     * as pending while a turn is running (brief window before the
+     * first onToolStart fires) and as errored once the session is
+     * idle (orphaned cutoff).
+     */
+    sending: boolean;
   }
-  let { calls, resultsByCallId, timings, nowMs }: Props = $props();
+  let { calls, resultsByCallId, timings, nowMs, sending }: Props = $props();
 
   let expanded = $state<Record<string, boolean>>({});
 
@@ -65,8 +80,14 @@
   function statusFor(callId: string): Status {
     const t = timings[callId];
     const result = resultsByCallId[callId];
-    // Session-local: timings are canonical while the call is in flight.
-    if (t && !t.endedAt) return 'pending';
+    // Session-local: a started-but-not-ended timing means the call is
+    // in flight - but only if the session is actually still streaming.
+    // If `sending` is false, the stream ended without completing this
+    // tool (parent finalizes dangling timings on the sending->idle
+    // edge, so this branch is rarely hit; the guard is defense in
+    // depth for the frame between the edge firing and the finalize
+    // effect running).
+    if (t && !t.endedAt) return sending ? 'pending' : 'error';
     if (t?.error) return 'error';
     // Replayed history: we don't have timings, so fall back to the
     // tool-result row. A JSON `error` key means the execution failed;
@@ -78,11 +99,19 @@
           return 'error';
         }
       } catch {
-        // Non-JSON content is uncommon but fine — treat as success.
+        // Non-JSON content is uncommon but fine - treat as success.
       }
       return 'ok';
     }
-    return 'pending';
+    // No timing, no result. During an active turn this is the brief
+    // window between the assistant message landing in `messages` and
+    // the first onToolStart handler firing - render as pending so the
+    // row doesn't flash red. When the session is idle it means the
+    // tool_calls persisted but execution never ran (stream cut off
+    // before any tool started, or thread opened fresh with an orphan
+    // tail and in-memory timings wiped) - render as errored so the
+    // spinner doesn't animate indefinitely.
+    return sending ? 'pending' : 'error';
   }
 
   function durationPill(callId: string): string {

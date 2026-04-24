@@ -483,6 +483,31 @@
   let composer = $state('');
   let composerEl: HTMLTextAreaElement | undefined = $state();
   let sending = $state(false);
+  // Finalize any tool timings that never got an endedAt when the
+  // session stops streaming. A clean run sets endedAt via onToolDone /
+  // onToolError, but a stream that dies mid-tool (network drop, abort,
+  // provider 5xx) leaves the timing entry with just startedAt forever -
+  // which statusFor() reads as "still in flight" and keeps the spinner
+  // animating indefinitely. Marking them errored on the sending->idle
+  // edge converts orphaned spinners into red-X glyphs and also prevents
+  // a later same-session send from reviving the animation when sending
+  // flips back to true.
+  let sendingWasTrue = false;
+  $effect(() => {
+    if (sending) {
+      sendingWasTrue = true;
+      return;
+    }
+    if (!sendingWasTrue) return;
+    sendingWasTrue = false;
+    const now = performance.now();
+    for (const id of Object.keys(toolTimings)) {
+      const t = toolTimings[id];
+      if (t.endedAt === undefined) {
+        toolTimings[id] = { ...t, endedAt: now, error: true };
+      }
+    }
+  });
   // Error banner state. `retry` is populated only for transient failures
   // where re-firing the exact same request is meaningful (rate-limit so
   // far) — it re-runs the chat loop with the captured history so the
@@ -3588,6 +3613,7 @@
                     resultsByCallId={block.resultsByCallId}
                     timings={toolTimings}
                     nowMs={nowMs}
+                    sending={sending}
                   />
                 </AssistantBody>
               </div>
