@@ -24,7 +24,11 @@ destination:
 - **Usage** — a date-ranged snapshot of per-model token spend
   against the Venice API key. Read-only: it calls Venice's beta
   `/billing/usage` endpoint and aggregates the rows client-side.
-  Nothing persists — closing the pane forgets the fetched data.
+  The default rolling-7-day window is warmed by an hourly
+  background poll from `usage-store.svelte.ts` so opening the pane
+  is typically instant; custom date ranges bypass the cache and
+  fetch on-demand. Nothing persists to disk — the cache is
+  in-memory only and gets wiped on `lock()`.
 - **Export** — downloads the three keys as a plaintext JSON
   file. No persistence change.
 - **Security** — rotates the master password. Re-encrypts the
@@ -61,6 +65,11 @@ every update) so it's covered here rather than in its own file.
   `/billing/usage` transparently up to `USAGE_MAX_PAGES`
   (20 × 500 rows = 10k rows) and coerces each row defensively
   before returning.
+- `src/lib/usage-store.svelte.ts` — reactive cache + hourly
+  background poller for the Usage pane's default rolling-7-day
+  window. Started by `state.svelte.ts::activate()` and stopped by
+  `lock()`. Exposes `usage` (the `$state` rune), `refreshUsage`,
+  `isUsageStale`, plus `USAGE_POLL_MS` / `USAGE_STALE_MS` constants.
 - `src/lib/config.ts` — `saveConfig` (keys pane) and
   `changePassword` (security pane).
 - `src/lib/theme.ts` — `ColorMode`, `Accent`, `applyTheme`,
@@ -93,14 +102,24 @@ every update) so it's covered here rather than in its own file.
   state synchronously, then fires
   `app.supabase.updateSettings` fire-and-forget for server
   persistence.
-- **Usage pane first-open fetch** — an `$effect` in `Settings.svelte`
-  watches `group` and calls `loadUsage` exactly once, the first
-  time the user lands on the Usage tab. Subsequent pane toggles
-  don't refetch; the Refresh button is the explicit path for
-  reloading after a date-range change. The pane's state lives on
-  the Settings component itself (not the global store) so closing
-  the modal drops everything — there's no privacy value in
-  retaining a billing snapshot across sessions.
+- **Usage pane background poll + on-open refresh** —
+  `state.svelte.ts::activate()` calls `startUsagePolling(app.venice)`
+  from `$lib/usage-store.svelte` the moment the app unlocks. The
+  poller fires one fetch of the default rolling-7-day window
+  immediately and re-fires every `USAGE_POLL_MS` (1 hour). Rows
+  land in the reactive `usage` store that the pane reads from, so
+  opening Settings -> Usage typically shows data without a
+  loading flash. An `$effect` in `Settings.svelte` also watches
+  `group`: if the user lands on the Usage tab AND the cached
+  data is older than `USAGE_STALE_MS` (15 minutes), it calls
+  `refreshUsage` to top up. User-picked custom date ranges
+  bypass the store entirely — a second `usageSource = 'custom'`
+  branch fetches into component-local state so a non-default
+  fetch doesn't evict the cached default view. The Refresh button
+  routes through whichever source matches the current date
+  pickers. The cache is in-memory only and is wiped on `lock()`
+  so rows billed against the previous API key don't leak into a
+  subsequent unlock with a different config.
 - **Security pane submit** — `changePassword(old, new)` in
   config.ts. Settings catches errors and displays them inline.
 

@@ -38,8 +38,12 @@ Each row shows a horizontal bar scaled by total tokens
   shown. The gradient is driven by how each bucket compares to
   the median on a log scale, so one runaway workload stands out
   in red without flattening everything else into a single shade.
-- The pane auto-loads the last 7 days the first time you open it
-  in a session. Change the dates and click **Refresh** to re-fetch.
+- The last 7 days are refreshed in the background while the app
+  is unlocked, so opening the pane usually shows numbers right
+  away. If the cached view is more than 15 minutes old when you
+  land on the pane, Nak kicks off a fresh fetch automatically.
+  Change the dates and click **Refresh** to re-fetch a custom
+  range.
 - Spend is always dollar-formatted, e.g. `$0.07`. Rows billed in
   credits instead of cash (VCU, DIEM, or bundled credits) render
   as muted/grey pills so your eye skips past them to the cash

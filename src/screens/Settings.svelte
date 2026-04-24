@@ -15,8 +15,11 @@
    *                 button) and mirrors to Supabase the same way as
    *                 the default model.
    *   usage       — date-ranged snapshot of billed spend per model,
-   *                 pulled live from Venice's beta /billing/usage
-   *                 endpoint. Read-only; nothing persists.
+   *                 pulled from Venice's beta /billing/usage endpoint.
+   *                 The default rolling-7-day view is warmed by an
+   *                 hourly background poll from usage-store.svelte;
+   *                 custom date ranges fetch on demand. Read-only;
+   *                 nothing persists to disk.
    *   export      — download the three keys as a plaintext JSON file
    *                 for import on another browser. See config.ts for
    *                 the file format.
@@ -69,6 +72,11 @@
     type UsageCurrency,
     type UsageRow,
   } from '$lib/venice';
+  import {
+    usage,
+    isUsageStale,
+    refreshUsage,
+  } from '$lib/usage-store.svelte';
 
   interface Props {
     onClose: () => void;
@@ -344,40 +352,85 @@
   // useful slice — long enough to smooth over a single heavy day,
   // short enough that the pane loads quickly and the bars reflect
   // recent habits rather than a month-old workload.
-  let usageStart = $state<string>(ymdDaysAgo(7));
-  let usageEnd = $state<string>(todayYmd());
-  let usageRows = $state<UsageRow[] | null>(null);
-  let usageLoading = $state(false);
-  let usageError = $state<string | null>(null);
-  // True when fetchUsage bailed at the USAGE_MAX_PAGES cap. Surfaces as
-  // a footer note so the user can narrow their range rather than
-  // silently seeing only the top slice.
-  let usageTruncated = $state(false);
-  /**
-   * Tracks whether the Usage pane has auto-fetched at least once in
-   * this modal lifetime. The `$effect` below fires the first fetch
-   * when the user lands on the pane — without this guard it would
-   * refire every time `group` changes (including back to 'usage' after
-   * visiting another pane), which means a click on the Refresh button
-   * can feel redundant.
-   */
-  let usageAutoFetched = $state(false);
+  //
+  // Captured at component mount (Settings is a new instance on every
+  // open) so a user who changes the dates and later edits them back
+  // still matches the stored range to the byte; comparing against a
+  // recomputed ymdDaysAgo() on every keystroke would drift if the day
+  // rolled over mid-session.
+  const DEFAULT_USAGE_START = ymdDaysAgo(7);
+  const DEFAULT_USAGE_END = todayYmd();
+  let usageStart = $state<string>(DEFAULT_USAGE_START);
+  let usageEnd = $state<string>(DEFAULT_USAGE_END);
 
+  /**
+   * Display source for the Usage pane. 'store' draws from the
+   * background-polled default-range cache in `$lib/usage-store.svelte`
+   * (the common case - Settings opens, shows whatever the last poll
+   * captured, kicks a refresh if >15 min stale). 'custom' draws from
+   * component-local state filled by a user-initiated fetch of a
+   * non-default date range; the store is left alone so the next
+   * default-range poll doesn't have to re-fetch.
+   */
+  let usageSource = $state<'store' | 'custom'>('store');
+  let customRows = $state<UsageRow[] | null>(null);
+  let customLoading = $state(false);
+  let customError = $state<string | null>(null);
+  let customTruncated = $state(false);
+
+  const usageRows = $derived(
+    usageSource === 'store' ? usage.data : customRows
+  );
+  const usageLoading = $derived(
+    usageSource === 'store' ? usage.loading : customLoading
+  );
+  const usageError = $derived(
+    usageSource === 'store' ? usage.error : customError
+  );
+  const usageTruncated = $derived(
+    usageSource === 'store' ? usage.truncated : customTruncated
+  );
+
+  /**
+   * First-landing-on-the-pane auto-refresh. Fires only when the pane
+   * is showing the store view AND the cache is null or older than
+   * USAGE_STALE_MS - a fresher poll is reused as-is so the user sees
+   * numbers without a spinner. The guard on `usage.loading` means a
+   * poll already in flight (common during the boot window) isn't
+   * double-triggered.
+   */
   $effect(() => {
-    if (group === 'usage' && !usageAutoFetched && !usageLoading) {
-      usageAutoFetched = true;
-      void loadUsage();
+    if (
+      group === 'usage' &&
+      usageSource === 'store' &&
+      !usage.loading &&
+      isUsageStale() &&
+      app.venice
+    ) {
+      void refreshUsage(app.venice);
     }
   });
 
-  async function loadUsage(): Promise<void> {
+  async function onUsageRefresh(): Promise<void> {
     if (!app.venice) {
-      usageError = 'Not connected to Venice yet.';
+      customError = 'Not connected to Venice yet.';
       return;
     }
-    usageError = null;
-    usageLoading = true;
-    usageTruncated = false;
+    const isDefaultRange =
+      usageStart === DEFAULT_USAGE_START && usageEnd === DEFAULT_USAGE_END;
+    if (isDefaultRange) {
+      // Route the Refresh click through the shared store so a manual
+      // refresh and an hourly background poll land in the same cache.
+      // Other tabs / the next pane open see the new numbers without
+      // having to re-fetch.
+      usageSource = 'store';
+      await refreshUsage(app.venice);
+      return;
+    }
+    usageSource = 'custom';
+    customError = null;
+    customLoading = true;
+    customTruncated = false;
     try {
       // End-of-day upper bound: the date picker reads as "through this
       // whole day". Venice treats endDate as an exclusive cutoff, so
@@ -390,23 +443,23 @@
         startDate: startIso,
         endDate: endIso,
       });
-      usageRows = rows;
+      customRows = rows;
       // Best-effort cap detection: if the response came back exactly at
       // the page × per-page ceiling, we almost certainly hit the safety
       // limit. Not perfect (a user with exactly 10k rows would also
       // trip it) but close enough for a "your data may be truncated"
       // hint — never shown when we're confidently under the cap.
-      usageTruncated = rows.length >= USAGE_MAX_PAGES * 500;
+      customTruncated = rows.length >= USAGE_MAX_PAGES * 500;
     } catch (err) {
-      usageError =
+      customError =
         err instanceof VeniceError
           ? err.message
           : err instanceof Error
             ? err.message
             : String(err);
-      usageRows = null;
+      customRows = null;
     } finally {
-      usageLoading = false;
+      customLoading = false;
     }
   }
 
@@ -1099,16 +1152,21 @@
           ledger for this API key. Hits Venice's beta
           `/billing/usage` endpoint, aggregates by (sku, currency),
           and renders a bar chart scaled by total tokens with a spend
-          pill per row. The pane auto-loads on first visit (see the
-          `$effect` gate above); the Refresh button re-runs the fetch
-          with the current date range.
+          pill per row. The default rolling-7-day view is warmed by
+          an hourly background poll (see `$lib/usage-store.svelte`),
+          so opening the pane typically shows data without a loading
+          flash; the `$effect` above still forces a refresh when the
+          cache is older than USAGE_STALE_MS. User-picked custom
+          ranges bypass the cache and fetch on-demand.
         -->
         <h2>Usage</h2>
         <p class="subtle">
-          Token spend against your Venice API key. Pulled live from
-          Venice's billing ledger each time you open this pane or
-          hit refresh — the numbers below are what Venice reports,
-          not a Nak-side tally. Bars are scaled by
+          Token spend against your Venice API key. Pulled from
+          Venice's billing ledger — the numbers below are what Venice
+          reports, not a Nak-side tally. The default 7-day view
+          refreshes in the background and re-fetches on open if
+          it's more than 15 minutes stale; custom date ranges fetch
+          when you hit Refresh. Bars are scaled by
           prompt + completion tokens; the pill on the right is the
           raw billed amount in whatever currency each charge was
           denominated in.
@@ -1133,7 +1191,7 @@
           </label>
           <button
             type="button"
-            onclick={loadUsage}
+            onclick={onUsageRefresh}
             disabled={usageLoading}
           >
             {usageLoading ? 'Loading…' : 'Refresh'}

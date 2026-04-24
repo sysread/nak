@@ -29,6 +29,7 @@ import { reflectionManager } from './agents/reflection/manager';
 import { summaryManager } from './agents/summary/manager';
 import { attachmentExpiryManager } from './agents/attachment_expiry/manager';
 import { samskaraManager } from './agents/samskara/manager';
+import { startUsagePolling, stopUsagePolling } from './usage-store.svelte';
 import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_TIER,
@@ -186,6 +187,11 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   void summaryManager.start({ supabase: app.supabase, config });
   void attachmentExpiryManager.start({ supabase: app.supabase, config });
   void samskaraManager.start({ supabase: app.supabase, config });
+  // Warm the Usage pane cache in the background so Settings -> Usage
+  // opens instantly when the user goes looking. The poller fires once
+  // immediately and re-fires hourly; Settings still forces a refresh
+  // on open if the cached data is older than USAGE_STALE_MS.
+  startUsagePolling(app.venice);
 }
 
 export function lock(): void {
@@ -197,6 +203,10 @@ export function lock(): void {
   summaryManager.stop();
   attachmentExpiryManager.stop();
   samskaraManager.stop();
+  // Tear down the usage poller and wipe the cache so rows billed
+  // against the previous API key don't leak into a subsequent
+  // unlock-with-different-config.
+  stopUsagePolling();
   app.config = null;
   app.supabase = null;
   app.venice = null;
