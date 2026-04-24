@@ -158,6 +158,39 @@ function buildTitleNote(thread: Thread): string | null {
 }
 
 /**
+ * Opt-in formatting nudge for the model. When the user has the
+ * "Emphasis markdown" setting on (Settings -> AI), chat-loop folds
+ * this block into the per-turn system-prompt appendix so every
+ * reply this turn carries the same instruction. The goal is a
+ * bionic-style scan aid: bold on terms the reader should fix on,
+ * italics on phrases that orient them, sparsity calibrated so the
+ * emphasis rewards skimming instead of competing with it.
+ *
+ * Editing this copy changes model behaviour on every turn of every
+ * user who has the toggle on - treat it as a voice-tuning change,
+ * not a typo fix. Kept in a named function so the prompt text sits
+ * next to the rules that shaped it rather than buried inline in
+ * the appendix-build block.
+ */
+function buildEmphasisNote(): string {
+  return [
+    'Formatting: when the reply runs more than a sentence or two,',
+    'use light Markdown emphasis as scan-points so the reader can',
+    'skim. Bold (`**term**`) meaningful single words, proper nouns,',
+    'and identifiers - things the reader should fix on. Italicise',
+    '(`*phrase*`) short phrases, transitional clauses, or compound',
+    'noun phrases that orient the reader. Either style works for a',
+    'single or compound word; pick bold for terms worth fixing on,',
+    'italics for phrases that set up what comes next. Aim for',
+    'roughly one emphasised span per sentence in prose; less in',
+    'code-heavy, list-heavy, or tabular passages. Do not emphasise',
+    'whole sentences, filler adjectives, or boilerplate - the',
+    'emphasis should reward skimming, not compete with it. Skip',
+    "emphasis on short replies where skimming wouldn't help.",
+  ].join('\n');
+}
+
+/**
  * Return a shallow copy of `messages` with the last role='user'
  * message's content wrapped in the <user_message> boundary tags. The
  * input messages are not mutated — we allocate a fresh message object
@@ -322,6 +355,17 @@ export interface ChatLoopOptions {
    * that don't recognize the field silently ignore it.
    */
   verbosity?: Verbosity;
+  /**
+   * When true, append a short formatting-nudge block to the per-turn
+   * system-prompt appendix asking the model to sprinkle light
+   * Markdown emphasis (bold terms, italic phrases) through its reply
+   * as scan-points. Opt-in; the block is skipped when false/absent
+   * so the baseline prompt stays free of formatting hints for users
+   * who didn't ask for them. See `buildEmphasisNote` below for the
+   * exact wording - modifying it changes model behaviour on every
+   * turn of every user who has the toggle on.
+   */
+  emphasisMarkdown?: boolean;
   /**
    * Optional id of the user message that opened this turn. When set,
    * the chat-loop pairs it with the terminal assistant message id and
@@ -506,6 +550,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     handlers,
     reasoningEffort,
     verbosity,
+    emphasisMarkdown,
     userMessageId,
     currentMessageAttachments,
   } = opts;
@@ -618,9 +663,18 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // made the model gloss over the rename and answer the user directly,
   // leaving threads parked on "New conversation" across several turns.
   const titleNote = buildTitleNote(thread);
-  const appendixParts = [priming.samskaraAppendix, titleNote].filter(
-    (s): s is string => typeof s === 'string' && s.length > 0
-  );
+  // Emphasis blurb slots between samskara priming and the title
+  // note: it's ambient voice tuning (less urgent than the title
+  // directive, which needs to sit closest to the user turn) but
+  // not per-user context (samskara priming carries the user
+  // profile and belongs at the top of the appendix). Null when the
+  // setting is off so the filter below skips it cleanly.
+  const emphasisNote = emphasisMarkdown ? buildEmphasisNote() : null;
+  const appendixParts = [
+    priming.samskaraAppendix,
+    emphasisNote,
+    titleNote,
+  ].filter((s): s is string => typeof s === 'string' && s.length > 0);
   const promptAppendix = appendixParts.join('\n\n');
 
   // Push the opening-recall <think> block onto local history as an

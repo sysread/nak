@@ -14,10 +14,13 @@ destination:
 - **Keys** — the three API keys. Re-encrypts the config blob on
   save.
 - **AI** — default model tier, default reasoning effort, default
-  verbosity, system-prompt library, web-search toggle, and a
-  "Browse memories" link to the Memories modal. All preferences
-  persist to `profiles.settings`; the Memories link is pure
-  navigation.
+  verbosity, the "Emphasis markdown" opt-in (a bionic-style scan
+  aid - when on, chat-loop folds a short formatting blurb into
+  the per-turn system-prompt appendix so the model bolds terms
+  and italicises phrases), system-prompt library, web-search
+  toggle, and a "Browse memories" link to the Memories modal.
+  All preferences persist to `profiles.settings`; the Memories
+  link is pure navigation.
 - **Appearance** — color mode + accent. Live-applies on click
   (no Save button); mirrors to `profiles.settings` (and
   localStorage for the boot script).
@@ -55,8 +58,8 @@ every update) so it's covered here rather than in its own file.
   Mounted once in `App.svelte` so it appears across every phase.
 - `src/lib/state.svelte.ts` — setters that Settings calls
   (`setDefaultModel`, `setDefaultReasoningEffort`,
-  `setDefaultVerbosity`, `setSystemPrompts`, `setTheme`,
-  `setWebSearchEnabled`).
+  `setDefaultVerbosity`, `setEmphasisMarkdown`,
+  `setSystemPrompts`, `setTheme`, `setWebSearchEnabled`).
 - `src/lib/supabase.ts` — `getSettings`, `updateSettings`,
   `updateSystemPrompts`. Read-then-write against the
   `profiles.settings` JSONB column.

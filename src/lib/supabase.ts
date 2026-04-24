@@ -409,6 +409,17 @@ export interface UserSettings {
    * the drawer's dropdown are not persisted.
    */
   defaultLogLevel?: LogLevel;
+  /**
+   * Opt-in: ask the model to sprinkle light Markdown emphasis (bold
+   * on terms, italics on phrases) through its replies so the user
+   * can skim the save-points. Chat-loop appends a short instruction
+   * block to the per-turn system-prompt appendix when this is true.
+   * Absent / false leaves the prompt untouched. Named after the
+   * "bionic reading" visual style the feature is modelled on, even
+   * though this is semantic emphasis rather than mechanical prefix
+   * bolding.
+   */
+  emphasisMarkdown?: boolean;
 }
 
 /**
@@ -460,6 +471,9 @@ export function coerceSettings(raw: unknown): UserSettings {
     if (prompts.length > 0) out.systemPrompts = prompts;
   }
   if (isLogLevel(r.defaultLogLevel)) out.defaultLogLevel = r.defaultLogLevel;
+  if (typeof r.emphasisMarkdown === 'boolean') {
+    out.emphasisMarkdown = r.emphasisMarkdown;
+  }
   return out;
 }
 
@@ -589,6 +603,12 @@ export class SupabaseService {
       if (patch.defaultLogLevel === undefined) delete merged.defaultLogLevel;
       else if (isLogLevel(patch.defaultLogLevel)) {
         merged.defaultLogLevel = patch.defaultLogLevel;
+      }
+    }
+    if ('emphasisMarkdown' in patch) {
+      if (patch.emphasisMarkdown === undefined) delete merged.emphasisMarkdown;
+      else if (typeof patch.emphasisMarkdown === 'boolean') {
+        merged.emphasisMarkdown = patch.emphasisMarkdown;
       }
     }
     const { error } = await this.client

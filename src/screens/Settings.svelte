@@ -38,6 +38,7 @@
     setDefaultReasoningEffort,
     setDefaultVerbosity,
     setDefaultLogLevel,
+    setEmphasisMarkdown,
     setSystemPrompts,
     setTheme,
   } from '$lib/state.svelte';
@@ -133,6 +134,11 @@
   // the same "how do I want this model to answer me?" decision cluster.
   // Persisted on `profiles.settings.defaultVerbosity`.
   let defaultVerbosity = $state<Verbosity>(app.defaultVerbosity);
+  // Opt-in formatting nudge. When on, chat-loop appends a short
+  // instruction block to the per-turn system prompt asking the model
+  // to use light Markdown emphasis as scan-points. Persisted on
+  // `profiles.settings.emphasisMarkdown`.
+  let emphasisMarkdown = $state<boolean>(app.emphasisMarkdown);
   let modelError = $state<string | null>(null);
   let modelInfo = $state<string | null>(null);
 
@@ -806,6 +812,30 @@
     }
   }
 
+  async function onToggleEmphasis(next: boolean): Promise<void> {
+    modelError = null;
+    modelInfo = null;
+    if (!app.supabase) {
+      modelError = 'Not connected to Supabase yet.';
+      return;
+    }
+    const prev = emphasisMarkdown;
+    // Optimistic update: flip the UI + app state now, roll back on error.
+    // Same pattern as the verbosity/reasoning handlers above.
+    emphasisMarkdown = next;
+    setEmphasisMarkdown(next);
+    try {
+      await app.supabase.updateSettings({ emphasisMarkdown: next });
+      modelInfo = next
+        ? 'Emphasis markdown enabled.'
+        : 'Emphasis markdown disabled.';
+    } catch (err) {
+      emphasisMarkdown = prev;
+      setEmphasisMarkdown(prev);
+      modelError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   async function onChangePassword(e: SubmitEvent): Promise<void> {
     e.preventDefault();
     pwError = null;
@@ -979,6 +1009,28 @@
               <option value={v}>{VERBOSITY_LABELS[v]}</option>
             {/each}
           </select>
+        </div>
+
+        <h3 class="pane-section">Emphasis markdown</h3>
+        <p class="subtle">
+          Bionic-style scan aid. When on, Nak asks the model to
+          sprinkle <strong>bold</strong> on meaningful terms and
+          identifiers and <em>italics</em> on short phrases or
+          transitional clauses, so long answers skim more easily.
+          Off by default; costs a handful of tokens per turn and
+          nothing when the reply is short enough that emphasis
+          would be noise.
+        </p>
+        <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
+          <label style="display:flex;gap:0.5rem;align-items:center">
+            <input
+              type="checkbox"
+              checked={emphasisMarkdown}
+              onchange={(e) =>
+                onToggleEmphasis((e.currentTarget as HTMLInputElement).checked)}
+            />
+            <span>Ask the model to highlight save-points</span>
+          </label>
         </div>
         {#if modelError}<p class="error">{modelError}</p>{/if}
         {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}

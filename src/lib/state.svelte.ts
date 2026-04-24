@@ -95,6 +95,14 @@ interface AppState {
    * conversation-scoped.
    */
   systemPrompts: SystemPrompt[];
+  /**
+   * When true, the chat loop appends a short instruction block to the
+   * per-turn system-prompt appendix asking the model to use light
+   * Markdown emphasis for semantic save-points (bold terms, italic
+   * phrases). Opt-in; seeded from Supabase on unlock. See
+   * chat-loop.ts for the exact blurb.
+   */
+  emphasisMarkdown: boolean;
   error: string | null;
 }
 
@@ -112,6 +120,7 @@ export const app = $state<AppState>({
   accent: cachedTheme?.accent ?? DEFAULT_ACCENT,
   defaultLogLevel: DEFAULT_LOG_LEVEL,
   systemPrompts: [],
+  emphasisMarkdown: false,
   error: null,
 });
 
@@ -133,6 +142,10 @@ export function setSystemPrompts(prompts: SystemPrompt[]): void {
 
 export function setDefaultLogLevel(level: LogLevel): void {
   app.defaultLogLevel = level;
+}
+
+export function setEmphasisMarkdown(enabled: boolean): void {
+  app.emphasisMarkdown = enabled;
 }
 
 /**
@@ -163,6 +176,7 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
   app.defaultVerbosity = DEFAULT_VERBOSITY;
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
+  app.emphasisMarkdown = false;
   app.phase = 'unlocked';
   app.error = null;
   if (opts.persist !== false) saveSession(config);
@@ -214,6 +228,7 @@ export function lock(): void {
   app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
   app.defaultVerbosity = DEFAULT_VERBOSITY;
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
+  app.emphasisMarkdown = false;
   app.systemPrompts = [];
   app.phase = 'locked';
   clearSession();

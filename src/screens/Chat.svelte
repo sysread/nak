@@ -45,6 +45,7 @@
     setDefaultReasoningEffort,
     setDefaultVerbosity,
     setDefaultLogLevel,
+    setEmphasisMarkdown,
     setSystemPrompts,
     setTheme,
   } from '$lib/state.svelte';
@@ -949,6 +950,10 @@
       if (s.defaultReasoningEffort) setDefaultReasoningEffort(s.defaultReasoningEffort);
       if (s.defaultVerbosity) setDefaultVerbosity(s.defaultVerbosity);
       if (s.defaultLogLevel) setDefaultLogLevel(s.defaultLogLevel);
+      // Absent key means "setting never set" -> stays false from
+      // activate(). Explicit `false` in the blob overrides anything
+      // set in-session (e.g. a toggle flipped in another tab).
+      setEmphasisMarkdown(s.emphasisMarkdown ?? false);
       // If the server has a theme choice and it differs from the cached one,
       // apply it now. setTheme also re-caches, so subsequent loads are fast.
       if (s.colorMode || s.accent) {
@@ -1643,6 +1648,7 @@
       systemMessages,
       sendReasoning,
       sendVerbosity,
+      sendEmphasis: app.emphasisMarkdown,
       originalText: text,
       userMessageId,
       // Pass the DB-hydrated attachment rows so analyze_image can find
@@ -1667,6 +1673,15 @@
     systemMessages: { role: 'system'; content: string }[];
     sendReasoning: ReasoningEffort | undefined;
     sendVerbosity: Verbosity;
+    /**
+     * Snapshot of the "Emphasis markdown" toggle taken at send time.
+     * Carried as a context value so a user who flips the setting
+     * mid-stream doesn't change the prompt under an already-running
+     * request - the initial turn ships with whatever the setting was
+     * when they hit send, and subsequent turns pick up the new value
+     * on their own send paths.
+     */
+    sendEmphasis: boolean;
     originalText: string;
     /**
      * The Supabase id of the user message that opened this exchange.
@@ -1770,6 +1785,7 @@
           currentMessageAttachments: ctx.sendAttachments,
           reasoningEffort: ctx.sendReasoning,
           verbosity: ctx.sendVerbosity,
+          emphasisMarkdown: ctx.sendEmphasis,
           handlers: {
             onTextUpdate: (t) => {
               pending = t;
@@ -2112,6 +2128,7 @@
       systemMessages,
       sendReasoning,
       sendVerbosity,
+      sendEmphasis: app.emphasisMarkdown,
       originalText: userMessage.content,
       userMessageId: userMessage.id,
       // userMessage.attachments is already hydrated by listMessages so
@@ -2184,6 +2201,7 @@
       systemMessages,
       sendReasoning,
       sendVerbosity,
+      sendEmphasis: app.emphasisMarkdown,
       originalText: userMessage.content,
       userMessageId: userMessage.id,
       sendAttachments: userMessage.attachments ?? [],

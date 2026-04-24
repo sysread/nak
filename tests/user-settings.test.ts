@@ -146,4 +146,24 @@ describe('coerceSettings', () => {
     expect(coerceSettings({ defaultLogLevel: null })).toEqual({});
     expect(coerceSettings({ defaultLogLevel: 0 })).toEqual({});
   });
+
+  it('passes through a boolean emphasisMarkdown', () => {
+    expect(coerceSettings({ emphasisMarkdown: true })).toEqual({
+      emphasisMarkdown: true,
+    });
+    expect(coerceSettings({ emphasisMarkdown: false })).toEqual({
+      emphasisMarkdown: false,
+    });
+  });
+
+  it('drops a non-boolean emphasisMarkdown value', () => {
+    // Truthy strings must not coerce to true - the setting is a
+    // hard boolean, and the coercer's job is to reject anything else
+    // so a corrupt blob from an older build can't accidentally enable
+    // the prompt nudge.
+    expect(coerceSettings({ emphasisMarkdown: 'yes' })).toEqual({});
+    expect(coerceSettings({ emphasisMarkdown: 1 })).toEqual({});
+    expect(coerceSettings({ emphasisMarkdown: 0 })).toEqual({});
+    expect(coerceSettings({ emphasisMarkdown: null })).toEqual({});
+  });
 });

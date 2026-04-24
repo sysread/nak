@@ -2,7 +2,8 @@
 
 Nak routes chat requests to Venice. The **AI** pane in Settings picks
 the default model tier, the default reasoning effort, the default
-verbosity, whether web-search is available to the model, and whether
+verbosity, whether replies come back with bionic-style emphasis,
+whether web-search is available to the model, and whether
 search-grounded answers come back with inline `[1]` / `[2]` source
 markers.
 
@@ -26,6 +27,30 @@ controls how much hidden thinking happens before the reply.
   and carries across devices.
 - Providers that don't recognize `text.verbosity` silently ignore
   it; the field is always safe to send.
+
+## Emphasis markdown
+
+A bionic-style scan aid for long replies. When it's on, Nak asks
+the model to sprinkle light Markdown emphasis through its
+answers - **bold** on terms and identifiers you should fix on,
+*italics* on short phrases and transitional clauses that orient
+you - so long prose skims more easily.
+
+- Flip it on in Settings -> AI -> *Emphasis markdown*. Off by
+  default.
+- The nudge is a short instruction added to every request while
+  the toggle is on. The model decides where to place emphasis;
+  Nak does not post-process the reply.
+- Short replies (a sentence or two) stay unformatted - the
+  instruction explicitly tells the model to skip emphasis when
+  there's nothing to skim.
+- Costs a handful of prompt tokens per turn. Nothing when the
+  toggle is off.
+- Strictly semantic. True "bionic reading" bolds the leading
+  prefix of every word by word length; this feature picks
+  meaningful words and phrases instead. If you want
+  mechanical-prefix bionic, it would need to be a separate
+  render-time transform, not a model instruction.
 
 ## Per-thread overrides
 

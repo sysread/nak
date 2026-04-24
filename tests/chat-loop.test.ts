@@ -245,6 +245,78 @@ describe('runChatLoop', () => {
     expect(seenRequests[0].reasoningEffort).toBeUndefined();
   });
 
+  it('appends the emphasis-markdown blurb to the system prompt when emphasisMarkdown=true', async () => {
+    // When the user has the "Emphasis markdown" toggle on, chat-loop
+    // folds a short formatting instruction into the per-turn system-
+    // prompt appendix. The blurb tells the model to sprinkle light
+    // Markdown emphasis through its reply so long answers skim
+    // better. We assert on a distinctive phrase from the blurb so a
+    // later wording tweak surfaces here and gets a deliberate review
+    // rather than silently changing user-visible model behaviour.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      emphasisMarkdown: true,
+    });
+    const sys = seenRequests[0].messages[0];
+    expect(sys.role).toBe('system');
+    expect(typeof sys.content).toBe('string');
+    expect(sys.content as string).toContain('scan-points');
+  });
+
+  it('omits the emphasis-markdown blurb when the flag is false or absent', async () => {
+    // Opt-in: the baseline prompt stays free of the formatting nudge
+    // for users who haven't turned it on. Two sub-cases both matter -
+    // explicit false (user flipped it off) and absent (older caller
+    // or test that predates the option).
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      emphasisMarkdown: false,
+    });
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      // emphasisMarkdown intentionally omitted.
+    });
+    expect(seenRequests).toHaveLength(2);
+    for (const req of seenRequests) {
+      expect(req.messages[0].role).toBe('system');
+      expect(req.messages[0].content as string).not.toContain('scan-points');
+    }
+  });
+
   it('wraps the last user message in <user_message> tags when web search is active', async () => {
     // Venice's server-side web search inlines the search payload plus
     // its own framing ("you can use this real time information to
