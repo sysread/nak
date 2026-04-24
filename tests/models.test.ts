@@ -27,8 +27,8 @@ import {
 describe('MODELS', () => {
   it('has the three tiers with the expected Venice model ids', () => {
     expect(MODELS.smart.id).toBe('zai-org-glm-5-1');
-    expect(MODELS.balanced.id).toBe('minimax-m27');
-    expect(MODELS.fast.id).toBe('qwen3-5-35b-a3b');
+    expect(MODELS.balanced.id).toBe('zai-org-glm-5');
+    expect(MODELS.fast.id).toBe('zai-org-glm-4.7');
   });
   it('differentiates smart and balanced by reasoning effort', () => {
     expect(MODELS.smart.defaultReasoningEffort).toBe('high');
@@ -42,8 +42,8 @@ describe('MODELS', () => {
       expect(MODELS[t].label.length).toBeGreaterThan(0);
       expect(MODELS[t].contextWindow).toBeGreaterThan(0);
     }
-    // fast (qwen3-5-35b-a3b) is a 256k-context model.
-    expect(MODELS.fast.contextWindow).toBe(256_000);
+    // fast (zai-org-glm-4.7) is a 198k-context model.
+    expect(MODELS.fast.contextWindow).toBe(198_000);
   });
 });
 
@@ -230,8 +230,8 @@ describe('padEmbeddingForStorage', () => {
 describe('findContextWindowById', () => {
   it('returns the window for a currently-fronted model id', () => {
     expect(findContextWindowById('zai-org-glm-5-1')).toBe(MODELS.smart.contextWindow);
-    expect(findContextWindowById('minimax-m27')).toBe(MODELS.balanced.contextWindow);
-    expect(findContextWindowById('qwen3-5-35b-a3b')).toBe(MODELS.fast.contextWindow);
+    expect(findContextWindowById('zai-org-glm-5')).toBe(MODELS.balanced.contextWindow);
+    expect(findContextWindowById('zai-org-glm-4.7')).toBe(MODELS.fast.contextWindow);
   });
 
   // Historical assistant rows carry ids that used to front a tier — if
@@ -243,14 +243,16 @@ describe('findContextWindowById', () => {
     expect(findContextWindowById('arcee-trinity-large-thinking')).toBe(256_000);
     expect(findModelById('gemma-4-uncensored')).toBeNull();
     expect(findContextWindowById('gemma-4-uncensored')).toBe(198_000);
-    expect(findModelById('zai-org-glm-5')).toBeNull();
-    expect(findContextWindowById('zai-org-glm-5')).toBe(198_000);
     expect(findModelById('kimi-k2-5')).toBeNull();
     expect(findContextWindowById('kimi-k2-5')).toBe(256_000);
+    expect(findModelById('minimax-m27')).toBeNull();
+    expect(findContextWindowById('minimax-m27')).toBe(198_000);
     expect(findModelById('kimi-k2-6')).toBeNull();
     expect(findContextWindowById('kimi-k2-6')).toBe(256_000);
     expect(findModelById('grok-41-fast')).toBeNull();
     expect(findContextWindowById('grok-41-fast')).toBe(1_000_000);
+    expect(findModelById('qwen3-5-35b-a3b')).toBeNull();
+    expect(findContextWindowById('qwen3-5-35b-a3b')).toBe(256_000);
   });
 
   it('returns null for an unknown id and for null/empty input', () => {

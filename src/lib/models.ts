@@ -147,31 +147,30 @@ export const MODELS: Record<ModelTier, ModelSpec> = {
   },
   balanced: {
     tier: 'balanced',
-    id: 'minimax-m27',
+    id: 'zai-org-glm-5',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
     // SCALES because the scales glyph is all thin strokes in every major
     // emoji font, and it vanishes against the toggle background in both
     // themes; yin-yang is a solid bi-tonal disc that reads at any size.
     icon: '\u262F\uFE0F',
-    description: 'MiniMax M27 with light thinking. Good default for most turns.',
+    description: 'GLM-5 with light thinking. Good default for most turns.',
     contextWindow: 198_000,
     supportsReasoning: true,
-    // Vision support unknown at retarget time - set false to route
-    // images through analyze_image(). Flip to true if Venice confirms
-    // native vision support for this id.
+    // GLM-5 is text-only on Venice - images route through analyze_image().
     supportsVision: false,
     defaultReasoningEffort: 'low',
   },
   fast: {
     tier: 'fast',
-    id: 'qwen3-5-35b-a3b',
+    id: 'zai-org-glm-4.7',
     label: 'Fast',
     icon: '\u26A1\uFE0F',
-    description: 'Qwen3.5 35B-A3B. Fast, vision-capable, 256k context.',
-    contextWindow: 256_000,
+    description: 'GLM-4.7. Fast, 198k context.',
+    contextWindow: 198_000,
     supportsReasoning: true,
-    supportsVision: true,
+    // GLM-4.7 is text-only on Venice - images route through analyze_image().
+    supportsVision: false,
   },
 };
 
@@ -187,8 +186,8 @@ export const UTILITY_TIER: ModelTier = 'fast';
  * tier because the reflection task is "read the conversation, make
  * some judgments, call the memory tools" — not reasoning-heavy, but
  * bottlenecked on input length (entire thread as context). The fast
- * tier's ~1M-token window means we don't need a summariser layer in
- * front of the agent.
+ * tier's context window (currently 198k on GLM-4.7) is large enough
+ * for typical thread lengths without a summariser layer in front.
  *
  * Re-points automatically if the fast tier is retargeted, which is
  * usually what we want — if a cheaper/faster model lands in the fast
@@ -416,10 +415,12 @@ const RETIRED_MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   'gemma-4-uncensored': 198_000,
   'zai-org-glm-5': 198_000,
   'kimi-k2-5': 256_000,
+  'minimax-m27': 198_000,
   // Retired Smart-tier ids.
   'kimi-k2-6': 256_000,
   // Retired Fast-tier ids.
   'grok-41-fast': 1_000_000,
+  'qwen3-5-35b-a3b': 256_000,
 };
 
 /**

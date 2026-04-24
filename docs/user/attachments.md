@@ -27,13 +27,12 @@ Click the × on a chip to remove it before sending.
 
 ## What the model actually sees
 
-- **Images**. On vision-capable tiers (Balanced and Smart), images
-  are inlined into the request as image data — the model sees the
-  pixels natively. On the Fast tier (text-only), Nak automatically
-  calls a vision sub-model on the model's behalf: the model receives
-  a note listing the attached image filenames and calls the built-in
-  `analyze_image` tool to get a text description. Either way, you
-  do not need to switch tiers just because you are sending an image.
+- **Images**. All current tiers are text-only, so Nak automatically
+  calls a vision sub-model on the main model's behalf: the model
+  receives a note listing the attached image filenames and calls the
+  built-in `analyze_image` tool to get a text description. You do not
+  need to switch tiers to send an image; if a future tier is
+  vision-capable, Nak will inline the pixels directly instead.
 - **Documents, code, and other files**. Nak calls Venice's text
   parser at upload time to pull readable text out, then prepends
   that text to your message as a fenced block tagged with the
@@ -78,6 +77,7 @@ downscale keeps row sizes predictable.
 
 - [The chat interface](./chat.md) — composer, streaming, and the
   rest of the main view.
-- [Models & reasoning](./models.md) — which tier supports vision.
+- [Models & reasoning](./models.md) — tier tradeoffs and
+  capabilities.
 - [What runs in the background](./background.md) — including the
   attachment-expiry worker that reclaims storage.
