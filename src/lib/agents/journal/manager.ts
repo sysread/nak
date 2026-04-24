@@ -18,6 +18,7 @@ import type { AppConfig } from '../../config';
 import type { SupabaseService } from '../../supabase';
 import { VENICE_JOURNAL_MODEL } from './agent';
 import { makeHolderId } from '../../embeddings/manager';
+import { emitJournalChange } from '../../journal-events';
 import {
   appendFromWorker,
   createLogger,
@@ -86,12 +87,27 @@ export class JournalManager {
         appendFromWorker(evt.data.entry);
         return;
       }
-      const data = evt.data as { type?: string; level?: string; message?: string };
+      const data = evt.data as {
+        type?: string;
+        level?: string;
+        message?: string;
+        result?: string;
+      };
       if (!data || typeof data !== 'object') return;
       if (data.type === 'log' && typeof data.message === 'string') {
         const level: 'info' | 'warn' | 'error' =
           data.level === 'error' ? 'error' : data.level === 'warn' ? 'warn' : 'info';
         workerLog[level](data.message);
+        return;
+      }
+      // The worker posts a `progress` message after every cycle. We
+      // only act on 'journaled' (a row actually landed) - everything
+      // else is internal worker state. Firing the change event here
+      // is what wakes the open Journal modal / drawer up: the store's
+      // window listener refetches and the new entry shows without a
+      // page reload.
+      if (data.type === 'progress' && data.result === 'journaled') {
+        emitJournalChange();
       }
     });
     this.worker = worker;

@@ -141,6 +141,15 @@ export interface HeadlessToolLoopResult {
   rounds: number;
   /** Total number of tool calls issued across all rounds. */
   toolCalls: number;
+  /**
+   * Subset of `toolCalls` whose execute() returned without throwing.
+   * A tool call that produced an `{ ok: false, error }` row to the
+   * model is counted under `toolCalls` but NOT here. Callers that want
+   * to log "did this run accomplish anything" - e.g. the journal
+   * worker's `entryWritten` - must use this; using `toolCalls` would
+   * report success for runs whose only tool calls all errored out.
+   */
+  successfulToolCalls: number;
   /** True iff we stopped because of maxRounds rather than a clean finish. */
   stoppedByLimit: boolean;
 }
@@ -169,6 +178,7 @@ export async function runHeadlessToolLoop(
   let finalText = '';
   let rounds = 0;
   let toolCalls = 0;
+  let successfulToolCalls = 0;
   let stoppedByLimit = false;
 
   for (let round = 0; round < maxRounds; round++) {
@@ -258,6 +268,7 @@ export async function runHeadlessToolLoop(
       tool_calls: sanitizeToolCallsForWire(roundCalls),
     });
     for (const r of settled) {
+      if (r.ok) successfulToolCalls++;
       const content = r.ok
         ? encodeToolContent({ ok: true, value: r.value })
         : encodeToolContent({ ok: false, error: r.error });
@@ -274,5 +285,5 @@ export async function runHeadlessToolLoop(
     }
   }
 
-  return { finalText, rounds, toolCalls, stoppedByLimit };
+  return { finalText, rounds, toolCalls, successfulToolCalls, stoppedByLimit };
 }

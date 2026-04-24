@@ -481,8 +481,10 @@
         <!-- ----------- List view ----------- -->
         {#if searching && listRows.length === 0}
           <p class="subtle">Searching…</p>
-        {:else if journal.loading && journal.entries.length === 0}
+        {:else if journal.loading && !journal.loaded}
           <p class="subtle">Loading reflections…</p>
+        {:else if journal.error}
+          <p class="error">Couldn't load reflections: {journal.error}</p>
         {:else if listRows.length === 0}
           {#if query.trim().length > 0}
             <p class="subtle reflections-empty">

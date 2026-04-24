@@ -14,12 +14,22 @@ import { emitJournalChange } from './journal-events';
 interface JournalStore {
   entries: JournalEntry[];
   loading: boolean;
+  /**
+   * Set true after the first `loadJournalEntries` resolves (success OR
+   * error). The lazy-load effect in Chat.svelte gates on this rather
+   * than `entries.length === 0` - otherwise an account with zero
+   * entries enters an infinite re-fetch loop: load resolves with [],
+   * loading flips to false, the effect re-runs, sees still-empty +
+   * not-loading, fires another load, and the spinner never stops.
+   */
+  loaded: boolean;
   error: string | null;
 }
 
 export const journal = $state<JournalStore>({
   entries: [],
   loading: false,
+  loaded: false,
   error: null,
 });
 
@@ -41,6 +51,7 @@ export async function loadJournalEntries(
     journal.error = err instanceof Error ? err.message : String(err);
   } finally {
     journal.loading = false;
+    journal.loaded = true;
   }
 }
 

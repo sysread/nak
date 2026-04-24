@@ -199,7 +199,7 @@
   // list-focused modal).
   function onPickReflectionsTab(): void {
     navigate({ drawer: 'reflections' }, { replace: true });
-    if (app.supabase && journal.entries.length === 0 && !journal.loading) {
+    if (app.supabase && !journal.loaded && !journal.loading) {
       void loadJournalEntries(app.supabase, { limit: 200 });
     }
   }
@@ -214,20 +214,25 @@
     void loadRecipes(app.supabase);
   });
 
-  // Parallel for the reflections tab.
+  // Parallel for the reflections tab. Gates on `journal.loaded` rather
+  // than `journal.entries.length === 0` - an account with zero entries
+  // would otherwise re-fire this effect every time the load resolves
+  // empty (loading flips false, deps trip, effect runs, loads again,
+  // forever). The spinner never stops and the modal that shares the
+  // store sees the same flicker.
   $effect(() => {
     if (route.drawer !== 'reflections') return;
     if (!app.supabase) return;
-    if (journal.entries.length !== 0 || journal.loading) return;
+    if (journal.loaded || journal.loading) return;
     void loadJournalEntries(app.supabase, { limit: 200 });
   });
 
   function onJournalStoreChanged(): void {
     // Any journal write (tool path, worker path, modal compose save)
     // invalidates the list - only reload if we've already loaded it,
-    // so unused drawer / modal stays lazy.
+    // so an unused drawer / modal stays lazy.
     if (!app.supabase) return;
-    if (journal.entries.length === 0 && !journal.loading) return;
+    if (!journal.loaded) return;
     void loadJournalEntries(app.supabase, { limit: 200 });
   }
 
@@ -3528,8 +3533,12 @@
              chron glance surface; semantic search and compose live
              in the modal proper. -->
         <div class="recipe-drawer-list">
-          {#if journal.loading && journal.entries.length === 0}
+          {#if journal.loading && !journal.loaded}
             <p class="subtle" style="padding:0.75rem">Loading reflections…</p>
+          {:else if journal.error}
+            <p class="error" style="padding:0.75rem">
+              Couldn't load reflections: {journal.error}
+            </p>
           {:else if visibleDrawerReflections.length === 0}
             <p class="subtle" style="padding:0.75rem">
               {#if journal.entries.length === 0}

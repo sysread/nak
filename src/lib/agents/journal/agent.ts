@@ -186,7 +186,13 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
         output: {
           finalText: result.finalText,
           inputMessageCount: slice.length,
-          entryWritten: result.toolCalls > 0,
+          // `successfulToolCalls`, not `toolCalls` - we don't want to
+          // log "wrote=true" for a run whose only journal_upsert call
+          // threw on the RPC and surfaced as an `{ok:false}` row to
+          // the model. The pointer still advances either way (the loop
+          // marks the thread journaled regardless), but the log line
+          // should reflect what actually landed in the DB.
+          entryWritten: result.successfulToolCalls > 0,
         },
         toolCalls: result.toolCalls,
         stoppedReason: signal.aborted ? 'aborted' : 'done',
