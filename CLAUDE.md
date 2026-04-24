@@ -316,8 +316,25 @@ These are the defaults - follow them without being asked. Deviate only when
 the user explicitly says to.
 
 **Claude Code on the web** (task-scoped sessions on a designated feature
-branch): the session is expected to land the work on `main`. When the feature
-is done:
+branch): the web environment is persistent and shared between concurrent
+agent sessions, so it's your responsibility to keep the source repo in
+good shape - `main` up to date with `origin/main`, feature branches
+rebased on current `main`, and a merge history that reads as a clean
+linear progression rather than a twisty-straw tangle of crossing merges
+from stale branches. The session is expected to land the work on `main`.
+
+Before starting any work on the feature branch:
+
+1. `git fetch origin` and confirm local `main` is up to date with
+   `origin/main`. Fast-forward if behind (`git checkout main && git pull
+   --ff-only origin main`). If they've diverged - a previous session
+   left local `main` ahead, or someone else pushed a non-fast-forward
+   change - stop and ask; don't guess.
+2. Rebase the feature branch onto the refreshed `main` before the first
+   edit. Starting work on a stale branch is what produces the twisty
+   straw at merge time.
+
+When the feature is done:
 
 1. `git fetch origin main && git checkout main && git pull --ff-only origin main`
 2. `git checkout <feature-branch> && git rebase main` (resolve conflicts;
