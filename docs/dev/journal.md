@@ -115,8 +115,9 @@ In `supabase/schema.sql`:
   - `upsert_journal_automatic_entry` - on-conflict merge
     with `source_thread_ids` union-deduped.
   - `claim_next_thread_for_journal` - filters threads in
-    `journal_thread_excludes`, gates on a 6400-char
-    accumulated threshold since `last_journaled_msg_id`.
+    `journal_thread_excludes`, gates on at least two user
+    messages on the thread (skip one-shot Q&A) past
+    `last_journaled_msg_id`.
   - `mark_thread_journaled_if_claimed` - advances the
     pointer if the holder still owns the claim.
   - `claim_next_pending_journal_entry` +

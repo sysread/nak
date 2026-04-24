@@ -1195,10 +1195,10 @@ $$;
 -- thread (role='assistant' AND (tool_calls IS NULL OR empty) AND
 -- content is non-null and non-empty) whose id is strictly greater than
 -- whatever `threads.last_reflected_msg_id` currently is (or any such
--- message, if last_reflected_msg_id is null). The token-volume guard
--- (~6400 chars ≈ 20% of the fast model's 8192-token embedding context)
--- keeps us from burning Venice calls on "hi"/"hey" exchanges that
--- produced nothing worth remembering.
+-- message, if last_reflected_msg_id is null). The depth guard requires
+-- at least two user messages on the thread, so a one-shot ask (single
+-- user prompt + assistant reply, no follow-up) doesn't burn Venice
+-- calls reflecting on a conversation that hadn't actually started yet.
 --
 -- The function returns `(thread_id, terminal_msg_id)` atomically. The
 -- worker fetches messages up to `terminal_msg_id` (so a race where the
@@ -1246,13 +1246,16 @@ language sql security invoker as $$
        and (t.reflection_claim_expires_at is null
             or t.reflection_claim_expires_at < now())
        and (
-         -- Sum of all message content in the thread (user + assistant
-         -- + tool) — generous proxy for conversation volume. ~6400
-         -- chars ≈ 20% of 8192-token embedding-model context.
-         select coalesce(sum(length(m2.content)), 0)
+         -- At least two user messages on the thread. A single user
+         -- prompt + assistant reply is a one-shot Q&A; we only want
+         -- to reflect once the user came back with a follow-up, which
+         -- is the cheapest signal that the conversation has substance
+         -- worth turning into memories.
+         select count(*)
            from public.messages m2
           where m2.thread_id = t.id
-       ) >= 6400
+            and m2.role = 'user'
+       ) >= 2
      order by t.updated_at asc
      limit 1
      for update of t skip locked
@@ -3038,9 +3041,9 @@ end $$;
 -- Claim the oldest thread that needs journaling. Parallels
 -- `claim_next_thread_for_reflection`; the predicate is "terminal
 -- assistant message newer than last_journaled_msg_id, not in the
--- user's excludes, passes the char threshold, not currently claimed".
--- The excludes filter is the per-thread "do not journal" switch the
--- delete path writes to.
+-- user's excludes, has at least two user messages, not currently
+-- claimed". The excludes filter is the per-thread "do not journal"
+-- switch the delete path writes to.
 drop function if exists public.claim_next_thread_for_journal(text, int);
 create or replace function public.claim_next_thread_for_journal(
   p_holder_id text,
@@ -3073,12 +3076,14 @@ language sql security invoker as $$
             and e.thread_id = t.id
        )
        and (
-         -- Same char-volume guard as reflection: ~6400 chars keeps the
-         -- worker from burning Venice on "hi"/"hey" exchanges.
-         select coalesce(sum(length(m2.content)), 0)
+         -- Same depth guard as reflection: skip threads that haven't
+         -- seen a follow-up user message yet. A one-shot Q&A isn't
+         -- enough material to warrant a daily-journal entry.
+         select count(*)
            from public.messages m2
           where m2.thread_id = t.id
-       ) >= 6400
+            and m2.role = 'user'
+       ) >= 2
      order by t.updated_at asc
      limit 1
      for update of t skip locked
