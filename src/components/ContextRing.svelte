@@ -25,9 +25,14 @@
   again (or hitting Escape) slides it closed. The action bar uses
   `flex-wrap: wrap` and the detail row takes `flex-basis: 100%`, so
   it naturally drops to its own line inside the bubble rather than
-  floating on top of the message. Desktop hover still shows a native
-  `title` tooltip for a quick peek without a click, and screen
-  readers read the same summary via `aria-label`.
+  floating on top of the message. The `.ring-detail` rule in
+  styles.css also pins `order: 1` on the row so it always lands
+  below every action button, not between the ring and any sibling
+  button (e.g. regenerate) that comes after it in DOM order — without
+  that, wrapping splits the bar across three lines instead of two.
+  Desktop hover still shows a native `title` tooltip for a quick peek
+  without a click, and screen readers read the same summary via
+  `aria-label`.
 -->
 <script lang="ts">
   import { slide } from 'svelte/transition';
@@ -155,12 +160,14 @@
 </button>
 {#if open}
   <!-- Sibling of .context-ring inside .msg-actions. `flex-basis: 100%`
-       on this row plus `flex-wrap: wrap` on the parent bar breaks it
-       onto its own line under the buttons. Svelte's slide transition
-       animates height (plus margin/padding), and cubicOut decelerates
-       the motion toward the end so the row settles rather than
-       snapping. 220ms is long enough to read as "moving" without
-       feeling sluggish on a repeated open/close. -->
+       plus `order: 1` (see .ring-detail in styles.css) on this row,
+       combined with `flex-wrap: wrap` on the parent bar, breaks it
+       onto its own line below every action button — even buttons
+       that come after the ring in DOM order. Svelte's slide
+       transition animates height (plus margin/padding), and cubicOut
+       decelerates the motion toward the end so the row settles
+       rather than snapping. 220ms is long enough to read as "moving"
+       without feeling sluggish on a repeated open/close. -->
   <div
     bind:this={detailEl}
     class="ring-detail"

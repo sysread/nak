@@ -2116,9 +2116,16 @@ h1 {
    below the right-aligned controls, where Svelte's slide transition
    animates its height open and shut. Matches the button footprint
    (same bg/border/radius) so the bar reads as a single surface
-   that's expanded a row, not a different panel that appeared. */
+   that's expanded a row, not a different panel that appeared.
+
+   `order: 1` pins this row visually after every action button, even
+   though the ContextRing component injects it in DOM order between
+   the ring and the regenerate button. Without the order bump, the
+   detail row wraps between those two siblings and pushes the
+   regenerate button onto a third line, splitting the action bar. */
 .ring-detail {
   flex-basis: 100%;
+  order: 1;
   margin-top: 0.4rem;
   padding: 0.45rem 0.6rem;
   background: var(--bg-2);
