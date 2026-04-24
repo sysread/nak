@@ -3509,14 +3509,23 @@
                      stream ends the persisted message rerenders through
                      this same <Markdown> path. -->
                 <Markdown content={streamingText} />
-              {:else if !streamingReasoning}
-                <!-- Placeholder shown between "user hit send" and "first
-                     token arrived" — gives the composer submit some
-                     immediate feedback that something is happening.
+              {:else}
+                <!-- Continuous "still working" signal for the entire
+                     window between "user hit send" and "first answer
+                     token arrived" - including the gaps that aren't
+                     emitting any deltas (model has finished reasoning
+                     and is assembling a tool call; tools are executing
+                     between rounds; round just ended, next round about
+                     to start). Sits below ReasoningPanel rather than
+                     being suppressed by it: once reasoning text has
+                     accumulated the panel itself stops moving, and
+                     without the Scanner the UI reads as frozen during
+                     the tool-call-assembly pause. The Scanner steps
+                     aside the moment streamingText starts arriving
+                     (the answer body is its own progress signal).
                      Wrapper centers the inline-flex Scanner inside the
                      bubble so it doesn't read as a stranded artifact in
-                     the top-left corner. Suppressed once reasoning has
-                     started (the thinking panel is itself feedback). -->
+                     the top-left corner. -->
                 <div class="thinking">
                   <Scanner label="Thinking" />
                 </div>
