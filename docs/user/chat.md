@@ -6,6 +6,20 @@ aren't immediately obvious.
 
 ## The composer
 
+### Mobile: the composer menu
+
+On narrow screens the composer toolbar collapses behind a single
+button — a 3x3 grid of dots sitting to the left of the textarea.
+Tap it and a thin vertical column slides up, one icon per row:
+toolbox, attachments, prompts, model, reasoning, verbosity. Tap
+one to act on it (the column closes; the corresponding popover
+takes over if the button has one). The send button stays in its
+usual bottom-right spot.
+
+The descriptions below for individual buttons apply the same way
+whether they're in the desktop toolbar or the mobile column — the
+behaviour is identical; only the layout differs.
+
 ### Attaching files
 
 The paperclip button in the composer toolbar queues files for the

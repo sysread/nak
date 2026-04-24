@@ -2360,6 +2360,14 @@
   let reasoningMenuOpen = $state(false);
   let verbosityMenuOpen = $state(false);
   let toolboxMenuOpen = $state(false);
+  // Mobile-only "wharf": on narrow viewports the whole composer-button
+  // row collapses behind a single tap target. When this is true, the
+  // row slides up as a vertical icon column above the bar. Opening any
+  // picker auto-closes the wharf so only one popover is on screen at
+  // a time - see the `composerWharfOpen = false` lines sprinkled
+  // through the button handlers below. Has no effect on desktop; the
+  // CSS hides the trigger above 720px.
+  let composerWharfOpen = $state(false);
 
   // IDs of system prompts active for the current thread. Seeded from
   // `enabledByDefault` when a thread is opened, not persisted. Swapping
@@ -2390,6 +2398,7 @@
     reasoningMenuOpen = false;
     verbosityMenuOpen = false;
     toolboxMenuOpen = false;
+    composerWharfOpen = false;
   }
 
   function onDocClick(e: MouseEvent): void {
@@ -2409,7 +2418,8 @@
       !modelMenuOpen &&
       !reasoningMenuOpen &&
       !verbosityMenuOpen &&
-      !toolboxMenuOpen
+      !toolboxMenuOpen &&
+      !composerWharfOpen
     )
       return;
     // "Inside" is scoped to the open popover and its trigger — not the
@@ -2417,11 +2427,16 @@
     // button, or the toolbox toggle all count as outside so the popover
     // yields the moment the user's attention moves anywhere else.
     // `aria-haspopup="true"` is already set on every menu trigger for
-    // a11y, so we reuse it here instead of listing CSS classes.
+    // a11y, so we reuse it here instead of listing CSS classes. The
+    // mobile wharf column also counts as inside: taps on a wharf icon
+    // button already close the wharf via their own handlers, but taps
+    // on the column's bevel frame or gap should not.
     const tgt = e.target;
     if (
       tgt instanceof Element &&
-      (tgt.closest('.composer-menu') || tgt.closest('[aria-haspopup="true"]'))
+      (tgt.closest('.composer-menu') ||
+        tgt.closest('[aria-haspopup="true"]') ||
+        tgt.closest('.composer-bar-left.wharf-open'))
     ) {
       return;
     }
@@ -2442,6 +2457,7 @@
       reasoningMenuOpen ||
       verbosityMenuOpen ||
       toolboxMenuOpen ||
+      composerWharfOpen ||
       openMenuThreadId !== null;
     if (!anyOpen) return;
     document.addEventListener('click', onDocClick);
@@ -3675,7 +3691,38 @@
             tabindex="-1"
           />
           <div class="composer-bar">
-            <div class="composer-bar-left">
+            <!-- Mobile-only wharf trigger. On desktop the CSS hides this
+                 button entirely; on mobile it toggles the `.wharf-open`
+                 class on the sibling button row, which CSS restyles as
+                 a vertical icon column floating above the composer
+                 bar. The row itself is hidden on mobile when the wharf
+                 is closed (see `.composer-bar-left > button` in
+                 styles.css), so this trigger is the only way to reach
+                 the pickers on a narrow viewport. -->
+            <button
+              type="button"
+              class="secondary icon-btn composer-wharf-trigger"
+              class:open={composerWharfOpen}
+              onclick={() => (composerWharfOpen = !composerWharfOpen)}
+              title="Composer menu"
+              aria-label="Composer menu"
+              aria-haspopup="true"
+              aria-expanded={composerWharfOpen}
+              aria-controls="composer-wharf"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <circle cx="5" cy="5" r="1.8" />
+                <circle cx="12" cy="5" r="1.8" />
+                <circle cx="19" cy="5" r="1.8" />
+                <circle cx="5" cy="12" r="1.8" />
+                <circle cx="12" cy="12" r="1.8" />
+                <circle cx="19" cy="12" r="1.8" />
+                <circle cx="5" cy="19" r="1.8" />
+                <circle cx="12" cy="19" r="1.8" />
+                <circle cx="19" cy="19" r="1.8" />
+              </svg>
+            </button>
+            <div class="composer-bar-left" id="composer-wharf" class:wharf-open={composerWharfOpen}>
               <!-- Toolbox popover: each gated toolbox is an independent
                    on/off. Badge shows how many are on for this thread.
                    Pulses on LLM-initiated flips via .flash (see CSS).
@@ -3693,6 +3740,7 @@
                     reasoningMenuOpen = false;
                     verbosityMenuOpen = false;
                     promptsMenuOpen = false;
+                    composerWharfOpen = false;
                     toolboxMenuOpen = !toolboxMenuOpen;
                   }}
                   title={currentThread.toolboxes_enabled.length > 0
@@ -3728,7 +3776,10 @@
                 type="button"
                 class="secondary icon-btn"
                 class:active={pendingAttachments.length > 0}
-                onclick={onFilePicker}
+                onclick={() => {
+                  composerWharfOpen = false;
+                  void onFilePicker();
+                }}
                 title="Attach files (or paste / drag-drop)"
                 aria-label="Attach files"
                 disabled={sending ||
@@ -3755,6 +3806,7 @@
                   modelMenuOpen = false;
                   reasoningMenuOpen = false;
                   verbosityMenuOpen = false;
+                  composerWharfOpen = false;
                   promptsMenuOpen = !promptsMenuOpen;
                 }}
                 title="System prompts"
@@ -3795,6 +3847,7 @@
                   promptsMenuOpen = false;
                   reasoningMenuOpen = false;
                   verbosityMenuOpen = false;
+                  composerWharfOpen = false;
                   modelMenuOpen = !modelMenuOpen;
                 }}
                 aria-haspopup="true"
@@ -3849,6 +3902,7 @@
                     promptsMenuOpen = false;
                     modelMenuOpen = false;
                     verbosityMenuOpen = false;
+                    composerWharfOpen = false;
                     reasoningMenuOpen = !reasoningMenuOpen;
                   }}
                   onSelect={(effort) => {
@@ -3873,6 +3927,7 @@
                   promptsMenuOpen = false;
                   modelMenuOpen = false;
                   reasoningMenuOpen = false;
+                  composerWharfOpen = false;
                   verbosityMenuOpen = !verbosityMenuOpen;
                 }}
                 onSelect={(v) => {

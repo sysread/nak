@@ -69,6 +69,13 @@
     0 24px 60px rgba(0, 0, 0, 0.55),
     0 0 80px -10px color-mix(in srgb, var(--accent) 28%, transparent),
     0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+  /* Bevel tones for retro-WM chrome (see the composer wharf in
+     styles.css). A raised tile gets `--bevel-hi` on its top+left
+     inset and `--bevel-lo` on its bottom+right; pressed tiles swap
+     the two. Values are deliberately low-contrast so the bevel reads
+     as subtle relief rather than cartoon 3D. */
+  --bevel-hi: rgba(255, 255, 255, 0.07);
+  --bevel-lo: rgba(0, 0, 0, 0.55);
 }
 
 :root[data-theme='light'] {
@@ -106,6 +113,11 @@
   --shadow-modal:
     0 18px 48px rgba(0, 0, 0, 0.12),
     0 4px 12px rgba(0, 0, 0, 0.06);
+  /* Bevel tones - see the dark-theme block above for the contract.
+     Light-mode tiles use a near-white highlight and a soft grey
+     shadow so the relief reads on the pale surfaces. */
+  --bevel-hi: rgba(255, 255, 255, 0.9);
+  --bevel-lo: rgba(0, 0, 0, 0.18);
 }
 
 /* Accent pairings. Each name maps to a pastel on dark (>= 9:1 on #0b0d10)
@@ -2198,6 +2210,13 @@ h1 {
   border-color: var(--accent);
 }
 
+/* Wharf trigger: hidden on desktop; the mobile media query below
+   re-enables it. Declared here (before the @media block) so source
+   order lets the mobile rule win when the viewport matches. */
+.composer-wharf-trigger {
+  display: none;
+}
+
 /* Mobile override for `.composer-shell`. Must live *after* the base
    declaration above - same-specificity rules in source order would
    otherwise let the 80%-centered desktop sizing win on mobile even
@@ -2228,15 +2247,128 @@ h1 {
   }
 
   /* With .composer-send removed from the flex flow, reserve
-     right-side room on the bar so wrapping buttons don't run under
-     the floating send button, and let the left-side pickers wrap
-     to a second row rather than overflow horizontally. */
+     right-side room on the bar so the wharf trigger doesn't run
+     under the floating send button. Desktop's `justify-content:
+     space-between` still applies - that's intentional: with the
+     wharf trigger as the first in-flow child and the (0-width,
+     children-hidden) .composer-bar-left as the last, space-between
+     parks the trigger at the left edge. */
   .composer-bar {
     padding-right: 2.8rem;
   }
+
+  /* Wharf trigger: the only composer-bar control visible on mobile
+     when the wharf is closed. Tapping it toggles `.wharf-open` on
+     the sibling button row, which CSS below restyles as a vertical
+     icon column rising above the bar. Desktop hides this button
+     entirely (see the block below the media query). */
+  .composer-wharf-trigger {
+    display: inline-flex;
+  }
+
+  /* Pressed/inverted bevel while the wharf is open - same contract
+     as the column tiles below, but with hi/lo swapped so the
+     trigger reads as "held down". */
+  .composer-wharf-trigger.open {
+    box-shadow:
+      inset 1px 1px 0 var(--bevel-lo),
+      inset -1px -1px 0 var(--bevel-hi);
+    background: var(--bg-2);
+  }
+
+  /* Hide the picker row entirely on mobile when the wharf is closed.
+     Targeting `> button` rather than the container itself leaves the
+     popover divs (rendered as siblings of the buttons inside
+     ReasoningPicker / VerbosityPicker, and as direct children of
+     `.composer-bar-left` for toolbox/prompts/model) free to appear
+     when their open state is true. In practice this doesn't come up:
+     opening a picker closes the wharf in the same handler, so the
+     popover only renders when the row itself has been briefly shown
+     and then hidden again - but the DOM stays consistent either
+     way. Also collapses the row's baseline footprint to zero so the
+     wharf trigger sits flush at the bar's left edge. */
   .composer-bar-left {
-    flex-wrap: wrap;
-    row-gap: 0.35rem;
+    flex-wrap: nowrap;
+    gap: 0;
+    row-gap: 0;
+    min-width: 0;
+  }
+  .composer-bar-left > button {
+    display: none;
+  }
+
+  /* Wharf open: the button row becomes a narrow vertical column,
+     absolutely positioned so it overlays the textarea rather than
+     pushing it down. Styling borrows from classic X11 window-manager
+     wharfs (AfterStep, WindowMaker, CDE Front Panel): hard
+     rectangular edges, a beveled frame, tightly stacked square
+     tiles each with their own inset bevel. Intentionally breaks
+     from the app's rounded-chrome default - the wharf is meant to
+     feel like a small piece of separate machinery docked to the
+     composer rather than another rounded card. */
+  .composer-bar-left.wharf-open {
+    position: absolute;
+    left: 0.2rem;
+    bottom: calc(100% + 0.35rem);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 3px;
+    background: var(--bg-2);
+    border-radius: 0;
+    box-shadow:
+      inset 1px 1px 0 var(--bevel-hi),
+      inset -1px -1px 0 var(--bevel-lo),
+      0 10px 22px rgba(0, 0, 0, 0.35);
+    z-index: 25;
+    animation: composer-wharf-slide 160ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  /* Tile styling for every button inside the open wharf. Square,
+     sharp corners, inset bevel, uniform size regardless of the
+     source button class (.icon-btn, .model-picker-btn, etc. all
+     normalise to the same 2.4rem square). */
+  .composer-bar-left.wharf-open > button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.4rem;
+    height: 2.4rem;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--bg-2);
+    color: var(--text);
+    box-shadow:
+      inset 1px 1px 0 var(--bevel-hi),
+      inset -1px -1px 0 var(--bevel-lo);
+  }
+
+  /* Active-state tint on wharf tiles. The existing `.icon-btn.active`
+     rule tints color + border-color, but we've zeroed the border on
+     tiles; reapply the accent tint via background + color-mix so the
+     "prompts/attachments enabled" cue still reads in the column. */
+  .composer-bar-left.wharf-open > button.active,
+  .composer-bar-left.wharf-open > button.on {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent-weak) 60%, var(--bg-2));
+  }
+
+  /* Pressed bevel when the user taps a wharf tile. Visual feedback
+     only - the click fires its own handler which closes the wharf
+     and opens a popover, so this state is transient. */
+  .composer-bar-left.wharf-open > button:active {
+    box-shadow:
+      inset 1px 1px 0 var(--bevel-lo),
+      inset -1px -1px 0 var(--bevel-hi);
+  }
+
+  /* The model picker's flex trigger reserves an internal gap between
+     icon, label, and chevron. Labels and trailing chevrons are
+     already hidden globally, but zero the gap so the leading CPU
+     icon centers cleanly in the 2.4rem tile. */
+  .composer-bar-left.wharf-open .model-picker-btn {
+    gap: 0;
   }
 
   /* Collapse/expand the textarea around focus on mobile. The `.is-collapsed`
@@ -2259,6 +2391,17 @@ h1 {
     min-height: 0;
     height: 2.4rem;
     overflow: hidden;
+  }
+}
+
+@keyframes composer-wharf-slide {
+  from {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
   }
 }
 
