@@ -273,6 +273,18 @@ A chat turn goes:
   never persisted. If you add another place that constructs wire
   messages for any Venice call, apply the same wrap.
 
+  The same projection also prepends a per-turn `<datetime
+  local="..." utc="..." zone="..." />` tag outside the
+  user_message fence. LLMs have no clock - asked "what year is
+  it?" the model either refuses or hallucinates from training-
+  cutoff data. `buildDatetimeTag` formats the current wall-clock
+  time in ISO 8601 (local with offset, UTC Z form) using the
+  user's `journalTimezone` (falling back to the runtime's
+  reported zone), and the system prompt's boundary block tells
+  the model the tag is authoritative. The tag is recomputed
+  every round of the loop, not once at send-time, so a long
+  multi-tool turn reflects actual elapsed time.
+
   The system prompt unconditionally mentions URL scraping so the
   model doesn't refuse "what does this page say?" with a generic
   "I can't browse the web" when a scraped page is sitting in the

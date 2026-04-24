@@ -437,7 +437,14 @@ describe('runChatLoop', () => {
     const users = msgs.filter((m) => m.role === 'user');
     expect(users).toHaveLength(2);
     expect(users[0].content).toBe('older turn');
-    expect(users[1].content).toBe('<user_message>look up X</user_message>');
+    // The current turn ships with a `<datetime>` tag prepended outside
+    // the user_message fence (see buildDatetimeTag in chat-loop). The
+    // exact tag content is wall-clock-dependent so we match the shape
+    // and assert the user_message wrapping is intact around the user's
+    // actual words.
+    expect(users[1].content).toMatch(
+      /^<datetime local="[^"]+" utc="[^"]+" zone="[^"]+" \/>\n<user_message>look up X<\/user_message>$/,
+    );
   });
 
   it('never sets webSearch or webCitations on the outer stream request', async () => {
@@ -492,7 +499,9 @@ describe('runChatLoop', () => {
       signal: new AbortController().signal,
     });
     const users = seenRequests[0].messages.filter((m) => m.role === 'user');
-    expect(users[0].content).toBe('<user_message>hi</user_message>');
+    expect(users[0].content).toMatch(
+      /^<datetime local="[^"]+" utc="[^"]+" zone="[^"]+" \/>\n<user_message>hi<\/user_message>$/,
+    );
   });
 
   it('does not mutate the caller-supplied history when wrapping', async () => {
@@ -554,7 +563,14 @@ describe('runChatLoop', () => {
     const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
     expect(Array.isArray(userMsg?.content)).toBe(true);
     const parts = userMsg!.content as Array<{ type: string; text?: string }>;
-    expect(parts[0]).toEqual({ type: 'text', text: '<user_message>' });
+    // The opening text part fuses the per-turn `<datetime>` tag with
+    // the `<user_message>` open tag (the datetime sits outside the
+    // boundary, the open tag opens the boundary). Match the shape
+    // rather than exact contents - the datetime is wall-clock dependent.
+    expect(parts[0].type).toBe('text');
+    expect(parts[0].text).toMatch(
+      /^<datetime local="[^"]+" utc="[^"]+" zone="[^"]+" \/>\n<user_message>$/,
+    );
     expect(parts[parts.length - 1]).toEqual({
       type: 'text',
       text: '</user_message>',
@@ -562,6 +578,74 @@ describe('runChatLoop', () => {
     // Original parts sit between the opening and closing tag parts.
     expect(parts).toHaveLength(4);
     expect(parts[1]).toEqual({ type: 'text', text: 'what is in this image?' });
+  });
+
+  it('prepends a <datetime> tag with local + utc + zone outside the user_message fence', async () => {
+    // The model has no clock without an injected timestamp - asked
+    // "what year is it?" it would either refuse or hallucinate from
+    // training-cutoff knowledge. The chat-loop builds a `<datetime>`
+    // tag every round and prepends it to the latest user turn,
+    // outside the `<user_message>` boundary so the system prompt's
+    // boundary contract treats it as platform-injected metadata
+    // rather than user input.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'what time is it?' }],
+      journalTimezone: 'America/Los_Angeles',
+      signal: new AbortController().signal,
+    });
+    const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
+    const content = userMsg?.content as string;
+    // ISO 8601 local with offset (e.g. '2026-04-24T15:30:00-07:00' or
+    // '2026-04-24T15:30:00-08:00' depending on DST), UTC Z form, and
+    // the IANA zone name verbatim.
+    expect(content).toMatch(
+      /^<datetime local="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}" utc="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z" zone="America\/Los_Angeles" \/>\n<user_message>what time is it\?<\/user_message>$/,
+    );
+  });
+
+  it('uses UTC zone in the datetime tag when journalTimezone is null', async () => {
+    // No configured timezone falls back to the runtime's reported
+    // zone; in the Vitest environment that's typically UTC, but the
+    // important contract is that `zone` is non-empty and well-formed
+    // and `local` includes a parseable ISO offset.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+    });
+    const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
+    const content = userMsg?.content as string;
+    const m = /^<datetime local="([^"]+)" utc="([^"]+)" zone="([^"]+)" \/>/.exec(content);
+    expect(m).not.toBeNull();
+    const [, local, utc, zone] = m!;
+    expect(local).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}([+-]\d{2}:\d{2}|Z)$/);
+    expect(utc).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    expect(zone.length).toBeGreaterThan(0);
   });
 
   it('persists a plain text response in one round', async () => {

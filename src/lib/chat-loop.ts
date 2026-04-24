@@ -52,7 +52,7 @@ import {
   type FireResult,
 } from './samskara';
 import { recallOpeningMemories } from './opening-recall';
-import { todayInZone } from './journal-day';
+import { detectTimezone, todayInZone } from './journal-day';
 import type { JournalEntry } from './supabase';
 
 /** Upper bound on rounds to prevent a runaway tool-call loop. */
@@ -228,20 +228,107 @@ function buildJournalNote(entry: JournalEntry | null): string | null {
 }
 
 /**
+ * Build the per-turn `<datetime>` tag that gets prepended to the
+ * latest user turn (outside the `<user_message>` boundary, see
+ * `tagLastUserMessage` below). The tag carries the wall-clock time
+ * at request-build time in three forms:
+ *
+ *   - `local`: ISO 8601 with offset, computed in the user's
+ *     `journalTimezone` (or the runtime's reported zone if the
+ *     setting is unset). Friendly enough that the model can answer
+ *     "what time is it?" or "what day of the week is it?" without
+ *     guessing - it can read the offset, the date, and (via the
+ *     date) the day of week directly.
+ *   - `utc`: ISO 8601 Z form. Unambiguous reference time, included
+ *     so the model has a fallback if it doesn't trust the local
+ *     interpretation.
+ *   - `zone`: the IANA zone name itself, so the model can name the
+ *     timezone in replies ("it's 3pm in America/Los_Angeles") and
+ *     so the value is self-describing if surfaced in logs.
+ *
+ * This exists because LLMs have no clock - the model was trained
+ * months ago, and without an injected datetime it either refuses
+ * "what year is it?" or hallucinates a stale answer. The tag rides
+ * outside `<user_message>` so the boundary contract from the system
+ * prompt applies: anything outside the tags is platform-injected
+ * metadata, not human input the model should echo or thank the
+ * user for.
+ *
+ * Computed fresh per round in the chat-loop, not once at send-time.
+ * Multi-round tool loops can take 30+ seconds; recomputing every
+ * round keeps the value honest if the model asks the user "what
+ * time is it now?" mid-tool-loop on a long-running turn.
+ */
+function buildDatetimeTag(tz: string | null | undefined): string {
+  const now = new Date();
+  // Drop sub-second precision: noisy in the prompt and the model
+  // doesn't use millisecond resolution for anything.
+  const utc = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const zone = typeof tz === 'string' && tz.length > 0 ? tz : detectTimezone();
+  let local = utc;
+  let zoneAttr = zone;
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      // 'longOffset' returns 'GMT-07:00' / 'GMT+00:00' across modern
+      // engines; older Safari has used 'GMT' alone for UTC, which the
+      // regex below tolerates by falling back to 'Z'.
+      timeZoneName: 'longOffset',
+    }).formatToParts(now);
+    const get = (t: string): string => parts.find((p) => p.type === t)?.value ?? '';
+    let h = get('hour');
+    // Some Intl runtimes emit '24' for midnight under hour12=false;
+    // ISO 8601 wants '00' for the same instant.
+    if (h === '24') h = '00';
+    const tzn = get('timeZoneName');
+    const m = /GMT([+-]\d{2}:\d{2})$/.exec(tzn);
+    const offset = m ? m[1] : 'Z';
+    local = `${get('year')}-${get('month')}-${get('day')}T${h}:${get('minute')}:${get('second')}${offset}`;
+  } catch {
+    // Unknown / rejected zone (older Safari has been stricter about
+    // unfamiliar IANA names). Fall back to UTC for both forms - the
+    // model still gets a usable timestamp, it just loses the local
+    // calibration.
+    zoneAttr = 'UTC';
+  }
+  return `<datetime local="${local}" utc="${utc}" zone="${zoneAttr}" />`;
+}
+
+/**
  * Return a shallow copy of `messages` with the last role='user'
- * message's content wrapped in the <user_message> boundary tags. The
- * input messages are not mutated — we allocate a fresh message object
+ * message's content wrapped in the <user_message> boundary tags and
+ * a `<datetime>` tag prepended outside that boundary. The input
+ * messages are not mutated - we allocate a fresh message object
  * (and fresh content array, when the content is multimodal) so that
  * the caller's history stays untouched across the chat loop's rounds.
  *
  * Scope is deliberately "last user turn only": that's the one Venice
- * augments on the current round. Earlier user turns in history were
- * already processed on prior rounds and don't need re-tagging — and
- * tagging every user turn in the request would bloat the wire and
- * could confuse the model into thinking the tags carry per-turn
- * semantics beyond "this is where the human's words are."
+ * augments on the current round, and that's where the freshest
+ * datetime belongs. Earlier user turns in history were already
+ * processed on prior rounds with their own then-current datetime;
+ * re-tagging them with "now" would falsely imply the user said those
+ * older words right now. Tagging every user turn in the request
+ * would also bloat the wire and could confuse the model into
+ * thinking the boundary tags carry per-turn semantics beyond "this
+ * is where the human's words are."
+ *
+ * The `<datetime>` tag sits OUTSIDE the `<user_message>` fence on
+ * purpose: the system prompt's boundary block tells the model that
+ * anything outside the fence is platform-injected reference, which
+ * is exactly the role the datetime plays. Putting it inside would
+ * make the model treat the tag text as user-typed input.
  */
-function tagLastUserMessage(messages: VeniceMessage[]): VeniceMessage[] {
+function tagLastUserMessage(
+  messages: VeniceMessage[],
+  datetimeTag: string,
+): VeniceMessage[] {
   // Walk from the end so we find the most recent user message even
   // when tool-result rows follow it on a mid-loop round.
   let lastUserIdx = -1;
@@ -257,17 +344,18 @@ function tagLastUserMessage(messages: VeniceMessage[]): VeniceMessage[] {
   if (typeof orig.content === 'string') {
     out[lastUserIdx] = {
       ...orig,
-      content: `${USER_MSG_OPEN}${orig.content}${USER_MSG_CLOSE}`,
+      content: `${datetimeTag}\n${USER_MSG_OPEN}${orig.content}${USER_MSG_CLOSE}`,
     };
   } else {
-    // Vision/multimodal: prepend an opening-tag text part and append
-    // a closing-tag text part so images and extracted-text prelude
-    // blocks all sit *inside* the user-message boundary. Allocating a
-    // fresh array so we don't mutate the caller's content.
+    // Vision/multimodal: prepend the datetime tag + opening-tag text
+    // part and append a closing-tag text part so images and
+    // extracted-text prelude blocks all sit *inside* the user-message
+    // boundary while the datetime sits outside. Allocating a fresh
+    // array so we don't mutate the caller's content.
     out[lastUserIdx] = {
       ...orig,
       content: [
-        { type: 'text', text: USER_MSG_OPEN },
+        { type: 'text', text: `${datetimeTag}\n${USER_MSG_OPEN}` },
         ...orig.content,
         { type: 'text', text: USER_MSG_CLOSE },
       ],
@@ -405,11 +493,14 @@ export interface ChatLoopOptions {
   emphasisMarkdown?: boolean;
   /**
    * IANA timezone used to compute "today" for the Reflections
-   * appendix. When null/undefined the journal lookup falls through to
-   * the chat-loop's process-level default (typically the browser's
-   * own zone). The chat-loop uses this ONLY to pull today's automatic
-   * journal entry into the per-turn prompt; it doesn't affect the
-   * model's reasoning directly.
+   * appendix and the per-turn `<datetime>` tag prepended to the
+   * latest user message (see `buildDatetimeTag`). When
+   * null/undefined both paths fall back to the runtime's reported
+   * zone (typically the browser's own). The journal use is
+   * indirect (calendar-day bucketing); the datetime use is direct -
+   * the model reads the local time off this zone, so a wrong value
+   * here will surface as the model giving the user the wrong wall-
+   * clock time.
    */
   journalTimezone?: string | null;
   /**
@@ -810,7 +901,15 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // previously also an `enable_web_search` injection on every
     // request, now flows through the `web_search` tool instead - the
     // main chat loop never sets those Venice parameters.
-    const projectedHistory = tagLastUserMessage(history);
+    //
+    // The same projection also prepends a `<datetime>` tag (outside
+    // the user_message fence) carrying current local + UTC time. The
+    // model otherwise has no clock and either refuses or hallucinates
+    // when asked "what time is it?". Recomputed every round so a
+    // long multi-tool loop reflects actual elapsed time rather than
+    // a stale send-time snapshot.
+    const datetimeTag = buildDatetimeTag(journalTimezone);
+    const projectedHistory = tagLastUserMessage(history, datetimeTag);
     const requestMessages: VeniceMessage[] = [
       {
         role: 'system',
