@@ -34,6 +34,7 @@ import type { VeniceClient, VeniceMessage } from '../../venice';
 // 'output.format'". See `../../tools/memory_toolbox.ts`.
 import { memoryToolbox } from '../../tools/memory_toolbox';
 import { runHeadlessToolLoop } from '../../tools/run';
+import { sanitizeToolCallsForWire } from '../../tools/wire';
 import { VENICE_REFLECTION_MODEL } from '../../models';
 import { REFLECTION_PROMPT } from './prompt';
 
@@ -73,6 +74,10 @@ export interface ReflectionOutput {
  * sideways into the chat-loop module. The two copies must stay in
  * sync — the projection is what makes history → API a direct
  * mapping for both surfaces.
+ *
+ * The arguments-string sanitiser is shared - see
+ * src/lib/tools/wire.ts for the rationale (Venice 400s on a malformed
+ * arguments JSON and the failure rides every replay until normalised).
  */
 function messageToVenice(m: Message): VeniceMessage {
   if (m.role === 'tool') {
@@ -85,7 +90,7 @@ function messageToVenice(m: Message): VeniceMessage {
   }
   const out: VeniceMessage = { role: m.role, content: m.content };
   if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-    out.tool_calls = m.tool_calls;
+    out.tool_calls = sanitizeToolCallsForWire(m.tool_calls);
   }
   return out;
 }

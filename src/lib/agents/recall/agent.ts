@@ -35,6 +35,7 @@ import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
 // circular chain: agents/recall → tools → memory_recall → agents/recall.
 import { recallToolbox } from '../../tools/recall_toolbox';
 import { runHeadlessToolLoop } from '../../tools/run';
+import { sanitizeToolCallsForWire } from '../../tools/wire';
 import { VENICE_RECALL_MODEL } from '../../models';
 import { RECALL_PROMPT } from './prompt';
 
@@ -80,6 +81,10 @@ export interface RecallOutput {
  * three surfaces share the shape but not the imports, and a shared
  * helper would mean agents have to reach into the chat-loop module.
  * The projection must stay in lockstep across all three copies.
+ *
+ * The arguments-string sanitiser IS shared - it lives in the leaf
+ * `tools/wire.ts` module so all wire-projection sites can call in
+ * without dragging chat-loop. See that file for the rationale.
  */
 function messageToVenice(m: Message): VeniceMessage {
   if (m.role === 'tool') {
@@ -92,7 +97,7 @@ function messageToVenice(m: Message): VeniceMessage {
   }
   const out: VeniceMessage = { role: m.role, content: m.content };
   if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-    out.tool_calls = m.tool_calls;
+    out.tool_calls = sanitizeToolCallsForWire(m.tool_calls);
   }
   return out;
 }

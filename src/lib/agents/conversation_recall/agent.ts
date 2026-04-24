@@ -26,6 +26,7 @@ import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
 // the full explanation.
 import { conversationRecallToolbox } from '../../tools/conversation_recall_toolbox';
 import { runHeadlessToolLoop } from '../../tools/run';
+import { sanitizeToolCallsForWire } from '../../tools/wire';
 import { VENICE_CONVERSATION_RECALL_MODEL } from '../../models';
 import {
   trimToLastUserTurn,
@@ -66,6 +67,9 @@ export interface ConversationRecallOutput {
  * shape but not the imports, and a shared helper would mean agents
  * reach into chat-loop. Update all three in lockstep if the shape
  * changes.
+ *
+ * The arguments-string sanitiser is shared via tools/wire.ts - see
+ * that module for the rationale.
  */
 function messageToVenice(m: Message): VeniceMessage {
   if (m.role === 'tool') {
@@ -78,7 +82,7 @@ function messageToVenice(m: Message): VeniceMessage {
   }
   const out: VeniceMessage = { role: m.role, content: m.content };
   if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-    out.tool_calls = m.tool_calls;
+    out.tool_calls = sanitizeToolCallsForWire(m.tool_calls);
   }
   return out;
 }

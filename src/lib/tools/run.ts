@@ -32,6 +32,7 @@ import type { Toolbox, ToolContext, OpenAIToolCall } from './types';
 // `runHeadlessToolLoop` from inside a Web Worker, so this import has
 // to stay on the IIFE-safe side of the graph.
 import { buildToolboxWireList, executeToolboxCall } from './dispatch';
+import { sanitizeToolCallsForWire } from './wire';
 import type { VeniceClient, VeniceMessage, ResponseFormat } from '../venice';
 import type { ReasoningEffort } from '../models';
 
@@ -245,10 +246,16 @@ export async function runHeadlessToolLoop(
     // subsequent `role: 'tool'` with the same tool_call_id — that's
     // why the assistant row must come first and every call gets a
     // result, even on failure.
+    //
+    // Arguments are sanitised before going back on the wire: a model
+    // that emits a malformed arguments JSON (unescaped quotes inside
+    // the free-form `activity` sentence is the usual offender) would
+    // fail Venice's server-side json.loads check on the next round
+    // and 400 the whole request. See `./wire.ts`.
     messages.push({
       role: 'assistant',
       content: roundText,
-      tool_calls: roundCalls,
+      tool_calls: sanitizeToolCallsForWire(roundCalls),
     });
     for (const r of settled) {
       const content = r.ok

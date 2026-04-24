@@ -32,6 +32,7 @@ import type { VeniceClient, VeniceMessage } from '../../venice';
 // constraint as `../reflection/agent.ts`.
 import { journalAgentToolbox } from '../../tools/journal_agent_toolbox';
 import { runHeadlessToolLoop } from '../../tools/run';
+import { sanitizeToolCallsForWire } from '../../tools/wire';
 import { MODELS, type ReasoningEffort } from '../../models';
 import { buildJournalPrompt } from './prompt';
 import type { JournalInput, JournalOutput } from './types';
@@ -66,7 +67,13 @@ function messageToVenice(m: Message): VeniceMessage {
   }
   const out: VeniceMessage = { role: m.role, content: m.content };
   if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-    out.tool_calls = m.tool_calls;
+    // Sanitise the arguments JSON before it goes back on the wire. A
+    // malformed arguments string from a previous round (e.g. unescaped
+    // quotes inside the model-written `activity` sentence) is what
+    // surfaces as the Venice 400 "Expecting ',' delimiter" error - and
+    // it rides every replay until the row drops out of history. See
+    // src/lib/tools/wire.ts for the full rationale.
+    out.tool_calls = sanitizeToolCallsForWire(m.tool_calls);
   }
   return out;
 }

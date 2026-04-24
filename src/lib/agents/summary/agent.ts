@@ -21,6 +21,7 @@ import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
 import type { VeniceClient, VeniceMessage } from '../../venice';
 import type { Toolbox } from '../../tools/types';
+import { sanitizeToolCallsForWire } from '../../tools/wire';
 import { VENICE_SUMMARY_MODEL } from '../../models';
 import { SUMMARY_PROMPT } from './prompt';
 
@@ -68,6 +69,9 @@ export interface SummaryOutput {
  * chat-loop or reflection — the projection is tiny and copying it
  * once is less coupling than sharing a helper across three
  * subsystems.
+ *
+ * The arguments-string sanitiser is shared via tools/wire.ts - see
+ * that module for the rationale.
  */
 function messageToVenice(m: Message): VeniceMessage {
   if (m.role === 'tool') {
@@ -80,7 +84,7 @@ function messageToVenice(m: Message): VeniceMessage {
   }
   const out: VeniceMessage = { role: m.role, content: m.content };
   if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-    out.tool_calls = m.tool_calls;
+    out.tool_calls = sanitizeToolCallsForWire(m.tool_calls);
   }
   return out;
 }
