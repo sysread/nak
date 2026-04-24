@@ -40,6 +40,8 @@ You can reach these pages two ways:
 - [Memory](./memory.md) — the long-term store Nak builds up about you
   across conversations: what gets remembered, how to correct or
   forget something, what's scoped to your account.
+- [Reflections](./reflections.md) — a daily journal Nak keeps for you
+  alongside your conversations, plus space for your own entries.
 - [Cookbook](./cookbook.md) — a personal store for Cooklang recipes,
   with a dedicated modal and a tab in the conversation drawer.
 - [Search](./search.md) — finding a thread or a message across your

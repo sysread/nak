@@ -33,6 +33,7 @@ import type { Toolbox, ToolContext, OpenAIToolCall } from './types';
 // to stay on the IIFE-safe side of the graph.
 import { buildToolboxWireList, executeToolboxCall } from './dispatch';
 import type { VeniceClient, VeniceMessage, ResponseFormat } from '../venice';
+import type { ReasoningEffort } from '../models';
 
 /** Upper bound on rounds a headless run can take. Prevents runaway loops. */
 export const DEFAULT_MAX_ROUNDS = 8;
@@ -119,6 +120,17 @@ export interface HeadlessToolLoopOptions {
    * tool rounds before settling on a structured final answer.
    */
   responseFormat?: ResponseFormat;
+  /**
+   * Optional reasoning_effort knob. Forwarded verbatim to Venice on
+   * every round. Omitted by default so callers that don't want to
+   * spend reasoning budget get whatever default the model's provider
+   * applies. Only honored on reasoning-capable models; non-reasoning
+   * tiers silently ignore. The journaling agent sets this to 'medium'
+   * because emotional-arc parsing benefits from the extra think time;
+   * the memory-reflection agent leaves it unset and lets the fast
+   * tier default.
+   */
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface HeadlessToolLoopResult {
@@ -168,6 +180,7 @@ export async function runHeadlessToolLoop(
       signal,
       tools: buildToolboxWireList(toolbox),
       responseFormat: opts.responseFormat,
+      reasoningEffort: opts.reasoningEffort,
     });
 
     let roundText = '';

@@ -153,11 +153,18 @@ extension.
 - **Conversation recall** — `conversation_search` vector path
   reads `threads.embedding`. ILIKE-on-title fallback covers
   unembedded rows. See `./conversation-recall.md`.
-- **Reflection / summary workers** — share the `lease.ts`
-  coordinator and the worker-leases table. Separate
-  `worker_kind` values (`'reflection'`, `'summary'`,
-  `'embedding'`) so a device can hold all three leases
-  concurrently. See `./memory.md` and `./summaries.md`.
+- **Reflection / summary / journal workers** — share the
+  `lease.ts` coordinator and the worker-leases table.
+  Separate `worker_kind` values (`'reflection'`,
+  `'summary'`, `'embedding'`, `'journal'`,
+  `'attachment_expiry'`, `'samskara'`) so a device can
+  hold every lease concurrently. See `./memory.md`,
+  `./summaries.md`, `./journal.md`.
+- **Journal** — `journal_entries` is a registered source
+  alongside memories / threads / samskara substrate. The
+  `clear_journal_embedding_on_change` trigger fires when
+  `content | topics | mood` change so an edit reselects
+  the row. See `./journal.md`.
 - **Auth-session** — worker startup is gated on an active
   Supabase session; `manager.start()` pulls the session from
   the Supabase client and passes tokens to the Worker. A

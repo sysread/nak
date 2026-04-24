@@ -13,17 +13,21 @@ describe('routing: parseUrl', () => {
       modal: null,
       recipe: null,
       doc: null,
+      reflection_date: null,
     });
   });
 
   it('reads every routed key', () => {
-    const r = parseUrl('?cid=abc&drawer=recipes&modal=help&recipe=xyz&doc=user/foo.md');
+    const r = parseUrl(
+      '?cid=abc&drawer=recipes&modal=help&recipe=xyz&doc=user/foo.md&reflection_date=2026-04-24'
+    );
     expect(r).toEqual({
       cid: 'abc',
       drawer: 'recipes',
       modal: 'help',
       recipe: 'xyz',
       doc: 'user/foo.md',
+      reflection_date: '2026-04-24',
     });
   });
 
@@ -63,7 +67,7 @@ describe('routing: buildSearch', () => {
 
   it('emits only the keys that are set', () => {
     const out = buildSearch(
-      { cid: 'abc', drawer: null, modal: 'settings', recipe: null, doc: null },
+      { cid: 'abc', drawer: null, modal: 'settings', recipe: null, doc: null, reflection_date: null },
       '',
     );
     expect(out).toBe('?cid=abc&modal=settings');
@@ -74,7 +78,7 @@ describe('routing: buildSearch', () => {
     // to ?share=pending, and our routing pushes must not strip that
     // flag before Chat.svelte's share-drain has a chance to read it.
     const out = buildSearch(
-      { cid: 'abc', drawer: null, modal: null, recipe: null, doc: null },
+      { cid: 'abc', drawer: null, modal: null, recipe: null, doc: null, reflection_date: null },
       '?share=pending&foo=bar',
     );
     expect(out).toContain('share=pending');
@@ -85,7 +89,7 @@ describe('routing: buildSearch', () => {
   it('overwrites stale routed keys on the current search', () => {
     // Old value for a routed key must be replaced, not duplicated.
     const out = buildSearch(
-      { cid: 'new', drawer: null, modal: null, recipe: null, doc: null },
+      { cid: 'new', drawer: null, modal: null, recipe: null, doc: null, reflection_date: null },
       '?cid=old&share=pending',
     );
     // URLSearchParams.set overwrites, URLSearchParams.append would not.
@@ -96,7 +100,7 @@ describe('routing: buildSearch', () => {
 
   it('clears routed keys when the field goes null', () => {
     const out = buildSearch(
-      { cid: null, drawer: null, modal: null, recipe: null, doc: null },
+      { cid: null, drawer: null, modal: null, recipe: null, doc: null, reflection_date: null },
       '?cid=was-here&share=pending',
     );
     expect(out).not.toContain('cid=');

@@ -40,9 +40,13 @@
     setDefaultLogLevel,
     setEmphasisMarkdown,
     setNotifyOnComplete,
+    setJournalAutomaticEnabled,
+    setJournalTimezone,
     setSystemPrompts,
     setTheme,
   } from '$lib/state.svelte';
+  import { detectTimezone, normalizeTimezone } from '$lib/journal-day';
+  import { downloadFullArchive } from '$lib/journal-export';
   import { isSupported as notificationsSupported, requestPermission } from '$lib/notifications.svelte';
   import { LOG_LEVELS, LOG_LEVEL_LABELS, type LogLevel } from '$lib/logger.svelte';
   import {
@@ -99,6 +103,7 @@
   type Group =
     | 'keys'
     | 'ai'
+    | 'reflections'
     | 'appearance'
     | 'usage'
     | 'export'
@@ -107,6 +112,7 @@
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'keys', label: 'API keys' },
     { id: 'ai', label: 'AI' },
+    { id: 'reflections', label: 'Reflections' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'usage', label: 'Usage' },
     { id: 'export', label: 'Export' },
@@ -149,6 +155,17 @@
   let notifyOnComplete = $state<boolean>(app.notifyOnComplete);
   let modelError = $state<string | null>(null);
   let modelInfo = $state<string | null>(null);
+
+  // --- Reflections pane ---
+  // Journal toggle + timezone. Both pass through state.svelte so the
+  // journaling worker starts/stops and switches day-bucket zones in
+  // real time. Persisted on `profiles.settings.journalAutomaticEnabled`
+  // / `profiles.settings.journalTimezone`.
+  let journalAutomaticEnabled = $state<boolean>(app.journalAutomaticEnabled);
+  let journalTimezone = $state<string>(app.journalTimezone || detectTimezone());
+  let journalError = $state<string | null>(null);
+  let journalInfo = $state<string | null>(null);
+  let journalExportBusy = $state(false);
 
   // --- Prompts pane ---
   // Local working copy of the prompt library. We edit this in memory and
@@ -893,6 +910,68 @@
     }
   }
 
+  async function onToggleJournalAutomatic(next: boolean): Promise<void> {
+    journalError = null;
+    journalInfo = null;
+    if (!app.supabase) {
+      journalError = 'Not connected to Supabase yet.';
+      return;
+    }
+    const prev = journalAutomaticEnabled;
+    journalAutomaticEnabled = next;
+    setJournalAutomaticEnabled(next);
+    try {
+      await app.supabase.updateSettings({ journalAutomaticEnabled: next });
+      journalInfo = next
+        ? 'Automatic reflections enabled.'
+        : 'Automatic reflections disabled. Your own entries are unaffected.';
+    } catch (err) {
+      journalAutomaticEnabled = prev;
+      setJournalAutomaticEnabled(prev);
+      journalError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function onChangeJournalTimezone(next: string): Promise<void> {
+    journalError = null;
+    journalInfo = null;
+    if (!app.supabase) {
+      journalError = 'Not connected to Supabase yet.';
+      return;
+    }
+    const normalized = normalizeTimezone(next);
+    if (!normalized) {
+      journalError = `"${next}" is not a recognized IANA timezone.`;
+      return;
+    }
+    const prev = journalTimezone;
+    journalTimezone = normalized;
+    setJournalTimezone(normalized);
+    try {
+      await app.supabase.updateSettings({ journalTimezone: normalized });
+      journalInfo = `Reflections day boundary set to ${normalized}.`;
+    } catch (err) {
+      journalTimezone = prev;
+      setJournalTimezone(prev);
+      journalError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function onExportReflectionsArchive(): Promise<void> {
+    if (!app.supabase) return;
+    journalError = null;
+    journalInfo = null;
+    journalExportBusy = true;
+    try {
+      await downloadFullArchive(app.supabase);
+      journalInfo = 'Reflections archive downloaded.';
+    } catch (err) {
+      journalError = err instanceof Error ? err.message : String(err);
+    } finally {
+      journalExportBusy = false;
+    }
+  }
+
   async function onChangePassword(e: SubmitEvent): Promise<void> {
     e.preventDefault();
     pwError = null;
@@ -1213,6 +1292,89 @@
             Browse memories
           </button>
         {/if}
+      {:else if group === 'reflections'}
+        <h2>Reflections</h2>
+        <p class="subtle">
+          Reflections are a daily journal Nak keeps alongside you. The
+          automatic journaler writes an entry for each day based on your
+          conversations; your own entries sit next to them. Both are
+          searchable and exportable. See the Help modal's Reflections
+          page for the full flow.
+        </p>
+
+        <h3 class="pane-section">Automatic entries</h3>
+        <label class="form-row toggle-row">
+          <input
+            type="checkbox"
+            checked={journalAutomaticEnabled}
+            onchange={(e) => onToggleJournalAutomatic(e.currentTarget.checked)}
+          />
+          <span>
+            Let Nak write an automatic entry each day from your
+            conversations. Turning this off stops the background
+            journaler; your own entries and any existing automatic
+            entries are untouched.
+          </span>
+        </label>
+
+        <h3 class="pane-section">Day boundary</h3>
+        <p class="subtle" style="font-size:0.85rem">
+          Reflections are bucketed by date in this IANA timezone, so a
+          late-night conversation lands on the day you experienced
+          rather than wherever the server is. Browser detected:
+          <code>{detectTimezone()}</code>.
+        </p>
+        <div class="form-row">
+          <label for="journal-timezone">Timezone</label>
+          <input
+            id="journal-timezone"
+            type="text"
+            bind:value={journalTimezone}
+            placeholder="America/Los_Angeles"
+            list="journal-timezone-options"
+            spellcheck="false"
+            autocomplete="off"
+          />
+          <datalist id="journal-timezone-options">
+            <option value="UTC"></option>
+            <option value="America/Los_Angeles"></option>
+            <option value="America/Denver"></option>
+            <option value="America/Chicago"></option>
+            <option value="America/New_York"></option>
+            <option value="America/Sao_Paulo"></option>
+            <option value="Europe/London"></option>
+            <option value="Europe/Paris"></option>
+            <option value="Europe/Berlin"></option>
+            <option value="Europe/Moscow"></option>
+            <option value="Africa/Johannesburg"></option>
+            <option value="Asia/Dubai"></option>
+            <option value="Asia/Kolkata"></option>
+            <option value="Asia/Shanghai"></option>
+            <option value="Asia/Tokyo"></option>
+            <option value="Australia/Sydney"></option>
+            <option value="Pacific/Auckland"></option>
+          </datalist>
+          <button
+            type="button"
+            class="secondary"
+            onclick={() => onChangeJournalTimezone(journalTimezone)}
+          >Save</button>
+        </div>
+
+        <h3 class="pane-section">Export</h3>
+        <p class="subtle" style="font-size:0.85rem">
+          Download every reflection as a ZIP of Markdown files, one per
+          day. Single-day exports live on each entry card inside the
+          Reflections modal.
+        </p>
+        <button
+          type="button"
+          onclick={onExportReflectionsArchive}
+          disabled={journalExportBusy}
+        >{journalExportBusy ? 'Preparing…' : 'Export all (.zip)'}</button>
+
+        {#if journalError}<p class="error">{journalError}</p>{/if}
+        {#if journalInfo}<p class="subtle">{journalInfo}</p>{/if}
       {:else if group === 'appearance'}
         <h2>Appearance</h2>
         <p class="subtle">

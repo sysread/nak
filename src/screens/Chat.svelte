@@ -47,6 +47,8 @@
     setDefaultLogLevel,
     setEmphasisMarkdown,
     setNotifyOnComplete,
+    setJournalAutomaticEnabled,
+    setJournalTimezone,
     setSystemPrompts,
     setTheme,
   } from '$lib/state.svelte';
@@ -97,6 +99,7 @@
   import Auth from './Auth.svelte';
   import Help from './Help.svelte';
   import Memories from './Memories.svelte';
+  import Reflections from './Reflections.svelte';
   import Samskara from './Samskara.svelte';
   import Settings from './Settings.svelte';
   import Cookbook from './Cookbook.svelte';
@@ -105,6 +108,11 @@
     loadRecipes,
     COOKBOOK_CHANGE_EVENT,
   } from '$lib/cookbook-store.svelte';
+  import {
+    journal,
+    loadJournalEntries,
+  } from '$lib/journal-store.svelte';
+  import { JOURNAL_CHANGE_EVENT } from '$lib/journal-events';
   import AssistantBody from '../components/AssistantBody.svelte';
   import CitationsPanel from '../components/CitationsPanel.svelte';
   import Markdown from '../components/Markdown.svelte';
@@ -138,19 +146,39 @@
   const showMemories = $derived(route.modal === 'memories');
   const showCookbook = $derived(route.modal === 'cookbook');
   const showSamskara = $derived(route.modal === 'samskara');
+  const showReflections = $derived(route.modal === 'reflections');
   /**
    * Sidebar drawer tab. Backed by `route.drawer` - absent in the URL
-   * means "chats" (the default). 'recipes' renders the cookbook list
-   * in place of the thread list. Tab switches use replaceState so a
-   * chats<->recipes flip doesn't fill history with UI-chrome entries.
+   * means "chats" (the default). 'recipes' and 'reflections' render
+   * their own list in place of the thread list. Tab switches use
+   * replaceState so a tab flip doesn't fill history with UI-chrome
+   * entries.
    */
-  const drawerTab = $derived<'chats' | 'recipes'>(route.drawer ?? 'chats');
+  const drawerTab = $derived<'chats' | 'recipes' | 'reflections'>(
+    route.drawer ?? 'chats'
+  );
   /** Recipe-side search, separate from conversation search. */
   let recipeDrawerQuery = $state('');
   const visibleDrawerRecipes = $derived.by(() => {
     const q = recipeDrawerQuery.trim().toLowerCase();
     if (q.length === 0) return cookbook.recipes;
     return cookbook.recipes.filter((r) => r.title.toLowerCase().includes(q));
+  });
+  /** Reflection-side search. Filters by content / topics / mood
+      substring match - the drawer is a glance surface; the modal
+      does the semantic search for the same query. */
+  let reflectionDrawerQuery = $state('');
+  const visibleDrawerReflections = $derived.by(() => {
+    const q = reflectionDrawerQuery.trim().toLowerCase();
+    if (q.length === 0) return journal.entries;
+    return journal.entries.filter((e) => {
+      if (e.content.toLowerCase().includes(q)) return true;
+      if (e.mood && e.mood.toLowerCase().includes(q)) return true;
+      for (const t of e.topics) {
+        if (t.toLowerCase().includes(q)) return true;
+      }
+      return false;
+    });
   });
 
   function onPickRecipesTab(): void {
@@ -164,6 +192,18 @@
     }
   }
 
+  // Reflections drawer tab. Same shape as onPickRecipesTab - the list
+  // is lazy-loaded the first time the tab is opened, and the store
+  // keeps itself fresh via JOURNAL_CHANGE_EVENT. The modal opens
+  // separately (drawer row -> day-focused modal, footer button ->
+  // list-focused modal).
+  function onPickReflectionsTab(): void {
+    navigate({ drawer: 'reflections' }, { replace: true });
+    if (app.supabase && journal.entries.length === 0 && !journal.loading) {
+      void loadJournalEntries(app.supabase, { limit: 200 });
+    }
+  }
+
   // When the user (or a popstate pop) lands on `?drawer=recipes`
   // without having gone through onPickRecipesTab, still make sure the
   // recipe list is fetched so the drawer isn't blank.
@@ -173,6 +213,23 @@
     if (cookbook.recipes.length !== 0 || cookbook.loading) return;
     void loadRecipes(app.supabase);
   });
+
+  // Parallel for the reflections tab.
+  $effect(() => {
+    if (route.drawer !== 'reflections') return;
+    if (!app.supabase) return;
+    if (journal.entries.length !== 0 || journal.loading) return;
+    void loadJournalEntries(app.supabase, { limit: 200 });
+  });
+
+  function onJournalStoreChanged(): void {
+    // Any journal write (tool path, worker path, modal compose save)
+    // invalidates the list - only reload if we've already loaded it,
+    // so unused drawer / modal stays lazy.
+    if (!app.supabase) return;
+    if (journal.entries.length === 0 && !journal.loading) return;
+    void loadJournalEntries(app.supabase, { limit: 200 });
+  }
 
   function openRecipeFromDrawer(id: string): void {
     navigate({ modal: 'cookbook', recipe: id });
@@ -974,9 +1031,11 @@
     // reload when we've already loaded at least once — a fresh
     // unlock that never opened the Recipes tab stays lazy.
     window.addEventListener(COOKBOOK_CHANGE_EVENT, onCookbookStoreChanged);
+    window.addEventListener(JOURNAL_CHANGE_EVENT, onJournalStoreChanged);
     return () => {
       unsubscribe();
       window.removeEventListener(COOKBOOK_CHANGE_EVENT, onCookbookStoreChanged);
+      window.removeEventListener(JOURNAL_CHANGE_EVENT, onJournalStoreChanged);
     };
   });
 
@@ -993,6 +1052,13 @@
       // set in-session (e.g. a toggle flipped in another tab).
       setEmphasisMarkdown(s.emphasisMarkdown ?? false);
       setNotifyOnComplete(s.notifyOnComplete ?? false);
+      // Reflections: default-on for new accounts, so absent key is true.
+      // Explicit false disables the worker; setJournalAutomaticEnabled
+      // stops the journalManager if it was running. Timezone falls
+      // through to whatever activate() seeded (browser zone) when the
+      // setting is absent.
+      setJournalAutomaticEnabled(s.journalAutomaticEnabled ?? true);
+      if (s.journalTimezone) setJournalTimezone(s.journalTimezone);
       // If the server has a theme choice and it differs from the cached one,
       // apply it now. setTheme also re-caches, so subsequent loads are fast.
       if (s.colorMode || s.accent) {
@@ -1831,6 +1897,7 @@
           reasoningEffort: ctx.sendReasoning,
           verbosity: ctx.sendVerbosity,
           emphasisMarkdown: ctx.sendEmphasis,
+          journalTimezone: app.journalTimezone || null,
           handlers: {
             onTextUpdate: (t) => {
               pending = t;
@@ -3197,6 +3264,16 @@
               onclick={() => onPickRecipesTab()}
             >Recipes</button>
           </div>
+          <div class="row thread-row">
+            <button
+              type="button"
+              role="tab"
+              class="thread grow"
+              class:active={drawerTab === 'reflections'}
+              aria-selected={drawerTab === 'reflections'}
+              onclick={() => onPickReflectionsTab()}
+            >Reflections</button>
+          </div>
         </div>
         {#if drawerTab === 'chats'}
           <!-- Search replaces the old "+ New thread" button — the
@@ -3211,13 +3288,21 @@
             bind:value={searchQuery}
             onkeydown={onSearchKey}
           />
-        {:else}
+        {:else if drawerTab === 'recipes'}
           <input
             type="search"
             class="sidebar-search-input"
             placeholder="Search recipes"
             aria-label="Search recipes"
             bind:value={recipeDrawerQuery}
+          />
+        {:else}
+          <input
+            type="search"
+            class="sidebar-search-input"
+            placeholder="Search reflections"
+            aria-label="Search reflections"
+            bind:value={reflectionDrawerQuery}
           />
         {/if}
       </header>
@@ -3400,7 +3485,7 @@
           {/if}
         {/if}
       </div>
-      {:else}
+      {:else if drawerTab === 'recipes'}
         <!-- Recipes tab. Click opens the Cookbook modal on the detail
              pane for that recipe. The list itself is a flattened read-
              only view into `cookbook.recipes`; editing flows through
@@ -3434,6 +3519,47 @@
               class="secondary"
               onclick={() => navigate({ modal: 'cookbook' })}
             >Open cookbook</button>
+          </div>
+        </div>
+      {:else}
+        <!-- Reflections tab. Click on an entry opens the Reflections
+             modal on that day's detail view. The footer button opens
+             the modal on the list view. The drawer list is a reverse-
+             chron glance surface; semantic search and compose live
+             in the modal proper. -->
+        <div class="recipe-drawer-list">
+          {#if journal.loading && journal.entries.length === 0}
+            <p class="subtle" style="padding:0.75rem">Loading reflections…</p>
+          {:else if visibleDrawerReflections.length === 0}
+            <p class="subtle" style="padding:0.75rem">
+              {#if journal.entries.length === 0}
+                No reflections yet. Open Reflections to add one.
+              {:else}
+                No matches.
+              {/if}
+            </p>
+          {:else}
+            {#each visibleDrawerReflections as e (e.id)}
+              <div class="row thread-row" data-reflection-id={e.id}>
+                <button
+                  class="thread grow"
+                  onclick={() => navigate({ modal: 'reflections', reflection_date: e.entry_date })}
+                  title={`${e.entry_date} (${e.source === 'automatic' ? 'automatic' : 'you'})`}
+                >
+                  <span>{e.entry_date}</span>
+                  <span class="subtle" style="margin-left:0.4rem;font-size:0.75rem">
+                    {e.source === 'automatic' ? 'auto' : 'you'}
+                  </span>
+                </button>
+              </div>
+            {/each}
+          {/if}
+          <div class="recipe-drawer-footer">
+            <button
+              type="button"
+              class="secondary"
+              onclick={() => navigate({ modal: 'reflections' })}
+            >Open reflections</button>
           </div>
         </div>
       {/if}
@@ -4378,5 +4504,10 @@
   {/if}
   {#if showCookbook}
     <Cookbook onClose={onCookbookModalClose} />
+  {/if}
+  {#if showReflections}
+    <Reflections
+      onClose={() => navigate({ modal: null, reflection_date: null })}
+    />
   {/if}
 {/if}

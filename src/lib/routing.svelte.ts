@@ -3,10 +3,11 @@
  * state that survives a refresh lives in the query string:
  *
  *   cid     = active thread id
- *   drawer  = 'chats' | 'recipes'   (sidebar tab; absent = 'chats')
- *   modal   = 'settings'|'cookbook'|'help'|'memories'
+ *   drawer  = 'chats' | 'recipes' | 'reflections'  (sidebar tab; absent = 'chats')
+ *   modal   = 'settings'|'cookbook'|'help'|'memories'|'reflections'
  *   recipe  = recipe id when modal=cookbook
  *   doc     = docs/user/ path when modal=help
+ *   reflection_date = YYYY-MM-DD focused in the reflections modal
  *
  * The deploy target is GitHub Pages with no SPA fallback, so path-style
  * routes (/settings, /recipes/<id>) would 404 on refresh. Every routed
@@ -32,8 +33,14 @@
  * owns.
  */
 
-export type Modal = 'settings' | 'cookbook' | 'help' | 'memories' | 'samskara';
-export type DrawerTab = 'chats' | 'recipes';
+export type Modal =
+  | 'settings'
+  | 'cookbook'
+  | 'help'
+  | 'memories'
+  | 'samskara'
+  | 'reflections';
+export type DrawerTab = 'chats' | 'recipes' | 'reflections';
 
 export interface Route {
   cid: string | null;
@@ -41,11 +48,30 @@ export interface Route {
   modal: Modal | null;
   recipe: string | null;
   doc: string | null;
+  /**
+   * YYYY-MM-DD focused in the Reflections daily view when
+   * `modal === 'reflections'`. Absent on the list view.
+   */
+  reflection_date: string | null;
 }
 
-const ROUTED_KEYS = ['cid', 'drawer', 'modal', 'recipe', 'doc'] as const;
-const MODAL_VALUES: readonly Modal[] = ['settings', 'cookbook', 'help', 'memories', 'samskara'];
-const DRAWER_VALUES: readonly DrawerTab[] = ['chats', 'recipes'];
+const ROUTED_KEYS = [
+  'cid',
+  'drawer',
+  'modal',
+  'recipe',
+  'doc',
+  'reflection_date',
+] as const;
+const MODAL_VALUES: readonly Modal[] = [
+  'settings',
+  'cookbook',
+  'help',
+  'memories',
+  'samskara',
+  'reflections',
+];
+const DRAWER_VALUES: readonly DrawerTab[] = ['chats', 'recipes', 'reflections'];
 
 export const route = $state<Route>({
   cid: null,
@@ -53,6 +79,7 @@ export const route = $state<Route>({
   modal: null,
   recipe: null,
   doc: null,
+  reflection_date: null,
 });
 
 function readEnum<T extends string>(
@@ -78,6 +105,7 @@ export function parseUrl(search: string = typeof location !== 'undefined' ? loca
     modal: readEnum(params, 'modal', MODAL_VALUES),
     recipe: readString(params, 'recipe'),
     doc: readString(params, 'doc'),
+    reflection_date: readString(params, 'reflection_date'),
   };
 }
 
@@ -98,6 +126,7 @@ export function buildSearch(
   if (r.modal) params.set('modal', r.modal);
   if (r.recipe) params.set('recipe', r.recipe);
   if (r.doc) params.set('doc', r.doc);
+  if (r.reflection_date) params.set('reflection_date', r.reflection_date);
   const s = params.toString();
   return s ? `?${s}` : '';
 }
@@ -132,6 +161,13 @@ function applyPatch(patch: Partial<Route>): boolean {
   }
   if (patch.doc !== undefined && patch.doc !== route.doc) {
     route.doc = patch.doc;
+    changed = true;
+  }
+  if (
+    patch.reflection_date !== undefined &&
+    patch.reflection_date !== route.reflection_date
+  ) {
+    route.reflection_date = patch.reflection_date;
     changed = true;
   }
   return changed;
@@ -197,6 +233,7 @@ export const __test = {
     route.modal = null;
     route.recipe = null;
     route.doc = null;
+    route.reflection_date = null;
   },
   syncFromUrl,
 };

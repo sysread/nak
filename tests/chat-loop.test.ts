@@ -70,6 +70,10 @@ interface MockSupabase {
   samskaraFireTopK: ReturnType<typeof vi.fn>;
   samskaraRecordFires: ReturnType<typeof vi.fn>;
   samskaraRecordSubstrate: ReturnType<typeof vi.fn>;
+  // Journal - runChatLoop fetches today's automatic entry on the
+  // opening turn to build the `Today's journal` appendix. Default to
+  // an empty list so legacy tests keep passing.
+  getJournalEntriesForDate: ReturnType<typeof vi.fn>;
 }
 
 function mockSupabase(overrides: Partial<MockSupabase> = {}): {
@@ -119,6 +123,7 @@ function mockSupabase(overrides: Partial<MockSupabase> = {}): {
     samskaraFireTopK: vi.fn(async () => []),
     samskaraRecordFires: vi.fn(async () => undefined),
     samskaraRecordSubstrate: vi.fn(async () => 'sub-stub'),
+    getJournalEntriesForDate: vi.fn(async () => []),
     ...overrides,
   };
   return { svc: mocks as unknown as SupabaseService, mocks, messagesOut };

@@ -238,6 +238,67 @@ export interface Recipe {
   updated_at: string;
 }
 
+/**
+ * One daily-journal row for the Reflections feature. Paired with a
+ * matching row of the opposite `source` on the same `entry_date` - the
+ * UI's daily view stacks "automatic" (agent-written) and "user"
+ * (human-authored) together. See docs/dev/journal.md for the feature
+ * overview.
+ *
+ * `source_thread_ids` is populated only on automatic rows (the agent
+ * tracks which conversations it derived the entry from); the delete
+ * path uses it to populate `journal_thread_excludes` so a deleted
+ * automatic row doesn't get regenerated on the next worker cycle.
+ * `similarity` is attached on rows that came out of the semantic-
+ * search RPC - undefined on direct reads.
+ */
+export type JournalSource = 'automatic' | 'user';
+
+export interface JournalEntry {
+  id: string;
+  entry_date: string;
+  source: JournalSource;
+  content: string;
+  topics: string[];
+  mood: string | null;
+  people: string[];
+  source_thread_ids: string[];
+  created_at: string;
+  updated_at: string;
+  /** Populated only by `searchJournalEntriesByEmbedding`. */
+  similarity?: number;
+}
+
+function coerceJournalEntry(raw: Record<string, unknown>): JournalEntry {
+  const source: JournalSource =
+    raw.source === 'automatic' || raw.source === 'user' ? raw.source : 'user';
+  const topics = Array.isArray(raw.topics)
+    ? (raw.topics as unknown[]).filter((t): t is string => typeof t === 'string')
+    : [];
+  const people = Array.isArray(raw.people)
+    ? (raw.people as unknown[]).filter((p): p is string => typeof p === 'string')
+    : [];
+  const sourceThreadIds = Array.isArray(raw.source_thread_ids)
+    ? (raw.source_thread_ids as unknown[]).filter(
+        (s): s is string => typeof s === 'string'
+      )
+    : [];
+  return {
+    id: String(raw.id),
+    entry_date: String(raw.entry_date),
+    source,
+    content: typeof raw.content === 'string' ? raw.content : '',
+    topics,
+    mood: typeof raw.mood === 'string' ? raw.mood : null,
+    people,
+    source_thread_ids: sourceThreadIds,
+    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
+    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
+    similarity:
+      typeof raw.similarity === 'number' ? (raw.similarity as number) : undefined,
+  };
+}
+
 export interface Message {
   id: string;
   thread_id: string;
@@ -428,6 +489,29 @@ export interface UserSettings {
    * permission prompt - the user has to ask for the feature explicitly.
    */
   notifyOnComplete?: boolean;
+  /**
+   * Reflections (journal) feature: when true, the background journaling
+   * agent processes threads as they accrue terminal assistant messages
+   * and writes/updates today's automatic entry. Absent/true is the
+   * default-on semantics decided with the user - a brand-new account
+   * opts in automatically, and the setting only has to be present when
+   * the user explicitly disables. False means the manager does not
+   * start the worker at unlock time (and stops it when flipped
+   * mid-session). User-authored entries are unaffected by this flag.
+   */
+  journalAutomaticEnabled?: boolean;
+  /**
+   * IANA timezone name used by the journaling feature to bucket
+   * entries into per-day rows. "America/New_York", "Europe/London",
+   * etc. Seeded on first Settings visit from
+   * `Intl.DateTimeFormat().resolvedOptions().timeZone`; user can
+   * override from the Reflections settings pane. Absent means "fall
+   * back to the browser's current zone at read time"; callers must
+   * handle `undefined` rather than assume a server default so a user
+   * roaming across time zones never silently lands entries on the
+   * wrong day.
+   */
+  journalTimezone?: string;
 }
 
 /**
@@ -484,6 +568,20 @@ export function coerceSettings(raw: unknown): UserSettings {
   }
   if (typeof r.notifyOnComplete === 'boolean') {
     out.notifyOnComplete = r.notifyOnComplete;
+  }
+  if (typeof r.journalAutomaticEnabled === 'boolean') {
+    out.journalAutomaticEnabled = r.journalAutomaticEnabled;
+  }
+  if (
+    typeof r.journalTimezone === 'string' &&
+    r.journalTimezone.length > 0 &&
+    r.journalTimezone.length < 128
+  ) {
+    // Character set loose on purpose - IANA zones are
+    // `Continent/City` plus aliases, and we don't want to re-implement
+    // the zone list client-side. The 128-char ceiling is a defensive
+    // cap so a malformed blob can't balloon.
+    out.journalTimezone = r.journalTimezone;
   }
   return out;
 }
@@ -626,6 +724,23 @@ export class SupabaseService {
       if (patch.notifyOnComplete === undefined) delete merged.notifyOnComplete;
       else if (typeof patch.notifyOnComplete === 'boolean') {
         merged.notifyOnComplete = patch.notifyOnComplete;
+      }
+    }
+    if ('journalAutomaticEnabled' in patch) {
+      if (patch.journalAutomaticEnabled === undefined) {
+        delete merged.journalAutomaticEnabled;
+      } else if (typeof patch.journalAutomaticEnabled === 'boolean') {
+        merged.journalAutomaticEnabled = patch.journalAutomaticEnabled;
+      }
+    }
+    if ('journalTimezone' in patch) {
+      if (patch.journalTimezone === undefined) delete merged.journalTimezone;
+      else if (
+        typeof patch.journalTimezone === 'string' &&
+        patch.journalTimezone.length > 0 &&
+        patch.journalTimezone.length < 128
+      ) {
+        merged.journalTimezone = patch.journalTimezone;
       }
     }
     const { error } = await this.client
@@ -1225,6 +1340,335 @@ export class SupabaseService {
   async deleteRecipe(id: string): Promise<void> {
     const { error } = await this.client.from('recipes').delete().eq('id', id);
     if (error) throw new SupabaseError(error.message);
+  }
+
+  // journal_entries (Reflections) ---------------------------------------
+  //
+  // User-scoped via RLS. Every read filters to the signed-in user; every
+  // write either goes through the upsert RPC (automatic rows) or
+  // explicit user-id tagging on direct inserts (user rows).
+
+  /**
+   * List journal entries newest-day-first. Pulls a bounded window;
+   * callers that want full history should paginate via `from`/`to`
+   * filters on `entry_date`. Used by the Reflections list view and
+   * export.
+   */
+  async listJournalEntries(opts: {
+    limit?: number;
+    from?: string;
+    to?: string;
+  } = {}): Promise<JournalEntry[]> {
+    let q = this.client
+      .from('journal_entries')
+      .select(
+        'id, entry_date, source, content, topics, mood, people, source_thread_ids, created_at, updated_at'
+      )
+      .order('entry_date', { ascending: false })
+      .order('source', { ascending: true })
+      .limit(opts.limit ?? 500);
+    if (opts.from) q = q.gte('entry_date', opts.from);
+    if (opts.to) q = q.lte('entry_date', opts.to);
+    const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []).map((row) => coerceJournalEntry(row as Record<string, unknown>));
+  }
+
+  /**
+   * Look up a specific day's entry pair by date. Returns an array with
+   * zero, one, or two entries (at most one per `source`). Used by the
+   * Reflections daily view and by chat-loop's "today's journal"
+   * appendix to decide whether to inject context at conversation open.
+   */
+  async getJournalEntriesForDate(entryDate: string): Promise<JournalEntry[]> {
+    const { data, error } = await this.client
+      .from('journal_entries')
+      .select(
+        'id, entry_date, source, content, topics, mood, people, source_thread_ids, created_at, updated_at'
+      )
+      .eq('entry_date', entryDate)
+      .order('source', { ascending: true });
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []).map((row) => coerceJournalEntry(row as Record<string, unknown>));
+  }
+
+  /**
+   * Upsert today's automatic entry via the schema RPC. The RPC's
+   * `on conflict` branch merges topics/mood/people/content with the
+   * latest agent view and accumulates `source_thread_ids` (de-duped).
+   * Called from the journaling agent's tool loop; direct UI paths use
+   * `createJournalEntry` / `updateJournalEntry` for user-sourced rows.
+   */
+  async upsertJournalAutomaticEntry(args: {
+    entryDate: string;
+    content: string;
+    topics: string[];
+    mood: string | null;
+    people: string[];
+    sourceThreadIds: string[];
+  }): Promise<JournalEntry> {
+    const { data, error } = await this.client.rpc('upsert_journal_automatic_entry', {
+      p_entry_date: args.entryDate,
+      p_content: args.content,
+      p_topics: args.topics,
+      p_mood: args.mood,
+      p_people: args.people,
+      p_source_thread_ids: args.sourceThreadIds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    if (rows.length === 0) throw new SupabaseError('Upsert returned no row.');
+    return coerceJournalEntry(rows[0]);
+  }
+
+  /**
+   * Create a user-sourced entry for the given date. Surfaces the
+   * 23505-unique-violation as a clean error so the UI can route the
+   * user to updateJournalEntry instead of silently swallowing the
+   * duplicate.
+   */
+  async createUserJournalEntry(args: {
+    entryDate: string;
+    content: string;
+    topics: string[];
+    mood: string | null;
+    people: string[];
+  }): Promise<JournalEntry> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const { data, error } = await this.client
+      .from('journal_entries')
+      .insert({
+        user_id: session.user.id,
+        entry_date: args.entryDate,
+        source: 'user',
+        content: args.content,
+        topics: args.topics,
+        mood: args.mood,
+        people: args.people,
+      })
+      .select(
+        'id, entry_date, source, content, topics, mood, people, source_thread_ids, created_at, updated_at'
+      )
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return coerceJournalEntry(data as Record<string, unknown>);
+  }
+
+  /**
+   * Patch a user-sourced entry's content/topics/mood/people. Refuses
+   * to touch automatic rows at the RLS layer (the policy still allows
+   * it, but the UI never calls this with an automatic id). Bumps
+   * updated_at; the trigger on the table nulls the embedding if
+   * content/topics/mood changed so the worker re-embeds.
+   */
+  async updateJournalEntry(
+    id: string,
+    patch: {
+      content?: string;
+      topics?: string[];
+      mood?: string | null;
+      people?: string[];
+    }
+  ): Promise<JournalEntry> {
+    const { data, error } = await this.client
+      .from('journal_entries')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select(
+        'id, entry_date, source, content, topics, mood, people, source_thread_ids, created_at, updated_at'
+      )
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return coerceJournalEntry(data as Record<string, unknown>);
+  }
+
+  /**
+   * Delete a journal entry by id. If the caller passes non-empty
+   * `excludeThreadIds`, those threads are upserted into
+   * journal_thread_excludes in the same round so the worker doesn't
+   * regenerate the entry from the same conversation. Caller builds
+   * the list from the entry's own source_thread_ids before deleting
+   * (the row disappears as part of this call, so we read-then-delete
+   * in the tool layer rather than inside Supabase).
+   */
+  async deleteJournalEntry(
+    id: string,
+    excludeThreadIds: readonly string[] = []
+  ): Promise<void> {
+    const { error } = await this.client.from('journal_entries').delete().eq('id', id);
+    if (error) throw new SupabaseError(error.message);
+    if (excludeThreadIds.length === 0) return;
+    const session = await this.getSession();
+    if (!session) return; // best-effort on cleanup
+    const rows = excludeThreadIds.map((threadId) => ({
+      user_id: session.user.id,
+      thread_id: threadId,
+    }));
+    // onConflict ignore so idempotent re-calls are no-ops.
+    const { error: err2 } = await this.client
+      .from('journal_thread_excludes')
+      .upsert(rows, { onConflict: 'user_id,thread_id', ignoreDuplicates: true });
+    if (err2) throw new SupabaseError(err2.message);
+  }
+
+  /**
+   * Semantic + substring search over journal entries. Parallels
+   * `searchMemoriesSemantic` in src/lib/memories.ts but lives here on
+   * the service so the reflection-side toolbox can reuse it without
+   * hauling in the memories helper's ILIKE-fallback contract.
+   *
+   * `queryEmbedding` may be null - callers without Venice get ILIKE
+   * results only. Merges vector hits first (RPC), then unembedded
+   * ILIKE hits, deduped by id. Empty `query` returns most-recent-first
+   * without embedding.
+   */
+  async searchJournalEntries(opts: {
+    query: string;
+    queryEmbedding: number[] | null;
+    limit?: number;
+  }): Promise<JournalEntry[]> {
+    const query = opts.query.trim();
+    const limit = opts.limit ?? 20;
+    if (query.length === 0) return this.listJournalEntries({ limit });
+
+    const safe = query.replace(/([,()])/g, '\\$1');
+    const pattern = `%${safe}%`;
+
+    const ilikePromise = this.client
+      .from('journal_entries')
+      .select(
+        'id, entry_date, source, content, topics, mood, people, source_thread_ids, created_at, updated_at'
+      )
+      .or(`content.ilike.${pattern},mood.ilike.${pattern}`)
+      .order('entry_date', { ascending: false })
+      .limit(limit);
+
+    const semanticPromise = opts.queryEmbedding
+      ? this.client.rpc('search_journal_entries_by_embedding', {
+          query_embedding: opts.queryEmbedding,
+          match_limit: limit,
+        })
+      : Promise.resolve({ data: [] as unknown[], error: null });
+
+    const [ilikeRes, semRes] = await Promise.all([ilikePromise, semanticPromise]);
+    if (ilikeRes.error) throw new SupabaseError(ilikeRes.error.message);
+    const ilikeRows = (ilikeRes.data ?? []).map((row) =>
+      coerceJournalEntry(row as Record<string, unknown>)
+    );
+    const semanticRows =
+      semRes.error !== null
+        ? []
+        : ((semRes.data ?? []) as unknown[]).map((row) =>
+            coerceJournalEntry(row as Record<string, unknown>)
+          );
+
+    const out: JournalEntry[] = [];
+    const seen = new Set<string>();
+    // Semantic first - a meaning match ranks above a substring match.
+    for (const e of semanticRows) {
+      if (seen.has(e.id)) continue;
+      seen.add(e.id);
+      out.push(e);
+      if (out.length >= limit) return out;
+    }
+    for (const e of ilikeRows) {
+      if (seen.has(e.id)) continue;
+      seen.add(e.id);
+      out.push(e);
+      if (out.length >= limit) return out;
+    }
+    return out;
+  }
+
+  // Journal background pipeline ------------------------------------------
+
+  /**
+   * Claim the oldest thread that needs journaling. Returns null when
+   * the queue is empty. Mirrors `claimNextThreadForReflection` but for
+   * the journal worker's partition.
+   */
+  async claimNextThreadForJournal(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{ threadId: string; terminalMsgId: string } | null> {
+    const { data, error } = await this.client.rpc('claim_next_thread_for_journal', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as { thread_id: string; terminal_msg_id: string }[];
+    if (rows.length === 0) return null;
+    return { threadId: rows[0].thread_id, terminalMsgId: rows[0].terminal_msg_id };
+  }
+
+  async markThreadJournaledIfClaimed(
+    threadId: string,
+    holderId: string,
+    msgId: string
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('mark_thread_journaled_if_claimed', {
+      p_thread_id: threadId,
+      p_holder_id: holderId,
+      p_msg_id: msgId,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  async claimNextPendingJournalEntry(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<
+    | {
+        id: string;
+        entry_date: string;
+        content: string;
+        topics: string[];
+        mood: string | null;
+      }
+    | null
+  > {
+    const { data, error } = await this.client.rpc('claim_next_pending_journal_entry', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      id: string;
+      entry_date: string;
+      content: string;
+      topics: string[] | null;
+      mood: string | null;
+    }[];
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      id: row.id,
+      entry_date: row.entry_date,
+      content: row.content,
+      topics: Array.isArray(row.topics) ? row.topics : [],
+      mood: row.mood,
+    };
+  }
+
+  async saveJournalEntryEmbedding(
+    id: string,
+    holderId: string,
+    embedding: number[],
+    model: string
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc(
+      'save_journal_entry_embedding_if_claimed',
+      {
+        p_id: id,
+        p_holder_id: holderId,
+        p_embedding: embedding,
+        p_embedding_model: model,
+      }
+    );
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
   }
 
   // Background-worker pipeline --------------------------------------------

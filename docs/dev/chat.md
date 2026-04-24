@@ -164,11 +164,22 @@ A chat turn goes:
 - **Conversation recall** — same: `conversation_recall` is a tool
   that drops into the same executor path. See
   `./conversation-recall.md`.
-- **Summaries / reflection** — no direct call; their triggers
-  watch for a terminal assistant message newer than
-  `last_summarised_msg_id` / `last_reflected_msg_id`. The chat
-  loop creates that assistant message; the workers pick it up on
-  their next poll. See `./summaries.md` and `./memory.md`.
+- **Summaries / reflection / journal** — no direct call;
+  their triggers watch for a terminal assistant message
+  newer than `last_summarised_msg_id` /
+  `last_reflected_msg_id` / `last_journaled_msg_id`. The
+  chat loop creates that assistant message; the workers
+  pick it up on their next poll. See `./summaries.md`,
+  `./memory.md`, `./journal.md`.
+- **Reflections (journal)** — `chat-loop.ts` also reads
+  today's automatic journal entry on the opening turn of
+  each conversation (via
+  `supabase.getJournalEntriesForDate(todayInZone(tz))`)
+  and appends a `## Today's journal` block to the
+  appendix so the main model has same-day reflective
+  context without an explicit tool call. The Reflections
+  modal + drawer tab + Settings pane are parallel to the
+  Cookbook surfaces. See `./journal.md`.
 - **Settings** — `Chat.svelte` reads `app.defaultModel`,
   `app.defaultReasoningEffort`, `app.defaultVerbosity`,
   `app.systemPrompts` from the state store. Settings writes

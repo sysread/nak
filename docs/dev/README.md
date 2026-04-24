@@ -51,6 +51,9 @@ changing a contract that other features depend on.
   executors (chat-side and headless-agent-side).
 - [Memory](./memory.md) — `memories` store + reflection
   agent + memory recall.
+- [Reflections / journal](./journal.md) — daily automatic +
+  user journal entries, the journaling agent, the
+  `journal_*` tools, and the Reflections modal.
 - [Cookbook](./cookbook.md) — `recipes` store + Cooklang
   parser + the recipe_* tools + the Cookbook modal and
   drawer tab.

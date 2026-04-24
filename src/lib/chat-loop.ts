@@ -51,6 +51,8 @@ import {
   type FireResult,
 } from './samskara';
 import { recallOpeningMemories } from './opening-recall';
+import { todayInZone } from './journal-day';
+import type { JournalEntry } from './supabase';
 
 /** Upper bound on rounds to prevent a runaway tool-call loop. */
 export const MAX_ROUNDS = 5;
@@ -188,6 +190,40 @@ function buildEmphasisNote(): string {
     'emphasis should reward skimming, not compete with it. Skip',
     "emphasis on short replies where skimming wouldn't help.",
   ].join('\n');
+}
+
+/**
+ * Render today's automatic journal entry as a short appendix block for
+ * the system prompt. Returns null when there's no entry yet today or
+ * when the caller passed no entry (mid-thread turns, the priming
+ * timeout fell through, etc.).
+ *
+ * Design intent: the block is context, not instruction. The baseline
+ * prompt already explains what Reflections are and how to use them -
+ * this block just ships the actual content so the model can weave
+ * continuity in. Kept compact: date header + topics/mood line + body.
+ * No `###` heavy formatting because the appendix as a whole is
+ * already framed as per-turn reference material, not an essay.
+ */
+function buildJournalNote(entry: JournalEntry | null): string | null {
+  if (!entry) return null;
+  const tags: string[] = [];
+  if (entry.topics.length > 0) {
+    tags.push(`topics: ${entry.topics.join(', ')}`);
+  }
+  if (entry.mood) tags.push(`mood: ${entry.mood}`);
+  if (entry.people.length > 0) {
+    tags.push(`people: ${entry.people.join(', ')}`);
+  }
+  const lines: string[] = [
+    `## Today's journal (${entry.entry_date})`,
+    '',
+  ];
+  if (tags.length > 0) {
+    lines.push(`_${tags.join(' / ')}_`, '');
+  }
+  lines.push(entry.content);
+  return lines.join('\n');
 }
 
 /**
@@ -366,6 +402,15 @@ export interface ChatLoopOptions {
    * turn of every user who has the toggle on.
    */
   emphasisMarkdown?: boolean;
+  /**
+   * IANA timezone used to compute "today" for the Reflections
+   * appendix. When null/undefined the journal lookup falls through to
+   * the chat-loop's process-level default (typically the browser's
+   * own zone). The chat-loop uses this ONLY to pull today's automatic
+   * journal entry into the per-turn prompt; it doesn't affect the
+   * model's reasoning directly.
+   */
+  journalTimezone?: string | null;
   /**
    * Optional id of the user message that opened this turn. When set,
    * the chat-loop pairs it with the terminal assistant message id and
@@ -551,6 +596,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     reasoningEffort,
     verbosity,
     emphasisMarkdown,
+    journalTimezone,
     userMessageId,
     currentMessageAttachments,
   } = opts;
@@ -621,28 +667,58 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   interface PrimingBundle {
     samskaraAppendix: string;
     openingRecallBlock: string | null;
+    /**
+     * Today's automatic journal entry for the signed-in user, if one
+     * exists. Injected as an appendix block on opening turns so the
+     * model can weave continuity in without a tool call. Null when
+     * there's no entry yet today, or when this isn't the opening
+     * turn (mid-thread turns pay no tax).
+     */
+    journalEntry: JournalEntry | null;
   }
+  // Pre-compute today's date in the user's timezone so the journal
+  // lookup (a tiny indexed SELECT) can race alongside the samskara
+  // bundle. Bucketing is cheap; both feeds run under the same
+  // SAMSKARA_PRIMING_TIMEOUT_MS cap.
+  const journalToday = todayInZone(journalTimezone ?? null);
   const primingWork = (async (): Promise<PrimingBundle> => {
-    const [compoundSummary, fireResult, openingRecallBlock] = await Promise.all([
-      getCompoundSummary(supabase),
-      fireSamskaras(supabase, venice, thread.id, userText, signal),
-      isOpeningTurn
-        ? recallOpeningMemories(supabase, venice, userText, signal)
-        : Promise.resolve<string | null>(null),
-    ]);
+    const [compoundSummary, fireResult, openingRecallBlock, journalRows] =
+      await Promise.all([
+        getCompoundSummary(supabase),
+        fireSamskaras(supabase, venice, thread.id, userText, signal),
+        isOpeningTurn
+          ? recallOpeningMemories(supabase, venice, userText, signal)
+          : Promise.resolve<string | null>(null),
+        // Only pull the journal row on the opening turn - the same
+        // reason we only do opening-recall there. Mid-thread turns
+        // would rebuild the same appendix every round with no benefit.
+        // Degrades silently: an error here just means "no journal
+        // block this turn."
+        isOpeningTurn
+          ? supabase.getJournalEntriesForDate(journalToday).catch(() => [])
+          : Promise.resolve([]),
+      ]);
+    const automatic =
+      journalRows.find((e) => e.source === 'automatic') ?? null;
     return {
       samskaraAppendix: formatPriming({
         compoundSummary,
         fire: fireResult as FireResult | null,
       }),
       openingRecallBlock,
+      journalEntry: automatic,
     };
   })();
   const priming = await Promise.race<PrimingBundle>([
     primingWork,
     new Promise<PrimingBundle>((resolve) =>
       setTimeout(
-        () => resolve({ samskaraAppendix: '', openingRecallBlock: null }),
+        () =>
+          resolve({
+            samskaraAppendix: '',
+            openingRecallBlock: null,
+            journalEntry: null,
+          }),
         SAMSKARA_PRIMING_TIMEOUT_MS
       )
     ),
@@ -670,8 +746,15 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // profile and belongs at the top of the appendix). Null when the
   // setting is off so the filter below skips it cleanly.
   const emphasisNote = emphasisMarkdown ? buildEmphasisNote() : null;
+  // Today's Reflections block sits between the samskara priming and
+  // the emphasis/title nudges: it's user-specific context (belongs
+  // with samskara) but not urgent (title note stays closest to the
+  // user turn). Null on mid-thread turns or when no automatic entry
+  // exists yet.
+  const journalNote = buildJournalNote(priming.journalEntry);
   const appendixParts = [
     priming.samskaraAppendix,
+    journalNote,
     emphasisNote,
     titleNote,
   ].filter((s): s is string => typeof s === 'string' && s.length > 0);

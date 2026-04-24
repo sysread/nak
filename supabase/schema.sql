@@ -2829,6 +2829,375 @@ begin
   return v_collapsed;
 end $$;
 
+-- Journal (Reflections feature) -----------------------------------------
+--
+-- Daily-journal surface for the user's reflective content. A background
+-- worker (src/lib/agents/journal/) processes threads that have accrued
+-- new terminal assistant messages and extracts reflective content into
+-- one automatic entry per user per day. The user can also author their
+-- own user-sourced entry for the same day; both render together in the
+-- daily-view UI. Semantic search is backed by the same embeddings
+-- pipeline as memories/threads.
+--
+-- "Reflections" is the public feature name; the internal code uses
+-- `journal` because the existing `reflection` subtree is the memory-
+-- extraction agent and the naming would collide.
+
+create table if not exists public.journal_entries (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- Day this entry belongs to, in the user's local timezone. Stored as
+  -- a plain DATE so queries can range-scan without timezone math.
+  entry_date date not null,
+  -- Who wrote it. 'automatic' rows are owned by the background worker
+  -- and are read-only from the UI; 'user' rows are composed by the
+  -- signed-in human. Exactly one of each per day (per the unique
+  -- constraint below), so the daily view shows at most two cards.
+  source text not null check (source in ('automatic', 'user')),
+  content text not null,
+  -- Free-text topic chips. Array rather than a separate table because
+  -- topics are purely presentational; we don't query across users by
+  -- topic and the LLM is free to invent new ones per-entry.
+  topics text[] not null default array[]::text[],
+  -- Single dominant mood/tone for the day ("anxious", "hopeful",
+  -- "frustrated", "reflective"). Nullable because not every entry
+  -- carries a clear dominant tone.
+  mood text,
+  -- First names / identifiers of people mentioned. Same rationale as
+  -- topics - no cross-user joins, chips only.
+  people text[] not null default array[]::text[],
+  -- Threads the automatic-entry text was derived from. Populated by the
+  -- journaling agent via journal_upsert; user-sourced entries leave
+  -- this empty. Referenced by the delete path to populate
+  -- journal_thread_excludes so a deleted automatic entry doesn't get
+  -- recreated from the same conversation on the next worker cycle.
+  source_thread_ids uuid[] not null default array[]::uuid[],
+  embedding vector(2048),
+  embedding_model text,
+  embedding_claim_holder text,
+  embedding_claim_expires timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  -- At most one automatic and one user row per day per user.
+  unique (user_id, entry_date, source)
+);
+
+create index if not exists journal_entries_user_date_idx
+  on public.journal_entries (user_id, entry_date desc);
+
+-- Invalidate the embedding whenever the text that produced it changes.
+-- Matches the memories pattern: pending = `embedding is null`, claim
+-- columns nulled so an in-flight worker save won't land a stale vector
+-- (its guard checks `claim_holder = $me and claim_expires > now()` and
+-- both fields would otherwise still match).
+create or replace function public.clear_journal_embedding_on_change()
+  returns trigger language plpgsql as $$
+begin
+  if new.content is distinct from old.content
+     or new.topics  is distinct from old.topics
+     or new.mood    is distinct from old.mood then
+    new.embedding := null;
+    new.embedding_model := null;
+    new.embedding_claim_holder := null;
+    new.embedding_claim_expires := null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clear_journal_embedding_on_change on public.journal_entries;
+create trigger clear_journal_embedding_on_change
+  before update on public.journal_entries
+  for each row execute function public.clear_journal_embedding_on_change();
+
+alter table public.journal_entries enable row level security;
+
+drop policy if exists "journal_entries are self-selectable" on public.journal_entries;
+create policy "journal_entries are self-selectable" on public.journal_entries
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "journal_entries are self-insertable" on public.journal_entries;
+create policy "journal_entries are self-insertable" on public.journal_entries
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "journal_entries are self-updatable" on public.journal_entries;
+create policy "journal_entries are self-updatable" on public.journal_entries
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "journal_entries are self-deletable" on public.journal_entries;
+create policy "journal_entries are self-deletable" on public.journal_entries
+  for delete using (auth.uid() = user_id);
+
+-- Per-user set of threads the journaling worker should skip. Populated
+-- whenever the user (via the chat-side journal_delete tool) removes an
+-- automatic entry - we add the entry's source_thread_ids here so the
+-- next worker cycle doesn't regenerate what the user just deleted.
+-- Hard-deleting the row from this table (e.g. from an admin surface) is
+-- the only way to re-enroll a thread; we deliberately don't expose a
+-- user-facing "clear excludes" button because the delete action is
+-- meant to be durable.
+create table if not exists public.journal_thread_excludes (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  thread_id uuid not null references public.threads(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (user_id, thread_id)
+);
+
+alter table public.journal_thread_excludes enable row level security;
+
+drop policy if exists "journal_thread_excludes are self-selectable" on public.journal_thread_excludes;
+create policy "journal_thread_excludes are self-selectable" on public.journal_thread_excludes
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "journal_thread_excludes are self-insertable" on public.journal_thread_excludes;
+create policy "journal_thread_excludes are self-insertable" on public.journal_thread_excludes
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "journal_thread_excludes are self-deletable" on public.journal_thread_excludes;
+create policy "journal_thread_excludes are self-deletable" on public.journal_thread_excludes
+  for delete using (auth.uid() = user_id);
+
+-- Threads carry a pointer + per-row claim for the journaling worker,
+-- independent of the memory-extraction pipeline's last_reflected_msg_id.
+-- Both can run concurrently against the same thread; the two pointers
+-- advance independently.
+alter table public.threads
+  add column if not exists last_journaled_msg_id uuid references public.messages(id) on delete set null,
+  add column if not exists journal_claim_holder text,
+  add column if not exists journal_claim_expires_at timestamptz;
+
+-- Upsert today's automatic entry atomically. Idempotent on
+-- (user_id, entry_date, source='automatic'): the agent calls this on
+-- every worker cycle and the conflict target merges the call into the
+-- existing row. source_thread_ids accumulates (de-duped) across calls
+-- so a delete can find every source thread in one go. Topics, people,
+-- mood are overwritten with the agent's latest view; content replaces
+-- wholesale.
+drop function if exists public.upsert_journal_automatic_entry(date, text, text[], text, text[], uuid[]);
+create or replace function public.upsert_journal_automatic_entry(
+  p_entry_date date,
+  p_content text,
+  p_topics text[],
+  p_mood text,
+  p_people text[],
+  p_source_thread_ids uuid[]
+) returns table (
+  id uuid,
+  entry_date date,
+  source text,
+  content text,
+  topics text[],
+  mood text,
+  people text[],
+  source_thread_ids uuid[],
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+  return query
+  insert into public.journal_entries (
+    user_id, entry_date, source, content, topics, mood, people, source_thread_ids
+  ) values (
+    v_uid, p_entry_date, 'automatic', p_content,
+    coalesce(p_topics, array[]::text[]),
+    p_mood,
+    coalesce(p_people, array[]::text[]),
+    coalesce(p_source_thread_ids, array[]::uuid[])
+  )
+  on conflict (user_id, entry_date, source) do update
+     set content = excluded.content,
+         topics  = excluded.topics,
+         mood    = excluded.mood,
+         people  = excluded.people,
+         -- Union dedup: preserve every thread the agent has ever
+         -- derived this day's entry from so the delete path can
+         -- add them all to journal_thread_excludes in one step.
+         source_thread_ids = (
+           select coalesce(array_agg(distinct x), array[]::uuid[])
+             from unnest(public.journal_entries.source_thread_ids || excluded.source_thread_ids) as x
+         ),
+         updated_at = now()
+  returning
+    public.journal_entries.id,
+    public.journal_entries.entry_date,
+    public.journal_entries.source,
+    public.journal_entries.content,
+    public.journal_entries.topics,
+    public.journal_entries.mood,
+    public.journal_entries.people,
+    public.journal_entries.source_thread_ids,
+    public.journal_entries.created_at,
+    public.journal_entries.updated_at;
+end $$;
+
+-- Claim the oldest thread that needs journaling. Parallels
+-- `claim_next_thread_for_reflection`; the predicate is "terminal
+-- assistant message newer than last_journaled_msg_id, not in the
+-- user's excludes, passes the char threshold, not currently claimed".
+-- The excludes filter is the per-thread "do not journal" switch the
+-- delete path writes to.
+drop function if exists public.claim_next_thread_for_journal(text, int);
+create or replace function public.claim_next_thread_for_journal(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, terminal_msg_id uuid)
+language sql security invoker as $$
+  with candidate as (
+    select t.id as thread_id, term.msg_id as terminal_msg_id
+      from public.threads t
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+     where t.user_id = auth.uid()
+       and term.msg_id is distinct from t.last_journaled_msg_id
+       and (t.journal_claim_expires_at is null
+            or t.journal_claim_expires_at < now())
+       and not exists (
+         select 1 from public.journal_thread_excludes e
+          where e.user_id = t.user_id
+            and e.thread_id = t.id
+       )
+       and (
+         -- Same char-volume guard as reflection: ~6400 chars keeps the
+         -- worker from burning Venice on "hi"/"hey" exchanges.
+         select coalesce(sum(length(m2.content)), 0)
+           from public.messages m2
+          where m2.thread_id = t.id
+       ) >= 6400
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set journal_claim_holder = p_holder_id,
+         journal_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id;
+$$;
+
+-- Mark the thread journaled IF our claim is still ours. Returns false
+-- on claim-lost; caller drops the cycle (any upsert side-effect already
+-- landed and will be reconciled by the agent reading the existing
+-- automatic row on the next cycle).
+drop function if exists public.mark_thread_journaled_if_claimed(uuid, text, uuid);
+create or replace function public.mark_thread_journaled_if_claimed(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_msg_id uuid
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.threads
+     set last_journaled_msg_id = p_msg_id,
+         journal_claim_holder = null,
+         journal_claim_expires_at = null
+   where id = p_thread_id
+     and user_id = auth.uid()
+     and journal_claim_holder = p_holder_id
+     and journal_claim_expires_at > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Embeddings pipeline RPCs for journal entries. Same claim/save
+-- semantics as memories, same 2048-dim padded vectors, same
+-- "security invoker" posture letting RLS enforce user scoping.
+drop function if exists public.claim_next_pending_journal_entry(text, int);
+create or replace function public.claim_next_pending_journal_entry(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, entry_date date, content text, topics text[], mood text)
+language sql security invoker as $$
+  with candidate as (
+    select je.id
+      from public.journal_entries je
+     where je.user_id = auth.uid()
+       and je.embedding is null
+       and (je.embedding_claim_expires is null
+            or je.embedding_claim_expires < now())
+     order by je.updated_at desc
+     limit 1
+     for update skip locked
+  )
+  update public.journal_entries je
+     set embedding_claim_holder = p_holder_id,
+         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where je.id = c.id
+  returning je.id, je.entry_date, je.content, je.topics, je.mood;
+$$;
+
+drop function if exists public.save_journal_entry_embedding_if_claimed(uuid, text, vector, text);
+create or replace function public.save_journal_entry_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.journal_entries
+     set embedding = p_embedding,
+         embedding_model = p_embedding_model,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where id = p_id
+     and user_id = auth.uid()
+     and embedding_claim_holder = p_holder_id
+     and embedding_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Similarity search RPC. No confidence boost (journal entries don't
+-- carry a confidence scalar; they're direct human/agent assertions
+-- rather than probabilistic memories). Plain cosine ranking, scoped
+-- by RLS + an explicit user_id guard.
+drop function if exists public.search_journal_entries_by_embedding(vector, int);
+create or replace function public.search_journal_entries_by_embedding(
+  query_embedding vector(2048),
+  match_limit int
+) returns table (
+  id uuid,
+  entry_date date,
+  source text,
+  content text,
+  topics text[],
+  mood text,
+  people text[],
+  updated_at timestamptz,
+  similarity real
+)
+language sql stable security invoker as $$
+  select id, entry_date, source, content, topics, mood, people, updated_at,
+         (1 - (embedding <=> query_embedding))::real as similarity
+    from public.journal_entries
+   where user_id = auth.uid()
+     and embedding is not null
+   order by embedding <=> query_embedding asc
+   limit match_limit
+$$;
+
 -- Realtime subscriptions --------------------------------------------------
 --
 -- The client subscribes to INSERTs on `messages` (filtered by thread_id)

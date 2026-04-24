@@ -230,6 +230,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'conversations',
+      'journal',
       'research',
     ]);
   });
@@ -239,6 +240,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'conversations',
+      'journal',
       'research',
     ]);
     expect(GATED_TOOLBOX_NAMES).not.toContain('always_on');
@@ -253,6 +255,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'conversations',
+      'journal',
       'research',
     ]);
     for (const m of GATED_TOOLBOX_META) {

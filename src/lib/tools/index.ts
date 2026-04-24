@@ -55,6 +55,11 @@ import { updateTitle } from './update_title';
 import { analyzeImage } from './analyze_image';
 import { researchDocs } from './research_docs';
 import { memoryToolbox } from './memory_toolbox';
+import { journalList } from './journal_list';
+import { journalRead } from './journal_read';
+import { journalSearch } from './journal_search';
+import { journalDelete } from './journal_delete';
+import { journalAgentToolbox } from './journal_agent_toolbox';
 
 /**
  * Always-on toolbox. Rides with every request regardless of the
@@ -148,6 +153,31 @@ export const conversationsToolbox: Toolbox = {
 };
 
 /**
+ * Reflections (daily journal). Read-focused tools for the main chat -
+ * the write path is the background journaling agent's, not this
+ * toolbox's. `journal_delete` is here because removing an entry is
+ * user-directed (and invokes the per-thread exclude side-effect);
+ * creating an automatic entry is not the model's call.
+ *
+ * Gated rather than always-on because most conversations don't
+ * involve Reflections - including the schemas on every turn would
+ * grow the request payload without paying rent. The LLM can flip it
+ * on via toggle_toolbox once a reflective topic opens up.
+ */
+export const journalToolbox: Toolbox = {
+  name: 'journal',
+  description:
+    "Read and search the user's daily Reflections (journal entries), " +
+    'and delete entries they no longer want. Entries come from two ' +
+    "sources per day: 'automatic' (written by the background " +
+    "journaling agent from the user's conversations) and 'user' " +
+    '(first-person entries the user composed themselves). Writing ' +
+    'automatic entries is handled by the background worker, not this ' +
+    'toolbox.',
+  tools: [journalList, journalRead, journalSearch, journalDelete],
+};
+
+/**
  * Research capabilities that aren't a fit for always-on. Today this is
  * just `research_docs` - a sub-agent that answers questions about Nak
  * itself by reading the bundled in-app help corpus, and (when the
@@ -187,6 +217,7 @@ export const TOOLBOXES: readonly Toolbox[] = [
   cookingToolbox,
   memoriesToolbox,
   conversationsToolbox,
+  journalToolbox,
   researchToolbox,
 ];
 
@@ -424,6 +455,25 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     "conversations where you discussed something similar. Don't make",
     'the user repeat themselves if the answer is already in your history.',
     '',
+    // Reflections / journal framing. Most conversations don't touch
+    // the journal; the hint is short on purpose so it stays cheap on
+    // tokens for turns that will never reach for it. When the
+    // appendix carries a "Today's journal" block, it sits near the
+    // end so the model sees it as recent context; this paragraph
+    // just tells the model the block exists and what to do with it.
+    "The user has a Reflections surface - a daily journal written by",
+    'the background journaler when reflective topics come up, plus any',
+    "first-person entries the user composed themselves. If today's",
+    'automatic entry exists, the appendix below will include it; weave',
+    "that continuity in naturally, no announcement (don't say \"I see",
+    "you wrote...\") - just let it inform your tone the way a friend",
+    "who remembers yesterday's conversation would. If the user is",
+    'being reflective (venting, processing, self-examining) or brings',
+    'up an older emotional thread, the `journal` toolbox has',
+    '`journal_search` to pull related prior entries so you can help',
+    'them build on what they already worked through rather than',
+    'starting from scratch.',
+    '',
     // --- Toolbox framing -------------------------------------------
     // The model sees the toolbox catalog below with [x]/[ ] marks
     // showing current state. Explicit instructions on how to flip
@@ -556,7 +606,7 @@ export async function executeToolCall(
 // header for the IIFE/code-splitting failure mode that keeps it out
 // of `./index.ts`. The recall toolboxes live in their own files to
 // avoid a circular import - see those files' headers for why.
-export { memoryToolbox, recallToolbox, conversationRecallToolbox };
+export { memoryToolbox, recallToolbox, conversationRecallToolbox, journalAgentToolbox };
 
 export { toOpenAIToolDef, buildToolboxWireList, executeToolboxCall };
 export { toggleToolbox, updateTitle };

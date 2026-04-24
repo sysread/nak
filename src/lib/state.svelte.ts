@@ -29,7 +29,9 @@ import { reflectionManager } from './agents/reflection/manager';
 import { summaryManager } from './agents/summary/manager';
 import { attachmentExpiryManager } from './agents/attachment_expiry/manager';
 import { samskaraManager } from './agents/samskara/manager';
+import { journalManager } from './agents/journal/manager';
 import { startUsagePolling, stopUsagePolling } from './usage-store.svelte';
+import { detectTimezone } from './journal-day';
 import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_TIER,
@@ -112,6 +114,22 @@ interface AppState {
    * unlock; see src/lib/notifications.svelte.ts for the delivery policy.
    */
   notifyOnComplete: boolean;
+  /**
+   * Reflections feature: background journaling worker runs unless this
+   * is explicitly false. Seeded to true on activate() so a brand-new
+   * account gets journaling out of the box; overwritten from Supabase
+   * `profiles.settings.journalAutomaticEnabled` on unlock.
+   */
+  journalAutomaticEnabled: boolean;
+  /**
+   * IANA timezone used by the journaling feature to bucket entries.
+   * Seeded from the browser's detected zone on activate() so a
+   * first-time user lands on sensible defaults; overwritten from
+   * Supabase `profiles.settings.journalTimezone` on unlock. Passed
+   * into the chat-loop's per-turn "today's journal" appendix
+   * computation and into the journaling worker's start message.
+   */
+  journalTimezone: string;
   error: string | null;
 }
 
@@ -131,6 +149,8 @@ export const app = $state<AppState>({
   systemPrompts: [],
   emphasisMarkdown: false,
   notifyOnComplete: false,
+  journalAutomaticEnabled: true,
+  journalTimezone: detectTimezone(),
   error: null,
 });
 
@@ -163,6 +183,38 @@ export function setNotifyOnComplete(enabled: boolean): void {
 }
 
 /**
+ * Flip the background journaling worker on/off in the current session.
+ * Starts or stops the journal manager to match - the toggle is the
+ * live switch, not a passive preference. Settings.svelte also calls
+ * `updateSettings({ journalAutomaticEnabled })` so the choice
+ * persists across reloads.
+ */
+export function setJournalAutomaticEnabled(enabled: boolean): void {
+  app.journalAutomaticEnabled = enabled;
+  if (!app.supabase || !app.config) return;
+  if (enabled) {
+    void journalManager.start({
+      supabase: app.supabase,
+      config: app.config,
+      timezone: app.journalTimezone || null,
+    });
+  } else {
+    journalManager.stop();
+  }
+}
+
+/**
+ * Update the journal timezone in memory AND push the new zone to the
+ * journaling worker so it starts bucketing entries into the right
+ * days immediately. Caller is responsible for the Supabase persist
+ * side (Settings.svelte calls `updateSettings({ journalTimezone })`).
+ */
+export function setJournalTimezone(tz: string): void {
+  app.journalTimezone = tz;
+  journalManager.setTimezone(tz || null);
+}
+
+/**
  * Update color mode / accent in memory, apply to the DOM, and cache the
  * choice so the boot script can restore it instantly next load. Does NOT
  * write to Supabase — callers that want server-side persistence should
@@ -192,6 +244,11 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
   app.emphasisMarkdown = false;
   app.notifyOnComplete = false;
+  // Reflections defaults: opt-in by default, zone from the browser.
+  // Chat.svelte overwrites both from Supabase `profiles.settings` on
+  // unlock; this seed keeps the app functional before that arrives.
+  app.journalAutomaticEnabled = true;
+  app.journalTimezone = detectTimezone();
   app.phase = 'unlocked';
   app.error = null;
   if (opts.persist !== false) saveSession(config);
@@ -216,6 +273,18 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   void summaryManager.start({ supabase: app.supabase, config });
   void attachmentExpiryManager.start({ supabase: app.supabase, config });
   void samskaraManager.start({ supabase: app.supabase, config });
+  // Journal worker is gated on the user's opt-in setting. We start it
+  // here when the seed is true (default-on for new accounts); Chat.svelte
+  // may flip this off via `setJournalAutomaticEnabled(false)` after
+  // pulling the persisted settings from Supabase if the user had
+  // disabled it previously. The start() call is idempotent.
+  if (app.journalAutomaticEnabled) {
+    void journalManager.start({
+      supabase: app.supabase,
+      config,
+      timezone: app.journalTimezone || null,
+    });
+  }
   // Warm the Usage pane cache in the background so Settings -> Usage
   // opens instantly when the user goes looking. The poller fires once
   // immediately and re-fires hourly; Settings still forces a refresh
@@ -232,6 +301,7 @@ export function lock(): void {
   summaryManager.stop();
   attachmentExpiryManager.stop();
   samskaraManager.stop();
+  journalManager.stop();
   // Tear down the usage poller and wipe the cache so rows billed
   // against the previous API key don't leak into a subsequent
   // unlock-with-different-config.
@@ -245,6 +315,11 @@ export function lock(): void {
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
   app.emphasisMarkdown = false;
   app.notifyOnComplete = false;
+  // Reflections: reset both fields so a subsequent unlock re-seeds
+  // them from the new account's Supabase settings rather than
+  // inheriting the previous account's choices.
+  app.journalAutomaticEnabled = true;
+  app.journalTimezone = detectTimezone();
   app.systemPrompts = [];
   app.phase = 'locked';
   clearSession();
