@@ -39,9 +39,11 @@
     setDefaultVerbosity,
     setDefaultLogLevel,
     setEmphasisMarkdown,
+    setNotifyOnComplete,
     setSystemPrompts,
     setTheme,
   } from '$lib/state.svelte';
+  import { isSupported as notificationsSupported, requestPermission } from '$lib/notifications.svelte';
   import { LOG_LEVELS, LOG_LEVEL_LABELS, type LogLevel } from '$lib/logger.svelte';
   import {
     MODELS,
@@ -139,6 +141,12 @@
   // to use light Markdown emphasis as scan-points. Persisted on
   // `profiles.settings.emphasisMarkdown`.
   let emphasisMarkdown = $state<boolean>(app.emphasisMarkdown);
+  // Opt-in completion-notification toggle. Persisted on
+  // `profiles.settings.notifyOnComplete`. Flipping on triggers a
+  // browser permission prompt via onToggleNotifyOnComplete - if the
+  // user denies we snap back off, since the in-app unread dot alone
+  // isn't what the toggle advertises.
+  let notifyOnComplete = $state<boolean>(app.notifyOnComplete);
   let modelError = $state<string | null>(null);
   let modelInfo = $state<string | null>(null);
 
@@ -836,6 +844,55 @@
     }
   }
 
+  /**
+   * Flip the completion-notification toggle. Enabling requires the
+   * browser's Notification permission - we ask for it inline the first
+   * time the toggle is turned on. On 'denied' we snap the checkbox back
+   * off rather than persisting a setting the user can't actually use;
+   * only 'granted' gets persisted to Supabase. Turning the toggle OFF
+   * never touches permission (the browser-level grant survives, the
+   * app-level preference goes back to false).
+   */
+  async function onToggleNotifyOnComplete(next: boolean): Promise<void> {
+    modelError = null;
+    modelInfo = null;
+    if (!app.supabase) {
+      modelError = 'Not connected to Supabase yet.';
+      return;
+    }
+    const prev = notifyOnComplete;
+    if (next && notificationsSupported()) {
+      // Safari + Chromium both require a user gesture to kick off the
+      // prompt; the click that toggled the checkbox counts, so we can
+      // ask immediately from this handler.
+      const result = await requestPermission();
+      if (result === 'denied' || result === 'default') {
+        // 'default' here means the user dismissed the prompt without
+        // choosing - treat as a soft deny, since we can't fire OS
+        // notifications without a granted state. User can re-flip the
+        // toggle to try again.
+        notifyOnComplete = false;
+        modelError =
+          'Browser notifications are blocked. Allow notifications for this site in your browser settings, then try again.';
+        return;
+      }
+    }
+    notifyOnComplete = next;
+    setNotifyOnComplete(next);
+    try {
+      await app.supabase.updateSettings({ notifyOnComplete: next });
+      modelInfo = next
+        ? notificationsSupported()
+          ? 'Reply notifications enabled.'
+          : 'Reply notifications enabled. This browser does not support OS notifications, so Nak will flag unread threads in the sidebar instead.'
+        : 'Reply notifications disabled.';
+    } catch (err) {
+      notifyOnComplete = prev;
+      setNotifyOnComplete(prev);
+      modelError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   async function onChangePassword(e: SubmitEvent): Promise<void> {
     e.preventDefault();
     pwError = null;
@@ -1030,6 +1087,32 @@
                 onToggleEmphasis((e.currentTarget as HTMLInputElement).checked)}
             />
             <span>Ask the model to highlight save-points</span>
+          </label>
+        </div>
+
+        <h3 class="pane-section">Reply notifications</h3>
+        <p class="subtle">
+          When a reply lands in a thread you aren't currently viewing,
+          Nak can flag the thread in the sidebar and - if your browser
+          supports it and permission is granted - fire a desktop or
+          mobile notification when the tab isn't visible. Only fires
+          for threads you navigated away from mid-reply; the thread
+          you're watching never notifies itself.
+          {#if !notificationsSupported()}
+            This browser doesn't expose the Notification API, so you'll
+            only see the in-app sidebar flag. On iOS, install Nak to
+            the home screen to receive OS notifications.
+          {/if}
+        </p>
+        <div class="form-row" style="display:flex;gap:0.5rem;align-items:center">
+          <label style="display:flex;gap:0.5rem;align-items:center">
+            <input
+              type="checkbox"
+              checked={notifyOnComplete}
+              onchange={(e) =>
+                onToggleNotifyOnComplete((e.currentTarget as HTMLInputElement).checked)}
+            />
+            <span>Notify me when replies finish</span>
           </label>
         </div>
         {#if modelError}<p class="error">{modelError}</p>{/if}

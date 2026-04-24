@@ -52,6 +52,14 @@ you - so long prose skims more easily.
   mechanical-prefix bionic, it would need to be a separate
   render-time transform, not a model instruction.
 
+## Reply notifications
+
+See [The chat interface](./chat.md#reply-notifications). The
+toggle lives in the AI pane next to the Emphasis markdown one,
+but the behaviour (OS notification or sidebar dot when a reply
+lands in a thread you're not viewing) is chat-UX, so the full
+write-up lives on the chat page.
+
 ## Per-thread overrides
 
 ## Web search

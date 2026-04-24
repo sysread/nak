@@ -1260,6 +1260,23 @@ h1 {
   flex-shrink: 0;
 }
 
+/* Unread-reply dot. Sits inline before the title so the ellipsis
+   clipping on .thread preserves visibility of the dot even when the
+   title is long - putting it after the title would let it get cut off.
+   Filled with the accent color so it reads as a call to attention
+   against both light and dark sidebars. Cleared by markThreadRead()
+   when the user opens the thread (see notifications.svelte.ts). */
+.thread-unread-dot {
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-right: 0.4rem;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
 /* Per-row dropdown. Anchored to the right edge of the row so it
    expands inward without clipping against the drawer's right border.
    Reuses the composer-menu visual language. */

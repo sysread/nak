@@ -46,9 +46,11 @@
     setDefaultVerbosity,
     setDefaultLogLevel,
     setEmphasisMarkdown,
+    setNotifyOnComplete,
     setSystemPrompts,
     setTheme,
   } from '$lib/state.svelte';
+  import { notifications, notifyTurnComplete, markThreadRead } from '$lib/notifications.svelte';
   import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
   import { route, navigate, buildSearch } from '$lib/routing.svelte';
   import {
@@ -990,6 +992,7 @@
       // activate(). Explicit `false` in the blob overrides anything
       // set in-session (e.g. a toggle flipped in another tab).
       setEmphasisMarkdown(s.emphasisMarkdown ?? false);
+      setNotifyOnComplete(s.notifyOnComplete ?? false);
       // If the server has a theme choice and it differs from the cached one,
       // apply it now. setTheme also re-caches, so subsequent loads are fast.
       if (s.colorMode || s.accent) {
@@ -1176,6 +1179,10 @@
       }
     }
     activeThreadId = id;
+    // Opening a thread clears its unread dot. No-op if the dot wasn't
+    // set (e.g. the user is navigating to a thread they've been viewing
+    // all along via back/forward).
+    if (id !== null) markThreadRead(id);
     setSessionThreadId(id);
     // Mirror the active thread into the URL. `navigate` no-ops when
     // route.cid is already `id` (e.g. this call originated from a
@@ -1430,6 +1437,8 @@
       // Drafts only exist in memory — just drop them locally.
       if (!t.isDraft) await app.supabase.deleteThread(id);
       removeThread(id);
+      // If this thread had an unread dot pending, it's meaningless now.
+      markThreadRead(id);
       if (activeThreadId === id) {
         activeThreadId = null;
         messages = [];
@@ -1999,6 +2008,24 @@
       streamingCitations = null;
       streamingReasoningOpen = false;
       streamingContentStarted = false;
+      // Surface the completion to the notifications service: either
+      // fires an OS notification (tab backgrounded + permission granted)
+      // or sets an unread dot on the sidebar row. Skip on user-initiated
+      // stop (they know they hit Stop) and on a limit-without-text
+      // outcome (no actual reply to report). The service itself no-ops
+      // when the completed thread is the active one, so tagging the
+      // current thread here is harmless.
+      if (!loopResult.interrupted && loopResult.finalText.length > 0) {
+        const threadForNotif = findThread(ctx.threadId);
+        notifyTurnComplete({
+          threadId: ctx.threadId,
+          title: threadForNotif?.title || 'New reply',
+          isActive: activeThreadId === ctx.threadId,
+          onClick: (id) => {
+            void selectThread(id);
+          },
+        });
+      }
       await refreshThreads();
     } catch (err) {
       // User-initiated stop: runChatLoop catches mid-stream aborts
@@ -3208,6 +3235,13 @@
               ontouchcancel={cancelLongPress}
               title={t.title || 'Untitled'}
             >
+              {#if notifications.unread.has(t.id)}
+                <span
+                  class="thread-unread-dot"
+                  aria-label="New reply"
+                  title="New reply"
+                ></span>
+              {/if}
               {t.title || 'Untitled'}
             </button>
             <button

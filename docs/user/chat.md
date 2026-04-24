@@ -245,6 +245,57 @@ second click against a clean pool reports "Nothing redundant".
 Opens via the fist button in the log drawer header; closes via the
 ×, Escape, or clicking the backdrop.
 
+## Reply notifications
+
+If you switch to a different conversation while a reply is still
+streaming, Nak keeps the reply running in the background - the
+stream is tied to the app session, not the view. When you come
+back, the completed message is already there, just without the
+token-by-token playback you would have seen live.
+
+To make that easier to notice, turn on **Notify me when replies
+finish** in Settings > AI. When it's on, a completion that lands
+in a thread you aren't currently viewing surfaces in one of two
+ways, picked automatically:
+
+- **The tab is visible but you're on a different thread.** A
+  small dot appears next to the thread's row in the sidebar.
+  Opening the thread clears the dot.
+- **The tab is backgrounded, the PWA is minimized, or the screen
+  is locked.** Nak fires a real OS notification - desktop
+  notification on Windows/macOS/Linux, system notification on
+  Android. Click it and the window focuses and jumps straight to
+  the thread.
+
+The first time you flip the toggle on, your browser asks whether
+Nak can send notifications. Allow it and the feature is ready;
+deny it and the toggle snaps back off (an in-app dot alone isn't
+what the setting advertises, so we don't silently downgrade).
+You can re-enable the permission later from your browser's site
+settings and flip the toggle again.
+
+A few platform quirks worth knowing:
+
+- **iOS Safari in a tab has no Notification API at all.** You'll
+  only get the in-app sidebar dot, never a system notification.
+  [Install Nak to the home screen](./install-pwa.md) on iOS 16.4
+  or later and the installed PWA can fire real notifications.
+- **Multiple completions on the same thread collapse** into one
+  OS notification - a second reply in a thread that already has
+  an unfired notification replaces it rather than stacking a
+  second popup. You'll still see one dot per thread in the
+  sidebar.
+- **Interrupted replies don't notify.** If you hit Stop on a
+  reply, the partial text is saved but no notification fires -
+  you already know the reply is done.
+- **The thread you're watching never notifies itself.** Only
+  replies in threads you've navigated away from trigger the
+  sidebar dot or the OS notification.
+
+Off by default because enabling it triggers the browser's
+permission prompt, and prompting you for permissions without you
+asking first would be rude.
+
 ## When the model is rate-limited
 
 Venice occasionally returns a 429 "model overloaded" response when the

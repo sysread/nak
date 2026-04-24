@@ -103,6 +103,15 @@ interface AppState {
    * chat-loop.ts for the exact blurb.
    */
   emphasisMarkdown: boolean;
+  /**
+   * When true, completions that land in a thread other than the one the
+   * user is currently viewing fire either an OS notification (document
+   * hidden, permission granted) or an in-app unread dot on the sidebar
+   * entry. Opt-in because the OS path needs Notification permission, and
+   * asking on first load would be presumptuous. Seeded from Supabase on
+   * unlock; see src/lib/notifications.svelte.ts for the delivery policy.
+   */
+  notifyOnComplete: boolean;
   error: string | null;
 }
 
@@ -121,6 +130,7 @@ export const app = $state<AppState>({
   defaultLogLevel: DEFAULT_LOG_LEVEL,
   systemPrompts: [],
   emphasisMarkdown: false,
+  notifyOnComplete: false,
   error: null,
 });
 
@@ -146,6 +156,10 @@ export function setDefaultLogLevel(level: LogLevel): void {
 
 export function setEmphasisMarkdown(enabled: boolean): void {
   app.emphasisMarkdown = enabled;
+}
+
+export function setNotifyOnComplete(enabled: boolean): void {
+  app.notifyOnComplete = enabled;
 }
 
 /**
@@ -177,6 +191,7 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.defaultVerbosity = DEFAULT_VERBOSITY;
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
   app.emphasisMarkdown = false;
+  app.notifyOnComplete = false;
   app.phase = 'unlocked';
   app.error = null;
   if (opts.persist !== false) saveSession(config);
@@ -229,6 +244,7 @@ export function lock(): void {
   app.defaultVerbosity = DEFAULT_VERBOSITY;
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
   app.emphasisMarkdown = false;
+  app.notifyOnComplete = false;
   app.systemPrompts = [];
   app.phase = 'locked';
   clearSession();

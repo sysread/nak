@@ -420,6 +420,14 @@ export interface UserSettings {
    * bolding.
    */
   emphasisMarkdown?: boolean;
+  /**
+   * Opt-in: when a chat completion finishes in a thread the user isn't
+   * currently viewing, surface it via an OS notification (if the tab is
+   * hidden and permission was granted) or an in-app unread dot on the
+   * sidebar row. Default off because enabling it triggers the browser's
+   * permission prompt - the user has to ask for the feature explicitly.
+   */
+  notifyOnComplete?: boolean;
 }
 
 /**
@@ -473,6 +481,9 @@ export function coerceSettings(raw: unknown): UserSettings {
   if (isLogLevel(r.defaultLogLevel)) out.defaultLogLevel = r.defaultLogLevel;
   if (typeof r.emphasisMarkdown === 'boolean') {
     out.emphasisMarkdown = r.emphasisMarkdown;
+  }
+  if (typeof r.notifyOnComplete === 'boolean') {
+    out.notifyOnComplete = r.notifyOnComplete;
   }
   return out;
 }
@@ -609,6 +620,12 @@ export class SupabaseService {
       if (patch.emphasisMarkdown === undefined) delete merged.emphasisMarkdown;
       else if (typeof patch.emphasisMarkdown === 'boolean') {
         merged.emphasisMarkdown = patch.emphasisMarkdown;
+      }
+    }
+    if ('notifyOnComplete' in patch) {
+      if (patch.notifyOnComplete === undefined) delete merged.notifyOnComplete;
+      else if (typeof patch.notifyOnComplete === 'boolean') {
+        merged.notifyOnComplete = patch.notifyOnComplete;
       }
     }
     const { error } = await this.client
