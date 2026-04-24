@@ -20,9 +20,9 @@ The main chat model sees toolboxes as the unit of enablement:
 
 - **`always_on`** - reflex-level tools that ride every request
   regardless of the thread's `toolboxes_enabled` array.
-- **`cooking`**, **`memories`**, **`conversations`** - gated
-  toolboxes. Included in the wire catalog only when their name
-  appears in `threads.toolboxes_enabled`.
+- **`cooking`**, **`memories`**, **`conversations`**, **`research`**
+  - gated toolboxes. Included in the wire catalog only when their
+  name appears in `threads.toolboxes_enabled`.
 
 The always-on toolbox carries:
 
@@ -58,16 +58,32 @@ The always-on toolbox carries:
   the chat loop from the current user message's DB rows - no
   in-tool DB query needed.
 
+The gated `research` toolbox carries:
+
+- `research_docs` - fires a one-shot sub-completion on the fast
+  tier whose system prompt bundles every user-facing doc under
+  `docs/user/` (loaded via `src/lib/docs.ts`'s Vite glob). The
+  sub-model answers the caller's question from that context alone
+  and returns `{answer, sources}` where `sources` is an array of
+  doc paths. Same in-app corpus the Help modal renders, just with
+  the fast model doing the synthesis. Gated (not always-on) because
+  meta-questions about the app are a small fraction of
+  conversation turns; paying a tool-schema tax on every request
+  would be wasteful. The LLM flips the toolbox on via
+  `toggle_toolbox` when it sees a meta-question and keeps it on
+  for the rest of a research-oriented thread.
+
 ## Files
 
 - `src/lib/tools/index.ts` - the toolbox definitions
   (`alwaysOnToolbox`, `cookingToolbox`, `memoriesToolbox`,
-  `conversationsToolbox`), the ordered `TOOLBOXES` list, the
-  derived `GATED_TOOLBOX_NAMES` / `GATED_TOOLBOX_META`, the flat
-  `TOOLS` view used by tests, the catalog builders
-  (`buildToolList`, `buildSystemPrompt`), and the main dispatcher
-  `executeToolCall`. Also exports the agent-only toolboxes
-  (`memoryToolbox`, `recallToolbox`, `conversationRecallToolbox`).
+  `conversationsToolbox`, `researchToolbox`), the ordered
+  `TOOLBOXES` list, the derived `GATED_TOOLBOX_NAMES` /
+  `GATED_TOOLBOX_META`, the flat `TOOLS` view used by tests, the
+  catalog builders (`buildToolList`, `buildSystemPrompt`), and the
+  main dispatcher `executeToolCall`. Also exports the agent-only
+  toolboxes (`memoryToolbox`, `recallToolbox`,
+  `conversationRecallToolbox`).
 - `src/lib/tools/run.ts` - `runHeadlessToolLoop`: the agent-side
   executor. Parallel to the chat loop but without persistence or
   streaming callbacks.
@@ -103,6 +119,14 @@ The always-on toolbox carries:
   `ctx.attachments`. Requires `ToolContext.attachments` to be
   populated (the chat loop does this from the current user
   message's attachment rows). Returns `{answer: string}`.
+- `src/lib/tools/research_docs.ts` - bundles every `docs/user/`
+  markdown file into the system prompt of a fast-tier sub-
+  completion and returns `{answer, sources}`. The trailing
+  `Sources: ...` line the prompt asks for is parsed back into
+  the sources array by `parseResearchResult`, exported for
+  direct test coverage. Uses `listDocs` / `loadDoc` from
+  `src/lib/docs.ts` so the bundled corpus is always identical
+  to what the Help modal renders.
 
 ## Entry points
 
@@ -126,12 +150,12 @@ The always-on toolbox carries:
 ## Data model
 
 - **Toolbox definitions** (`alwaysOnToolbox`, `cookingToolbox`,
-  `memoriesToolbox`, `conversationsToolbox`) - each is a `Toolbox`
-  with a stable name, a human-readable description (surfaced in
-  the UI popover and in the system-prompt catalog), and an
-  ordered `tools: ToolDef[]` array.
+  `memoriesToolbox`, `conversationsToolbox`, `researchToolbox`) -
+  each is a `Toolbox` with a stable name, a human-readable
+  description (surfaced in the UI popover and in the system-prompt
+  catalog), and an ordered `tools: ToolDef[]` array.
 - **`TOOLBOXES`** - ordered list: always-on first, then cooking,
-  memories, conversations. Order is visible to the model
+  memories, conversations, research. Order is visible to the model
   (system-prompt catalog) and to the user (popover).
 - **`GATED_TOOLBOX_NAMES`** - `TOOLBOXES` minus `alwaysOnToolbox`.
   The canonical name list for both writers (the `toggle_toolbox`
@@ -245,6 +269,12 @@ The always-on toolbox carries:
   calling `console.*` directly - the `no-console` ESLint rule
   enforces this outside `src/lib/logger.svelte.ts`. See
   `./logging.md`.
+- **Help / user docs** - `research_docs` reads the bundled
+  `docs/user/` corpus via the same `listDocs` / `loadDoc`
+  primitives the Help modal uses (`src/lib/docs.ts`). New docs
+  added to the Help manual are automatically visible to the
+  research tool on the next build - the Vite glob is the single
+  source of truth. See `./help.md`.
 
 ## Gotchas
 

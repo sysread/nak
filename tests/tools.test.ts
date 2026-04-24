@@ -230,11 +230,17 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'conversations',
+      'research',
     ]);
   });
 
   it('GATED_TOOLBOX_NAMES lists every gated toolbox and omits always_on', () => {
-    expect(GATED_TOOLBOX_NAMES).toEqual(['cooking', 'memories', 'conversations']);
+    expect(GATED_TOOLBOX_NAMES).toEqual([
+      'cooking',
+      'memories',
+      'conversations',
+      'research',
+    ]);
     expect(GATED_TOOLBOX_NAMES).not.toContain('always_on');
   });
 
@@ -247,6 +253,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'conversations',
+      'research',
     ]);
     for (const m of GATED_TOOLBOX_META) {
       expect(typeof m.description).toBe('string');
@@ -379,16 +386,18 @@ describe('tool registry', () => {
     expect(gatedSection).toMatch(/\[ \] cooking : /);
     expect(gatedSection).toMatch(/\[ \] memories : /);
     expect(gatedSection).toMatch(/\[ \] conversations : /);
+    expect(gatedSection).toMatch(/\[ \] research : /);
   });
 
   it('buildSystemPrompt shows [x] marks for enabled toolboxes and [ ] for disabled ones', () => {
     // The marks give the model visible current state without a second
     // prompt section. A model reading "[x] cooking" knows it can
     // invoke the cooking tools this turn without a toolbox flip.
-    const prompt = buildSystemPrompt({ enabledToolboxes: ['cooking'] });
+    const prompt = buildSystemPrompt({ enabledToolboxes: ['cooking', 'research'] });
     expect(prompt).toMatch(/\[x\] cooking : /);
     expect(prompt).toMatch(/\[ \] memories : /);
     expect(prompt).toMatch(/\[ \] conversations : /);
+    expect(prompt).toMatch(/\[x\] research : /);
   });
 
   it('buildSystemPrompt carries recall cadence rules', () => {

@@ -54,6 +54,7 @@ import { recipeUpdate } from './recipe_update';
 import { recipeDelete } from './recipe_delete';
 import { updateTitle } from './update_title';
 import { analyzeImage } from './analyze_image';
+import { researchDocs } from './research_docs';
 
 /**
  * Always-on toolbox. Rides with every request regardless of the
@@ -78,14 +79,28 @@ import { analyzeImage } from './analyze_image';
  *     would mean a toggle round-trip before the model could set
  *     the initial title, which defeats the "single-call adaptive
  *     title" design.
+ *
+ * Note on what's NOT here: `research_docs` is a research capability
+ * (read-only bundled docs) that would pass the always-on criteria on
+ * read-safety grounds, but meta-questions about the app are rare
+ * relative to actual work turns - gating it keeps the default request
+ * payload smaller. See `researchToolbox` below.
  */
 export const alwaysOnToolbox: Toolbox = {
   name: 'always_on',
   description:
     'Reflex-level tools that ride every request without being toggled. ' +
-    'Includes recall (memory + prior conversations), live web search, the ' +
-    'title-rename convenience, and the toggle_toolbox meta-tool itself.',
-  tools: [toggleToolbox, memoryRecall, conversationRecall, webSearch, updateTitle, analyzeImage],
+    'Includes recall (memory + prior conversations), live web search, ' +
+    'the title-rename convenience, and the toggle_toolbox meta-tool ' +
+    'itself.',
+  tools: [
+    toggleToolbox,
+    memoryRecall,
+    conversationRecall,
+    webSearch,
+    updateTitle,
+    analyzeImage,
+  ],
 };
 
 /** Save-and-read recipes against the cookbook CRUD. */
@@ -133,6 +148,31 @@ export const conversationsToolbox: Toolbox = {
 };
 
 /**
+ * Research capabilities that aren't a fit for always-on. Today this is
+ * just `research_docs` - a sub-agent that answers questions about Nak
+ * itself by reading the bundled in-app help corpus. The tool is read-
+ * only (no DB writes, no network fetch), so it could technically sit
+ * in `alwaysOnToolbox`, but meta-questions about the app are a tiny
+ * fraction of conversation turns. Gating it keeps the default request
+ * payload smaller; the LLM can flip this toolbox on via
+ * `toggle_toolbox` the moment a user turn looks like a meta-question
+ * and keep it on for the rest of that thread.
+ *
+ * Future research-adjacent tools (e.g. reading a saved document the
+ * user uploaded, pulling a snippet from a knowledge base) would land
+ * here rather than each getting their own single-tool toolbox.
+ */
+export const researchToolbox: Toolbox = {
+  name: 'research',
+  description:
+    'Research capabilities for answering meta-questions about Nak or ' +
+    'other research-adjacent lookups. Enable when the user asks how ' +
+    'to do something in Nak, what a setting does, or any other ' +
+    'question about the app itself.',
+  tools: [researchDocs],
+};
+
+/**
  * The canonical ordered list of toolboxes exposed to the main chat.
  * Order is visible to the model (system-prompt catalog) and to the
  * user (popover list). Always-on goes first so the model reads the
@@ -143,6 +183,7 @@ export const TOOLBOXES: readonly Toolbox[] = [
   cookingToolbox,
   memoriesToolbox,
   conversationsToolbox,
+  researchToolbox,
 ];
 
 /**
