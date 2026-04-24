@@ -200,6 +200,79 @@ describe('toVeniceMessage', () => {
       name: 'memory_search',
     });
   });
+
+  // Guards the Venice 400 ("Expecting ',' delimiter: line 1 column N") we
+  // saw in the wild after the `activity` param started landing free-form
+  // model-written sentences inside tool-call arguments - an unescaped
+  // quote in the sentence truncates the JSON string, Venice's server-side
+  // json.loads rejects the whole body, and the bad arguments blob then
+  // rides every subsequent replay until the thread drops that row.
+  it('replaces malformed tool-call arguments with an empty object on the wire', () => {
+    const badCall: OpenAIToolCall = {
+      id: 'call_bad',
+      type: 'function',
+      function: {
+        name: 'memory_search',
+        // The middle `"dishwasher"` terminates the activity string early,
+        // leaving the rest of the line unparseable.
+        arguments: '{"activity": "Searching your memories for "dishwasher" notes", "query": "x"}',
+      },
+    };
+    const m: Message = {
+      id: 'a',
+      thread_id: 't',
+      role: 'assistant',
+      content: '',
+      created_at: 't',
+      tool_calls: [badCall],
+    };
+    const out = toVeniceMessage(m);
+    expect(out.tool_calls).toHaveLength(1);
+    expect(out.tool_calls![0].function.arguments).toBe('{}');
+    // Original call object is left untouched so the UI / DB copy still
+    // shows what the model tried to emit.
+    expect(badCall.function.arguments).toContain('dishwasher');
+  });
+
+  it('canonicalises well-formed tool-call arguments through parse+stringify', () => {
+    const call: OpenAIToolCall = {
+      id: 'call_ok',
+      type: 'function',
+      function: {
+        name: 'memory_search',
+        // Extra whitespace gets normalised away; semantics stay identical.
+        arguments: '{ "query" : "dishwasher" }',
+      },
+    };
+    const m: Message = {
+      id: 'a',
+      thread_id: 't',
+      role: 'assistant',
+      content: '',
+      created_at: 't',
+      tool_calls: [call],
+    };
+    const out = toVeniceMessage(m);
+    expect(out.tool_calls![0].function.arguments).toBe('{"query":"dishwasher"}');
+  });
+
+  it('treats an empty arguments string as {}', () => {
+    const call: OpenAIToolCall = {
+      id: 'call_empty',
+      type: 'function',
+      function: { name: 'memory_search', arguments: '' },
+    };
+    const m: Message = {
+      id: 'a',
+      thread_id: 't',
+      role: 'assistant',
+      content: '',
+      created_at: 't',
+      tool_calls: [call],
+    };
+    const out = toVeniceMessage(m);
+    expect(out.tool_calls![0].function.arguments).toBe('{}');
+  });
 });
 
 describe('runChatLoop', () => {
