@@ -33,9 +33,9 @@ describe('coerceSettings', () => {
   });
 
   it('passes through valid theme fields', () => {
-    expect(coerceSettings({ colorMode: 'light', accent: 'teal' })).toEqual({
+    expect(coerceSettings({ colorMode: 'light', accent: 'red' })).toEqual({
       colorMode: 'light',
-      accent: 'teal',
+      accent: 'red',
     });
     expect(coerceSettings({ colorMode: 'system' })).toEqual({ colorMode: 'system' });
   });
@@ -47,8 +47,8 @@ describe('coerceSettings', () => {
 
   it('mixes model + theme fields correctly', () => {
     expect(
-      coerceSettings({ defaultModel: 'smart', colorMode: 'dark', accent: 'pink' })
-    ).toEqual({ defaultModel: 'smart', colorMode: 'dark', accent: 'pink' });
+      coerceSettings({ defaultModel: 'smart', colorMode: 'dark', accent: 'red' })
+    ).toEqual({ defaultModel: 'smart', colorMode: 'dark', accent: 'red' });
   });
 
   it('passes through well-formed systemPrompts', () => {

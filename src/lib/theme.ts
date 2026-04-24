@@ -2,7 +2,7 @@
  * Theme tokens for the app. Two concerns are tracked independently:
  *
  *   colorMode : light | dark | system   (how the background looks)
- *   accent    : blue | green | ... | teal (the tint on buttons, links, etc.)
+ *   accent    : blue | green | ... | red  (the tint on buttons, links, etc.)
  *
  * The CSS uses two attributes on <html>:
  *   [data-theme='light' | 'dark']
@@ -16,16 +16,15 @@
 
 export type ColorMode = 'light' | 'dark' | 'system';
 export type EffectiveMode = 'light' | 'dark';
-export type Accent = 'blue' | 'green' | 'purple' | 'pink' | 'orange' | 'teal';
+export type Accent = 'blue' | 'green' | 'purple' | 'orange' | 'red';
 
 export const MODES: readonly ColorMode[] = ['system', 'light', 'dark'];
 export const ACCENTS: readonly Accent[] = [
   'blue',
   'green',
   'purple',
-  'pink',
   'orange',
-  'teal',
+  'red',
 ];
 
 export const DEFAULT_MODE: ColorMode = 'system';
@@ -42,9 +41,8 @@ export const ACCENT_LABELS: Record<Accent, string> = {
   blue: 'Blue',
   green: 'Green',
   purple: 'Purple',
-  pink: 'Pink',
   orange: 'Orange',
-  teal: 'Teal',
+  red: 'Red',
 };
 
 /** Per-accent swatch used in the Settings picker (matches --accent). */
@@ -52,9 +50,8 @@ export const ACCENT_SWATCHES: Record<Accent, { light: string; dark: string }> = 
   blue: { light: '#1d4ed8', dark: '#8ab4ff' },
   green: { light: '#15803d', dark: '#86efac' },
   purple: { light: '#7e22ce', dark: '#c4b5fd' },
-  pink: { light: '#be185d', dark: '#f9a8d4' },
   orange: { light: '#c2410c', dark: '#fdba74' },
-  teal: { light: '#0f766e', dark: '#5eead4' },
+  red: { light: '#b91c1c', dark: '#fca5a5' },
 };
 
 export function isColorMode(v: unknown): v is ColorMode {

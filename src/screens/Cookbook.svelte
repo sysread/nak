@@ -907,7 +907,7 @@
      tint extends to the badge edge on the left and the pane edge on
      the right, making the active step the obvious focal point at a
      glance. Inherits the theme accent, so a blue theme gets a blue
-     wash and a pink theme gets a pink wash — no per-theme overrides
+     wash and a red theme gets a red wash — no per-theme overrides
      needed. */
   .cookbook-render :global(ol.cook-steps li.is-active) {
     background: var(--accent-weak);

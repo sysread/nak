@@ -12,8 +12,8 @@ import {
 } from '../src/lib/theme';
 
 describe('theme enums', () => {
-  it('ACCENTS has exactly six entries', () => {
-    expect(ACCENTS.length).toBe(6);
+  it('ACCENTS has exactly five entries', () => {
+    expect(ACCENTS.length).toBe(5);
   });
   it('MODES includes system + light + dark', () => {
     expect(new Set(MODES)).toEqual(new Set(['system', 'light', 'dark']));
@@ -29,7 +29,7 @@ describe('type guards', () => {
     for (const a of ACCENTS) expect(isAccent(a)).toBe(true);
   });
   it('isAccent rejects others', () => {
-    expect(isAccent('red')).toBe(false);
+    expect(isAccent('chartreuse')).toBe(false);
     expect(isAccent('')).toBe(false);
     expect(isAccent(null)).toBe(false);
   });
@@ -48,8 +48,8 @@ describe('theme cache', () => {
   beforeEach(() => localStorage.clear());
 
   it('round-trips a valid theme', () => {
-    cacheTheme('dark', 'pink');
-    expect(readCachedTheme()).toEqual({ mode: 'dark', accent: 'pink' });
+    cacheTheme('dark', 'red');
+    expect(readCachedTheme()).toEqual({ mode: 'dark', accent: 'red' });
   });
 
   it('returns null when nothing is cached', () => {
