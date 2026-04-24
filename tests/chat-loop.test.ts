@@ -11,7 +11,12 @@
  *   - MAX_ROUNDS guardrail
  */
 import { describe, it, expect, vi } from 'vitest';
-import { runChatLoop, MAX_ROUNDS, toVeniceMessage } from '../src/lib/chat-loop';
+import {
+  runChatLoop,
+  MAX_ROUNDS,
+  toVeniceMessage,
+  INTERRUPTED_MARKER,
+} from '../src/lib/chat-loop';
 import type { ChatRequest, StreamEvent, Citation } from '../src/lib/venice';
 import type { VeniceClient } from '../src/lib/venice';
 import type { SupabaseService, Thread, Message } from '../src/lib/supabase';
@@ -428,6 +433,153 @@ describe('runChatLoop', () => {
     expect(result.stoppedByLimit).toBe(false);
     expect(messagesOut).toHaveLength(1);
     expect(messagesOut[0]).toMatchObject({ role: 'assistant', content: 'Hello there' });
+  });
+
+  it('persists partial text with the interrupted marker when the stream aborts mid-round', async () => {
+    // User clicks stop after a few text deltas have arrived but before
+    // the stream finishes. Chat-loop catches the AbortError inside the
+    // round loop, appends the marker to whatever text / reasoning
+    // accumulated, and returns `{ interrupted: true }`. The partial
+    // row is persisted so the user can see exactly where the reply
+    // was cut.
+    const controller = new AbortController();
+    // Streaming mock: yield two deltas synchronously, then on the
+    // third pull abort the signal and throw the spec-shaped AbortError
+    // that fetch's ReadableStream rejects with. This mirrors the real
+    // flow where the reader.read() rejects after signal.abort().
+    const venice = {
+      async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
+        yield { type: 'text', delta: 'Hello ' };
+        yield { type: 'text', delta: 'there, I was saying' };
+        controller.abort();
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        throw err;
+      },
+      embed: vi.fn(async () => ({
+        data: [{ index: 0, embedding: new Array(1024).fill(0) }],
+      })),
+    } as unknown as VeniceClient;
+    const { svc, messagesOut, mocks } = mockSupabase();
+    const result = await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: controller.signal,
+    });
+    expect(result.interrupted).toBe(true);
+    expect(result.stoppedByLimit).toBe(false);
+    expect(result.finalText).toBe('Hello there, I was saying');
+    expect(messagesOut).toHaveLength(1);
+    expect(messagesOut[0].role).toBe('assistant');
+    expect(messagesOut[0].content).toBe(
+      `Hello there, I was saying\n\n${INTERRUPTED_MARKER}`
+    );
+    // Tool-call fragments are internal to venice.ts and never surface as
+    // tool_call events mid-stream, so the persisted row must not carry
+    // any tool_calls — any accumulated-but-unexecuted calls are dropped.
+    const [, , , opts] = mocks.addMessage.mock.calls[0];
+    expect((opts as Record<string, unknown>).tool_calls).toBeUndefined();
+  });
+
+  it('skips persistence when the stream aborts before any content arrived', async () => {
+    // No deltas made it through before the abort - the user clicked
+    // stop so quickly that nothing was streamed. Skip the assistant
+    // row entirely so the conversation doesn't accumulate a ghost
+    // bubble containing only the marker.
+    const controller = new AbortController();
+    const venice = {
+      async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
+        controller.abort();
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        throw err;
+      },
+      embed: vi.fn(async () => ({
+        data: [{ index: 0, embedding: new Array(1024).fill(0) }],
+      })),
+    } as unknown as VeniceClient;
+    const { svc, messagesOut } = mockSupabase();
+    const result = await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: controller.signal,
+    });
+    expect(result.interrupted).toBe(true);
+    expect(messagesOut).toHaveLength(0);
+  });
+
+  it('persists the marker as standalone content on a reasoning-only interrupt', async () => {
+    // Reasoning-capable models can stream their thinking before any
+    // visible answer tokens appear. Aborting during that phase means
+    // roundText is empty but roundReasoning holds real content - we
+    // still persist the row so the reasoning panel survives a refresh,
+    // and the content field shows the marker on its own so the bubble
+    // renders something.
+    const controller = new AbortController();
+    const venice = {
+      async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
+        yield { type: 'reasoning', delta: 'weighing the ' };
+        yield { type: 'reasoning', delta: 'options...' };
+        controller.abort();
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        throw err;
+      },
+      embed: vi.fn(async () => ({
+        data: [{ index: 0, embedding: new Array(1024).fill(0) }],
+      })),
+    } as unknown as VeniceClient;
+    const { svc, messagesOut, mocks } = mockSupabase();
+    const result = await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: controller.signal,
+    });
+    expect(result.interrupted).toBe(true);
+    expect(messagesOut).toHaveLength(1);
+    expect(messagesOut[0].content).toBe(INTERRUPTED_MARKER);
+    const [, , , opts] = mocks.addMessage.mock.calls[0];
+    expect((opts as Record<string, unknown>).reasoning).toBe('weighing the options...');
+  });
+
+  it('rethrows non-abort errors instead of swallowing them as interrupts', async () => {
+    // A mid-stream network failure is NOT an abort - let the outer
+    // runExchange catch it and surface an error banner. Only
+    // AbortError / signal.aborted routes through the interrupted
+    // branch.
+    const venice = {
+      async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
+        yield { type: 'text', delta: 'partial' };
+        throw new Error('connection reset');
+      },
+      embed: vi.fn(async () => ({
+        data: [{ index: 0, embedding: new Array(1024).fill(0) }],
+      })),
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await expect(
+      runChatLoop({
+        venice,
+        supabase: svc,
+        thread: mkThread(),
+        userId: 'u-1',
+        modelId: 'm',
+        history: [{ role: 'user', content: 'hi' }],
+        signal: new AbortController().signal,
+      })
+    ).rejects.toThrow('connection reset');
   });
 
   it('persists reasoning and citations on the assistant row', async () => {

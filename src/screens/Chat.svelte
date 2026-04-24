@@ -489,7 +489,13 @@
   // earlier retry closure; the banner only ever owns one.
   type ChatError = { text: string; retry?: () => void };
   let error = $state<ChatError | null>(null);
-  let abortCtl: AbortController | null = null;
+  // Reactive because the send button's disabled state reads it: while
+  // `sending` is true, the button acts as a stop button and needs to
+  // latch to disabled for the brief window after abort() fires but
+  // before the runExchange finally block nulls the controller. Without
+  // $state, the template wouldn't re-render when abortCtl flips back
+  // to null and the button would stay on its last frame.
+  let abortCtl = $state<AbortController | null>(null);
 
   // Pending attachments — one chip per queued file. Populated by the
   // file picker, the paste handler, and the drop handler; cleared on
@@ -1943,14 +1949,26 @@
       streamingContentStarted = false;
       await refreshThreads();
     } catch (err) {
-      // Final-fallback diagnostic. Everything from the pre-stream
-      // fetch down through SSE parse, tool dispatch, and persistence
-      // funnels here. Log unconditionally so the in-app log drawer
-      // has a breadcrumb - on mobile there's no devtools, so an
-      // unlogged catch at this boundary is effectively a silent
-      // swallow. `err` lands in the drawer's expandable detail so
-      // the stack survives.
-      log.error('chat exchange failed', err);
+      // User-initiated stop: runChatLoop catches mid-stream aborts
+      // itself and returns cleanly with `interrupted: true`, so we
+      // normally don't land here on a stop click. An AbortError
+      // reaching this catch means something outside the stream loop
+      // (priming work, a tool-execution path not routed through the
+      // per-tool catch) bubbled one up - treat it the same way:
+      // the user asked for it, not a failure to report.
+      const isAbort =
+        abortCtl?.signal.aborted === true ||
+        (err instanceof Error && err.name === 'AbortError');
+      if (!isAbort) {
+        // Final-fallback diagnostic. Everything from the pre-stream
+        // fetch down through SSE parse, tool dispatch, and persistence
+        // funnels here. Log unconditionally so the in-app log drawer
+        // has a breadcrumb - on mobile there's no devtools, so an
+        // unlogged catch at this boundary is effectively a silent
+        // swallow. `err` lands in the drawer's expandable detail so
+        // the stack survives.
+        log.error('chat exchange failed', err);
+      }
       streamingText = '';
       streamingReasoning = '';
       streamingCitations = null;
@@ -1971,11 +1989,13 @@
       // a moment later is the right fix - Venice's message literally
       // says "try again later." Park a retry closure on the inline
       // bubble so the refresh button sits next to the error text the
-      // user is already reading; other failure kinds (auth, parse,
-      // the user's abort) would just repeat the error on retry, so
-      // we omit the closure for them and the bubble renders dismiss-
-      // only.
-      if (err instanceof VeniceError && err.kind === 'rate_limit') {
+      // user is already reading; other failure kinds (auth, parse)
+      // would just repeat the error on retry, so we omit the closure
+      // for them and the bubble renders dismiss-only. Aborts don't
+      // raise a banner at all - the stop was the intended outcome.
+      if (isAbort) {
+        streamingError = null;
+      } else if (err instanceof VeniceError && err.kind === 'rate_limit') {
         streamingError = {
           text: formatRateLimitMessage(err),
           retry: () => {
@@ -2169,11 +2189,34 @@
   // aren't interrupted. `metaKey` maps to the Command key on macOS; on
   // Windows/Linux it's the rarely-pressed Super/Windows key, so including
   // it there is harmless.
+  //
+  // While a response is streaming the same keystroke routes to stop
+  // instead of send - the button's dual mode (send <-> stop) is
+  // mirrored by its keyboard shortcut, so users never end up firing
+  // a new send while waiting for the current stream to clear. After
+  // the stream aborts (sending flips false), the next submit-modifier
+  // Enter fires the draft the user typed while waiting.
   function onKeydown(e: KeyboardEvent): void {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || e.shiftKey)) {
       e.preventDefault();
-      void send();
+      if (sending) {
+        stopStreaming();
+      } else {
+        void send();
+      }
     }
+  }
+
+  /**
+   * Cancel the in-flight chat request. Fires the outer AbortController,
+   * which propagates through runChatLoop (where the stream consumer's
+   * abort-aware branch persists partial text / reasoning with a marker)
+   * and through any in-flight tool fetches (via childController). Safe
+   * to call repeatedly - once `abortCtl` is nulled in runExchange's
+   * finally block this is a no-op.
+   */
+  function stopStreaming(): void {
+    abortCtl?.abort();
   }
 
   // Platform-aware hint in the composer placeholder. Uses the modern
@@ -3662,6 +3705,14 @@
               {/each}
             </div>
           {/if}
+          <!-- The textarea stays enabled while `sending` is true so the
+               user can draft their next message while the current reply
+               is still streaming. The send button transforms into a
+               stop button in the same state (see the .send-btn block
+               below) and a submit-modifier Enter aborts rather than
+               sends (see onKeydown) - so any input landing here during
+               a stream is a draft for the *next* turn, not something
+               that auto-fires when the current stream completes. -->
           <textarea
             class="composer-textarea"
             class:is-collapsed={composerIsMobile && !composerFocused}
@@ -3674,7 +3725,7 @@
             placeholder={currentThread?.archived
               ? 'Restore this conversation to continue.'
               : `Message… (${sendHint})`}
-            disabled={sending || currentThread?.archived}
+            disabled={currentThread?.archived}
           ></textarea>
           <!-- Hidden file input — the paperclip button triggers this
                via .click(). `multiple` because users routinely attach
@@ -3937,23 +3988,40 @@
               />
             </div>
 
+            <!-- Dual-purpose button: sends when idle, stops the in-
+                 flight response when a stream is running. The icon
+                 swap (paper plane <-> filled square) signals the mode;
+                 the handler branches on `sending`. While sending, the
+                 disabled rules that gate the send path (empty composer,
+                 archived thread) are intentionally ignored - stop
+                 must always be clickable once a response is in flight,
+                 regardless of what the user has typed next. -->
             <button
               class="send-btn composer-send"
-              onclick={send}
-              disabled={sending ||
-                (composer.trim().length === 0 && pendingAttachments.length === 0) ||
-                currentThread?.archived}
+              class:is-stopping={sending}
+              onclick={sending ? stopStreaming : send}
+              disabled={sending
+                ? abortCtl === null
+                : (composer.trim().length === 0 && pendingAttachments.length === 0) ||
+                  currentThread?.archived}
               title={sending
-                ? 'Sending…'
+                ? 'Stop response'
                 : currentThread?.archived
                   ? 'Archived — restore to continue'
                   : 'Send'}
-              aria-label={sending ? 'Sending' : 'Send'}
+              aria-label={sending ? 'Stop response' : 'Send'}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"
-                   aria-hidden="true">
-                <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
-              </svg>
+              {#if sending}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"
+                     aria-hidden="true">
+                  <rect x="5" y="5" width="14" height="14" rx="2" />
+                </svg>
+              {:else}
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"
+                     aria-hidden="true">
+                  <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
+                </svg>
+              {/if}
             </button>
 
             {#if toolboxMenuOpen && currentThread && !currentThread.isDraft}

@@ -2725,6 +2725,20 @@ h1 {
   border-radius: 999px;
 }
 
+/* Stop-mode styling: while the chat is streaming, the send button
+   swaps its paper-plane SVG for a filled square and takes the accent
+   fill so the click target reads unmistakably as "stop the response"
+   rather than a disabled send. Accent rather than red - the user
+   chose to stop, it's not an error state. */
+.send-btn.is-stopping {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.send-btn.is-stopping:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .composer-shell {
     transition: none;

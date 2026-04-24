@@ -47,11 +47,30 @@ A chat turn goes:
 - **Send button / Enter** — `Chat.svelte`'s `send()` builds the
   history, creates an `AbortController`, and calls
   `runChatLoop(opts)`.
-- **Stop button** — aborts the current controller. The loop is
-  wired so the outer abort cancels every in-flight tool via
-  `childController`; tool errors land as `role='tool'` rows with
-  an error payload, so history stays internally consistent even
-  on cancellation.
+- **Stop button** — the send button's dual mode. While `sending`
+  is true the paper-plane icon swaps for a filled square; the
+  click handler routes to `stopStreaming()` (which fires the
+  outer `AbortController`) instead of `send()`. Same for the
+  submit-modifier Enter shortcut. Two phases:
+  - *Mid-stream:* `runChatLoop` catches the `AbortError` inside
+    its round loop, persists the accumulated `roundText` /
+    `roundReasoning` / `roundCitations` with the
+    `INTERRUPTED_MARKER` (`--- user interrupted response`)
+    appended to content, and returns `{ interrupted: true }`.
+    Tool-call fragments still being assembled in `venice.ts`
+    are discarded; so are any fully-assembled-but-unexecuted
+    `tool_call` events from the current round.
+  - *Mid-tool-execution:* the outer abort cascades through every
+    `childController`, in-flight tool fetches reject with
+    `AbortError`, the tool executor's per-call catch maps those
+    to error `role='tool'` rows, and `Promise.all(executions)`
+    resolves normally. The next round's top-of-loop
+    `signal.aborted` guard exits the loop and sets
+    `interrupted: true` on the result. No marker - the error
+    tool rows already record the cancellation.
+  The `ChatLoopResult.interrupted` flag lets the UI suppress the
+  "something went wrong" banner a generic catch would raise - the
+  user asked for the stop, it's not a failure to report.
 - **Draft creation** — "New thread" button creates an in-memory-
   only `Thread` row (`isDraft: true`). It materializes to
   Supabase on first send; never written as an empty shell. This

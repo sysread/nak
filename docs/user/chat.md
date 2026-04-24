@@ -137,6 +137,30 @@ deleted. Try again, or carry on as if you hadn't clicked.
 
 ## Stop and resume
 
+While the model is generating a response, the send button turns
+into a filled square. Click it (or use the same Enter shortcut that
+normally sends - Ctrl+Enter on Windows/Linux, Command+Enter on
+macOS) to stop the response where it is. Whatever the model had
+already produced - partial reasoning, partial answer text, any
+citations that arrived - is saved to the conversation with a
+trailing `--- user interrupted response` marker so you can tell a
+stopped reply from one that finished on its own.
+
+The composer stays editable while the response streams, so you can
+start drafting the next message without waiting for the stop click
+to take effect. Pressing the stop button does not send whatever
+you've typed - it just cancels the current response. After the
+stop lands, the button returns to its normal send icon and your
+draft is still there.
+
+If the model was in the middle of running a tool when you stopped
+(a web search, a memory lookup, and so on) the tool is cancelled
+and its row in the conversation records the cancellation. Any
+tools that had already finished in earlier rounds of the same
+turn stay saved. You can continue the conversation as usual; the
+partial reply and any tool results are part of the history the
+next turn sees.
+
 ## The log drawer
 
 The document-shaped button at the right end of the chat top bar

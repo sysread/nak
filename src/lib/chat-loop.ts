@@ -351,12 +351,30 @@ export interface ChatLoopResult {
   /** True if we stopped because of MAX_ROUNDS rather than a clean finish. */
   stoppedByLimit: boolean;
   /**
+   * True if the loop exited because the caller's AbortSignal fired mid-
+   * stream (user clicked the stop button). The UI uses this to skip
+   * the "something went wrong" banner a generic catch would produce -
+   * the user asked for the abort, it's not a failure to report.
+   */
+  interrupted: boolean;
+  /**
    * The thread's enabled gated-toolbox set at the end of the loop.
    * Callers persist this back to local state so subsequent user sends
    * see the same surface the model last saw.
    */
   toolboxesEnabled: readonly string[];
 }
+
+/**
+ * Marker appended to the content field of an assistant row whose stream
+ * the user cut short mid-response. Rendered verbatim in the message
+ * bubble so the reader can tell a truncated reply from a naturally
+ * short one. ASCII only and placed on its own line so a markdown
+ * renderer treats it as paragraph text rather than a setext heading
+ * (three hyphens alone would become an &lt;hr&gt; / H2; three hyphens
+ * followed by more text on the same line parses as paragraph).
+ */
+export const INTERRUPTED_MARKER = '--- user interrupted response';
 
 /**
  * Project a stored Message row onto the OpenAI wire format. Handles the
@@ -501,6 +519,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   let finalText = '';
   let roundsRun = 0;
   let stoppedByLimit = false;
+  let interrupted = false;
   // Track the last assistant row we persisted across rounds. End-of-
   // turn samskara substrate writes pair the opening user message with
   // whichever assistant row closed the turn — final text or terminal
@@ -620,7 +639,18 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   }
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    if (signal.aborted) break;
+    // Phase B abort exit: the prior round reached tool execution, then
+    // the user clicked stop while tools were running. Promise.all
+    // settled (each in-flight tool's childController fired; cancelled
+    // tools landed as error rows via the tool executor's catch), so
+    // the history is internally consistent. No content marker needed -
+    // the error tool rows already tell the story. Flag the result so
+    // the UI knows to suppress the inline error banner this failure
+    // would otherwise raise.
+    if (signal.aborted) {
+      interrupted = true;
+      break;
+    }
     roundsRun++;
 
     // Prepend the baseline system prompt every round. It's not stored
@@ -679,25 +709,84 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     let roundCitations: Citation[] | null = null;
     const roundCalls: OpenAIToolCall[] = [];
     let roundUsage: TokenUsage | null = null;
-    for await (const ev of stream) {
-      if (ev.type === 'text') {
-        roundText += ev.delta;
-        handlers?.onTextUpdate?.(roundText);
-      } else if (ev.type === 'reasoning') {
-        roundReasoning += ev.delta;
-        handlers?.onReasoningUpdate?.(roundReasoning);
-      } else if (ev.type === 'tool_call') {
-        roundCalls.push(ev.toolCall);
-      } else if (ev.type === 'usage') {
-        // Captured from the stream's trailing usage frame. Persisted on
-        // every assistant row we write below — the tokens were spent
-        // regardless of whether the turn produced text or tool calls,
-        // and we want the per-row data honest for future aggregates.
-        roundUsage = ev.usage;
-      } else if (ev.type === 'citations') {
-        roundCitations = ev.citations;
-        handlers?.onCitationsUpdate?.(ev.citations);
+    try {
+      for await (const ev of stream) {
+        if (ev.type === 'text') {
+          roundText += ev.delta;
+          handlers?.onTextUpdate?.(roundText);
+        } else if (ev.type === 'reasoning') {
+          roundReasoning += ev.delta;
+          handlers?.onReasoningUpdate?.(roundReasoning);
+        } else if (ev.type === 'tool_call') {
+          roundCalls.push(ev.toolCall);
+        } else if (ev.type === 'usage') {
+          // Captured from the stream's trailing usage frame. Persisted on
+          // every assistant row we write below — the tokens were spent
+          // regardless of whether the turn produced text or tool calls,
+          // and we want the per-row data honest for future aggregates.
+          roundUsage = ev.usage;
+        } else if (ev.type === 'citations') {
+          roundCitations = ev.citations;
+          handlers?.onCitationsUpdate?.(ev.citations);
+        }
       }
+    } catch (err) {
+      // User clicked the stop button (or the caller aborted for any
+      // other reason) while the stream was still producing deltas.
+      // `fetch` rejects with an AbortError whose `.name` is literally
+      // 'AbortError'; we also check `signal.aborted` as a belt-and-
+      // braces fallback because a `reader.read()` rejection shape
+      // isn't fully standardized across browsers and some runtimes
+      // wrap the error.
+      //
+      // Persist whatever text / reasoning / citations arrived this
+      // round with a visible marker appended to the content field so
+      // the user can see exactly where the reply was cut. Partial
+      // tool-call fragments live inside venice.ts's private accumulator
+      // and are never emitted as tool_call events mid-stream, so there
+      // is nothing partial to drop here - any entries in roundCalls
+      // are fully-assembled-but-unexecuted, and we discard them per
+      // spec (the user asked to stop; an unexecuted tool call isn't
+      // "a tool call completed already"). Break out of the round loop
+      // without recursing into tool execution.
+      const isAbort =
+        signal.aborted ||
+        (err instanceof Error && err.name === 'AbortError');
+      if (!isAbort) throw err;
+      interrupted = true;
+      if (roundText.length > 0 || roundReasoning.length > 0) {
+        // Same citation priority as the clean-finish branch below:
+        // outer-stream citations win over accumulated tool citations.
+        const finalCitations =
+          roundCitations ?? (toolCitations.length > 0 ? toolCitations : null);
+        // Append the marker on its own line after whatever prose
+        // arrived. An empty roundText with reasoning-only still gets
+        // the marker as standalone content so the bubble renders
+        // something - otherwise the user sees only the reasoning
+        // panel with no indication the answer was cut.
+        const interruptedContent =
+          roundText.length > 0
+            ? `${roundText}\n\n${INTERRUPTED_MARKER}`
+            : INTERRUPTED_MARKER;
+        const msg = await supabase.addMessage(
+          thread.id,
+          'assistant',
+          interruptedContent,
+          {
+            model: modelId,
+            // Usage frame often doesn't land before the abort - Venice
+            // emits it after the last choice-bearing frame. The column
+            // is nullable; the context ring simply hides on absence.
+            usage: roundUsage,
+            reasoning: roundReasoning.length > 0 ? roundReasoning : null,
+            citations: finalCitations,
+          }
+        );
+        handlers?.onAssistantPersisted?.(msg);
+        lastAssistantId = msg.id;
+      }
+      finalText = roundText;
+      break;
     }
 
     // No tool calls → this is the final assistant message. Persist and
@@ -899,5 +988,5 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     void recordSubstrateStub(supabase, thread.id, userMessageId, lastAssistantId);
   }
 
-  return { finalText, roundsRun, stoppedByLimit, toolboxesEnabled };
+  return { finalText, roundsRun, stoppedByLimit, interrupted, toolboxesEnabled };
 }
