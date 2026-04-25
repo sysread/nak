@@ -280,6 +280,16 @@ export interface JournalEntry {
    * underlying conversation actually started.
    */
   thread_created_at: string | null;
+  /**
+   * Set the first time the user marks an automatic entry as appropriate
+   * (the "ham" button in the journal modal). Idempotency marker for the
+   * spam-filter training path - the UI hides the button once non-null,
+   * the supabase service rejects ham training that would double-count.
+   * Always null on user-source entries (the button only shows on
+   * automatic ones) and on rows fetched via search RPCs that don't
+   * project the column.
+   */
+  ham_marked_at: string | null;
   created_at: string;
   updated_at: string;
   /** Populated only by `searchJournalEntriesByEmbedding`. */
@@ -329,6 +339,10 @@ function coerceJournalEntry(raw: Record<string, unknown>): JournalEntry {
     thread_id: threadId,
     thread_title: threadTitle,
     thread_created_at: threadCreatedAt,
+    ham_marked_at:
+      typeof raw.ham_marked_at === 'string' && raw.ham_marked_at.length > 0
+        ? (raw.ham_marked_at as string)
+        : null,
     created_at: String(raw.created_at ?? raw.updated_at ?? ''),
     updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
     similarity:
@@ -1407,7 +1421,7 @@ export class SupabaseService {
     let q = this.client
       .from('journal_entries')
       .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, created_at, updated_at, thread:threads(title, created_at)'
+        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
       )
       .order('entry_date', { ascending: false })
       .order('source', { ascending: true })
@@ -1433,7 +1447,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('journal_entries')
       .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, created_at, updated_at, thread:threads(title, created_at)'
+        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
       )
       .eq('entry_date', entryDate)
       .order('source', { ascending: true })
@@ -1500,7 +1514,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('journal_entries')
       .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, created_at, updated_at, thread:threads(title, created_at)'
+        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
       )
       .eq('thread_id', threadId)
       .eq('source', 'automatic')
@@ -1537,7 +1551,7 @@ export class SupabaseService {
         people: args.people,
       })
       .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, created_at, updated_at, thread:threads(title, created_at)'
+        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
       )
       .single();
     if (error) throw new SupabaseError(error.message);
@@ -1565,7 +1579,7 @@ export class SupabaseService {
       .update({ ...patch, updated_at: new Date().toISOString() })
       .eq('id', id)
       .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, created_at, updated_at, thread:threads(title, created_at)'
+        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
       )
       .single();
     if (error) throw new SupabaseError(error.message);
@@ -1602,6 +1616,89 @@ export class SupabaseService {
   }
 
   /**
+   * Stamp `ham_marked_at = now()` on an automatic entry. The UI guards
+   * the call (button hidden when the column is already non-null) but
+   * we re-check the predicate in the WHERE clause so a double-click
+   * race or a stale tab can't double-train. Returns the updated entry,
+   * or null when the row was already marked or doesn't exist - the
+   * caller skips training in that case.
+   */
+  async markJournalEntryHam(id: string): Promise<JournalEntry | null> {
+    const nowIso = new Date().toISOString();
+    const { data, error } = await this.client
+      .from('journal_entries')
+      .update({ ham_marked_at: nowIso })
+      .eq('id', id)
+      .is('ham_marked_at', null)
+      .select(
+        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
+      )
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    if (!data) return null;
+    return coerceJournalEntry(data as Record<string, unknown>);
+  }
+
+  /**
+   * Train the per-user spam filter. Tokens are expected pre-stemmed
+   * and lowercased (see `tokenizeConversation` in
+   * src/lib/agents/journal/spam_filter.ts). The RPC bumps token
+   * counts and the per-user totals row in one transaction.
+   */
+  async trainJournalSpam(
+    tokens: readonly string[],
+    label: 'ham' | 'spam'
+  ): Promise<void> {
+    const { error } = await this.client.rpc('train_journal_spam', {
+      p_tokens: tokens as string[],
+      p_label: label,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Read the per-user totals (number of conversations labeled ham vs
+   * spam). Used as the cold-start gate in the worker - the score is
+   * suppressed entirely while either total is below threshold so the
+   * LLM doesn't try to interpret a noisy posterior.
+   */
+  async getJournalSpamStats(): Promise<{ hamTotal: number; spamTotal: number }> {
+    const { data, error } = await this.client.rpc('get_journal_spam_stats');
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    if (rows.length === 0) return { hamTotal: 0, spamTotal: 0 };
+    const r = rows[0];
+    return {
+      hamTotal: typeof r.ham_total === 'number' ? r.ham_total : 0,
+      spamTotal: typeof r.spam_total === 'number' ? r.spam_total : 0,
+    };
+  }
+
+  /**
+   * Look up token rows for scoring. Returns one row per token that
+   * exists in the user's vocabulary; tokens never seen are silently
+   * dropped (the Naive Bayes formula treats them as no-evidence).
+   * The RPC also returns the user's totals replicated on every row;
+   * callers that need totals separately should use
+   * `getJournalSpamStats` instead - this method strips them.
+   */
+  async scoreJournalSpamTokens(
+    tokens: readonly string[]
+  ): Promise<{ token: string; hamCount: number; spamCount: number }[]> {
+    if (tokens.length === 0) return [];
+    const { data, error } = await this.client.rpc('score_journal_spam', {
+      p_tokens: tokens as string[],
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      token: String(r.token ?? ''),
+      hamCount: typeof r.ham_count === 'number' ? r.ham_count : 0,
+      spamCount: typeof r.spam_count === 'number' ? r.spam_count : 0,
+    }));
+  }
+
+  /**
    * Semantic + substring search over journal entries. Parallels
    * `searchMemoriesSemantic` in src/lib/memories.ts but lives here on
    * the service so the reflection-side toolbox can reuse it without
@@ -1627,7 +1724,7 @@ export class SupabaseService {
     const ilikePromise = this.client
       .from('journal_entries')
       .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, created_at, updated_at, thread:threads(title, created_at)'
+        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
       )
       .or(`content.ilike.${pattern},mood.ilike.${pattern}`)
       .order('entry_date', { ascending: false })

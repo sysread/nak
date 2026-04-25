@@ -58,6 +58,16 @@ Unlike memories, entries are not linked into a graph.
     through as `tool_calls.arguments`.
   - `types.ts` — `JournalInput`, `JournalOutput`,
     `MAX_JOURNAL_CONTENT_CHARS`.
+  - `spam_filter.ts` — per-user Naive Bayes classifier over
+    the source conversation text. Tokenize (user/assistant
+    only, lowercased, length-windowed, Snowball English
+    stemmed, deduped per conversation) -> train via the
+    `train_journal_spam` RPC -> score via `score_journal_spam`
+    + `get_journal_spam_stats`. `renderSpamHint(score)`
+    returns the natural-language string the agent injects
+    into the prompt; returns null below the cold-start
+    threshold so the prompt section is suppressed entirely
+    until there's enough data.
 - `src/lib/tools/journal_{list,read,search,delete}.ts` —
   user-facing tools; registered in `journalToolbox`, gated
   (user-toggleable in the chat composer's tool picker).
@@ -114,6 +124,19 @@ In `supabase/schema.sql`:
 - `journal_thread_excludes` — `(user_id, thread_id)`.
   Populated when an automatic entry is deleted; the
   journaler's claim RPC filters these out.
+- `journal_spam_tokens` — `(user_id, token)` PK + `ham_count`
+  and `spam_count`. The Naive Bayes vocabulary. Tokens are
+  stored already-stemmed (Snowball English); train and score
+  paths must agree on the pipeline or rows never join.
+- `journal_spam_stats` — `user_id` PK + `ham_total` and
+  `spam_total` (counts of conversations labeled, not tokens).
+  The Bayes prior + the cold-start gate.
+- `journal_entries.ham_marked_at timestamptz null` — set
+  the first time the user clicks the **Looks good** button
+  on an automatic entry. Idempotency marker for ham
+  training; the UI hides the button once non-null and the
+  supabase update has a `ham_marked_at IS NULL` predicate so
+  a stale tab can't double-train.
 - `threads.last_journaled_msg_id`, `journal_claim_holder`,
   `journal_claim_expires_at` — per-thread journaling
   cursor + claim stamps.
@@ -148,6 +171,18 @@ In `supabase/schema.sql`:
   - `search_journal_entries_by_embedding` - cosine
     similarity. No confidence bias; journals don't use
     the confidence metric memories carry.
+  - `train_journal_spam(p_tokens text[], p_label text)` -
+    bumps the per-token counts and the per-user totals row
+    in one transaction. `security invoker`; the RPC reads
+    `auth.uid()` and rejects the call if there's no
+    session.
+  - `score_journal_spam(p_tokens text[])` - returns one row
+    per matched token plus the user's totals replicated on
+    every row. `security invoker`. The Bayes math runs in
+    JS; this RPC just feeds the inputs.
+  - `get_journal_spam_stats()` - standalone totals lookup
+    used by the worker as a cheap cold-start gate before
+    paying for the (potentially large) token query.
 
 `UserSettings` adds `journalAutomaticEnabled?: boolean`
 and `journalTimezone?: string` (IANA zone).
@@ -175,6 +210,39 @@ and `journalTimezone?: string` (IANA zone).
   injects today's automatic entry (if any) into the
   system-prompt appendix on the opening turn. Weave
   continuity in naturally; no announcement.
+- **Spam-filter training paths.** Two signals feed the
+  per-user Naive Bayes model: deleting an automatic entry
+  (chat-side `journal_delete` tool path AND modal delete
+  button, both routing through
+  `journal-store.svelte.ts:deleteEntry`) trains as `spam`,
+  and the **Looks good** button trains as `ham`. Both
+  paths funnel through `trainSpamFilterForThread` in
+  `spam_filter.ts` so the tokenization pipeline lives in
+  one place. The training call is best-effort (silently
+  swallows errors) - it must not break the user-facing
+  delete or ham action. Spam training is naturally
+  one-shot per thread because `journal_thread_excludes`
+  prevents the same thread from re-journaling; ham
+  training is enforced one-shot by `ham_marked_at`.
+- **Spam-filter scoring path.** The journal agent
+  tokenizes the conversation slice, scores it via
+  `scoreSpamFilter`, and renders the score as a
+  natural-language hint via `renderSpamHint`. The hint
+  goes into `buildJournalPrompt` as `spamHint`; the prompt
+  section is suppressed entirely when null (cold-start or
+  scoring failure). The score is positioned in the prompt
+  as a SOFT signal explicitly subordinate to the
+  conversation's actual content - a topic pivot that
+  reframes a technical thread as emotional should still
+  produce a journal entry even if early tokens score as
+  spam.
+- **Cold-start gate.** Hardcoded at 20 examples per class
+  (`SPAM_FILTER_COLD_START_MIN` in `spam_filter.ts`). Below
+  that threshold the worker doesn't pass the score to the
+  prompt at all - the LLM falls back to its built-in
+  worthy/not-worthy heuristics. Tuning this requires data
+  we don't have yet; revisit if cold-start drags on
+  longer than expected.
 
 ## Interactions
 
@@ -241,3 +309,22 @@ and `journalTimezone?: string` (IANA zone).
   schema is `vector(2048)` per the project convention
   (`padEmbeddingForStorage`). Mirrors the memories
   source exactly.
+- **Stemmer language is fixed at English.** The
+  `snowball-stemmers` package supports many languages but
+  `spam_filter.ts` hardcodes `'english'`. Non-English
+  tokens get stemmed by English rules, which mostly leaves
+  them alone but occasionally over-stems a Spanish/Italian
+  suffix. Acceptable for v1; if non-English usage matters,
+  detect language and pick a per-conversation stemmer
+  (and decide whether to keep the per-language vocabulary
+  separate so cross-language false-matches don't pollute
+  the model).
+- **Train and score must use the same tokenizer.**
+  `tokenizeConversation` is the single source of truth.
+  Drift between the two paths would land train rows in
+  one vocabulary and score lookups in another; no token
+  rows would join and the classifier would silently
+  return prior-only scores forever. If you change the
+  tokenizer, decide what to do with already-stored token
+  rows (truncate? leave as legacy noise?) - there's no
+  migration path baked in.

@@ -29,6 +29,9 @@ importers:
       marked-katex-extension:
         specifier: ^5.1.8
         version: 5.1.8(katex@0.16.45)(marked@18.0.1)
+      snowball-stemmers:
+        specifier: ^0.6.0
+        version: 0.6.0
       workbox-window:
         specifier: ^7.4.0
         version: 7.4.0
@@ -2622,6 +2625,9 @@ packages:
   smob@1.6.1:
     resolution: {integrity: sha512-KAkBqZl3c2GvNgNhcoyJae1aKldDW0LO279wF9bk1PnluRTETKBq0WyzRXxEhoQLk56yHaOY4JCBEKDuJIET5g==}
     engines: {node: '>=20.0.0'}
+
+  snowball-stemmers@0.6.0:
+    resolution: {integrity: sha512-47VTJvsZzEme3VxhbUFc9wR0CX8fYKNMgL7AiBdJcHUrwbmN7htFroeX+8ESIAaoNgwEgwI2wnv1HIcqQqAdcA==}
 
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
@@ -5802,6 +5808,8 @@ snapshots:
   slash@5.1.0: {}
 
   smob@1.6.1: {}
+
+  snowball-stemmers@0.6.0: {}
 
   source-map-js@1.2.1: {}
 

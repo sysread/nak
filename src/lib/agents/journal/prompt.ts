@@ -63,6 +63,18 @@ export interface BuildPromptArgs {
     people: readonly string[];
   } | null;
   threadId: string;
+  /**
+   * Pre-rendered, natural-language hint from the per-user spam
+   * filter (see ../journal/spam_filter.ts:renderSpamHint). Null when
+   * the model is in cold-start (insufficient training data per
+   * class) or when scoring failed - the caller is expected to
+   * suppress the section by passing null rather than asking the
+   * prompt to interpret a noisy score. The hint is positioned as a
+   * SOFT signal in the prompt, after the worthy/not-worthy rules,
+   * so the LLM treats the conversation's actual content as primary
+   * and the prior as a tiebreaker rather than a gate.
+   */
+  spamHint: string | null;
 }
 
 /**
@@ -186,6 +198,25 @@ export function buildJournalPrompt(args: BuildPromptArgs): string {
     'conversation in the chat history if they want it; the journal is',
     "for what they couldn't.",
     '',
+  ];
+  if (args.spamHint !== null && args.spamHint.length > 0) {
+    lines.push(
+      '## Prior signal',
+      '',
+      args.spamHint,
+      '',
+      'This is a SOFT hint built from past ham/spam labels on the',
+      "user's own deleted and approved entries. Treat the conversation",
+      "above as primary evidence; let the prior nudge a borderline",
+      'judgment but not override a clear read. A conversation that',
+      'starts technical and pivots into emotional territory should',
+      'still be journaled even if the early tokens read as "spam"',
+      'to the prior - the worthy test is on the conversation as a',
+      'whole, not its opening turns.',
+      ''
+    );
+  }
+  lines.push(
     '## Voice (when worthy)',
     '',
     'Third person, observational. "User was frustrated by X", "User',
@@ -196,8 +227,8 @@ export function buildJournalPrompt(args: BuildPromptArgs): string {
     'list of facts.',
     '',
     '## Building on what already exists',
-    '',
-  ];
+    ''
+  );
   if (args.existingEntry && args.existingEntry.content.length > 0) {
     lines.push(
       "An automatic entry for today already exists. Apply the worthy",

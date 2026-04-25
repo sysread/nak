@@ -48,6 +48,11 @@ day unfolded.
   updates the same thread, so your manual edits to an automatic
   entry would be overwritten - delete instead, then write your own
   user entry if you want a different framing.
+- **Looks good** — on automatic entries, a button that tells the
+  journaler "this kind of conversation IS worth journaling." See
+  [Teaching the journaler what to keep](#teaching-the-journaler-what-to-keep)
+  below for what this does. One click per entry; once marked, the
+  button is replaced by a quiet **Marked good** tag.
 
 Navigate days with **‹** / **›** or jump back to **Today**.
 
@@ -73,6 +78,37 @@ Deleting an automatic entry also marks its **source conversation**
 as excluded from journaling. The journaler won't regenerate the
 entry from that same thread - you'd see the same content re-appear
 otherwise. User entries delete cleanly with no side-effect.
+
+Deletion also feeds the spam filter; see the next section.
+
+## Teaching the journaler what to keep
+
+The journaler decides whether to write an entry from each settled
+conversation. It's selective by design (the bar is "did this move
+the user emotionally / relationally / identity-wise", not "did
+anything happen"), but the model's defaults won't match every
+user perfectly. Two signals shape its behaviour over time:
+
+- **Deleting an automatic entry** trains a per-user spam filter
+  against the source conversation. The next conversation that
+  reads similarly is more likely to be skipped.
+- **Looks good** on an automatic entry trains the same filter in
+  the opposite direction. Conversations that read like ones you've
+  approved get a stronger nudge toward journaling.
+
+The classifier is a Naive Bayes model on the conversation's words,
+stemmed so different inflections of the same word share signal
+(English-only for now). The score is passed to the journaler as a
+**soft hint**, not a gate - a conversation that pivots from
+technical to emotional should still get journaled even if its
+opening reads as spam to the prior. The journaler still applies
+its own worthy / not-worthy judgment on the conversation as a
+whole.
+
+The hint is suppressed entirely until you've labeled at least 20
+conversations as ham (Looks good) and 20 as spam (deleted). Below
+that threshold the model would be too noisy to interpret. Until
+then, the journaler runs on its built-in heuristics alone.
 
 ## Settings
 

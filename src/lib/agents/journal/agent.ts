@@ -56,6 +56,11 @@ import { sanitizeToolCallsForWire } from '../../tools/wire';
 import type { ReasoningEffort } from '../../models';
 import { buildJournalPrompt } from './prompt';
 import {
+  renderSpamHint,
+  scoreSpamFilter,
+  tokenizeConversation,
+} from './spam_filter';
+import {
   MAX_JOURNAL_CONTENT_CHARS,
   type JournalInput,
   type JournalOutput,
@@ -333,6 +338,23 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
         existingEntry = null;
       }
 
+      // Spam-filter prior. Score the conversation against the user's
+      // ham/spam history; render as a natural-language hint when out
+      // of cold-start, otherwise null. Best-effort: a scoring failure
+      // (network blip, RPC error, missing stats row) just suppresses
+      // the hint - the LLM falls back to its built-in worthy/not-worthy
+      // judgment without the prior nudging it. We don't log the
+      // failure on every cycle because a transient error should not
+      // generate sustained log noise.
+      let spamHint: string | null = null;
+      try {
+        const tokens = tokenizeConversation(slice);
+        const score = await scoreSpamFilter(this.supabase, tokens);
+        spamHint = renderSpamHint(score);
+      } catch {
+        spamHint = null;
+      }
+
       const convo: VeniceMessage[] = slice.map(messageToVenice);
       convo.push({
         role: 'user',
@@ -340,6 +362,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
           entryDate: req.input.entryDate,
           existingEntry,
           threadId: req.input.threadId,
+          spamHint,
         }),
       });
 

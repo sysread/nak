@@ -10,6 +10,7 @@
  */
 import type { JournalEntry, SupabaseService } from './supabase';
 import { emitJournalChange } from './journal-events';
+import { trainSpamFilterForThread } from './agents/journal/spam_filter';
 
 interface JournalStore {
   entries: JournalEntry[];
@@ -111,4 +112,34 @@ export async function deleteEntry(
   await supabase.deleteJournalEntry(id, excludeThreadIds);
   journal.entries = journal.entries.filter((e) => e.id !== id);
   emitJournalChange();
+  // Train the spam filter against the deleted automatic entry's
+  // source conversation. Best-effort; the helper swallows errors
+  // since training is a side-effect, not a blocking step. Skips
+  // user entries (no thread tie) and orphaned automatic entries
+  // whose source thread was deleted (FK on delete set null).
+  if (target?.source === 'automatic' && target.thread_id) {
+    void trainSpamFilterForThread(supabase, target.thread_id, 'spam');
+  }
+}
+
+/**
+ * Mark an automatic entry as appropriate (the "ham" button). One-shot
+ * per entry - the supabase call's WHERE clause guards against double-
+ * trains via a stale tab. On success, the source thread's tokens get
+ * trained as ham. Returns the updated entry on first click; null on
+ * subsequent clicks (already marked) so callers can show a no-op
+ * state without re-training.
+ */
+export async function markEntryHam(
+  supabase: SupabaseService,
+  id: string
+): Promise<JournalEntry | null> {
+  const updated = await supabase.markJournalEntryHam(id);
+  if (!updated) return null;
+  journal.entries = journal.entries.map((e) => (e.id === id ? updated : e));
+  emitJournalChange();
+  if (updated.thread_id) {
+    void trainSpamFilterForThread(supabase, updated.thread_id, 'ham');
+  }
+  return updated;
 }

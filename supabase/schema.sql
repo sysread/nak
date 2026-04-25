@@ -3315,6 +3315,178 @@ language sql stable security invoker as $$
    limit match_limit
 $$;
 
+-- Journal spam filter ----------------------------------------------------
+--
+-- Naive Bayes classifier over the source conversation text, used as a
+-- soft hint to the journal agent's worthiness decision. Two signals
+-- feed it:
+--
+--   - Delete on an automatic entry (existing journal_delete tool path)
+--     trains the source thread's tokens as `spam`. The thread is
+--     already prevented from re-journaling via journal_thread_excludes,
+--     so spam training is naturally one-shot per thread.
+--   - The ham button on an automatic entry (Journal.svelte) trains the
+--     source thread's tokens as `ham`. Ham idempotency is enforced by
+--     `journal_entries.ham_marked_at` - once set, the UI disables the
+--     button. We do NOT remove ham training when an entry is later
+--     deleted; the user said it was a good entry at the moment of
+--     marking, and a later delete doesn't retroactively make that wrong.
+--
+-- The classifier itself runs in the journal worker and main thread (for
+-- training). Tokens are pre-stemmed (Snowball English) before storage
+-- so the same word in different inflections shares a row. The model is
+-- per-user, RLS-scoped.
+
+create table if not exists public.journal_spam_tokens (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- Lowercased + stemmed token. The stemmer must match between train
+  -- and score paths or rows will never join with new conversations.
+  token text not null,
+  ham_count int not null default 0,
+  spam_count int not null default 0,
+  primary key (user_id, token)
+);
+
+alter table public.journal_spam_tokens enable row level security;
+
+drop policy if exists "journal_spam_tokens are self-selectable" on public.journal_spam_tokens;
+create policy "journal_spam_tokens are self-selectable" on public.journal_spam_tokens
+  for select using (auth.uid() = user_id);
+
+-- Writes go through the train_journal_spam RPC (which uses
+-- auth.uid()), so insert/update policies just enforce the same
+-- self-scoping the RPC already imposes.
+drop policy if exists "journal_spam_tokens are self-insertable" on public.journal_spam_tokens;
+create policy "journal_spam_tokens are self-insertable" on public.journal_spam_tokens
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "journal_spam_tokens are self-updatable" on public.journal_spam_tokens;
+create policy "journal_spam_tokens are self-updatable" on public.journal_spam_tokens
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- Per-user totals. Used as Naive Bayes priors and as the cold-start
+-- gate (worker suppresses the hint while either total is below
+-- threshold so the LLM doesn't try to interpret meaningless scores).
+create table if not exists public.journal_spam_stats (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  -- Number of conversations the user has marked as ham (good entry).
+  ham_total int not null default 0,
+  -- Number of conversations the user has marked as spam (deleted entry).
+  spam_total int not null default 0,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.journal_spam_stats enable row level security;
+
+drop policy if exists "journal_spam_stats are self-selectable" on public.journal_spam_stats;
+create policy "journal_spam_stats are self-selectable" on public.journal_spam_stats
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "journal_spam_stats are self-insertable" on public.journal_spam_stats;
+create policy "journal_spam_stats are self-insertable" on public.journal_spam_stats
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "journal_spam_stats are self-updatable" on public.journal_spam_stats;
+create policy "journal_spam_stats are self-updatable" on public.journal_spam_stats
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- Idempotency marker for the ham button. Set once when the user
+-- marks an automatic entry as appropriate; the UI hides the button
+-- after the first click. Nullable - most entries never get marked.
+alter table public.journal_entries
+  add column if not exists ham_marked_at timestamptz null;
+
+-- Train the per-user Bayesian model. Atomic across the token rows
+-- and the totals row - both updates land in the same transaction so
+-- a partial training failure leaves the model untouched. Tokens are
+-- expected pre-stemmed and lowercased; the function does no
+-- normalization of its own.
+drop function if exists public.train_journal_spam(text[], text);
+create or replace function public.train_journal_spam(
+  p_tokens text[],
+  p_label text
+) returns void
+language plpgsql security invoker as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_ham int := case when p_label = 'ham' then 1 else 0 end;
+  v_spam int := case when p_label = 'spam' then 1 else 0 end;
+begin
+  if v_user_id is null then
+    raise exception 'not authenticated';
+  end if;
+  if p_label not in ('ham', 'spam') then
+    raise exception 'invalid label: %', p_label;
+  end if;
+  if p_tokens is null or array_length(p_tokens, 1) is null then
+    -- Empty token list: still bump the stats row so the prior
+    -- shifts correctly even if the conversation tokenized to nothing.
+    insert into public.journal_spam_stats (user_id, ham_total, spam_total, updated_at)
+    values (v_user_id, v_ham, v_spam, now())
+    on conflict (user_id) do update set
+      ham_total = public.journal_spam_stats.ham_total + v_ham,
+      spam_total = public.journal_spam_stats.spam_total + v_spam,
+      updated_at = now();
+    return;
+  end if;
+
+  insert into public.journal_spam_tokens as t (user_id, token, ham_count, spam_count)
+  select v_user_id, tk, v_ham, v_spam
+    from unnest(p_tokens) as tk
+  on conflict (user_id, token) do update set
+    ham_count = t.ham_count + v_ham,
+    spam_count = t.spam_count + v_spam;
+
+  insert into public.journal_spam_stats (user_id, ham_total, spam_total, updated_at)
+  values (v_user_id, v_ham, v_spam, now())
+  on conflict (user_id) do update set
+    ham_total = public.journal_spam_stats.ham_total + v_ham,
+    spam_total = public.journal_spam_stats.spam_total + v_spam,
+    updated_at = now();
+end $$;
+
+-- Score lookup. Returns one row per matched token plus the user's
+-- totals (replicated on every row, since callers compute Naive Bayes
+-- in JS and need both pieces). Empty result means either no tokens
+-- matched the user's vocabulary or the user has no training data
+-- yet - the caller distinguishes via the totals.
+drop function if exists public.score_journal_spam(text[]);
+create or replace function public.score_journal_spam(
+  p_tokens text[]
+) returns table (
+  token text,
+  ham_count int,
+  spam_count int,
+  ham_total int,
+  spam_total int
+)
+language sql stable security invoker as $$
+  with stats as (
+    select coalesce(s.ham_total, 0) as ham_total,
+           coalesce(s.spam_total, 0) as spam_total
+      from (select 1) d
+      left join public.journal_spam_stats s on s.user_id = auth.uid()
+  )
+  select t.token, t.ham_count, t.spam_count, stats.ham_total, stats.spam_total
+    from public.journal_spam_tokens t, stats
+   where t.user_id = auth.uid()
+     and t.token = any(p_tokens)
+$$;
+
+-- Standalone stats lookup. Used by the worker to apply the
+-- cold-start gate before bothering to tokenize and call
+-- score_journal_spam (saves a round-trip when the model is empty)
+-- and by the UI if it ever wants to surface "trained on N
+-- conversations" copy.
+drop function if exists public.get_journal_spam_stats();
+create or replace function public.get_journal_spam_stats()
+returns table (ham_total int, spam_total int)
+language sql stable security invoker as $$
+  select coalesce(s.ham_total, 0)::int, coalesce(s.spam_total, 0)::int
+    from (select 1) d
+    left join public.journal_spam_stats s on s.user_id = auth.uid()
+$$;
+
 -- Realtime subscriptions --------------------------------------------------
 --
 -- The client subscribes to INSERTs on `messages` (filtered by thread_id)

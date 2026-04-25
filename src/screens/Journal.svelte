@@ -33,6 +33,7 @@
     saveUserEntry,
     updateUserEntry,
     deleteEntry,
+    markEntryHam,
   } from '$lib/journal-store.svelte';
   import {
     downloadEntryMarkdown,
@@ -76,6 +77,16 @@
 
   let deleteTargetId = $state<string | null>(null);
   let deleteError = $state<string | null>(null);
+
+  // Ham-button state. One-shot per entry; the spam-filter training is
+  // best-effort downstream so we mostly need to track which row's
+  // request is in flight (to avoid a double-click sending two RPCs)
+  // and surface errors inline. Idempotency is enforced server-side
+  // via the WHERE-is-null clause on the update; the UI just hides
+  // the button once entry.ham_marked_at flips non-null.
+  let hamBusyId = $state<string | null>(null);
+  let hamError = $state<string | null>(null);
+  let hamErrorId = $state<string | null>(null);
 
   // User-entry compose / edit state. Only one day can be edited at a
   // time - the daily view renders a single user card anyway.
@@ -377,6 +388,27 @@
       deleteError = null;
     } catch (err) {
       deleteError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // Ham click handler. Hits the markEntryHam helper which sets
+  // ham_marked_at and trains the source thread's tokens as ham. The
+  // helper returns null when the row was already marked - we treat
+  // that as success (the user clicked it on a stale tab; the
+  // server-side guard prevented the double-train) so the button
+  // just disappears.
+  async function onMarkHam(id: string): Promise<void> {
+    if (!app.supabase || hamBusyId !== null) return;
+    hamBusyId = id;
+    hamError = null;
+    hamErrorId = null;
+    try {
+      await markEntryHam(app.supabase, id);
+    } catch (err) {
+      hamError = err instanceof Error ? err.message : String(err);
+      hamErrorId = id;
+    } finally {
+      hamBusyId = null;
     }
   }
 
@@ -722,6 +754,27 @@
         onclick={() => downloadEntryMarkdown(entry)}
         title="Download this entry as Markdown"
       >Export .md</button>
+      <!--
+        Ham button - the user's "this entry was appropriate" signal.
+        Appears only on automatic entries that still have a source
+        thread (orphans can't be trained against) and that haven't
+        already been marked. Once clicked, the column flips and the
+        button disappears, replaced by a quiet "Marked good" tag so
+        the user can see the action took. The thumbs-up icon plus
+        the explicit text matches the verb-first pattern of the
+        other footer buttons.
+      -->
+      {#if entry.ham_marked_at !== null}
+        <span class="subtle journal-ham-marked" title="You marked this entry as appropriate. Trained the spam filter on the source conversation.">Marked good</span>
+      {:else if entry.thread_id}
+        <button
+          type="button"
+          class="secondary"
+          onclick={() => onMarkHam(entry.id)}
+          disabled={hamBusyId === entry.id}
+          title="Tell the spam filter this kind of conversation IS journal-worthy"
+        >{hamBusyId === entry.id ? 'Marking…' : 'Looks good'}</button>
+      {/if}
       {#if deleteTargetId === entry.id}
         <span class="subtle journal-delete-prompt">
           Delete and stop journaling this conversation?
@@ -746,6 +799,9 @@
     </footer>
     {#if deleteTargetId === entry.id && deleteError}
       <p class="error">{deleteError}</p>
+    {/if}
+    {#if hamErrorId === entry.id && hamError}
+      <p class="error">{hamError}</p>
     {/if}
   </article>
 {/snippet}
@@ -1216,6 +1272,15 @@
   .journal-delete-prompt {
     font-size: 0.85rem;
     margin-right: 0.25rem;
+  }
+
+  /* Quiet "you marked this" tag that replaces the Looks-good button
+     once the user clicks it. Sits in the same row as the action
+     buttons so the spacing matches; visually muted so it doesn't
+     compete with the actual buttons. */
+  .journal-ham-marked {
+    font-size: 0.85rem;
+    padding: 0 0.25rem;
   }
 
   .journal-badge {

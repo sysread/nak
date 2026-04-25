@@ -18,6 +18,7 @@
  * is just a row removal.
  */
 import type { ToolDef } from './types';
+import { trainSpamFilterForThread } from '../agents/journal/spam_filter';
 
 export const journalDelete: ToolDef = {
   name: 'journal_delete',
@@ -55,6 +56,14 @@ export const journalDelete: ToolDef = {
     const excludeThreadIds =
       target.source === 'automatic' && target.thread_id ? [target.thread_id] : [];
     await ctx.supabase.deleteJournalEntry(id, excludeThreadIds);
+    // Train the spam filter against the source conversation. The
+    // user removing an automatic entry is the strong "this kind of
+    // conversation should NOT auto-journal" signal. journal_thread_excludes
+    // already prevents the same thread from re-journaling, so this
+    // training contribution is naturally one-shot per thread.
+    if (target.source === 'automatic' && target.thread_id) {
+      await trainSpamFilterForThread(ctx.supabase, target.thread_id, 'spam');
+    }
     return {
       id,
       source: target.source,
