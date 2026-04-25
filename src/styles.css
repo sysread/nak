@@ -3296,3 +3296,38 @@ h1 {
   padding: 3rem 0;
   min-height: 12rem;
 }
+
+/* ---------- Shared modal full-bleed (mobile) ----------
+   The four `.center`-wrapped modals (Journal, Help, Memories, Settings)
+   sit inside .center's 2rem gutter, which on a ~375px phone leaves the
+   shell roughly two thirds of the viewport wide - cramped enough that
+   prose lines visibly truncate and chip rows clip on the right. Drop
+   the gutter, shed the rounded corners and side borders that read as
+   decoration once the surface is the whole screen, and stretch the
+   shell to the full dynamic viewport height. Cookbook and Samskara
+   also carry the `.center` class but override .center's grid + padding
+   with their own `position: fixed; inset: 0` backdrops, so they're not
+   affected by the .center reset and aren't included here. Placed at
+   the bottom of the file so source-order beats the per-modal shell
+   declarations (.help-shell, .settings-shell at the top, the others
+   in their components) - same cascade trap the .msg mobile override
+   sidesteps. */
+@media (max-width: 720px) {
+  .journal-backdrop,
+  .help-backdrop,
+  .memories-backdrop,
+  .settings-backdrop {
+    padding: 0;
+  }
+  .journal-shell,
+  .help-shell,
+  .memories-shell,
+  .settings-shell {
+    border-radius: 0;
+    border-left-width: 0;
+    border-right-width: 0;
+    max-width: 100%;
+    height: 100vh;
+    height: 100dvh;
+  }
+}

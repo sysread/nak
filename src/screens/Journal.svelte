@@ -1141,6 +1141,14 @@
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
+    /* Flex items default to min-width: auto, sized by their content's
+       min-content width. A long unbreakable token in the body (URL,
+       hash, em-dash run without surrounding spaces) would otherwise
+       push the card past .journal-body's width and out the right edge
+       of the modal - same failure mode .msg handles. Allow the card
+       to shrink to its parent's width so the wrapping rules on
+       .journal-card-body below can take over. */
+    min-width: 0;
   }
 
   .card-automatic {
@@ -1150,6 +1158,15 @@
   .journal-card-body {
     font-size: 0.95rem;
     color: var(--text);
+    /* Mirror .msg's wrapping rules so the rendered markdown wraps to
+       the card's width rather than running off the right edge.
+       Without these, prose with em-dash compounds ("anxiety-secondary")
+       or long hashes/URLs renders as a single overflowing line - the
+       Markdown component itself doesn't carry these styles, it relies
+       on the container. */
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
   }
 
   .journal-card-actions {
@@ -1254,5 +1271,25 @@
     gap: 0.4rem;
     justify-content: flex-end;
     flex-wrap: wrap;
+  }
+
+  /*
+   * Small-screen inner padding. The shared `.center`-modal full-bleed
+   * rules (styles.css, bottom) take the shell edge-to-edge on mobile;
+   * here we tighten the journal's own header / body / card paddings so
+   * the gained width reaches the entry text rather than feeding a
+   * widened inner gutter.
+   */
+  @media (max-width: 720px) {
+    .journal-header {
+      padding: 0.75rem 0.75rem 0.6rem;
+      padding-right: 3rem;
+    }
+    .journal-body {
+      padding: 0.75rem;
+    }
+    .journal-card {
+      padding: 0.6rem 0.7rem;
+    }
   }
 </style>
