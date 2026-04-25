@@ -513,7 +513,7 @@
             onclick={backToList}
             aria-label="Back to list"
             title="Back to list"
-          >← All entries</button>
+          >← ToC</button>
           <button
             type="button"
             class="secondary"
@@ -933,12 +933,13 @@
     font-size: 0.95rem;
     font-weight: 600;
     line-height: 1.3;
-    /* Single line; long titles already collapsed/truncated by
-       formatTitle but the CSS belt keeps visual rhythm if the
-       truncation slips. */
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    /* Allow long titles to wrap onto multiple lines so the full title
+       stays visible. The parent .journal-card-conversation-title
+       centers this inline-block; text-align: center keeps the
+       wrapped lines themselves centered within the button/span (a
+       <button> picks this up from the UA stylesheet anyway, the
+       disabled <span> would left-align without it). */
+    text-align: center;
   }
   .journal-thread-link {
     background: transparent;
