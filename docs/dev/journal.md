@@ -62,12 +62,12 @@ Unlike memories, entries are not linked into a graph.
     the source conversation text. Tokenize (user/assistant
     only, lowercased, length-windowed, Snowball English
     stemmed, deduped per conversation) -> train via the
-    `train_journal_spam` RPC -> score via `score_journal_spam`
-    + `get_journal_spam_stats`. `renderSpamHint(score)`
-    returns the natural-language string the agent injects
-    into the prompt; returns null below the cold-start
-    threshold so the prompt section is suppressed entirely
-    until there's enough data.
+    `train_journal_spam` RPC -> score via the
+    `score_journal_spam` and `get_journal_spam_stats` RPCs.
+    `renderSpamHint(score)` returns the natural-language
+    string the agent injects into the prompt; returns null
+    below the cold-start threshold so the prompt section is
+    suppressed entirely until there's enough data.
 - `src/lib/tools/journal_{list,read,search,delete}.ts` —
   user-facing tools; registered in `journalToolbox`, gated
   (user-toggleable in the chat composer's tool picker).
