@@ -10,12 +10,16 @@
  * Mirrors `../reflection/agent.ts` in the thread-fetch / slice / model
  * pinning pieces but diverges in three ways:
  *
- *   - Model + reasoning: runs on MODELS.balanced.id with
- *     reasoning_effort='medium' because "parse the emotional arc of
- *     a conversation, decide whether it's worth journaling, and
- *     either write the entry or explain the skip" is genuinely harder
- *     than "extract factual memories" and a lighter model regressed
- *     on nuance in review.
+ *   - Model + reasoning: runs on `nvidia-nemotron-cascade-2-30b-a3b`
+ *     with reasoning_effort='medium'. Cheap, fast, 256k context, and
+ *     it supports function calling + reasoning, which is the slot
+ *     this background agent actually needs (no vision, no streaming
+ *     UX). Pinned to a literal id rather than tracking a tier so a
+ *     swap of the user-facing `balanced` profile doesn't perturb the
+ *     journaler. Earlier the task was on the balanced profile (GLM-5)
+ *     and overload errors started showing up in the journal logs,
+ *     and a low-traffic-tier model is a better fit for "every settled
+ *     thread, in order, in the background" anyway.
  *
  *   - Output: structured JSON via response_format, not a tool call.
  *     The earlier tool-call shape ran the entry's Markdown body
@@ -43,7 +47,7 @@ import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
 import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
 import { sanitizeToolCallsForWire } from '../../tools/wire';
-import { MODELS, type ReasoningEffort } from '../../models';
+import type { ReasoningEffort } from '../../models';
 import { buildJournalPrompt } from './prompt';
 import {
   MAX_JOURNAL_CONTENT_CHARS,
@@ -52,15 +56,21 @@ import {
 } from './types';
 
 /**
- * Model the journaling agent runs against. Pinned to the balanced
- * tier because the task involves emotional-arc parsing and nuanced
- * merging with the existing entry. The fast tier regressed on
- * reframings and mood continuity in review; smart is overkill.
+ * Model the journaling agent runs against. Literal id rather than a
+ * tier reference: the journal worker is a "every settled thread, in
+ * order, in the background" load and wants its own low-traffic slot
+ * so foreground turns on the user-facing `balanced` profile don't
+ * compete with the background queue for capacity. Nemotron Cascade
+ * 2 30b-a3b is cheap, has a 256k context (comfortable headroom for
+ * long threads + the existing-entry priming block), and supports
+ * function calling + reasoning - everything the journaler exercises.
+ * No vision, which is fine; threads are text-only at this layer.
  *
- * Tracks the balanced tier automatically if the tier is retargeted,
- * which is usually what we want.
+ * Pin to a string. If a future swap is wanted, change it here; the
+ * worker reads the value through the start-message plumbing in
+ * `manager.ts`.
  */
-export const VENICE_JOURNAL_MODEL = MODELS.balanced.id;
+export const VENICE_JOURNAL_MODEL = 'nvidia-nemotron-cascade-2-30b-a3b';
 
 /**
  * Reasoning effort sent alongside the balanced-tier model. `medium` is
@@ -229,9 +239,10 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
     private venice: VeniceClient,
     private supabase: SupabaseService,
     /**
-     * Optional override. Defaults to `VENICE_JOURNAL_MODEL` (balanced
-     * tier). Useful for tests and for a future A/B where two
-     * journaling models run against historical threads.
+     * Optional override. Defaults to `VENICE_JOURNAL_MODEL`
+     * (nvidia-nemotron-cascade-2-30b-a3b). Useful for tests and for a
+     * future A/B where two journaling models run against historical
+     * threads.
      */
     modelId?: string
   ) {

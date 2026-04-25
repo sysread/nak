@@ -39,9 +39,12 @@ Unlike memories, entries are not linked into a graph.
     on the right day.
   - `agent.ts` — `JournalAgent implements
     Agent<JournalInput, JournalOutput>`. Model:
-    `MODELS.balanced.id`. `reasoning_effort: 'medium'`.
-    Reads today's existing automatic entry and injects it
-    into the prompt so the LLM extends rather than
+    `nvidia-nemotron-cascade-2-30b-a3b` (literal id, not a
+    tier - low-traffic slot for the background queue,
+    256k context, supports function calling + reasoning).
+    `reasoning_effort: 'medium'`. Reads today's existing
+    automatic entry and injects it into the prompt so the
+    LLM extends rather than
     duplicates.
   - `prompt.ts` — `buildJournalPrompt({entryDate,
     existingEntry, threadId})`. Third-person observational
