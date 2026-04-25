@@ -49,7 +49,11 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     return 'acquired-lease';
   }
 
-  let claim: { threadId: string; terminalMsgId: string } | null = null;
+  let claim: {
+    threadId: string;
+    terminalMsgId: string;
+    title: string | null;
+  } | null = null;
   try {
     claim = await ctx.supabase.claimNextThreadForJournal(
       ctx.holderId,
@@ -60,7 +64,13 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   }
   if (!claim) return 'empty-queue';
 
-  log.info(`picked up thread ${claim.threadId} @ msg ${claim.terminalMsgId}`);
+  // Title is rendered as `"<title>"` so it's visually distinct in the
+  // log even when it contains stray punctuation, and falls back to a
+  // bracketed sentinel when the auto-titler hasn't run yet.
+  const titleTag = claim.title ? `"${claim.title}"` : '[untitled]';
+  log.info(
+    `picked up thread ${claim.threadId} ${titleTag} @ msg ${claim.terminalMsgId}`
+  );
 
   // Compute today's date EVERY cycle rather than cache once per worker
   // run - a worker that stays idle across midnight would otherwise keep
@@ -109,14 +119,25 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       claim.terminalMsgId
     );
     if (marked) {
+      // Append the first failed-tool-call error when the agent tried but
+      // every attempt errored (wrote=false despite N tool calls). That's
+      // the case the user actually wants to debug; bare `wrote=false`
+      // looks identical for "agent decided not to journal" vs "every
+      // upsert RPC returned an error", and the two need different
+      // responses. Suppressed when wrote=true (irrelevant) or when there
+      // were no failures (firstError stays null).
+      const errorTag = runResult.output.firstError
+        ? `, firstError="${runResult.output.firstError}"`
+        : '';
       log.info(
-        `finished thread ${claim.threadId} ` +
+        `finished thread ${claim.threadId} ${titleTag} ` +
           `(wrote=${runResult.output.entryWritten}, ` +
-          `${runResult.toolCalls} tool calls over ${runResult.output.inputMessageCount} messages)`
+          `${runResult.toolCalls} tool calls over ${runResult.output.inputMessageCount} messages` +
+          `${errorTag})`
       );
     } else {
       log.debug(
-        `claim lost on thread ${claim.threadId} - another device took over`
+        `claim lost on thread ${claim.threadId} ${titleTag} - another device took over`
       );
     }
     return marked ? 'journaled' : 'claim-lost';

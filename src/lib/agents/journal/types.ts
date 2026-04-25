@@ -25,4 +25,13 @@ export interface JournalOutput {
   inputMessageCount: number;
   /** Whether the agent actually wrote an entry this run. */
   entryWritten: boolean;
+  /**
+   * Error message from the FIRST failed `journal_upsert` call this run,
+   * or null when none failed. Plumbed up so the worker log can show
+   * "wrote=false but the agent tried - here's the RPC error" instead of
+   * silently reporting wrote=false on a thread that the agent did try
+   * to journal. Null also means "agent never called the tool", which
+   * is the legitimate-skip path.
+   */
+  firstError: string | null;
 }

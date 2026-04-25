@@ -103,7 +103,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
 
     if (signal.aborted) {
       return {
-        output: { finalText: '', inputMessageCount: 0, entryWritten: false },
+        output: { finalText: '', inputMessageCount: 0, entryWritten: false, firstError: null },
         toolCalls: 0,
         stoppedReason: 'aborted',
       };
@@ -121,7 +121,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
 
       if (slice.length === 0) {
         return {
-          output: { finalText: '', inputMessageCount: 0, entryWritten: false },
+          output: { finalText: '', inputMessageCount: 0, entryWritten: false, firstError: null },
           toolCalls: 0,
           stoppedReason: 'done',
         };
@@ -193,13 +193,14 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
           // marks the thread journaled regardless), but the log line
           // should reflect what actually landed in the DB.
           entryWritten: result.successfulToolCalls > 0,
+          firstError: result.firstError,
         },
         toolCalls: result.toolCalls,
         stoppedReason: signal.aborted ? 'aborted' : 'done',
       };
     } catch (err) {
       return {
-        output: { finalText: '', inputMessageCount: 0, entryWritten: false },
+        output: { finalText: '', inputMessageCount: 0, entryWritten: false, firstError: null },
         toolCalls: 0,
         stoppedReason: 'error',
         error: err instanceof Error ? err.message : String(err),

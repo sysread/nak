@@ -3048,10 +3048,10 @@ drop function if exists public.claim_next_thread_for_journal(text, int);
 create or replace function public.claim_next_thread_for_journal(
   p_holder_id text,
   p_ttl_seconds int
-) returns table (thread_id uuid, terminal_msg_id uuid)
+) returns table (thread_id uuid, terminal_msg_id uuid, title text)
 language sql security invoker as $$
   with candidate as (
-    select t.id as thread_id, term.msg_id as terminal_msg_id
+    select t.id as thread_id, term.msg_id as terminal_msg_id, t.title as title
       from public.threads t
       cross join lateral (
         select m.id as msg_id
@@ -3093,7 +3093,7 @@ language sql security invoker as $$
          journal_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where t.id = c.thread_id
-  returning t.id as thread_id, c.terminal_msg_id;
+  returning t.id as thread_id, c.terminal_msg_id, c.title;
 $$;
 
 -- Mark the thread journaled IF our claim is still ours. Returns false

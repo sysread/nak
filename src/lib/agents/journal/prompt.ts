@@ -21,24 +21,23 @@
  *     should build on what's already been captured rather than
  *     re-summarising from scratch.
  *
- *   - Include / exclude lists come straight from the feature spec
- *     (feelings, interpersonal dynamics, self-reflection,
- *     neurodivergence processing; NOT pure tech Q&A, recipe lookups
- *     unless they drift personal, etc.). The model needs explicit
- *     rules because "what counts as reflective" is the kind of
- *     judgement call that otherwise produces drift across runs.
+ *   - **No skip branch.** The agent always calls `journal_upsert`.
+ *     Earlier versions had a strict "skip if not reflective" rule and
+ *     two include/exclude lists; in practice the model erred far on
+ *     the side of skipping, every cycle ended `wrote=false`, and the
+ *     user got an empty journal. The journal is meant as a daily
+ *     record of the user's life, not just their feelings. Technical
+ *     conversations get a brief log-style entry ("User worked on the
+ *     auth flow today; refactored the JWT handler, decided to keep
+ *     refresh-token rotation manual"); reflective conversations get
+ *     the longer narrative form. The framing differs but every cycle
+ *     produces a row.
  *
  *   - "Single upsert" discipline is a load-bearing invariant: the
  *     agent is told to call `journal_upsert` at most once per run.
  *     Multiple upsert calls against the same (user, date,
  *     source='automatic') key would each overwrite the previous one
  *     inside a single run, wasting round-trips with no benefit.
- *
- *   - "Skip this turn" is an explicit branch: if the conversation
- *     doesn't carry any reflective content, the agent should produce
- *     no tool call. The thread still gets marked as journaled (the
- *     pointer advances) so the worker doesn't reconsider the same
- *     messages next cycle.
  */
 
 export interface BuildPromptArgs {
@@ -68,48 +67,55 @@ export function buildJournalPrompt(args: BuildPromptArgs): string {
     `This conversation's thread id is **${args.threadId}** - include it in`,
     '`source_thread_ids` on your upsert call.',
     '',
-    '## What goes in a Journal entry',
+    '## Always write something',
     '',
-    'INCLUDE content that is reflective in nature:',
-    '- Feelings, emotional states, self-reflection',
-    '- Interpersonal dynamics, conflicts, relationship processing',
-    '- Venting about work/life situations with emotional weight',
-    '- Processing neurodivergence experiences (ADHD, autism, other)',
-    '- Personal growth, identity, self-perception themes',
-    '- Any transactional topic that drifted into emotional territory',
-    '  ("My boss is making me work on a project I hate" qualifies;',
-    '   "How do I configure X?" does not)',
+    'Every conversation gets an entry. The journal is a daily record of',
+    "what the user did and felt - a diary, not just an emotions log.",
+    'Pick the framing that fits the conversation:',
     '',
-    'EXCLUDE content that is not reflective:',
-    '- Purely technical or transactional exchanges',
-    '- Recipe or cooking discussion (unless it drifted personal)',
-    '- Factual Q&A, lookups, how-tos',
-    '- Tool-driven workflows with no emotional dimension',
+    '- **Reflective content** (feelings, interpersonal dynamics, conflict,',
+    '  identity / neurodivergence processing, personal growth, venting',
+    '  about life with emotional weight): lead with that. Third-person',
+    "  observational, 2-6 short paragraphs. Capture the arc, not just a",
+    "  list of facts. This is the long-form mode.",
     '',
-    'If the conversation above contains NOTHING reflective, DO NOT call',
-    'any tool. Reply with a single word and stop. The worker will mark',
-    'the thread journaled and move on. Fabricating reflective content',
-    'where none exists is strictly worse than skipping.',
+    '- **Technical / transactional content** (debugging, code reviews,',
+    '  recipe lookups, factual Q&A, configuration help, planning a',
+    '  project): a brief log entry. One paragraph or a short bullet',
+    '  list. Name what was worked on, decisions made, anything notable',
+    '  to look back on. "User spent the afternoon debugging the auth',
+    '  flow with the assistant; refactored the JWT handler and decided',
+    '  to keep refresh-token rotation manual" is a perfectly good entry.',
+    '  This is the short-form mode.',
+    '',
+    '- **Mixed content** (a technical conversation that drifted into',
+    "  frustration, or a venting session that landed on a concrete",
+    '  decision): combine. Lead with whichever was the larger arc, then',
+    '  fold in the other.',
+    '',
+    'Do NOT skip. An empty journal is worse than a brief one - the user',
+    "wants to be able to look back at any day and see what they were",
+    'doing.',
     '',
     '## Voice',
     '',
     'Write in third person, observational ("User was frustrated by X",',
-    '"User noticed that Y made them anxious"). The user can write their',
-    'own first-person entry alongside yours; keep the two voices',
-    'distinguishable. Format in Markdown - paragraphs, lists, short',
-    'headers if helpful. Keep it tight: this is a daily arc, not an',
-    'essay. A good entry is 2-6 short paragraphs.',
+    '"User worked on Y", "User noticed that Z made them anxious"). The',
+    "user can write their own first-person entry alongside yours; keep",
+    'the two voices distinguishable. Format in Markdown - paragraphs,',
+    'lists, short headers if helpful. Keep it tight: this is a daily',
+    "arc, not an essay.",
     '',
     '## Building on what already exists',
     '',
   ];
   if (args.existingEntry && args.existingEntry.content.length > 0) {
     lines.push(
-      "An automatic entry for today already exists. Your job is to EXTEND",
+      'An automatic entry for today already exists. Your job is to EXTEND',
       'and REFINE it, not overwrite it. Read it below, then produce an',
-      'updated version that captures the full day so far - new emotional',
-      'arcs from this conversation folded into the existing narrative. If',
-      "the existing entry got something wrong (say the user reframed a",
+      'updated version that captures the full day so far - new arcs from',
+      'this conversation folded into the existing narrative. If the',
+      'existing entry got something wrong (say the user reframed a',
       'feeling mid-day), correct it; otherwise preserve what\'s there.',
       '',
       '**Existing automatic entry:**',
@@ -149,8 +155,7 @@ export function buildJournalPrompt(args: BuildPromptArgs): string {
     '  overwrite each other and waste tokens.',
     '- Required fields: `entry_date`, `content`. Pass the values above.',
     '- Optional: `topics`, `mood`, `people`, `source_thread_ids`.',
-    '- If the conversation has nothing reflective, skip the tool call',
-    '  entirely and reply with a single word.',
+    '- For purely technical conversations, `mood` may be omitted.',
     '',
     'When done, reply with a single word. The word is discarded.'
   );

@@ -1591,15 +1591,28 @@ export class SupabaseService {
   async claimNextThreadForJournal(
     holderId: string,
     ttlSeconds: number
-  ): Promise<{ threadId: string; terminalMsgId: string } | null> {
+  ): Promise<{
+    threadId: string;
+    terminalMsgId: string;
+    /** Thread title at claim time. Null when the auto-titler hasn't filled it in yet. */
+    title: string | null;
+  } | null> {
     const { data, error } = await this.client.rpc('claim_next_thread_for_journal', {
       p_holder_id: holderId,
       p_ttl_seconds: ttlSeconds,
     });
     if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as { thread_id: string; terminal_msg_id: string }[];
+    const rows = (data ?? []) as {
+      thread_id: string;
+      terminal_msg_id: string;
+      title: string | null;
+    }[];
     if (rows.length === 0) return null;
-    return { threadId: rows[0].thread_id, terminalMsgId: rows[0].terminal_msg_id };
+    return {
+      threadId: rows[0].thread_id,
+      terminalMsgId: rows[0].terminal_msg_id,
+      title: rows[0].title ?? null,
+    };
   }
 
   async markThreadJournaledIfClaimed(
