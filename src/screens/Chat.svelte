@@ -2460,9 +2460,7 @@
         .userAgentData?.platform ?? navigator.platform ?? '';
     return /mac/i.test(p);
   });
-  const sendHint = $derived(
-    isMac ? '\u2318+Enter to send, Enter for newline' : 'Ctrl+Enter to send, Enter for newline'
-  );
+  const sendHint = $derived(isMac ? '\u2318-enter sends' : 'ctrl-enter sends');
 
   async function signOut(): Promise<void> {
     // Clear the cached master-password session too — an explicit sign-out
@@ -4112,7 +4110,7 @@
             onblur={() => (composerFocused = false)}
             placeholder={currentThread?.archived
               ? 'Restore this conversation to continue.'
-              : `Message… (${sendHint})`}
+              : sendHint}
             disabled={currentThread?.archived}
           ></textarea>
           <!-- Hidden file input — the paperclip button triggers this
