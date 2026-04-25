@@ -12,7 +12,9 @@ import type { JournalEntry, SupabaseService } from './supabase';
 import { emitJournalChange } from './journal-events';
 import {
   trainSpamFilterForThread,
+  trainSpamFilterForUserEntry,
   untrainSpamFilterForThread,
+  untrainSpamFilterForUserEntry,
 } from './agents/journal/spam_filter';
 
 interface JournalStore {
@@ -86,6 +88,15 @@ export async function saveUserEntry(
     return a.created_at < b.created_at ? -1 : 1;
   });
   emitJournalChange();
+  // Auto-ham. The user writing their own entry is the strongest
+  // possible "this is journal-worthy" signal we have - the entry IS
+  // the user's curated framing of what belongs in the journal. Feed
+  // the entry's text directly to the model as ham training. We do
+  // NOT retrain on edits (updateUserEntry below) - the original tokens
+  // already shaped the model on save, and re-training on every save
+  // would over-weight verbose users. The trade-off: heavy edits drift
+  // the trained vocabulary slightly off the current content.
+  void trainSpamFilterForUserEntry(supabase, entry.content);
   return entry;
 }
 
@@ -135,6 +146,14 @@ export async function deleteEntry(
       }
       await trainSpamFilterForThread(supabase, threadId, 'spam');
     })();
+  }
+  // User entries get auto-hammed on creation. Rescind that vote on
+  // delete so a written-then-deleted entry doesn't leave orphaned
+  // ham evidence in the model. The untrain RPC floors at zero, so
+  // legacy user entries (created before auto-ham wiring) decrement
+  // to no-op rather than underflowing.
+  if (target?.source === 'user' && target.content) {
+    void untrainSpamFilterForUserEntry(supabase, target.content);
   }
 }
 

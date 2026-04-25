@@ -1,24 +1,15 @@
 <script lang="ts">
   /*
-   * Journal modal. The human-facing surface for the journal
-   * feature - see docs/dev/journal.md for the end-to-end data flow.
+   * Journal modal. Daily-view-only surface - the drawer's day index
+   * is the equivalent of a list view, so the modal itself just shows
+   * one day at a time and lets the user step day-by-day from there.
    *
-   * Two views, switched via `route.journal_date`:
-   *
-   *   (no journal_date) List view. Every entry, grouped by date,
-   *                        newest first. Debounced semantic + ILIKE
-   *                        search via the same pipeline the
-   *                        `journal_search` tool uses. Each date
-   *                        header is a button that navigates into
-   *                        the day view.
-   *
-   *   journal_date=YYYY-MM-DD Daily view. Two stacked cards for
-   *                              that date - Automatic (read-only,
-   *                              deleteable; delete also excludes the
-   *                              source thread ids from regeneration)
-   *                              then User Entry (editable, or an
-   *                              inline compose form when absent).
-   *                              Prev/Next day nav, Today button.
+   * route.journal_date carries the focused day. When absent (the
+   * drawer footer's "Open journal" button passes nothing) the modal
+   * defaults to today via the local-timezone helper. Closing the
+   * modal returns the user to whatever drawer tab they came from -
+   * there is no in-modal back-to-list affordance because there is
+   * no list to go back to.
    *
    * Chrome mirrors Memories.svelte - single scrolling column on top of
    * a shared backdrop. CSS classes are parallel (`.journal-shell`
@@ -35,16 +26,9 @@
     deleteEntry,
     markEntryHam,
   } from '$lib/journal-store.svelte';
-  import {
-    downloadEntryMarkdown,
-    downloadFullArchive,
-  } from '$lib/journal-export';
+  import { downloadEntryMarkdown } from '$lib/journal-export';
   import { todayInZone } from '$lib/journal-day';
   import { onJournalChange } from '$lib/journal-events';
-  import {
-    VENICE_EMBEDDING_MODEL,
-    padEmbeddingForStorage,
-  } from '$lib/models';
   import Markdown from '../components/Markdown.svelte';
   import type { JournalEntry } from '$lib/supabase';
 
@@ -60,20 +44,12 @@
   const MAX_MOOD_CHARS = 80;
   const MAX_TOPIC_CHARS = 60;
   const MAX_PERSON_CHARS = 60;
-  const SEARCH_DEBOUNCE_MS = 200;
 
   const today = $derived(todayInZone(app.journalTimezone || null));
-  const focusedDate = $derived(route.journal_date);
-
-  let query = $state('');
-  let searching = $state(false);
-  let searchResults = $state<JournalEntry[] | null>(null);
-  let searchError = $state<string | null>(null);
-  let currentSearchAbort: AbortController | null = null;
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-
-  let archiveBusy = $state(false);
-  let archiveError = $state<string | null>(null);
+  // Default to today when the route doesn't specify a date - the
+  // drawer's "Open journal" footer button intentionally passes no
+  // journal_date so the modal lands on the user's most-current day.
+  const focusedDate = $derived(route.journal_date ?? today);
 
   let deleteTargetId = $state<string | null>(null);
   let deleteError = $state<string | null>(null);
@@ -116,88 +92,7 @@
   });
 
   // Debounced semantic search. Clears when the query is empty so the
-  // list view falls back to the full `journal.entries` store.
-  $effect(() => {
-    const q = query.trim();
-    if (debounceTimer !== null) clearTimeout(debounceTimer);
-    if (q.length === 0) {
-      searchResults = null;
-      searching = false;
-      searchError = null;
-      if (currentSearchAbort) {
-        currentSearchAbort.abort();
-        currentSearchAbort = null;
-      }
-      return;
-    }
-    debounceTimer = setTimeout(() => {
-      debounceTimer = null;
-      void runSearch(q);
-    }, SEARCH_DEBOUNCE_MS);
-    return () => {
-      if (debounceTimer !== null) {
-        clearTimeout(debounceTimer);
-        debounceTimer = null;
-      }
-    };
-  });
-
-  async function runSearch(q: string): Promise<void> {
-    if (!app.supabase) return;
-    if (currentSearchAbort) currentSearchAbort.abort();
-    const ctl = new AbortController();
-    currentSearchAbort = ctl;
-    searching = true;
-    searchError = null;
-    try {
-      // Best-effort Venice embed; search falls back to ILIKE when this
-      // fails or the account has no API key configured.
-      let embedding: number[] | null = null;
-      if (app.venice) {
-        try {
-          const resp = await app.venice.embed({
-            model: VENICE_EMBEDDING_MODEL,
-            input: q,
-            signal: ctl.signal,
-          });
-          const raw = resp.data[0]?.embedding ?? null;
-          embedding = raw ? padEmbeddingForStorage(raw) : null;
-        } catch {
-          embedding = null;
-        }
-      }
-      if (ctl.signal.aborted) return;
-      const hits = await app.supabase.searchJournalEntries({
-        query: q,
-        queryEmbedding: embedding,
-        limit: 50,
-      });
-      if (ctl.signal.aborted) return;
-      searchResults = hits;
-    } catch (err) {
-      if (ctl.signal.aborted) return;
-      searchError = err instanceof Error ? err.message : String(err);
-    } finally {
-      if (currentSearchAbort === ctl) currentSearchAbort = null;
-      if (!ctl.signal.aborted) searching = false;
-    }
-  }
-
-  // Group entries by date for the list view. Preserves the store's
-  // newest-first ordering.
-  const listRows = $derived.by(() => {
-    const rows = searchResults ?? journal.entries;
-    const byDate = new Map<string, JournalEntry[]>();
-    for (const e of rows) {
-      const bucket = byDate.get(e.entry_date);
-      if (bucket) bucket.push(e);
-      else byDate.set(e.entry_date, [e]);
-    }
-    return Array.from(byDate.entries());
-  });
-
-  // Active day's entries. Picks from the store, not the search
-  // results, so the daily view is always authoritative.
+  // Active day's entries. Picks from the store as the source of truth.
   //
   // Order: user entries first (oldest-created first), then automatic
   // entries in conversation-start order (oldest thread first). The
@@ -207,7 +102,6 @@
   // chronologically so reading top-to-bottom matches how the day
   // unfolded.
   const dayEntriesOrdered = $derived.by<JournalEntry[]>(() => {
-    if (focusedDate === null) return [];
     const all = journal.entries.filter((e) => e.entry_date === focusedDate);
     const users = all
       .filter((e) => e.source === 'user')
@@ -252,11 +146,6 @@
 
   function goToDay(date: string): void {
     navigate({ journal_date: date });
-  }
-
-  function backToList(): void {
-    cancelCompose();
-    navigate({ journal_date: null });
   }
 
   // Add/subtract one calendar day to the YYYY-MM-DD key. Uses UTC math
@@ -324,7 +213,7 @@
   }
 
   async function saveCompose(): Promise<void> {
-    if (!app.supabase || focusedDate === null) return;
+    if (!app.supabase) return;
     const content = composeContent.trim();
     if (content.length === 0) {
       composeError = 'Write something first.';
@@ -412,47 +301,12 @@
     }
   }
 
-  async function onExportArchive(): Promise<void> {
-    if (!app.supabase) return;
-    archiveBusy = true;
-    archiveError = null;
-    try {
-      await downloadFullArchive(app.supabase);
-    } catch (err) {
-      archiveError = err instanceof Error ? err.message : String(err);
-    } finally {
-      archiveBusy = false;
-    }
-  }
-
-  // Format YYYY-MM-DD as a human-friendly day-of-week + date. Built on
-  // Intl.DateTimeFormat rather than a library so the bundle stays
-  // lean. Uses UTC interpretation because the key is already a
-  // zone-agnostic day bucket; letting the local zone nudge it would
-  // flip the label for dates straddling midnight.
-  function formatDateLong(ymd: string): string {
-    const [y, m, d] = ymd.split('-').map((n) => Number.parseInt(n, 10));
-    if (!Number.isFinite(y)) return ymd;
-    const dt = new Date(Date.UTC(y, m - 1, d));
-    try {
-      return new Intl.DateTimeFormat(undefined, {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        timeZone: 'UTC',
-      }).format(dt);
-    } catch {
-      return ymd;
-    }
-  }
-
   // Compact ISO-flavoured form ("SUN 2026-04-19") for the daily-view
-  // title. The long-form formatDateLong was the only multi-token
-  // element in the daynav row, and on a narrow viewport it forced the
-  // whole row (back / prev / next / today buttons) to wrap into four
-  // lines and balloon the header. Short weekday + ISO date keeps the
-  // title to a single line on any reasonable phone width.
+  // title. Short weekday + ISO date keeps the title to a single line
+  // on any reasonable phone width and matches the daynav button row.
+  // Uses UTC interpretation because the key is already a zone-agnostic
+  // day bucket; letting the local zone nudge it would flip the label
+  // for dates straddling midnight.
   function formatDateCompact(ymd: string): string {
     const [y, m, d] = ymd.split('-').map((n) => Number.parseInt(n, 10));
     if (!Number.isFinite(y)) return ymd;
@@ -466,13 +320,6 @@
     } catch {
       return ymd;
     }
-  }
-
-  function entryTags(entry: JournalEntry): string[] {
-    const chips: string[] = [];
-    if (entry.mood) chips.push(`mood: ${entry.mood}`);
-    for (const t of entry.topics) chips.push(t);
-    return chips;
   }
 </script>
 
@@ -505,140 +352,37 @@
     >×</button>
 
     <header class="journal-header">
-      {#if focusedDate === null}
-        <h1 class="journal-title">Journal</h1>
-        <p class="subtle journal-blurb">
-          A daily journal the assistant keeps alongside you. Automatic
-          entries draw from your conversations; your own entries sit
-          next to them. Delete anything you'd rather not keep - an
-          automatic entry you delete won't be regenerated from the
-          same conversation.
-        </p>
-        <div class="journal-controls">
-          <input
-            type="search"
-            placeholder="Search journal…"
-            bind:value={query}
-            autocomplete="off"
-            spellcheck="false"
-            aria-label="Search journal"
-          />
+      <div class="journal-daynav">
+        <button
+          type="button"
+          class="secondary"
+          onclick={() => goToDay(shiftDay(focusedDate, -1))}
+          aria-label="Previous day"
+          title="Previous day"
+        >‹</button>
+        <button
+          type="button"
+          class="secondary"
+          onclick={() => goToDay(shiftDay(focusedDate, 1))}
+          aria-label="Next day"
+          title="Next day"
+          disabled={focusedDate >= today}
+        >›</button>
+        {#if focusedDate !== today}
           <button
             type="button"
+            class="secondary"
             onclick={() => goToDay(today)}
             title="Jump to today's entry"
           >Today</button>
-          <button
-            type="button"
-            class="secondary"
-            onclick={onExportArchive}
-            disabled={archiveBusy || journal.entries.length === 0}
-            title="Download every entry as a ZIP of Markdown files"
-          >{archiveBusy ? 'Preparing…' : 'Export all (.zip)'}</button>
-        </div>
-        {#if archiveError}<p class="error">{archiveError}</p>{/if}
-      {:else}
-        <div class="journal-daynav">
-          <button
-            type="button"
-            class="secondary"
-            onclick={backToList}
-            aria-label="Back to list"
-            title="Back to list"
-          >← ToC</button>
-          <button
-            type="button"
-            class="secondary"
-            onclick={() => goToDay(shiftDay(focusedDate, -1))}
-            aria-label="Previous day"
-            title="Previous day"
-          >‹</button>
-          <button
-            type="button"
-            class="secondary"
-            onclick={() => goToDay(shiftDay(focusedDate, 1))}
-            aria-label="Next day"
-            title="Next day"
-            disabled={focusedDate >= today}
-          >›</button>
-          {#if focusedDate !== today}
-            <button
-              type="button"
-              class="secondary"
-              onclick={() => goToDay(today)}
-              title="Jump to today's entry"
-            >Today</button>
-          {/if}
-        </div>
-        <h1 class="journal-title daily-title">{formatDateCompact(focusedDate)}</h1>
-      {/if}
+        {/if}
+      </div>
+      <h1 class="journal-title daily-title">{formatDateCompact(focusedDate)}</h1>
     </header>
 
     <section class="journal-body">
       {#if journal.error}<p class="error">{journal.error}</p>{/if}
-      {#if searchError}<p class="error">{searchError}</p>{/if}
-
-      {#if focusedDate === null}
-        <!-- ----------- List view ----------- -->
-        {#if searching && listRows.length === 0}
-          <p class="subtle">Searching…</p>
-        {:else if journal.loading && !journal.loaded}
-          <p class="subtle">Loading journal…</p>
-        {:else if journal.error}
-          <p class="error">Couldn't load journal: {journal.error}</p>
-        {:else if listRows.length === 0}
-          {#if query.trim().length > 0}
-            <p class="subtle journal-empty">
-              No matches for "{query.trim()}".
-            </p>
-          {:else}
-            <p class="subtle journal-empty">
-              Nothing here yet. Start a conversation; the automatic
-              journaler writes itself a page once the conversation
-              settles, or use the Today button above to write one
-              yourself.
-            </p>
-          {/if}
-        {:else}
-          <ul class="journal-list">
-            {#each listRows as [date, entries] (date)}
-              <li class="journal-day">
-                <button
-                  type="button"
-                  class="day-header"
-                  onclick={() => goToDay(date)}
-                  title="Open this day"
-                >
-                  <span class="day-header-date">{formatDateLong(date)}</span>
-                  <span class="subtle day-header-meta">
-                    {entries.length === 1 ? '1 entry' : `${entries.length} entries`}
-                  </span>
-                </button>
-                <ul class="journal-day-entries">
-                  {#each entries as entry (entry.id)}
-                    <li class="journal-preview">
-                      <span
-                        class="journal-badge badge-{entry.source}"
-                        title={entry.source === 'automatic' ? 'Written by the journaler' : 'Your own entry'}
-                      >{entry.source === 'automatic' ? 'Automatic' : 'You'}</span>
-                      <p class="journal-preview-text">{entry.content}</p>
-                      {#if entryTags(entry).length > 0}
-                        <div class="journal-chips">
-                          {#each entryTags(entry) as chip}
-                            <span class="chip">{chip}</span>
-                          {/each}
-                        </div>
-                      {/if}
-                    </li>
-                  {/each}
-                </ul>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      {:else}
-        <!-- ----------- Daily view ----------- -->
-        <!--
+      <!--
           Compound day view. The dayEntriesOrdered list is already
           sorted (user entries first, automatic entries by source-
           conversation-start time within their section). We render a
@@ -686,13 +430,12 @@
           presence doesn't compete visually with reading the day.
         -->
         {#if composeMode === 'none'}
-          <div class="journal-write-action">
-            <button
-              type="button"
-              onclick={() => startCompose(null)}
-            >Write an entry</button>
-          </div>
-        {/if}
+        <div class="journal-write-action">
+          <button
+            type="button"
+            onclick={() => startCompose(null)}
+          >Write an entry</button>
+        </div>
       {/if}
     </section>
   </div>
@@ -1117,29 +860,6 @@
     font-weight: 600;
   }
 
-  .journal-blurb {
-    margin: 0 0 0.75rem;
-    font-size: 0.85rem;
-  }
-
-  .journal-controls {
-    display: flex;
-    gap: 0.4rem;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-
-  .journal-controls input[type='search'] {
-    flex: 1;
-    min-width: 10rem;
-    padding: 0.45rem 0.6rem;
-    font-size: 0.9rem;
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-  }
-
   .journal-daynav {
     display: flex;
     gap: 0.4rem;
@@ -1150,86 +870,6 @@
     padding: 1rem 1.25rem;
     overflow-y: auto;
     min-width: 0;
-  }
-
-  .journal-empty {
-    margin: 1rem 0;
-  }
-
-  .journal-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 1.25rem;
-  }
-
-  .journal-day {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .day-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0.4rem 0.6rem;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    font: inherit;
-    color: var(--text);
-    cursor: pointer;
-    text-align: left;
-  }
-
-  .day-header:hover {
-    background: var(--surface);
-  }
-
-  .day-header-date {
-    font-weight: 600;
-  }
-
-  .day-header-meta {
-    font-size: 0.8rem;
-  }
-
-  .journal-day-entries {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .journal-preview {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    padding: 0.55rem 0.7rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-  }
-
-  .journal-preview-text {
-    margin: 0;
-    font-size: 0.9rem;
-    color: var(--text);
-    /* Keep previews scannable - a long automatic entry would otherwise
-       dwarf every other day. Clamp to three lines. */
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    white-space: pre-wrap;
-    word-wrap: break-word;
   }
 
   .journal-card {
@@ -1318,21 +958,10 @@
     flex: 0 0 auto;
   }
 
-  .badge-automatic {
-    background: var(--bg-2);
-    color: var(--muted);
-  }
-
   .badge-user {
     background: var(--accent-bg, var(--bg-2));
     color: var(--accent, var(--text));
     border-color: var(--accent, var(--border));
-  }
-
-  .journal-chips {
-    display: flex;
-    gap: 0.3rem;
-    flex-wrap: wrap;
   }
 
   .chip {

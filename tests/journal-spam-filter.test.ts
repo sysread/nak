@@ -4,6 +4,7 @@ import {
   renderSpamHint,
   scoreSpamFilter,
   tokenizeConversation,
+  tokenizeUserEntry,
   trainSpamFilter,
   untrainSpamFilter,
 } from '../src/lib/agents/journal/spam_filter';
@@ -118,6 +119,32 @@ describe('tokenizeConversation', () => {
     expect(tokens).toContain('worri'); // "worried" -> stem
     expect(tokens).toContain('mom'); // possessive 's drops at boundary
     expect(tokens).toContain('birthday');
+  });
+});
+
+describe('tokenizeUserEntry', () => {
+  it('tokenizes plain content with the same pipeline as conversations', () => {
+    const fromConv = tokenizeConversation([
+      msg('user', 'Running and runs through the woods'),
+    ]);
+    const fromEntry = tokenizeUserEntry('Running and runs through the woods');
+    expect(fromEntry.sort()).toEqual(fromConv.sort());
+  });
+
+  it('returns an empty list on empty content', () => {
+    expect(tokenizeUserEntry('')).toEqual([]);
+  });
+
+  it('drops too-short tokens and stems inflections', () => {
+    const tokens = tokenizeUserEntry('I went running today and felt happiness');
+    expect(tokens).not.toContain('i');
+    expect(tokens).toContain('run'); // running -> run
+    expect(tokens).toContain('happi'); // happiness -> happi
+  });
+
+  it('dedupes within a single content string', () => {
+    const tokens = tokenizeUserEntry('hello hello HELLO Hello');
+    expect(tokens.filter((t) => t === 'hello')).toHaveLength(1);
   });
 });
 

@@ -12,25 +12,20 @@ entries:
   identity themes that surface as you chat. Skips purely technical
   Q&A.
 
-Both are searchable (synonyms and paraphrases work), exportable as
-Markdown, and can be deleted on demand.
+Both are exportable as Markdown and deletable on demand.
 
-Open the Journal from the **Journal** tab in the conversation
-drawer, or the **Open journal** button at the bottom of that tab.
+## Opening the Journal
 
-## The list view
+The conversation drawer has a **Journal** tab. It shows one row
+per day - newest first - with a count of how many entries that
+day holds. Clicking a day opens the modal on that day's view.
+The drawer's search box filters the listed days by content,
+mood, or topic. The footer's **Open journal** button opens the
+modal on today's day.
 
-The modal opens on a reverse-chronological list, grouped by date.
-
-- **Search** — start typing to filter. The same pipeline the
-  assistant uses for its `journal_search` tool runs here:
-  meaning matches first, substring matches fall back.
-- **Today** — jumps to today's day view.
-- **Export all (.zip)** — downloads every entry as a ZIP of
-  Markdown files (`journal/yyyy-mm-dd.md`, one per day, each
-  containing every entry from that day).
-
-Click any day's header to open the daily view.
+The modal itself is daily-view-only - one day at a time, with
+prev / next / Today buttons in the header. Closing the modal
+(× or Escape) returns you to the drawer.
 
 ## The daily view
 
@@ -75,7 +70,13 @@ form has:
 - optional comma-separated **people**.
 
 **Save entry** writes; **Cancel** discards. Saves show up
-immediately in the list and the drawer.
+immediately in the day view and the drawer's day index.
+
+Writing your own entry counts as a strong **ham** signal - the
+fact that you took the time to record it tells the spam filter
+you find this kind of content journal-worthy, so the entry's
+words feed straight into the model's ham vocabulary. Deleting
+the entry rescinds that vote.
 
 ### Deleting an automatic entry
 
@@ -100,6 +101,10 @@ user perfectly. Two signals shape its behaviour over time:
 - **Thumbs-up (Looks good)** trains the same filter in the
   opposite direction. Conversations that read like ones you've
   approved get a stronger nudge toward journaling.
+- **Writing your own entry** counts as ham too. The entry's text
+  itself feeds the model rather than a conversation transcript -
+  your own framing of what's worth keeping is the cleanest
+  positive example we have.
 
 If you change your mind - thumbs-up an entry, then later delete
 it - the thumbs-up vote is rescinded before the delete trains the
@@ -132,8 +137,9 @@ The **Journal** pane in Settings controls:
   a conversation lands on. Default is whatever your browser
   reports. A late-night message in Los Angeles should land on
   that calendar day, not whatever UTC thinks.
-- **Export all (.zip)** — same button as the list view, surfaced
-  in Settings for users who never open the modal.
+- **Export all (.zip)** — downloads every entry as a ZIP of
+  Markdown files (`journal/yyyy-mm-dd.md`, one per day, each
+  containing every entry from that day).
 
 ## How the assistant knows about your journal
 

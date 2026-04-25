@@ -67,7 +67,13 @@ Unlike memories, entries are not linked into a graph.
     `renderSpamHint(score)` returns the natural-language
     string the agent injects into the prompt; returns null
     below the cold-start threshold so the prompt section is
-    suppressed entirely until there's enough data.
+    suppressed entirely until there's enough data. Two
+    tokenizer entry points: `tokenizeConversation(messages)`
+    for thread-sourced training/scoring, and
+    `tokenizeUserEntry(content)` for user-authored entries
+    where the entry text itself is the training input. Both
+    share `addTokensFromText` so the train and score paths
+    see byte-identical tokens regardless of source.
 - `src/lib/tools/journal_{list,read,search,delete}.ts` —
   user-facing tools; registered in `journalToolbox`, gated
   (user-toggleable in the chat composer's tool picker).
@@ -89,8 +95,13 @@ Unlike memories, entries are not linked into a graph.
   writes and modal writes fan out to every surface.
 - `src/lib/journal-export.ts` — single-entry `.md` and
   full-archive `.zip` (dynamic-import jszip).
-- `src/screens/Journal.svelte` — the modal. List
-  view, daily view, and inline compose form.
+- `src/screens/Journal.svelte` — the modal. Daily-view-only
+  with an inline compose form. The drawer's Journal tab in
+  `Chat.svelte` aggregates entries to one row per
+  `entry_date` (rendered in the `recipe-drawer-list` block)
+  and is the equivalent of a list view; the modal itself
+  starts on whatever day the drawer click passed in (or
+  today when no date came in via the route).
 
 ## Entry points
 
@@ -217,36 +228,48 @@ and `journalTimezone?: string` (IANA zone).
   injects today's automatic entry (if any) into the
   system-prompt appendix on the opening turn. Weave
   continuity in naturally; no announcement.
-- **Spam-filter training paths.** Two signals feed the
-  per-user Naive Bayes model: deleting an automatic entry
-  (chat-side `journal_delete` tool path AND modal delete
-  button, both routing through
-  `journal-store.svelte.ts:deleteEntry`) trains as `spam`,
-  and the thumbs-up (Looks good) button trains as `ham`.
-  Both paths funnel through `trainSpamFilterForThread` in
-  `spam_filter.ts` so the tokenization pipeline lives in
-  one place. The training call is best-effort (silently
-  swallows errors) - it must not break the user-facing
-  delete or ham action. Spam training is naturally
-  one-shot per thread because `journal_thread_excludes`
-  prevents the same thread from re-journaling; ham
-  training is enforced one-shot by `ham_marked_at`.
-- **Ham-rescind on delete.** When the user deletes an
-  entry that was previously hammed (`ham_marked_at` is
-  non-null on the row being deleted), the delete path
-  calls `untrainSpamFilterForThread(threadId, 'ham')`
-  BEFORE `trainSpamFilterForThread(threadId, 'spam')`.
-  Without the rescind, the same conversation's tokens
-  would contribute +1 ham AND +1 spam, polluting both
-  classes. With it, the net effect is a clean -ham +spam
-  shift (the totals row gets -1/+1, individual token
-  counts get -1 in ham and +1 in spam, floored at zero).
-  The check lives in both delete call sites
-  (`journal-store.svelte.ts` and `journal_delete.ts`)
-  rather than inside the helper because the helper's
-  contract is "best-effort fire-and-forget"; pulling the
-  ham-marked check up to the call site keeps the helper
-  signature simple.
+- **Spam-filter training paths.** Three signals feed the
+  per-user Naive Bayes model.
+  - Deleting an automatic entry (chat-side `journal_delete`
+    tool path AND modal delete button, both routing through
+    `journal-store.svelte.ts:deleteEntry`) trains as `spam`
+    on the source conversation's tokens via
+    `trainSpamFilterForThread`. Naturally one-shot per
+    thread because `journal_thread_excludes` prevents the
+    same thread from re-journaling.
+  - The thumbs-up button on an automatic entry trains as
+    `ham` on the source conversation's tokens. One-shot
+    enforced by `ham_marked_at`.
+  - Saving a user-authored entry (`saveUserEntry`) trains
+    as `ham` on the entry's CONTENT via
+    `trainSpamFilterForUserEntry` - no thread is involved,
+    the entry IS the training input. Edits do NOT retrain;
+    only the original save counts (rationale: re-training
+    on every save would over-weight verbose users; the
+    drift from heavy edits is acceptable for v1).
+  All training is best-effort (silently swallows errors) -
+  it must not break the user-facing delete / ham / save
+  action.
+- **Ham-rescind on delete.** Two flavours, mirroring the
+  two ham sources.
+  - Automatic entry delete: when `ham_marked_at` is
+    non-null on the row being deleted, the delete path
+    calls `untrainSpamFilterForThread(threadId, 'ham')`
+    BEFORE `trainSpamFilterForThread(threadId, 'spam')`.
+    Without the rescind, the same conversation's tokens
+    would contribute +1 ham AND +1 spam, polluting both
+    classes. With it, the net effect is a clean -ham +spam
+    shift.
+  - User entry delete: `untrainSpamFilterForUserEntry` on
+    the entry's content. Rescinds the auto-ham vote that
+    creation set. Safe for legacy user entries that
+    pre-date the auto-ham wiring - the untrain RPC floors
+    at zero so a decrement against a never-trained vocabulary
+    is a no-op rather than an underflow.
+  Both checks live in `journal-store.svelte.ts:deleteEntry`
+  (and the equivalent automatic-only check in the
+  `journal_delete` tool); the helper's contract stays
+  best-effort fire-and-forget.
 - **Spam-filter scoring path.** The journal agent
   tokenizes the conversation slice, scores it via
   `scoreSpamFilter`, and renders the score as a

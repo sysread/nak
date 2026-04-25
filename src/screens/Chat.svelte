@@ -166,19 +166,40 @@
   });
   /** Journal-side search. Filters by content / topics / mood
       substring match - the drawer is a glance surface; the modal
-      does the semantic search for the same query. */
+      does the semantic search for the same query. Results are
+      then collapsed to one row per date so the drawer reads as a
+      day index rather than an entry list (multiple entries on the
+      same date all link to the same day-view anyway). */
   let journalDrawerQuery = $state('');
-  const visibleDrawerJournal = $derived.by(() => {
+  const visibleDrawerJournal = $derived.by<
+    { entry_date: string; count: number; matchId: string }[]
+  >(() => {
     const q = journalDrawerQuery.trim().toLowerCase();
-    if (q.length === 0) return journal.entries;
-    return journal.entries.filter((e) => {
-      if (e.content.toLowerCase().includes(q)) return true;
-      if (e.mood && e.mood.toLowerCase().includes(q)) return true;
-      for (const t of e.topics) {
-        if (t.toLowerCase().includes(q)) return true;
-      }
-      return false;
-    });
+    const matches = q.length === 0
+      ? journal.entries
+      : journal.entries.filter((e) => {
+          if (e.content.toLowerCase().includes(q)) return true;
+          if (e.mood && e.mood.toLowerCase().includes(q)) return true;
+          for (const t of e.topics) {
+            if (t.toLowerCase().includes(q)) return true;
+          }
+          return false;
+        });
+    // Aggregate to one row per entry_date. journal.entries is sorted
+    // newest-day-first; preserve that order via a Map (insertion-ordered).
+    // matchId carries any one entry's id so the row's #each key stays
+    // stable across re-renders even when the count changes.
+    const byDay = new Map<string, { count: number; matchId: string }>();
+    for (const e of matches) {
+      const cur = byDay.get(e.entry_date);
+      if (cur) cur.count += 1;
+      else byDay.set(e.entry_date, { count: 1, matchId: e.id });
+    }
+    return Array.from(byDay, ([entry_date, v]) => ({
+      entry_date,
+      count: v.count,
+      matchId: v.matchId,
+    }));
   });
 
   function onPickRecipesTab(): void {
@@ -3543,11 +3564,11 @@
           </div>
         </div>
       {:else}
-        <!-- Journal tab. Click on an entry opens the Journal
-             modal on that day's detail view. The footer button opens
-             the modal on the list view. The drawer list is a reverse-
-             chron glance surface; semantic search and compose live
-             in the modal proper. -->
+        <!-- Journal tab. One row per date - entries on the same day
+             all open the same day-view in the modal, so collapsing
+             keeps the drawer as a day index. The footer button opens
+             the modal on today's day-view. Semantic search and compose
+             live in the modal proper. -->
         <div class="recipe-drawer-list">
           {#if journal.loading && !journal.loaded}
             <p class="subtle" style="padding:0.75rem">Loading journal…</p>
@@ -3564,16 +3585,16 @@
               {/if}
             </p>
           {:else}
-            {#each visibleDrawerJournal as e (e.id)}
-              <div class="row thread-row" data-journal-id={e.id}>
+            {#each visibleDrawerJournal as day (day.entry_date)}
+              <div class="row thread-row" data-journal-day={day.entry_date}>
                 <button
                   class="thread grow"
-                  onclick={() => navigate({ modal: 'journal', journal_date: e.entry_date })}
-                  title={`${e.entry_date} (${e.source === 'automatic' ? 'automatic' : 'you'})`}
+                  onclick={() => navigate({ modal: 'journal', journal_date: day.entry_date })}
+                  title={`${day.entry_date} (${day.count} ${day.count === 1 ? 'entry' : 'entries'})`}
                 >
-                  <span>{e.entry_date}</span>
+                  <span>{day.entry_date}</span>
                   <span class="subtle" style="margin-left:0.4rem;font-size:0.75rem">
-                    {e.source === 'automatic' ? 'auto' : 'you'}
+                    {day.count === 1 ? '1 entry' : `${day.count} entries`}
                   </span>
                 </button>
               </div>

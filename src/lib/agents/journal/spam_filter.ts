@@ -78,6 +78,21 @@ const TOP_N_TOKENS = 15;
 const PROB_FLOOR = 0.01;
 const PROB_CEIL = 0.99;
 
+// Core tokenizer step. Lowercase, split on non-word boundaries,
+// filter on the length window, stem, and add to the destination set.
+// Both tokenizeConversation and tokenizeUserEntry funnel through this
+// so the train and score paths see identical normalization. Drift
+// between the two paths would land train rows in one vocabulary and
+// score lookups in another, silently breaking the model.
+function addTokensFromText(text: string, into: Set<string>): void {
+  for (const raw of text.toLowerCase().split(/\W+/)) {
+    if (raw.length < MIN_TOKEN_LEN || raw.length > MAX_TOKEN_LEN) continue;
+    const stemmed = stemmer.stem(raw);
+    if (stemmed.length < MIN_TOKEN_LEN) continue;
+    into.add(stemmed);
+  }
+}
+
 /**
  * Extract the deduped token set from a conversation. Filters out
  * system + tool messages, then lowercases, length-windows, and stems.
@@ -92,13 +107,22 @@ export function tokenizeConversation(
   for (const msg of messages) {
     if (msg.role !== 'user' && msg.role !== 'assistant') continue;
     if (!msg.content) continue;
-    for (const raw of msg.content.toLowerCase().split(/\W+/)) {
-      if (raw.length < MIN_TOKEN_LEN || raw.length > MAX_TOKEN_LEN) continue;
-      const stemmed = stemmer.stem(raw);
-      if (stemmed.length < MIN_TOKEN_LEN) continue;
-      seen.add(stemmed);
-    }
+    addTokensFromText(msg.content, seen);
   }
+  return [...seen];
+}
+
+/**
+ * Extract the deduped token set from a single user-authored journal
+ * entry. The user-entry training path feeds the entry's CONTENT
+ * directly (no conversation to walk) - the entry IS the user's
+ * curated framing, so it stands as a clean ham example without a
+ * thread behind it. Same normalization pipeline as
+ * `tokenizeConversation` for vocabulary parity.
+ */
+export function tokenizeUserEntry(content: string): string[] {
+  const seen = new Set<string>();
+  if (content) addTokensFromText(content, seen);
   return [...seen];
 }
 
@@ -277,6 +301,50 @@ export async function untrainSpamFilterForThread(
     const messages = await supabase.listMessages(threadId);
     const tokens = tokenizeConversation(messages);
     await untrainSpamFilter(supabase, tokens, label);
+  } catch {
+    // Best-effort.
+  }
+}
+
+/**
+ * Train ham over a user-authored entry's content. Called when the
+ * user creates their own entry - that's an authoritative "this is
+ * journal-worthy" signal in the user's own words, so we feed the
+ * entry's text directly into the model as ham training. No thread
+ * is involved (user entries leave thread_id null).
+ *
+ * Best-effort like the thread variants. The train RPC tolerates
+ * empty token sets (a single-word entry that filters down to
+ * nothing still bumps the totals row, which is the intended
+ * cold-start contribution).
+ */
+export async function trainSpamFilterForUserEntry(
+  supabase: SupabaseService,
+  content: string
+): Promise<void> {
+  try {
+    const tokens = tokenizeUserEntry(content);
+    await trainSpamFilter(supabase, tokens, 'ham');
+  } catch {
+    // Best-effort.
+  }
+}
+
+/**
+ * Untrain ham over a user-authored entry's content. Called when
+ * the user deletes their own entry - rescinds the auto-ham vote
+ * from creation so deleted user entries don't leave orphaned ham
+ * evidence in the model. The untrain RPC floors at zero, so this
+ * is a safe no-op for legacy user entries that pre-date the
+ * auto-ham wiring.
+ */
+export async function untrainSpamFilterForUserEntry(
+  supabase: SupabaseService,
+  content: string
+): Promise<void> {
+  try {
+    const tokens = tokenizeUserEntry(content);
+    await untrainSpamFilter(supabase, tokens, 'ham');
   } catch {
     // Best-effort.
   }
