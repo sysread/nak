@@ -171,13 +171,13 @@ A chat turn goes:
   chat loop creates that assistant message; the workers
   pick it up on their next poll. See `./summaries.md`,
   `./memory.md`, `./journal.md`.
-- **Reflections (journal)** — `chat-loop.ts` also reads
+- **Journal** — `chat-loop.ts` also reads
   today's automatic journal entry on the opening turn of
   each conversation (via
   `supabase.getJournalEntriesForDate(todayInZone(tz))`)
   and appends a `## Today's journal` block to the
   appendix so the main model has same-day reflective
-  context without an explicit tool call. The Reflections
+  context without an explicit tool call. The Journal
   modal + drawer tab + Settings pane are parallel to the
   Cookbook surfaces. See `./journal.md`.
 - **Settings** — `Chat.svelte` reads `app.defaultModel`,

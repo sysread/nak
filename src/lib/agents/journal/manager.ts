@@ -1,5 +1,5 @@
 /**
- * Main-thread supervisor for the journaling (Reflections) Web Worker.
+ * Main-thread supervisor for the journaling (Journal) Web Worker.
  * Parallels `../reflection/manager.ts`; the only material differences:
  *
  *   - Web Lock name 'nak:journal-worker' partitions from reflection

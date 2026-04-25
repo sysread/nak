@@ -1,18 +1,18 @@
 <script lang="ts">
   /*
-   * Reflections modal. The human-facing surface for the journal
+   * Journal modal. The human-facing surface for the journal
    * feature - see docs/dev/journal.md for the end-to-end data flow.
    *
-   * Two views, switched via `route.reflection_date`:
+   * Two views, switched via `route.journal_date`:
    *
-   *   (no reflection_date) List view. Every entry, grouped by date,
+   *   (no journal_date) List view. Every entry, grouped by date,
    *                        newest first. Debounced semantic + ILIKE
    *                        search via the same pipeline the
    *                        `journal_search` tool uses. Each date
    *                        header is a button that navigates into
    *                        the day view.
    *
-   *   reflection_date=YYYY-MM-DD Daily view. Two stacked cards for
+   *   journal_date=YYYY-MM-DD Daily view. Two stacked cards for
    *                              that date - Automatic (read-only,
    *                              deleteable; delete also excludes the
    *                              source thread ids from regeneration)
@@ -21,7 +21,7 @@
    *                              Prev/Next day nav, Today button.
    *
    * Chrome mirrors Memories.svelte - single scrolling column on top of
-   * a shared backdrop. CSS classes are parallel (`.reflections-shell`
+   * a shared backdrop. CSS classes are parallel (`.journal-shell`
    * etc.) so the two modals stay visually lockstep without sharing
    * styles.
    */
@@ -62,7 +62,7 @@
   const SEARCH_DEBOUNCE_MS = 200;
 
   const today = $derived(todayInZone(app.journalTimezone || null));
-  const focusedDate = $derived(route.reflection_date);
+  const focusedDate = $derived(route.journal_date);
 
   let query = $state('');
   let searching = $state(false);
@@ -196,12 +196,12 @@
   );
 
   function goToDay(date: string): void {
-    navigate({ reflection_date: date });
+    navigate({ journal_date: date });
   }
 
   function backToList(): void {
     cancelCompose();
-    navigate({ reflection_date: null });
+    navigate({ journal_date: null });
   }
 
   // Add/subtract one calendar day to the YYYY-MM-DD key. Uses UTC math
@@ -378,7 +378,7 @@
 <!--
   Escape and click-outside both dismiss. The outer `.center` is the
   backdrop — only close when the target IS the backdrop so clicks
-  inside `.reflections-shell` don't spuriously close. Same pattern
+  inside `.journal-shell` don't spuriously close. Same pattern
   as Memories / Settings / Help.
 -->
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
@@ -386,41 +386,41 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
-  class="center reflections-backdrop"
+  class="center journal-backdrop"
   onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}
 >
   <div
-    class="reflections-shell"
+    class="journal-shell"
     role="dialog"
     aria-modal="true"
-    aria-label="Reflections"
+    aria-label="Journal"
   >
     <button
       type="button"
-      class="reflections-close"
+      class="journal-close"
       onclick={onClose}
-      aria-label="Close reflections"
+      aria-label="Close journal"
       title="Close"
     >×</button>
 
-    <header class="reflections-header">
+    <header class="journal-header">
       {#if focusedDate === null}
-        <h1 class="reflections-title">Reflections</h1>
-        <p class="subtle reflections-blurb">
+        <h1 class="journal-title">Journal</h1>
+        <p class="subtle journal-blurb">
           A daily journal the assistant keeps alongside you. Automatic
           entries draw from your conversations; your own entries sit
           next to them. Delete anything you'd rather not keep - an
           automatic entry you delete won't be regenerated from the
           same conversation.
         </p>
-        <div class="reflections-controls">
+        <div class="journal-controls">
           <input
             type="search"
-            placeholder="Search reflections…"
+            placeholder="Search journal…"
             bind:value={query}
             autocomplete="off"
             spellcheck="false"
-            aria-label="Search reflections"
+            aria-label="Search journal"
           />
           <button
             type="button"
@@ -437,7 +437,7 @@
         </div>
         {#if archiveError}<p class="error">{archiveError}</p>{/if}
       {:else}
-        <div class="reflections-daynav">
+        <div class="journal-daynav">
           <button
             type="button"
             class="secondary"
@@ -452,7 +452,7 @@
             aria-label="Previous day"
             title="Previous day"
           >‹</button>
-          <h1 class="reflections-title daily-title">{formatDateLong(focusedDate)}</h1>
+          <h1 class="journal-title daily-title">{formatDateLong(focusedDate)}</h1>
           <button
             type="button"
             class="secondary"
@@ -473,7 +473,7 @@
       {/if}
     </header>
 
-    <section class="reflections-body">
+    <section class="journal-body">
       {#if journal.error}<p class="error">{journal.error}</p>{/if}
       {#if searchError}<p class="error">{searchError}</p>{/if}
 
@@ -482,16 +482,16 @@
         {#if searching && listRows.length === 0}
           <p class="subtle">Searching…</p>
         {:else if journal.loading && !journal.loaded}
-          <p class="subtle">Loading reflections…</p>
+          <p class="subtle">Loading journal…</p>
         {:else if journal.error}
-          <p class="error">Couldn't load reflections: {journal.error}</p>
+          <p class="error">Couldn't load journal: {journal.error}</p>
         {:else if listRows.length === 0}
           {#if query.trim().length > 0}
-            <p class="subtle reflections-empty">
-              No reflections match "{query.trim()}".
+            <p class="subtle journal-empty">
+              No matches for "{query.trim()}".
             </p>
           {:else}
-            <p class="subtle reflections-empty">
+            <p class="subtle journal-empty">
               Nothing here yet. Start a conversation; the automatic
               journaler writes itself a page once the conversation
               settles, or use the Today button above to write one
@@ -499,9 +499,9 @@
             </p>
           {/if}
         {:else}
-          <ul class="reflections-list">
+          <ul class="journal-list">
             {#each listRows as [date, entries] (date)}
-              <li class="reflections-day">
+              <li class="journal-day">
                 <button
                   type="button"
                   class="day-header"
@@ -513,16 +513,16 @@
                     {entries.length === 1 ? '1 entry' : `${entries.length} entries`}
                   </span>
                 </button>
-                <ul class="reflections-day-entries">
+                <ul class="journal-day-entries">
                   {#each entries as entry (entry.id)}
-                    <li class="reflection-preview">
+                    <li class="journal-preview">
                       <span
-                        class="reflection-badge badge-{entry.source}"
+                        class="journal-badge badge-{entry.source}"
                         title={entry.source === 'automatic' ? 'Written by the journaler' : 'Your own entry'}
                       >{entry.source === 'automatic' ? 'Automatic' : 'You'}</span>
-                      <p class="reflection-preview-text">{entry.content}</p>
+                      <p class="journal-preview-text">{entry.content}</p>
                       {#if entryTags(entry).length > 0}
-                        <div class="reflection-chips">
+                        <div class="journal-chips">
                           {#each entryTags(entry) as chip}
                             <span class="chip">{chip}</span>
                           {/each}
@@ -538,9 +538,9 @@
       {:else}
         <!-- ----------- Daily view ----------- -->
         {#if dayAutomatic}
-          <article class="reflection-card card-automatic">
-            <header class="reflection-card-header">
-              <span class="reflection-badge badge-automatic">Automatic</span>
+          <article class="journal-card card-automatic">
+            <header class="journal-card-header">
+              <span class="journal-badge badge-automatic">Automatic</span>
               {#if dayAutomatic.mood}
                 <span class="chip">mood: {dayAutomatic.mood}</span>
               {/if}
@@ -548,15 +548,15 @@
                 <span class="chip">{t}</span>
               {/each}
             </header>
-            <div class="reflection-card-body">
+            <div class="journal-card-body">
               <Markdown content={dayAutomatic.content} />
             </div>
             {#if dayAutomatic.people.length > 0}
-              <p class="subtle reflection-people">
+              <p class="subtle journal-people">
                 People: {dayAutomatic.people.join(', ')}
               </p>
             {/if}
-            <footer class="reflection-card-actions">
+            <footer class="journal-card-actions">
               <button
                 type="button"
                 class="secondary"
@@ -564,7 +564,7 @@
                 title="Download this entry as Markdown"
               >Export .md</button>
               {#if deleteTargetId === dayAutomatic.id}
-                <span class="subtle reflection-delete-prompt">
+                <span class="subtle journal-delete-prompt">
                   Delete and stop journaling these conversations?
                 </span>
                 <button
@@ -593,9 +593,9 @@
 
         {#if composeMode === 'none'}
           {#if dayUser}
-            <article class="reflection-card card-user">
-              <header class="reflection-card-header">
-                <span class="reflection-badge badge-user">You</span>
+            <article class="journal-card card-user">
+              <header class="journal-card-header">
+                <span class="journal-badge badge-user">You</span>
                 {#if dayUser.mood}
                   <span class="chip">mood: {dayUser.mood}</span>
                 {/if}
@@ -603,15 +603,15 @@
                   <span class="chip">{t}</span>
                 {/each}
               </header>
-              <div class="reflection-card-body">
+              <div class="journal-card-body">
                 <Markdown content={dayUser.content} />
               </div>
               {#if dayUser.people.length > 0}
-                <p class="subtle reflection-people">
+                <p class="subtle journal-people">
                   People: {dayUser.people.join(', ')}
                 </p>
               {/if}
-              <footer class="reflection-card-actions">
+              <footer class="journal-card-actions">
                 <button
                   type="button"
                   class="secondary"
@@ -624,7 +624,7 @@
                   title="Download this entry as Markdown"
                 >Export .md</button>
                 {#if deleteTargetId === dayUser.id}
-                  <span class="subtle reflection-delete-prompt">Really delete?</span>
+                  <span class="subtle journal-delete-prompt">Really delete?</span>
                   <button
                     type="button"
                     class="secondary"
@@ -648,7 +648,7 @@
               {/if}
             </article>
           {:else}
-            <div class="reflections-empty-day">
+            <div class="journal-empty-day">
               <p class="subtle">
                 No user entry for this day yet.
               </p>
@@ -659,9 +659,9 @@
             </div>
           {/if}
         {:else}
-          <article class="reflection-card card-user card-compose">
-            <header class="reflection-card-header">
-              <span class="reflection-badge badge-user">You</span>
+          <article class="journal-card card-user card-compose">
+            <header class="journal-card-header">
+              <span class="journal-badge badge-user">You</span>
               <span class="subtle">
                 {composeMode === 'edit' ? 'Editing your entry' : 'New entry'}
               </span>
@@ -742,7 +742,7 @@
 
 <style>
   /* Parallel to .memories-shell / .help-shell / .settings-shell. */
-  .reflections-shell {
+  .journal-shell {
     position: relative;
     background: var(--surface);
     border: 1px solid var(--border);
@@ -756,7 +756,7 @@
     overflow: hidden;
   }
 
-  .reflections-close {
+  .journal-close {
     position: absolute;
     top: 0.5rem;
     right: 0.5rem;
@@ -776,18 +776,18 @@
     cursor: pointer;
   }
 
-  .reflections-close:hover {
+  .journal-close:hover {
     background: var(--bg-2);
   }
 
-  .reflections-header {
+  .journal-header {
     padding: 1rem 1.25rem 0.75rem;
     border-bottom: 1px solid var(--border);
     background: var(--bg-2);
     padding-right: 3rem;
   }
 
-  .reflections-title {
+  .journal-title {
     font-size: 1.1rem;
     margin: 0 0 0.25rem;
   }
@@ -798,19 +798,19 @@
     margin: 0;
   }
 
-  .reflections-blurb {
+  .journal-blurb {
     margin: 0 0 0.75rem;
     font-size: 0.85rem;
   }
 
-  .reflections-controls {
+  .journal-controls {
     display: flex;
     gap: 0.4rem;
     flex-wrap: wrap;
     align-items: center;
   }
 
-  .reflections-controls input[type='search'] {
+  .journal-controls input[type='search'] {
     flex: 1;
     min-width: 10rem;
     padding: 0.45rem 0.6rem;
@@ -821,23 +821,23 @@
     border-radius: var(--radius);
   }
 
-  .reflections-daynav {
+  .journal-daynav {
     display: flex;
     gap: 0.4rem;
     align-items: center;
   }
 
-  .reflections-body {
+  .journal-body {
     padding: 1rem 1.25rem;
     overflow-y: auto;
     min-width: 0;
   }
 
-  .reflections-empty {
+  .journal-empty {
     margin: 1rem 0;
   }
 
-  .reflections-list {
+  .journal-list {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -846,7 +846,7 @@
     gap: 1.25rem;
   }
 
-  .reflections-day {
+  .journal-day {
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
@@ -879,7 +879,7 @@
     font-size: 0.8rem;
   }
 
-  .reflections-day-entries {
+  .journal-day-entries {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -888,7 +888,7 @@
     gap: 0.4rem;
   }
 
-  .reflection-preview {
+  .journal-preview {
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
@@ -898,7 +898,7 @@
     background: var(--surface);
   }
 
-  .reflection-preview-text {
+  .journal-preview-text {
     margin: 0;
     font-size: 0.9rem;
     color: var(--text);
@@ -913,7 +913,7 @@
     word-wrap: break-word;
   }
 
-  .reflection-card {
+  .journal-card {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--surface);
@@ -928,36 +928,36 @@
     background: var(--bg-2);
   }
 
-  .reflection-card-header {
+  .journal-card-header {
     display: flex;
     align-items: baseline;
     gap: 0.4rem;
     flex-wrap: wrap;
   }
 
-  .reflection-card-body {
+  .journal-card-body {
     font-size: 0.95rem;
     color: var(--text);
   }
 
-  .reflection-card-actions {
+  .journal-card-actions {
     display: flex;
     gap: 0.4rem;
     flex-wrap: wrap;
     align-items: center;
   }
 
-  .reflection-people {
+  .journal-people {
     margin: 0;
     font-size: 0.8rem;
   }
 
-  .reflection-delete-prompt {
+  .journal-delete-prompt {
     font-size: 0.85rem;
     margin-right: 0.25rem;
   }
 
-  .reflection-badge {
+  .journal-badge {
     display: inline-block;
     font-size: 0.7rem;
     padding: 0.1rem 0.45rem;
@@ -980,8 +980,8 @@
     border-color: var(--accent, var(--border));
   }
 
-  .reflection-chips,
-  .reflection-card-header {
+  .journal-chips,
+  .journal-card-header {
     display: flex;
     gap: 0.3rem;
     flex-wrap: wrap;
@@ -998,7 +998,7 @@
     white-space: nowrap;
   }
 
-  .reflections-empty-day {
+  .journal-empty-day {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;

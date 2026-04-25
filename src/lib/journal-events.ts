@@ -2,7 +2,7 @@
  * Window-level event bus for cross-surface notification of journal
  * writes. Parallel to `cookbook-events.ts` - when a journal entry is
  * created/updated/deleted anywhere (user compose, tool call, worker
- * write), whatever surface cares (the Reflections modal, a future
+ * write), whatever surface cares (the Journal modal, a future
  * drawer listing) listens for the event and refetches.
  *
  * Keeping the store reactive alone would be enough within a single

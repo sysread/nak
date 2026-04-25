@@ -115,7 +115,7 @@ interface AppState {
    */
   notifyOnComplete: boolean;
   /**
-   * Reflections feature: background journaling worker runs unless this
+   * Journal feature: background journaling worker runs unless this
    * is explicitly false. Seeded to true on activate() so a brand-new
    * account gets journaling out of the box; overwritten from Supabase
    * `profiles.settings.journalAutomaticEnabled` on unlock.
@@ -244,7 +244,7 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
   app.emphasisMarkdown = false;
   app.notifyOnComplete = false;
-  // Reflections defaults: opt-in by default, zone from the browser.
+  // Journal defaults: opt-in by default, zone from the browser.
   // Chat.svelte overwrites both from Supabase `profiles.settings` on
   // unlock; this seed keeps the app functional before that arrives.
   app.journalAutomaticEnabled = true;
@@ -315,7 +315,7 @@ export function lock(): void {
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
   app.emphasisMarkdown = false;
   app.notifyOnComplete = false;
-  // Reflections: reset both fields so a subsequent unlock re-seeds
+  // Journal: reset both fields so a subsequent unlock re-seeds
   // them from the new account's Supabase settings rather than
   // inheriting the previous account's choices.
   app.journalAutomaticEnabled = true;

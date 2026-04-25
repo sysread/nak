@@ -18,7 +18,7 @@ const MAX_LIMIT = 50;
 export const journalSearch: ToolDef = {
   name: 'journal_search',
   description:
-    "Search the user's Reflections by meaning. Paraphrases work; this " +
+    "Search the user's journal entries by meaning. Paraphrases work; this " +
     'is a semantic embedding search with a substring fallback for rows ' +
     'the embeddings worker has not yet processed. Returns an array of ' +
     '{id, entry_date, source, content, topics, mood, people, ' +

@@ -1,8 +1,11 @@
-# Reflections / journal
+# Journal
 
-User-facing name: **Reflections**. Internal name: **journal** -
-`src/lib/agents/reflection/` is already the memory-extraction
-agent, so this feature gets a different namespace.
+User-facing name: **Journal**. Internal name: **journal** -
+`src/lib/agents/reflection/` is the memory-extraction agent,
+which kept this feature out of the reflection namespace from the
+start. The user-facing label was originally "Reflections" but
+collided with the memory feature in conversation, so the surface
+was renamed.
 
 ## Role
 
@@ -73,7 +76,7 @@ Unlike memories, entries are not linked into a graph.
   writes and modal writes fan out to every surface.
 - `src/lib/journal-export.ts` — single-entry `.md` and
   full-archive `.zip` (dynamic-import jszip).
-- `src/screens/Reflections.svelte` — the modal. List
+- `src/screens/Journal.svelte` — the modal. List
   view, daily view, and inline compose form.
 
 ## Entry points
@@ -170,9 +173,9 @@ and `journalTimezone?: string` (IANA zone).
   is gated and toggleable in the composer's tool picker.
   `journalAgentToolbox` (upsert only) is agent-private -
   not registered in `TOOLBOXES`. See [tools.md](./tools.md).
-- **Settings.** The Reflections pane owns the toggle +
+- **Settings.** The Journal pane owns the toggle +
   timezone + export buttons. See [settings.md](./settings.md).
-- **Chat.** The drawer gains a Reflections tab between
+- **Chat.** The drawer gains a Journal tab between
   Recipes and (before) the other footer icons; the modal
   reads `route.modal === 'reflections'` and
   `route.reflection_date`. See [chat.md](./chat.md).

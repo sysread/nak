@@ -1,5 +1,5 @@
 /**
- * Reactive store for the Reflections modal. Holds the most recent
+ * Reactive store for the Journal modal. Holds the most recent
  * listing of journal entries (newest day first) and a loading flag.
  * The modal reads these directly; writes go through the store helpers
  * so every subscriber re-renders.

@@ -1,5 +1,5 @@
 /**
- * Journaling agent for the Reflections feature. One run = one pass
+ * Journaling agent for the Journal feature. One run = one pass
  * over a completed conversation: fetch the thread's messages up to
  * the claimed terminal assistant message, read today's existing
  * automatic entry (so the prompt can tell the agent to extend rather

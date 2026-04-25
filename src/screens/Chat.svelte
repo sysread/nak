@@ -99,7 +99,7 @@
   import Auth from './Auth.svelte';
   import Help from './Help.svelte';
   import Memories from './Memories.svelte';
-  import Reflections from './Reflections.svelte';
+  import Journal from './Journal.svelte';
   import Samskara from './Samskara.svelte';
   import Settings from './Settings.svelte';
   import Cookbook from './Cookbook.svelte';
@@ -146,15 +146,15 @@
   const showMemories = $derived(route.modal === 'memories');
   const showCookbook = $derived(route.modal === 'cookbook');
   const showSamskara = $derived(route.modal === 'samskara');
-  const showReflections = $derived(route.modal === 'reflections');
+  const showJournal = $derived(route.modal === 'journal');
   /**
    * Sidebar drawer tab. Backed by `route.drawer` - absent in the URL
-   * means "chats" (the default). 'recipes' and 'reflections' render
+   * means "chats" (the default). 'recipes' and 'journal' render
    * their own list in place of the thread list. Tab switches use
    * replaceState so a tab flip doesn't fill history with UI-chrome
    * entries.
    */
-  const drawerTab = $derived<'chats' | 'recipes' | 'reflections'>(
+  const drawerTab = $derived<'chats' | 'recipes' | 'journal'>(
     route.drawer ?? 'chats'
   );
   /** Recipe-side search, separate from conversation search. */
@@ -164,12 +164,12 @@
     if (q.length === 0) return cookbook.recipes;
     return cookbook.recipes.filter((r) => r.title.toLowerCase().includes(q));
   });
-  /** Reflection-side search. Filters by content / topics / mood
+  /** Journal-side search. Filters by content / topics / mood
       substring match - the drawer is a glance surface; the modal
       does the semantic search for the same query. */
-  let reflectionDrawerQuery = $state('');
-  const visibleDrawerReflections = $derived.by(() => {
-    const q = reflectionDrawerQuery.trim().toLowerCase();
+  let journalDrawerQuery = $state('');
+  const visibleDrawerJournal = $derived.by(() => {
+    const q = journalDrawerQuery.trim().toLowerCase();
     if (q.length === 0) return journal.entries;
     return journal.entries.filter((e) => {
       if (e.content.toLowerCase().includes(q)) return true;
@@ -192,13 +192,13 @@
     }
   }
 
-  // Reflections drawer tab. Same shape as onPickRecipesTab - the list
+  // Journal drawer tab. Same shape as onPickRecipesTab - the list
   // is lazy-loaded the first time the tab is opened, and the store
   // keeps itself fresh via JOURNAL_CHANGE_EVENT. The modal opens
   // separately (drawer row -> day-focused modal, footer button ->
   // list-focused modal).
-  function onPickReflectionsTab(): void {
-    navigate({ drawer: 'reflections' }, { replace: true });
+  function onPickJournalTab(): void {
+    navigate({ drawer: 'journal' }, { replace: true });
     if (app.supabase && !journal.loaded && !journal.loading) {
       void loadJournalEntries(app.supabase, { limit: 200 });
     }
@@ -214,14 +214,14 @@
     void loadRecipes(app.supabase);
   });
 
-  // Parallel for the reflections tab. Gates on `journal.loaded` rather
+  // Parallel for the journal tab. Gates on `journal.loaded` rather
   // than `journal.entries.length === 0` - an account with zero entries
   // would otherwise re-fire this effect every time the load resolves
   // empty (loading flips false, deps trip, effect runs, loads again,
   // forever). The spinner never stops and the modal that shares the
   // store sees the same flicker.
   $effect(() => {
-    if (route.drawer !== 'reflections') return;
+    if (route.drawer !== 'journal') return;
     if (!app.supabase) return;
     if (journal.loaded || journal.loading) return;
     void loadJournalEntries(app.supabase, { limit: 200 });
@@ -1057,7 +1057,7 @@
       // set in-session (e.g. a toggle flipped in another tab).
       setEmphasisMarkdown(s.emphasisMarkdown ?? false);
       setNotifyOnComplete(s.notifyOnComplete ?? false);
-      // Reflections: default-on for new accounts, so absent key is true.
+      // Journal: default-on for new accounts, so absent key is true.
       // Explicit false disables the worker; setJournalAutomaticEnabled
       // stops the journalManager if it was running. Timezone falls
       // through to whatever activate() seeded (browser zone) when the
@@ -3274,10 +3274,10 @@
               type="button"
               role="tab"
               class="thread grow"
-              class:active={drawerTab === 'reflections'}
-              aria-selected={drawerTab === 'reflections'}
-              onclick={() => onPickReflectionsTab()}
-            >Reflections</button>
+              class:active={drawerTab === 'journal'}
+              aria-selected={drawerTab === 'journal'}
+              onclick={() => onPickJournalTab()}
+            >Journal</button>
           </div>
         </div>
         {#if drawerTab === 'chats'}
@@ -3305,9 +3305,9 @@
           <input
             type="search"
             class="sidebar-search-input"
-            placeholder="Search reflections"
-            aria-label="Search reflections"
-            bind:value={reflectionDrawerQuery}
+            placeholder="Search journal"
+            aria-label="Search journal"
+            bind:value={journalDrawerQuery}
           />
         {/if}
       </header>
@@ -3527,32 +3527,32 @@
           </div>
         </div>
       {:else}
-        <!-- Reflections tab. Click on an entry opens the Reflections
+        <!-- Journal tab. Click on an entry opens the Journal
              modal on that day's detail view. The footer button opens
              the modal on the list view. The drawer list is a reverse-
              chron glance surface; semantic search and compose live
              in the modal proper. -->
         <div class="recipe-drawer-list">
           {#if journal.loading && !journal.loaded}
-            <p class="subtle" style="padding:0.75rem">Loading reflections…</p>
+            <p class="subtle" style="padding:0.75rem">Loading journal…</p>
           {:else if journal.error}
             <p class="error" style="padding:0.75rem">
-              Couldn't load reflections: {journal.error}
+              Couldn't load journal: {journal.error}
             </p>
-          {:else if visibleDrawerReflections.length === 0}
+          {:else if visibleDrawerJournal.length === 0}
             <p class="subtle" style="padding:0.75rem">
               {#if journal.entries.length === 0}
-                No reflections yet. Open Reflections to add one.
+                No journal entries yet. Open Journal to add one.
               {:else}
                 No matches.
               {/if}
             </p>
           {:else}
-            {#each visibleDrawerReflections as e (e.id)}
-              <div class="row thread-row" data-reflection-id={e.id}>
+            {#each visibleDrawerJournal as e (e.id)}
+              <div class="row thread-row" data-journal-id={e.id}>
                 <button
                   class="thread grow"
-                  onclick={() => navigate({ modal: 'reflections', reflection_date: e.entry_date })}
+                  onclick={() => navigate({ modal: 'journal', journal_date: e.entry_date })}
                   title={`${e.entry_date} (${e.source === 'automatic' ? 'automatic' : 'you'})`}
                 >
                   <span>{e.entry_date}</span>
@@ -3567,8 +3567,8 @@
             <button
               type="button"
               class="secondary"
-              onclick={() => navigate({ modal: 'reflections' })}
-            >Open reflections</button>
+              onclick={() => navigate({ modal: 'journal' })}
+            >Open journal</button>
           </div>
         </div>
       {/if}
@@ -4514,9 +4514,9 @@
   {#if showCookbook}
     <Cookbook onClose={onCookbookModalClose} />
   {/if}
-  {#if showReflections}
-    <Reflections
-      onClose={() => navigate({ modal: null, reflection_date: null })}
+  {#if showJournal}
+    <Journal
+      onClose={() => navigate({ modal: null, journal_date: null })}
     />
   {/if}
 {/if}

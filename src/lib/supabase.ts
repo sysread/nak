@@ -239,7 +239,7 @@ export interface Recipe {
 }
 
 /**
- * One daily-journal row for the Reflections feature. Paired with a
+ * One daily-journal row for the Journal feature. Paired with a
  * matching row of the opposite `source` on the same `entry_date` - the
  * UI's daily view stacks "automatic" (agent-written) and "user"
  * (human-authored) together. See docs/dev/journal.md for the feature
@@ -490,7 +490,7 @@ export interface UserSettings {
    */
   notifyOnComplete?: boolean;
   /**
-   * Reflections (journal) feature: when true, the background journaling
+   * Journal feature: when true, the background journaling
    * agent processes threads as they accrue terminal assistant messages
    * and writes/updates today's automatic entry. Absent/true is the
    * default-on semantics decided with the user - a brand-new account
@@ -505,7 +505,7 @@ export interface UserSettings {
    * entries into per-day rows. "America/New_York", "Europe/London",
    * etc. Seeded on first Settings visit from
    * `Intl.DateTimeFormat().resolvedOptions().timeZone`; user can
-   * override from the Reflections settings pane. Absent means "fall
+   * override from the Journal settings pane. Absent means "fall
    * back to the browser's current zone at read time"; callers must
    * handle `undefined` rather than assume a server default so a user
    * roaming across time zones never silently lands entries on the
@@ -1342,7 +1342,7 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
   }
 
-  // journal_entries (Reflections) ---------------------------------------
+  // journal_entries (Journal) ---------------------------------------
   //
   // User-scoped via RLS. Every read filters to the signed-in user; every
   // write either goes through the upsert RPC (automatic rows) or
@@ -1351,7 +1351,7 @@ export class SupabaseService {
   /**
    * List journal entries newest-day-first. Pulls a bounded window;
    * callers that want full history should paginate via `from`/`to`
-   * filters on `entry_date`. Used by the Reflections list view and
+   * filters on `entry_date`. Used by the Journal list view and
    * export.
    */
   async listJournalEntries(opts: {
@@ -1377,7 +1377,7 @@ export class SupabaseService {
   /**
    * Look up a specific day's entry pair by date. Returns an array with
    * zero, one, or two entries (at most one per `source`). Used by the
-   * Reflections daily view and by chat-loop's "today's journal"
+   * Journal daily view and by chat-loop's "today's journal"
    * appendix to decide whether to inject context at conversation open.
    */
   async getJournalEntriesForDate(entryDate: string): Promise<JournalEntry[]> {

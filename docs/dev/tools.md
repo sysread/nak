@@ -289,7 +289,7 @@ The gated `research` toolbox carries:
   reactive recipe list; mutating tools fire a `window`
   `CustomEvent` so the UI refreshes without a tools -> UI import.
   See `./cookbook.md`.
-- **Reflections / journal** - four user-facing tools
+- **Journal** - four user-facing tools
   (`journal_list`, `journal_read`, `journal_search`,
   `journal_delete`) gated by the `journal` toolbox, plus
   `journal_upsert` as an agent-only tool in

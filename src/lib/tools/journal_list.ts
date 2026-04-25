@@ -18,7 +18,7 @@ const MAX_LIMIT = 100;
 export const journalList: ToolDef = {
   name: 'journal_list',
   description:
-    "List the user's Reflections (journal entries), most-recent day first. " +
+    "List the user's journal entries, most-recent day first. " +
     'Optional `from` / `to` clip the range (ISO YYYY-MM-DD). Returns an ' +
     'array of {id, entry_date, source, content, topics, mood, people, ' +
     'updated_at}. Use journal_search for meaning-based queries; this is ' +

@@ -6,7 +6,7 @@
  *
  * NOT exposed in the main chat toolbox - only the background
  * journaling worker reaches for this. User-authored entries go
- * through the Reflections UI, which calls `createUserJournalEntry` /
+ * through the Journal UI, which calls `createUserJournalEntry` /
  * `updateJournalEntry` directly.
  *
  * The underlying Supabase RPC handles the on-conflict merge for

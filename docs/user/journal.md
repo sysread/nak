@@ -1,6 +1,6 @@
-# Reflections
+# Journal
 
-Reflections is Nak's daily journal. Each day has up to two entries:
+The Journal is Nak's daily diary. Each day has up to two entries:
 
 - **Automatic** — written by a background journaler after your
   conversations settle. Covers feelings, self-reflection,
@@ -12,8 +12,8 @@ Reflections is Nak's daily journal. Each day has up to two entries:
 Both are searchable (synonyms and paraphrases work), exportable as
 Markdown, and can be deleted on demand.
 
-Open Reflections from the **Reflections** tab in the conversation
-drawer, or the **Open reflections** button at the bottom of that
+Open the Journal from the **Journal** tab in the conversation
+drawer, or the **Open journal** button at the bottom of that
 tab. Each entry in the drawer jumps straight to its day.
 
 ## The list view
@@ -25,7 +25,7 @@ The modal opens on a reverse-chronological list, grouped by date.
   meaning matches first, substring matches fall back.
 - **Today** — jumps to today's day view.
 - **Export all (.zip)** — downloads every entry as a ZIP of
-  Markdown files (`reflections/yyyy-mm-dd.md`, one per day, each
+  Markdown files (`journal/yyyy-mm-dd.md`, one per day, each
   containing both the automatic and user sections when present).
 
 Click any day's header to open the daily view.
@@ -70,7 +70,7 @@ side-effect.
 
 ## Settings
 
-The **Reflections** pane in Settings controls:
+The **Journal** pane in Settings controls:
 
 - **Automatic entries** — toggle the background journaler on or
   off. User entries are unaffected either way. Turning this off
@@ -83,16 +83,16 @@ The **Reflections** pane in Settings controls:
 - **Export all (.zip)** — same button as the list view, surfaced
   in Settings for users who never open the modal.
 
-## How the assistant knows about your reflections
+## How the assistant knows about your journal
 
 At the start of every new conversation, today's automatic entry
 (if any) is injected into the assistant's per-turn context so
 replies can refer back to what you've been working through. It's
 not announced; the assistant just has context.
 
-If you reference something reflective, the assistant may reach
+If you reference something journal-worthy, the assistant may reach
 into the journal via its `journal_search` tool to find a related
-prior entry. That's opt-in per-thread via the **Reflections**
+prior entry. That's opt-in per-thread via the **Journal**
 toolbox in the chat composer's tool picker.
 
 See also: [Memory](./memory.md), [Background](./background.md),

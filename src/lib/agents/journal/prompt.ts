@@ -1,5 +1,5 @@
 /**
- * Prompt for the journaling agent (Reflections feature). Appended as
+ * Prompt for the journaling agent (Journal feature). Appended as
  * the final user-role turn after the full conversation history, same
  * framing as the memory-extraction prompt in `../reflection/prompt.ts`:
  * the model sees itself as the prior assistant and reads this as a
@@ -61,14 +61,14 @@ export function buildJournalPrompt(args: BuildPromptArgs): string {
   const lines: string[] = [
     "You've just read the conversation above. Step out of that role.",
     "You're not the assistant talking to the user anymore - nobody will",
-    'read this text reply. Your job is to update the user\'s REFLECTIONS',
-    "(their daily journal) by calling the `journal_upsert` tool.",
+    "read this text reply. Your job is to update the user's JOURNAL",
+    '(their daily diary) by calling the `journal_upsert` tool.',
     '',
     `Today's date, in the user's local timezone, is **${args.entryDate}**.`,
     `This conversation's thread id is **${args.threadId}** - include it in`,
     '`source_thread_ids` on your upsert call.',
     '',
-    '## What goes in a Reflections entry',
+    '## What goes in a Journal entry',
     '',
     'INCLUDE content that is reflective in nature:',
     '- Feelings, emotional states, self-reflection',

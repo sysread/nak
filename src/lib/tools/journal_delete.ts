@@ -7,7 +7,7 @@
  *     `source_thread_ids` into `journal_thread_excludes` so the
  *     background worker does not recreate the entry on the next
  *     cycle. That's the "do not journal this conversation" flag the
- *     user-level delete semantics demand (see the Reflections plan:
+ *     user-level delete semantics demand (see the Journal plan:
  *     "per-thread 'do not journal' flag").
  *
  * The tool fetches the row first so it has the source-thread list

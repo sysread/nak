@@ -257,9 +257,9 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   Worker-side entries relay main-thread via postMessage
   and surface in the in-app log drawer alongside
   main-thread logs. See `./logging.md`.
-- **Reflections / journal** - parallel pipeline living
+- **Journal** - parallel pipeline living
   under `src/lib/agents/journal/` (note: `reflection/` is
-  the memory-extraction folder; the public "Reflections"
+  the memory-extraction folder; the public "Journal"
   feature uses the `journal` namespace internally). The
   journaler shares the same claim/lease plumbing but
   writes daily Markdown prose keyed by date, not facts

@@ -1,5 +1,5 @@
 /**
- * Reflections export helpers. Two surfaces:
+ * Journal export helpers. Two surfaces:
  *
  *   1. `downloadEntryMarkdown` - one-entry `.md` file via a Blob +
  *      hidden anchor click. No external dependency.

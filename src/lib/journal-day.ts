@@ -1,5 +1,5 @@
 /**
- * Timezone-aware date-key helpers for the Reflections / journal feature.
+ * Timezone-aware date-key helpers for the Journal feature.
  *
  * Journal entries are bucketed by a plain YYYY-MM-DD key (stored in
  * `journal_entries.entry_date` as a `date` column). "Today" depends on

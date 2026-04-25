@@ -200,7 +200,7 @@ function buildEmphasisNote(): string {
  * timeout fell through, etc.).
  *
  * Design intent: the block is context, not instruction. The baseline
- * prompt already explains what Reflections are and how to use them -
+ * prompt already explains what the Journal is and how to use it -
  * this block just ships the actual content so the model can weave
  * continuity in. Kept compact: date header + topics/mood line + body.
  * No `###` heavy formatting because the appendix as a whole is
@@ -492,7 +492,7 @@ export interface ChatLoopOptions {
    */
   emphasisMarkdown?: boolean;
   /**
-   * IANA timezone used to compute "today" for the Reflections
+   * IANA timezone used to compute "today" for the Journal
    * appendix and the per-turn `<datetime>` tag prepended to the
    * latest user message (see `buildDatetimeTag`). When
    * null/undefined both paths fall back to the runtime's reported
@@ -838,7 +838,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // profile and belongs at the top of the appendix). Null when the
   // setting is off so the filter below skips it cleanly.
   const emphasisNote = emphasisMarkdown ? buildEmphasisNote() : null;
-  // Today's Reflections block sits between the samskara priming and
+  // Today's Journal block sits between the samskara priming and
   // the emphasis/title nudges: it's user-specific context (belongs
   // with samskara) but not urgent (title note stays closest to the
   // user turn). Null on mid-thread turns or when no automatic entry

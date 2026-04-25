@@ -3,11 +3,11 @@
  * state that survives a refresh lives in the query string:
  *
  *   cid     = active thread id
- *   drawer  = 'chats' | 'recipes' | 'reflections'  (sidebar tab; absent = 'chats')
- *   modal   = 'settings'|'cookbook'|'help'|'memories'|'reflections'
+ *   drawer  = 'chats' | 'recipes' | 'journal'  (sidebar tab; absent = 'chats')
+ *   modal   = 'settings'|'cookbook'|'help'|'memories'|'journal'
  *   recipe  = recipe id when modal=cookbook
  *   doc     = docs/user/ path when modal=help
- *   reflection_date = YYYY-MM-DD focused in the reflections modal
+ *   journal_date = YYYY-MM-DD focused in the journal modal
  *
  * The deploy target is GitHub Pages with no SPA fallback, so path-style
  * routes (/settings, /recipes/<id>) would 404 on refresh. Every routed
@@ -39,8 +39,8 @@ export type Modal =
   | 'help'
   | 'memories'
   | 'samskara'
-  | 'reflections';
-export type DrawerTab = 'chats' | 'recipes' | 'reflections';
+  | 'journal';
+export type DrawerTab = 'chats' | 'recipes' | 'journal';
 
 export interface Route {
   cid: string | null;
@@ -49,10 +49,10 @@ export interface Route {
   recipe: string | null;
   doc: string | null;
   /**
-   * YYYY-MM-DD focused in the Reflections daily view when
-   * `modal === 'reflections'`. Absent on the list view.
+   * YYYY-MM-DD focused in the Journal daily view when
+   * `modal === 'journal'`. Absent on the list view.
    */
-  reflection_date: string | null;
+  journal_date: string | null;
 }
 
 const ROUTED_KEYS = [
@@ -61,7 +61,7 @@ const ROUTED_KEYS = [
   'modal',
   'recipe',
   'doc',
-  'reflection_date',
+  'journal_date',
 ] as const;
 const MODAL_VALUES: readonly Modal[] = [
   'settings',
@@ -69,9 +69,9 @@ const MODAL_VALUES: readonly Modal[] = [
   'help',
   'memories',
   'samskara',
-  'reflections',
+  'journal',
 ];
-const DRAWER_VALUES: readonly DrawerTab[] = ['chats', 'recipes', 'reflections'];
+const DRAWER_VALUES: readonly DrawerTab[] = ['chats', 'recipes', 'journal'];
 
 export const route = $state<Route>({
   cid: null,
@@ -79,7 +79,7 @@ export const route = $state<Route>({
   modal: null,
   recipe: null,
   doc: null,
-  reflection_date: null,
+  journal_date: null,
 });
 
 function readEnum<T extends string>(
@@ -105,7 +105,7 @@ export function parseUrl(search: string = typeof location !== 'undefined' ? loca
     modal: readEnum(params, 'modal', MODAL_VALUES),
     recipe: readString(params, 'recipe'),
     doc: readString(params, 'doc'),
-    reflection_date: readString(params, 'reflection_date'),
+    journal_date: readString(params, 'journal_date'),
   };
 }
 
@@ -126,7 +126,7 @@ export function buildSearch(
   if (r.modal) params.set('modal', r.modal);
   if (r.recipe) params.set('recipe', r.recipe);
   if (r.doc) params.set('doc', r.doc);
-  if (r.reflection_date) params.set('reflection_date', r.reflection_date);
+  if (r.journal_date) params.set('journal_date', r.journal_date);
   const s = params.toString();
   return s ? `?${s}` : '';
 }
@@ -164,10 +164,10 @@ function applyPatch(patch: Partial<Route>): boolean {
     changed = true;
   }
   if (
-    patch.reflection_date !== undefined &&
-    patch.reflection_date !== route.reflection_date
+    patch.journal_date !== undefined &&
+    patch.journal_date !== route.journal_date
   ) {
-    route.reflection_date = patch.reflection_date;
+    route.journal_date = patch.journal_date;
     changed = true;
   }
   return changed;
@@ -233,7 +233,7 @@ export const __test = {
     route.modal = null;
     route.recipe = null;
     route.doc = null;
-    route.reflection_date = null;
+    route.journal_date = null;
   },
   syncFromUrl,
 };

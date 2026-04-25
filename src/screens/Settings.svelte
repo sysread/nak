@@ -103,7 +103,7 @@
   type Group =
     | 'keys'
     | 'ai'
-    | 'reflections'
+    | 'journal'
     | 'appearance'
     | 'usage'
     | 'export'
@@ -112,7 +112,7 @@
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'keys', label: 'API keys' },
     { id: 'ai', label: 'AI' },
-    { id: 'reflections', label: 'Reflections' },
+    { id: 'journal', label: 'Journal' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'usage', label: 'Usage' },
     { id: 'export', label: 'Export' },
@@ -156,7 +156,7 @@
   let modelError = $state<string | null>(null);
   let modelInfo = $state<string | null>(null);
 
-  // --- Reflections pane ---
+  // --- Journal pane ---
   // Journal toggle + timezone. Both pass through state.svelte so the
   // journaling worker starts/stops and switches day-bucket zones in
   // real time. Persisted on `profiles.settings.journalAutomaticEnabled`
@@ -923,8 +923,8 @@
     try {
       await app.supabase.updateSettings({ journalAutomaticEnabled: next });
       journalInfo = next
-        ? 'Automatic reflections enabled.'
-        : 'Automatic reflections disabled. Your own entries are unaffected.';
+        ? 'Automatic journal enabled.'
+        : 'Automatic journal disabled. Your own entries are unaffected.';
     } catch (err) {
       journalAutomaticEnabled = prev;
       setJournalAutomaticEnabled(prev);
@@ -949,7 +949,7 @@
     setJournalTimezone(normalized);
     try {
       await app.supabase.updateSettings({ journalTimezone: normalized });
-      journalInfo = `Reflections day boundary set to ${normalized}.`;
+      journalInfo = `Journal day boundary set to ${normalized}.`;
     } catch (err) {
       journalTimezone = prev;
       setJournalTimezone(prev);
@@ -957,14 +957,14 @@
     }
   }
 
-  async function onExportReflectionsArchive(): Promise<void> {
+  async function onExportJournalArchive(): Promise<void> {
     if (!app.supabase) return;
     journalError = null;
     journalInfo = null;
     journalExportBusy = true;
     try {
       await downloadFullArchive(app.supabase);
-      journalInfo = 'Reflections archive downloaded.';
+      journalInfo = 'Journal archive downloaded.';
     } catch (err) {
       journalError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -1292,13 +1292,13 @@
             Browse memories
           </button>
         {/if}
-      {:else if group === 'reflections'}
-        <h2>Reflections</h2>
+      {:else if group === 'journal'}
+        <h2>Journal</h2>
         <p class="subtle">
-          Reflections are a daily journal Nak keeps alongside you. The
+          The Journal is a daily diary Nak keeps alongside you. The
           automatic journaler writes an entry for each day based on your
           conversations; your own entries sit next to them. Both are
-          searchable and exportable. See the Help modal's Reflections
+          searchable and exportable. See the Help modal's Journal
           page for the full flow.
         </p>
 
@@ -1319,7 +1319,7 @@
 
         <h3 class="pane-section">Day boundary</h3>
         <p class="subtle" style="font-size:0.85rem">
-          Reflections are bucketed by date in this IANA timezone, so a
+          Journal entries are bucketed by date in this IANA timezone, so a
           late-night conversation lands on the day you experienced
           rather than wherever the server is. Browser detected:
           <code>{detectTimezone()}</code>.
@@ -1363,13 +1363,13 @@
 
         <h3 class="pane-section">Export</h3>
         <p class="subtle" style="font-size:0.85rem">
-          Download every reflection as a ZIP of Markdown files, one per
+          Download every journal entry as a ZIP of Markdown files, one per
           day. Single-day exports live on each entry card inside the
-          Reflections modal.
+          Journal modal.
         </p>
         <button
           type="button"
-          onclick={onExportReflectionsArchive}
+          onclick={onExportJournalArchive}
           disabled={journalExportBusy}
         >{journalExportBusy ? 'Preparing…' : 'Export all (.zip)'}</button>
 

@@ -153,21 +153,21 @@ export const conversationsToolbox: Toolbox = {
 };
 
 /**
- * Reflections (daily journal). Read-focused tools for the main chat -
+ * Journal (daily diary). Read-focused tools for the main chat -
  * the write path is the background journaling agent's, not this
  * toolbox's. `journal_delete` is here because removing an entry is
  * user-directed (and invokes the per-thread exclude side-effect);
  * creating an automatic entry is not the model's call.
  *
  * Gated rather than always-on because most conversations don't
- * involve Reflections - including the schemas on every turn would
+ * involve the journal - including the schemas on every turn would
  * grow the request payload without paying rent. The LLM can flip it
  * on via toggle_toolbox once a reflective topic opens up.
  */
 export const journalToolbox: Toolbox = {
   name: 'journal',
   description:
-    "Read and search the user's daily Reflections (journal entries), " +
+    "Read and search the user's daily journal entries, " +
     'and delete entries they no longer want. Entries come from two ' +
     "sources per day: 'automatic' (written by the background " +
     "journaling agent from the user's conversations) and 'user' " +
@@ -455,13 +455,13 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     "conversations where you discussed something similar. Don't make",
     'the user repeat themselves if the answer is already in your history.',
     '',
-    // Reflections / journal framing. Most conversations don't touch
+    // Journal framing. Most conversations don't touch
     // the journal; the hint is short on purpose so it stays cheap on
     // tokens for turns that will never reach for it. When the
     // appendix carries a "Today's journal" block, it sits near the
     // end so the model sees it as recent context; this paragraph
     // just tells the model the block exists and what to do with it.
-    "The user has a Reflections surface - a daily journal written by",
+    "The user has a Journal surface - a daily journal written by",
     'the background journaler when reflective topics come up, plus any',
     "first-person entries the user composed themselves. If today's",
     'automatic entry exists, the appendix below will include it; weave',
