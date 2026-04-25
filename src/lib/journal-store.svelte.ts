@@ -59,6 +59,11 @@ export async function loadJournalEntries(
  * Create a user-sourced entry for the given date. Refreshes the
  * in-memory list on success and emits the change event so other
  * surfaces (e.g. a future drawer preview) can refetch.
+ *
+ * The schema allows multiple user entries per day, but the modal's
+ * compose flow only ever creates one (it edits the existing one
+ * when present). If a duplicate ever lands here from another path,
+ * the resort below keeps the newest entry first by created_at.
  */
 export async function saveUserEntry(
   supabase: SupabaseService,
@@ -71,10 +76,11 @@ export async function saveUserEntry(
   }
 ): Promise<JournalEntry> {
   const entry = await supabase.createUserJournalEntry(args);
-  journal.entries = [
-    entry,
-    ...journal.entries.filter((e) => !(e.entry_date === entry.entry_date && e.source === 'user')),
-  ].sort((a, b) => (a.entry_date < b.entry_date ? 1 : a.entry_date > b.entry_date ? -1 : 0));
+  journal.entries = [entry, ...journal.entries].sort((a, b) => {
+    if (a.entry_date !== b.entry_date) return a.entry_date < b.entry_date ? 1 : -1;
+    if (a.source !== b.source) return a.source < b.source ? -1 : 1;
+    return a.created_at < b.created_at ? -1 : 1;
+  });
   emitJournalChange();
   return entry;
 }
@@ -101,7 +107,7 @@ export async function deleteEntry(
 ): Promise<void> {
   const target = journal.entries.find((e) => e.id === id);
   const excludeThreadIds =
-    target?.source === 'automatic' ? target.source_thread_ids : [];
+    target?.source === 'automatic' && target.thread_id ? [target.thread_id] : [];
   await supabase.deleteJournalEntry(id, excludeThreadIds);
   journal.entries = journal.entries.filter((e) => e.id !== id);
   emitJournalChange();

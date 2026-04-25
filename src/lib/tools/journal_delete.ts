@@ -3,17 +3,19 @@
  * `source`:
  *
  *   - source='user': straight hard-delete of the row. No side effects.
- *   - source='automatic': hard-delete, AND upsert every thread in
- *     `source_thread_ids` into `journal_thread_excludes` so the
- *     background worker does not recreate the entry on the next
- *     cycle. That's the "do not journal this conversation" flag the
- *     user-level delete semantics demand (see the Journal plan:
- *     "per-thread 'do not journal' flag").
+ *   - source='automatic': hard-delete, AND upsert the entry's
+ *     `thread_id` into `journal_thread_excludes` so the background
+ *     worker does not recreate the entry on the next cycle. That's
+ *     the "do not journal this conversation" flag the user-level
+ *     delete semantics demand.
  *
- * The tool fetches the row first so it has the source-thread list
- * (the row vanishes as part of the delete, so a read-then-delete
- * sequence is the only way to get both). User-sourced deletes skip
- * the excludes population entirely.
+ * The tool fetches the row first so it has the thread id (the row
+ * vanishes as part of the delete, so a read-then-delete sequence is
+ * the only way to get both). User-sourced deletes skip the excludes
+ * population entirely. An automatic entry whose source thread was
+ * deleted (FK is `on delete set null` on `thread_id`) carries
+ * `thread_id=null`; nothing to exclude in that case, so the delete
+ * is just a row removal.
  */
 import type { ToolDef } from './types';
 
@@ -51,7 +53,7 @@ export const journalDelete: ToolDef = {
       throw new Error(`journal entry ${id} not found`);
     }
     const excludeThreadIds =
-      target.source === 'automatic' ? target.source_thread_ids : [];
+      target.source === 'automatic' && target.thread_id ? [target.thread_id] : [];
     await ctx.supabase.deleteJournalEntry(id, excludeThreadIds);
     return {
       id,

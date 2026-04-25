@@ -239,16 +239,22 @@ export interface Recipe {
 }
 
 /**
- * One daily-journal row for the Journal feature. Paired with a
- * matching row of the opposite `source` on the same `entry_date` - the
- * UI's daily view stacks "automatic" (agent-written) and "user"
- * (human-authored) together. See docs/dev/journal.md for the feature
- * overview.
+ * One journal-entry row. The Journal feature lets a date have any
+ * number of entries; the UI groups them by `entry_date` and assembles
+ * a compound day view per click.
  *
- * `source_thread_ids` is populated only on automatic rows (the agent
- * tracks which conversations it derived the entry from); the delete
- * path uses it to populate `journal_thread_excludes` so a deleted
- * automatic row doesn't get regenerated on the next worker cycle.
+ * Each automatic entry pins to one source `thread_id`; per-thread
+ * uniqueness is enforced by a partial-unique index in the schema, so
+ * the worker re-running on a thread extends the existing entry rather
+ * than creating duplicates. User entries leave `thread_id` null - they
+ * aren't tied to any specific conversation.
+ *
+ * `thread_title` rides on rows produced by `listJournalEntries` and
+ * `getJournalEntriesForDate` (PostgREST embedded select); null on
+ * rows that came back from a path without the embed (the upsert
+ * RPC's RETURNING list, e.g.) and on rows whose source thread was
+ * deleted (the FK is `on delete set null`).
+ *
  * `similarity` is attached on rows that came out of the semantic-
  * search RPC - undefined on direct reads.
  */
@@ -262,7 +268,18 @@ export interface JournalEntry {
   topics: string[];
   mood: string | null;
   people: string[];
-  source_thread_ids: string[];
+  thread_id: string | null;
+  thread_title: string | null;
+  /**
+   * Source thread's start timestamp (ISO 8601). Embedded from
+   * `threads.created_at` on read paths that include the thread join;
+   * null on rows whose thread was deleted (FK on delete set null) or
+   * whose source path didn't fetch the embed (the upsert RPC return,
+   * the semantic-search RPC). Used by the daily-view UI to order
+   * multiple automatic entries on the same date by the time the
+   * underlying conversation actually started.
+   */
+  thread_created_at: string | null;
   created_at: string;
   updated_at: string;
   /** Populated only by `searchJournalEntriesByEmbedding`. */
@@ -278,11 +295,29 @@ function coerceJournalEntry(raw: Record<string, unknown>): JournalEntry {
   const people = Array.isArray(raw.people)
     ? (raw.people as unknown[]).filter((p): p is string => typeof p === 'string')
     : [];
-  const sourceThreadIds = Array.isArray(raw.source_thread_ids)
-    ? (raw.source_thread_ids as unknown[]).filter(
-        (s): s is string => typeof s === 'string'
-      )
-    : [];
+  const threadId =
+    typeof raw.thread_id === 'string' && raw.thread_id.length > 0
+      ? raw.thread_id
+      : null;
+  // PostgREST embedded select shapes the joined row as
+  // `thread: { title, created_at } | null`. The nested object
+  // disappears when the referenced thread was deleted (FK
+  // `on delete set null` nulls thread_id, the embed has nothing to
+  // attach to). Coerce to flat `thread_title` / `thread_created_at`
+  // fields so the UI doesn't have to know about the nesting shape.
+  const threadEmbed = raw.thread;
+  const threadObj =
+    threadEmbed && typeof threadEmbed === 'object' && !Array.isArray(threadEmbed)
+      ? (threadEmbed as Record<string, unknown>)
+      : null;
+  const threadTitle =
+    threadObj && typeof threadObj.title === 'string' && threadObj.title.length > 0
+      ? (threadObj.title as string)
+      : null;
+  const threadCreatedAt =
+    threadObj && typeof threadObj.created_at === 'string' && threadObj.created_at.length > 0
+      ? (threadObj.created_at as string)
+      : null;
   return {
     id: String(raw.id),
     entry_date: String(raw.entry_date),
@@ -291,7 +326,9 @@ function coerceJournalEntry(raw: Record<string, unknown>): JournalEntry {
     topics,
     mood: typeof raw.mood === 'string' ? raw.mood : null,
     people,
-    source_thread_ids: sourceThreadIds,
+    thread_id: threadId,
+    thread_title: threadTitle,
+    thread_created_at: threadCreatedAt,
     created_at: String(raw.created_at ?? raw.updated_at ?? ''),
     updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
     similarity:
@@ -1353,6 +1390,14 @@ export class SupabaseService {
    * callers that want full history should paginate via `from`/`to`
    * filters on `entry_date`. Used by the Journal list view and
    * export.
+   *
+   * Embeds the source thread's `title` via PostgREST's relation
+   * resolution so the daily view can render a centered conversation
+   * title above each automatic entry without a second round trip.
+   * Embed shape lands on `raw.thread = {title} | null`; the coercer
+   * flattens it to `thread_title`. The embed evaluates to null when
+   * the source thread was deleted (FK is `on delete set null`), so
+   * `coerceJournalEntry` tolerates either path.
    */
   async listJournalEntries(opts: {
     limit?: number;
@@ -1362,10 +1407,11 @@ export class SupabaseService {
     let q = this.client
       .from('journal_entries')
       .select(
-        'id, entry_date, source, content, topics, mood, people, source_thread_ids, created_at, updated_at'
+        'id, entry_date, source, content, topics, mood, people, thread_id, created_at, updated_at, thread:threads(title, created_at)'
       )
       .order('entry_date', { ascending: false })
       .order('source', { ascending: true })
+      .order('created_at', { ascending: true })
       .limit(opts.limit ?? 500);
     if (opts.from) q = q.gte('entry_date', opts.from);
     if (opts.to) q = q.lte('entry_date', opts.to);
@@ -1375,45 +1421,55 @@ export class SupabaseService {
   }
 
   /**
-   * Look up a specific day's entry pair by date. Returns an array with
-   * zero, one, or two entries (at most one per `source`). Used by the
-   * Journal daily view and by chat-loop's "today's journal"
-   * appendix to decide whether to inject context at conversation open.
+   * Look up all entries for a specific day. With per-thread automatic
+   * entries the result can have any number of rows: at most one user
+   * row plus one automatic row per conversation that started that
+   * day. Used by the Journal daily view (which assembles them into a
+   * compound display) and by chat-loop's "today's journal" appendix.
+   * Embeds `thread.title` for the same reason `listJournalEntries`
+   * does.
    */
   async getJournalEntriesForDate(entryDate: string): Promise<JournalEntry[]> {
     const { data, error } = await this.client
       .from('journal_entries')
       .select(
-        'id, entry_date, source, content, topics, mood, people, source_thread_ids, created_at, updated_at'
+        'id, entry_date, source, content, topics, mood, people, thread_id, created_at, updated_at, thread:threads(title, created_at)'
       )
       .eq('entry_date', entryDate)
-      .order('source', { ascending: true });
+      .order('source', { ascending: true })
+      .order('created_at', { ascending: true });
     if (error) throw new SupabaseError(error.message);
     return (data ?? []).map((row) => coerceJournalEntry(row as Record<string, unknown>));
   }
 
   /**
-   * Upsert today's automatic entry via the schema RPC. The RPC's
-   * `on conflict` branch merges topics/mood/people/content with the
-   * latest agent view and accumulates `source_thread_ids` (de-duped).
-   * Called from the journaling agent's tool loop; direct UI paths use
-   * `createJournalEntry` / `updateJournalEntry` for user-sourced rows.
+   * Upsert the automatic entry for a single thread via the schema
+   * RPC. Idempotent on (user_id, thread_id) WHERE source='automatic':
+   * the worker re-runs on the same thread when the user adds more
+   * turns, and the conflict path lets the agent extend its existing
+   * narrative rather than creating duplicates. `entry_date` is set on
+   * insert and intentionally not updated on conflict (the entry's
+   * date is the conversation-start day, which doesn't change just
+   * because the worker re-ran).
+   *
+   * RPC return doesn't include the embedded thread title; the caller
+   * (the agent) doesn't need it for the write path.
    */
   async upsertJournalAutomaticEntry(args: {
+    threadId: string;
     entryDate: string;
     content: string;
     topics: string[];
     mood: string | null;
     people: string[];
-    sourceThreadIds: string[];
   }): Promise<JournalEntry> {
     const { data, error } = await this.client.rpc('upsert_journal_automatic_entry', {
+      p_thread_id: args.threadId,
       p_entry_date: args.entryDate,
       p_content: args.content,
       p_topics: args.topics,
       p_mood: args.mood,
       p_people: args.people,
-      p_source_thread_ids: args.sourceThreadIds,
     });
     if (error) throw new SupabaseError(error.message);
     const rows = (data ?? []) as Record<string, unknown>[];
@@ -1422,10 +1478,33 @@ export class SupabaseService {
   }
 
   /**
-   * Create a user-sourced entry for the given date. Surfaces the
-   * 23505-unique-violation as a clean error so the UI can route the
-   * user to updateJournalEntry instead of silently swallowing the
-   * duplicate.
+   * Look up the automatic entry the worker has previously written for
+   * this thread, if any. Returns null when the thread doesn't have an
+   * entry yet (first cycle for the thread, or the user deleted the
+   * prior entry and the thread was re-included after the exclude was
+   * cleared). The agent passes the result into `buildJournalPrompt`
+   * so the model extends the existing narrative rather than starting
+   * from scratch.
+   */
+  async getJournalEntryForThread(threadId: string): Promise<JournalEntry | null> {
+    const { data, error } = await this.client
+      .from('journal_entries')
+      .select(
+        'id, entry_date, source, content, topics, mood, people, thread_id, created_at, updated_at, thread:threads(title, created_at)'
+      )
+      .eq('thread_id', threadId)
+      .eq('source', 'automatic')
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    if (!data) return null;
+    return coerceJournalEntry(data as Record<string, unknown>);
+  }
+
+  /**
+   * Create a user-sourced entry for the given date. Multiple per day
+   * are allowed at the schema level, but the UI's compose flow keeps
+   * to one (edits the existing one when present); this method is the
+   * write path for both new and additional user entries.
    */
   async createUserJournalEntry(args: {
     entryDate: string;
@@ -1448,7 +1527,7 @@ export class SupabaseService {
         people: args.people,
       })
       .select(
-        'id, entry_date, source, content, topics, mood, people, source_thread_ids, created_at, updated_at'
+        'id, entry_date, source, content, topics, mood, people, thread_id, created_at, updated_at, thread:threads(title, created_at)'
       )
       .single();
     if (error) throw new SupabaseError(error.message);
@@ -1476,7 +1555,7 @@ export class SupabaseService {
       .update({ ...patch, updated_at: new Date().toISOString() })
       .eq('id', id)
       .select(
-        'id, entry_date, source, content, topics, mood, people, source_thread_ids, created_at, updated_at'
+        'id, entry_date, source, content, topics, mood, people, thread_id, created_at, updated_at, thread:threads(title, created_at)'
       )
       .single();
     if (error) throw new SupabaseError(error.message);
@@ -1488,9 +1567,9 @@ export class SupabaseService {
    * `excludeThreadIds`, those threads are upserted into
    * journal_thread_excludes in the same round so the worker doesn't
    * regenerate the entry from the same conversation. Caller builds
-   * the list from the entry's own source_thread_ids before deleting
-   * (the row disappears as part of this call, so we read-then-delete
-   * in the tool layer rather than inside Supabase).
+   * the list from the entry's own `thread_id` (singular, post-restructure)
+   * before deleting; the row disappears as part of this call so we
+   * read-then-delete in the tool layer rather than inside Supabase.
    */
   async deleteJournalEntry(
     id: string,
@@ -1538,7 +1617,7 @@ export class SupabaseService {
     const ilikePromise = this.client
       .from('journal_entries')
       .select(
-        'id, entry_date, source, content, topics, mood, people, source_thread_ids, created_at, updated_at'
+        'id, entry_date, source, content, topics, mood, people, thread_id, created_at, updated_at, thread:threads(title, created_at)'
       )
       .or(`content.ilike.${pattern},mood.ilike.${pattern}`)
       .order('entry_date', { ascending: false })
@@ -1596,6 +1675,14 @@ export class SupabaseService {
     terminalMsgId: string;
     /** Thread title at claim time. Null when the auto-titler hasn't filled it in yet. */
     title: string | null;
+    /**
+     * Conversation start timestamp (ISO 8601 string from PostgREST).
+     * The worker converts this to a YYYY-MM-DD key in the user's IANA
+     * timezone via `dateInZone` and uses it as the entry_date - so an
+     * automatic entry lands on the day the conversation actually
+     * happened on, not the day the worker is processing it.
+     */
+    threadCreatedAt: string;
   } | null> {
     const { data, error } = await this.client.rpc('claim_next_thread_for_journal', {
       p_holder_id: holderId,
@@ -1606,12 +1693,14 @@ export class SupabaseService {
       thread_id: string;
       terminal_msg_id: string;
       title: string | null;
+      thread_created_at: string;
     }[];
     if (rows.length === 0) return null;
     return {
       threadId: rows[0].thread_id,
       terminalMsgId: rows[0].terminal_msg_id,
       title: rows[0].title ?? null,
+      threadCreatedAt: rows[0].thread_created_at,
     };
   }
 

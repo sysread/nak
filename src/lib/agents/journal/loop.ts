@@ -10,7 +10,7 @@ import type { SupabaseService } from '../../supabase';
 import type { LeaseCoordinator } from '../../embeddings/lease';
 import type { JournalInput, JournalOutput } from './types';
 import { createLogger } from '../../logger.svelte';
-import { todayInZone } from '../../journal-day';
+import { dateInZone, todayInZone } from '../../journal-day';
 
 const log = createLogger('journal-worker');
 
@@ -53,6 +53,7 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     threadId: string;
     terminalMsgId: string;
     title: string | null;
+    threadCreatedAt: string;
   } | null = null;
   try {
     claim = await ctx.supabase.claimNextThreadForJournal(
@@ -75,11 +76,17 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     `picked up thread ${claim.threadId} @ msg ${claim.terminalMsgId} ${titleTag}`
   );
 
-  // Compute today's date EVERY cycle rather than cache once per worker
-  // run - a worker that stays idle across midnight would otherwise keep
-  // writing yesterday's entry. The cost is three Intl calls per claim;
-  // negligible.
-  const entryDate = todayInZone(ctx.timezone);
+  // entry_date is the day the conversation STARTED on, not the day
+  // the worker is processing it. A worker that runs idle past
+  // midnight or chews through a backlog would otherwise stamp every
+  // entry with today; combined with the per-thread upsert that's
+  // fine in isolation but the daily view would show all of those
+  // entries grouped under "today" instead of the days they actually
+  // happened. Falls back to today only when the timestamp from the
+  // claim RPC fails to parse (shouldn't happen; the column is NOT
+  // NULL on threads).
+  const entryDate =
+    dateInZone(claim.threadCreatedAt, ctx.timezone) ?? todayInZone(ctx.timezone);
 
   let runResult;
   try {

@@ -1,22 +1,25 @@
 /**
- * Read the journal entries for a specific day. Returns zero, one, or
- * two rows - at most one automatic and one user entry per day. Kept as
- * a distinct tool from journal_list so "what did I write today?" is a
- * single precise call rather than a ranged scan the LLM has to filter.
+ * Read the journal entries for a specific day. Returns any number of
+ * rows: at most one user entry plus one automatic row per conversation
+ * the user had on that day. Kept as a distinct tool from journal_list
+ * so "what did I write today?" is a single precise call rather than a
+ * ranged scan the LLM has to filter.
  *
- * Returns the full entry rows including `source_thread_ids` so the LLM
- * can surface "this is derived from <N> conversations" when summarising.
+ * Each row carries `thread_id` (and `thread_title` when the source
+ * thread still exists) so the LLM can name the source conversation
+ * when summarising back to the user.
  */
 import type { ToolDef } from './types';
 
 export const journalRead: ToolDef = {
   name: 'journal_read',
   description:
-    'Read the journal entries for a single date. Returns an array with ' +
-    'up to two entries (automatic + user). `date` is ISO YYYY-MM-DD in ' +
-    "the user's local timezone. Each entry has {id, entry_date, source, " +
-    'content, topics, mood, people, source_thread_ids, created_at, ' +
-    'updated_at}.',
+    'Read the journal entries for a single date. Returns an array of ' +
+    'entries (any number; at most one user entry plus one automatic ' +
+    'entry per source conversation that day). `date` is ISO YYYY-MM-DD ' +
+    "in the user's local timezone. Each entry has {id, entry_date, " +
+    'source, content, topics, mood, people, thread_id, thread_title, ' +
+    'created_at, updated_at}.',
   shortDescription: 'read one day of journal entries',
   parameters: {
     type: 'object',
@@ -44,7 +47,8 @@ export const journalRead: ToolDef = {
       topics: e.topics,
       mood: e.mood,
       people: e.people,
-      source_thread_ids: e.source_thread_ids,
+      thread_id: e.thread_id,
+      thread_title: e.thread_title,
       created_at: e.created_at,
       updated_at: e.updated_at,
     }));

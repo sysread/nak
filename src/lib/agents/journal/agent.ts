@@ -290,11 +290,14 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
         };
       }
 
-      // Today's existing automatic entry, if any. Passed into the
-      // prompt so the agent can extend rather than clobber. A
-      // Supabase failure here degrades to "no existing entry" - the
-      // worker will re-run on the next cycle and the union-merge
-      // inside the upsert RPC still preserves accumulated state.
+      // The automatic entry the worker has previously written for THIS
+      // thread, if any. Looked up by thread_id (not date) so a worker
+      // re-run on the same thread - because the user added more turns
+      // - extends the same entry rather than competing with another
+      // thread's entry that happens to share a date. A Supabase
+      // failure here degrades to "no existing entry"; the on-conflict
+      // path of the upsert RPC will still merge the agent's output
+      // into whatever's stored.
       let existingEntry = null as
         | {
             content: string;
@@ -304,10 +307,9 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
           }
         | null;
       try {
-        const rows = await this.supabase.getJournalEntriesForDate(
-          req.input.entryDate
+        const automatic = await this.supabase.getJournalEntryForThread(
+          req.input.threadId
         );
-        const automatic = rows.find((e) => e.source === 'automatic');
         if (automatic) {
           existingEntry = {
             content: automatic.content,
@@ -389,18 +391,20 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
       }
 
       // Worthy + entry present: write through the supabase service
-      // directly. The RPC handles the on-conflict merge for
-      // (user_id, entry_date, source='automatic') and union-dedups
-      // source_thread_ids across runs, so the agent doesn't have to
-      // decide create-vs-update.
+      // directly. The RPC's on-conflict path is keyed on
+      // (user_id, thread_id) WHERE source='automatic', so a re-run
+      // on this same thread overwrites the model's prior view rather
+      // than creating a duplicate row. entry_date is set on insert
+      // and intentionally not updated on conflict (the entry's date
+      // is the conversation-start day, fixed).
       try {
         await this.supabase.upsertJournalAutomaticEntry({
+          threadId: req.input.threadId,
           entryDate: req.input.entryDate,
           content: decision.entry.content,
           topics: decision.entry.topics,
           mood: decision.entry.mood,
           people: decision.entry.people,
-          sourceThreadIds: [req.input.threadId],
         });
       } catch (err) {
         // Surface the upsert failure as the run error so the loop

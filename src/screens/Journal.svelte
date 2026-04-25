@@ -81,6 +81,10 @@
   // time - the daily view renders a single user card anyway.
   type ComposeMode = 'none' | 'create' | 'edit';
   let composeMode = $state<ComposeMode>('none');
+  // Set on Edit-an-existing-user-entry; the entry being edited is
+  // hidden from the list and the compose form takes its slot. Stays
+  // null when composeMode is 'create' or 'none'.
+  let composeEditId = $state<string | null>(null);
   let composeContent = $state('');
   let composeTopics = $state('');
   let composeMood = $state('');
@@ -183,17 +187,57 @@
 
   // Active day's entries. Picks from the store, not the search
   // results, so the daily view is always authoritative.
-  const dayEntries = $derived.by(() => {
+  //
+  // Order: user entries first (oldest-created first), then automatic
+  // entries in conversation-start order (oldest thread first). The
+  // user-first ordering is intentional - the human's own framing of
+  // the day reads more naturally before the agent's third-person
+  // observational paragraphs. Within each section we sort
+  // chronologically so reading top-to-bottom matches how the day
+  // unfolded.
+  const dayEntriesOrdered = $derived.by<JournalEntry[]>(() => {
     if (focusedDate === null) return [];
-    return journal.entries.filter((e) => e.entry_date === focusedDate);
+    const all = journal.entries.filter((e) => e.entry_date === focusedDate);
+    const users = all
+      .filter((e) => e.source === 'user')
+      .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0));
+    const autos = all
+      .filter((e) => e.source === 'automatic')
+      .sort((a, b) => {
+        // Sort by source-conversation start time when available;
+        // fall back to entry created_at when the embed is missing
+        // (semantic-search RPC, deleted thread). Never zero-tie
+        // entries from different threads since equal created_at on
+        // distinct rows is vanishingly unlikely and sort stability
+        // covers the rare collision.
+        const aKey = a.thread_created_at ?? a.created_at;
+        const bKey = b.thread_created_at ?? b.created_at;
+        return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+      });
+    return [...users, ...autos];
   });
 
-  const dayAutomatic = $derived(
-    dayEntries.find((e) => e.source === 'automatic') ?? null
-  );
-  const dayUser = $derived(
-    dayEntries.find((e) => e.source === 'user') ?? null
-  );
+  /**
+   * Strip newlines and collapse whitespace, then truncate to
+   * `maxChars` (with an ellipsis when clipped). The auto-titler now
+   * sanitises titles up front so this is mostly defensive, but the
+   * journaler's daily view shows multiple titles stacked on a single
+   * column so a stray multi-line title would otherwise blow out the
+   * vertical rhythm. Returns 'Untitled conversation' when title is
+   * null - the source thread was deleted (FK on delete set null).
+   */
+  function formatTitle(title: string | null, maxChars = 60): string {
+    if (!title) return 'Untitled conversation';
+    const collapsed = title.replace(/\s+/g, ' ').trim();
+    if (collapsed.length === 0) return 'Untitled conversation';
+    if (collapsed.length <= maxChars) return collapsed;
+    return collapsed.slice(0, maxChars - 1).trimEnd() + '…';
+  }
+
+  function openConversation(threadId: string | null): void {
+    if (!threadId) return;
+    navigate({ cid: threadId, modal: null, journal_date: null });
+  }
 
   function goToDay(date: string): void {
     navigate({ journal_date: date });
@@ -224,12 +268,14 @@
   function startCompose(entry: JournalEntry | null): void {
     if (entry) {
       composeMode = 'edit';
+      composeEditId = entry.id;
       composeContent = entry.content;
       composeTopics = entry.topics.join(', ');
       composeMood = entry.mood ?? '';
       composePeople = entry.people.join(', ');
     } else {
       composeMode = 'create';
+      composeEditId = null;
       composeContent = '';
       composeTopics = '';
       composeMood = '';
@@ -242,6 +288,7 @@
   function cancelCompose(): void {
     if (composeBusy) return;
     composeMode = 'none';
+    composeEditId = null;
     composeContent = '';
     composeTopics = '';
     composeMood = '';
@@ -282,8 +329,8 @@
     composeBusy = true;
     composeError = null;
     try {
-      if (composeMode === 'edit' && dayUser) {
-        await updateUserEntry(app.supabase, dayUser.id, {
+      if (composeMode === 'edit' && composeEditId) {
+        await updateUserEntry(app.supabase, composeEditId, {
           content,
           topics,
           mood: mood.length > 0 ? mood : null,
@@ -299,6 +346,7 @@
         });
       }
       composeMode = 'none';
+      composeEditId = null;
       composeContent = '';
       composeTopics = '';
       composeMood = '';
@@ -537,210 +585,381 @@
         {/if}
       {:else}
         <!-- ----------- Daily view ----------- -->
-        {#if dayAutomatic}
-          <article class="journal-card card-automatic">
-            <header class="journal-card-header">
-              <span class="journal-badge badge-automatic">Automatic</span>
-              {#if dayAutomatic.mood}
-                <span class="chip">mood: {dayAutomatic.mood}</span>
-              {/if}
-              {#each dayAutomatic.topics as t}
-                <span class="chip">{t}</span>
-              {/each}
-            </header>
-            <div class="journal-card-body">
-              <Markdown content={dayAutomatic.content} />
-            </div>
-            {#if dayAutomatic.people.length > 0}
-              <p class="subtle journal-people">
-                People: {dayAutomatic.people.join(', ')}
-              </p>
-            {/if}
-            <footer class="journal-card-actions">
-              <button
-                type="button"
-                class="secondary"
-                onclick={() => downloadEntryMarkdown(dayAutomatic!)}
-                title="Download this entry as Markdown"
-              >Export .md</button>
-              {#if deleteTargetId === dayAutomatic.id}
-                <span class="subtle journal-delete-prompt">
-                  Delete and stop journaling these conversations?
-                </span>
-                <button
-                  type="button"
-                  class="secondary"
-                  onclick={cancelDelete}
-                >Cancel</button>
-                <button
-                  type="button"
-                  class="danger"
-                  onclick={confirmDelete}
-                >Delete</button>
-              {:else}
-                <button
-                  type="button"
-                  class="secondary"
-                  onclick={() => requestDelete(dayAutomatic!.id)}
-                >Delete</button>
-              {/if}
-            </footer>
-            {#if deleteTargetId === dayAutomatic.id && deleteError}
-              <p class="error">{deleteError}</p>
-            {/if}
-          </article>
-        {/if}
+        <!--
+          Compound day view. The dayEntriesOrdered list is already
+          sorted (user entries first, automatic entries by source-
+          conversation-start time within their section). We render a
+          curtain-rod divider between every adjacent pair so the
+          column reads as one continuous day-of-the-user broken into
+          recognisable sections, not a stack of disconnected cards.
 
-        {#if composeMode === 'none'}
-          {#if dayUser}
-            <article class="journal-card card-user">
-              <header class="journal-card-header">
-                <span class="journal-badge badge-user">You</span>
-                {#if dayUser.mood}
-                  <span class="chip">mood: {dayUser.mood}</span>
-                {/if}
-                {#each dayUser.topics as t}
-                  <span class="chip">{t}</span>
-                {/each}
-              </header>
-              <div class="journal-card-body">
-                <Markdown content={dayUser.content} />
-              </div>
-              {#if dayUser.people.length > 0}
-                <p class="subtle journal-people">
-                  People: {dayUser.people.join(', ')}
-                </p>
-              {/if}
-              <footer class="journal-card-actions">
-                <button
-                  type="button"
-                  class="secondary"
-                  onclick={() => startCompose(dayUser)}
-                >Edit</button>
-                <button
-                  type="button"
-                  class="secondary"
-                  onclick={() => downloadEntryMarkdown(dayUser!)}
-                  title="Download this entry as Markdown"
-                >Export .md</button>
-                {#if deleteTargetId === dayUser.id}
-                  <span class="subtle journal-delete-prompt">Really delete?</span>
-                  <button
-                    type="button"
-                    class="secondary"
-                    onclick={cancelDelete}
-                  >Cancel</button>
-                  <button
-                    type="button"
-                    class="danger"
-                    onclick={confirmDelete}
-                  >Delete</button>
-                {:else}
-                  <button
-                    type="button"
-                    class="secondary"
-                    onclick={() => requestDelete(dayUser!.id)}
-                  >Delete</button>
-                {/if}
-              </footer>
-              {#if deleteTargetId === dayUser.id && deleteError}
-                <p class="error">{deleteError}</p>
-              {/if}
-            </article>
-          {:else}
-            <div class="journal-empty-day">
-              <p class="subtle">
-                No user entry for this day yet.
-              </p>
-              <button
-                type="button"
-                onclick={() => startCompose(null)}
-              >Write an entry</button>
-            </div>
+          Compose mode interleaves: 'create' inserts the form at the
+          top of the list (before any existing entries), 'edit' hides
+          the entry being edited and inserts the form in its slot.
+        -->
+        {#if composeMode === 'create'}
+          {@render composeForm()}
+          {#if dayEntriesOrdered.length > 0}
+            {@render divider()}
           {/if}
-        {:else}
-          <article class="journal-card card-user card-compose">
-            <header class="journal-card-header">
-              <span class="journal-badge badge-user">You</span>
-              <span class="subtle">
-                {composeMode === 'edit' ? 'Editing your entry' : 'New entry'}
-              </span>
-            </header>
-            <div class="compose-form">
-              <div class="form-row">
-                <label for="compose-content">What's on your mind?</label>
-                <textarea
-                  id="compose-content"
-                  class="compose-textarea"
-                  maxlength={MAX_ENTRY_CHARS}
-                  bind:value={composeContent}
-                  placeholder="Markdown supported."
-                ></textarea>
-                <span class="subtle char-count">
-                  {composeContent.length}/{MAX_ENTRY_CHARS}
-                </span>
-              </div>
-              <div class="form-row">
-                <label for="compose-mood">Mood (optional)</label>
-                <input
-                  id="compose-mood"
-                  type="text"
-                  maxlength={MAX_MOOD_CHARS}
-                  bind:value={composeMood}
-                  placeholder="e.g. tired / hopeful"
-                />
-              </div>
-              <div class="form-row">
-                <label for="compose-topics">Topics (optional, comma-separated)</label>
-                <input
-                  id="compose-topics"
-                  type="text"
-                  bind:value={composeTopics}
-                  placeholder="e.g. work, sleep, therapy"
-                />
-              </div>
-              <div class="form-row">
-                <label for="compose-people">People (optional, comma-separated)</label>
-                <input
-                  id="compose-people"
-                  type="text"
-                  bind:value={composePeople}
-                  placeholder="first names or labels"
-                />
-              </div>
-              {#if composeError}
-                <p class="error">{composeError}</p>
-              {/if}
-              <div class="compose-actions">
-                <button
-                  type="button"
-                  class="secondary"
-                  onclick={cancelCompose}
-                  disabled={composeBusy}
-                >Cancel</button>
-                <button
-                  type="button"
-                  onclick={saveCompose}
-                  disabled={composeBusy || composeContent.trim().length === 0}
-                >{composeBusy ? 'Saving…' : composeMode === 'edit' ? 'Save changes' : 'Save entry'}</button>
-              </div>
-            </div>
-          </article>
         {/if}
 
-        {#if !dayAutomatic && !dayUser && composeMode === 'none'}
-          <p class="subtle">
-            Nothing saved for this day. Use <em>Write an entry</em> above
+        {#each dayEntriesOrdered as entry, idx (entry.id)}
+          {#if composeMode === 'edit' && composeEditId === entry.id}
+            {@render composeForm()}
+          {:else if entry.source === 'user'}
+            {@render userCard(entry)}
+          {:else}
+            {@render automaticCard(entry)}
+          {/if}
+          {#if idx < dayEntriesOrdered.length - 1}
+            {@render divider()}
+          {/if}
+        {/each}
+
+        {#if dayEntriesOrdered.length === 0 && composeMode === 'none'}
+          <p class="subtle journal-empty-day-text">
+            Nothing saved for this day. Use <em>Write an entry</em> below
             to start one, or keep chatting - the automatic journaler
             will fill in a page once it has something worth writing.
           </p>
+        {/if}
+
+        <!--
+          Footer "Write an entry" button. Only when no compose form is
+          already on screen. Always available regardless of whether the
+          day already has user entries; the schema allows multiple per
+          day. The button intentionally sits below the entries so its
+          presence doesn't compete visually with reading the day.
+        -->
+        {#if composeMode === 'none'}
+          <div class="journal-write-action">
+            <button
+              type="button"
+              onclick={() => startCompose(null)}
+            >Write an entry</button>
+          </div>
         {/if}
       {/if}
     </section>
   </div>
 </div>
 
+<!--
+  Snippets for the compound day view. Pulled out as top-level
+  snippets rather than inlined so the daily-view loop stays readable
+  and the compose-form duplication on edit-vs-create paths reuses one
+  source of truth.
+-->
+
+{#snippet divider()}
+  <div class="journal-divider" role="separator" aria-hidden="true">
+    <span class="journal-divider-finial">❦</span>
+    <span class="journal-divider-rod"></span>
+    <span class="journal-divider-finial">❦</span>
+  </div>
+{/snippet}
+
+{#snippet automaticCard(entry: JournalEntry)}
+  <article class="journal-card card-automatic">
+    <header class="journal-card-conversation-title">
+      {#if entry.thread_id}
+        <button
+          type="button"
+          class="journal-thread-link"
+          title={entry.thread_title ?? 'Open this conversation'}
+          onclick={() => openConversation(entry.thread_id)}
+        >{formatTitle(entry.thread_title)}</button>
+      {:else}
+        <span class="subtle journal-thread-link-disabled">
+          {formatTitle(entry.thread_title)}
+        </span>
+      {/if}
+    </header>
+    {#if entry.mood || entry.topics.length > 0}
+      <div class="journal-card-chips">
+        {#if entry.mood}
+          <span class="chip">mood: {entry.mood}</span>
+        {/if}
+        {#each entry.topics as t}
+          <span class="chip">{t}</span>
+        {/each}
+      </div>
+    {/if}
+    <div class="journal-card-body">
+      <Markdown content={entry.content} />
+    </div>
+    {#if entry.people.length > 0}
+      <p class="subtle journal-people">
+        People: {entry.people.join(', ')}
+      </p>
+    {/if}
+    <footer class="journal-card-actions">
+      <button
+        type="button"
+        class="secondary"
+        onclick={() => downloadEntryMarkdown(entry)}
+        title="Download this entry as Markdown"
+      >Export .md</button>
+      {#if deleteTargetId === entry.id}
+        <span class="subtle journal-delete-prompt">
+          Delete and stop journaling this conversation?
+        </span>
+        <button
+          type="button"
+          class="secondary"
+          onclick={cancelDelete}
+        >Cancel</button>
+        <button
+          type="button"
+          class="danger"
+          onclick={confirmDelete}
+        >Delete</button>
+      {:else}
+        <button
+          type="button"
+          class="secondary"
+          onclick={() => requestDelete(entry.id)}
+        >Delete</button>
+      {/if}
+    </footer>
+    {#if deleteTargetId === entry.id && deleteError}
+      <p class="error">{deleteError}</p>
+    {/if}
+  </article>
+{/snippet}
+
+{#snippet userCard(entry: JournalEntry)}
+  <article class="journal-card card-user">
+    {#if entry.mood || entry.topics.length > 0}
+      <div class="journal-card-chips">
+        <span class="journal-badge badge-user">You</span>
+        {#if entry.mood}
+          <span class="chip">mood: {entry.mood}</span>
+        {/if}
+        {#each entry.topics as t}
+          <span class="chip">{t}</span>
+        {/each}
+      </div>
+    {:else}
+      <div class="journal-card-chips">
+        <span class="journal-badge badge-user">You</span>
+      </div>
+    {/if}
+    <div class="journal-card-body">
+      <Markdown content={entry.content} />
+    </div>
+    {#if entry.people.length > 0}
+      <p class="subtle journal-people">
+        People: {entry.people.join(', ')}
+      </p>
+    {/if}
+    <footer class="journal-card-actions">
+      <button
+        type="button"
+        class="secondary"
+        onclick={() => startCompose(entry)}
+      >Edit</button>
+      <button
+        type="button"
+        class="secondary"
+        onclick={() => downloadEntryMarkdown(entry)}
+        title="Download this entry as Markdown"
+      >Export .md</button>
+      {#if deleteTargetId === entry.id}
+        <span class="subtle journal-delete-prompt">Really delete?</span>
+        <button
+          type="button"
+          class="secondary"
+          onclick={cancelDelete}
+        >Cancel</button>
+        <button
+          type="button"
+          class="danger"
+          onclick={confirmDelete}
+        >Delete</button>
+      {:else}
+        <button
+          type="button"
+          class="secondary"
+          onclick={() => requestDelete(entry.id)}
+        >Delete</button>
+      {/if}
+    </footer>
+    {#if deleteTargetId === entry.id && deleteError}
+      <p class="error">{deleteError}</p>
+    {/if}
+  </article>
+{/snippet}
+
+{#snippet composeForm()}
+  <article class="journal-card card-user card-compose">
+    <header class="journal-card-chips">
+      <span class="journal-badge badge-user">You</span>
+      <span class="subtle">
+        {composeMode === 'edit' ? 'Editing your entry' : 'New entry'}
+      </span>
+    </header>
+    <div class="compose-form">
+      <div class="form-row">
+        <label for="compose-content">What's on your mind?</label>
+        <textarea
+          id="compose-content"
+          class="compose-textarea"
+          maxlength={MAX_ENTRY_CHARS}
+          bind:value={composeContent}
+          placeholder="Markdown supported."
+        ></textarea>
+        <span class="subtle char-count">
+          {composeContent.length}/{MAX_ENTRY_CHARS}
+        </span>
+      </div>
+      <div class="form-row">
+        <label for="compose-mood">Mood (optional)</label>
+        <input
+          id="compose-mood"
+          type="text"
+          maxlength={MAX_MOOD_CHARS}
+          bind:value={composeMood}
+          placeholder="e.g. tired / hopeful"
+        />
+      </div>
+      <div class="form-row">
+        <label for="compose-topics">Topics (optional, comma-separated)</label>
+        <input
+          id="compose-topics"
+          type="text"
+          bind:value={composeTopics}
+          placeholder="e.g. work, sleep, therapy"
+        />
+      </div>
+      <div class="form-row">
+        <label for="compose-people">People (optional, comma-separated)</label>
+        <input
+          id="compose-people"
+          type="text"
+          bind:value={composePeople}
+          placeholder="first names or labels"
+        />
+      </div>
+      {#if composeError}
+        <p class="error">{composeError}</p>
+      {/if}
+      <div class="compose-actions">
+        <button
+          type="button"
+          class="secondary"
+          onclick={cancelCompose}
+          disabled={composeBusy}
+        >Cancel</button>
+        <button
+          type="button"
+          onclick={saveCompose}
+          disabled={composeBusy || composeContent.trim().length === 0}
+        >{composeBusy ? 'Saving…' : composeMode === 'edit' ? 'Save changes' : 'Save entry'}</button>
+      </div>
+    </div>
+  </article>
+{/snippet}
+
 <style>
+  /*
+   * Compound day view styles. Each card sits flush in a single
+   * column; the curtain-rod divider provides the visual separation
+   * between adjacent entries (the cards themselves drop their bottom
+   * margin so the divider's spacing is the only gap).
+   */
+
+  /*
+   * Curtain-rod divider. A thin rule with floral-heart finials on
+   * each end. ASCII line + Unicode finials so the look survives
+   * font-rendering differences across platforms. role="separator"
+   * + aria-hidden cover both the screen-reader contract (it's
+   * decorative) and the semantics (it marks a section break).
+   */
+  .journal-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 1.25rem 0.25rem;
+    color: var(--muted);
+    user-select: none;
+  }
+  .journal-divider-rod {
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  .journal-divider-finial {
+    font-size: 0.95rem;
+    line-height: 1;
+    opacity: 0.7;
+  }
+
+  /*
+   * Conversation-title header on automatic entries. Centered,
+   * single-line, button-styled so click semantics are obvious. The
+   * disabled fallback (thread deleted) renders as plain muted text.
+   */
+  .journal-card-conversation-title {
+    text-align: center;
+    margin-bottom: 0.5rem;
+  }
+  .journal-thread-link,
+  .journal-thread-link-disabled {
+    display: inline-block;
+    max-width: 100%;
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.3;
+    /* Single line; long titles already collapsed/truncated by
+       formatTitle but the CSS belt keeps visual rhythm if the
+       truncation slips. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .journal-thread-link {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: var(--accent, var(--text));
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.2em;
+  }
+  .journal-thread-link:hover {
+    color: var(--text);
+  }
+  .journal-thread-link-disabled {
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /*
+   * Card-chip row sits below the conversation title (auto entries) or
+   * at the top of the card (user entries). Same flex-wrap as the old
+   * .journal-card-header but pulled out so user / auto cards don't
+   * have to share a class with subtle layout differences.
+   */
+  .journal-card-chips {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+
+  .journal-write-action {
+    margin-top: 1.25rem;
+    display: flex;
+    justify-content: center;
+  }
+
+  .journal-empty-day-text {
+    margin: 1rem 0;
+  }
+
   /* Parallel to .memories-shell / .help-shell / .settings-shell. */
   .journal-shell {
     position: relative;
@@ -928,13 +1147,6 @@
     background: var(--bg-2);
   }
 
-  .journal-card-header {
-    display: flex;
-    align-items: baseline;
-    gap: 0.4rem;
-    flex-wrap: wrap;
-  }
-
   .journal-card-body {
     font-size: 0.95rem;
     color: var(--text);
@@ -980,8 +1192,7 @@
     border-color: var(--accent, var(--border));
   }
 
-  .journal-chips,
-  .journal-card-header {
+  .journal-chips {
     display: flex;
     gap: 0.3rem;
     flex-wrap: wrap;
@@ -998,12 +1209,6 @@
     white-space: nowrap;
   }
 
-  .journal-empty-day {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    align-items: flex-start;
-  }
 
   .compose-form {
     display: flex;

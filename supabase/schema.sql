@@ -2850,40 +2850,73 @@ create table if not exists public.journal_entries (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   -- Day this entry belongs to, in the user's local timezone. Stored as
-  -- a plain DATE so queries can range-scan without timezone math.
+  -- a plain DATE so queries can range-scan without timezone math. For
+  -- automatic entries this is the day the source conversation started
+  -- on (NOT the day the worker happened to process it - those drift
+  -- when the worker runs idle past midnight or processes a backlog).
+  -- For user entries it's whatever date the user picked when composing.
   entry_date date not null,
   -- Who wrote it. 'automatic' rows are owned by the background worker
   -- and are read-only from the UI; 'user' rows are composed by the
-  -- signed-in human. Exactly one of each per day (per the unique
-  -- constraint below), so the daily view shows at most two cards.
+  -- signed-in human.
   source text not null check (source in ('automatic', 'user')),
   content text not null,
   -- Free-text topic chips. Array rather than a separate table because
   -- topics are purely presentational; we don't query across users by
   -- topic and the LLM is free to invent new ones per-entry.
   topics text[] not null default array[]::text[],
-  -- Single dominant mood/tone for the day ("anxious", "hopeful",
+  -- Single dominant mood/tone for the entry ("anxious", "hopeful",
   -- "frustrated", "reflective"). Nullable because not every entry
   -- carries a clear dominant tone.
   mood text,
   -- First names / identifiers of people mentioned. Same rationale as
   -- topics - no cross-user joins, chips only.
   people text[] not null default array[]::text[],
-  -- Threads the automatic-entry text was derived from. Populated by the
-  -- journaling agent via journal_upsert; user-sourced entries leave
-  -- this empty. Referenced by the delete path to populate
-  -- journal_thread_excludes so a deleted automatic entry doesn't get
-  -- recreated from the same conversation on the next worker cycle.
-  source_thread_ids uuid[] not null default array[]::uuid[],
+  -- Source conversation for an automatic entry. NULL for user-authored
+  -- entries (they're not pinned to any specific conversation). The
+  -- partial-unique index below pins one automatic entry per (user,
+  -- thread) so the worker re-running on a thread extends an existing
+  -- entry rather than creating duplicates. The journal-delete path
+  -- reads this to populate journal_thread_excludes so a deleted
+  -- automatic entry doesn't get regenerated from the same conversation.
+  thread_id uuid references public.threads(id) on delete set null,
   embedding vector(2048),
   embedding_model text,
   embedding_claim_holder text,
   embedding_claim_expires timestamptz,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  -- At most one automatic and one user row per day per user.
-  unique (user_id, entry_date, source)
+  updated_at timestamptz not null default now()
 );
+
+-- Idempotent migration off the older shape (where each automatic entry
+-- merged multiple threads into one row keyed by date). The thread_id
+-- column moved inline in the table definition above for fresh
+-- installs; existing tables get the same column added here.
+alter table public.journal_entries
+  add column if not exists thread_id uuid references public.threads(id) on delete set null;
+
+-- Drop the old "one automatic and one user row per day per user"
+-- constraint. We now allow multiple automatic entries per day (one per
+-- thread the user had a conversation on) and don't constrain user
+-- entries either. Per-thread uniqueness for automatic entries lives in
+-- the partial-unique index that follows.
+alter table public.journal_entries
+  drop constraint if exists journal_entries_user_id_entry_date_source_key;
+
+-- One automatic entry per (user, thread). Enforces the worker's
+-- "extend a thread's existing entry rather than create a duplicate"
+-- contract; user-authored entries (thread_id IS NULL) are exempt and
+-- can be created freely without colliding.
+create unique index if not exists journal_entries_user_thread_unique
+  on public.journal_entries (user_id, thread_id)
+  where source = 'automatic' and thread_id is not null;
+
+-- Older databases carry a `source_thread_ids uuid[]` column from the
+-- one-entry-per-day era. The column has no consumer after the schema
+-- moves to per-thread entries, so drop it. `if exists` keeps fresh
+-- installs (which never had the column) green.
+alter table public.journal_entries
+  drop column if exists source_thread_ids;
 
 create index if not exists journal_entries_user_date_idx
   on public.journal_entries (user_id, entry_date desc);
@@ -2968,86 +3001,84 @@ alter table public.threads
   add column if not exists journal_claim_holder text,
   add column if not exists journal_claim_expires_at timestamptz;
 
--- Upsert today's automatic entry atomically. Idempotent on
--- (user_id, entry_date, source='automatic'): the agent calls this on
--- every worker cycle and the conflict target merges the call into the
--- existing row. source_thread_ids accumulates (de-duped) across calls
--- so a delete can find every source thread in one go. Topics, people,
--- mood are overwritten with the agent's latest view; content replaces
--- wholesale.
+-- Upsert the automatic entry for a single thread. Idempotent on
+-- (user_id, thread_id) WHERE source='automatic': the agent calls this
+-- once per thread per worker cycle, and the conflict path merges the
+-- call into the existing row when the worker re-runs (the user added
+-- more turns mid-day and the thread re-qualified). Topics, people,
+-- mood, content are all overwritten with the agent's latest view -
+-- the prompt instructs the agent to produce a CONSOLIDATED narrative
+-- covering the whole conversation so far, not a diff.
+--
+-- entry_date is set on insert and intentionally NOT updated on
+-- conflict: the entry's date is whichever calendar day the
+-- conversation started on, and that doesn't change just because the
+-- worker re-ran on a fresh turn the next morning.
 drop function if exists public.upsert_journal_automatic_entry(date, text, text[], text, text[], uuid[]);
+drop function if exists public.upsert_journal_automatic_entry(uuid, date, text, text[], text, text[]);
 create or replace function public.upsert_journal_automatic_entry(
+  p_thread_id uuid,
   p_entry_date date,
   p_content text,
   p_topics text[],
   p_mood text,
-  p_people text[],
-  p_source_thread_ids uuid[]
+  p_people text[]
 ) returns table (
   id uuid,
+  thread_id uuid,
   entry_date date,
   source text,
   content text,
   topics text[],
   mood text,
   people text[],
-  source_thread_ids uuid[],
   created_at timestamptz,
   updated_at timestamptz
 )
 language plpgsql security invoker as $$
 #variable_conflict use_column
 -- The function returns a table whose columns share names with the
--- target table (`entry_date`, `source`, `topics`, etc.). plpgsql
--- treats `RETURNS TABLE (...)` columns as in-scope OUT variables, so
--- an unqualified reference inside the body - notably the
--- `on conflict (user_id, entry_date, source)` target list - resolves
--- to BOTH the OUT variable AND the journal_entries column and Postgres
--- raises `column reference "entry_date" is ambiguous`. The directive
--- tells plpgsql to prefer the table column when a name overlaps,
--- which is what we want everywhere in this body. Without it, the
--- on-conflict clause errors on every settled thread that already has
--- an automatic entry for the same day - i.e. every cycle after the
--- first one - and the worker logs `wrote=false` for runs the agent
--- did try to write.
+-- target table (`entry_date`, `thread_id`, `source`, `topics`, ...).
+-- plpgsql treats `RETURNS TABLE (...)` columns as in-scope OUT
+-- variables, so an unqualified reference inside the body - notably
+-- the `on conflict (user_id, thread_id) where source='automatic'`
+-- target - resolves to BOTH the OUT variable AND the table column,
+-- and Postgres raises `column reference "thread_id" is ambiguous`.
+-- The directive tells plpgsql to prefer the table column when a
+-- name overlaps, which is what we want everywhere in this body.
 declare
   v_uid uuid := auth.uid();
 begin
   if v_uid is null then
     raise exception 'not authenticated';
   end if;
+  if p_thread_id is null then
+    raise exception 'thread_id is required for automatic entries';
+  end if;
   return query
   insert into public.journal_entries (
-    user_id, entry_date, source, content, topics, mood, people, source_thread_ids
+    user_id, thread_id, entry_date, source, content, topics, mood, people
   ) values (
-    v_uid, p_entry_date, 'automatic', p_content,
+    v_uid, p_thread_id, p_entry_date, 'automatic', p_content,
     coalesce(p_topics, array[]::text[]),
     p_mood,
-    coalesce(p_people, array[]::text[]),
-    coalesce(p_source_thread_ids, array[]::uuid[])
+    coalesce(p_people, array[]::text[])
   )
-  on conflict (user_id, entry_date, source) do update
+  on conflict (user_id, thread_id) where source = 'automatic' do update
      set content = excluded.content,
          topics  = excluded.topics,
          mood    = excluded.mood,
          people  = excluded.people,
-         -- Union dedup: preserve every thread the agent has ever
-         -- derived this day's entry from so the delete path can
-         -- add them all to journal_thread_excludes in one step.
-         source_thread_ids = (
-           select coalesce(array_agg(distinct x), array[]::uuid[])
-             from unnest(public.journal_entries.source_thread_ids || excluded.source_thread_ids) as x
-         ),
          updated_at = now()
   returning
     public.journal_entries.id,
+    public.journal_entries.thread_id,
     public.journal_entries.entry_date,
     public.journal_entries.source,
     public.journal_entries.content,
     public.journal_entries.topics,
     public.journal_entries.mood,
     public.journal_entries.people,
-    public.journal_entries.source_thread_ids,
     public.journal_entries.created_at,
     public.journal_entries.updated_at;
 end $$;
@@ -3059,13 +3090,30 @@ end $$;
 -- claimed". The excludes filter is the per-thread "do not journal"
 -- switch the delete path writes to.
 drop function if exists public.claim_next_thread_for_journal(text, int);
+drop function if exists public.claim_next_thread_for_journal(text, int);
 create or replace function public.claim_next_thread_for_journal(
   p_holder_id text,
   p_ttl_seconds int
-) returns table (thread_id uuid, terminal_msg_id uuid, title text)
+) returns table (
+  thread_id uuid,
+  terminal_msg_id uuid,
+  title text,
+  -- Conversation-start timestamp. The worker converts this into the
+  -- user's local timezone and uses it as the entry_date, so an entry
+  -- lands on the day the conversation actually happened on - NOT the
+  -- day the worker happens to be processing it. Worker idle past
+  -- midnight or processing a backlog would otherwise stamp every
+  -- entry with the current run-day and clobber prior entries via the
+  -- per-thread upsert.
+  thread_created_at timestamptz
+)
 language sql security invoker as $$
   with candidate as (
-    select t.id as thread_id, term.msg_id as terminal_msg_id, t.title as title
+    select
+      t.id as thread_id,
+      term.msg_id as terminal_msg_id,
+      t.title as title,
+      t.created_at as thread_created_at
       from public.threads t
       cross join lateral (
         select m.id as msg_id
@@ -3107,7 +3155,7 @@ language sql security invoker as $$
          journal_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where t.id = c.thread_id
-  returning t.id as thread_id, c.terminal_msg_id, c.title;
+  returning t.id as thread_id, c.terminal_msg_id, c.title, c.thread_created_at;
 $$;
 
 -- Mark the thread journaled IF our claim is still ours. Returns false
@@ -3204,11 +3252,14 @@ create or replace function public.search_journal_entries_by_embedding(
   topics text[],
   mood text,
   people text[],
+  thread_id uuid,
+  created_at timestamptz,
   updated_at timestamptz,
   similarity real
 )
 language sql stable security invoker as $$
-  select id, entry_date, source, content, topics, mood, people, updated_at,
+  select id, entry_date, source, content, topics, mood, people, thread_id,
+         created_at, updated_at,
          (1 - (embedding <=> query_embedding))::real as similarity
     from public.journal_entries
    where user_id = auth.uid()

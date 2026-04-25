@@ -102,10 +102,15 @@ Unlike memories, entries are not linked into a graph.
 
 In `supabase/schema.sql`:
 
-- `journal_entries` — unique `(user_id, entry_date,
-  source)`. Columns include `content`, `topics text[]`,
-  `mood`, `people text[]`, `source_thread_ids uuid[]`,
-  `embedding vector(2048)`, claim stamps.
+- `journal_entries` — multiple rows per `(user_id, entry_date)`
+  allowed. Automatic entries pin to a single source thread via
+  the `thread_id uuid` FK (on delete set null); a partial-unique
+  index on `(user_id, thread_id) WHERE source='automatic'`
+  enforces "one automatic entry per thread, ever" so a worker
+  re-running on the same thread extends the existing row rather
+  than creating a duplicate. User entries leave `thread_id` null.
+  Columns include `content`, `topics text[]`, `mood`, `people
+  text[]`, `embedding vector(2048)`, claim stamps.
 - `journal_thread_excludes` — `(user_id, thread_id)`.
   Populated when an automatic entry is deleted; the
   journaler's claim RPC filters these out.
@@ -118,12 +123,23 @@ In `supabase/schema.sql`:
 - RLS: `auth.uid() = user_id` on both tables.
 - Index on `(user_id, entry_date desc)`.
 - RPCs:
-  - `upsert_journal_automatic_entry` - on-conflict merge
-    with `source_thread_ids` union-deduped.
+  - `upsert_journal_automatic_entry(p_thread_id, ...)` -
+    on-conflict path keyed on `(user_id, thread_id)` WHERE
+    `source='automatic'`. `entry_date` is set on insert and
+    intentionally not updated on conflict (the entry's date is
+    the conversation-start day, fixed). Carries the
+    `#variable_conflict use_column` plpgsql directive so
+    `RETURNS TABLE` OUT-variable names don't collide with the
+    target table's column names.
   - `claim_next_thread_for_journal` - filters threads in
     `journal_thread_excludes`, gates on at least two user
     messages on the thread (skip one-shot Q&A) past
-    `last_journaled_msg_id`.
+    `last_journaled_msg_id`. Returns `thread_created_at` so
+    the worker can compute `entry_date` in the user's IANA
+    timezone (via `dateInZone` in `journal-day.ts`); pinning
+    on the conversation start day keeps an entry from drifting
+    onto whatever calendar day the worker happens to be
+    processing it on.
   - `mark_thread_journaled_if_claimed` - advances the
     pointer if the holder still owns the claim.
   - `claim_next_pending_journal_entry` +

@@ -49,6 +49,51 @@ export function todayInZone(tz: string | null | undefined): string {
 }
 
 /**
+ * Compute the YYYY-MM-DD calendar key for an arbitrary instant in the
+ * given IANA timezone. Same shape as `todayInZone` but for any
+ * timestamp - used by the journaling worker to bucket an automatic
+ * entry on the day the source conversation started, NOT the day the
+ * worker happens to be processing it. Without this distinction a
+ * worker that runs idle past midnight or chews through a backlog
+ * would stamp every entry with the current run-day.
+ *
+ * `instant` may be a Date or an ISO 8601 timestamp string (PostgREST
+ * returns timestamps as strings). Returns null on an unparseable
+ * input rather than throwing - the caller is expected to fall back to
+ * `todayInZone(tz)` when the conversation timestamp couldn't be read.
+ */
+export function dateInZone(
+  instant: Date | string,
+  tz: string | null | undefined
+): string | null {
+  const d = instant instanceof Date ? instant : new Date(instant);
+  if (Number.isNaN(d.getTime())) return null;
+  const options: Intl.DateTimeFormatOptions = {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  };
+  if (typeof tz === 'string' && tz.length > 0) {
+    options.timeZone = tz;
+  }
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', options).formatToParts(d);
+    const y = parts.find((p) => p.type === 'year')?.value ?? '';
+    const m = parts.find((p) => p.type === 'month')?.value ?? '';
+    const day = parts.find((p) => p.type === 'day')?.value ?? '';
+    if (y.length === 4 && m.length === 2 && day.length === 2) {
+      return `${y}-${m}-${day}`;
+    }
+  } catch {
+    // fall through
+  }
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
  * Best-effort detection of the browser / worker's own timezone for use
  * as a seed when the user hasn't set `journalTimezone` explicitly.
  * Returns 'UTC' when the runtime refuses to vend a zone.
