@@ -38,16 +38,31 @@ import type { ToolDef } from './types';
 const TITLE_MAX_CHARS = 80;
 
 /**
- * Trim, strip wrapping / trailing punctuation, cap length. Extracted so
- * the main-chat auto-title path and any future caller that wants the
- * same shape can share the logic without a copy. The regex matches the
- * original autoTitle's - both ASCII and Unicode "smart" quotes, plus
- * trailing periods / exclamation / question marks that the model
- * sometimes adds despite the system-prompt saying not to.
+ * Trim, collapse to the first non-empty line, strip wrapping / trailing
+ * punctuation, cap length. Extracted so the main-chat auto-title path
+ * and any future caller that wants the same shape can share the logic
+ * without a copy. The regex matches the original autoTitle's - both
+ * ASCII and Unicode "smart" quotes, plus trailing periods / exclamation
+ * / question marks that the model sometimes adds despite the system-
+ * prompt saying not to.
+ *
+ * First-line split: the model sometimes ignores the "concise 3-6 word
+ * title" instruction and stuffs its full response into the argument
+ * ("Holy Spirit Origins in Christianity\n\nThe concept of the ..."). A
+ * straight 80-char slice would then store a multi-line string whose
+ * second line is a truncated paragraph - the sidebar renders that as
+ * wrapped garbage. Taking only the first non-empty line recovers the
+ * intended title in the common case (line 1 is the title, line 2+ is
+ * spillover) and at worst yields a single truncated sentence rather
+ * than a multi-line one.
  */
 export function sanitizeTitle(raw: string): string {
-  return raw
-    .trim()
+  const firstLine =
+    raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? '';
+  return firstLine
     .replace(/^["'“”‘’]+|["'“”‘’.!?]+$/g, '')
     .trim()
     .slice(0, TITLE_MAX_CHARS);

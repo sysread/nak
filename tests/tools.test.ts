@@ -32,6 +32,7 @@ import {
   type Toolbox,
   type ToolDef,
 } from '../src/lib/tools';
+import { sanitizeTitle } from '../src/lib/tools/update_title';
 import type { SupabaseService } from '../src/lib/supabase';
 import type { VeniceClient } from '../src/lib/venice';
 
@@ -50,6 +51,7 @@ function mockSupabase(): {
     updateMemory: ReturnType<typeof vi.fn>;
     deleteMemory: ReturnType<typeof vi.fn>;
     decayMemoryConfidence: ReturnType<typeof vi.fn>;
+    renameThread: ReturnType<typeof vi.fn>;
   };
 } {
   const spies = {
@@ -80,6 +82,7 @@ function mockSupabase(): {
     // confidence. Default mock returns 0.5 — one halving from the 1.0
     // seed value.
     decayMemoryConfidence: vi.fn(async () => 0.5),
+    renameThread: vi.fn(async () => undefined),
   };
   // Cast is fine — the handlers only touch the methods we've implemented.
   const svc = spies as unknown as SupabaseService;
@@ -788,6 +791,72 @@ describe('memory_delete', () => {
   it('rejects a missing id', async () => {
     const { svc } = mockSupabase();
     await expect(tool.execute({}, ctxFor(svc))).rejects.toThrow(/id/);
+  });
+});
+
+describe('sanitizeTitle', () => {
+  // Observed failure: the model occasionally ignores the "concise 3-6
+  // word title" instruction and stuffs its full response into the
+  // title argument ("Holy Spirit Origins in Christianity\n\nThe
+  // concept of..."). Without the first-line collapse, the embedded
+  // newline survives and an 80-char slice stores a multi-line title
+  // whose second line is a truncated paragraph - the sidebar then
+  // renders it as wrapped garbage.
+  it('takes only the first non-empty line when the model embeds the response', () => {
+    const raw = 'Holy Spirit Origins in Christianity\n\nThe concept of the "Holy Spirit" (Greek: *P';
+    expect(sanitizeTitle(raw)).toBe('Holy Spirit Origins in Christianity');
+  });
+
+  it('skips leading blank lines and uses the first content line', () => {
+    expect(sanitizeTitle('\n\n  Lateral Thinking Definition  \n\nbody...')).toBe(
+      'Lateral Thinking Definition'
+    );
+  });
+
+  it('CRLF line endings split the same as LF', () => {
+    expect(sanitizeTitle('Pancake Recipe Tool Test\r\n\r\nSure, testing tool calls...')).toBe(
+      'Pancake Recipe Tool Test'
+    );
+  });
+
+  it('still trims and strips wrapping quotes on a single-line title', () => {
+    expect(sanitizeTitle('  "Casual Howdy Greeting."  ')).toBe('Casual Howdy Greeting');
+  });
+
+  it('caps a long single line at 80 chars (response-as-title fallback)', () => {
+    const raw =
+      'Hafa adai is a Chamorro greeting from Guam meaning "hello." It is not a band, common';
+    const out = sanitizeTitle(raw);
+    expect(out.length).toBeLessThanOrEqual(80);
+    expect(out).toBe(raw.slice(0, 80));
+  });
+
+  it('returns empty string when the input is only whitespace / newlines', () => {
+    expect(sanitizeTitle('\n\n   \r\n  ')).toBe('');
+  });
+});
+
+describe('update_title', () => {
+  const tool = TOOLS.find((t: ToolDef) => t.name === 'update_title')!;
+
+  it('passes the sanitised first line through to renameThread', async () => {
+    const { svc, spies } = mockSupabase();
+    const result = await tool.execute(
+      { title: 'Holy Spirit Origins in Christianity\n\nThe concept of the Holy Spirit...' },
+      ctxFor(svc)
+    );
+    expect(spies.renameThread).toHaveBeenCalledWith(
+      't-1',
+      'Holy Spirit Origins in Christianity'
+    );
+    expect(result).toEqual({ title: 'Holy Spirit Origins in Christianity' });
+  });
+
+  it('rejects a title that sanitises to empty', async () => {
+    const { svc } = mockSupabase();
+    await expect(
+      tool.execute({ title: '\n\n   \r\n  ' }, ctxFor(svc))
+    ).rejects.toThrow(/title/);
   });
 });
 
