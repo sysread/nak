@@ -55,8 +55,21 @@
   // override lasts until close/reopen.
   let levelFilter = $state<LogLevel>(app.defaultLogLevel);
 
+  // Multi-token search mode. The search string is split on whitespace
+  // into independent needles; `or` matches entries hitting any needle,
+  // `and` matches only entries hitting every needle. Both lose the
+  // adjacency-match behaviour of a single literal substring - users
+  // who want a literal "foo bar" phrase have to drop the space.
+  // Default is `or` because that's the discovery-friendly mode (typing
+  // a second token broadens, not narrows). Re-seeded on each open so
+  // a stray toggle doesn't carry across sessions.
+  let matchMode = $state<'or' | 'and'>('or');
+
   $effect(() => {
-    if (drawer.state.open) levelFilter = app.defaultLogLevel;
+    if (drawer.state.open) {
+      levelFilter = app.defaultLogLevel;
+      matchMode = 'or';
+    }
   });
 
   let search = $state('');
@@ -76,11 +89,21 @@
     error: 3,
   };
 
-  function entryMatches(e: LogEntry, threshold: LogLevel, needle: string): boolean {
+  function entryMatches(
+    e: LogEntry,
+    threshold: LogLevel,
+    needles: string[],
+    mode: 'or' | 'and'
+  ): boolean {
     if (LEVEL_RANK[e.level] < LEVEL_RANK[threshold]) return false;
-    if (needle.length === 0) return true;
-    const hay = (e.source ?? '') + ' ' + e.message + ' ' + detailsHaystack(e.details);
-    return hay.toLowerCase().includes(needle.toLowerCase());
+    if (needles.length === 0) return true;
+    const hay = (
+      (e.source ?? '') + ' ' + e.message + ' ' + detailsHaystack(e.details)
+    ).toLowerCase();
+    if (mode === 'and') {
+      return needles.every((n) => hay.includes(n.toLowerCase()));
+    }
+    return needles.some((n) => hay.includes(n.toLowerCase()));
   }
 
   function detailsHaystack(details: unknown[]): string {
@@ -108,8 +131,15 @@
     return parts.join(' ');
   }
 
+  // Whitespace-split tokens. Empty tokens (from leading / trailing /
+  // double spaces) are dropped so the user doesn't accidentally match
+  // every entry just by hitting space.
+  const needles = $derived(
+    search.trim().split(/\s+/).filter((s) => s.length > 0)
+  );
+
   const visible = $derived(
-    logs.entries.filter((e) => entryMatches(e, levelFilter, search.trim()))
+    logs.entries.filter((e) => entryMatches(e, levelFilter, needles, matchMode))
   );
 
   // Copy-to-clipboard for the currently-filtered entry set. Feeds
@@ -147,6 +177,7 @@
       buildTime: __APP_BUILD_TIME__,
       levelFilter,
       searchFilter: search,
+      searchMode: matchMode,
       totalEntries: logs.entries.length,
       shownEntries: visible.length,
       entries: visible.map((e) => ({
@@ -230,35 +261,57 @@
   }
 
   // Split `text` into runs of unmatched/matched substrings against the
-  // current search needle. Caller renders matched runs inside <mark>
+  // current search needles. Caller renders matched runs inside <mark>
   // for the search-highlight band, unmatched runs as plain text. Empty
-  // needle short-circuits to a single unmatched run so an empty filter
-  // produces no DOM churn vs. the pre-highlight render.
+  // needle list short-circuits to a single unmatched run so an empty
+  // filter produces no DOM churn vs. the pre-highlight render.
+  //
+  // Multi-needle highlighting: collect every match range across every
+  // needle, sort by start, merge overlaps, then walk the merged ranges
+  // to emit segments. Highlights are mode-agnostic - in OR mode we mark
+  // whichever needle hit; in AND mode every needle hit by definition,
+  // so the same logic produces the right rendering for both.
   function highlightSegments(
     text: string,
-    needle: string
+    queryNeedles: string[]
   ): Array<{ text: string; match: boolean }> {
-    if (needle.length === 0 || text.length === 0) {
+    if (queryNeedles.length === 0 || text.length === 0) {
       return [{ text, match: false }];
     }
-    const out: Array<{ text: string; match: boolean }> = [];
     const hay = text.toLowerCase();
-    const find = needle.toLowerCase();
-    let i = 0;
-    while (i < text.length) {
-      const at = hay.indexOf(find, i);
-      if (at === -1) {
-        out.push({ text: text.slice(i), match: false });
-        break;
+    const ranges: Array<[number, number]> = [];
+    for (const n of queryNeedles) {
+      if (n.length === 0) continue;
+      const find = n.toLowerCase();
+      let i = 0;
+      while (i < text.length) {
+        const at = hay.indexOf(find, i);
+        if (at === -1) break;
+        ranges.push([at, at + n.length]);
+        i = at + n.length;
       }
-      if (at > i) out.push({ text: text.slice(i, at), match: false });
-      out.push({ text: text.slice(at, at + needle.length), match: true });
-      i = at + needle.length;
     }
+    if (ranges.length === 0) return [{ text, match: false }];
+    ranges.sort((a, b) => a[0] - b[0]);
+    const merged: Array<[number, number]> = [];
+    for (const r of ranges) {
+      const last = merged[merged.length - 1];
+      if (last && r[0] <= last[1]) {
+        last[1] = Math.max(last[1], r[1]);
+      } else {
+        merged.push([r[0], r[1]]);
+      }
+    }
+    const out: Array<{ text: string; match: boolean }> = [];
+    let cursor = 0;
+    for (const [s, e] of merged) {
+      if (s > cursor) out.push({ text: text.slice(cursor, s), match: false });
+      out.push({ text: text.slice(s, e), match: true });
+      cursor = e;
+    }
+    if (cursor < text.length) out.push({ text: text.slice(cursor), match: false });
     return out;
   }
-
-  const needle = $derived(search.trim());
 
   function toggleExpanded(id: number): void {
     // Re-assign the Set so Svelte sees it as a new value; mutating in
@@ -432,16 +485,26 @@
         </div>
       </div>
       <div class="logs-controls-row">
-        <!-- Search syntax is substring-literal (case-insensitive). The
-             three attributes below stop mobile keyboards (iOS Safari
-             especially) from auto-capitalizing the first letter,
-             auto-correcting tokens like `id` -> `Id`, and rendering
-             red squiggles under code identifiers. autocorrect="off"
-             is Safari-specific but harmless elsewhere. -->
+        <!-- Search syntax is whitespace-tokenised, case-insensitive
+             substring per token. The mode select decides whether an
+             entry has to hit any token (Any) or every token (All).
+             The three input attributes below stop mobile keyboards
+             (iOS Safari especially) from auto-capitalizing the first
+             letter, auto-correcting tokens like `id` -> `Id`, and
+             rendering red squiggles under code identifiers.
+             autocorrect="off" is Safari-specific but harmless
+             elsewhere. -->
+        <label class="logs-mode">
+          <span class="visually-hidden">Match mode</span>
+          <select bind:value={matchMode} aria-label="Search match mode">
+            <option value="or">Any</option>
+            <option value="and">All</option>
+          </select>
+        </label>
         <input
           type="search"
           class="logs-search"
-          placeholder="Search"
+          placeholder="Search (space-separated)"
           bind:value={search}
           aria-label="Search logs"
           autocapitalize="off"
@@ -490,18 +553,18 @@
               <time class="log-time">{formatTimestamp(entry.timestamp)}</time>
               {#if entry.source}
                 <span class="log-source"
-                  >[{#each highlightSegments(entry.source, needle) as seg}{#if seg.match}<mark
+                  >[{#each highlightSegments(entry.source, needles) as seg}{#if seg.match}<mark
                         class="log-mark">{seg.text}</mark>{:else}{seg.text}{/if}{/each}]</span
                 >
               {/if}
               <span class="log-message"
-                >{#each highlightSegments(entry.message, needle) as seg}{#if seg.match}<mark
+                >{#each highlightSegments(entry.message, needles) as seg}{#if seg.match}<mark
                       class="log-mark">{seg.text}</mark>{:else}{seg.text}{/if}{/each}</span
               >
             </div>
             {#each inlineStringDetails(entry.details) as s}
               <div class="log-inline-detail"
-                >{#each highlightSegments(s, needle) as seg}{#if seg.match}<mark
+                >{#each highlightSegments(s, needles) as seg}{#if seg.match}<mark
                       class="log-mark">{seg.text}</mark>{:else}{seg.text}{/if}{/each}</div
               >
             {/each}
@@ -509,7 +572,7 @@
               <div class="log-structured">
                 {#each structuredDetails(entry.details) as d}
                   <pre class="log-structured-block"
-                    >{#each highlightSegments(formatStructured(d), needle) as seg}{#if seg.match}<mark
+                    >{#each highlightSegments(formatStructured(d), needles) as seg}{#if seg.match}<mark
                           class="log-mark">{seg.text}</mark>{:else}{seg.text}{/if}{/each}</pre>
                 {/each}
               </div>
@@ -580,6 +643,7 @@
      pins the visible box regardless of the browser's default
      padding. */
   .logs-level select,
+  .logs-mode select,
   .logs-search,
   .logs-copy,
   .logs-clear {
@@ -608,6 +672,15 @@
   .logs-level select {
     padding-right: 1.6rem;
     min-width: 6rem;
+  }
+
+  /* Same chevron-room treatment as the level dropdown, narrower
+     min-width because "Any" / "All" are short labels - sizing it
+     to 6rem like the level select would just leave dead space and
+     squeeze the search input. */
+  .logs-mode select {
+    padding-right: 1.4rem;
+    min-width: 4.2rem;
   }
 
   .logs-search {

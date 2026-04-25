@@ -189,7 +189,11 @@ Controls inside the drawer:
   resets on the next open.
 - **Search box** - case-insensitive substring match against the
   source tag, the message, and any structured details attached to
-  the entry.
+  the entry. Whitespace splits the input into independent tokens, so
+  `journal write=true` searches for two needles, not one literal
+  phrase. The **Any / All** dropdown next to the box decides whether
+  an entry has to hit at least one token (Any, the default) or every
+  token (All).
 - **Clear** - drops the current buffer. The live feed continues to
   populate from the next log event onward.
 
