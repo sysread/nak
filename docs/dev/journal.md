@@ -45,22 +45,22 @@ Unlike memories, entries are not linked into a graph.
     duplicates.
   - `prompt.ts` — `buildJournalPrompt({entryDate,
     existingEntry, threadId})`. Third-person observational
-    voice. Explicit include/exclude list. "AT MOST ONCE
-    upsert" discipline; skip-when-nothing-reflective
-    branch for purely technical conversations.
-  - `types.ts` — `JournalInput`, `JournalOutput`.
-- `src/lib/tools/journal_upsert.ts` — agent-only. Registered
-  in `journalAgentToolbox` (not user-exposed). Writes via
-  the `upsert_journal_automatic_entry` RPC which handles
-  the on-conflict merge.
+    voice. Tells the model to return one JSON object with
+    `worthy` (bool), `reasoning` (one sentence), and
+    `entry` (only when worthy=true). The agent parses the
+    response and writes through
+    `supabase.upsertJournalAutomaticEntry` directly - no
+    tool call - to avoid the double-JSON-escape failure
+    mode that ate writes when long Markdown bodies came
+    through as `tool_calls.arguments`.
+  - `types.ts` — `JournalInput`, `JournalOutput`,
+    `MAX_JOURNAL_CONTENT_CHARS`.
 - `src/lib/tools/journal_{list,read,search,delete}.ts` —
   user-facing tools; registered in `journalToolbox`, gated
   (user-toggleable in the chat composer's tool picker).
-- `src/lib/tools/journal_agent_toolbox.ts` — leaf file so
-  `agent.ts` can import the agent-only toolbox without
-  pulling the main-chat toolbox barrel (Vite IIFE / code-
-  split collision with `research_docs` → `docs.ts` lazy
-  glob).
+  The agent itself does NOT use any tool; it goes through
+  `response_format=json_object` and writes the entry
+  directly.
 - `src/lib/embeddings/sources/journal.ts` —
   `createJournalSource(supabase)`. Text =
   `${entry_date}\n${topics}\nmood: ${mood}\n\n${content}`.
@@ -171,14 +171,16 @@ and `journalTimezone?: string` (IANA zone).
   [embeddings.md](./embeddings.md).
 - **Tools.** `journalToolbox` (user-facing CRUD + search)
   is gated and toggleable in the composer's tool picker.
-  `journalAgentToolbox` (upsert only) is agent-private -
-  not registered in `TOOLBOXES`. See [tools.md](./tools.md).
+  The background agent does NOT use a tool to write; the
+  upsert goes through `response_format=json_object` and
+  a direct `supabase.upsertJournalAutomaticEntry` call.
+  See [tools.md](./tools.md).
 - **Settings.** The Journal pane owns the toggle +
   timezone + export buttons. See [settings.md](./settings.md).
 - **Chat.** The drawer gains a Journal tab between
   Recipes and (before) the other footer icons; the modal
-  reads `route.modal === 'reflections'` and
-  `route.reflection_date`. See [chat.md](./chat.md).
+  reads `route.modal === 'journal'` and
+  `route.journal_date`. See [chat.md](./chat.md).
 
 ## Gotchas
 
@@ -186,12 +188,20 @@ and `journalTimezone?: string` (IANA zone).
   `src/lib/agents/journal/`, NOT `.../reflection/` - the
   reflection folder is the memory-extraction agent. When
   grepping, use `journal` for this feature.
-- **Worker import graph.** `agent.ts` imports
-  `journalAgentToolbox` from the leaf file
-  `tools/journal_agent_toolbox.ts`, not from
-  `tools/index.ts`. The index barrel pulls in
-  `research_docs`, which lazy-globs `docs.ts`, which
-  breaks Vite's IIFE worker bundler.
+- **Structured output, not tools.** The agent talks to
+  Venice with `response_format: {type: 'json_object'}`
+  and parses the model's `{worthy, reasoning, entry?}`
+  payload. An earlier tool-call shape (`journal_upsert`)
+  ate too many writes to long-Markdown threads because
+  the entry body had to survive two layers of JSON
+  escaping (the streamed `tool_calls.arguments` string
+  on the wire, then the inner `content` field). Keeping
+  the journal body in a single layer of provider-issued
+  JSON dropped silent failures to near zero. If you ever
+  need a tool path back (e.g. for a future agent-driven
+  delete flow), expose a NEW tool rather than restoring
+  `journal_upsert` so the always-on JSON-output path
+  stays the only writer.
 - **Timezone recomputation per cycle.** `loop.ts`
   recomputes `entryDate` every iteration so an idle
   worker that straddles midnight still writes to the

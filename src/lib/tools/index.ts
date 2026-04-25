@@ -59,7 +59,6 @@ import { journalList } from './journal_list';
 import { journalRead } from './journal_read';
 import { journalSearch } from './journal_search';
 import { journalDelete } from './journal_delete';
-import { journalAgentToolbox } from './journal_agent_toolbox';
 
 /**
  * Always-on toolbox. Rides with every request regardless of the
@@ -623,7 +622,7 @@ export async function executeToolCall(
 // header for the IIFE/code-splitting failure mode that keeps it out
 // of `./index.ts`. The recall toolboxes live in their own files to
 // avoid a circular import - see those files' headers for why.
-export { memoryToolbox, recallToolbox, conversationRecallToolbox, journalAgentToolbox };
+export { memoryToolbox, recallToolbox, conversationRecallToolbox };
 
 export { toOpenAIToolDef, buildToolboxWireList, executeToolboxCall };
 export { toggleToolbox, updateTitle };

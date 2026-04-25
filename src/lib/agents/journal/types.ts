@@ -5,6 +5,15 @@
  * `runHeadlessToolLoop` path).
  */
 
+/**
+ * Hard cap on the agent's Markdown body. Lives here rather than next
+ * to the upsert call site because the embeddings worker also clamps
+ * to this length when building the journal entry's vector text - both
+ * sides agreeing on one constant keeps a long entry from getting
+ * truncated differently between storage and embedding.
+ */
+export const MAX_JOURNAL_CONTENT_CHARS = 16000;
+
 export interface JournalInput {
   /** Thread to journal - claimed by the worker before this runs. */
   threadId: string;
@@ -19,19 +28,20 @@ export interface JournalInput {
 }
 
 export interface JournalOutput {
-  /** Final text the model settled on. Usually a single filler word per prompt. */
+  /** Final text the model settled on (the raw JSON it produced). */
   finalText: string;
   /** Number of messages the agent saw on round 1 (observability). */
   inputMessageCount: number;
   /** Whether the agent actually wrote an entry this run. */
   entryWritten: boolean;
   /**
-   * Error message from the FIRST failed `journal_upsert` call this run,
-   * or null when none failed. Plumbed up so the worker log can show
-   * "wrote=false but the agent tried - here's the RPC error" instead of
-   * silently reporting wrote=false on a thread that the agent did try
-   * to journal. Null also means "agent never called the tool", which
-   * is the legitimate-skip path.
+   * The model's one-sentence rationale for whether this conversation
+   * merits a journal entry, copied straight out of the structured-
+   * response payload. Set on every non-parse-failure run - both write
+   * and skip paths - so the worker log can show the decision-with-why
+   * regardless of which way the model went. Null only when JSON parsing
+   * failed (the run gets `entryWritten=false` and the loop reads the
+   * fallback message off `finalText`).
    */
-  firstError: string | null;
+  reasoning: string | null;
 }

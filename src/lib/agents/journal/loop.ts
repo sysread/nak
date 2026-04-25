@@ -66,10 +66,13 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
 
   // Title is rendered as `"<title>"` so it's visually distinct in the
   // log even when it contains stray punctuation, and falls back to a
-  // bracketed sentinel when the auto-titler hasn't run yet.
+  // bracketed sentinel when the auto-titler hasn't run yet. Always
+  // appears at the END of a log line so the structured fields the
+  // operator scans for (`wrote=`, `reasoning=`, message ids) stay
+  // left-aligned and a long title can't push them off-screen.
   const titleTag = claim.title ? `"${claim.title}"` : '[untitled]';
   log.info(
-    `picked up thread ${claim.threadId} ${titleTag} @ msg ${claim.terminalMsgId}`
+    `picked up thread ${claim.threadId} @ msg ${claim.terminalMsgId} ${titleTag}`
   );
 
   // Compute today's date EVERY cycle rather than cache once per worker
@@ -119,25 +122,26 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       claim.terminalMsgId
     );
     if (marked) {
-      // Append the first failed-tool-call error when the agent tried but
-      // every attempt errored (wrote=false despite N tool calls). That's
-      // the case the user actually wants to debug; bare `wrote=false`
-      // looks identical for "agent decided not to journal" vs "every
-      // upsert RPC returned an error", and the two need different
-      // responses. Suppressed when wrote=true (irrelevant) or when there
-      // were no failures (firstError stays null).
-      const errorTag = runResult.output.firstError
-        ? `, firstError="${runResult.output.firstError}"`
-        : '';
+      // Reasoning comes straight from the model's structured output -
+      // it's the one-sentence "why this conversation merits a journal
+      // entry (or doesn't)" we ask for in the prompt. Falls back to a
+      // truncated head of the raw final text on parse failures so an
+      // operator can see what the model actually emitted instead of
+      // a bare "(parse failed)". The structured fields stay first so
+      // grep / scrollback searches for `wrote=` / `reasoning=` line
+      // up regardless of title length.
+      const reasoning =
+        runResult.output.reasoning ??
+        `(parse failed: ${runResult.output.finalText.slice(0, 120).replace(/\s+/g, ' ').trim()})`;
       log.info(
-        `finished thread ${claim.threadId} ${titleTag} ` +
+        `finished thread ${claim.threadId} ` +
           `(wrote=${runResult.output.entryWritten}, ` +
-          `${runResult.toolCalls} tool calls over ${runResult.output.inputMessageCount} messages` +
-          `${errorTag})`
+          `over ${runResult.output.inputMessageCount} messages, ` +
+          `reasoning="${reasoning}") ${titleTag}`
       );
     } else {
       log.debug(
-        `claim lost on thread ${claim.threadId} ${titleTag} - another device took over`
+        `claim lost on thread ${claim.threadId} - another device took over ${titleTag}`
       );
     }
     return marked ? 'journaled' : 'claim-lost';

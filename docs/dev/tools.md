@@ -291,16 +291,16 @@ The gated `research` toolbox carries:
   See `./cookbook.md`.
 - **Journal** - four user-facing tools
   (`journal_list`, `journal_read`, `journal_search`,
-  `journal_delete`) gated by the `journal` toolbox, plus
-  `journal_upsert` as an agent-only tool in
-  `journalAgentToolbox` (imported from the leaf file
-  `tools/journal_agent_toolbox.ts`, NOT from
-  `tools/index.ts`, to dodge a Vite worker-bundler
-  collision with `research_docs`'s lazy doc glob). The
-  store in `journal-store.svelte.ts` fans out a
-  `JOURNAL_CHANGE_EVENT` on every write so modal / drawer
-  surfaces refresh without a tools -> UI import. See
-  `./journal.md`.
+  `journal_delete`) gated by the `journal` toolbox. The
+  background journaling agent does NOT use a tool to
+  write; it goes through `response_format=json_object`
+  and calls `supabase.upsertJournalAutomaticEntry`
+  directly. See `./journal.md` for the rationale (long
+  Markdown bodies double-escaped through tool-call
+  arguments lost too many writes). The store in
+  `journal-store.svelte.ts` fans out a
+  `JOURNAL_CHANGE_EVENT` on every write so modal /
+  drawer surfaces refresh without a tools -> UI import.
 - **Reflection agent** - uses `memoryToolbox`, a write-scoped
   subset of the memory tools: `create / update / invalidate /
   search`, but NOT `delete` (agent can only soft-invalidate; hard

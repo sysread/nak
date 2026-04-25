@@ -52,9 +52,9 @@
   }
   let { onClose }: Props = $props();
 
-  // Cap parallels MAX_JOURNAL_CONTENT_CHARS in src/lib/tools/journal_upsert.ts
-  // - a user entry and an agent entry live in the same column, so they
-  // should respect the same ceiling.
+  // Cap parallels MAX_JOURNAL_CONTENT_CHARS in
+  // src/lib/agents/journal/types.ts - a user entry and an agent entry
+  // live in the same column, so they should respect the same ceiling.
   const MAX_ENTRY_CHARS = 16000;
   const MAX_MOOD_CHARS = 80;
   const MAX_TOPIC_CHARS = 60;

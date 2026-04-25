@@ -10,7 +10,7 @@
  */
 import type { SupabaseService } from '../../supabase';
 import type { EmbeddingSource, PendingItem } from '../types';
-import { MAX_JOURNAL_CONTENT_CHARS } from '../../tools/journal_upsert';
+import { MAX_JOURNAL_CONTENT_CHARS } from '../../agents/journal/types';
 
 /**
  * Compose the text Venice actually embeds. We lead with topics + mood

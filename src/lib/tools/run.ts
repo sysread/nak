@@ -141,27 +141,6 @@ export interface HeadlessToolLoopResult {
   rounds: number;
   /** Total number of tool calls issued across all rounds. */
   toolCalls: number;
-  /**
-   * Subset of `toolCalls` whose execute() returned without throwing.
-   * A tool call that produced an `{ ok: false, error }` row to the
-   * model is counted under `toolCalls` but NOT here. Callers that want
-   * to log "did this run accomplish anything" - e.g. the journal
-   * worker's `entryWritten` - must use this; using `toolCalls` would
-   * report success for runs whose only tool calls all errored out.
-   */
-  successfulToolCalls: number;
-  /**
-   * Error message from the FIRST failed tool call, or null when no
-   * tool call failed (or none were issued). Useful for log lines that
-   * want to explain why `successfulToolCalls === 0` despite
-   * `toolCalls > 0` - the journal worker uses this to surface "every
-   * upsert errored, here's what the RPC said" without having to plumb
-   * a per-call result list to the caller. Picks the first error
-   * deliberately: a recurring failure usually has the same cause, and
-   * the first message is the cleanest one (later ones can ride on the
-   * sanitised-arguments retry path and lose specificity).
-   */
-  firstError: string | null;
   /** True iff we stopped because of maxRounds rather than a clean finish. */
   stoppedByLimit: boolean;
 }
@@ -190,8 +169,6 @@ export async function runHeadlessToolLoop(
   let finalText = '';
   let rounds = 0;
   let toolCalls = 0;
-  let successfulToolCalls = 0;
-  let firstError: string | null = null;
   let stoppedByLimit = false;
 
   for (let round = 0; round < maxRounds; round++) {
@@ -281,11 +258,6 @@ export async function runHeadlessToolLoop(
       tool_calls: sanitizeToolCallsForWire(roundCalls),
     });
     for (const r of settled) {
-      if (r.ok) {
-        successfulToolCalls++;
-      } else if (firstError === null) {
-        firstError = r.error.message || String(r.error);
-      }
       const content = r.ok
         ? encodeToolContent({ ok: true, value: r.value })
         : encodeToolContent({ ok: false, error: r.error });
@@ -302,12 +274,5 @@ export async function runHeadlessToolLoop(
     }
   }
 
-  return {
-    finalText,
-    rounds,
-    toolCalls,
-    successfulToolCalls,
-    firstError,
-    stoppedByLimit,
-  };
+  return { finalText, rounds, toolCalls, stoppedByLimit };
 }
