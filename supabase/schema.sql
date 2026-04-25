@@ -2996,6 +2996,20 @@ create or replace function public.upsert_journal_automatic_entry(
   updated_at timestamptz
 )
 language plpgsql security invoker as $$
+#variable_conflict use_column
+-- The function returns a table whose columns share names with the
+-- target table (`entry_date`, `source`, `topics`, etc.). plpgsql
+-- treats `RETURNS TABLE (...)` columns as in-scope OUT variables, so
+-- an unqualified reference inside the body - notably the
+-- `on conflict (user_id, entry_date, source)` target list - resolves
+-- to BOTH the OUT variable AND the journal_entries column and Postgres
+-- raises `column reference "entry_date" is ambiguous`. The directive
+-- tells plpgsql to prefer the table column when a name overlaps,
+-- which is what we want everywhere in this body. Without it, the
+-- on-conflict clause errors on every settled thread that already has
+-- an automatic entry for the same day - i.e. every cycle after the
+-- first one - and the worker logs `wrote=false` for runs the agent
+-- did try to write.
 declare
   v_uid uuid := auth.uid();
 begin
