@@ -415,6 +415,27 @@
     }
   }
 
+  // Compact ISO-flavoured form ("SUN 2026-04-19") for the daily-view
+  // title. The long-form formatDateLong was the only multi-token
+  // element in the daynav row, and on a narrow viewport it forced the
+  // whole row (back / prev / next / today buttons) to wrap into four
+  // lines and balloon the header. Short weekday + ISO date keeps the
+  // title to a single line on any reasonable phone width.
+  function formatDateCompact(ymd: string): string {
+    const [y, m, d] = ymd.split('-').map((n) => Number.parseInt(n, 10));
+    if (!Number.isFinite(y)) return ymd;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    try {
+      const weekday = new Intl.DateTimeFormat(undefined, {
+        weekday: 'short',
+        timeZone: 'UTC',
+      }).format(dt);
+      return `${weekday.toUpperCase()} ${ymd}`;
+    } catch {
+      return ymd;
+    }
+  }
+
   function entryTags(entry: JournalEntry): string[] {
     const chips: string[] = [];
     if (entry.mood) chips.push(`mood: ${entry.mood}`);
@@ -500,7 +521,6 @@
             aria-label="Previous day"
             title="Previous day"
           >‹</button>
-          <h1 class="journal-title daily-title">{formatDateLong(focusedDate)}</h1>
           <button
             type="button"
             class="secondary"
@@ -518,6 +538,7 @@
             >Today</button>
           {/if}
         </div>
+        <h1 class="journal-title daily-title">{formatDateCompact(focusedDate)}</h1>
       {/if}
     </header>
 
@@ -1012,9 +1033,19 @@
   }
 
   .daily-title {
-    flex: 1;
+    /* Sits on its own row below .journal-daynav (see template). The
+       ISO-flavoured compact form (formatDateCompact - "SUN 2026-04-19")
+       lets the title stay a single line on a phone, and stepping the
+       size down from the journal-list h1 keeps the header chrome
+       visually quiet now that it spans two rows. text-align is offset
+       slightly left of viewport center on mobile because the header
+       carries `padding-right: 3rem` to clear the absolute-positioned
+       close button in the top-right; the offset is a fraction of an em
+       and reads as centered for a 14-character string. */
     text-align: center;
-    margin: 0;
+    margin: 0.4rem 0 0;
+    font-size: 0.95rem;
+    font-weight: 600;
   }
 
   .journal-blurb {
