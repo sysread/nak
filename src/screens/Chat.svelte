@@ -1293,6 +1293,15 @@
       // against a late response stomping newer state.
       if (activeThreadId !== id) return;
       messages = fetched;
+      // Land on the latest exchange. The auto-scroll effect is gated on
+      // an active completion (so a realtime echo can't hijack the view
+      // out from under the user), which means thread-load can't
+      // piggyback on it - do the snap explicitly here, after Svelte
+      // commits the new messages. Re-check activeThreadId post-tick: a
+      // fast thread-hop during the await would have us scrolling the
+      // wrong list otherwise.
+      await tick();
+      if (activeThreadId === id) scrollToBottom(false);
     } catch (err) {
       error = { text: err instanceof Error ? err.message : String(err) };
     }
@@ -2547,16 +2556,19 @@
 
   function firePendingStreamScroll(): void {
     cancelScrollTimers();
-    // Re-check followBottom at fire time: the user may have scrolled
-    // up while the timer was pending, and scroll-lock honors current
-    // intent rather than the intent at the moment the timer was set.
-    if (followBottom) scrollToBottom(false);
+    // Re-check both gates at fire time. The user may have scrolled up
+    // while the timer was pending, and the completion may have ended
+    // between schedule and fire (max-wait of 300ms can outlive the
+    // final round of streaming) - either condition disables auto-scroll.
+    if (sending && followBottom) scrollToBottom(false);
   }
 
   function scheduleStreamScroll(): void {
-    if (!followBottom) {
-      // Scroll-lock engaged — drop any pending scrolls so a stale
-      // timer doesn't fight the user after they scroll up.
+    if (!sending || !followBottom) {
+      // Auto-scroll only runs while a completion is in progress and
+      // scroll-lock isn't engaged. Drop any pending scrolls so a stale
+      // timer doesn't yank the view after the user scrolls up or after
+      // the completion ends.
       cancelScrollTimers();
       return;
     }
@@ -2582,18 +2594,24 @@
   // the simplest way to get "debounce tokens, snap on commits" without
   // prev-value bookkeeping inside a single effect.
 
-  // Message-list mutations — user send, assistant-persist, thread load,
-  // thread switch. These mark a clean transition and should land the
-  // view on the bottom immediately. Firing here also supersedes any
-  // pending streaming debounce: the commit we just observed is the
-  // latest state, so a stale late-firing timer would just flicker.
+  // Message-list mutations during an active completion - user send,
+  // assistant-persist, regenerate-drop. These mark a clean transition
+  // and should land the view on the bottom immediately. Firing here
+  // also supersedes any pending streaming debounce: the commit we just
+  // observed is the latest state, so a stale late-firing timer would
+  // just flicker.
+  //
+  // Gated on `sending` so a delayed realtime echo or cross-tab mutation
+  // arriving after the completion ends doesn't yank the view back to
+  // the bottom. Thread-load lands on the bottom via the explicit
+  // scrollToBottom in loadMessages, not via this effect.
   $effect(() => {
     void messages;
     const el = messagesEl;
     if (!el) return;
     hasOverflow = el.scrollHeight > el.clientHeight + 1;
     cancelScrollTimers();
-    if (followBottom) scrollToBottom(false);
+    if (sending && followBottom) scrollToBottom(false);
   });
 
   // Streaming deltas — debounced with a max-wait cap. Tracks both the
