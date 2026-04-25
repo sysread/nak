@@ -94,6 +94,7 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       input: {
         threadId: claim.threadId,
         terminalMsgId: claim.terminalMsgId,
+        holderId: ctx.holderId,
         entryDate,
       },
       userId: ctx.userId,
@@ -111,47 +112,56 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   if (runResult.stoppedReason === 'aborted') return 'empty-queue';
 
   if (runResult.stoppedReason === 'error') {
-    log.debug(
-      `thread ${claim.threadId} agent reported error`,
-      runResult.error ?? '(no message)'
+    // The atomic upsert+mark RPC raises on either an upsert failure
+    // (constraint, RLS) or a claim-lost during its mark step, and
+    // the schema function rolls BOTH halves of its transaction back
+    // before the exception propagates. So when the agent reports an
+    // error here, the entry isn't in the DB AND the pointer didn't
+    // advance - the thread stays in the queue for next cycle. We
+    // explicitly do NOT fall through to a separate mark; that would
+    // re-introduce the "pointer advances even though we couldn't
+    // write" race the atomic RPC exists to prevent.
+    log.info(
+      `thread ${claim.threadId} agent reported error: ` +
+        `${runResult.error ?? '(no message)'} ${titleTag}`
     );
     return 'error';
   }
 
-  // Mark even when no tool call fired. The prompt allows the agent to
-  // skip the upsert when the conversation has nothing reflective; in
-  // that case we still want the pointer to advance so we don't
-  // reconsider the same messages next cycle.
+  // Reasoning comes straight from the model's structured output -
+  // it's the one-sentence "why this conversation merits a journal
+  // entry (or doesn't)" we ask for in the prompt. Falls back to a
+  // truncated head of the raw final text on parse failures so an
+  // operator can see what the model actually emitted instead of a
+  // bare "(parse failed)". The structured fields stay first so grep /
+  // scrollback searches for `wrote=` / `reasoning=` line up regardless
+  // of title length.
+  const reasoning =
+    runResult.output.reasoning ??
+    `(parse failed: ${runResult.output.finalText.slice(0, 120).replace(/\s+/g, ' ').trim()})`;
+
+  // When the agent wrote an entry it used the atomic upsert+mark RPC,
+  // so the pointer-advance already landed inside that transaction.
+  // The loop's job here is just to log the outcome. When the agent
+  // skipped (worthy=false or parse failure) the pointer hasn't
+  // advanced yet; we mark separately so the worker doesn't reconsider
+  // the same conversation next cycle.
+  if (runResult.output.entryWritten) {
+    log.info(
+      `finished thread ${claim.threadId} ` +
+        `(wrote=true, over ${runResult.output.inputMessageCount} messages, ` +
+        `reasoning="${reasoning}") ${titleTag}`
+    );
+    return 'journaled';
+  }
+
+  let marked = false;
   try {
-    const marked = await ctx.supabase.markThreadJournaledIfClaimed(
+    marked = await ctx.supabase.markThreadJournaledIfClaimed(
       claim.threadId,
       ctx.holderId,
       claim.terminalMsgId
     );
-    if (marked) {
-      // Reasoning comes straight from the model's structured output -
-      // it's the one-sentence "why this conversation merits a journal
-      // entry (or doesn't)" we ask for in the prompt. Falls back to a
-      // truncated head of the raw final text on parse failures so an
-      // operator can see what the model actually emitted instead of
-      // a bare "(parse failed)". The structured fields stay first so
-      // grep / scrollback searches for `wrote=` / `reasoning=` line
-      // up regardless of title length.
-      const reasoning =
-        runResult.output.reasoning ??
-        `(parse failed: ${runResult.output.finalText.slice(0, 120).replace(/\s+/g, ' ').trim()})`;
-      log.info(
-        `finished thread ${claim.threadId} ` +
-          `(wrote=${runResult.output.entryWritten}, ` +
-          `over ${runResult.output.inputMessageCount} messages, ` +
-          `reasoning="${reasoning}") ${titleTag}`
-      );
-    } else {
-      log.debug(
-        `claim lost on thread ${claim.threadId} - another device took over ${titleTag}`
-      );
-    }
-    return marked ? 'journaled' : 'claim-lost';
   } catch (err) {
     log.debug(
       `mark RPC threw for thread ${claim.threadId}`,
@@ -159,6 +169,18 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     );
     return 'error';
   }
+  if (marked) {
+    log.info(
+      `finished thread ${claim.threadId} ` +
+        `(wrote=false, over ${runResult.output.inputMessageCount} messages, ` +
+        `reasoning="${reasoning}") ${titleTag}`
+    );
+    return 'journaled';
+  }
+  log.debug(
+    `claim lost on thread ${claim.threadId} - another device took over ${titleTag}`
+  );
+  return 'claim-lost';
 }
 
 export interface NapConfig {

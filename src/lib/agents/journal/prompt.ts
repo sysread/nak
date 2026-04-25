@@ -21,7 +21,7 @@
  * on the streamChat call, then re-asserted in this prompt as a
  * worked example. The agent does NOT call any tool - the worker
  * parses the JSON the model returns and writes the entry directly
- * via `supabase.upsertJournalAutomaticEntry` when `worthy=true`.
+ * via `supabase.upsertJournalEntryAndMarkThread` when `worthy=true`.
  *
  * Why structured output instead of a `journal_upsert` tool call:
  *

@@ -2905,11 +2905,20 @@ alter table public.journal_entries
 
 -- One automatic entry per (user, thread). Enforces the worker's
 -- "extend a thread's existing entry rather than create a duplicate"
--- contract; user-authored entries (thread_id IS NULL) are exempt and
--- can be created freely without colliding.
+-- contract. The upsert RPC checks `thread_id IS NOT NULL` upstream
+-- via a `raise exception`, so the partial-unique predicate stays at
+-- just `source = 'automatic'` - matching the ON CONFLICT clause's
+-- predicate exactly. Postgres requires the constraint's predicate
+-- and the on-conflict clause's predicate to be identical, otherwise
+-- it raises "no unique or exclusion constraint matching the ON
+-- CONFLICT specification". Drop-and-recreate (idempotent on fresh
+-- installs since the drop is `if exists`) so a database that synced
+-- the earlier `... and thread_id is not null` predicate gets the
+-- corrected one without manual intervention.
+drop index if exists public.journal_entries_user_thread_unique;
 create unique index if not exists journal_entries_user_thread_unique
   on public.journal_entries (user_id, thread_id)
-  where source = 'automatic' and thread_id is not null;
+  where source = 'automatic';
 
 -- Older databases carry a `source_thread_ids uuid[]` column from the
 -- one-entry-per-day era. The column has no consumer after the schema
@@ -3001,87 +3010,13 @@ alter table public.threads
   add column if not exists journal_claim_holder text,
   add column if not exists journal_claim_expires_at timestamptz;
 
--- Upsert the automatic entry for a single thread. Idempotent on
--- (user_id, thread_id) WHERE source='automatic': the agent calls this
--- once per thread per worker cycle, and the conflict path merges the
--- call into the existing row when the worker re-runs (the user added
--- more turns mid-day and the thread re-qualified). Topics, people,
--- mood, content are all overwritten with the agent's latest view -
--- the prompt instructs the agent to produce a CONSOLIDATED narrative
--- covering the whole conversation so far, not a diff.
---
--- entry_date is set on insert and intentionally NOT updated on
--- conflict: the entry's date is whichever calendar day the
--- conversation started on, and that doesn't change just because the
--- worker re-ran on a fresh turn the next morning.
+-- The standalone `upsert_journal_automatic_entry` RPC has been
+-- replaced by the atomic `upsert_journal_entry_and_mark_thread`
+-- below (entry write + pointer-advance in one transaction). Drop
+-- the old signatures so a project that synced an earlier shape of
+-- the schema doesn't carry a stale function around.
 drop function if exists public.upsert_journal_automatic_entry(date, text, text[], text, text[], uuid[]);
 drop function if exists public.upsert_journal_automatic_entry(uuid, date, text, text[], text, text[]);
-create or replace function public.upsert_journal_automatic_entry(
-  p_thread_id uuid,
-  p_entry_date date,
-  p_content text,
-  p_topics text[],
-  p_mood text,
-  p_people text[]
-) returns table (
-  id uuid,
-  thread_id uuid,
-  entry_date date,
-  source text,
-  content text,
-  topics text[],
-  mood text,
-  people text[],
-  created_at timestamptz,
-  updated_at timestamptz
-)
-language plpgsql security invoker as $$
-#variable_conflict use_column
--- The function returns a table whose columns share names with the
--- target table (`entry_date`, `thread_id`, `source`, `topics`, ...).
--- plpgsql treats `RETURNS TABLE (...)` columns as in-scope OUT
--- variables, so an unqualified reference inside the body - notably
--- the `on conflict (user_id, thread_id) where source='automatic'`
--- target - resolves to BOTH the OUT variable AND the table column,
--- and Postgres raises `column reference "thread_id" is ambiguous`.
--- The directive tells plpgsql to prefer the table column when a
--- name overlaps, which is what we want everywhere in this body.
-declare
-  v_uid uuid := auth.uid();
-begin
-  if v_uid is null then
-    raise exception 'not authenticated';
-  end if;
-  if p_thread_id is null then
-    raise exception 'thread_id is required for automatic entries';
-  end if;
-  return query
-  insert into public.journal_entries (
-    user_id, thread_id, entry_date, source, content, topics, mood, people
-  ) values (
-    v_uid, p_thread_id, p_entry_date, 'automatic', p_content,
-    coalesce(p_topics, array[]::text[]),
-    p_mood,
-    coalesce(p_people, array[]::text[])
-  )
-  on conflict (user_id, thread_id) where source = 'automatic' do update
-     set content = excluded.content,
-         topics  = excluded.topics,
-         mood    = excluded.mood,
-         people  = excluded.people,
-         updated_at = now()
-  returning
-    public.journal_entries.id,
-    public.journal_entries.thread_id,
-    public.journal_entries.entry_date,
-    public.journal_entries.source,
-    public.journal_entries.content,
-    public.journal_entries.topics,
-    public.journal_entries.mood,
-    public.journal_entries.people,
-    public.journal_entries.created_at,
-    public.journal_entries.updated_at;
-end $$;
 
 -- Claim the oldest thread that needs journaling. Parallels
 -- `claim_next_thread_for_reflection`; the predicate is "terminal
@@ -3182,6 +3117,118 @@ begin
      and journal_claim_expires_at > now();
   get diagnostics updated = row_count;
   return updated > 0;
+end $$;
+
+-- Atomic write+mark for a worthy worker run. The journaling worker
+-- needs the entry's existence and the thread's pointer-advance to
+-- happen in lockstep: a successful entry write that fails to advance
+-- the pointer would re-process the same conversation next cycle (and
+-- write the same entry idempotently, but waste a Venice call); a
+-- pointer advance without a successful entry write would orphan the
+-- conversation (no row stored, but the worker thinks it's done). An
+-- earlier shape of this pipeline split the upsert and the mark into
+-- two RPCs which the worker called in sequence, leaving a window
+-- between them where one could succeed and the other fail.
+--
+-- This function does both in a single plpgsql transaction. Postgres
+-- runs every function body as a transaction by default; raising any
+-- exception (including the explicit one below for claim-lost) rolls
+-- back BOTH the upsert and the mark. The result: if the function
+-- returns successfully the entry exists AND the pointer advanced;
+-- if it raises the entry doesn't exist (rolled back) AND the
+-- pointer didn't advance.
+--
+-- Claim-lost handling: if the mark UPDATE matched zero rows (TTL
+-- expired, another holder grabbed the row, the user cleared the
+-- claim) we raise an exception so the upsert rolls back. Without
+-- this, the agent's content would land in a row owned by whoever
+-- holds the claim now, and the original worker would think it
+-- succeeded. The other holder will rewrite the entry on its own
+-- cycle from its own model run; we don't want this worker's draft
+-- to outlive its lease.
+drop function if exists public.upsert_journal_entry_and_mark_thread(uuid, text, uuid, date, text, text[], text, text[]);
+create or replace function public.upsert_journal_entry_and_mark_thread(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_msg_id uuid,
+  p_entry_date date,
+  p_content text,
+  p_topics text[],
+  p_mood text,
+  p_people text[]
+) returns table (
+  id uuid,
+  thread_id uuid,
+  entry_date date,
+  source text,
+  content text,
+  topics text[],
+  mood text,
+  people text[],
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql security invoker as $$
+#variable_conflict use_column
+declare
+  v_uid uuid := auth.uid();
+  v_marked int;
+begin
+  if v_uid is null then
+    raise exception 'not authenticated';
+  end if;
+  if p_thread_id is null then
+    raise exception 'thread_id is required for automatic entries';
+  end if;
+
+  -- Step 1: upsert the entry. Same shape as
+  -- upsert_journal_automatic_entry; kept inline here so the function
+  -- body is one self-contained transaction (a SELECT against another
+  -- function would still be in the same transaction, but inlining
+  -- removes the round-trip-through-CTE shape).
+  return query
+  insert into public.journal_entries (
+    user_id, thread_id, entry_date, source, content, topics, mood, people
+  ) values (
+    v_uid, p_thread_id, p_entry_date, 'automatic', p_content,
+    coalesce(p_topics, array[]::text[]),
+    p_mood,
+    coalesce(p_people, array[]::text[])
+  )
+  on conflict (user_id, thread_id) where source = 'automatic' do update
+     set content = excluded.content,
+         topics  = excluded.topics,
+         mood    = excluded.mood,
+         people  = excluded.people,
+         updated_at = now()
+  returning
+    public.journal_entries.id,
+    public.journal_entries.thread_id,
+    public.journal_entries.entry_date,
+    public.journal_entries.source,
+    public.journal_entries.content,
+    public.journal_entries.topics,
+    public.journal_entries.mood,
+    public.journal_entries.people,
+    public.journal_entries.created_at,
+    public.journal_entries.updated_at;
+
+  -- Step 2: advance the thread pointer IF our claim is still ours.
+  -- Same predicate as `mark_thread_journaled_if_claimed`.
+  update public.threads
+     set last_journaled_msg_id = p_msg_id,
+         journal_claim_holder = null,
+         journal_claim_expires_at = null
+   where id = p_thread_id
+     and user_id = v_uid
+     and journal_claim_holder = p_holder_id
+     and journal_claim_expires_at > now();
+  get diagnostics v_marked = row_count;
+  if v_marked = 0 then
+    raise exception
+      'claim lost on thread % during atomic upsert; rolling back',
+      p_thread_id;
+  end if;
 end $$;
 
 -- Embeddings pipeline RPCs for journal entries. Same claim/save

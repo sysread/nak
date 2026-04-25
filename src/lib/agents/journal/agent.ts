@@ -5,7 +5,12 @@
  * entry (so the prompt can tell the agent to extend rather than
  * duplicate), call Venice with `response_format: {type:'json_object'}`,
  * parse the model's structured decision, and - when `worthy=true` -
- * write the entry directly via `supabase.upsertJournalAutomaticEntry`.
+ * write the entry AND advance the thread's `last_journaled_msg_id`
+ * pointer in a single atomic Postgres transaction via
+ * `supabase.upsertJournalEntryAndMarkThread`. The atomicity matters:
+ * a successful entry write that fails to advance the pointer would
+ * loop the worker on the same conversation; a pointer advance
+ * without a successful entry write would orphan it.
  *
  * Mirrors `../reflection/agent.ts` in the thread-fetch / slice / model
  * pinning pieces but diverges in three ways:
@@ -46,6 +51,7 @@
 import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
 import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
+import { createLogger } from '../../logger.svelte';
 import { sanitizeToolCallsForWire } from '../../tools/wire';
 import type { ReasoningEffort } from '../../models';
 import { buildJournalPrompt } from './prompt';
@@ -54,6 +60,11 @@ import {
   type JournalInput,
   type JournalOutput,
 } from './types';
+
+// Log under the same source as `loop.ts` so a Logs-drawer filter for
+// "journal-worker" picks up everything from this pipeline - the
+// loop's lifecycle lines and the agent's mid-cycle progress notes.
+const log = createLogger('journal-worker');
 
 /**
  * Model the journaling agent runs against. Literal id rather than a
@@ -332,6 +343,19 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
         }),
       });
 
+      // Mid-cycle progress note. The Venice call below can take tens
+      // of seconds on a long thread + medium reasoning effort, and
+      // without a log line between "picked up thread X" and "finished
+      // thread X" the worker looks frozen to anyone scanning the
+      // logs. The note also surfaces "Venice itself is unreachable"
+      // separately from "agent reasoned through a skip" - if the
+      // reachable-Venice line lands but the finished-thread line
+      // never does, the streamChat call hung.
+      log.info(
+        `asking model about thread ${req.input.threadId} ` +
+          `(${slice.length} messages, ${existingEntry ? 'extending prior entry' : 'first pass'})`
+      );
+
       // Single streaming call. No tool loop - structured output makes
       // the round-trip a one-shot. Drain text events into finalText;
       // ignore reasoning / usage / citations.
@@ -390,16 +414,27 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
         };
       }
 
-      // Worthy + entry present: write through the supabase service
-      // directly. The RPC's on-conflict path is keyed on
-      // (user_id, thread_id) WHERE source='automatic', so a re-run
-      // on this same thread overwrites the model's prior view rather
-      // than creating a duplicate row. entry_date is set on insert
-      // and intentionally not updated on conflict (the entry's date
-      // is the conversation-start day, fixed).
+      // Mid-cycle progress note for the write path. Same rationale
+      // as the "asking model" line above - if the atomic upsert hangs
+      // or fails, the user can see the write was attempted and which
+      // thread it was for without having to stare at a silent gap.
+      log.info(
+        `writing entry for thread ${req.input.threadId} ` +
+          `(${decision.entry.content.length} chars)`
+      );
+
+      // Worthy + entry present: write through the atomic upsert+mark
+      // RPC. The schema function does both the entry upsert and the
+      // thread's pointer-advance in one Postgres transaction - so an
+      // entry only exists when the pointer also advanced, and a
+      // claim-lost during the mark step rolls the upsert back. The
+      // worker won't end up with an orphan row whose claim has
+      // expired and which a re-run would just overwrite.
       try {
-        await this.supabase.upsertJournalAutomaticEntry({
+        await this.supabase.upsertJournalEntryAndMarkThread({
           threadId: req.input.threadId,
+          holderId: req.input.holderId,
+          msgId: req.input.terminalMsgId,
           entryDate: req.input.entryDate,
           content: decision.entry.content,
           topics: decision.entry.topics,
@@ -407,9 +442,12 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
           people: decision.entry.people,
         });
       } catch (err) {
-        // Surface the upsert failure as the run error so the loop
-        // logs it. The reasoning is still useful here (it's the
-        // model's case for writing); both fields land in the log.
+        // Surface the failure as the run error so the loop logs it
+        // and DOES NOT call its own mark step. Whether the failure
+        // came from the upsert (predicate mismatch, RLS) or the
+        // mark (claim lost, raised inside the function), the schema
+        // transaction has rolled BOTH halves back - there's nothing
+        // for the loop to compensate for.
         return {
           output: {
             finalText,

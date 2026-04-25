@@ -1443,37 +1443,47 @@ export class SupabaseService {
   }
 
   /**
-   * Upsert the automatic entry for a single thread via the schema
-   * RPC. Idempotent on (user_id, thread_id) WHERE source='automatic':
-   * the worker re-runs on the same thread when the user adds more
-   * turns, and the conflict path lets the agent extend its existing
-   * narrative rather than creating duplicates. `entry_date` is set on
-   * insert and intentionally not updated on conflict (the entry's
-   * date is the conversation-start day, which doesn't change just
-   * because the worker re-ran).
+   * Atomic upsert + thread-pointer-advance for the journaling
+   * worker. The schema RPC runs both in a single Postgres
+   * transaction so the entry's existence and the thread's
+   * pointer-advance can't disagree:
    *
-   * RPC return doesn't include the embedded thread title; the caller
-   * (the agent) doesn't need it for the write path.
+   *   - Successful return: entry is in the DB AND
+   *     `last_journaled_msg_id` advanced to `msgId`.
+   *   - Throw: entry was rolled back AND pointer didn't advance.
+   *
+   * Throws on claim-lost (the schema function raises an exception
+   * when the claim TTL expired or another holder took over). The
+   * worker logs the failure and returns the cycle as 'error', and
+   * the thread stays in the queue for the next cycle - the next
+   * holder will redo the work.
    */
-  async upsertJournalAutomaticEntry(args: {
+  async upsertJournalEntryAndMarkThread(args: {
     threadId: string;
+    holderId: string;
+    msgId: string;
     entryDate: string;
     content: string;
     topics: string[];
     mood: string | null;
     people: string[];
   }): Promise<JournalEntry> {
-    const { data, error } = await this.client.rpc('upsert_journal_automatic_entry', {
-      p_thread_id: args.threadId,
-      p_entry_date: args.entryDate,
-      p_content: args.content,
-      p_topics: args.topics,
-      p_mood: args.mood,
-      p_people: args.people,
-    });
+    const { data, error } = await this.client.rpc(
+      'upsert_journal_entry_and_mark_thread',
+      {
+        p_thread_id: args.threadId,
+        p_holder_id: args.holderId,
+        p_msg_id: args.msgId,
+        p_entry_date: args.entryDate,
+        p_content: args.content,
+        p_topics: args.topics,
+        p_mood: args.mood,
+        p_people: args.people,
+      }
+    );
     if (error) throw new SupabaseError(error.message);
     const rows = (data ?? []) as Record<string, unknown>[];
-    if (rows.length === 0) throw new SupabaseError('Upsert returned no row.');
+    if (rows.length === 0) throw new SupabaseError('Atomic upsert returned no row.');
     return coerceJournalEntry(rows[0]);
   }
 
