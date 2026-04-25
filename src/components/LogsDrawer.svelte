@@ -229,6 +229,37 @@
     }
   }
 
+  // Split `text` into runs of unmatched/matched substrings against the
+  // current search needle. Caller renders matched runs inside <mark>
+  // for the search-highlight band, unmatched runs as plain text. Empty
+  // needle short-circuits to a single unmatched run so an empty filter
+  // produces no DOM churn vs. the pre-highlight render.
+  function highlightSegments(
+    text: string,
+    needle: string
+  ): Array<{ text: string; match: boolean }> {
+    if (needle.length === 0 || text.length === 0) {
+      return [{ text, match: false }];
+    }
+    const out: Array<{ text: string; match: boolean }> = [];
+    const hay = text.toLowerCase();
+    const find = needle.toLowerCase();
+    let i = 0;
+    while (i < text.length) {
+      const at = hay.indexOf(find, i);
+      if (at === -1) {
+        out.push({ text: text.slice(i), match: false });
+        break;
+      }
+      if (at > i) out.push({ text: text.slice(i, at), match: false });
+      out.push({ text: text.slice(at, at + needle.length), match: true });
+      i = at + needle.length;
+    }
+    return out;
+  }
+
+  const needle = $derived(search.trim());
+
   function toggleExpanded(id: number): void {
     // Re-assign the Set so Svelte sees it as a new value; mutating in
     // place wouldn't retrigger the $state proxy for Set-typed fields.
@@ -401,12 +432,21 @@
         </div>
       </div>
       <div class="logs-controls-row">
+        <!-- Search syntax is substring-literal (case-insensitive). The
+             three attributes below stop mobile keyboards (iOS Safari
+             especially) from auto-capitalizing the first letter,
+             auto-correcting tokens like `id` -> `Id`, and rendering
+             red squiggles under code identifiers. autocorrect="off"
+             is Safari-specific but harmless elsewhere. -->
         <input
           type="search"
           class="logs-search"
           placeholder="Search"
           bind:value={search}
           aria-label="Search logs"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
         />
       </div>
     </div>
@@ -449,17 +489,28 @@
               <span class="log-level-badge">{entry.level.toUpperCase()}</span>
               <time class="log-time">{formatTimestamp(entry.timestamp)}</time>
               {#if entry.source}
-                <span class="log-source">[{entry.source}]</span>
+                <span class="log-source"
+                  >[{#each highlightSegments(entry.source, needle) as seg}{#if seg.match}<mark
+                        class="log-mark">{seg.text}</mark>{:else}{seg.text}{/if}{/each}]</span
+                >
               {/if}
-              <span class="log-message">{entry.message}</span>
+              <span class="log-message"
+                >{#each highlightSegments(entry.message, needle) as seg}{#if seg.match}<mark
+                      class="log-mark">{seg.text}</mark>{:else}{seg.text}{/if}{/each}</span
+              >
             </div>
             {#each inlineStringDetails(entry.details) as s}
-              <div class="log-inline-detail">{s}</div>
+              <div class="log-inline-detail"
+                >{#each highlightSegments(s, needle) as seg}{#if seg.match}<mark
+                      class="log-mark">{seg.text}</mark>{:else}{seg.text}{/if}{/each}</div
+              >
             {/each}
             {#if hasStructured && isOpen}
               <div class="log-structured">
                 {#each structuredDetails(entry.details) as d}
-                  <pre class="log-structured-block">{formatStructured(d)}</pre>
+                  <pre class="log-structured-block"
+                    >{#each highlightSegments(formatStructured(d), needle) as seg}{#if seg.match}<mark
+                          class="log-mark">{seg.text}</mark>{:else}{seg.text}{/if}{/each}</pre>
                 {/each}
               </div>
             {/if}
@@ -694,6 +745,20 @@
     font-size: 0.97em;
     max-height: 40vh;
     overflow: auto;
+  }
+
+  /* Search-match highlight. `--accent-weak` is the theme's pastel
+     companion to `--accent` - light pastels in light mode, dark
+     accent shades in dark mode - so the band reads as a soft
+     foreground tint without competing with the accent itself.
+     Forcing `color: var(--text)` overrides the user-agent default
+     <mark> styling (yellow bg + black text) so the matched run
+     stays legible in both themes regardless of accent palette. */
+  .log-mark {
+    background: var(--accent-weak);
+    color: var(--text);
+    padding: 0 1px;
+    border-radius: 2px;
   }
 
   .visually-hidden {
