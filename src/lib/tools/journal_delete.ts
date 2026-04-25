@@ -18,7 +18,10 @@
  * is just a row removal.
  */
 import type { ToolDef } from './types';
-import { trainSpamFilterForThread } from '../agents/journal/spam_filter';
+import {
+  trainSpamFilterForThread,
+  untrainSpamFilterForThread,
+} from '../agents/journal/spam_filter';
 
 export const journalDelete: ToolDef = {
   name: 'journal_delete',
@@ -61,7 +64,14 @@ export const journalDelete: ToolDef = {
     // conversation should NOT auto-journal" signal. journal_thread_excludes
     // already prevents the same thread from re-journaling, so this
     // training contribution is naturally one-shot per thread.
+    //
+    // If the entry had been hammed previously, untrain ham first
+    // so the same tokens don't contribute to both classes. See the
+    // matching block in journal-store.svelte.ts:deleteEntry.
     if (target.source === 'automatic' && target.thread_id) {
+      if (target.ham_marked_at !== null) {
+        await untrainSpamFilterForThread(ctx.supabase, target.thread_id, 'ham');
+      }
       await trainSpamFilterForThread(ctx.supabase, target.thread_id, 'spam');
     }
     return {

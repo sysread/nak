@@ -3445,6 +3445,62 @@ begin
     updated_at = now();
 end $$;
 
+-- Reverse a previous train_journal_spam call. Decrements the per-
+-- token counts AND the per-user totals row, floored at zero so an
+-- imbalance (caller untrains a label that wasn't trained, a token
+-- count that's already zero) can't push the numbers negative.
+--
+-- Why this exists: the user can mark an automatic entry as ham
+-- (the "Looks good" button) and then later delete it. Without an
+-- untrain step, the same conversation's tokens would contribute
+-- +1 ham AND +1 spam, polluting both sides of the model. The
+-- delete path calls untrain(ham) before train(spam) so the net
+-- effect is a clean -ham/+spam shift on the conversation's
+-- vocabulary.
+drop function if exists public.untrain_journal_spam(text[], text);
+create or replace function public.untrain_journal_spam(
+  p_tokens text[],
+  p_label text
+) returns void
+language plpgsql security invoker as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_ham int := case when p_label = 'ham' then 1 else 0 end;
+  v_spam int := case when p_label = 'spam' then 1 else 0 end;
+begin
+  if v_user_id is null then
+    raise exception 'not authenticated';
+  end if;
+  if p_label not in ('ham', 'spam') then
+    raise exception 'invalid label: %', p_label;
+  end if;
+
+  if p_tokens is not null and array_length(p_tokens, 1) is not null then
+    update public.journal_spam_tokens
+       set ham_count = greatest(0, ham_count - v_ham),
+           spam_count = greatest(0, spam_count - v_spam)
+     where user_id = v_user_id
+       and token = any(p_tokens);
+
+    -- Garbage-collect rows that lost their last evidence in either
+    -- class. Otherwise the table accumulates zero-rows for every
+    -- token the user once labeled and later untrained. Doesn't
+    -- touch rows that still carry evidence in the OTHER class -
+    -- those are still load-bearing for scoring.
+    delete from public.journal_spam_tokens
+     where user_id = v_user_id
+       and token = any(p_tokens)
+       and ham_count = 0
+       and spam_count = 0;
+  end if;
+
+  update public.journal_spam_stats
+     set ham_total = greatest(0, ham_total - v_ham),
+         spam_total = greatest(0, spam_total - v_spam),
+         updated_at = now()
+   where user_id = v_user_id;
+end $$;
+
 -- Score lookup. Returns one row per matched token plus the user's
 -- totals (replicated on every row, since callers compute Naive Bayes
 -- in JS and need both pieces). Empty result means either no tokens

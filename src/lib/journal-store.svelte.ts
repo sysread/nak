@@ -10,7 +10,10 @@
  */
 import type { JournalEntry, SupabaseService } from './supabase';
 import { emitJournalChange } from './journal-events';
-import { trainSpamFilterForThread } from './agents/journal/spam_filter';
+import {
+  trainSpamFilterForThread,
+  untrainSpamFilterForThread,
+} from './agents/journal/spam_filter';
 
 interface JournalStore {
   entries: JournalEntry[];
@@ -113,12 +116,25 @@ export async function deleteEntry(
   journal.entries = journal.entries.filter((e) => e.id !== id);
   emitJournalChange();
   // Train the spam filter against the deleted automatic entry's
-  // source conversation. Best-effort; the helper swallows errors
+  // source conversation. Best-effort; the helpers swallow errors
   // since training is a side-effect, not a blocking step. Skips
   // user entries (no thread tie) and orphaned automatic entries
   // whose source thread was deleted (FK on delete set null).
+  //
+  // If the user previously hammed the entry, rescind that vote
+  // first - otherwise the same tokens contribute +1 ham AND +1
+  // spam, polluting both classes. The untrain RPC floors at zero
+  // so an over-untrain (the train side failed silently after the
+  // ham_marked_at flip) is a no-op rather than an underflow.
   if (target?.source === 'automatic' && target.thread_id) {
-    void trainSpamFilterForThread(supabase, target.thread_id, 'spam');
+    const threadId = target.thread_id;
+    const wasHam = target.ham_marked_at !== null;
+    void (async () => {
+      if (wasHam) {
+        await untrainSpamFilterForThread(supabase, threadId, 'ham');
+      }
+      await trainSpamFilterForThread(supabase, threadId, 'spam');
+    })();
   }
 }
 

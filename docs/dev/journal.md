@@ -176,6 +176,13 @@ In `supabase/schema.sql`:
     in one transaction. `security invoker`; the RPC reads
     `auth.uid()` and rejects the call if there's no
     session.
+  - `untrain_journal_spam(p_tokens text[], p_label text)` -
+    reverse of train. Decrements with `greatest(0, x - 1)`
+    so an over-untrain (calling on tokens that weren't
+    trained, or trained fewer times) is a no-op rather
+    than an underflow. Garbage-collects token rows whose
+    counts both hit zero so the table doesn't accumulate
+    no-evidence entries.
   - `score_journal_spam(p_tokens text[])` - returns one row
     per matched token plus the user's totals replicated on
     every row. `security invoker`. The Bayes math runs in
@@ -215,8 +222,8 @@ and `journalTimezone?: string` (IANA zone).
   (chat-side `journal_delete` tool path AND modal delete
   button, both routing through
   `journal-store.svelte.ts:deleteEntry`) trains as `spam`,
-  and the **Looks good** button trains as `ham`. Both
-  paths funnel through `trainSpamFilterForThread` in
+  and the thumbs-up (Looks good) button trains as `ham`.
+  Both paths funnel through `trainSpamFilterForThread` in
   `spam_filter.ts` so the tokenization pipeline lives in
   one place. The training call is best-effort (silently
   swallows errors) - it must not break the user-facing
@@ -224,6 +231,22 @@ and `journalTimezone?: string` (IANA zone).
   one-shot per thread because `journal_thread_excludes`
   prevents the same thread from re-journaling; ham
   training is enforced one-shot by `ham_marked_at`.
+- **Ham-rescind on delete.** When the user deletes an
+  entry that was previously hammed (`ham_marked_at` is
+  non-null on the row being deleted), the delete path
+  calls `untrainSpamFilterForThread(threadId, 'ham')`
+  BEFORE `trainSpamFilterForThread(threadId, 'spam')`.
+  Without the rescind, the same conversation's tokens
+  would contribute +1 ham AND +1 spam, polluting both
+  classes. With it, the net effect is a clean -ham +spam
+  shift (the totals row gets -1/+1, individual token
+  counts get -1 in ham and +1 in spam, floored at zero).
+  The check lives in both delete call sites
+  (`journal-store.svelte.ts` and `journal_delete.ts`)
+  rather than inside the helper because the helper's
+  contract is "best-effort fire-and-forget"; pulling the
+  ham-marked check up to the call site keeps the helper
+  signature simple.
 - **Spam-filter scoring path.** The journal agent
   tokenizes the conversation slice, scores it via
   `scoreSpamFilter`, and renders the score as a

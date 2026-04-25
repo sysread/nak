@@ -5,17 +5,19 @@ import {
   scoreSpamFilter,
   tokenizeConversation,
   trainSpamFilter,
+  untrainSpamFilter,
 } from '../src/lib/agents/journal/spam_filter';
 import type { Message, SupabaseService } from '../src/lib/supabase';
 
-// Lightweight stand-in for SupabaseService. Only the three methods
-// the spam filter calls are wired; everything else throws if
-// touched, which keeps the surface area honest.
+// Lightweight stand-in for SupabaseService. Only the methods the
+// spam filter calls are wired; everything else throws if touched,
+// which keeps the surface area honest.
 function mockSupabase(opts: {
   hamTotal: number;
   spamTotal: number;
   rows?: { token: string; hamCount: number; spamCount: number }[];
   onTrain?: (tokens: readonly string[], label: 'ham' | 'spam') => void;
+  onUntrain?: (tokens: readonly string[], label: 'ham' | 'spam') => void;
 }): SupabaseService {
   const stub = {
     getJournalSpamStats: async () => ({
@@ -28,6 +30,12 @@ function mockSupabase(opts: {
     },
     trainJournalSpam: async (tokens: readonly string[], label: 'ham' | 'spam') => {
       opts.onTrain?.(tokens, label);
+    },
+    untrainJournalSpam: async (
+      tokens: readonly string[],
+      label: 'ham' | 'spam'
+    ) => {
+      opts.onUntrain?.(tokens, label);
     },
   };
   return stub as unknown as SupabaseService;
@@ -229,5 +237,40 @@ describe('trainSpamFilter', () => {
     expect(received).not.toBeNull();
     expect(received!.tokens).toEqual(['hello', 'world']);
     expect(received!.label).toBe('ham');
+  });
+});
+
+describe('untrainSpamFilter', () => {
+  it('passes tokens and label through to the untrain RPC', async () => {
+    let received: { tokens: readonly string[]; label: 'ham' | 'spam' } | null = null;
+    const supabase = mockSupabase({
+      hamTotal: 0,
+      spamTotal: 0,
+      onUntrain: (tokens, label) => {
+        received = { tokens, label };
+      },
+    });
+    await untrainSpamFilter(supabase, ['hello', 'world'], 'ham');
+    expect(received).not.toBeNull();
+    expect(received!.tokens).toEqual(['hello', 'world']);
+    expect(received!.label).toBe('ham');
+  });
+
+  it('does not call the train RPC', async () => {
+    let trainCalls = 0;
+    let untrainCalls = 0;
+    const supabase = mockSupabase({
+      hamTotal: 0,
+      spamTotal: 0,
+      onTrain: () => {
+        trainCalls += 1;
+      },
+      onUntrain: () => {
+        untrainCalls += 1;
+      },
+    });
+    await untrainSpamFilter(supabase, ['x'], 'spam');
+    expect(trainCalls).toBe(0);
+    expect(untrainCalls).toBe(1);
   });
 });

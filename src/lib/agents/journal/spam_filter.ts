@@ -125,6 +125,23 @@ export async function trainSpamFilter(
 }
 
 /**
+ * Reverse a previous `trainSpamFilter` call. Used by the delete
+ * path when the entry being deleted had previously been marked
+ * ham - we rescind the ham vote so the conversation's tokens
+ * don't end up double-counted (one row each in ham AND spam).
+ * Server-side RPC floors counts at zero, so an over-untrain (e.g.
+ * a stale tab calls this on an already-untrained set) is a no-op
+ * rather than an underflow.
+ */
+export async function untrainSpamFilter(
+  supabase: SupabaseService,
+  tokens: readonly string[],
+  label: 'ham' | 'spam'
+): Promise<void> {
+  await supabase.untrainJournalSpam(tokens, label);
+}
+
+/**
  * Score a token set against the user's model. Reads the totals first
  * to short-circuit the cold-start case without paying for the (often
  * sizable) token-row query.
@@ -242,6 +259,26 @@ export async function trainSpamFilterForThread(
     await trainSpamFilter(supabase, tokens, label);
   } catch {
     // Best-effort; see the docstring above for why this is silent.
+  }
+}
+
+/**
+ * Reverse-side equivalent of `trainSpamFilterForThread`. Used by
+ * the delete path when the entry was previously hammed - we untrain
+ * ham over the same tokens before training spam. Same best-effort
+ * contract; same swallow-and-skip on failure.
+ */
+export async function untrainSpamFilterForThread(
+  supabase: SupabaseService,
+  threadId: string,
+  label: 'ham' | 'spam'
+): Promise<void> {
+  try {
+    const messages = await supabase.listMessages(threadId);
+    const tokens = tokenizeConversation(messages);
+    await untrainSpamFilter(supabase, tokens, label);
+  } catch {
+    // Best-effort.
   }
 }
 

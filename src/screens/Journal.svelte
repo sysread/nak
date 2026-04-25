@@ -764,16 +764,26 @@
         the explicit text matches the verb-first pattern of the
         other footer buttons.
       -->
+      <!--
+        Spam-filter votes. Thumbs-up trains the source conversation's
+        tokens as ham; thumbs-down (Delete) trains them as spam AND
+        deletes the entry + adds the thread to journal_thread_excludes.
+        Emoji-only labels keep the row compact alongside Export .md;
+        aria-label + title carry the verb for screen readers and
+        hover tooltips. The Marked-good tag replaces the thumbs-up
+        once clicked so the action is durable across reloads.
+      -->
       {#if entry.ham_marked_at !== null}
         <span class="subtle journal-ham-marked" title="You marked this entry as appropriate. Trained the spam filter on the source conversation.">Marked good</span>
       {:else if entry.thread_id}
         <button
           type="button"
-          class="secondary"
+          class="secondary journal-vote-btn"
+          aria-label="Looks good"
           onclick={() => onMarkHam(entry.id)}
           disabled={hamBusyId === entry.id}
-          title="Tell the spam filter this kind of conversation IS journal-worthy"
-        >{hamBusyId === entry.id ? 'Marking…' : 'Looks good'}</button>
+          title="Looks good - tell the spam filter this kind of conversation IS journal-worthy"
+        >{hamBusyId === entry.id ? '…' : '👍'}</button>
       {/if}
       {#if deleteTargetId === entry.id}
         <span class="subtle journal-delete-prompt">
@@ -792,9 +802,11 @@
       {:else}
         <button
           type="button"
-          class="secondary"
+          class="secondary journal-vote-btn"
+          aria-label="Delete and mark as spam"
           onclick={() => requestDelete(entry.id)}
-        >Delete</button>
+          title="Delete - tell the spam filter this kind of conversation is NOT journal-worthy"
+        >👎</button>
       {/if}
     </footer>
     {#if deleteTargetId === entry.id && deleteError}
@@ -1274,13 +1286,24 @@
     margin-right: 0.25rem;
   }
 
-  /* Quiet "you marked this" tag that replaces the Looks-good button
+  /* Quiet "you marked this" tag that replaces the thumbs-up button
      once the user clicks it. Sits in the same row as the action
      buttons so the spacing matches; visually muted so it doesn't
      compete with the actual buttons. */
   .journal-ham-marked {
     font-size: 0.85rem;
     padding: 0 0.25rem;
+  }
+
+  /* Emoji-only vote buttons (thumbs-up for ham, thumbs-down for the
+     delete trigger). Tighten horizontal padding compared to the
+     text buttons in the same row so the glyph reads as a square
+     control rather than a wide pill. The emoji itself carries the
+     visual weight; aria-label + title keep the action discoverable
+     for keyboard / screen-reader users. */
+  .journal-vote-btn {
+    padding-inline: 0.45rem;
+    line-height: 1;
   }
 
   .journal-badge {

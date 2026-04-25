@@ -48,11 +48,16 @@ day unfolded.
   updates the same thread, so your manual edits to an automatic
   entry would be overwritten - delete instead, then write your own
   user entry if you want a different framing.
-- **Looks good** — on automatic entries, a button that tells the
-  journaler "this kind of conversation IS worth journaling." See
+- **Thumbs up / thumbs down** — on automatic entries, two
+  emoji-labeled buttons that train a per-user filter shaping
+  future auto-journal decisions. Thumbs-up (Looks good) tells the
+  journaler "this kind of conversation IS worth journaling";
+  thumbs-down (Delete) removes the entry, marks the source
+  conversation as excluded from future journaling, AND tells the
+  journaler "this kind is NOT worth journaling." See
   [Teaching the journaler what to keep](#teaching-the-journaler-what-to-keep)
-  below for what this does. One click per entry; once marked, the
-  button is replaced by a quiet **Marked good** tag.
+  below. The thumbs-up is one-shot per entry; once clicked it's
+  replaced by a quiet **Marked good** tag.
 
 Navigate days with **‹** / **›** or jump back to **Today**.
 
@@ -89,12 +94,17 @@ the user emotionally / relationally / identity-wise", not "did
 anything happen"), but the model's defaults won't match every
 user perfectly. Two signals shape its behaviour over time:
 
-- **Deleting an automatic entry** trains a per-user spam filter
-  against the source conversation. The next conversation that
-  reads similarly is more likely to be skipped.
-- **Looks good** on an automatic entry trains the same filter in
-  the opposite direction. Conversations that read like ones you've
+- **Thumbs-down (Delete)** trains a per-user spam filter against
+  the source conversation. The next conversation that reads
+  similarly is more likely to be skipped.
+- **Thumbs-up (Looks good)** trains the same filter in the
+  opposite direction. Conversations that read like ones you've
   approved get a stronger nudge toward journaling.
+
+If you change your mind - thumbs-up an entry, then later delete
+it - the thumbs-up vote is rescinded before the delete trains the
+filter as spam. The conversation's words contribute one clean
+negative signal instead of cancelling out at zero.
 
 The classifier is a Naive Bayes model on the conversation's words,
 stemmed so different inflections of the same word share signal

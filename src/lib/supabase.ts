@@ -1657,6 +1657,25 @@ export class SupabaseService {
   }
 
   /**
+   * Reverse a previous `trainJournalSpam` call. Used when the user
+   * deletes an automatic entry they had previously marked as ham:
+   * we rescind the ham vote before training spam, so the
+   * conversation's tokens don't end up double-counted (one row in
+   * each class). Counts and totals floor at zero - calling this
+   * with no prior train is a no-op rather than an underflow.
+   */
+  async untrainJournalSpam(
+    tokens: readonly string[],
+    label: 'ham' | 'spam'
+  ): Promise<void> {
+    const { error } = await this.client.rpc('untrain_journal_spam', {
+      p_tokens: tokens as string[],
+      p_label: label,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
    * Read the per-user totals (number of conversations labeled ham vs
    * spam). Used as the cold-start gate in the worker - the score is
    * suppressed entirely while either total is below threshold so the
