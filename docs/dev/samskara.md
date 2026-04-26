@@ -73,8 +73,13 @@ toast is just a glance cue that the bias model is forming.
   renders the latest mint's emoji as a fixed pill in the
   top-right corner, and stays visible until the next mint (or a
   thread switch) so the user can connect the glyph to whatever
-  it reacted to. Click opens the Samskara diagnostics modal.
-  Mounted once in `Chat.svelte`.
+  it reacted to. Whenever a thread is active (`route.cid` set)
+  the pill is visible - reopened conversations and threads with
+  no mint history this session show U+1F4A4 SLEEPING SYMBOL (💤)
+  as a "nothing has fired yet" placeholder. The pill is only
+  suppressed on the brand-new-chat screen where `route.cid`
+  is null. Click always opens the Samskara diagnostics modal
+  regardless of state. Mounted once in `Chat.svelte`.
 - `src/lib/embeddings/sources/samskara-substrate.ts` - registered
   with the embeddings worker as a third source alongside
   memories and threads. Polls `samskara_substrate where

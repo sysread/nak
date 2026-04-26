@@ -217,6 +217,15 @@ the samskara pipeline for the current conversation. Useful while
 vetting the feature or debugging a "why did the model seem to
 already expect X" moment.
 
+The pill is visible whenever a conversation is open. On a freshly
+reopened thread, or one where nothing has fired yet this session,
+it shows 💤 as a "nothing to report" placeholder; the diagnostics
+screen will say so explicitly. As soon as the worker mints
+something, the 💤 swaps for a face emoji that tracks the latest
+mint's valence (cheerful / content / neutral / uneasy / pensive).
+On the brand-new-chat screen with no conversation selected the
+pill is hidden - there's no context yet to predict against.
+
 The screen shows:
 
 - **Overview counters** - total samskaras (split by tier), total

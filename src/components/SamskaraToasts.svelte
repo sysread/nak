@@ -6,8 +6,19 @@
    * SamskaraManager when the worker reports a mint commit). Renders
    * a single emoji that reflects the most recent mint's valence and
    * stays visible for the duration of the current conversation.
-   * Swaps to the newer emoji when another mint fires; clears when
-   * the user switches threads (tracked via `route.cid`).
+   * Swaps to the newer emoji when another mint fires.
+   *
+   * Whenever a thread is active (`route.cid` is set) the pill is
+   * visible - even on a freshly-reopened conversation that has no
+   * mint history yet, or a saved thread the worker hasn't fired in
+   * during this session. Those states render U+1F4A4 SLEEPING SYMBOL
+   * (💤) as a stand-in for "nothing has formed yet". Click always
+   * opens the Samskara diagnostics modal regardless of state, so the
+   * user has a consistent affordance for "what is this thing
+   * predicting about me right now". The pill is only suppressed on
+   * the brand-new-chat screen where `route.cid === null` - there's no
+   * conversation context to predict against, so the indicator would
+   * be lying.
    *
    * Earlier revision auto-dismissed each toast after 4s and stacked
    * up to six at once. User feedback: the emoji was vanishing before
@@ -46,22 +57,47 @@
      *  new mint visibly replaces the old one. */
     id: number;
     emoji: string;
-    /** Short label (cheerful / content / neutral / uneasy / pensive)
-     *  that drives the tooltip. Derived at capture time from the
-     *  same valence the emoji came from, so the two stay
-     *  consistent even if valenceToEmoji's bands later shift. */
+    /** Short label (cheerful / content / neutral / uneasy / pensive,
+     *  or `idle` for the default sleeping state) that drives the
+     *  tooltip. Derived at capture time from the same valence the
+     *  emoji came from, so the two stay consistent even if
+     *  valenceToEmoji's bands later shift. */
     label: string;
     /** Tier is carried for future styling differentiation (tier-2
      *  could get a subtle halo, for instance). Not used visually
      *  today. */
     tier: 1 | 2;
+    /** True for the placeholder shown on threads that have not yet
+     *  produced a mint this session. Flips to false the first time
+     *  `adopt` runs for a real mint event. Drives the tooltip and
+     *  aria-label so screen readers can tell "no mood data" from a
+     *  real reading instead of just hearing "samskara mood: idle"
+     *  and not knowing what idle means. */
+    isDefault: boolean;
   }
+
+  /** U+1F4A4 SLEEPING SYMBOL. The "nothing has fired yet" placeholder.
+   *  Picked deliberately because it isn't in valenceToEmoji's output
+   *  set - any real mint produces a different glyph, so the swap from
+   *  default to mood is always visible. */
+  const DEFAULT_EMOJI = '\u{1F4A4}';
+  const DEFAULT_LABEL = 'idle';
 
   const FLY_IN_MS = 220;
   const FLY_OUT_MS = 320;
 
   let current = $state<Mood | null>(null);
   let nextId = 0;
+
+  function makeDefault(): Mood {
+    return {
+      id: ++nextId,
+      emoji: DEFAULT_EMOJI,
+      label: DEFAULT_LABEL,
+      tier: 1,
+      isDefault: true,
+    };
+  }
 
   function adopt(detail: SamskaraMintEventDetail): void {
     const emoji = valenceToEmoji(detail.valence);
@@ -88,6 +124,7 @@
       emoji,
       label,
       tier: detail.tier,
+      isDefault: false,
     };
   }
 
@@ -103,17 +140,18 @@
     };
   });
 
-  // Clear on thread switch. The "current mood" belongs to the
+  // Reset on thread switch. The "current mood" belongs to the
   // conversation the user is currently reading; carrying a mood
   // across threads reads as incoherent because a samskara that
   // fired in thread A has no narrative relationship to thread B.
-  // Reads route.cid reactively so the effect re-runs whenever the
-  // active thread id changes; also fires once on mount (current is
-  // already null at that point, so the assignment is a no-op).
+  // When a thread is active the pill stays visible with the default
+  // 💤 placeholder until a real mint arrives; on the brand-new-chat
+  // screen (route.cid === null) the pill is suppressed entirely
+  // because there's no conversation context yet. Reads route.cid
+  // reactively so the effect re-runs whenever the active thread id
+  // changes; also fires once on mount, which seeds the initial state.
   $effect(() => {
-    const _ = route.cid;
-    void _;
-    current = null;
+    current = route.cid !== null ? makeDefault() : null;
   });
 </script>
 
@@ -123,14 +161,18 @@
   aria-atomic="true"
   aria-label="Samskara formation activity"
 >
-  {#if current}
+  {#if current && route.cid !== null}
     {#key current.id}
       <button
         type="button"
         class="mood-pill"
         class:tier-2={current.tier === 2}
-        title={`feelin' ${current.label} - open Samskara diagnostics`}
-        aria-label={`Samskara mood: ${current.label} (tier ${current.tier}). Open diagnostics.`}
+        title={current.isDefault
+          ? 'Samskara diagnostics - no mood data yet'
+          : `feelin' ${current.label} - open Samskara diagnostics`}
+        aria-label={current.isDefault
+          ? 'Open Samskara diagnostics. No mood data yet for this conversation.'
+          : `Samskara mood: ${current.label} (tier ${current.tier}). Open diagnostics.`}
         onclick={() => navigate({ modal: 'samskara' })}
         in:fly={{ x: 24, duration: FLY_IN_MS, easing: cubicOut }}
         out:fly={{ x: 24, duration: FLY_OUT_MS, easing: cubicOut }}

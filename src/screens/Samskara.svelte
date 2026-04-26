@@ -481,7 +481,11 @@
       {#if !threadId}
         <p class="subtle">Open a conversation to see fires scoped to it.</p>
       {:else if cohortGroups.length === 0 && !loading}
-        <p class="subtle">No samskaras have fired in this chat yet.</p>
+        <p class="subtle">
+          No samskaras have fired in this chat yet. Cohorts will appear
+          here as the conversation progresses and the worker has
+          something to predict against.
+        </p>
       {:else}
         <ul class="cohort-list">
           {#each cohortGroups as group (group.cohortId)}
@@ -539,7 +543,11 @@
       {#if !threadId}
         <p class="subtle">Open a conversation to see its substrate.</p>
       {:else if substrate.length === 0 && !loading}
-        <p class="subtle">No substrate recorded for this chat yet.</p>
+        <p class="subtle">
+          No substrate recorded for this chat yet. New rows are stubbed
+          at the end of every assistant turn and enriched by the
+          background worker shortly after.
+        </p>
       {:else}
         <ul class="substrate-list">
           {#each substrate as row (row.id)}
