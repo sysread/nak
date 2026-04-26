@@ -58,6 +58,12 @@ run = "node scripts/user-edit.mjs"
 # raw = true so password prompts have direct TTY access (same as setup-supabase).
 raw = true
 
+[tasks.branch-cleanup]
+description = "Delete remote branches under a given prefix older than N days. Defaults to claude/* and 10 days. Lists candidates and asks for confirmation."
+run = "node scripts/branch-cleanup.mjs"
+# raw = true so the y/N confirmation prompt has direct TTY access.
+raw = true
+
 [tasks.deps]
 description = "Sync npm devDependencies from the lockfile (idempotent)"
 # Chained as a `depends` on every task that needs vitest, svelte-check,

@@ -71,6 +71,14 @@ docs imported via `import.meta.glob`.
   linked project + merges the Pages URL into the auth
   allowlist. Interactive on first run (picks a project,
   writes `.nak/state.json`); idempotent after.
+- **`mise run branch-cleanup`** — garbage-collects stale
+  remote branches. Defaults to `claude/*` older than 10 days
+  (the convention for branches Claude Code on the web
+  creates and abandons). Lists candidates, asks for
+  confirmation, then `git push origin --delete`s them in
+  one round-trip. Deletes regardless of merge status; local
+  branches are left alone. Override with `--days N` and
+  `--prefix STR`; `--yes` skips the prompt.
 - **Push to `main`** — triggers Tests → Deploy. The deploy
   runs sync-supabase → build → publish.
 
