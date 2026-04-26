@@ -3289,13 +3289,16 @@ export class SupabaseService {
    * cohort) and cluster_size each fire belongs to; the renderer joins
    * back against the existing fires array by fire id.
    *
-   * Threshold default 0.85 matches MINT dedup; pass a lower value if
-   * cohorts come back too splintered for the abstraction to help.
-   * Display-only - no schema is mutated.
+   * Threshold default 0.7 sits in BGE-M3's "topically similar" band -
+   * paraphrases of the same idea typically land between 0.65 and 0.78.
+   * MINT dedup uses 0.85 because that's "near-duplicate sentence";
+   * for human-readable theme grouping a lower bar reads as "same idea
+   * said differently." Modal exposes the threshold as a slider so the
+   * caller can tune it live without a redeploy.
    */
   async samskaraClusterThreadFires(
     threadId: string,
-    threshold = 0.85
+    threshold = 0.7
   ): Promise<Map<string, { clusterSeq: number; clusterSize: number }>> {
     const { data, error } = await this.client.rpc(
       'samskara_cluster_thread_fires',

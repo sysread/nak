@@ -154,7 +154,10 @@ toast is just a glance cue that the bias model is forming.
   `samskara_cluster_thread_fires(thread, threshold)` that
   greedy-clusters a thread's fires by cosine similarity on
   their samskaras' prediction embeddings (per-cohort, in score
-  order; threshold default 0.85 matches MINT dedup). A private
+  order; default threshold 0.7 sits in BGE-M3's "topically
+  similar" band, with a slider in the modal for live tuning -
+  higher reads as "near-duplicate sentence", lower reads as
+  "loosely related"). A private
   `_samskara_merge_pair(winner, loser, user)` helper backs the
   dedup RPC; underscore-prefixed to signal internal-only. Follows
   the project's idempotent-apply conventions (`if not exists`,

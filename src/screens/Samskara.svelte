@@ -79,6 +79,45 @@
   // in this set, the renderer bypasses clustering and shows the
   // original flat fires list. Toggle lives on each cohort header.
   let rawCohorts = $state<Set<string>>(new Set());
+  // Cosine-similarity threshold for the cluster RPC. Read from
+  // localStorage on mount so the user's chosen value sticks across
+  // sessions. 0.7 is the documented default - sits in BGE-M3's
+  // "topically similar" band (paraphrases run 0.65-0.78) without
+  // collapsing genuinely-different ideas. Slider lives in the cohort-
+  // fires section header so the user can tune live; persisted on
+  // every settle (input event), not just commit (change event), so a
+  // back-button doesn't lose the dial position.
+  const THRESHOLD_KEY = 'nak:samskara:cluster-threshold:v1';
+  const DEFAULT_THRESHOLD = 0.7;
+  function readStoredThreshold(): number {
+    try {
+      const raw = localStorage.getItem(THRESHOLD_KEY);
+      if (!raw) return DEFAULT_THRESHOLD;
+      const n = Number.parseFloat(raw);
+      // Reject NaN and out-of-range values rather than silently
+      // clamping - a corrupt stored value should fall back to the
+      // documented default, not anchor the user at -2.
+      if (!Number.isFinite(n) || n < 0.5 || n > 0.95) return DEFAULT_THRESHOLD;
+      return n;
+    } catch {
+      return DEFAULT_THRESHOLD;
+    }
+  }
+  function persistThreshold(v: number): void {
+    try {
+      localStorage.setItem(THRESHOLD_KEY, v.toFixed(2));
+    } catch {
+      // private mode / quota - drop silently. The slider still
+      // affects the live session; just won't carry across reloads.
+    }
+  }
+  let clusterThreshold = $state<number>(readStoredThreshold());
+  // Generation counter to drop stale RPC responses when the slider
+  // moves faster than the network. Without it, a slow response from
+  // an earlier threshold can land after a faster response from the
+  // current threshold and overwrite the right answer.
+  let clusterGen = 0;
+  let clusterReclustering = $state(false);
   // Snapshot route.cid ONCE at mount. The modal is full-screen so
   // the user can't switch threads without first closing us; a fresh
   // open re-runs onMount. Intentionally NOT reactive to avoid the
@@ -187,6 +226,42 @@
     rawCohorts = next;
   }
 
+  // Re-cluster fires at a new threshold. Driven by the slider's
+  // input event so the user sees the grouping shift live as they
+  // drag. Each call bumps clusterGen so a slow response from a
+  // previous threshold doesn't clobber a faster response from the
+  // current one - the user can drag past several positions and the
+  // last commit always wins.
+  //
+  // Fires/substrate are not refetched because the threshold only
+  // affects how the existing fires bucket - the underlying data
+  // doesn't change. expandedClusters resets because cluster_seq
+  // values shift across thresholds; a stale "open this cluster"
+  // flag would point at a different cluster after re-clustering.
+  async function reCluster(threshold: number): Promise<void> {
+    if (!app.supabase || !threadId) return;
+    persistThreshold(threshold);
+    expandedClusters = new Set();
+    clusterGen++;
+    const thisGen = clusterGen;
+    clusterReclustering = true;
+    try {
+      const map = await app.supabase.samskaraClusterThreadFires(threadId, threshold);
+      if (thisGen === clusterGen) clusterMap = map;
+    } catch {
+      if (thisGen === clusterGen) clusterMap = new Map();
+    } finally {
+      if (thisGen === clusterGen) clusterReclustering = false;
+    }
+  }
+
+  function onThresholdInput(e: Event): void {
+    const v = Number.parseFloat((e.currentTarget as HTMLInputElement).value);
+    if (!Number.isFinite(v)) return;
+    clusterThreshold = v;
+    void reCluster(v);
+  }
+
   // Sequenced fetch. Earlier version ran 4 top-level queries in
   // Promise.all and the counts helper ran 6 more underneath, for a
   // fan-out of up to 9 concurrent Supabase calls. On a cold-load
@@ -249,12 +324,19 @@
       // Soft-failure: an empty map falls through to one-cluster-per-
       // fire in the cohortGroups derivation, so the panel still
       // renders if the RPC isn't deployed yet (fresh schema not
-      // synced) or errors out.
+      // synced) or errors out. Bumps clusterGen so any in-flight
+      // slider-triggered call from a prior render is treated as
+      // stale.
+      clusterGen++;
+      const thisGen = clusterGen;
       try {
-        clusterMap = await sb.samskaraClusterThreadFires(threadId);
+        const map = await sb.samskaraClusterThreadFires(threadId, clusterThreshold);
+        if (thisGen === clusterGen) clusterMap = map;
       } catch (err) {
-        clusterMap = new Map();
-        error = error ?? `Clusters: ${err instanceof Error ? err.message : String(err)}`;
+        if (thisGen === clusterGen) {
+          clusterMap = new Map();
+          error = error ?? `Clusters: ${err instanceof Error ? err.message : String(err)}`;
+        }
       }
     } else {
       substrate = [];
@@ -693,16 +775,47 @@
            turn's worth of fired predictions). Default view collapses
            the per-cohort fire list into themed clusters by cosine
            similarity of the underlying samskara prediction embeddings
-           (RPC samskara_cluster_thread_fires, threshold 0.85). Each
-           theme shows its highest-scoring representative; siblings
-           are tucked behind a "+N similar" chevron. A per-cohort
-           "Show all" toggle bypasses clustering for the diagnostic
-           case. Resolution state still reads from the header pill -
-           the abstraction only affects density, not the underlying
-           data. -->
-      <h2 class="pane-section">
-        Cohort fires {threadId ? 'in this chat' : '(no chat selected)'}
-      </h2>
+           (RPC samskara_cluster_thread_fires; threshold from the
+           live slider, default 0.7). Each theme shows its highest-
+           scoring representative; siblings are tucked behind a
+           "+N similar" chevron. A per-cohort "Show all" toggle
+           bypasses clustering for the diagnostic case. Resolution
+           state still reads from the header pill - the abstraction
+           only affects density, not the underlying data. -->
+      <div class="cohort-section-head">
+        <h2 class="pane-section cohort-section-title">
+          Cohort fires {threadId ? 'in this chat' : '(no chat selected)'}
+        </h2>
+        {#if threadId && cohortGroups.length > 0}
+          <!-- Threshold slider. Step 0.05 keeps the input snappy
+               (each step is one RPC) while still spanning the useful
+               range from "near-duplicate only" (0.95) down to
+               "loosely related" (0.50). The label shows the live
+               value and dims while a re-cluster is in flight so the
+               user has feedback that the dial took effect. -->
+          <label class="cluster-slider">
+            <span class="cluster-slider-label">
+              theme threshold
+              <span
+                class="cluster-slider-value"
+                class:reclustering={clusterReclustering}
+              >
+                {clusterThreshold.toFixed(2)}
+              </span>
+            </span>
+            <input
+              type="range"
+              min="0.5"
+              max="0.95"
+              step="0.05"
+              value={clusterThreshold}
+              oninput={onThresholdInput}
+              aria-label="Cosine-similarity threshold for theme clustering"
+              title="Lower = fewer, broader themes. Higher = more, tighter themes."
+            />
+          </label>
+        {/if}
+      </div>
       {#if !threadId}
         <p class="subtle">Open a conversation to see fires scoped to it.</p>
       {:else if cohortGroups.length === 0 && !loading}
@@ -1351,6 +1464,51 @@
     margin: 0.15rem 0 0;
     font-size: 0.8rem;
     color: var(--muted);
+  }
+
+  /* Cohort-fires section header carries the H2 plus the threshold
+     slider. Flex row lets the slider shove right against the gutter
+     on desktop and wrap below the title on narrow viewports. The H2
+     itself keeps its existing pane-section margins via flex baseline-
+     alignment so the rest of the body's vertical rhythm stays stable. */
+  .cohort-section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .cohort-section-title {
+    margin-right: auto;
+  }
+  .cluster-slider {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    font-size: 0.72rem;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .cluster-slider-label {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+  }
+  .cluster-slider-value {
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    font-weight: 600;
+    transition: opacity 120ms;
+  }
+  .cluster-slider-value.reclustering {
+    /* Half-fade while the RPC for the new threshold is in flight, so
+       the user has a visible "the dial took effect, waiting" signal
+       rather than wondering whether the slider hooked up. */
+    opacity: 0.5;
+  }
+  .cluster-slider input[type='range'] {
+    width: 11rem;
+    accent-color: var(--accent);
+    cursor: pointer;
   }
 
   /* Per-cohort "Show all" / "Group by theme" pivot. Sits at the right
