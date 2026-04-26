@@ -789,15 +789,12 @@
            likeliest. -->
       <details class="mood-legend" open>
         <summary class="mood-legend-summary">
-          What the mood-pill emoji means
+          What controls the "mood"?
         </summary>
         <p class="mood-legend-blurb">
-          Each freshly-minted samskara reports two numbers: a
-          <strong>valence</strong> in [-1, 1] (how warm or cool the
-          underlying tendency reads) and a
-          <strong>confidence</strong> in [0, 1] (how sure the model
-          is). The pill picks one cell from the table below. Rows
-          step through valence top to bottom; the columns split on
+          Each samskara carries a <strong>valence</strong> [-1, 1]
+          (warm/cool) and a <strong>confidence</strong> [0, 1]. The
+          pill picks the matching cell below; columns split on
           confidence at {CONFIDENCE_CUT}. The
           <span class="mood-dot-inline" aria-hidden="true"></span>
           dot marks where the pill currently sits.
@@ -1269,16 +1266,19 @@
     gap: 0.6rem;
   }
 
-  /* Mood-pill legend. Lives at the very top of the body because the
+  /* Mood-pill legend. Sits just under the Overview counts because the
      click-the-pill -> open-this-modal flow is where the user is most
      likely asking "what did that emoji mean." <details>/<summary>
      gives us native dismiss-and-remember behaviour without component
-     state. */
+     state. margin-top puts a clear gutter between this card and the
+     counts-grid above so the section reads as its own block, not as
+     an appendix to Overview. */
   .mood-legend {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--surface);
     padding: 0.5rem 0.75rem;
+    margin-top: 1.2rem;
     margin-bottom: 1rem;
   }
 
