@@ -621,7 +621,6 @@
     padding: 1rem 1.25rem 0.75rem;
     border-bottom: 1px solid var(--border);
     background: var(--bg-2);
-    padding-right: 3rem;
     /* Grid items default to min-width: auto, which lets a non-shrinking
        child (the toolbar's flex row, see below) push the header wider
        than the shell's track. The shell has overflow: hidden, so any
@@ -634,6 +633,12 @@
   .samskara-title {
     font-size: 1.1rem;
     margin: 0 0 0.25rem;
+    /* Only the title row vertically overlaps the absolute-positioned
+       close button (top: 0.5rem, height: 2rem, so it sits between
+       0.5rem and 2.5rem from the shell top). The blurb and toolbar
+       fall below the close button and can use the full header width,
+       so the gutter goes here rather than on the header. */
+    padding-right: 3rem;
   }
 
   .samskara-blurb {
@@ -867,6 +872,8 @@
     }
     .samskara-header {
       padding: 0.75rem 0.85rem 0.6rem;
+    }
+    .samskara-title {
       padding-right: 2.75rem;
     }
     .samskara-body {
