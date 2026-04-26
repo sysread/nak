@@ -661,6 +661,18 @@ summarizer reads samskaras to feed the agent.
   per-turn cosine fire surfaces situational bias. Either one
   alone is wrong. Future contributors will be tempted to
   consolidate them; resist.
+- **`samskara_fires` is unique on (user, cohort, samskara).**
+  The constraint exists because `_samskara_merge_pair` retargets
+  loser-fires onto the winner, and if the winner already had a
+  fire in the same cohort, a naive UPDATE creates a duplicate
+  row with a different score (the original loser's cosine to the
+  query). The merge helper drops colliding loser-fires before
+  retargeting; the constraint is belt-and-braces. The diagnostics
+  modal's clustered-by-theme view assumes one fire per (cohort,
+  samskara) — duplicates show up there as identical-looking
+  expanded siblings under one cluster. If you ever see that
+  symptom return, look at the merge helper, not the cluster
+  RPC.
 - **Priming is raced, not awaited without a timeout.** The
   chat-loop wraps the `Promise.all` of compound + fire in a
   `Promise.race` against `SAMSKARA_PRIMING_TIMEOUT_MS`

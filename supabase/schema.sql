@@ -1931,6 +1931,48 @@ drop policy if exists "samskara fires self-deletable" on public.samskara_fires;
 create policy "samskara fires self-deletable" on public.samskara_fires
   for delete using (auth.uid() = user_id);
 
+-- One-shot cleanup of (user_id, cohort_id, samskara_id) duplicates
+-- left over from a pre-fix _samskara_merge_pair that retargeted
+-- loser-fires onto a winner without first dropping fires the winner
+-- already had in the same cohort. Two distinct samskaras both firing
+-- in cohort C, then merged into one, used to leave two fire rows in
+-- cohort C with the same samskara_id but different scores - which
+-- showed up as identical-looking entries in the diagnostics modal
+-- and skewed the cofire-based dedup math (a samskara cofiring with
+-- itself).
+--
+-- Keeps the highest-scoring fire per (user, cohort, samskara) tuple
+-- and deletes the rest. Idempotent: once the data is clean and the
+-- constraint below is in place, the predicate matches no rows and
+-- the DELETE is a no-op.
+delete from public.samskara_fires f
+ where exists (
+   select 1 from public.samskara_fires keeper
+    where keeper.cohort_id = f.cohort_id
+      and keeper.samskara_id = f.samskara_id
+      and keeper.user_id = f.user_id
+      and (keeper.score, keeper.id) > (f.score, f.id)
+ );
+
+-- Belt-and-braces against the merge bug returning. With the helper
+-- below now dropping colliding loser-fires before retargeting, this
+-- constraint can never trip in normal flow - but if a future change
+-- introduces another path that double-inserts into samskara_fires,
+-- the database catches it instead of the user noticing duplicates
+-- in the modal weeks later. Drop-then-add via DO block to stay
+-- idempotent across re-applies.
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint
+     where conname = 'samskara_fires_no_dup_in_cohort'
+       and conrelid = 'public.samskara_fires'::regclass
+  ) then
+    alter table public.samskara_fires
+      add constraint samskara_fires_no_dup_in_cohort
+      unique (user_id, cohort_id, samskara_id);
+  end if;
+end $$;
+
 -- Compound summary cache --
 --
 -- Single row per user. The always-on prose block that lives at the
@@ -2082,6 +2124,13 @@ begin
   -- Insert one fire row per cohort member. The jsonb array is shape
   -- `[{"samskara_id": "...", "score": 0.42}, ...]` — minimal payload
   -- since the rest is derivable from the samskara row.
+  --
+  -- ON CONFLICT DO NOTHING against the (user, cohort, samskara)
+  -- unique constraint - belt-and-braces against any future caller
+  -- that double-records the same cohort. Today this RPC is called
+  -- exactly once per turn from fireSamskaras with a fresh cohort_id
+  -- so the conflict can't trip; if a regression introduces a second
+  -- call path, the table stays clean instead of growing duplicates.
   insert into public.samskara_fires (
     user_id, samskara_id, thread_id, cohort_id, score
   )
@@ -2090,7 +2139,8 @@ begin
          p_thread_id,
          p_cohort_id,
          (elem->>'score')::real
-    from jsonb_array_elements(p_fires) as elem;
+    from jsonb_array_elements(p_fires) as elem
+   on conflict (user_id, cohort_id, samskara_id) do nothing;
   -- Keep samskaras' fire bookkeeping in sync.
   update public.samskaras
      set fire_count = fire_count + 1,
@@ -2773,8 +2823,29 @@ create or replace function public._samskara_merge_pair(
 ) returns void
 language plpgsql security invoker as $$
 begin
-  -- Retarget fires. Every fire row that pointed at the loser now
-  -- counts toward the winner so cohort history is preserved.
+  -- Drop loser-fires in cohorts where the winner already has a
+  -- fire. Without this, the retarget UPDATE below would create two
+  -- rows with the same (cohort_id, samskara_id) - originally a
+  -- visible bug in the diagnostics modal (identical predictions
+  -- with different scores under one cohort) and a subtler problem
+  -- for the cofire-based dedup math, which would see the winner
+  -- "cofiring with itself" and inflate Hebbian binding scores. The
+  -- unique constraint added alongside this fix would also reject
+  -- the UPDATE, but doing the cleanup explicitly here keeps the
+  -- merge transaction succeeding instead of erroring on conflict.
+  delete from public.samskara_fires
+   where samskara_id = p_loser_id
+     and user_id = p_user_id
+     and cohort_id in (
+       select cohort_id
+         from public.samskara_fires
+        where samskara_id = p_winner_id
+          and user_id = p_user_id
+     );
+
+  -- Retarget the surviving fires. Every fire row that pointed at
+  -- the loser now counts toward the winner so cohort history is
+  -- preserved.
   update public.samskara_fires
      set samskara_id = p_winner_id
    where samskara_id = p_loser_id and user_id = p_user_id;
