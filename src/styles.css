@@ -136,16 +136,22 @@
 :root[data-theme='light'][data-accent='orange'] { --accent: #c2410c; --accent-weak: #ffedd5; }
 :root[data-theme='light'][data-accent='red']    { --accent: #b91c1c; --accent-weak: #fee2e2; }
 
-/* Light-mode glyph weight. Lekton ships only 400 and 700 TTFs (see
-   @font-face above; the pixel-bitmap predecessor was retired precisely
-   to avoid synthesized faux-bold), so reaching for font-weight: 500
-   would route back through that same synthesis path. A sub-pixel
-   text-shadow thickens strokes uniformly and deterministically across
-   browsers - just enough to give the text the same visual density
-   against the light bg that the regular face has against the dark-mode
-   bg. */
-:root[data-theme='light'] body {
+/* Body-level glyph thickener. Lekton ships only 400 and 700 TTFs
+   (see @font-face above; the pixel-bitmap predecessor was retired
+   precisely to avoid synthesized faux-bold), so reaching for
+   font-weight: 500 would route back through that same synthesis
+   path. A sub-pixel text-shadow thickens strokes uniformly and
+   deterministically across browsers. Both themes get a base
+   thickener so body copy reads slightly heavier than Lekton's bare
+   Regular face; light mode gets an extra boost on top because its
+   lighter bg makes the same regular face render visibly thinner
+   than against dark. */
+body {
   text-shadow: 0 0 0.01em currentColor;
+}
+
+:root[data-theme='light'] body {
+  text-shadow: 0 0 0.02em currentColor;
 }
 
 * {
@@ -261,24 +267,29 @@ input, textarea, select {
   font-family: inherit;
 }
 
-/* In light mode, the body-level text-shadow thickener (see the
-   ':root[data-theme=light] body' rule above) doesn't reliably reach
-   the text rendered inside native form controls - WebKit in particular
-   draws input/textarea content through a path that drops inherited
-   text-shadow, leaving composer and settings fields looking notably
-   thinner and lighter than surrounding body copy against the light
-   bg. Re-apply the thickener on the form controls themselves, and
-   drop the ink a shade darker than --text so the contrast matches
-   what the reader expects from body text. font-weight is deliberately
-   left alone: Lekton only ships 400 and 700, and anything in between
-   routes through synthesized faux-bold (see the @font-face comments
-   at the top of this file). */
+/* The body-level text-shadow thickener (see the 'body' rule above)
+   doesn't reliably reach text rendered inside native form controls -
+   WebKit in particular draws input/textarea content through a path
+   that drops inherited text-shadow, leaving composer and settings
+   fields looking notably thinner than surrounding body copy. Re-apply
+   the thickener on the form controls themselves at the same per-theme
+   values used for body, plus a small extra delta to compensate for
+   the missing inheritance. Light mode additionally drops the ink a
+   shade darker than --text so the contrast matches what the reader
+   expects from body text. font-weight is deliberately left alone:
+   Lekton only ships 400 and 700, and anything in between routes
+   through synthesized faux-bold (see the @font-face comments at the
+   top of this file). */
+input, textarea, select, .composer-textarea {
+  text-shadow: 0 0 0.015em currentColor;
+}
+
 :root[data-theme='light'] input,
 :root[data-theme='light'] textarea,
 :root[data-theme='light'] select,
 :root[data-theme='light'] .composer-textarea {
   color: #09090b;
-  text-shadow: 0 0 0.015em currentColor;
+  text-shadow: 0 0 0.025em currentColor;
 }
 
 /* Password fields specifically - the browser's masking bullet (U+2022)
