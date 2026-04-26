@@ -410,17 +410,6 @@ export interface ChatLoopHandlers {
    * the reasoning panel closed.
    */
   onReasoningUpdate?(text: string): void;
-  /**
-   * Citations to display under the in-flight assistant bubble. Fires
-   * whenever a round contributes new sources - either the outer
-   * stream emitted a `citations` frame (legacy main-chat search path,
-   * no longer active in the default chat loop) or a `web_search` tool
-   * call returned a `citations` array that the loop harvested onto
-   * the running `toolCitations` accumulator. The argument is the full
-   * running list with indexes renumbered contiguously from 1, so the
-   * UI can swap in whatever it has without tracking deltas.
-   */
-  onCitationsUpdate?(citations: Citation[]): void;
   /** A tool call has been received from the model and is about to execute. */
   onToolStart?(call: OpenAIToolCall): void;
   /** A tool call resolved successfully. `result` is the parsed JS value. */
@@ -964,7 +953,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           roundUsage = ev.usage;
         } else if (ev.type === 'citations') {
           roundCitations = ev.citations;
-          handlers?.onCitationsUpdate?.(ev.citations);
         }
       }
     } catch (err) {
@@ -1166,12 +1154,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       content: roundText,
       tool_calls: sanitizeToolCallsForWire(roundCalls),
     });
-    // Snapshot the pre-settlement citation count so we can tell at the
-    // end of this round whether a tool contributed new sources and
-    // should therefore fire an `onCitationsUpdate` notification - the
-    // UI's live source-panel animates in the same way it did when
-    // Venice itself streamed citations on the outer completion.
-    const citationsBefore = toolCitations.length;
     for (const r of settled) {
       const content = r.ok
         ? encodeToolContent({ ok: true, value: r.value })
@@ -1201,14 +1183,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         }
       }
     }
-    if (toolCitations.length > citationsBefore) {
-      // Fire once per round that added citations; the handler
-      // snapshots the running list so the UI can render a live
-      // sources panel on the in-flight assistant bubble before the
-      // terminal assistant row is persisted.
-      handlers?.onCitationsUpdate?.(toolCitations.slice());
-    }
-
     // Loop back for another round. The model will see the tool results
     // in the extended history and either produce a final answer or
     // request more tool calls.

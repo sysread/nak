@@ -114,7 +114,6 @@
   } from '$lib/journal-store.svelte';
   import { JOURNAL_CHANGE_EVENT } from '$lib/journal-events';
   import AssistantBody from '../components/AssistantBody.svelte';
-  import CitationsPanel from '../components/CitationsPanel.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
   import ReasoningPicker from '../components/ReasoningPicker.svelte';
@@ -128,7 +127,7 @@
   import { logsDrawer, createLogger } from '$lib/logger.svelte';
 
   const log = createLogger('chat');
-  import { VeniceError, type Citation, type VeniceMessage } from '$lib/venice';
+  import { VeniceError, type VeniceMessage } from '$lib/venice';
 
   const DEFAULT_TITLE = 'New conversation';
 
@@ -313,11 +312,10 @@
    */
   let fadeOutDelays = $state<Record<string, number>>({});
   let streamingText = $state('');
-  // Live companions to streamingText during a turn. `streamingReasoning`
+  // Live companion to streamingText during a turn. `streamingReasoning`
   // is the running buffer of `delta.reasoning_content` chunks for the
-  // current round; `streamingCitations` is Venice's web_search_citations
-  // once they arrive on the first chunk. Both are reset when the
-  // assistant row persists and a new round begins.
+  // current round; reset when the assistant row persists and a new
+  // round begins.
   //
   // `streamingReasoningOpen` drives the slide-open state of the live
   // reasoning panel. We flip it on the first reasoning delta, then —
@@ -325,8 +323,16 @@
   // animate it shut. Value persists across the transition so the
   // intermediate "still streaming content with reasoning tucked away"
   // state has somewhere to sit.
+  //
+  // Citations are NOT mirrored into a streaming buffer: Venice ships
+  // them in the first chunk, but rendering an open citations panel
+  // mid-stream pushes the bubble's bottom edge down by the height of
+  // the source list, and follow-bottom scrolling then anchors to that
+  // edge - leaving reasoning streaming in above the viewport. Skip the
+  // live render entirely; the citations show up via AssistantBody
+  // (collapsed by default, toggle in the action bar) the instant the
+  // message persists.
   let streamingReasoning = $state('');
-  let streamingCitations = $state<Citation[] | null>(null);
   let streamingReasoningOpen = $state(false);
   // Inline error surface for chat exchange failures. Rendered as a
   // prominent red bubble at the bottom of the transcript - inside
@@ -1967,9 +1973,6 @@
                 streamingReasoningOpen = true;
               }
             },
-            onCitationsUpdate: (c) => {
-              streamingCitations = c;
-            },
             onAssistantPersisted: (msg) => {
               // Cancel any pending frame — the persisted row takes
               // over rendering and we don't want a stale flush to
@@ -1980,11 +1983,10 @@
               streamingText = '';
               // Streaming companions reset per round so the NEXT
               // round starts with a clean slate. The persisted row
-              // already carries reasoning/citations for the round
-              // just finished, so the UI keeps rendering them via
-              // the message store rather than the streaming state.
+              // already carries reasoning for the round just finished,
+              // so the UI keeps rendering it via the message store
+              // rather than the streaming state.
               streamingReasoning = '';
-              streamingCitations = null;
               streamingReasoningOpen = false;
               streamingContentStarted = false;
               if (reasoningCloseTimer !== 0) {
@@ -2107,7 +2109,6 @@
       }
       streamingText = '';
       streamingReasoning = '';
-      streamingCitations = null;
       streamingReasoningOpen = false;
       streamingContentStarted = false;
       // Surface the completion to the notifications service: either
@@ -2152,7 +2153,6 @@
       }
       streamingText = '';
       streamingReasoning = '';
-      streamingCitations = null;
       streamingReasoningOpen = false;
       streamingContentStarted = false;
       // Restore any rows the user had marked for regenerate-from-here.
@@ -3996,16 +3996,16 @@
                   <Scanner label="Thinking" />
                 </div>
               {/if}
-              <!-- Live citations panel. Venice ships the full list in
-                   the first chunk, so it typically appears ahead of
-                   the answer body. Shown open-always during streaming
-                   (no toggle button here; the streaming bubble has no
-                   action bar). Once the assistant row persists, the
-                   regular AssistantBody panel takes over with the
-                   toggle affordance. -->
-              {#if streamingCitations && streamingCitations.length > 0}
-                <CitationsPanel citations={streamingCitations} open={true} />
-              {/if}
+              <!-- Citations are deliberately NOT rendered during
+                   streaming. The list is available from Venice's first
+                   chunk, but rendering it open here pushes the bubble's
+                   bottom edge down by the height of the source list,
+                   and follow-bottom scrolling then anchors to that
+                   edge - leaving reasoning streaming in above the
+                   viewport. The persisted bubble's AssistantBody picks
+                   the citations up the instant the row lands, with the
+                   panel collapsed by default and an action-bar toggle
+                   to expand on demand. -->
             </div>
           {/if}
           {#if messages.length === 0 && !streamingText && !sending}

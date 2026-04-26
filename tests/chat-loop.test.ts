@@ -887,7 +887,6 @@ describe('runChatLoop', () => {
       [{ type: 'text', delta: 'Bitcoin is at ~$70k today ^1^.' }],
     ]);
     const { svc, mocks } = mockSupabase();
-    const citationUpdates: Citation[][] = [];
     await runChatLoop({
       venice,
       supabase: svc,
@@ -896,9 +895,6 @@ describe('runChatLoop', () => {
       modelId: 'm',
       history: [{ role: 'user', content: 'what is btc at' }],
       signal: new AbortController().signal,
-      handlers: {
-        onCitationsUpdate: (cites) => citationUpdates.push(cites),
-      },
     });
     // Last addMessage call is the terminal assistant row; its opts
     // carry the harvested citations.
@@ -912,10 +908,6 @@ describe('runChatLoop', () => {
         title: 'BTC price',
       },
     ]);
-    // Handler fired during the tool round, before the terminal
-    // assistant was persisted.
-    expect(citationUpdates.length).toBeGreaterThanOrEqual(1);
-    expect(citationUpdates[citationUpdates.length - 1]).toHaveLength(1);
   });
 
   it('renumbers citations contiguously across multiple web_search calls in one round', async () => {
