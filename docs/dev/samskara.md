@@ -74,12 +74,18 @@ toast is just a glance cue that the bias model is forming.
   top-right corner, and stays visible until the next mint (or a
   thread switch) so the user can connect the glyph to whatever
   it reacted to. Whenever a thread is active (`route.cid` set)
-  the pill is visible - reopened conversations and threads with
-  no mint history this session show U+1F4A4 SLEEPING SYMBOL (💤)
-  as a "nothing has fired yet" placeholder. The pill is only
-  suppressed on the brand-new-chat screen where `route.cid`
-  is null. Click always opens the Samskara diagnostics modal
-  regardless of state. Mounted once in `Chat.svelte`.
+  the pill is visible. On thread open it seeds asynchronously
+  from `samskaraGetLatestFireMood(cid)` (the most recent stored
+  fire's joined valence + tier), so reopened conversations
+  surface the model's last read instead of waiting for a fresh
+  mint. While the seed query is in flight, and on threads that
+  have never fired or where the query fails, the pill renders
+  U+1F4A4 SLEEPING SYMBOL (💤) as a "nothing to report"
+  placeholder. A monotonic generation counter guards the seed
+  fetch against thread-switch races. The pill is only suppressed
+  on the brand-new-chat screen where `route.cid` is null. Click
+  always opens the Samskara diagnostics modal regardless of
+  state. Mounted once in `Chat.svelte`.
 - `src/lib/embeddings/sources/samskara-substrate.ts` - registered
   with the embeddings worker as a third source alongside
   memories and threads. Polls `samskara_substrate where

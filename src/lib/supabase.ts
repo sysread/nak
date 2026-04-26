@@ -3160,6 +3160,55 @@ export class SupabaseService {
   }
 
   /**
+   * Most recent fire's valence + tier for a thread, used to seed the
+   * mood pill on conversation reopen so the user doesn't have to wait
+   * for a fresh mint to see anything other than 💤. Filters out fires
+   * whose joined samskara has a null valence (rare, but the field is
+   * nullable until the assimilator lands a reading) - returning null
+   * lets the caller fall back to the default placeholder cleanly.
+   * `.limit(1)` keeps this cheap on threads with hundreds of fires.
+   */
+  async samskaraGetLatestFireMood(
+    threadId: string
+  ): Promise<{ valence: number; tier: 1 | 2 } | null> {
+    // `samskaras!inner` collapses fires whose FK target was deleted
+    // out of the result at the DB level, and the
+    // `.not('samskaras.valence', 'is', null)` filter additionally
+    // skips fires whose joined samskara hasn't had a valence
+    // assimilated yet. Without the !inner, an orphaned fire could
+    // come back with samskaras=null and burn the `.limit(1)` slot,
+    // hiding a perfectly good fire one row below.
+    const { data, error } = await this.client
+      .from('samskara_fires')
+      .select('samskaras!inner(valence, tier)')
+      .eq('thread_id', threadId)
+      .not('samskaras.valence', 'is', null)
+      .order('fired_at', { ascending: false })
+      .limit(1);
+    if (error) throw new SupabaseError(error.message);
+    interface EmbeddedMood {
+      valence: number | null;
+      tier: number;
+    }
+    const rows = (data ?? []) as unknown as {
+      samskaras: EmbeddedMood | EmbeddedMood[] | null;
+    }[];
+    const row = rows[0];
+    if (!row) return null;
+    // supabase-js types the embed as an array even for N:1; runtime
+    // is a single object when the FK resolves. Same shape-quirk
+    // handled in samskaraListFiresForThread above.
+    const joined = Array.isArray(row.samskaras)
+      ? (row.samskaras[0] ?? null)
+      : row.samskaras;
+    if (!joined || joined.valence === null) return null;
+    // Collapse any unexpected tier value to tier 1 so the consumer's
+    // narrow union doesn't drift.
+    const tier: 1 | 2 = joined.tier === 2 ? 2 : 1;
+    return { valence: joined.valence, tier };
+  }
+
+  /**
    * All fires anchored to a thread, newest first, with the joined
    * samskara payload so the diagnostics screen can render each cohort
    * without a follow-up round trip. Supabase embed syntax pulls the
