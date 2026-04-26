@@ -1468,16 +1468,21 @@
 
   /* Cohort-fires section header carries the H2 plus the threshold
      slider. Flex row lets the slider shove right against the gutter
-     on desktop and wrap below the title on narrow viewports. The H2
-     itself keeps its existing pane-section margins via flex baseline-
-     alignment so the rest of the body's vertical rhythm stays stable. */
+     on desktop and wrap below the title on narrow viewports. The
+     margin-top sits on this wrapper rather than the H2 because flex
+     containers don't collapse margins with the previous element -
+     leaving the H2's own margin-top inside a flex parent reads as
+     "nearly touching" the prior section. The H2 inside has its
+     pane-section top margin zeroed so the spacing isn't doubled. */
   .cohort-section-head {
     display: flex;
     align-items: baseline;
     gap: 0.75rem;
     flex-wrap: wrap;
+    margin-top: 1.2rem;
   }
   .cohort-section-title {
+    margin-top: 0;
     margin-right: auto;
   }
   .cluster-slider {
