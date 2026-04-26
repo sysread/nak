@@ -52,6 +52,12 @@ description = "Re-apply schema and Pages URL allowlist to the linked Supabase pr
 run = "node scripts/sync.mjs"
 raw = true
 
+[tasks.user-edit]
+description = "Create a Supabase user on the linked project, or reset an existing user's password. Interactive; --email/--password override."
+run = "node scripts/user-edit.mjs"
+# raw = true so password prompts have direct TTY access (same as setup-supabase).
+raw = true
+
 [tasks.deps]
 description = "Sync npm devDependencies from the lockfile (idempotent)"
 # Chained as a `depends` on every task that needs vitest, svelte-check,
