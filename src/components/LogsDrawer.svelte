@@ -407,20 +407,7 @@
           navigate({ modal: 'samskara' });
         }}
       >
-        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
-             fill="none" stroke="currentColor" stroke-width="1.8"
-             stroke-linecap="round" stroke-linejoin="round">
-          <!-- Thinking-face emoji shape: one eyebrow raised significantly
-               higher than the other is the key legible feature at small
-               sizes. The arc below the chin suggests a cupped hand. -->
-          <circle cx="12" cy="10" r="7" />
-          <path d="M8.5 7.5 Q10.25 7 12 7.5" />
-          <path d="M12.5 5 Q14.25 4.5 16 5" />
-          <circle cx="9.5" cy="9.5" r="0.6" fill="currentColor" stroke="none" />
-          <circle cx="14.5" cy="9.5" r="0.6" fill="currentColor" stroke="none" />
-          <path d="M10 13 L14 13" />
-          <path d="M9 18.5 Q10.5 17.5 12 17.5 Q13.5 17.5 15 18.5" />
-        </svg>
+        <span class="samskara-emoji" aria-hidden="true">🤔</span>
       </button>
       <button
         type="button"
@@ -611,6 +598,14 @@
     margin: 0;
     font-size: 1rem;
     font-weight: 600;
+  }
+
+  /* Emoji glyph stands in for an SVG icon - bump the font-size so it
+     reads at roughly the same visual weight as the sibling 18px close
+     icon, and pin line-height so the flex centring stays clean. */
+  .samskara-emoji {
+    font-size: 1.05rem;
+    line-height: 1;
   }
 
   .logs-controls {

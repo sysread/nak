@@ -622,6 +622,13 @@
     border-bottom: 1px solid var(--border);
     background: var(--bg-2);
     padding-right: 3rem;
+    /* Grid items default to min-width: auto, which lets a non-shrinking
+       child (the toolbar's flex row, see below) push the header wider
+       than the shell's track. The shell has overflow: hidden, so any
+       overshoot manifests as the blurb and the "Collapse redundant"
+       button getting clipped at the right edge on narrow viewports.
+       Allow the header to shrink to its track. */
+    min-width: 0;
   }
 
   .samskara-title {
@@ -638,6 +645,12 @@
     display: flex;
     gap: 0.5rem;
     align-items: center;
+    /* Wrap onto a second row before the row pushes the header past the
+       shell width on phones. Without this, "Collapse redundant" alone
+       can already overshoot a 360px viewport. row-gap is tighter than
+       the column gap because wrapped rows don't need as much air. */
+    flex-wrap: wrap;
+    row-gap: 0.4rem;
   }
 
   .samskara-body {
@@ -841,5 +854,35 @@
     margin: 0.2rem 0 0;
     font-size: 0.8rem;
     line-height: 1.4;
+  }
+
+  /* Mobile: claw back the gutter the desktop layout was happy to spend
+     so the diagnostic body actually has room for stat cards and long
+     substrate / fire entries. Mirrors the pattern in Journal.svelte -
+     tighten the backdrop padding and the per-pane paddings instead of
+     letting the modal stay 1rem-inset on a 360px screen. */
+  @media (max-width: 720px) {
+    .samskara-backdrop {
+      padding: 0.5rem;
+    }
+    .samskara-header {
+      padding: 0.75rem 0.85rem 0.6rem;
+      padding-right: 2.75rem;
+    }
+    .samskara-body {
+      padding: 0.85rem 0.85rem 1.25rem;
+    }
+    .count-card,
+    .compound-block,
+    .cohort-card,
+    .substrate-card {
+      padding: 0.5rem 0.6rem;
+    }
+    /* Drop the auto-fit minimum so two narrow stat cards fit on a row
+       instead of stacking 1-up; minmax(7rem, 1fr) still keeps the
+       value+label legible at small sizes. */
+    .counts-grid {
+      grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+    }
   }
 </style>
