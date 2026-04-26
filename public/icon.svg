@@ -25,14 +25,23 @@
   -->
   <rect width="512" height="512" rx="96" ry="96" fill="#0b0d10"/>
   <rect x="32" y="32" width="448" height="448" rx="32" ry="32" fill="#efe3c5"/>
+  <!--
+    Hole y positions are derived: 4 rows of 48px + 3 gaps of 32px =
+    288px grid height, leaving (448 - 288) / 2 = 80px of card padding
+    top and bottom, so the first row sits at card_top + 80 = 112 and
+    subsequent rows step by 80. Verified: grid vertical center
+    (112 + 352 + 48) / 2 = 256, matching the icon center; the Pixel
+    launcher's circular maskable crop now lands the grid centered
+    rather than 24px low.
+  -->
   <g>
-    <rect x="126" y="136" width="100" height="48" rx="24" fill="#c8b682"/>
-    <rect x="126" y="216" width="100" height="48" rx="24" fill="#c8b682"/>
-    <rect x="126" y="296" width="100" height="48" rx="24" fill="#c8b682"/>
-    <rect x="126" y="376" width="100" height="48" rx="24" fill="#0b0d10"/>
-    <rect x="286" y="136" width="100" height="48" rx="24" fill="#c8b682"/>
-    <rect x="286" y="216" width="100" height="48" rx="24" fill="#0b0d10"/>
-    <rect x="286" y="296" width="100" height="48" rx="24" fill="#c8b682"/>
-    <rect x="286" y="376" width="100" height="48" rx="24" fill="#0b0d10"/>
+    <rect x="126" y="112" width="100" height="48" rx="24" fill="#c8b682"/>
+    <rect x="126" y="192" width="100" height="48" rx="24" fill="#c8b682"/>
+    <rect x="126" y="272" width="100" height="48" rx="24" fill="#c8b682"/>
+    <rect x="126" y="352" width="100" height="48" rx="24" fill="#0b0d10"/>
+    <rect x="286" y="112" width="100" height="48" rx="24" fill="#c8b682"/>
+    <rect x="286" y="192" width="100" height="48" rx="24" fill="#0b0d10"/>
+    <rect x="286" y="272" width="100" height="48" rx="24" fill="#c8b682"/>
+    <rect x="286" y="352" width="100" height="48" rx="24" fill="#0b0d10"/>
   </g>
 </svg>
