@@ -143,11 +143,15 @@ In `supabase/schema.sql`:
   `spam_total` (counts of conversations labeled, not tokens).
   The Bayes prior + the cold-start gate.
 - `journal_entries.ham_marked_at timestamptz null` — set
-  the first time the user clicks the **Looks good** button
-  on an automatic entry. Idempotency marker for ham
-  training; the UI hides the button once non-null and the
-  supabase update has a `ham_marked_at IS NULL` predicate so
-  a stale tab can't double-train.
+  the first time the user clicks the thumbs-up (Looks good)
+  button on an automatic entry. Idempotency marker for ham
+  training; the UI keeps the button visible but flags it
+  with a green border (`.is-voted`), and the click handler
+  short-circuits when this column is non-null so a re-click
+  on an already-voted button doesn't fire a redundant RPC.
+  The supabase update path also re-checks
+  `ham_marked_at IS NULL` in its WHERE clause so a stale
+  tab can't double-train.
 - `threads.last_journaled_msg_id`, `journal_claim_holder`,
   `journal_claim_expires_at` — per-thread journaling
   cursor + claim stamps.

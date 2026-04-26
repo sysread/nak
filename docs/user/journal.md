@@ -51,8 +51,9 @@ day unfolded.
   conversation as excluded from future journaling, AND tells the
   journaler "this kind is NOT worth journaling." See
   [Teaching the journaler what to keep](#teaching-the-journaler-what-to-keep)
-  below. The thumbs-up is one-shot per entry; once clicked it's
-  replaced by a quiet **Marked good** tag.
+  below. Both buttons stay visible; once you click the thumbs-up
+  it picks up a green border to show the vote took. The vote is
+  one-shot per entry, so re-clicking the green button is a no-op.
 
 Navigate days with **‹** / **›** or jump back to **Today**.
 

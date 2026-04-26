@@ -284,10 +284,14 @@
   // ham_marked_at and trains the source thread's tokens as ham. The
   // helper returns null when the row was already marked - we treat
   // that as success (the user clicked it on a stale tab; the
-  // server-side guard prevented the double-train) so the button
-  // just disappears.
+  // server-side guard prevented the double-train) so the green
+  // border just stays. The button stays visible after a successful
+  // mark; subsequent clicks short-circuit here so the visual is
+  // honest about the state without sending a redundant RPC.
   async function onMarkHam(id: string): Promise<void> {
     if (!app.supabase || hamBusyId !== null) return;
+    const target = journal.entries.find((e) => e.id === id);
+    if (target?.ham_marked_at) return; // already voted; no-op
     hamBusyId = id;
     hamError = null;
     hamErrorId = null;
@@ -498,34 +502,30 @@
         title="Download this entry as Markdown"
       >Export .md</button>
       <!--
-        Ham button - the user's "this entry was appropriate" signal.
-        Appears only on automatic entries that still have a source
-        thread (orphans can't be trained against) and that haven't
-        already been marked. Once clicked, the column flips and the
-        button disappears, replaced by a quiet "Marked good" tag so
-        the user can see the action took. The thumbs-up icon plus
-        the explicit text matches the verb-first pattern of the
-        other footer buttons.
-      -->
-      <!--
         Spam-filter votes. Thumbs-up trains the source conversation's
         tokens as ham; thumbs-down (Delete) trains them as spam AND
         deletes the entry + adds the thread to journal_thread_excludes.
-        Emoji-only labels keep the row compact alongside Export .md;
-        aria-label + title carry the verb for screen readers and
-        hover tooltips. The Marked-good tag replaces the thumbs-up
-        once clicked so the action is durable across reloads.
+        Both buttons stay visible once the entry has a thread; the
+        thumbs-up gets a green border (.is-voted) once ham_marked_at
+        flips so the durable vote state lives on the button itself
+        rather than being replaced by a separate "you voted" tag.
+        Re-clicking an already-hammed thumbs-up is a no-op (the click
+        handler short-circuits when ham_marked_at is set) - the visual
+        state is the indicator. aria-label + title carry the verb for
+        keyboard / screen-reader users.
       -->
-      {#if entry.ham_marked_at !== null}
-        <span class="subtle journal-ham-marked" title="You marked this entry as appropriate. Trained the spam filter on the source conversation.">Marked good</span>
-      {:else if entry.thread_id}
+      {#if entry.thread_id}
         <button
           type="button"
           class="secondary journal-vote-btn"
+          class:is-voted={entry.ham_marked_at !== null}
           aria-label="Looks good"
+          aria-pressed={entry.ham_marked_at !== null}
           onclick={() => onMarkHam(entry.id)}
           disabled={hamBusyId === entry.id}
-          title="Looks good - tell the spam filter this kind of conversation IS journal-worthy"
+          title={entry.ham_marked_at !== null
+            ? 'You marked this entry as appropriate.'
+            : 'Looks good - tell the spam filter this kind of conversation IS journal-worthy'}
         >{hamBusyId === entry.id ? '…' : '👍'}</button>
       {/if}
       {#if deleteTargetId === entry.id}
@@ -926,15 +926,6 @@
     margin-right: 0.25rem;
   }
 
-  /* Quiet "you marked this" tag that replaces the thumbs-up button
-     once the user clicks it. Sits in the same row as the action
-     buttons so the spacing matches; visually muted so it doesn't
-     compete with the actual buttons. */
-  .journal-ham-marked {
-    font-size: 0.85rem;
-    padding: 0 0.25rem;
-  }
-
   /* Emoji-only vote buttons (thumbs-up for ham, thumbs-down for the
      delete trigger). Tighten horizontal padding compared to the
      text buttons in the same row so the glyph reads as a square
@@ -944,6 +935,22 @@
   .journal-vote-btn {
     padding-inline: 0.45rem;
     line-height: 1;
+  }
+
+  /* Selected state for a vote button (currently only the thumbs-up
+     once the user has marked the entry as ham). Green border via
+     the project-wide --ok token (theme-aware: light/dark each pick
+     a contrast-appropriate green). 1.5px width so the indication
+     reads even when the button sits next to other secondary buttons
+     with the same neutral border, with an offsetting padding shave
+     so the button doesn't jitter sideways when it flips state.
+     :hover override pins the green - .secondary:hover would
+     otherwise repaint the border. */
+  .journal-vote-btn.is-voted,
+  .journal-vote-btn.is-voted:hover {
+    border-color: var(--ok);
+    border-width: 1.5px;
+    padding-inline: calc(0.45rem - 0.5px);
   }
 
   .journal-badge {
