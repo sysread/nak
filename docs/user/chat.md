@@ -219,17 +219,37 @@ already expect X" moment.
 
 The pill is visible whenever a conversation is open. On a thread
 that has fired before, the pill seeds from the most recent stored
-fire's valence so the emoji you see right after opening matches the
-model's last read. On a thread with no fire history it shows 💤 as
-a "nothing to report" placeholder; the diagnostics screen will say
+fire so the emoji you see right after opening matches the model's
+last read. On a thread with no fire history it shows 💤 as a
+"nothing to report" placeholder; the diagnostics screen will say
 so explicitly. As soon as the worker mints something new, the
-emoji swaps to track the latest mint's valence (cheerful / content
-/ neutral / uneasy / pensive). On the brand-new-chat screen with
+emoji swaps to track that mint. On the brand-new-chat screen with
 no conversation selected the pill is hidden - there's no context
 yet to predict against.
 
+The emoji is picked from a small two-axis table:
+
+- **Valence** (warm vs. cool, in five bands) sets the row -
+  cheerful, content, neutral, uneasy, or pensive.
+- **Confidence** (how sure the model is) splits each row into a
+  **confident** column and a **tentative** column. A tentative
+  cheerful read shows up as a slight smile rather than a beaming
+  one; a tentative neutral read shows up as 🤨 (skeptical) instead
+  of 😐, and so on.
+
+Hover the pill for the disambiguating label, or open the
+diagnostics screen below: the first section is a fold-away
+**legend** that plots all ten cells with their valence ranges and
+the confidence cutoff, sourced directly from the same lookup the
+pill uses, so the legend can never drift.
+
 The screen shows:
 
+- **Mood-pill legend** - a dismissable table illustrating the
+  (valence x confidence) lookup the pill is reading from, with
+  axis labels and the boundaries of each band. Defaults to open
+  on first arrival; click the summary line to fold it once you've
+  internalised the axes.
 - **Overview counters** - total samskaras (split by tier), total
   pair associations across the corpus, and per-chat counts for
   substrate records and cohort fires.

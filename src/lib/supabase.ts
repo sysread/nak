@@ -3160,17 +3160,21 @@ export class SupabaseService {
   }
 
   /**
-   * Most recent fire's valence + tier for a thread, used to seed the
-   * mood pill on conversation reopen so the user doesn't have to wait
-   * for a fresh mint to see anything other than 💤. Filters out fires
-   * whose joined samskara has a null valence (rare, but the field is
-   * nullable until the assimilator lands a reading) - returning null
-   * lets the caller fall back to the default placeholder cleanly.
-   * `.limit(1)` keeps this cheap on threads with hundreds of fires.
+   * Most recent fire's valence + tier + confidence for a thread, used
+   * to seed the mood pill on conversation reopen so the user doesn't
+   * have to wait for a fresh mint to see anything other than 💤.
+   * Filters out fires whose joined samskara has a null valence (rare,
+   * but the field is nullable until the assimilator lands a reading)
+   * - returning null lets the caller fall back to the default
+   * placeholder cleanly. Confidence falls back to 1 when the column
+   * is null on legacy rows so the seed renders the confident column;
+   * the alternative (rendering tentative for "unknown") would be a
+   * worse default. `.limit(1)` keeps this cheap on threads with
+   * hundreds of fires.
    */
   async samskaraGetLatestFireMood(
     threadId: string
-  ): Promise<{ valence: number; tier: 1 | 2 } | null> {
+  ): Promise<{ valence: number; tier: 1 | 2; confidence: number } | null> {
     // `samskaras!inner` collapses fires whose FK target was deleted
     // out of the result at the DB level, and the
     // `.not('samskaras.valence', 'is', null)` filter additionally
@@ -3180,7 +3184,7 @@ export class SupabaseService {
     // hiding a perfectly good fire one row below.
     const { data, error } = await this.client
       .from('samskara_fires')
-      .select('samskaras!inner(valence, tier)')
+      .select('samskaras!inner(valence, tier, confidence)')
       .eq('thread_id', threadId)
       .not('samskaras.valence', 'is', null)
       .order('fired_at', { ascending: false })
@@ -3189,6 +3193,7 @@ export class SupabaseService {
     interface EmbeddedMood {
       valence: number | null;
       tier: number;
+      confidence: number | null;
     }
     const rows = (data ?? []) as unknown as {
       samskaras: EmbeddedMood | EmbeddedMood[] | null;
@@ -3205,7 +3210,11 @@ export class SupabaseService {
     // Collapse any unexpected tier value to tier 1 so the consumer's
     // narrow union doesn't drift.
     const tier: 1 | 2 = joined.tier === 2 ? 2 : 1;
-    return { valence: joined.valence, tier };
+    return {
+      valence: joined.valence,
+      tier,
+      confidence: joined.confidence ?? 1,
+    };
   }
 
   /**

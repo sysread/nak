@@ -81,6 +81,9 @@ interface MintOutbound {
   tier: 1 | 2;
   /** Continuous [-1, 1]. Main-thread toast renders emoji per band. */
   valence: number;
+  /** Minter confidence in [0, 1]. Drives the second axis of the mood
+   *  pill (tentative vs confident column in MOOD_TABLE). */
+  confidence: number;
 }
 
 const workerGlobal = self as unknown as DedicatedWorkerGlobalScope;
@@ -185,7 +188,13 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
           phase,
           signal,
           onLeaseLost,
-          onMint: (info) => post({ type: 'mint', tier: info.tier, valence: info.valence }),
+          onMint: (info) =>
+            post({
+              type: 'mint',
+              tier: info.tier,
+              valence: info.valence,
+              confidence: info.confidence,
+            }),
         };
         const result = await runOneCycle(ctx);
         post({ type: 'progress', phase, result });

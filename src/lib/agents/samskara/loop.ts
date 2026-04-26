@@ -130,7 +130,7 @@ export interface CycleContext {
    * upsert both succeed, not on empty-phase or error paths. Optional so
    * unit tests and non-UI contexts can omit it.
    */
-  onMint?: (info: { tier: 1 | 2; valence: number }) => void;
+  onMint?: (info: { tier: 1 | 2; valence: number; confidence: number }) => void;
 }
 
 export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
@@ -533,7 +533,11 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
   });
   // Notify the main thread. Swallowed-by-ctx when the caller didn't
   // wire the callback (tests); otherwise bubbles a subtle toast.
-  ctx.onMint?.({ tier: 1, valence: minted.valence });
+  ctx.onMint?.({
+    tier: 1,
+    valence: minted.valence,
+    confidence: minted.confidence,
+  });
   return 'progress';
 }
 

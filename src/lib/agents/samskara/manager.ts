@@ -127,6 +127,7 @@ export class SamskaraManager {
         message?: string;
         tier?: number;
         valence?: number;
+        confidence?: number;
         phase?: string;
         result?: string;
       };
@@ -148,13 +149,18 @@ export class SamskaraManager {
       } else if (
         data.type === 'mint' &&
         (data.tier === 1 || data.tier === 2) &&
-        typeof data.valence === 'number'
+        typeof data.valence === 'number' &&
+        typeof data.confidence === 'number'
       ) {
         // Bubble to the UI toast listener via a window CustomEvent. The
         // toast component is the only listener today, but decoupling via
         // the event bus means future surfaces (debug inspector, audio
         // cue) can subscribe without touching this file.
-        notifySamskaraMint({ tier: data.tier, valence: data.valence });
+        notifySamskaraMint({
+          tier: data.tier,
+          valence: data.valence,
+          confidence: data.confidence,
+        });
       }
     });
     this.worker = worker;

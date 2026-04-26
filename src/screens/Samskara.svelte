@@ -25,6 +25,7 @@
     SamskaraSubstrateDiagnosticRow,
     SamskaraFireDiagnosticRow,
   } from '$lib/supabase';
+  import { MOOD_TABLE, CONFIDENCE_CUT } from '$lib/samskara/events';
 
   interface Props {
     onClose: () => void;
@@ -415,6 +416,82 @@
         <p class="error">{error}</p>
       {/if}
 
+      <!-- Mood-pill legend. Renders the (valence x confidence) lookup
+           table the toast component reads from at mint time, sourced
+           directly from MOOD_TABLE so the legend can never drift from
+           the live mapping. Wrapped in <details> so the user can fold
+           it away once they've internalised the axes - the modal also
+           has substrate/fires/cohort detail below that needs the
+           vertical space on tighter viewports. Defaults to open
+           because the click-the-pill -> open-this-modal flow is the
+           moment of curiosity where "what does that emoji mean?" is
+           likeliest to be the question. -->
+      <details class="mood-legend" open>
+        <summary class="mood-legend-summary">
+          What the mood-pill emoji means
+        </summary>
+        <p class="mood-legend-blurb">
+          Each freshly-minted samskara reports two numbers: a
+          <strong>valence</strong> in [-1, 1] (how warm or cool the
+          underlying tendency reads) and a
+          <strong>confidence</strong> in [0, 1] (how sure the model
+          is). The pill picks one cell from the table below. Rows
+          step through valence top to bottom; the columns split on
+          confidence at {CONFIDENCE_CUT}.
+        </p>
+        <div class="mood-legend-table-wrap">
+          <table class="mood-legend-table">
+            <thead>
+              <tr>
+                <th class="mood-axis-y" scope="col">
+                  <span class="mood-axis-label">valence</span>
+                </th>
+                <th scope="col">
+                  confident
+                  <span class="mood-axis-sub">conf &ge; {CONFIDENCE_CUT}</span>
+                </th>
+                <th scope="col">
+                  tentative
+                  <span class="mood-axis-sub">conf &lt; {CONFIDENCE_CUT}</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each MOOD_TABLE as row, i (i)}
+                <tr>
+                  <th scope="row" class="mood-row-label">
+                    <span class="mood-row-name">{row.confidentLabel}</span>
+                    <span class="mood-row-range">
+                      {#if i === 0}
+                        v &ge; {row.valenceMin}
+                      {:else if row.valenceMin === -Infinity}
+                        v &lt; {MOOD_TABLE[i - 1].valenceMin}
+                      {:else}
+                        {row.valenceMin} &le; v &lt; {MOOD_TABLE[i - 1].valenceMin}
+                      {/if}
+                    </span>
+                  </th>
+                  <td class="mood-cell">
+                    <span class="mood-glyph" aria-hidden="true">{row.confidentEmoji}</span>
+                    <span class="mood-cell-label">{row.confidentLabel}</span>
+                  </td>
+                  <td class="mood-cell">
+                    <span class="mood-glyph" aria-hidden="true">{row.tentativeEmoji}</span>
+                    <span class="mood-cell-label">{row.tentativeLabel}</span>
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+        <p class="mood-legend-foot subtle">
+          Glyph collisions are intentional - the slight smile shows up
+          for both confident "content" and tentative "cheerful"
+          because the emoji vocabulary thins out fast on the warm
+          side. Hover the pill itself for the disambiguating label.
+        </p>
+      </details>
+
       <!-- Overview counts. Three thread-scoped numbers (substrate,
            fires, total samskaras) + three corpus-wide (total /
            tier-1 / tier-2 / associations) so you can see at a glance
@@ -689,6 +766,153 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
     gap: 0.6rem;
+  }
+
+  /* Mood-pill legend. Lives at the very top of the body because the
+     click-the-pill -> open-this-modal flow is where the user is most
+     likely asking "what did that emoji mean." <details>/<summary>
+     gives us native dismiss-and-remember behaviour without component
+     state. */
+  .mood-legend {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .mood-legend-summary {
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    /* Native disclosure marker stays - readers expect the triangle
+       to telegraph "this folds." Intrinsic contents render with the
+       summary's font so summary-padding aligns with body-padding. */
+    padding: 0.1rem 0;
+    user-select: none;
+  }
+
+  .mood-legend-summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  .mood-legend-blurb {
+    margin: 0.6rem 0 0.4rem;
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+
+  /* Wrap the table so it can scroll horizontally on very narrow
+     viewports rather than overflowing the modal shell. min-width
+     keeps the cells readable - shrinking below this just turns the
+     table into hieroglyphics. */
+  .mood-legend-table-wrap {
+    overflow-x: auto;
+  }
+
+  .mood-legend-table {
+    width: 100%;
+    min-width: 22rem;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+
+  .mood-legend-table th,
+  .mood-legend-table td {
+    border: 1px solid var(--border);
+    padding: 0.4rem 0.55rem;
+    text-align: center;
+    vertical-align: middle;
+  }
+
+  .mood-legend-table thead th {
+    background: var(--bg-2);
+    font-weight: 600;
+    font-size: 0.78rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* The top-left axis cell carries the y-axis label ("valence")
+     while the column headers carry the x-axis split. Two scope=col
+     headers + scope=row on the per-row band names give screen
+     readers a sensible reading order without an explicit caption. */
+  .mood-axis-y {
+    text-align: left;
+  }
+
+  .mood-axis-label {
+    display: inline-block;
+    font-style: italic;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--muted);
+  }
+
+  .mood-axis-sub {
+    display: block;
+    font-size: 0.7rem;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--muted);
+    margin-top: 0.1rem;
+  }
+
+  .mood-row-label {
+    text-align: left;
+    background: var(--bg-2);
+  }
+
+  .mood-row-name {
+    display: block;
+    font-weight: 600;
+  }
+
+  .mood-row-range {
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 400;
+    color: var(--muted);
+    margin-top: 0.1rem;
+    /* Math notation can break across the cell awkwardly on narrow
+       columns; nowrap keeps each range on one line. The wrapping
+       table-wrap above handles overflow at the table level. */
+    white-space: nowrap;
+  }
+
+  .mood-cell {
+    /* Stack the glyph above its label so the emoji reads as the
+       primary content and the disambiguating word as a caption. */
+    line-height: 1.2;
+  }
+
+  .mood-glyph {
+    display: block;
+    font-size: 1.6rem;
+    line-height: 1.1;
+    /* Same font-family hint as the toast pill - older Android
+       WebView's default cascade can miss the system emoji font. */
+    font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
+  }
+
+  .mood-cell-label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-top: 0.1rem;
+  }
+
+  .mood-legend-foot {
+    margin: 0.5rem 0 0;
+    font-size: 0.78rem;
+    line-height: 1.45;
   }
 
   .count-card {

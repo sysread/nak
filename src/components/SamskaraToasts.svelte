@@ -112,8 +112,8 @@
   }
 
   function adopt(detail: SamskaraMintEventDetail): void {
-    const emoji = valenceToEmoji(detail.valence);
-    const label = valenceToMoodLabel(detail.valence);
+    const emoji = valenceToEmoji(detail.valence, detail.confidence);
+    const label = valenceToMoodLabel(detail.valence, detail.confidence);
     // Skip the swap when the incoming mint lands in the same
     // valence band as what's already showing AND the tier hasn't
     // changed. Without this, every mint bumps `id`, which keys the
@@ -169,8 +169,8 @@
       if (!current || !current.isDefault) return;
       current = {
         id: ++nextId,
-        emoji: valenceToEmoji(result.valence),
-        label: valenceToMoodLabel(result.valence),
+        emoji: valenceToEmoji(result.valence, result.confidence),
+        label: valenceToMoodLabel(result.valence, result.confidence),
         tier: result.tier,
         isDefault: false,
       };

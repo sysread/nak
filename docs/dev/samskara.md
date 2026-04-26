@@ -63,11 +63,17 @@ toast is just a glance cue that the bias model is forming.
   consumers of the types don't drag the Supabase/Venice imports
   along.
 - `src/lib/samskara/events.ts` - main-thread event bridge
-  (rune-free). Defines `SAMSKARA_MINT_EVENT`,
-  `valenceToEmoji`, and `notifySamskaraMint` for the
-  worker-manager handoff. Separate from the Svelte component so
-  the manager can import without pulling Svelte runtime into
-  the worker bundle.
+  (rune-free). Defines `SAMSKARA_MINT_EVENT`, `valenceToEmoji`,
+  `valenceToMoodLabel`, `notifySamskaraMint`, and the
+  `MOOD_TABLE` lookup that drives the mood pill. Mint-event
+  detail carries `{ tier, valence, confidence }`; the lookup
+  splits each of five valence bands into a confident column
+  (confidence >= `CONFIDENCE_CUT`, default 0.5) and a tentative
+  column (below the cut). Separate from the Svelte component so
+  the manager can import without pulling Svelte runtime into the
+  worker bundle. The Samskara diagnostics modal renders the same
+  `MOOD_TABLE` as a fold-away legend so the user-visible
+  documentation can never drift from the live mapping.
 - `src/components/SamskaraToasts.svelte` - the persistent
   mood-pill UI. Listens for `SAMSKARA_MINT_EVENT` on `window`,
   renders the latest mint's emoji as a fixed pill in the
@@ -76,16 +82,16 @@ toast is just a glance cue that the bias model is forming.
   it reacted to. Whenever a thread is active (`route.cid` set)
   the pill is visible. On thread open it seeds asynchronously
   from `samskaraGetLatestFireMood(cid)` (the most recent stored
-  fire's joined valence + tier), so reopened conversations
-  surface the model's last read instead of waiting for a fresh
-  mint. While the seed query is in flight, and on threads that
-  have never fired or where the query fails, the pill renders
-  U+1F4A4 SLEEPING SYMBOL (💤) as a "nothing to report"
-  placeholder. A monotonic generation counter guards the seed
-  fetch against thread-switch races. The pill is only suppressed
-  on the brand-new-chat screen where `route.cid` is null. Click
-  always opens the Samskara diagnostics modal regardless of
-  state. Mounted once in `Chat.svelte`.
+  fire's joined valence + tier + confidence), so reopened
+  conversations surface the model's last read instead of waiting
+  for a fresh mint. While the seed query is in flight, and on
+  threads that have never fired or where the query fails, the
+  pill renders U+1F4A4 SLEEPING SYMBOL (💤) as a "nothing to
+  report" placeholder. A monotonic generation counter guards the
+  seed fetch against thread-switch races. The pill is only
+  suppressed on the brand-new-chat screen where `route.cid` is
+  null. Click always opens the Samskara diagnostics modal
+  regardless of state. Mounted once in `Chat.svelte`.
 - `src/lib/embeddings/sources/samskara-substrate.ts` - registered
   with the embeddings worker as a third source alongside
   memories and threads. Polls `samskara_substrate where
