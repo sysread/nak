@@ -110,9 +110,9 @@ export const MOOD_TABLE: readonly MoodCell[] = [
 ] as const;
 
 /**
- * Find the row of MOOD_TABLE a valence falls into. Walks top-down so
- * the first matching `valenceMin` wins; the bottom row's -Infinity
- * means out-of-range negative values still land somewhere.
+ * Find the index of the MOOD_TABLE row a valence falls into. Walks
+ * top-down so the first matching `valenceMin` wins; the bottom row's
+ * -Infinity means out-of-range negative values still land somewhere.
  *
  * The comparison is asymmetric on purpose: positive cuts (valenceMin
  * >= 0) are inclusive on the lower edge, so valence === 0.2 lands in
@@ -123,12 +123,18 @@ export const MOOD_TABLE: readonly MoodCell[] = [
  * enforced and what the boundary tests pin. Keep the asymmetry; if
  * you want symmetric closure on both sides instead, every test
  * boundary needs to move with it.
+ *
+ * Returns the index rather than the row directly so consumers that
+ * need to position something in the table grid (e.g. the diagnostics-
+ * modal "you are here" dot) can walk by row index without a separate
+ * indexOf hop.
  */
-function bandFor(valence: number): MoodCell {
-  for (const row of MOOD_TABLE) {
+export function bandIndexFor(valence: number): number {
+  for (let i = 0; i < MOOD_TABLE.length; i++) {
+    const row = MOOD_TABLE[i];
     const inclusive = row.valenceMin >= 0;
     if (inclusive ? valence >= row.valenceMin : valence > row.valenceMin) {
-      return row;
+      return i;
     }
   }
   // Unreachable - bottom row's valenceMin is -Infinity, and any real
@@ -136,6 +142,36 @@ function bandFor(valence: number): MoodCell {
   // exhaustiveness check stays honest if someone reorders MOOD_TABLE
   // without keeping a -Infinity sentinel.
   throw new Error(`unreachable: no mood band for valence ${valence}`);
+}
+
+function bandFor(valence: number): MoodCell {
+  return MOOD_TABLE[bandIndexFor(valence)];
+}
+
+/**
+ * The two columns of MOOD_TABLE. `'confident'` is the high-confidence
+ * column (confidence >= CONFIDENCE_CUT) and the default for callers
+ * that don't pass confidence; `'tentative'` is the low-confidence
+ * column. Carried as a string union rather than a 0/1 index so call
+ * sites read self-documentingly and a typo is a compile error.
+ */
+export type MoodColumn = 'confident' | 'tentative';
+
+export function columnFor(confidence: number): MoodColumn {
+  return confidence < CONFIDENCE_CUT ? 'tentative' : 'confident';
+}
+
+/**
+ * Combined cell coordinate for a (valence, confidence) pair. The
+ * diagnostics-modal legend uses this to locate the matching <td> and
+ * overlay the "you are here" dot; any other consumer wanting to
+ * highlight a specific cell can use the same shape.
+ */
+export function cellFor(
+  valence: number,
+  confidence: number
+): { row: number; column: MoodColumn } {
+  return { row: bandIndexFor(valence), column: columnFor(confidence) };
 }
 
 /**

@@ -25,7 +25,13 @@
     SamskaraSubstrateDiagnosticRow,
     SamskaraFireDiagnosticRow,
   } from '$lib/supabase';
-  import { MOOD_TABLE, CONFIDENCE_CUT } from '$lib/samskara/events';
+  import {
+    MOOD_TABLE,
+    CONFIDENCE_CUT,
+    cellFor,
+    type MoodColumn,
+  } from '$lib/samskara/events';
+  import { moodState } from '$lib/samskara/mood.svelte';
 
   interface Props {
     onClose: () => void;
@@ -147,6 +153,22 @@
     }
     return [...groups.values()];
   });
+
+  // Where the mood pill currently sits in MOOD_TABLE, for the
+  // legend's "you are here" dot. Reads through the shared moodState
+  // so it stays in lockstep with the pill the user clicked to open
+  // this modal - SamskaraToasts updates moodState on every mint and
+  // on the seed-from-history path, so this derived recomputes
+  // automatically whenever the pill itself changes. Null when there
+  // is no current mood (brand-new chat, or a thread that has never
+  // fired and whose seed hasn't returned).
+  const currentCell: { row: number; column: MoodColumn } | null = $derived.by(
+    () => {
+      const m = moodState.current;
+      if (!m) return null;
+      return cellFor(m.valence, m.confidence);
+    }
+  );
 
   function clusterKey(cohortId: string, seq: number): string {
     return `${cohortId}:${seq}`;
@@ -508,16 +530,52 @@
         <p class="error">{error}</p>
       {/if}
 
+      <!-- Overview counts. Three thread-scoped numbers (substrate,
+           fires, total samskaras) + three corpus-wide (total /
+           tier-1 / tier-2 / associations) so you can see at a glance
+           whether the pipeline is producing anything. -->
+      <h2 class="pane-section">Overview</h2>
+      {#if counts}
+        <div class="counts-grid">
+          <div class="count-card">
+            <div class="count-value">{counts.totalSamskaras}</div>
+            <div class="count-label">Samskaras (total)</div>
+            <div class="count-sub">
+              tier 1: {counts.tier1Samskaras} · tier 2: {counts.tier2Samskaras}
+            </div>
+          </div>
+          <div class="count-card">
+            <div class="count-value">{counts.associations}</div>
+            <div class="count-label">Pair associations</div>
+          </div>
+          <div class="count-card">
+            <div class="count-value">{counts.substrateInThread}</div>
+            <div class="count-label">Substrate in this chat</div>
+          </div>
+          <div class="count-card">
+            <div class="count-value">{counts.firesInThread}</div>
+            <div class="count-label">Fires in this chat</div>
+            <div class="count-sub">
+              {cohortGroups.length} cohort{cohortGroups.length === 1 ? '' : 's'}
+            </div>
+          </div>
+        </div>
+      {:else if !error}
+        <p class="subtle">Loading counts…</p>
+      {/if}
+
       <!-- Mood-pill legend. Renders the (valence x confidence) lookup
-           table the toast component reads from at mint time, sourced
-           directly from MOOD_TABLE so the legend can never drift from
-           the live mapping. Wrapped in <details> so the user can fold
-           it away once they've internalised the axes - the modal also
-           has substrate/fires/cohort detail below that needs the
-           vertical space on tighter viewports. Defaults to open
-           because the click-the-pill -> open-this-modal flow is the
-           moment of curiosity where "what does that emoji mean?" is
-           likeliest to be the question. -->
+           the toast pill reads at mint time, sourced directly from
+           MOOD_TABLE so the legend can never drift from the live
+           mapping. The current pill position is overlaid as a
+           glowing red dot on the matching cell, read from the shared
+           moodState so the dot can never drift from the pill the
+           user clicked to open us. Wrapped in <details> so the user
+           can fold it once they've internalised the axes - the
+           cohort-fires section below it can be tall on a busy
+           thread. Defaults to open because clicking the pill is
+           the moment the "what does that emoji mean?" question is
+           likeliest. -->
       <details class="mood-legend" open>
         <summary class="mood-legend-summary">
           What the mood-pill emoji means
@@ -529,7 +587,9 @@
           <strong>confidence</strong> in [0, 1] (how sure the model
           is). The pill picks one cell from the table below. Rows
           step through valence top to bottom; the columns split on
-          confidence at {CONFIDENCE_CUT}.
+          confidence at {CONFIDENCE_CUT}. The
+          <span class="mood-dot-inline" aria-hidden="true"></span>
+          dot marks where the pill currently sits.
         </p>
         <div class="mood-legend-table-wrap">
           <table class="mood-legend-table">
@@ -566,16 +626,40 @@
                   <td class="mood-cell">
                     <span class="mood-glyph" aria-hidden="true">{row.confidentEmoji}</span>
                     <span class="mood-cell-label">{row.confidentLabel}</span>
+                    {#if currentCell && currentCell.row === i && currentCell.column === 'confident'}
+                      <span
+                        class="mood-dot"
+                        aria-label={`Pill currently here: ${row.confidentLabel}, confidence ${(moodState.current?.confidence ?? 0).toFixed(2)}, valence ${(moodState.current?.valence ?? 0).toFixed(2)}`}
+                      ></span>
+                    {/if}
                   </td>
                   <td class="mood-cell">
                     <span class="mood-glyph" aria-hidden="true">{row.tentativeEmoji}</span>
                     <span class="mood-cell-label">{row.tentativeLabel}</span>
+                    {#if currentCell && currentCell.row === i && currentCell.column === 'tentative'}
+                      <span
+                        class="mood-dot"
+                        aria-label={`Pill currently here: ${row.tentativeLabel}, confidence ${(moodState.current?.confidence ?? 0).toFixed(2)}, valence ${(moodState.current?.valence ?? 0).toFixed(2)}`}
+                      ></span>
+                    {/if}
                   </td>
                 </tr>
               {/each}
             </tbody>
           </table>
         </div>
+        {#if currentCell && moodState.current}
+          <p class="mood-legend-current subtle">
+            Currently at valence {moodState.current.valence.toFixed(2)},
+            confidence {moodState.current.confidence.toFixed(2)} -
+            tier {moodState.current.tier}.
+          </p>
+        {:else}
+          <p class="mood-legend-current subtle">
+            No current mood reading - the pill is on its 💤 placeholder
+            because nothing has fired or been minted on this thread yet.
+          </p>
+        {/if}
         <p class="mood-legend-foot subtle">
           Glyph collisions are intentional - the slight smile shows up
           for both confident "content" and tentative "cheerful"
@@ -583,40 +667,6 @@
           side. Hover the pill itself for the disambiguating label.
         </p>
       </details>
-
-      <!-- Overview counts. Three thread-scoped numbers (substrate,
-           fires, total samskaras) + three corpus-wide (total /
-           tier-1 / tier-2 / associations) so you can see at a glance
-           whether the pipeline is producing anything. -->
-      <h2 class="pane-section">Overview</h2>
-      {#if counts}
-        <div class="counts-grid">
-          <div class="count-card">
-            <div class="count-value">{counts.totalSamskaras}</div>
-            <div class="count-label">Samskaras (total)</div>
-            <div class="count-sub">
-              tier 1: {counts.tier1Samskaras} · tier 2: {counts.tier2Samskaras}
-            </div>
-          </div>
-          <div class="count-card">
-            <div class="count-value">{counts.associations}</div>
-            <div class="count-label">Pair associations</div>
-          </div>
-          <div class="count-card">
-            <div class="count-value">{counts.substrateInThread}</div>
-            <div class="count-label">Substrate in this chat</div>
-          </div>
-          <div class="count-card">
-            <div class="count-value">{counts.firesInThread}</div>
-            <div class="count-label">Fires in this chat</div>
-            <div class="count-sub">
-              {cohortGroups.length} cohort{cohortGroups.length === 1 ? '' : 's'}
-            </div>
-          </div>
-        </div>
-      {:else if !error}
-        <p class="subtle">Loading counts…</p>
-      {/if}
 
       <!-- Compound summary: the prose block always injected. Shows
            what the model actually sees as its predictive-self model
@@ -1042,8 +1092,77 @@
 
   .mood-cell {
     /* Stack the glyph above its label so the emoji reads as the
-       primary content and the disambiguating word as a caption. */
+       primary content and the disambiguating word as a caption.
+       position:relative anchors the absolutely-positioned
+       .mood-dot when the current pill lands in this cell. */
     line-height: 1.2;
+    position: relative;
+  }
+
+  /* "You are here" dot. Absolutely positioned in the top-right
+     corner of whichever .mood-cell currently matches the pill's
+     (valence, confidence). Solid red with a soft red glow so it
+     reads instantly against any cell color in either theme; the
+     `pulse` keyframe gives a subtle breathing animation so the
+     dot is noticed without being demanding. Reduced-motion
+     respects users who don't want the pulse. */
+  .mood-dot {
+    position: absolute;
+    top: 0.3rem;
+    right: 0.3rem;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background: #ef4444;
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, #ef4444 35%, transparent),
+      0 0 8px 2px color-mix(in srgb, #ef4444 55%, transparent);
+    pointer-events: none;
+    animation: mood-dot-pulse 2.4s ease-in-out infinite;
+  }
+
+  @keyframes mood-dot-pulse {
+    0%,
+    100% {
+      box-shadow:
+        0 0 0 2px color-mix(in srgb, #ef4444 35%, transparent),
+        0 0 6px 1px color-mix(in srgb, #ef4444 45%, transparent);
+    }
+    50% {
+      box-shadow:
+        0 0 0 3px color-mix(in srgb, #ef4444 45%, transparent),
+        0 0 10px 3px color-mix(in srgb, #ef4444 70%, transparent);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mood-dot {
+      animation: none;
+    }
+  }
+
+  /* Inline dot used in the legend blurb so the prose can refer to
+     "the [dot] dot" without leaving the reader to guess which
+     visual we mean. Static (no pulse) since the moving dot is
+     already in the table; shape and color match exactly. */
+  .mood-dot-inline {
+    display: inline-block;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    background: #ef4444;
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, #ef4444 30%, transparent),
+      0 0 4px 1px color-mix(in srgb, #ef4444 45%, transparent);
+    /* Nudge to optical-center against the surrounding text. */
+    vertical-align: -0.05em;
+    margin: 0 0.15rem;
+  }
+
+  .mood-legend-current {
+    margin: 0.5rem 0 0;
+    font-size: 0.78rem;
+    line-height: 1.45;
   }
 
   .mood-glyph {

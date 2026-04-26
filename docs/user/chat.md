@@ -238,21 +238,26 @@ The emoji is picked from a small two-axis table:
   of 😐, and so on.
 
 Hover the pill for the disambiguating label, or open the
-diagnostics screen below: the first section is a fold-away
-**legend** that plots all ten cells with their valence ranges and
-the confidence cutoff, sourced directly from the same lookup the
-pill uses, so the legend can never drift.
+diagnostics screen below: it has a fold-away **legend** that plots
+all ten cells with their valence ranges and the confidence cutoff,
+sourced directly from the same lookup the pill uses (so the legend
+can never drift), and overlays a small **glowing red dot** on the
+cell where the pill currently sits.
 
 The screen shows:
 
-- **Mood-pill legend** - a dismissable table illustrating the
-  (valence x confidence) lookup the pill is reading from, with
-  axis labels and the boundaries of each band. Defaults to open
-  on first arrival; click the summary line to fold it once you've
-  internalised the axes.
 - **Overview counters** - total samskaras (split by tier), total
   pair associations across the corpus, and per-chat counts for
   substrate records and cohort fires.
+- **Mood-pill legend** - a dismissable table illustrating the
+  (valence x confidence) lookup the pill is reading from, with
+  axis labels and the boundaries of each band. A glowing red dot
+  marks the current pill position; the row tells you the valence
+  band, the column tells you confident vs. tentative, and the line
+  beneath the table reads out the exact valence and confidence
+  numbers that produced it. Defaults to open on first arrival;
+  click the summary line to fold it once you've internalised the
+  axes.
 - **Compound summary** - the prose block currently riding in every
   system prompt, plus how many samskaras it covers and when the
   worker last regenerated it.

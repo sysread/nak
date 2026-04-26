@@ -51,6 +51,7 @@
     valenceToMoodLabel,
     type SamskaraMintEventDetail,
   } from '$lib/samskara/events';
+  import { moodState } from '$lib/samskara/mood.svelte';
   import { navigate, route } from '$lib/routing.svelte';
   import { app } from '$lib/state.svelte';
 
@@ -114,6 +115,18 @@
   function adopt(detail: SamskaraMintEventDetail): void {
     const emoji = valenceToEmoji(detail.valence, detail.confidence);
     const label = valenceToMoodLabel(detail.valence, detail.confidence);
+    // The shared store always reflects the most recent raw triple,
+    // even when the local pill skips its visual update below. The
+    // diagnostics-modal "you are here" dot reads this directly, so
+    // it tracks the actual mint event rather than the de-duplicated
+    // pill animation - if two consecutive mints land in the same
+    // band, the dot still updates to the second mint's exact
+    // (valence, confidence) coordinate.
+    moodState.set({
+      valence: detail.valence,
+      confidence: detail.confidence,
+      tier: detail.tier,
+    });
     // Skip the swap when the incoming mint lands in the same
     // valence band as what's already showing AND the tier hasn't
     // changed. Without this, every mint bumps `id`, which keys the
@@ -174,6 +187,16 @@
         tier: result.tier,
         isDefault: false,
       };
+      // Mirror the seed into the shared store so the diagnostics-
+      // modal dot can render even on a freshly-reopened thread that
+      // hasn't seen a new mint yet. Stays inside the
+      // `current.isDefault` guard above so a real mint that landed
+      // first won't get clobbered by a slow seed query.
+      moodState.set({
+        valence: result.valence,
+        confidence: result.confidence,
+        tier: result.tier,
+      });
     } catch {
       // best-effort; staying on 💤 is the correct fallback shape.
     }
@@ -195,6 +218,11 @@
     const cid = route.cid;
     seedGeneration += 1;
     const gen = seedGeneration;
+    // The shared store always clears on a thread switch. seedFromHistory
+    // re-populates it when (and if) a real mood lands; until then the
+    // diagnostics-modal dot stays hidden. Mirrors the same "moods belong
+    // to a thread" semantics the local pill uses for its 💤 placeholder.
+    moodState.clear();
     if (cid !== null) {
       current = makeDefault();
       void seedFromHistory(cid, gen);

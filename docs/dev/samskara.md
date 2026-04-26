@@ -64,16 +64,30 @@ toast is just a glance cue that the bias model is forming.
   along.
 - `src/lib/samskara/events.ts` - main-thread event bridge
   (rune-free). Defines `SAMSKARA_MINT_EVENT`, `valenceToEmoji`,
-  `valenceToMoodLabel`, `notifySamskaraMint`, and the
-  `MOOD_TABLE` lookup that drives the mood pill. Mint-event
-  detail carries `{ tier, valence, confidence }`; the lookup
-  splits each of five valence bands into a confident column
-  (confidence >= `CONFIDENCE_CUT`, default 0.5) and a tentative
-  column (below the cut). Separate from the Svelte component so
-  the manager can import without pulling Svelte runtime into the
-  worker bundle. The Samskara diagnostics modal renders the same
-  `MOOD_TABLE` as a fold-away legend so the user-visible
-  documentation can never drift from the live mapping.
+  `valenceToMoodLabel`, `notifySamskaraMint`, the `MOOD_TABLE`
+  lookup that drives the mood pill, and the `cellFor` /
+  `bandIndexFor` / `columnFor` coordinate helpers used by the
+  diagnostics-modal "you are here" dot. Mint-event detail carries
+  `{ tier, valence, confidence }`; the lookup splits each of five
+  valence bands into a confident column (confidence >=
+  `CONFIDENCE_CUT`, default 0.5) and a tentative column (below
+  the cut). Separate from the Svelte component so the manager can
+  import without pulling Svelte runtime into the worker bundle.
+  The Samskara diagnostics modal renders the same `MOOD_TABLE` as
+  a fold-away legend so the user-visible documentation can never
+  drift from the live mapping.
+- `src/lib/samskara/mood.svelte.ts` - shared current-mood state
+  (`moodState`) read by both `SamskaraToasts.svelte` and the
+  diagnostics modal. Holds the raw `{ valence, confidence, tier
+  } | null` triple. The pill is the sole writer (updates on mint
+  events and on the seed-from-history path; clears on thread
+  switch); the modal is a passive observer that uses it to plot
+  the "you are here" dot on the legend table. Lifting the triple
+  out of the pill keeps the dot perfectly aligned with the pill
+  the user clicked to open the modal - no separate fetch, no
+  listener race. Lives in its own .svelte.ts module rather than
+  `events.ts` because `events.ts` is shared with the worker
+  bundle, which cannot import Svelte runes.
 - `src/components/SamskaraToasts.svelte` - the persistent
   mood-pill UI. Listens for `SAMSKARA_MINT_EVENT` on `window`,
   renders the latest mint's emoji as a fixed pill in the
