@@ -26,7 +26,12 @@
  */
 
 import type { ReasoningEffort, Verbosity } from './models';
-import type { SupabaseService, Attachment, Message, Thread } from './supabase';
+import type {
+  SupabaseService,
+  Message,
+  Thread,
+  ThreadAttachmentSummary,
+} from './supabase';
 import type {
   VeniceClient,
   VeniceMessage,
@@ -224,6 +229,89 @@ function buildJournalNote(entry: JournalEntry | null): string | null {
     lines.push(`_${tags.join(' / ')}_`, '');
   }
   lines.push(entry.content);
+  return lines.join('\n');
+}
+
+/**
+ * Render the `<thread_attachments>` per-turn appendix block listing
+ * every file attachment that has appeared in this conversation. Three
+ * sections, each shown only when non-empty:
+ *
+ *   - Live images: filenames the model can pass to analyze_image().
+ *   - Live documents: filenames whose extracted text is inlined in
+ *     the user turn where they were attached. Listed for recall ("yes,
+ *     I still have the contract.pdf you sent earlier") - no separate
+ *     tool needed to read them.
+ *   - Expired: filenames whose binary was reclaimed by the 30-day
+ *     expiry sweep. The model knows it can't analyze them and can
+ *     tell the user the data is gone if asked.
+ *
+ * Why this lives in the system prompt, not the user turn: the per-
+ * message inline note added by buildUserVeniceContent only covers
+ * "this turn brought these images." Cross-turn recall - "you sent
+ * me a screenshot earlier, can you re-analyze it?" - requires a
+ * thread-wide view, which the inline note can't provide because the
+ * model would have to scan every prior user turn to find filenames.
+ *
+ * Returns null when the thread has no attachments at all so a clean
+ * conversation pays zero token cost. Duplicates are de-duplicated per
+ * section by filename (taking the most recent occurrence's category)
+ * to keep the block readable when the user repeats a filename across
+ * turns.
+ */
+export function buildThreadAttachmentsBlock(
+  summaries: ThreadAttachmentSummary[]
+): string | null {
+  if (summaries.length === 0) return null;
+
+  // De-duplicate by filename within each bucket so a re-attached file
+  // appears once. Sorted by created_at ascending in the supabase query,
+  // so the last write wins on category collisions (e.g. live then later
+  // expired - we trust expired_at on the most recent row).
+  const liveImages = new Map<string, true>();
+  const liveDocs = new Map<string, true>();
+  const expired = new Map<string, true>();
+  for (const s of summaries) {
+    if (s.expired) {
+      // An expired filename trumps an earlier live entry of the same
+      // name, since the binary really is gone now.
+      liveImages.delete(s.filename);
+      liveDocs.delete(s.filename);
+      expired.set(s.filename, true);
+    } else if (s.is_image) {
+      expired.delete(s.filename);
+      liveDocs.delete(s.filename);
+      liveImages.set(s.filename, true);
+    } else {
+      expired.delete(s.filename);
+      liveImages.delete(s.filename);
+      liveDocs.set(s.filename, true);
+    }
+  }
+
+  const lines: string[] = ['<thread_attachments>'];
+  if (liveImages.size > 0) {
+    lines.push(
+      `Live images: ${[...liveImages.keys()].join(', ')}. Call analyze_image(filename, query) to inspect any of them.`
+    );
+  }
+  if (liveDocs.size > 0) {
+    lines.push(
+      `Live documents: ${[...liveDocs.keys()].join(', ')}. Their extracted text is inlined in the user turns where they were attached.`
+    );
+  }
+  if (expired.size > 0) {
+    lines.push(
+      `Expired (binary reclaimed after 30d, no longer inspectable): ${[...expired.keys()].join(', ')}.`
+    );
+  }
+  lines.push('</thread_attachments>');
+
+  // If every category was empty after de-dup (shouldn't happen given
+  // the early-return above, but defensive in case a future schema
+  // change adds a fourth category and de-dup empties everything),
+  // skip the block entirely so we don't ship just the wrapper tags.
+  if (lines.length === 2) return null;
   return lines.join('\n');
 }
 
@@ -501,15 +589,6 @@ export interface ChatLoopOptions {
    * samskara to keep working.
    */
   userMessageId?: string;
-  /**
-   * Hydrated Attachment[] for the user message that opened this turn.
-   * Threaded into ToolContext so analyze_image can find image bytes by
-   * filename without a DB query inside the tool. Optional - callers
-   * that don't deal in attachments (tests, background agents) pass
-   * nothing and ctx.attachments will be undefined; the tool guards
-   * with ctx.attachments ?? [].
-   */
-  currentMessageAttachments?: Attachment[];
 }
 
 /** Non-error completion shape returned to the caller. */
@@ -679,7 +758,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     emphasisMarkdown,
     journalTimezone,
     userMessageId,
-    currentMessageAttachments,
   } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
@@ -833,9 +911,25 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // user turn). Null on mid-thread turns or when no automatic entry
   // exists yet.
   const journalNote = buildJournalNote(priming.journalEntry);
+
+  // Per-turn thread-attachments block. Lists every file attached
+  // anywhere in the conversation by category (live images, live
+  // documents, expired) so the model has a holistic view rather than
+  // having to scan every prior user turn for inline notes. The query
+  // is a single thread-scoped SELECT against `message_attachments` and
+  // doesn't go through Venice, so it stays out of the priming race and
+  // its associated timeout. Failure is swallowed - the model falls
+  // back to the per-message inline note rendered by
+  // buildUserVeniceContent, same as before this block existed.
+  const attachmentSummaries: ThreadAttachmentSummary[] = await supabase
+    .listAttachmentSummariesForThread(thread.id)
+    .catch(() => []);
+  const threadAttachmentsBlock = buildThreadAttachmentsBlock(attachmentSummaries);
+
   const appendixParts = [
     priming.samskaraAppendix,
     journalNote,
+    threadAttachmentsBlock,
     emphasisNote,
     titleNote,
   ].filter((s): s is string => typeof s === 'string' && s.length > 0);
@@ -1089,9 +1183,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         userId,
         threadId: thread.id,
         signal: ctl.signal,
-        // Pass current message's attachments so analyze_image can find
-        // image bytes by filename without a DB query inside the tool.
-        attachments: currentMessageAttachments,
       };
       let args: Record<string, unknown>;
       try {

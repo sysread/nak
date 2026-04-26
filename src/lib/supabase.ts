@@ -218,6 +218,24 @@ export interface NewAttachment {
 }
 
 /**
+ * Lightweight projection of a thread's attachments for the per-turn
+ * `<thread_attachments>` system block. Carries only what the block
+ * formatter and the model need (filename + categorisation flags) - no
+ * `data` payload, no `extracted_text` payload, so the wire stays small
+ * even on conversations with many file attachments.
+ */
+export interface ThreadAttachmentSummary {
+  filename: string;
+  mime_type: string;
+  /** Image MIME types route through the analyze_image tool branch in the block. */
+  is_image: boolean;
+  /** True when the binary has been reclaimed by the expiry worker. */
+  expired: boolean;
+  /** Insert timestamp, used by the block formatter for stable ordering. */
+  created_at: string;
+}
+
+/**
  * A saved recipe. The authoritative representation is `cooklang`, the
  * full raw Cooklang source string — structure (ingredients, cookware,
  * timers, metadata) is re-derived on read by `src/lib/cooklang.ts`.
@@ -2491,6 +2509,93 @@ export class SupabaseService {
       data_base64: row.data,
       extracted_text: row.extracted_text,
       expired_at: row.expired_at,
+      created_at: row.created_at,
+    }));
+  }
+
+  /**
+   * Find the most recent image attachment in this thread whose filename
+   * matches exactly. Returns the row regardless of expiry state - the
+   * caller distinguishes "not found" (null return) from "expired"
+   * (`data_base64 === null` on the returned row) and produces the right
+   * diagnostic for the model.
+   *
+   * Why thread-scoped instead of message-scoped: the analyze_image tool
+   * needs to reach images attached on prior turns of the same conversation,
+   * not just the user message that opened the current turn. The earlier
+   * design passed only the current message's attachments into ToolContext,
+   * which left the model unable to re-analyze an image once the user sent
+   * any follow-up message. RLS on `message_attachments` already scopes
+   * access to the signed-in user via the via-parent-of-parent chain
+   * (attachment -> message -> thread -> user_id), so the join here adds
+   * thread filtering without weakening the security model.
+   */
+  async findImageByFilenameInThread(
+    threadId: string,
+    filename: string
+  ): Promise<Attachment | null> {
+    const { data, error } = await this.client
+      .from('message_attachments')
+      .select(
+        'id, message_id, position, filename, mime_type, size_bytes, data, extracted_text, expired_at, created_at, messages!inner(thread_id)'
+      )
+      .eq('messages.thread_id', threadId)
+      .eq('filename', filename)
+      .like('mime_type', 'image/%')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    if (!data) return null;
+    const row = data as Omit<Attachment, 'data_base64'> & { data: string | null };
+    return {
+      id: row.id,
+      message_id: row.message_id,
+      position: row.position,
+      filename: row.filename,
+      mime_type: row.mime_type,
+      size_bytes: row.size_bytes,
+      data_base64: row.data,
+      extracted_text: row.extracted_text,
+      expired_at: row.expired_at,
+      created_at: row.created_at,
+    };
+  }
+
+  /**
+   * Lightweight summary of every attachment in a thread, used to render
+   * the `<thread_attachments>` system block in chat-loop. Deliberately
+   * omits the `data` and `extracted_text` columns because both are
+   * potentially huge (base64-encoded file bodies, full document text)
+   * and the block only needs filenames + categorisation.
+   *
+   * Live vs expired is read off `expired_at` rather than `data is null`
+   * - the schema guarantees those two states are equivalent (see the
+   * comment block on `message_attachments` in `schema.sql`), and
+   * checking `expired_at` lets us skip projecting the heavy `data`
+   * column entirely.
+   */
+  async listAttachmentSummariesForThread(
+    threadId: string
+  ): Promise<ThreadAttachmentSummary[]> {
+    const { data, error } = await this.client
+      .from('message_attachments')
+      .select(
+        'filename, mime_type, expired_at, created_at, messages!inner(thread_id)'
+      )
+      .eq('messages.thread_id', threadId)
+      .order('created_at', { ascending: true });
+    if (error) throw new SupabaseError(error.message);
+    return ((data ?? []) as Array<{
+      filename: string;
+      mime_type: string;
+      expired_at: string | null;
+      created_at: string;
+    }>).map((row) => ({
+      filename: row.filename,
+      mime_type: row.mime_type,
+      is_image: row.mime_type.startsWith('image/'),
+      expired: row.expired_at !== null,
       created_at: row.created_at,
     }));
   }

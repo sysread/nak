@@ -19,7 +19,7 @@
  * the containing thread id (for per-thread toggles), and an AbortSignal
  * that cascades from the outer send() cancellation.
  */
-import type { SupabaseService, Attachment } from '../supabase';
+import type { SupabaseService } from '../supabase';
 import type { VeniceClient } from '../venice';
 
 export interface ToolContext {
@@ -34,14 +34,6 @@ export interface ToolContext {
   userId: string;
   threadId: string;
   signal: AbortSignal;
-  /**
-   * Hydrated image attachments from the current user message. Populated
-   * by the chat loop at call-time so analyze_image can reach image bytes
-   * without a second DB round-trip. Optional so older callers (tests,
-   * background agents) compile without changes - tools guard with
-   * ctx.attachments ?? [].
-   */
-  attachments?: Attachment[];
 }
 
 /**

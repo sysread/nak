@@ -110,6 +110,28 @@ via-parent-of-parent pattern —
   loops as long as >0, naps 1 hour on 0. `for update skip
   locked` in the CTE prevents two workers from clobbering the
   same row.
+- **Thread-scoped attachment lookup**: `analyze_image` reaches
+  image bytes via `SupabaseService.findImageByFilenameInThread`,
+  which joins `message_attachments` against `messages.thread_id`
+  and returns the most recent matching row regardless of expiry
+  state. The tool itself decides whether to call (live), throw
+  "expired" (`data_base64 === null`), or throw "not found" (null
+  return). The earlier per-message contract — passing only the
+  current user message's attachments through `ToolContext` —
+  left the model unable to re-analyze an image once any
+  follow-up message was sent; the thread-scoped lookup fixes
+  that by trusting RLS to keep the scope honest.
+- **`<thread_attachments>` system block**: built once per turn in
+  `runChatLoop` from
+  `SupabaseService.listAttachmentSummariesForThread` (a
+  lightweight projection — no `data` or `extracted_text` payload
+  on the wire). Lists live images, live documents, and expired
+  filenames in three sections; each section appears only when
+  non-empty, and a thread with no attachments adds zero tokens.
+  The block coexists with `buildUserVeniceContent`'s per-message
+  inline note - the inline note remains the local "this turn
+  brought these" signal, while the system block is the
+  conversation-wide recall surface.
 
 ## Interactions
 

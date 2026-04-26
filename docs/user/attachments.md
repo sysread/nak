@@ -38,6 +38,13 @@ Click the × on a chip to remove it before sending.
   that text to your message as a fenced block tagged with the
   filename. The model sees the filename alongside the extracted
   content.
+- **Cross-turn recall**. Every chat turn the model also receives a
+  short summary of every file ever attached to the conversation -
+  live filenames it can still inspect, plus filenames of any expired
+  attachments so it can tell you "I had that file but its data has
+  been reclaimed" rather than pretending it never existed. This
+  means you can re-ask about an image you sent five turns ago and
+  the model can re-analyze it without you re-uploading.
 
 ## After sending
 

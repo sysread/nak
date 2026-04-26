@@ -62,7 +62,6 @@
     type ThreadCursor,
     type ThreadSearchHit,
     type Message,
-    type Attachment,
     type NewAttachment,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
@@ -1741,9 +1740,6 @@
       .map((p) => ({ role: 'system' as const, content: p.body }));
 
     let userMessageId: string;
-    // Hoisted so the runExchange call below can pass the DB-hydrated
-    // attachment rows to ToolContext without reaching into the try scope.
-    let persistedAttachments: Attachment[] = [];
     try {
       const userMsg = await app.supabase.addMessage(threadId, 'user', text);
       userMessageId = userMsg.id;
@@ -1759,7 +1755,6 @@
         try {
           const rows = await app.supabase.addAttachments(userMsg.id, newRows);
           userMsg.attachments = rows;
-          persistedAttachments = rows;
         } catch (err) {
           // Non-fatal: surface a warning but keep going. The user's
           // typed text still gets a reply — the attachments just
@@ -1803,9 +1798,6 @@
       sendEmphasis: app.emphasisMarkdown,
       originalText: text,
       userMessageId,
-      // Pass the DB-hydrated attachment rows so analyze_image can find
-      // image bytes by filename inside ToolContext.
-      sendAttachments: persistedAttachments,
     });
   }
 
@@ -1842,13 +1834,6 @@
      * row written at end-of-turn.
      */
     userMessageId: string;
-    /**
-     * DB-hydrated attachments for the current user message. Forwarded
-     * to runChatLoop -> ToolContext so analyze_image can read image
-     * bytes by filename. Optional - absent on the regenerate path,
-     * which populates this from the persisted message row instead.
-     */
-    sendAttachments?: Attachment[];
   }
 
   /**
@@ -1934,7 +1919,6 @@
           history: historyOnWire,
           signal: abortCtl.signal,
           userMessageId: ctx.userMessageId,
-          currentMessageAttachments: ctx.sendAttachments,
           reasoningEffort: ctx.sendReasoning,
           verbosity: ctx.sendVerbosity,
           emphasisMarkdown: ctx.sendEmphasis,
@@ -2296,10 +2280,6 @@
       sendEmphasis: app.emphasisMarkdown,
       originalText: userMessage.content,
       userMessageId: userMessage.id,
-      // userMessage.attachments is already hydrated by listMessages so
-      // analyze_image can reach image bytes on a regenerate just as it
-      // can on a fresh send.
-      sendAttachments: userMessage.attachments ?? [],
     });
   }
 
@@ -2369,7 +2349,6 @@
       sendEmphasis: app.emphasisMarkdown,
       originalText: userMessage.content,
       userMessageId: userMessage.id,
-      sendAttachments: userMessage.attachments ?? [],
     });
   }
 

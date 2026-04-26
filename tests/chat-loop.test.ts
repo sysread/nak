@@ -16,10 +16,16 @@ import {
   MAX_ROUNDS,
   toVeniceMessage,
   INTERRUPTED_MARKER,
+  buildThreadAttachmentsBlock,
 } from '../src/lib/chat-loop';
 import type { ChatRequest, StreamEvent, Citation } from '../src/lib/venice';
 import type { VeniceClient } from '../src/lib/venice';
-import type { SupabaseService, Thread, Message } from '../src/lib/supabase';
+import type {
+  SupabaseService,
+  Thread,
+  Message,
+  ThreadAttachmentSummary,
+} from '../src/lib/supabase';
 import type { OpenAIToolCall } from '../src/lib/tools';
 
 function mkThread(overrides: Partial<Thread> = {}): Thread {
@@ -74,6 +80,11 @@ interface MockSupabase {
   // opening turn to build the `Today's journal` appendix. Default to
   // an empty list so legacy tests keep passing.
   getJournalEntriesForDate: ReturnType<typeof vi.fn>;
+  // Attachments - runChatLoop fetches a lightweight summary of every
+  // attachment in the thread on every turn to build the
+  // `<thread_attachments>` block. Default to empty so legacy tests
+  // skip the block entirely.
+  listAttachmentSummariesForThread: ReturnType<typeof vi.fn>;
 }
 
 function mockSupabase(overrides: Partial<MockSupabase> = {}): {
@@ -124,6 +135,7 @@ function mockSupabase(overrides: Partial<MockSupabase> = {}): {
     samskaraRecordFires: vi.fn(async () => undefined),
     samskaraRecordSubstrate: vi.fn(async () => 'sub-stub'),
     getJournalEntriesForDate: vi.fn(async () => []),
+    listAttachmentSummariesForThread: vi.fn(async () => []),
     ...overrides,
   };
   return { svc: mocks as unknown as SupabaseService, mocks, messagesOut };
@@ -156,6 +168,85 @@ function mockVenice(roundEvents: StreamEvent[][]): VeniceClient {
     })),
   } as unknown as VeniceClient;
 }
+
+function summary(
+  filename: string,
+  mime_type: string,
+  expired: boolean,
+  created_at = '2026-01-01T00:00:00Z'
+): ThreadAttachmentSummary {
+  return {
+    filename,
+    mime_type,
+    is_image: mime_type.startsWith('image/'),
+    expired,
+    created_at,
+  };
+}
+
+describe('buildThreadAttachmentsBlock', () => {
+  it('returns null on a thread with no attachments', () => {
+    expect(buildThreadAttachmentsBlock([])).toBeNull();
+  });
+
+  it('renders only the live-images section when that is all there is', () => {
+    const out = buildThreadAttachmentsBlock([
+      summary('a.png', 'image/png', false),
+      summary('b.jpg', 'image/jpeg', false),
+    ]);
+    expect(out).not.toBeNull();
+    expect(out!).toContain('<thread_attachments>');
+    expect(out!).toContain('Live images: a.png, b.jpg');
+    expect(out!).toContain('analyze_image(filename, query)');
+    // No documents or expired sections when those buckets are empty.
+    expect(out!).not.toContain('Live documents:');
+    expect(out!).not.toContain('Expired');
+    expect(out!).toContain('</thread_attachments>');
+  });
+
+  it('renders documents and expired alongside live images', () => {
+    const out = buildThreadAttachmentsBlock([
+      summary('a.png', 'image/png', false),
+      summary('contract.pdf', 'application/pdf', false),
+      summary('old.png', 'image/png', true),
+      summary('gone.pdf', 'application/pdf', true),
+    ]);
+    expect(out).not.toBeNull();
+    expect(out!).toContain('Live images: a.png');
+    expect(out!).toContain('Live documents: contract.pdf');
+    expect(out!).toContain('Expired (binary reclaimed after 30d, no longer inspectable): old.png, gone.pdf');
+  });
+
+  it('promotes a re-attached filename to expired when the most recent occurrence is expired', () => {
+    // Same filename appearing live first, then expired later. Block
+    // should categorise it as expired - the binary really is gone now,
+    // even though an earlier turn had the live version. Sorted by
+    // created_at ascending, expired comes second.
+    const out = buildThreadAttachmentsBlock([
+      summary('shot.png', 'image/png', false, '2026-01-01T00:00:00Z'),
+      summary('shot.png', 'image/png', true, '2026-02-01T00:00:00Z'),
+    ]);
+    expect(out).not.toBeNull();
+    expect(out!).not.toContain('Live images');
+    expect(out!).toContain('Expired');
+    expect(out!).toContain('shot.png');
+  });
+
+  it('de-duplicates a filename that appears twice in the same bucket', () => {
+    // User attaches the same screenshot.png twice across turns; both
+    // remain live. The block should mention it once, not twice.
+    const out = buildThreadAttachmentsBlock([
+      summary('screenshot.png', 'image/png', false, '2026-01-01T00:00:00Z'),
+      summary('screenshot.png', 'image/png', false, '2026-02-01T00:00:00Z'),
+    ]);
+    expect(out).not.toBeNull();
+    // Match exactly one occurrence by checking the live-images line.
+    const liveLine = out!.split('\n').find((l) => l.startsWith('Live images:'));
+    expect(liveLine).toBe(
+      'Live images: screenshot.png. Call analyze_image(filename, query) to inspect any of them.'
+    );
+  });
+});
 
 describe('toVeniceMessage', () => {
   it('projects a plain user/assistant row', () => {
