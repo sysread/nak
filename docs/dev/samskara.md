@@ -68,11 +68,13 @@ toast is just a glance cue that the bias model is forming.
   worker-manager handoff. Separate from the Svelte component so
   the manager can import without pulling Svelte runtime into
   the worker bundle.
-- `src/components/SamskaraToasts.svelte` - the toast stack UI.
-  Listens for `SAMSKARA_MINT_EVENT` on `window`, renders one
-  emoji pill per mint in the top-right corner, auto-dismisses
-  after ~4s. Tap-to-dismiss-early. Mounted once in
-  `Chat.svelte`.
+- `src/components/SamskaraToasts.svelte` - the persistent
+  mood-pill UI. Listens for `SAMSKARA_MINT_EVENT` on `window`,
+  renders the latest mint's emoji as a fixed pill in the
+  top-right corner, and stays visible until the next mint (or a
+  thread switch) so the user can connect the glyph to whatever
+  it reacted to. Click opens the Samskara diagnostics modal.
+  Mounted once in `Chat.svelte`.
 - `src/lib/embeddings/sources/samskara-substrate.ts` - registered
   with the embeddings worker as a third source alongside
   memories and threads. Polls `samskara_substrate where
@@ -394,8 +396,8 @@ sleep (60s).
   A third tool - `samskara_collapse_by_cofiring(...)` - handles
   ongoing redundancy consolidation. It's the same RPC the
   background dedup phase runs each rotation (see below); the
-  diagnostics modal exposes it as a "Collapse redundant" button
-  for on-demand triggering. Idempotent.
+  diagnostics modal exposes it as a "Consolidate" button for
+  on-demand triggering. Idempotent.
 - **Mint-tier2** - stubbed for v1. Returns `'empty-phase'` so
   the rotation drains past it cheaply. Schema and provenance
   `kind='samskara'` support it; real cohort patterns need to

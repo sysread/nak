@@ -274,7 +274,7 @@
   async function collapseDuplicates(): Promise<void> {
     if (!app.supabase) return;
     const ok = window.confirm(
-      'Collapse redundant samskaras?\n\n' +
+      'Consolidate samskaras?\n\n' +
         'Tier-1 samskaras that reliably co-fire in the same cohort ' +
         '(Hebbian redundancy) are merged into their oldest ' +
         'representative. Fires and provenance move with the merge; ' +
@@ -387,7 +387,7 @@
           {:else if copyState === 'error'}
             Copy failed
           {:else}
-            Copy JSON
+            Export
           {/if}
         </button>
         <button
@@ -398,13 +398,13 @@
           title="Merge tier-1 samskaras that reliably co-fire together (primary) and trim the pool to target count (safety cap). Same RPC the background worker runs each rotation; this is the manual 'do it now' trigger. Capped at 20 merges per click."
         >
           {#if collapseState === 'running'}
-            Collapsing…
+            Consolidating…
           {:else if collapseState === 'done'}
-            {collapsedCount === 0 ? 'Nothing redundant' : `Collapsed ${collapsedCount}`}
+            {collapsedCount === 0 ? 'Nothing to consolidate' : `Consolidated ${collapsedCount}`}
           {:else if collapseState === 'error'}
-            Collapse failed
+            Consolidation failed
           {:else}
-            Collapse redundant
+            Consolidate
           {/if}
         </button>
       </div>
@@ -624,7 +624,7 @@
     /* Grid items default to min-width: auto, which lets a non-shrinking
        child (the toolbar's flex row, see below) push the header wider
        than the shell's track. The shell has overflow: hidden, so any
-       overshoot manifests as the blurb and the "Collapse redundant"
+       overshoot manifests as the blurb and the "Consolidate"
        button getting clipped at the right edge on narrow viewports.
        Allow the header to shrink to its track. */
     min-width: 0;
@@ -651,8 +651,8 @@
     gap: 0.5rem;
     align-items: center;
     /* Wrap onto a second row before the row pushes the header past the
-       shell width on phones. Without this, "Collapse redundant" alone
-       can already overshoot a 360px viewport. row-gap is tighter than
+       shell width on phones. Without this, "Consolidate" plus its
+       siblings can already overshoot a 360px viewport. row-gap is tighter than
        the column gap because wrapped rows don't need as much air. */
     flex-wrap: wrap;
     row-gap: 0.4rem;

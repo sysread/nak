@@ -37,7 +37,7 @@
     valenceToMoodLabel,
     type SamskaraMintEventDetail,
   } from '$lib/samskara/events';
-  import { route } from '$lib/routing.svelte';
+  import { navigate, route } from '$lib/routing.svelte';
 
   interface Mood {
     /** Stable key for Svelte's keyed each. Monotonic counter beats
@@ -125,16 +125,18 @@
 >
   {#if current}
     {#key current.id}
-      <div
+      <button
+        type="button"
         class="mood-pill"
         class:tier-2={current.tier === 2}
-        title={`feelin' ${current.label}`}
-        aria-label={`Samskara mood: ${current.label} (tier ${current.tier})`}
+        title={`feelin' ${current.label} - open Samskara diagnostics`}
+        aria-label={`Samskara mood: ${current.label} (tier ${current.tier}). Open diagnostics.`}
+        onclick={() => navigate({ modal: 'samskara' })}
         in:fly={{ x: 24, duration: FLY_IN_MS, easing: cubicOut }}
         out:fly={{ x: 24, duration: FLY_OUT_MS, easing: cubicOut }}
       >
         <span class="emoji" aria-hidden="true">{current.emoji}</span>
-      </div>
+      </button>
     {/key}
   {/if}
 </div>
@@ -170,12 +172,21 @@
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
     /* Re-enable pointer events for the pill itself (the container
        is pointer-events:none so it doesn't block the message pane
-       beneath). Needed so the native tooltip on `title` fires on
-       hover - without this the hover never registers on the pill. */
+       beneath). Required for both the native tooltip on `title` and
+       the click handler that opens the Samskara diagnostics modal. */
     pointer-events: auto;
-    cursor: default;
+    cursor: pointer;
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
+  }
+
+  .mood-pill:hover {
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  }
+
+  .mood-pill:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   /* Tier-2 reserved hook - lands when compound-of-compounds minting

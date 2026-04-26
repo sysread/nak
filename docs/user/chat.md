@@ -210,9 +210,10 @@ that travels with the PWA install.
 
 ### Samskara diagnostics
 
-The small fist icon at the top of the log drawer opens a dedicated
-**samskara diagnostics** screen - a read-only window into the
-samskara pipeline for the current conversation. Useful while
+Click the **mood emoji** in the top-right corner of a conversation
+(the persistent pill that updates when a samskara mints) to open a
+dedicated **samskara diagnostics** screen - a read-only window into
+the samskara pipeline for the current conversation. Useful while
 vetting the feature or debugging a "why did the model seem to
 already expect X" moment.
 
@@ -233,7 +234,7 @@ The screen shows:
   into samskaras, with their lifecycle state (pending assimilation
   / pending embed / fully baked).
 
-The toolbar also has a **Collapse redundant** button. The samskara
+The toolbar also has a **Consolidate** button. The samskara
 worker runs the same consolidation pass automatically each
 rotation, so this is a "do it now without waiting for the
 background pass" trigger rather than the only way merges happen.
@@ -244,10 +245,9 @@ population-count safety cap if the tier-1 pool is still above
 target after the co-firing pass. Merged losers have their fires
 and provenance migrated to the winner (the older row). Capped at
 20 merges per click - re-click to drain further. Idempotent; a
-second click against a clean pool reports "Nothing redundant".
+second click against a clean pool reports "Nothing to consolidate".
 
-Opens via the fist button in the log drawer header; closes via the
-×, Escape, or clicking the backdrop.
+Closes via the ×, Escape, or clicking the backdrop.
 
 ## Reply notifications
 

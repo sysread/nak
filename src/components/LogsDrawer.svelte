@@ -42,7 +42,6 @@
     type LogLevel,
   } from '$lib/logger.svelte';
   import { app } from '$lib/state.svelte';
-  import { navigate } from '$lib/routing.svelte';
 
   const drawer = logsDrawer;
 
@@ -394,21 +393,6 @@
 >
     <header class="logs-header">
       <h2 class="logs-title">Logs</h2>
-      <!-- Samskara diagnostics shortcut. Closes the drawer on click
-           because the modal it opens takes the full screen; reopening
-           the drawer after is a deliberate user action. -->
-      <button
-        type="button"
-        class="secondary icon-btn"
-        aria-label="Samskara diagnostics"
-        title="Samskara diagnostics"
-        onclick={() => {
-          drawer.close();
-          navigate({ modal: 'samskara' });
-        }}
-      >
-        <span class="samskara-emoji" aria-hidden="true">🤔</span>
-      </button>
       <button
         type="button"
         class="secondary icon-btn"
@@ -598,14 +582,6 @@
     margin: 0;
     font-size: 1rem;
     font-weight: 600;
-  }
-
-  /* Emoji glyph stands in for an SVG icon - bump the font-size so it
-     reads at roughly the same visual weight as the sibling 18px close
-     icon, and pin line-height so the flex centring stays clean. */
-  .samskara-emoji {
-    font-size: 1.05rem;
-    line-height: 1;
   }
 
   .logs-controls {
