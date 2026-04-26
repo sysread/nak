@@ -536,6 +536,26 @@
       copyResetTimer = null;
     }, 2000);
   }
+
+  // Aggregated transient feedback for the icon toolbar. The icon
+  // buttons themselves never change shape, so any "Copied", "Loading",
+  // "Consolidated N" message has to land in this companion span. Order
+  // matters - loading wins because Refresh is the only button that
+  // disables the rest, and an in-flight collapse beats a stale "Copied"
+  // toast from the previous action.
+  const toolbarStatus: string | null = $derived.by(() => {
+    if (loading) return 'Loading…';
+    if (collapseState === 'running') return 'Consolidating…';
+    if (collapseState === 'done') {
+      return collapsedCount === 0
+        ? 'Nothing to consolidate'
+        : `Consolidated ${collapsedCount}`;
+    }
+    if (collapseState === 'error') return 'Consolidation failed';
+    if (copyState === 'copied') return 'Copied!';
+    if (copyState === 'error') return 'Copy failed';
+    return null;
+  });
 </script>
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
@@ -563,47 +583,156 @@
         summary currently riding in every system prompt. See
         <em>docs/dev/samskara.md</em> for the underlying design.
       </p>
+      <!-- Compact icon bar. Replaced wider labeled buttons that wrapped
+           to two rows on phones. Transient state (Copied, Consolidating,
+           Consolidated N, etc.) lives in the polite-aria-live status
+           span instead of mutating button labels - the buttons stay
+           fixed-width so the bar doesn't reflow as actions resolve. -->
       <div class="samskara-toolbar">
         <button
           type="button"
-          class="secondary"
+          class="secondary icon-btn samskara-icon-btn"
           onclick={() => void refresh()}
           disabled={loading}
+          aria-label="Refresh diagnostics"
+          title="Refresh diagnostics"
         >
-          {loading ? 'Loading…' : 'Refresh'}
+          <svg
+            class="icon"
+            class:icon-spinning={loading}
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+            aria-hidden="true"
+          >
+            <path
+              d="M3.5 12a8.5 8.5 0 0 1 14.5-6l2 2"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              fill="none"
+            />
+            <path
+              d="M20 3v5h-5"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              fill="none"
+            />
+            <path
+              d="M20.5 12a8.5 8.5 0 0 1-14.5 6l-2-2"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              fill="none"
+            />
+            <path
+              d="M4 21v-5h5"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              fill="none"
+            />
+          </svg>
         </button>
         <button
           type="button"
-          class="secondary"
+          class="secondary icon-btn samskara-icon-btn"
           onclick={() => void copySnapshot()}
           disabled={loading}
+          aria-label="Export panel snapshot to clipboard"
           title="Copy everything on this panel as a JSON blob for pasting into a chat / bug report"
         >
-          {#if copyState === 'copied'}
-            Copied!
-          {:else if copyState === 'error'}
-            Copy failed
-          {:else}
-            Export
-          {/if}
+          <svg
+            class="icon"
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+            aria-hidden="true"
+          >
+            <rect
+              x="9"
+              y="3"
+              width="6"
+              height="3"
+              rx="1"
+              stroke="currentColor"
+              stroke-width="2"
+              fill="none"
+            />
+            <path
+              d="M9 5H6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              fill="none"
+            />
+          </svg>
         </button>
         <button
           type="button"
-          class="secondary"
+          class="secondary icon-btn samskara-icon-btn"
           onclick={() => void collapseDuplicates()}
           disabled={loading || collapseState === 'running'}
+          aria-label="Consolidate duplicate samskaras"
           title="Merge tier-1 samskaras that reliably co-fire together (primary) and trim the pool to target count (safety cap). Same RPC the background worker runs each rotation; this is the manual 'do it now' trigger. Capped at 20 merges per click."
         >
-          {#if collapseState === 'running'}
-            Consolidating…
-          {:else if collapseState === 'done'}
-            {collapsedCount === 0 ? 'Nothing to consolidate' : `Consolidated ${collapsedCount}`}
-          {:else if collapseState === 'error'}
-            Consolidation failed
-          {:else}
-            Consolidate
-          {/if}
+          <!-- Two parent nodes merging into one - visual shorthand for
+               co-firing samskaras being consolidated into a keeper. -->
+          <svg
+            class="icon"
+            class:icon-spinning={collapseState === 'running'}
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+            aria-hidden="true"
+          >
+            <circle
+              cx="6"
+              cy="5"
+              r="2"
+              stroke="currentColor"
+              stroke-width="2"
+              fill="none"
+            />
+            <circle
+              cx="18"
+              cy="5"
+              r="2"
+              stroke="currentColor"
+              stroke-width="2"
+              fill="none"
+            />
+            <circle
+              cx="12"
+              cy="19"
+              r="2"
+              stroke="currentColor"
+              stroke-width="2"
+              fill="none"
+            />
+            <path
+              d="M7 7l4 10M17 7l-4 10"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              fill="none"
+            />
+          </svg>
         </button>
+        <span
+          class="samskara-toolbar-status"
+          class:visible={toolbarStatus !== null}
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {toolbarStatus ?? ''}
+        </span>
       </div>
     </header>
 
@@ -1049,14 +1178,70 @@
 
   .samskara-toolbar {
     display: flex;
-    gap: 0.5rem;
+    gap: 0.4rem;
     align-items: center;
-    /* Wrap onto a second row before the row pushes the header past the
-       shell width on phones. Without this, "Consolidate" plus its
-       siblings can already overshoot a 360px viewport. row-gap is tighter than
-       the column gap because wrapped rows don't need as much air. */
+    /* The three icon buttons fit inside any reasonable viewport, but
+       a long status message (e.g. "Consolidated 20") still needs a
+       wrap target. row-gap is tighter than column gap because wrapped
+       rows don't need as much air. */
     flex-wrap: wrap;
-    row-gap: 0.4rem;
+    row-gap: 0.3rem;
+  }
+
+  /* Compact icon button used in the diagnostics toolbar. Slightly
+     tighter than the global .icon-btn so three of them plus a status
+     line still feel like a unit instead of a stripe of chrome. */
+  .samskara-icon-btn {
+    width: 1.9rem;
+    height: 1.9rem;
+    padding: 0.35rem;
+    color: var(--text);
+  }
+  .samskara-icon-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .samskara-icon-btn .icon {
+    display: block;
+  }
+
+  /* Spin while a long-running action is in flight - applied to the
+     refresh icon during a fetch and the consolidate icon during the
+     RPC. Reduced-motion users see the disabled-button opacity drop
+     plus the status text and lose nothing. */
+  @keyframes samskara-icon-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .icon-spinning {
+    animation: samskara-icon-spin 1s linear infinite;
+    transform-origin: 50% 50%;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .icon-spinning {
+      animation: none;
+    }
+  }
+
+  /* Companion status string for the icon bar. Kept out of the layout
+     when there's nothing to say (max-width:0 + no padding) so the bar
+     stays the width of just the icons; fades in once a message is
+     available. aria-live on the element itself means screen readers
+     hear "Copied!" / "Consolidated 5" without us refocusing anything. */
+  .samskara-toolbar-status {
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-left: 0.2rem;
+    opacity: 0;
+    max-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    transition: opacity 160ms ease, max-width 160ms ease;
+  }
+  .samskara-toolbar-status.visible {
+    opacity: 1;
+    max-width: 16rem;
   }
 
   .samskara-body {
