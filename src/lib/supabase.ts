@@ -3282,6 +3282,42 @@ export class SupabaseService {
   }
 
   /**
+   * Cluster a thread's fires by cosine similarity on their predictions,
+   * scoped per-cohort. Used by the diagnostics modal to collapse a
+   * 22-row cohort fire list down to a handful of themes the human
+   * reader can scan. Returns the cluster_seq (1-based, restarts per
+   * cohort) and cluster_size each fire belongs to; the renderer joins
+   * back against the existing fires array by fire id.
+   *
+   * Threshold default 0.85 matches MINT dedup; pass a lower value if
+   * cohorts come back too splintered for the abstraction to help.
+   * Display-only - no schema is mutated.
+   */
+  async samskaraClusterThreadFires(
+    threadId: string,
+    threshold = 0.85
+  ): Promise<Map<string, { clusterSeq: number; clusterSize: number }>> {
+    const { data, error } = await this.client.rpc(
+      'samskara_cluster_thread_fires',
+      { p_thread_id: threadId, p_threshold: threshold }
+    );
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      fire_id: string;
+      cluster_seq: number;
+      cluster_size: number;
+    }[];
+    const map = new Map<string, { clusterSeq: number; clusterSize: number }>();
+    for (const r of rows) {
+      map.set(r.fire_id, {
+        clusterSeq: r.cluster_seq,
+        clusterSize: r.cluster_size,
+      });
+    }
+    return map;
+  }
+
+  /**
    * Corpus-level counters for the diagnostics overview. Six head-only
    * count queries, awaited sequentially on purpose. Parallel Promise.all
    * here produced 6 concurrent auth-lock acquisitions in

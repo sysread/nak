@@ -135,8 +135,12 @@ toast is just a glance cue that the bias model is forming.
   RLS, the `worker_kind='samskara'` lease partition, and the
   RPC surface covering fire, cohort log, reaction apply,
   substrate record, assimilate claim/save, substrate-embed
-  claim/save, decay, co-firing-based dedup collapse, and the
-  three compound-regen coordinators. A private
+  claim/save, decay, co-firing-based dedup collapse, the
+  three compound-regen coordinators, and the diagnostics-only
+  `samskara_cluster_thread_fires(thread, threshold)` that
+  greedy-clusters a thread's fires by cosine similarity on
+  their samskaras' prediction embeddings (per-cohort, in score
+  order; threshold default 0.85 matches MINT dedup). A private
   `_samskara_merge_pair(winner, loser, user)` helper backs the
   dedup RPC; underscore-prefixed to signal internal-only. Follows
   the project's idempotent-apply conventions (`if not exists`,

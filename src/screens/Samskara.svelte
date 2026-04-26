@@ -57,6 +57,22 @@
   let counts = $state<Counts | null>(null);
   let substrate = $state<SamskaraSubstrateDiagnosticRow[]>([]);
   let fires = $state<SamskaraFireDiagnosticRow[]>([]);
+  // fire_id -> cluster assignment within its cohort. Populated by the
+  // samskara_cluster_thread_fires RPC after the fires fetch lands. An
+  // empty map (RPC failed, or no fires) falls back to one-cluster-per-
+  // fire in the derivation below, so the renderer always has clusters
+  // to walk.
+  let clusterMap = $state<Map<string, { clusterSeq: number; clusterSize: number }>>(
+    new Map()
+  );
+  // Per-cluster expand state: keys are `${cohortId}:${clusterSeq}`.
+  // Singleton clusters never collapse (no chevron rendered) so they
+  // don't need entries here.
+  let expandedClusters = $state<Set<string>>(new Set());
+  // Per-cohort "show raw fires" override. When a cohort id is present
+  // in this set, the renderer bypasses clustering and shows the
+  // original flat fires list. Toggle lives on each cohort header.
+  let rawCohorts = $state<Set<string>>(new Set());
   // Snapshot route.cid ONCE at mount. The modal is full-screen so
   // the user can't switch threads without first closing us; a fresh
   // open re-runs onMount. Intentionally NOT reactive to avoid the
@@ -67,12 +83,21 @@
 
   // Group fires by cohort so the renderer draws "one cohort" cards
   // instead of one row per (cohort, samskara) pair. Cohort order
-  // preserved from the original array (newest fired_at first).
+  // preserved from the original array (newest fired_at first). Each
+  // cohort also carries a clusters[] view derived from clusterMap,
+  // which the renderer prefers over the flat fires list unless the
+  // user toggled "Show raw fires" on this cohort.
+  interface ClusterView {
+    seq: number;
+    representative: SamskaraFireDiagnosticRow;
+    siblings: SamskaraFireDiagnosticRow[];
+  }
   interface CohortGroup {
     cohortId: string;
     firedAt: string;
     wasConfirmed: boolean | null;
     fires: SamskaraFireDiagnosticRow[];
+    clusters: ClusterView[];
   }
   const cohortGroups: CohortGroup[] = $derived.by(() => {
     const groups = new Map<string, CohortGroup>();
@@ -89,14 +114,56 @@
           firedAt: f.firedAt,
           wasConfirmed: f.wasConfirmed,
           fires: [f],
+          clusters: [],
         });
       }
     }
     for (const g of groups.values()) {
       g.fires.sort((a, b) => b.score - a.score);
+      // Build clusters off clusterMap. Fires without an entry (RPC
+      // hadn't loaded, or failed) fall through to a singleton cluster
+      // each, which means the worst case still renders something
+      // sensible - just no abstraction.
+      const bySeq = new Map<number, SamskaraFireDiagnosticRow[]>();
+      let nextFallbackSeq = -1;
+      for (const f of g.fires) {
+        const assigned = clusterMap.get(f.id);
+        const seq = assigned?.clusterSeq ?? nextFallbackSeq--;
+        const bucket = bySeq.get(seq);
+        if (bucket) bucket.push(f);
+        else bySeq.set(seq, [f]);
+      }
+      // Order clusters by their representative's score (descending)
+      // so the most-relevant theme leads. The representative is the
+      // first member after the per-cohort score-desc sort above.
+      const clusters: ClusterView[] = [...bySeq.values()]
+        .map((members) => ({
+          seq: clusterMap.get(members[0].id)?.clusterSeq ?? 0,
+          representative: members[0],
+          siblings: members.slice(1),
+        }))
+        .sort((a, b) => b.representative.score - a.representative.score);
+      g.clusters = clusters;
     }
     return [...groups.values()];
   });
+
+  function clusterKey(cohortId: string, seq: number): string {
+    return `${cohortId}:${seq}`;
+  }
+  function toggleCluster(cohortId: string, seq: number): void {
+    const key = clusterKey(cohortId, seq);
+    const next = new Set(expandedClusters);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    expandedClusters = next;
+  }
+  function toggleRaw(cohortId: string): void {
+    const next = new Set(rawCohorts);
+    if (next.has(cohortId)) next.delete(cohortId);
+    else next.add(cohortId);
+    rawCohorts = next;
+  }
 
   // Sequenced fetch. Earlier version ran 4 top-level queries in
   // Promise.all and the counts helper ran 6 more underneath, for a
@@ -154,10 +221,29 @@
         fires = [];
         error = error ?? `Fires: ${err instanceof Error ? err.message : String(err)}`;
       }
+
+      // Cluster the fires by prediction-embedding cosine so the
+      // renderer can collapse 22-row cohorts down to a few themes.
+      // Soft-failure: an empty map falls through to one-cluster-per-
+      // fire in the cohortGroups derivation, so the panel still
+      // renders if the RPC isn't deployed yet (fresh schema not
+      // synced) or errors out.
+      try {
+        clusterMap = await sb.samskaraClusterThreadFires(threadId);
+      } catch (err) {
+        clusterMap = new Map();
+        error = error ?? `Clusters: ${err instanceof Error ? err.message : String(err)}`;
+      }
     } else {
       substrate = [];
       fires = [];
+      clusterMap = new Map();
     }
+    // Drop any per-cohort UI state from a prior refresh; the cohort
+    // ids may be the same but the cluster assignments could differ if
+    // the threshold or underlying samskaras changed between loads.
+    expandedClusters = new Set();
+    rawCohorts = new Set();
 
     loading = false;
   }
@@ -247,10 +333,16 @@
         firedAt: g.firedAt,
         resolution: resolutionLabel(g.wasConfirmed, g.firedAt),
         wasConfirmed: g.wasConfirmed,
+        // Full member detail is preserved in the export even when the
+        // panel is rendering a collapsed-by-theme view. clusterSeq is
+        // included so a reader can reconstruct the same grouping the
+        // panel produced (or reason about why two fires landed in the
+        // same theme) without re-running the clustering RPC.
         members: g.fires.map((f) => ({
           id: f.id,
           samskaraId: f.samskaraId,
           score: f.score,
+          clusterSeq: clusterMap.get(f.id)?.clusterSeq ?? null,
           samskara: f.samskara,
         })),
       })),
@@ -548,10 +640,16 @@
       {/if}
 
       <!-- Cohort fires for this thread. Each card is one cohort (one
-           turn's worth of fired predictions), expandable into its
-           individual samskaras sorted by score. Resolution state is
-           the key diagnostic - confirmed/disconfirmed/waiting tells
-           you whether reaction-classify has caught up. -->
+           turn's worth of fired predictions). Default view collapses
+           the per-cohort fire list into themed clusters by cosine
+           similarity of the underlying samskara prediction embeddings
+           (RPC samskara_cluster_thread_fires, threshold 0.85). Each
+           theme shows its highest-scoring representative; siblings
+           are tucked behind a "+N similar" chevron. A per-cohort
+           "Show all" toggle bypasses clustering for the diagnostic
+           case. Resolution state still reads from the header pill -
+           the abstraction only affects density, not the underlying
+           data. -->
       <h2 class="pane-section">
         Cohort fires {threadId ? 'in this chat' : '(no chat selected)'}
       </h2>
@@ -566,6 +664,8 @@
       {:else}
         <ul class="cohort-list">
           {#each cohortGroups as group (group.cohortId)}
+            {@const isRaw = rawCohorts.has(group.cohortId)}
+            {@const collapsed = group.clusters.length < group.fires.length}
             <li class="cohort-card">
               <header class="cohort-head">
                 <span class="cohort-time">{formatRelative(group.firedAt)}</span>
@@ -573,42 +673,95 @@
                   {resolutionLabel(group.wasConfirmed, group.firedAt)}
                 </span>
                 <span class="cohort-count">
-                  {group.fires.length} prediction{group.fires.length === 1 ? '' : 's'}
+                  {#if collapsed && !isRaw}
+                    {group.clusters.length} theme{group.clusters.length === 1 ? '' : 's'}
+                    from {group.fires.length} prediction{group.fires.length === 1 ? '' : 's'}
+                  {:else}
+                    {group.fires.length} prediction{group.fires.length === 1 ? '' : 's'}
+                  {/if}
                 </span>
+                {#if collapsed}
+                  <button
+                    type="button"
+                    class="raw-toggle"
+                    onclick={() => toggleRaw(group.cohortId)}
+                    title={isRaw
+                      ? 'Re-collapse this cohort by theme'
+                      : 'Bypass clustering and show every fire individually'}
+                  >
+                    {isRaw ? 'Group by theme' : 'Show all'}
+                  </button>
+                {/if}
               </header>
-              <ul class="fire-list">
-                {#each group.fires as fire (fire.id)}
-                  <li class="fire-row">
-                    <div class="fire-head">
-                      <span class="fire-tier">T{fire.samskara?.tier ?? '?'}</span>
-                      <span class="fire-score" title="cosine * sqrt(health * confidence)">
-                        score {fire.score.toFixed(3)}
-                      </span>
-                      {#if fire.samskara}
-                        <span class="fire-meta">
-                          val {formatValence(fire.samskara.valence)} ·
-                          conf {fire.samskara.confidence.toFixed(2)} ·
-                          health {fire.samskara.health.toFixed(2)}
-                        </span>
-                      {:else}
-                        <span class="fire-meta subtle">samskara deleted since fire</span>
+              {#if isRaw}
+                <ul class="fire-list">
+                  {#each group.fires as fire (fire.id)}
+                    <li class="fire-row">
+                      {@render fireRow(fire)}
+                    </li>
+                  {/each}
+                </ul>
+              {:else}
+                <ul class="fire-list">
+                  {#each group.clusters as cluster (cluster.seq)}
+                    {@const expanded = expandedClusters.has(clusterKey(group.cohortId, cluster.seq))}
+                    <li class="fire-row">
+                      {@render fireRow(cluster.representative)}
+                      {#if cluster.siblings.length > 0}
+                        <button
+                          type="button"
+                          class="cluster-chip"
+                          aria-expanded={expanded}
+                          onclick={() => toggleCluster(group.cohortId, cluster.seq)}
+                          title="Other predictions that fired in this cohort with cosine ≥ 0.85 to the representative"
+                        >
+                          <span class="cluster-chip-mark" aria-hidden="true">{expanded ? '−' : '+'}</span>
+                          {cluster.siblings.length} similar
+                        </button>
+                        {#if expanded}
+                          <ul class="sibling-list">
+                            {#each cluster.siblings as sibling (sibling.id)}
+                              <li class="sibling-row">
+                                {@render fireRow(sibling)}
+                              </li>
+                            {/each}
+                          </ul>
+                        {/if}
                       {/if}
-                    </div>
-                    {#if fire.samskara}
-                      <p class="fire-prediction">{fire.samskara.prediction}</p>
-                      {#if fire.samskara.innerVoice}
-                        <p class="fire-inner-voice">
-                          <em>{fire.samskara.innerVoice}</em>
-                        </p>
-                      {/if}
-                    {/if}
-                  </li>
-                {/each}
-              </ul>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
             </li>
           {/each}
         </ul>
       {/if}
+
+      {#snippet fireRow(fire: SamskaraFireDiagnosticRow)}
+        <div class="fire-head">
+          <span class="fire-tier">T{fire.samskara?.tier ?? '?'}</span>
+          <span class="fire-score" title="cosine * sqrt(health * confidence)">
+            score {fire.score.toFixed(3)}
+          </span>
+          {#if fire.samskara}
+            <span class="fire-meta">
+              val {formatValence(fire.samskara.valence)} ·
+              conf {fire.samskara.confidence.toFixed(2)} ·
+              health {fire.samskara.health.toFixed(2)}
+            </span>
+          {:else}
+            <span class="fire-meta subtle">samskara deleted since fire</span>
+          {/if}
+        </div>
+        {#if fire.samskara}
+          <p class="fire-prediction">{fire.samskara.prediction}</p>
+          {#if fire.samskara.innerVoice}
+            <p class="fire-inner-voice">
+              <em>{fire.samskara.innerVoice}</em>
+            </p>
+          {/if}
+        {/if}
+      {/snippet}
 
       <!-- Substrate: per-turn rows recorded at end-of-round. Shown
            with their lifecycle state (pending assimilation / pending
@@ -1079,6 +1232,74 @@
     margin: 0.15rem 0 0;
     font-size: 0.8rem;
     color: var(--muted);
+  }
+
+  /* Per-cohort "Show all" / "Group by theme" pivot. Sits at the right
+     edge of the cohort header, after the count, so the cohort-count's
+     `margin-left: auto` still pushes both elements to the right. Kept
+     small and quiet because it's an escape hatch, not the primary
+     control. */
+  .raw-toggle {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 2px;
+    font-size: 0.7rem;
+    padding: 0.05rem 0.4rem;
+    cursor: pointer;
+    line-height: 1.4;
+  }
+  .raw-toggle:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  /* Cluster-expand chip. Sits below the representative's prediction
+     so the eye reads "this prediction" then "+N similar" as a
+     second-tier signal. Same surface tone as the cohort status pills
+     so the visual vocabulary stays consistent. */
+  .cluster-chip {
+    appearance: none;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+    border: 0;
+    border-radius: 2px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.05rem 0.45rem;
+    margin-top: 0.3rem;
+    cursor: pointer;
+    letter-spacing: 0.02em;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+  .cluster-chip:hover {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  .cluster-chip-mark {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.85rem;
+    line-height: 1;
+  }
+
+  /* Sibling list inside an expanded cluster. Indented + slightly
+     dimmed so siblings read as subordinate to the representative
+     above. Their per-row markup is the same as the representative
+     (same fire-head / fire-prediction / fire-inner-voice) so the
+     reader doesn't have to context-switch when expanding a cluster. */
+  .sibling-list {
+    list-style: none;
+    margin: 0.4rem 0 0;
+    padding: 0 0 0 0.75rem;
+    border-left: 2px solid color-mix(in srgb, var(--border) 70%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .sibling-row {
+    opacity: 0.85;
   }
 
   .substrate-situation {

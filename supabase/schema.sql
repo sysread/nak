@@ -2183,6 +2183,155 @@ begin
      and samskara_id = any (p_neutral_ids);
 end $$;
 
+-- Cluster a thread's fires by cosine similarity on their samskaras'
+-- prediction embeddings, scoped per-cohort. Used by the diagnostics
+-- modal to collapse the per-cohort fire list (which can run to ~22
+-- predictions) down to a handful of themes the human reader can scan.
+--
+-- The clustering itself is greedy in score order: within each cohort,
+-- walk the fires from highest-scoring to lowest. The first fire opens
+-- cluster 1. Each subsequent fire is compared against every existing
+-- seed by cosine; if its best match is >= p_threshold, it joins that
+-- cluster, otherwise it opens a new cluster of its own. Seeds are
+-- never re-evaluated, which means cluster_seq is deterministic across
+-- repeated calls so the renderer can cache the result by cohort.
+--
+-- Threshold default 0.85 matches the MINT dedup convention from
+-- src/lib/agents/samskara/loop.ts; drop to ~0.75 if cohorts come back
+-- splintered.
+--
+-- Output is one row per fire in the thread (cohort-keyed), naming the
+-- cluster_seq it landed in (1-based, restarts per cohort) plus the
+-- cluster_size so the renderer doesn't have to re-aggregate.
+-- Display-only - no schema is mutated, the fires table doesn't carry
+-- a cluster column. Lets the threshold be tuned without backfills.
+--
+-- Seed-embedding lookup happens once per (new fire, existing seed)
+-- pair via PK fetch on samskaras. Cohorts are typically small
+-- (~20 fires, ~5-10 seeds), so the inner-loop reload is fine for a
+-- modal-time call. Not on the chat-loop hot path.
+drop function if exists public.samskara_cluster_thread_fires(uuid, real);
+create or replace function public.samskara_cluster_thread_fires(
+  p_thread_id uuid,
+  p_threshold real
+) returns table (
+  fire_id uuid,
+  cluster_seq int,
+  cluster_size int
+)
+language plpgsql stable security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_current_cohort uuid := null;
+  v_next_seq int := 0;
+  v_seed_ids uuid[] := array[]::uuid[];
+  v_seed_seqs int[] := array[]::int[];
+  v_assignments jsonb := '{}'::jsonb;
+  v_best_cos real;
+  v_best_seq int;
+  v_cos real;
+  v_seed_emb vector(2048);
+  v_fire_emb vector(2048);
+  i int;
+  rec record;
+begin
+  -- Thread-ownership guard. Mirrors samskara_record_fires above:
+  -- silent return on a non-owned thread keeps RLS-style "nothing
+  -- happened" semantics rather than raising.
+  if not exists (
+    select 1 from public.threads t
+    where t.id = p_thread_id and t.user_id = v_uid
+  ) then
+    return;
+  end if;
+
+  -- Walk every fire of every cohort in this thread, ordered by
+  -- (cohort_id, score desc) so each cohort starts fresh and rows
+  -- arrive highest-score-first inside the cohort. left join because
+  -- a samskara may have been deleted after firing - we still want to
+  -- emit the orphan fire, just as its own singleton cluster.
+  for rec in
+    select f.id as fire_id,
+           f.cohort_id,
+           f.samskara_id,
+           s.prediction_embedding as embedding
+      from public.samskara_fires f
+      left join public.samskaras s on s.id = f.samskara_id
+     where f.thread_id = p_thread_id
+       and f.user_id = v_uid
+     order by f.cohort_id, f.score desc, f.id
+  loop
+    if rec.cohort_id is distinct from v_current_cohort then
+      v_current_cohort := rec.cohort_id;
+      v_next_seq := 0;
+      v_seed_ids := array[]::uuid[];
+      v_seed_seqs := array[]::int[];
+    end if;
+
+    -- Orphan fire (samskara deleted since): give it its own cluster.
+    -- Without this guard the row would be dropped by the inner-loop
+    -- guard below, leaving the renderer without an assignment for it.
+    if rec.embedding is null then
+      v_next_seq := v_next_seq + 1;
+      v_assignments := v_assignments
+        || jsonb_build_object(rec.fire_id::text, v_next_seq);
+      continue;
+    end if;
+
+    v_fire_emb := rec.embedding;
+    v_best_cos := -1.0;
+    v_best_seq := 0;
+
+    for i in 1..coalesce(array_length(v_seed_ids, 1), 0) loop
+      select s.prediction_embedding into v_seed_emb
+        from public.samskaras s
+       where s.id = v_seed_ids[i];
+      if v_seed_emb is null then
+        continue;
+      end if;
+      v_cos := (1 - (v_seed_emb <=> v_fire_emb))::real;
+      if v_cos > v_best_cos then
+        v_best_cos := v_cos;
+        v_best_seq := v_seed_seqs[i];
+      end if;
+    end loop;
+
+    if v_best_cos >= p_threshold then
+      v_assignments := v_assignments
+        || jsonb_build_object(rec.fire_id::text, v_best_seq);
+    else
+      v_next_seq := v_next_seq + 1;
+      v_seed_ids := array_append(v_seed_ids, rec.samskara_id);
+      v_seed_seqs := array_append(v_seed_seqs, v_next_seq);
+      v_assignments := v_assignments
+        || jsonb_build_object(rec.fire_id::text, v_next_seq);
+    end if;
+  end loop;
+
+  -- Emit (fire_id, cluster_seq, cluster_size). Sizes are recomputed
+  -- from the assignment map via a CTE so the caller doesn't have to.
+  return query
+    with assigned as (
+      select f.id as a_fire_id,
+             f.cohort_id as a_cohort_id,
+             ((v_assignments ->> (f.id::text))::int) as a_seq
+        from public.samskara_fires f
+       where f.thread_id = p_thread_id
+         and f.user_id = v_uid
+    ),
+    sizes as (
+      select a_cohort_id, a_seq, count(*)::int as a_size
+        from assigned
+       where a_seq is not null
+       group by a_cohort_id, a_seq
+    )
+    select a.a_fire_id, a.a_seq, sz.a_size
+      from assigned a
+      join sizes sz
+        on sz.a_cohort_id = a.a_cohort_id
+       and sz.a_seq = a.a_seq;
+end $$;
+
 -- Insert one substrate stub at end-of-round. The chat loop calls this
 -- with just the thread + message ids; the assimilator phase fills in
 -- situation/outcome/valence later. Returns the new row id so the
