@@ -1,14 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Nak">
   <!--
-    App icon. Colors mirror the theme-color / background-color declared in
-    the PWA manifest (see vite.config.ts) so the Chrome install sheet and
-    the splash screen don't flash a mismatched frame around the glyph.
-    Designed to work as both favicon and maskable PWA icon — the safe
-    zone is the inner 80% circle, so the monogram stays well inside the
-    maskable crop that Android applies to adaptive icons.
+    App icon. Eight slots arranged as a 2x4 grid encode 0x15 (binary
+    00010101), the ASCII code for NAK - Negative Acknowledgement,
+    the "no" in a request/response handshake. Three layers stacked
+    back-to-front:
+
+      1. Dark rounded square matches theme_color / background_color
+         in the PWA manifest (see vite.config.ts) so the Chrome
+         install sheet and the splash screen do not flash a
+         mismatched frame around the glyph.
+      2. Cream punch-card rectangle inset from the dark frame. The
+         card fully contains the inner-80% safe-zone circle Android
+         applies as the maskable crop, so adaptive-icon launchers
+         see a clean cream field with the punches; the dark frame
+         only shows in the non-maskable view.
+      3. Eight slot positions, column-major MSB-top: left column
+         holds bits 7-4, right column holds bits 3-0. Punched bits
+         (1s) are filled with the dark frame color so they read as
+         cut clean through the card. Unpunched positions (0s) are
+         filled with a darker amber, mimicking the printed
+         registration marks on a real IBM 5081 card -
+         distinguishable from the cream at favicon size where
+         stroked outlines disappear.
   -->
   <rect width="512" height="512" rx="96" ry="96" fill="#0b0d10"/>
-  <path
-    d="M150 370 V142 h44 l124 168 V142 h44 v228 h-44 L194 202 v168 z"
-    fill="#e6e9ef"/>
+  <rect x="32" y="32" width="448" height="448" rx="32" ry="32" fill="#efe3c5"/>
+  <g>
+    <rect x="126" y="136" width="100" height="48" rx="24" fill="#c8b682"/>
+    <rect x="126" y="216" width="100" height="48" rx="24" fill="#c8b682"/>
+    <rect x="126" y="296" width="100" height="48" rx="24" fill="#c8b682"/>
+    <rect x="126" y="376" width="100" height="48" rx="24" fill="#0b0d10"/>
+    <rect x="286" y="136" width="100" height="48" rx="24" fill="#c8b682"/>
+    <rect x="286" y="216" width="100" height="48" rx="24" fill="#0b0d10"/>
+    <rect x="286" y="296" width="100" height="48" rx="24" fill="#c8b682"/>
+    <rect x="286" y="376" width="100" height="48" rx="24" fill="#0b0d10"/>
+  </g>
 </svg>
