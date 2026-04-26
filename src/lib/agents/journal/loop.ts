@@ -58,7 +58,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   try {
     claim = await ctx.supabase.claimNextThreadForJournal(
       ctx.holderId,
-      ctx.threadClaimTtlSeconds
+      ctx.threadClaimTtlSeconds,
+      ctx.timezone
     );
   } catch {
     return 'error';

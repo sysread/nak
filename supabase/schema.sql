@@ -3021,14 +3021,31 @@ drop function if exists public.upsert_journal_automatic_entry(uuid, date, text, 
 -- Claim the oldest thread that needs journaling. Parallels
 -- `claim_next_thread_for_reflection`; the predicate is "terminal
 -- assistant message newer than last_journaled_msg_id, not in the
--- user's excludes, has at least two user messages, not currently
--- claimed". The excludes filter is the per-thread "do not journal"
--- switch the delete path writes to.
+-- user's excludes, has at least two user messages, no activity
+-- today in the user's timezone, not currently claimed". The
+-- excludes filter is the per-thread "do not journal" switch the
+-- delete path writes to. The same-day gate gives the user a
+-- chance to keep talking before the journaler grabs the thread -
+-- a conversation still receiving turns today is not a settled
+-- conversation, and journaling it mid-flow produces an entry
+-- that the next cycle has to extend rather than write fresh.
+-- threads.updated_at is bumped on every message insert (see
+-- supabase.ts:addMessage), so it tracks "most recent activity"
+-- without a separate column or correlated subquery.
 drop function if exists public.claim_next_thread_for_journal(text, int);
-drop function if exists public.claim_next_thread_for_journal(text, int);
+drop function if exists public.claim_next_thread_for_journal(text, int, text);
 create or replace function public.claim_next_thread_for_journal(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- IANA timezone the user has chosen for journaling (Settings ->
+  -- Journal -> Day boundary). The cooldown gate buckets activity
+  -- against this zone so a conversation last touched at 11pm in
+  -- Los Angeles isn't held over by the worker until UTC's clock
+  -- agrees. Defaults to UTC so a worker still on the old client
+  -- bundle (between schema sync and asset deploy) resolves the
+  -- function and degrades to UTC-day cooldown rather than
+  -- erroring on "function does not exist".
+  p_timezone text default 'UTC'
 ) returns table (
   thread_id uuid,
   terminal_msg_id uuid,
@@ -3081,6 +3098,18 @@ language sql security invoker as $$
           where m2.thread_id = t.id
             and m2.role = 'user'
        ) >= 2
+       -- Same-day cooldown. Skip threads whose most recent activity
+       -- (any message insert bumps t.updated_at) lands on today's
+       -- date in the user's tz. Effect: a thread is eligible to
+       -- journal only after it's been quiet for at least one full
+       -- calendar day in the user's timezone, which both gives an
+       -- in-progress conversation room to finish AND prevents a
+       -- thread that keeps getting new turns from being
+       -- continuously re-journaled mid-day. Re-journals on later
+       -- days still happen via the existing terminal_msg_id !=
+       -- last_journaled_msg_id predicate.
+       and (t.updated_at at time zone p_timezone)::date
+           < (now() at time zone p_timezone)::date
      order by t.updated_at asc
      limit 1
      for update of t skip locked

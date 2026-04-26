@@ -1795,7 +1795,8 @@ export class SupabaseService {
    */
   async claimNextThreadForJournal(
     holderId: string,
-    ttlSeconds: number
+    ttlSeconds: number,
+    timezone: string | null
   ): Promise<{
     threadId: string;
     terminalMsgId: string;
@@ -1813,6 +1814,14 @@ export class SupabaseService {
     const { data, error } = await this.client.rpc('claim_next_thread_for_journal', {
       p_holder_id: holderId,
       p_ttl_seconds: ttlSeconds,
+      // The RPC has a UTC default for graceful degradation against
+      // an old client bundle, but PostgREST doesn't fall back to
+      // SQL defaults on an explicit null - `at time zone null`
+      // returns null, which would make every candidate row fall
+      // out of the WHERE. Coerce null to 'UTC' here so the gate
+      // still buckets on a real zone. Settings -> normalizeTimezone
+      // makes this null path rare in practice.
+      p_timezone: timezone ?? 'UTC',
     });
     if (error) throw new SupabaseError(error.message);
     const rows = (data ?? []) as {

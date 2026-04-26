@@ -10,7 +10,9 @@ entries:
   journaler decided was worth keeping. Covers feelings,
   self-reflection, interpersonal dynamics, and neurodivergence /
   identity themes that surface as you chat. Skips purely technical
-  Q&A.
+  Q&A. The journaler waits until the day after a conversation's
+  most recent message before writing or updating its entry, so
+  an in-progress chat has room to finish before it gets a page.
 
 Both are exportable as Markdown and deletable on demand.
 

@@ -169,15 +169,23 @@ In `supabase/schema.sql`:
     `#variable_conflict use_column` plpgsql directive so
     `RETURNS TABLE` OUT-variable names don't collide with the
     target table's column names.
-  - `claim_next_thread_for_journal` - filters threads in
+  - `claim_next_thread_for_journal(p_holder_id, p_ttl_seconds,
+    p_timezone default 'UTC')` - filters threads in
     `journal_thread_excludes`, gates on at least two user
     messages on the thread (skip one-shot Q&A) past
-    `last_journaled_msg_id`. Returns `thread_created_at` so
-    the worker can compute `entry_date` in the user's IANA
-    timezone (via `dateInZone` in `journal-day.ts`); pinning
-    on the conversation start day keeps an entry from drifting
-    onto whatever calendar day the worker happens to be
-    processing it on.
+    `last_journaled_msg_id`, AND skips threads with activity
+    on today's date in the user's tz (the same-day cooldown
+    described under Contracts below). Returns
+    `thread_created_at` so the worker can compute
+    `entry_date` in the user's IANA timezone (via `dateInZone`
+    in `journal-day.ts`); pinning on the conversation start
+    day keeps an entry from drifting onto whatever calendar
+    day the worker happens to be processing it on. The
+    timezone parameter has a UTC default so a worker on the
+    old client bundle (the brief window between a deploy's
+    `sync-supabase` step and the asset-deploy step) resolves
+    the function and degrades to UTC-day cooldown rather
+    than erroring on "function does not exist".
   - `mark_thread_journaled_if_claimed` - advances the
     pointer if the holder still owns the claim.
   - `claim_next_pending_journal_entry` +
@@ -218,6 +226,29 @@ and `journalTimezone?: string` (IANA zone).
   `setJournalTimezone(tz)`, which posts `{type:'timezone',
   tz}` to the worker. No restart; the loop picks up the
   new zone on its next iteration.
+- **Same-day cooldown.** The claim RPC skips any thread
+  whose `updated_at` lands on today's date in the user's
+  tz. `threads.updated_at` is bumped on every message
+  insert (`supabase.ts:addMessage`), so this filter
+  effectively means "only journal threads that have been
+  quiet for at least one full calendar day in the user's
+  zone". Two effects:
+  1. An in-progress conversation gets time to finish before
+     the journaler grabs it - the user can keep adding
+     turns through the day without triggering a mid-flow
+     entry that the next cycle would have to extend.
+  2. A thread that keeps getting new turns from day to day
+     can't be continuously re-journaled today; each
+     re-journal waits until the day after the most recent
+     activity. Re-journals on later days still happen via
+     the existing `terminal_msg_id != last_journaled_msg_id`
+     predicate, and they extend the prior entry via the
+     existing prompt-level "EXTEND and REFINE" flow.
+  Trade-off: a conversation that ends today is not
+  journaled until tomorrow at the earliest. Acceptable
+  because the alternative is the failure mode the user
+  reported - a partial-conversation entry that gets
+  continually appended to as the conversation continues.
 - **Delete == exclude.** Deleting an automatic entry
   MUST insert its `source_thread_ids` into
   `journal_thread_excludes` in the same round. The modal
