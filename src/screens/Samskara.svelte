@@ -578,10 +578,9 @@
     <header class="samskara-header">
       <h1 class="samskara-title">Samskara diagnostics</h1>
       <p class="subtle samskara-blurb">
-        Read-only view into the samskara pipeline. Predictions this
-        chat fired, substrate the worker recorded, and the compound
-        summary currently riding in every system prompt. See
-        <em>docs/dev/samskara.md</em> for the underlying design.
+        Read-only view of this chat's samskara state: fires,
+        substrate, and the compound summary riding in every system
+        prompt. See <em>docs/dev/samskara.md</em> for the design.
       </p>
       <!-- Compact icon bar. Replaced wider labeled buttons that wrapped
            to two rows on phones. Transient state (Copied, Consolidating,
