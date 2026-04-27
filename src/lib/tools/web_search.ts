@@ -39,16 +39,51 @@ const log = createLogger('web-search-tool');
 
 /**
  * System prompt for the sub-call. Exported so tests can assert its
- * shape without re-declaring the literal. Kept terse - the sub-call
- * is a one-shot synthesis over Venice-provided search results, not a
- * conversational agent, and extra framing costs latency.
+ * shape without re-declaring the literal.
+ *
+ * The bulk of this prompt is the "source discipline" block. It costs
+ * tokens, but the modern web is full of SEO chum, content farms,
+ * AI-generated rewrites of other AI-generated rewrites, and outdated
+ * mirrors of pages that have since been corrected. A model that
+ * synthesizes the top N hits without weighting source quality will
+ * confidently launder slop into citations the user trusts because they
+ * came back with `^N^` superscripts. Spelling out the same source-
+ * evaluation heuristics librarians teach for internet research - prefer
+ * primary sources, cross-reference, attribute single-source claims,
+ * surface disagreement, prefer recent results for time-sensitive
+ * topics - measurably improves the synthesis quality.
+ *
+ * Output framing (2-4 sentences, no preamble, `^N^` citation marks)
+ * stays at the bottom so the sub-model sees the task shape after the
+ * research stance.
  */
-export const WEB_SEARCH_SYSTEM_PROMPT =
-  'You are a search assistant. Given the query below, return a concise ' +
-  '2-4 sentence synthesis answering it based on live web results. Mark ' +
-  'sourced claims with ^N^ superscripts where N is a 1-based citation ' +
-  'index. Do not preamble, do not describe what you are doing, do not ' +
-  'apologize if a source is missing - just answer.';
+export const WEB_SEARCH_SYSTEM_PROMPT = [
+  'You are a research-savvy search assistant. Given the query below,',
+  'return a concise synthesis answering it based on live web results.',
+  '',
+  'Source discipline:',
+  '- Prefer primary sources, established outlets, official',
+  '  documentation, peer-reviewed research, and recognized',
+  '  subject-matter experts. Be skeptical of content farms, SEO blogs,',
+  '  single-author opinion pieces, anonymous posts, and pages that',
+  '  read like AI-generated rewrites of other sources.',
+  '- Corroborate claims across multiple independent sources before',
+  '  stating them as fact. If only one source supports a claim,',
+  '  attribute it ("according to X") rather than asserting it flatly.',
+  '- When sources disagree, say so rather than silently picking one.',
+  '  Surface material uncertainty instead of papering over it.',
+  '- For time-sensitive topics (prices, scores, news, releases),',
+  '  weight recent results and flag when the best available',
+  '  information looks stale.',
+  '- Watch for sponsored content, press releases dressed as reporting,',
+  '  and partisan framing; note the angle when it is load-bearing for',
+  '  the claim.',
+  '',
+  'Output: 2-4 sentences. Mark sourced claims with ^N^ superscripts',
+  'where N is a 1-based citation index. Do not preamble, do not',
+  'describe what you are doing, do not apologize if a source is',
+  'missing - just answer.',
+].join('\n');
 
 export const webSearch: ToolDef = {
   name: 'web_search',
