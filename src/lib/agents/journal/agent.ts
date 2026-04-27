@@ -54,7 +54,7 @@ import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
 import { createLogger } from '../../logger.svelte';
 import { sanitizeToolCallsForWire } from '../../tools/wire';
 import type { ReasoningEffort } from '../../models';
-import { buildJournalPrompt } from './prompt';
+import { buildJournalPrompt, buildJournalRegeneratePrompt } from './prompt';
 import {
   renderSpamHint,
   scoreSpamFilter,
@@ -507,5 +507,100 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
         error: err instanceof Error ? err.message : String(err),
       };
     }
+  }
+
+  /**
+   * User-initiated regenerate of an existing automatic entry. Runs
+   * outside the worker queue: no claim, no lease, no pointer
+   * advance. Bypasses the worthy/not-worthy gate and the spam-filter
+   * prior because the user has explicitly asked for an entry. Does
+   * NOT write to the database - the caller previews the result and
+   * either accepts (and persists via updateJournalEntry) or
+   * discards.
+   *
+   * Uses the full thread history rather than the slice up to the
+   * original entry's terminal message - the user might be
+   * regenerating because newer turns added context worth covering,
+   * and the entry's existing entry_date is already pinned to the
+   * conversation-start day so the entry won't drift onto the wrong
+   * calendar bucket.
+   *
+   * Throws on any failure (parse error, model returning worthy=false
+   * despite the regenerate prompt, abort, network error). The caller
+   * surfaces the error inline so the user can retry or cancel.
+   */
+  async regenerate(args: {
+    threadId: string;
+    entryDate: string;
+    existingEntry: {
+      content: string;
+      topics: readonly string[];
+      mood: string | null;
+      people: readonly string[];
+    };
+    signal?: AbortSignal;
+  }): Promise<{
+    content: string;
+    topics: string[];
+    mood: string | null;
+    people: string[];
+  }> {
+    const signal = args.signal ?? new AbortController().signal;
+    if (signal.aborted) throw new Error('Regenerate aborted before start.');
+
+    const allMessages = await this.supabase.listMessages(args.threadId);
+    if (allMessages.length === 0) {
+      throw new Error('Source conversation has no messages to journal.');
+    }
+
+    const convo: VeniceMessage[] = allMessages.map(messageToVenice);
+    convo.push({
+      role: 'user',
+      content: buildJournalRegeneratePrompt({
+        entryDate: args.entryDate,
+        existingEntry: args.existingEntry,
+      }),
+    });
+
+    log.info(
+      `regenerating entry for thread ${args.threadId} ` +
+        `(${allMessages.length} messages)`
+    );
+
+    let finalText = '';
+    const stream = this.venice.streamChat({
+      model: this.model,
+      messages: convo,
+      responseFormat: JOURNAL_RESPONSE_FORMAT,
+      reasoningEffort: JOURNAL_REASONING_EFFORT,
+      signal,
+    });
+    for await (const ev of stream) {
+      if (ev.type === 'text') finalText += ev.delta;
+    }
+
+    if (signal.aborted) throw new Error('Regenerate aborted mid-stream.');
+
+    const decision = parseJournalDecision(finalText);
+    if (decision === null) {
+      throw new Error(
+        'The model returned a response we couldn\'t parse. Try again.'
+      );
+    }
+    // The regenerate prompt forces worthy=true; if the model still
+    // returned worthy=false (or downgraded for an empty entry) the
+    // payload is unusable. Surface the model's reasoning so the user
+    // sees why and can decide whether to retry.
+    if (!decision.worthy || decision.entry === null) {
+      throw new Error(
+        `The model declined to regenerate: ${decision.reasoning}`
+      );
+    }
+    return {
+      content: decision.entry.content,
+      topics: [...decision.entry.topics],
+      mood: decision.entry.mood,
+      people: [...decision.entry.people],
+    };
   }
 }

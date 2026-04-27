@@ -78,6 +78,30 @@ export interface BuildPromptArgs {
 }
 
 /**
+ * Args for the regenerate prompt - the user-initiated "rewrite this
+ * entry" path. Differs from BuildPromptArgs in two ways: there's
+ * always an existing entry (the one being regenerated), and there's
+ * no spam-filter hint or worthy/not-worthy decision because the user
+ * has already opted in by clicking the button. The model is told to
+ * produce a fresh take rather than extending the prior version.
+ */
+export interface BuildRegeneratePromptArgs {
+  entryDate: string;
+  /**
+   * The entry the user is currently looking at and asked to
+   * regenerate. Shown to the model as "this is what you wrote last
+   * time; the user wants something different" rather than as a base
+   * to extend, so the regenerated entry isn't just a rephrase.
+   */
+  existingEntry: {
+    content: string;
+    topics: readonly string[];
+    mood: string | null;
+    people: readonly string[];
+  };
+}
+
+/**
  * Construct the final-turn prompt. Returns a single string the caller
  * appends as a user-role message. Pair with
  * `response_format: {type: 'json_object'}` on the streamChat call so
@@ -276,6 +300,121 @@ export function buildJournalPrompt(args: BuildPromptArgs): string {
   lines.push(
     'Reply with the JSON object only. No surrounding prose, no markdown',
     'fence.'
+  );
+  return lines.join('\n');
+}
+
+/**
+ * Construct the prompt for a user-initiated regenerate. The user
+ * clicked the regenerate button on an existing automatic entry, so
+ * the worthy/not-worthy gate is bypassed and the spam-filter prior
+ * is suppressed - the user has explicitly asked for an entry. The
+ * existing entry is shown as "what you produced last time, the
+ * user wasn't satisfied" rather than as a base to extend, so the
+ * model takes a fresh angle (different framing, voice, or
+ * structure) instead of returning a near-duplicate.
+ *
+ * The output shape is the same as {@link buildJournalPrompt} so
+ * {@link parseJournalDecision} can be reused on the parse side.
+ * `worthy` is forced to true here - any worthy=false response is
+ * treated as a regenerate failure by the caller.
+ */
+export function buildJournalRegeneratePrompt(
+  args: BuildRegeneratePromptArgs
+): string {
+  const lines: string[] = [
+    "You've just read the conversation above. Step out of that role.",
+    "You're not the assistant talking to the user anymore. Your job",
+    "is to write a fresh JOURNAL ENTRY (third-person diary entry)",
+    "for this conversation. The user previously asked the journaler",
+    "to write one for this conversation, but didn't like the result -",
+    "they've clicked Regenerate and want a different take.",
+    '',
+    `This conversation started on **${args.entryDate}** (the user's`,
+    'local-timezone calendar day). Use that as the entry_date - the',
+    'entry belongs to the day the conversation happened on, NOT the',
+    'day you are processing it on.',
+    '',
+    '## Output format',
+    '',
+    'Return one JSON object. No prose around it, no markdown fences,',
+    'no comments. Required keys:',
+    '',
+    '- `worthy` (boolean): always true on this path - the user has',
+    '  explicitly asked for an entry by clicking Regenerate.',
+    '- `reasoning` (string): one sentence, plain text, naming the',
+    '  angle you took (e.g. "Reframed the conversation around the',
+    '  user\'s shifting relationship with their workload" or',
+    '  "Tightened the original entry into the single arc that',
+    '  actually moved the user").',
+    '- `entry` (object): the regenerated entry. Required field',
+    '  `content` (string, Markdown body, max 16000 chars). Optional',
+    '  fields `topics` (string[]), `mood` (string), `people`',
+    '  (string[]). Omit any optional you do not need; do not pass',
+    '  empty strings or empty arrays as filler.',
+    '',
+    'Worked example:',
+    '',
+    '```',
+    '{"worthy": true,',
+    ' "reasoning": "Recentered the entry on the boundary the user',
+    ' arrived at, rather than the work conflict that opened the',
+    ' conversation.",',
+    ' "entry": {',
+    '   "content": "User came in venting about a coworker but the',
+    ' arc that mattered was naming the boundary they want to set...",',
+    '   "topics": ["work", "boundaries"],',
+    '   "mood": "resolved",',
+    '   "people": ["Alex"]',
+    ' }}',
+    '```',
+    '',
+    '## Voice',
+    '',
+    'Third person, observational. "User was frustrated by X", "User',
+    'noticed that Y made them anxious", "User reframed Z as a',
+    'boundary problem". Markdown is fine - paragraphs, lists, short',
+    'headers if helpful. Keep it tight; this is a daily arc, not an',
+    'essay. 2-6 short paragraphs is the right shape.',
+    '',
+    '## How to differ from the previous entry',
+    '',
+    "The user clicked Regenerate because the previous entry didn't",
+    'land for them. Produce something different - not just a',
+    "reworded version. Concrete ways to differ: pick a different",
+    'central arc (the conversation likely had several), trim what',
+    'the previous entry over-emphasised, surface something the',
+    'previous entry missed, or shift the structure (one continuous',
+    'narrative vs. a few short beats). Match the conversation; do',
+    "not invent material that isn't there.",
+    '',
+    '**Previous entry (the one the user wants replaced):**',
+    '',
+    '```markdown',
+    args.existingEntry.content,
+    '```',
+    '',
+  ];
+  if (args.existingEntry.topics.length > 0) {
+    lines.push(`Previous topics: ${args.existingEntry.topics.join(', ')}`);
+  }
+  if (args.existingEntry.mood) {
+    lines.push(`Previous mood: ${args.existingEntry.mood}`);
+  }
+  if (args.existingEntry.people.length > 0) {
+    lines.push(
+      `Previous people: ${args.existingEntry.people.join(', ')}`
+    );
+  }
+  lines.push(
+    '',
+    'Topics, mood, and people on the new entry should reflect the',
+    'angle YOU take - they need not match the previous entry. Keep',
+    'whatever still fits, drop what your fresh take leaves behind,',
+    'and add what your angle introduces.',
+    '',
+    'Reply with the JSON object only. No surrounding prose, no',
+    'markdown fence.'
   );
   return lines.join('\n');
 }

@@ -45,17 +45,20 @@ day unfolded.
   updates the same thread, so your manual edits to an automatic
   entry would be overwritten - delete instead, then write your own
   user entry if you want a different framing.
-- **Thumbs up / thumbs down** — on automatic entries, two
-  emoji-labeled buttons that train a per-user filter shaping
-  future auto-journal decisions. Thumbs-up (Looks good) tells the
-  journaler "this kind of conversation IS worth journaling";
-  thumbs-down (Delete) removes the entry, marks the source
-  conversation as excluded from future journaling, AND tells the
-  journaler "this kind is NOT worth journaling." See
+- **Thumbs up / regenerate / thumbs down** — on automatic
+  entries, three emoji-labeled buttons in the action row.
+  Thumbs-up (Looks good) tells the journaler "this kind of
+  conversation IS worth journaling"; thumbs-down (Delete) removes
+  the entry, marks the source conversation as excluded from
+  future journaling, AND tells the journaler "this kind is NOT
+  worth journaling." See
   [Teaching the journaler what to keep](#teaching-the-journaler-what-to-keep)
-  below. Both buttons stay visible; once you click the thumbs-up
-  it picks up a green border to show the vote took. The vote is
-  one-shot per entry, so re-clicking the green button is a no-op.
+  below. Thumbs-up stays visible after a click and picks up a
+  green border to show the vote took; re-clicking is a no-op.
+  The regenerate button (🔄) sits between the two and asks the
+  journaler to write a different take on the same conversation -
+  see [Regenerating an automatic entry](#regenerating-an-automatic-entry)
+  below.
 
 Navigate days with **‹** / **›** or jump back to **Today**.
 
@@ -80,6 +83,31 @@ fact that you took the time to record it tells the spam filter
 you find this kind of content journal-worthy, so the entry's
 words feed straight into the model's ham vocabulary. Deleting
 the entry rescinds that vote.
+
+### Regenerating an automatic entry
+
+The 🔄 button on an automatic entry asks the journaler to write
+a different take on the same conversation. Click it and the
+card's body is replaced with the proposed new entry as soon as
+the model has finished. You then have three choices:
+
+- **Accept** replaces the original entry with the proposal.
+- **Try again** re-runs the journaler against the original entry
+  for another fresh angle. Each try ignores the previous proposal,
+  so retries don't compound.
+- **Cancel** discards the proposal and restores the original
+  entry untouched.
+
+Nothing is saved until you click Accept. While the regenerate is
+running, the card shows a "Regenerating this entry…" placeholder;
+your thumbs-up vote, the entry's spam-filter training, and the
+source conversation's link to the entry are all preserved when
+you accept.
+
+Regenerate runs the journaler with the worthy / not-worthy gate
+bypassed - clicking the button is itself a "yes, I want an entry
+for this" signal, so the model is told to produce one regardless
+of whether it would have on its own.
 
 ### Deleting an automatic entry
 

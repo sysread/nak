@@ -25,6 +25,8 @@
     updateUserEntry,
     deleteEntry,
     markEntryHam,
+    regenerateAutomaticEntry,
+    acceptRegeneratedEntry,
   } from '$lib/journal-store.svelte';
   import { downloadEntryMarkdown } from '$lib/journal-export';
   import { todayInZone } from '$lib/journal-day';
@@ -64,6 +66,30 @@
   let hamError = $state<string | null>(null);
   let hamErrorId = $state<string | null>(null);
 
+  // Regenerate-button state. Only one entry can be in regenerate
+  // mode at a time - the proposed replacement is shown in place of
+  // the entry's body until the user picks Accept / Try again / Cancel.
+  // Persistence is held off until Accept so Cancel can revert
+  // cleanly without round-tripping the DB. Try again re-runs the
+  // agent against the original entry (not the previous proposal),
+  // so the user always gets a fresh angle.
+  type RegeneratePreview = {
+    content: string;
+    topics: string[];
+    mood: string | null;
+    people: string[];
+  };
+  let regenerateTargetId = $state<string | null>(null);
+  let regenerateBusy = $state(false);
+  let regeneratePreview = $state<RegeneratePreview | null>(null);
+  let regenerateError = $state<string | null>(null);
+  let regenerateAccepting = $state(false);
+  // AbortController for the in-flight regenerate. Cancel calls
+  // .abort() so the streamChat call (and the SSE socket behind it)
+  // tear down promptly rather than running to completion in the
+  // background.
+  let regenerateController: AbortController | null = null;
+
   // User-entry compose / edit state. Only one day can be edited at a
   // time - the daily view renders a single user card anyway.
   type ComposeMode = 'none' | 'create' | 'edit';
@@ -89,6 +115,20 @@
       void loadJournalEntries(app.supabase, { limit: 500 });
     });
     return () => off();
+  });
+
+  // Tear down any in-flight regenerate when the modal unmounts. The
+  // streamChat call keeps the SSE socket open until aborted; without
+  // this the worker keeps generating tokens for a panel the user
+  // already closed. Stale-result guards inside startRegenerate
+  // catch the resolution, but we still want the socket released.
+  $effect(() => {
+    return () => {
+      if (regenerateController) {
+        regenerateController.abort();
+        regenerateController = null;
+      }
+    };
   });
 
   // Debounced semantic search. Clears when the query is empty so the
@@ -305,6 +345,93 @@
     }
   }
 
+  // Kick off (or retry) a regenerate against the given automatic
+  // entry. Holds previous state on retry: the target id stays put,
+  // any prior preview is cleared so the loading state takes the
+  // card slot, and the error is cleared so a successful retry
+  // doesn't keep showing the prior failure. The agent is run in
+  // the main thread so the UI can show its result and let the user
+  // decide before persisting - the worker pipeline never touches
+  // this path.
+  async function startRegenerate(entry: JournalEntry): Promise<void> {
+    if (!app.supabase || !app.venice) return;
+    if (!entry.thread_id) return;
+    // Cancel any in-flight regenerate before starting another. Two
+    // concurrent regenerates against the same row would race the
+    // preview state on resolution; the second-clicked one should win.
+    if (regenerateController) regenerateController.abort();
+    regenerateTargetId = entry.id;
+    regeneratePreview = null;
+    regenerateError = null;
+    regenerateBusy = true;
+    // Close any other inline UI on the same card so the regenerate
+    // preview owns the card's body slot uncontested.
+    if (deleteTargetId === entry.id) deleteTargetId = null;
+    const controller = new AbortController();
+    regenerateController = controller;
+    try {
+      const proposed = await regenerateAutomaticEntry(
+        app.supabase,
+        app.venice,
+        entry,
+        controller.signal
+      );
+      // Stale-result guard: if the user cancelled or moved to another
+      // row while the call was in flight, drop this result.
+      if (regenerateController !== controller) return;
+      if (regenerateTargetId !== entry.id) return;
+      regeneratePreview = proposed;
+    } catch (err) {
+      if (regenerateController !== controller) return;
+      if (regenerateTargetId !== entry.id) return;
+      regenerateError = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (regenerateController === controller) {
+        regenerateBusy = false;
+        regenerateController = null;
+      }
+    }
+  }
+
+  function cancelRegenerate(): void {
+    if (regenerateAccepting) return;
+    if (regenerateController) {
+      regenerateController.abort();
+      regenerateController = null;
+    }
+    regenerateTargetId = null;
+    regenerateBusy = false;
+    regeneratePreview = null;
+    regenerateError = null;
+  }
+
+  async function tryRegenerateAgain(): Promise<void> {
+    if (!regenerateTargetId) return;
+    const target = journal.entries.find((e) => e.id === regenerateTargetId);
+    if (!target) return;
+    await startRegenerate(target);
+  }
+
+  async function acceptRegenerate(): Promise<void> {
+    if (!app.supabase || !regenerateTargetId || !regeneratePreview) return;
+    if (regenerateAccepting) return;
+    regenerateAccepting = true;
+    try {
+      await acceptRegeneratedEntry(
+        app.supabase,
+        regenerateTargetId,
+        regeneratePreview
+      );
+      regenerateTargetId = null;
+      regeneratePreview = null;
+      regenerateError = null;
+    } catch (err) {
+      regenerateError = err instanceof Error ? err.message : String(err);
+    } finally {
+      regenerateAccepting = false;
+    }
+  }
+
   // Compact ISO-flavoured form ("SUN 2026-04-19") for the daily-view
   // title. Short weekday + ISO date keeps the title to a single line
   // on any reasonable phone width and matches the daynav button row.
@@ -461,6 +588,7 @@
 {/snippet}
 
 {#snippet automaticCard(entry: JournalEntry)}
+  {@const isRegenerating = regenerateTargetId === entry.id}
   <article class="journal-card card-automatic">
     <header class="journal-card-conversation-title">
       {#if entry.thread_id}
@@ -476,80 +604,169 @@
         </span>
       {/if}
     </header>
-    {#if entry.mood || entry.topics.length > 0}
-      <div class="journal-card-chips">
-        {#if entry.mood}
-          <span class="chip">mood: {entry.mood}</span>
+    <!--
+      Regenerate preview takes over the card body when the user has
+      asked for a rewrite. The chips/people from the ORIGINAL entry
+      are hidden during preview because the proposed replacement
+      carries its own metadata - showing both at once would conflate
+      two versions in one card.
+    -->
+    {#if isRegenerating}
+      {#if regenerateBusy && !regeneratePreview}
+        <div class="journal-card-body">
+          <p class="subtle">Regenerating this entry…</p>
+        </div>
+      {:else if regeneratePreview}
+        <div class="journal-card-chips">
+          <span class="journal-badge badge-regenerate">Proposed</span>
+          {#if regeneratePreview.mood}
+            <span class="chip">mood: {regeneratePreview.mood}</span>
+          {/if}
+          {#each regeneratePreview.topics as t}
+            <span class="chip">{t}</span>
+          {/each}
+        </div>
+        <div class="journal-card-body">
+          <Markdown content={regeneratePreview.content} />
+        </div>
+        {#if regeneratePreview.people.length > 0}
+          <p class="subtle journal-people">
+            People: {regeneratePreview.people.join(', ')}
+          </p>
         {/if}
-        {#each entry.topics as t}
-          <span class="chip">{t}</span>
-        {/each}
+      {:else if regenerateError}
+        <div class="journal-card-body">
+          <p class="error">{regenerateError}</p>
+        </div>
+      {/if}
+    {:else}
+      {#if entry.mood || entry.topics.length > 0}
+        <div class="journal-card-chips">
+          {#if entry.mood}
+            <span class="chip">mood: {entry.mood}</span>
+          {/if}
+          {#each entry.topics as t}
+            <span class="chip">{t}</span>
+          {/each}
+        </div>
+      {/if}
+      <div class="journal-card-body">
+        <Markdown content={entry.content} />
       </div>
-    {/if}
-    <div class="journal-card-body">
-      <Markdown content={entry.content} />
-    </div>
-    {#if entry.people.length > 0}
-      <p class="subtle journal-people">
-        People: {entry.people.join(', ')}
-      </p>
+      {#if entry.people.length > 0}
+        <p class="subtle journal-people">
+          People: {entry.people.join(', ')}
+        </p>
+      {/if}
     {/if}
     <footer class="journal-card-actions">
-      <button
-        type="button"
-        class="secondary"
-        onclick={() => downloadEntryMarkdown(entry)}
-        title="Download this entry as Markdown"
-      >Export .md</button>
-      <!--
-        Spam-filter votes. Thumbs-up trains the source conversation's
-        tokens as ham; thumbs-down (Delete) trains them as spam AND
-        deletes the entry + adds the thread to journal_thread_excludes.
-        Both buttons stay visible once the entry has a thread; the
-        thumbs-up gets a green border (.is-voted) once ham_marked_at
-        flips so the durable vote state lives on the button itself
-        rather than being replaced by a separate "you voted" tag.
-        Re-clicking an already-hammed thumbs-up is a no-op (the click
-        handler short-circuits when ham_marked_at is set) - the visual
-        state is the indicator. aria-label + title carry the verb for
-        keyboard / screen-reader users.
-      -->
-      {#if entry.thread_id}
-        <button
-          type="button"
-          class="secondary journal-vote-btn"
-          class:is-voted={entry.ham_marked_at !== null}
-          aria-label="Looks good"
-          aria-pressed={entry.ham_marked_at !== null}
-          onclick={() => onMarkHam(entry.id)}
-          disabled={hamBusyId === entry.id}
-          title={entry.ham_marked_at !== null
-            ? 'You marked this entry as appropriate.'
-            : 'Looks good - tell the spam filter this kind of conversation IS journal-worthy'}
-        >{hamBusyId === entry.id ? '…' : '👍'}</button>
-      {/if}
-      {#if deleteTargetId === entry.id}
+      {#if isRegenerating}
+        <!--
+          Regenerate-mode footer. Cancel reverts to the original
+          entry (no DB write). Try again re-runs the agent against
+          the original (not the proposal), so each retry takes a
+          fresh angle. Accept persists the proposal via
+          updateJournalEntry. Buttons are ordered Cancel / Try
+          again / Accept so the primary action sits on the right
+          where the eye lands at the end of the row.
+        -->
         <span class="subtle journal-delete-prompt">
-          Delete and stop journaling this conversation?
+          {regeneratePreview
+            ? 'Replace existing entry with this version?'
+            : regenerateError
+            ? 'Regenerate failed.'
+            : ''}
         </span>
         <button
           type="button"
           class="secondary"
-          onclick={cancelDelete}
+          onclick={cancelRegenerate}
+          disabled={regenerateAccepting}
         >Cancel</button>
         <button
           type="button"
-          class="danger"
-          onclick={confirmDelete}
-        >Delete</button>
+          class="secondary"
+          onclick={tryRegenerateAgain}
+          disabled={regenerateBusy || regenerateAccepting}
+          title="Run the journaler again for a different take"
+        >{regenerateBusy ? 'Trying…' : 'Try again'}</button>
+        {#if regeneratePreview}
+          <button
+            type="button"
+            onclick={acceptRegenerate}
+            disabled={regenerateAccepting}
+          >{regenerateAccepting ? 'Saving…' : 'Accept'}</button>
+        {/if}
       {:else}
         <button
           type="button"
-          class="secondary journal-vote-btn"
-          aria-label="Delete and mark as spam"
-          onclick={() => requestDelete(entry.id)}
-          title="Delete - tell the spam filter this kind of conversation is NOT journal-worthy"
-        >👎</button>
+          class="secondary"
+          onclick={() => downloadEntryMarkdown(entry)}
+          title="Download this entry as Markdown"
+        >Export .md</button>
+        <!--
+          Spam-filter votes. Thumbs-up trains the source conversation's
+          tokens as ham; thumbs-down (Delete) trains them as spam AND
+          deletes the entry + adds the thread to journal_thread_excludes.
+          Both buttons stay visible once the entry has a thread; the
+          thumbs-up gets a green border (.is-voted) once ham_marked_at
+          flips so the durable vote state lives on the button itself
+          rather than being replaced by a separate "you voted" tag.
+          Re-clicking an already-hammed thumbs-up is a no-op (the click
+          handler short-circuits when ham_marked_at is set) - the visual
+          state is the indicator. aria-label + title carry the verb for
+          keyboard / screen-reader users.
+        -->
+        {#if entry.thread_id}
+          <button
+            type="button"
+            class="secondary journal-vote-btn"
+            class:is-voted={entry.ham_marked_at !== null}
+            aria-label="Looks good"
+            aria-pressed={entry.ham_marked_at !== null}
+            onclick={() => onMarkHam(entry.id)}
+            disabled={hamBusyId === entry.id}
+            title={entry.ham_marked_at !== null
+              ? 'You marked this entry as appropriate.'
+              : 'Looks good - tell the spam filter this kind of conversation IS journal-worthy'}
+          >{hamBusyId === entry.id ? '…' : '👍'}</button>
+          <!--
+            Regenerate. Sits between thumbs-up and thumbs-down so the
+            row reads as "approve / rewrite / reject". Only available
+            when the source thread still exists - the agent needs the
+            messages to feed the model.
+          -->
+          <button
+            type="button"
+            class="secondary journal-vote-btn"
+            aria-label="Regenerate this entry"
+            onclick={() => startRegenerate(entry)}
+            title="Regenerate - have the journaler write a different take on this conversation"
+          >🔄</button>
+        {/if}
+        {#if deleteTargetId === entry.id}
+          <span class="subtle journal-delete-prompt">
+            Delete and stop journaling this conversation?
+          </span>
+          <button
+            type="button"
+            class="secondary"
+            onclick={cancelDelete}
+          >Cancel</button>
+          <button
+            type="button"
+            class="danger"
+            onclick={confirmDelete}
+          >Delete</button>
+        {:else}
+          <button
+            type="button"
+            class="secondary journal-vote-btn"
+            aria-label="Delete and mark as spam"
+            onclick={() => requestDelete(entry.id)}
+            title="Delete - tell the spam filter this kind of conversation is NOT journal-worthy"
+          >👎</button>
+        {/if}
       {/if}
     </footer>
     {#if deleteTargetId === entry.id && deleteError}
@@ -557,6 +774,9 @@
     {/if}
     {#if hamErrorId === entry.id && hamError}
       <p class="error">{hamError}</p>
+    {/if}
+    {#if isRegenerating && regeneratePreview && regenerateError}
+      <p class="error">{regenerateError}</p>
     {/if}
   </article>
 {/snippet}
@@ -969,6 +1189,16 @@
     background: var(--accent-bg, var(--bg-2));
     color: var(--accent, var(--text));
     border-color: var(--accent, var(--border));
+  }
+
+  /* Proposed-replacement badge worn by the regenerate preview. Uses
+     --warn rather than --accent so it reads as "this is a pending
+     decision the user has to confirm" rather than blending with the
+     usual user/automatic badge palette. */
+  .badge-regenerate {
+    background: color-mix(in srgb, var(--warn) 18%, transparent);
+    color: var(--warn);
+    border-color: var(--warn);
   }
 
   .chip {

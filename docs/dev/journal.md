@@ -44,18 +44,29 @@ Unlike memories, entries are not linked into a graph.
     256k context, supports function calling + reasoning).
     `reasoning_effort: 'medium'`. Reads today's existing
     automatic entry and injects it into the prompt so the
-    LLM extends rather than
-    duplicates.
+    LLM extends rather than duplicates. Also exposes a
+    `regenerate({threadId, entryDate, existingEntry})`
+    method used by the modal's Regenerate button - bypasses
+    the worker queue and the worthy/not-worthy gate, runs
+    the agent in the main thread, and returns the proposed
+    entry without writing it. See "Regenerate path" under
+    Contracts below.
   - `prompt.ts` — `buildJournalPrompt({entryDate,
-    existingEntry, threadId})`. Third-person observational
-    voice. Tells the model to return one JSON object with
-    `worthy` (bool), `reasoning` (one sentence), and
-    `entry` (only when worthy=true). The agent parses the
-    response and writes through
-    `supabase.upsertJournalAutomaticEntry` directly - no
-    tool call - to avoid the double-JSON-escape failure
-    mode that ate writes when long Markdown bodies came
-    through as `tool_calls.arguments`.
+    existingEntry, threadId})` for the worker path, plus
+    `buildJournalRegeneratePrompt({entryDate,
+    existingEntry})` for the user-initiated regenerate.
+    Both use the third-person observational voice and the
+    same `{worthy, reasoning, entry}` JSON output shape -
+    `parseJournalDecision` reads both. The regenerate
+    prompt forces `worthy=true` and tells the model to
+    take a different angle on the same conversation rather
+    than extending or rephrasing the existing entry. The
+    worker-side prompt parses the response and writes
+    through `supabase.upsertJournalAutomaticEntry`
+    directly - no tool call - to avoid the
+    double-JSON-escape failure mode that ate writes when
+    long Markdown bodies came through as
+    `tool_calls.arguments`.
   - `types.ts` — `JournalInput`, `JournalOutput`,
     `MAX_JOURNAL_CONTENT_CHARS`.
   - `spam_filter.ts` — per-user Naive Bayes classifier over
@@ -324,6 +335,44 @@ and `journalTimezone?: string` (IANA zone).
   worthy/not-worthy heuristics. Tuning this requires data
   we don't have yet; revisit if cold-start drags on
   longer than expected.
+- **Regenerate path.** The Regenerate button on the modal's
+  automatic-card footer runs `JournalAgent.regenerate(...)`
+  in the MAIN THREAD via `regenerateAutomaticEntry` in
+  `journal-store.svelte.ts`. Bypasses everything the
+  worker pipeline gates on:
+  - No claim, no lease, no thread-pointer advance
+    (`last_journaled_msg_id` stays where the worker left
+    it; the entry is rewritten in place so there's nothing
+    new to journal beyond what was already covered).
+  - No same-day cooldown, no `journal_thread_excludes`
+    check, no two-user-message gate. The user clicked
+    the button - that's the gate.
+  - No spam-filter prior, no worthy/not-worthy decision.
+    `buildJournalRegeneratePrompt` tells the model to
+    always return `worthy=true` and produce a fresh take;
+    a worthy=false response is treated as a regenerate
+    failure surfaced inline.
+  Persistence is held off until the user clicks Accept,
+  which calls `acceptRegeneratedEntry` -> the standard
+  `supabase.updateJournalEntry` (RLS allows the user to
+  update either source; the path patches content / topics
+  / mood / people only and leaves `thread_id`, `entry_date`,
+  `source`, and `ham_marked_at` alone). Cancel discards
+  the proposal; Try again re-runs the agent against the
+  ORIGINAL entry (not the prior proposal) so each retry
+  takes an independent fresh angle. The in-flight
+  `streamChat` call is held by an `AbortController` on the
+  modal so closing the modal or starting a new regenerate
+  tears the SSE socket down promptly.
+
+  Re-journaling interaction: if the conversation gets new
+  turns later, the worker picks the thread up via the
+  standard `terminal_msg_id != last_journaled_msg_id`
+  predicate, fetches the regenerated entry as the
+  "existing entry" prior, and extends it via the standard
+  EXTEND-and-REFINE flow. The regenerated content becomes
+  the base going forward - same shape as a worker-written
+  entry would have.
 
 ## Interactions
 
@@ -374,13 +423,20 @@ and `journalTimezone?: string` (IANA zone).
   recomputes `entryDate` every iteration so an idle
   worker that straddles midnight still writes to the
   right day.
-- **Automatic card is read-only.** The modal does not
-  expose an edit affordance on the automatic card. The
-  journaler re-reads that card every update; user edits
-  would be clobbered on the next conversation-settles
-  cycle. Users who want to adjust an automatic entry
-  delete it (which also excludes the source threads)
-  and write their own.
+- **Automatic card has no manual-edit affordance.** The
+  modal does not let the user hand-edit the body of an
+  automatic entry. The journaler re-reads that card on
+  every update cycle, so a hand-edit would be clobbered
+  on the next conversation-settles run. Users who want a
+  different framing of an automatic entry have two
+  options: click Regenerate (the journaler writes a
+  different take and the user accepts or cancels - see
+  the Regenerate-path contract above), or delete the
+  entry (which also excludes the source thread) and
+  write their own user entry. A regenerated entry is
+  itself agent-written and so survives the worker re-read
+  contract; the worker's next-cycle EXTEND flow treats it
+  as the base.
 - **IANA zone validation.** `normalizeTimezone` is the
   only guard on the settings path. A typo that slips
   through would still be caught by `todayInZone`'s

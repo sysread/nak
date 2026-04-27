@@ -9,7 +9,9 @@
  * list without explicit wiring at every call site.
  */
 import type { JournalEntry, SupabaseService } from './supabase';
+import type { VeniceClient } from './venice';
 import { emitJournalChange } from './journal-events';
+import { JournalAgent } from './agents/journal/agent';
 import {
   trainSpamFilterForThread,
   trainSpamFilterForUserEntry,
@@ -155,6 +157,87 @@ export async function deleteEntry(
   if (target?.source === 'user' && target.content) {
     void untrainSpamFilterForUserEntry(supabase, target.content);
   }
+}
+
+/**
+ * Run the journal agent in regenerate mode against an existing
+ * automatic entry. Bypasses the worker queue (no claim, no lease,
+ * no pointer advance) and the worthy/not-worthy gate - the user
+ * has clicked Regenerate, which is an explicit opt-in. Does NOT
+ * write the result; callers preview the proposed entry and either
+ * persist via {@link acceptRegeneratedEntry} or discard.
+ *
+ * Throws when the source thread is gone, the model returned
+ * unparseable output, or the call was aborted - the modal renders
+ * the error inline so the user can retry or cancel.
+ */
+export async function regenerateAutomaticEntry(
+  supabase: SupabaseService,
+  venice: VeniceClient,
+  entry: JournalEntry,
+  signal?: AbortSignal
+): Promise<{
+  content: string;
+  topics: string[];
+  mood: string | null;
+  people: string[];
+}> {
+  if (entry.source !== 'automatic') {
+    throw new Error('Only automatic entries can be regenerated.');
+  }
+  if (!entry.thread_id) {
+    throw new Error(
+      'Source conversation no longer exists; cannot regenerate.'
+    );
+  }
+  const agent = new JournalAgent(venice, supabase);
+  return agent.regenerate({
+    threadId: entry.thread_id,
+    entryDate: entry.entry_date,
+    existingEntry: {
+      content: entry.content,
+      topics: entry.topics,
+      mood: entry.mood,
+      people: entry.people,
+    },
+    signal,
+  });
+}
+
+/**
+ * Persist a regenerated entry's content/topics/mood/people over the
+ * existing automatic row. The thread's `last_journaled_msg_id`
+ * pointer is intentionally NOT advanced - the entry was already
+ * journaled up to wherever the worker left it; the regenerate just
+ * rewrites the body. `ham_marked_at` is preserved for the same
+ * reason - the user's prior "this conversation IS journal-worthy"
+ * vote still stands; only the entry's wording changed.
+ *
+ * If the conversation gets new turns later, the worker will pick
+ * the thread up again, fetch the regenerated entry as the
+ * "existing entry" prior, and extend it via the standard prompt
+ * flow. The regenerated content is treated as the base from there
+ * on - same way a worker-written entry would be.
+ */
+export async function acceptRegeneratedEntry(
+  supabase: SupabaseService,
+  id: string,
+  proposed: {
+    content: string;
+    topics: string[];
+    mood: string | null;
+    people: string[];
+  }
+): Promise<JournalEntry> {
+  const entry = await supabase.updateJournalEntry(id, {
+    content: proposed.content,
+    topics: proposed.topics,
+    mood: proposed.mood,
+    people: proposed.people,
+  });
+  journal.entries = journal.entries.map((e) => (e.id === id ? entry : e));
+  emitJournalChange();
+  return entry;
 }
 
 /**

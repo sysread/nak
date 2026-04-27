@@ -1577,11 +1577,14 @@ export class SupabaseService {
   }
 
   /**
-   * Patch a user-sourced entry's content/topics/mood/people. Refuses
-   * to touch automatic rows at the RLS layer (the policy still allows
-   * it, but the UI never calls this with an automatic id). Bumps
-   * updated_at; the trigger on the table nulls the embedding if
-   * content/topics/mood changed so the worker re-embeds.
+   * Patch an entry's content/topics/mood/people. Used on user-sourced
+   * rows by the compose-form Edit flow, and on automatic rows by the
+   * Regenerate flow when the user accepts a proposed replacement.
+   * RLS allows the user to update either source; thread/source/date
+   * columns are intentionally not patchable here (a regenerated
+   * automatic entry stays pinned to its original thread and day).
+   * Bumps updated_at; the trigger on the table nulls the embedding
+   * if content/topics/mood changed so the worker re-embeds.
    */
   async updateJournalEntry(
     id: string,
