@@ -316,9 +316,13 @@ the section the PR introduces or changes.
 
 ## Commit / branch / merge conventions
 
-See the standing instructions given at session start for branch names and
-merge policy. In short: develop on the designated feature branch, fast-forward
-into `main` when done, and clean up the feature branch when safely merged.
+See the standing instructions given at session start for branch names
+and merge policy. In short: develop on the designated feature branch,
+push that branch when the work is done, and **wait for the user to
+green-light the merge** before fast-forwarding into `main`. The
+designated branch exists precisely so the user can review before
+landing - merging without explicit go-ahead pre-empts the review they
+intended to do.
 
 Commit messages follow the project's narrative style: a short imperative
 summary line, then a paragraph or two explaining *why*. Match the tone of
@@ -331,11 +335,20 @@ the user explicitly says to.
 
 **Claude Code on the web** (task-scoped sessions on a designated feature
 branch): the web environment is persistent and shared between concurrent
-agent sessions, so it's your responsibility to keep the source repo in
-good shape - `main` up to date with `origin/main`, feature branches
-rebased on current `main`, and a merge history that reads as a clean
-linear progression rather than a twisty-straw tangle of crossing merges
-from stale branches. The session is expected to land the work on `main`.
+agent sessions, so the start-of-work hygiene below keeps the source repo
+in good shape - `main` up to date with `origin/main`, feature branches
+rebased on current `main`, and (eventually) a merge history that reads
+as a clean linear progression rather than a twisty-straw tangle of
+crossing merges from stale branches.
+
+**The default end-of-task is "commit on the feature branch, push it, and
+stop."** Do NOT merge to `main` unless the user has explicitly given the
+go-ahead for *this* task. "Fix X" / "implement Y" is permission to do
+the work; it is not permission to land it. A "looks good" or "thanks"
+afterward is appreciation, not a merge instruction. Phrases that DO
+constitute a green light: "merge it", "land it", "ship it", "go ahead
+and merge to main", or any equivalent that unambiguously asks for the
+integration step. If unsure, ask.
 
 Before starting any work on the feature branch:
 
@@ -348,7 +361,14 @@ Before starting any work on the feature branch:
    edit. Starting work on a stale branch is what produces the twisty
    straw at merge time.
 
-When the feature is done:
+When the work for the task is done:
+
+1. Commit on the feature branch with a clear narrative message.
+2. `git push -u origin <feature-branch>`.
+3. Stop. Summarise what changed and what's next; wait for the user to
+   review and either request changes or green-light the merge.
+
+When the user has explicitly green-lit merging this branch to `main`:
 
 1. `git fetch origin main && git checkout main && git pull --ff-only origin main`
 2. `git checkout <feature-branch> && git rebase main` (resolve conflicts;
