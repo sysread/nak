@@ -352,10 +352,11 @@ label {
 }
 
 /* Top-right "new version" pill. z-index 100 sits above every other
-   layered surface in the app (drawer: 20, modals: 30, error toasts:
-   30) so the prompt is never hidden behind a dialog the user didn't
-   want to interact with in the first place. top offset uses safe-area
-   inset so it clears the iOS notch / dynamic island on installed PWA. */
+   layered surface in the app (mood pill: 25, modals: 30, drawers: 40,
+   Cookbook: 40, Samskara: 50) so the prompt is never hidden behind a
+   dialog the user didn't want to interact with in the first place.
+   top offset uses safe-area inset so it clears the iOS notch /
+   dynamic island on installed PWA. */
 .update-banner {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 0.75rem);
@@ -1073,7 +1074,12 @@ h1 {
     bottom: 0;
     left: 0;
     width: min(85vw, 320px);
-    z-index: 20;
+    /* Sits above the SamskaraToasts mood pill (z-index 25) so the
+       slide-over drawer fully covers the pill rather than letting it
+       float in front of the drawer's content / close handles. Matches
+       the ExtractedTextDrawer (40) and the documented "drawers (40)"
+       layer in the SamskaraToasts comment. */
+    z-index: 40;
     transform: translateX(-100%);
     transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
     box-shadow: 0 0 28px rgba(0, 0, 0, 0.45);
@@ -1098,7 +1104,10 @@ h1 {
     bottom: 0;
     right: 0;
     width: min(85vw, 480px);
-    z-index: 20;
+    /* Mirror of .sidebar's z-index - above the SamskaraToasts mood
+       pill (25) so the slide-over fully covers it. Same value as
+       ExtractedTextDrawer (40). */
+    z-index: 40;
     transform: translateX(100%);
     transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
     box-shadow: 0 0 28px rgba(0, 0, 0, 0.45);
@@ -1119,7 +1128,10 @@ h1 {
     display: block;
     position: fixed;
     inset: 0;
-    z-index: 15;
+    /* Sits between the SamskaraToasts mood pill (z-index 25) and the
+       drawer it dims for (40), so the dim layer covers the pill while
+       the drawer itself stays clearly above the dim. */
+    z-index: 35;
     background: rgba(0, 0, 0, 0);
     pointer-events: none;
     transition: background 220ms ease-out;
