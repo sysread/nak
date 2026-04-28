@@ -339,10 +339,15 @@ asking first would be rude.
 ## When the model is rate-limited
 
 Venice occasionally returns a 429 "model overloaded" response when the
-requested model is under heavy load. When that happens the composer
-clears as usual, your message stays in the conversation, and a banner
-appears above the composer with the provider's explanation (e.g. "The
-model is currently overloaded. Please try again later.").
+requested model is under heavy load. Nak silently retries the request
+once after a short pause before surfacing anything to you, since the
+overload window usually clears within a second or two and the second
+attempt succeeds.
+
+When the auto-retry also fails, the composer clears as usual, your
+message stays in the conversation, and a banner appears above the
+composer with the provider's explanation (e.g. "The model is currently
+overloaded. Please try again later.").
 
 Next to the banner is a refresh-arrow button — click it to re-send the
 same request without retyping. Retries pick up any intermediate

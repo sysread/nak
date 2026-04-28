@@ -1843,10 +1843,17 @@
    * initial send path and the rate-limit refresh button share identical
    * lifecycle handling.
    *
-   * On a rate-limit failure (VeniceError kind='rate_limit'), parks a
-   * retry closure on the error banner that re-invokes this function
-   * with the same context. Other errors surface their message without
-   * a retry — we only advertise a retry when re-firing is meaningful.
+   * On a rate-limit failure (VeniceError kind='rate_limit') the loop
+   * auto-retries once after a short delay before surfacing anything to
+   * the user. Venice's 429 typically reads "the model is currently
+   * overloaded, try again later" and clears within a second or two, so
+   * a transparent retry covers the common case. The retry happens
+   * inside the same try block so `sending` stays asserted - the
+   * composer doesn't re-enable, and no error banner appears unless the
+   * second attempt also fails. Only when the retry also rate-limits do
+   * we park a manual retry closure on the inline banner. Other error
+   * kinds (auth, parse, http) surface immediately without a retry -
+   * re-firing them would just repeat the failure.
    */
   async function runExchange(ctx: ExchangeContext): Promise<void> {
     if (!app.venice || !app.supabase) return;
@@ -1863,8 +1870,11 @@
 
     // Rebuild at call time so a retry after mid-exchange persists
     // (assistant row + tool result from a prior round) sees them.
-    // toVeniceMessage is safe to call on rows without attachments —
-    // they come back as plain strings either way.
+    // Same closure is invoked again on the in-loop auto-retry below
+    // so that retry path also picks up rows the chat loop persisted
+    // before the 429 hit. toVeniceMessage is safe to call on rows
+    // without attachments — they come back as plain strings either
+    // way.
     //
     // The pendingDeleteSet filter excludes rows the user marked for
     // regenerate-from-here. The rows still exist in the DB at this
@@ -1873,12 +1883,20 @@
     // otherwise Venice would see "user, asst-bad, [regenerate
     // request]" and just continue from asst-bad instead of
     // re-rolling.
-    const historyOnWire: VeniceMessage[] = [
+    const buildHistoryOnWire = (): VeniceMessage[] => [
       ...ctx.systemMessages,
       ...messages
         .filter((m) => !pendingDeleteSet.has(m.id))
         .map((m) => toVeniceMessage(m, { visionSpec: ctx.tierSpec })),
     ];
+
+    // Short pause before the auto-retry on a Venice 429. Long enough
+    // for the model's overload window to clear in the common case
+    // (the provider's 429 message says "try again later" without a
+    // standard Retry-After header), short enough that the user doesn't
+    // perceive the retry as a stall. The manual retry button on the
+    // error banner has no such delay - that's user-driven.
+    const BUSY_RETRY_DELAY_MS = 1500;
 
     // Throttle streamingText updates to ~2Hz while the response
     // arrives. Every assignment drives <Markdown> to re-run marked
@@ -1909,15 +1927,28 @@
 
     try {
       let loopResult;
-      try {
-        loopResult = await runChatLoop({
-          venice: app.venice,
-          supabase: app.supabase,
+      // Auto-retry once on Venice 429 ("model is busy / overloaded").
+      // The retry runs inside this inner try so `sending` stays
+      // asserted across the brief delay - the composer doesn't
+      // re-enable mid-retry, no error banner appears, and the user
+      // just sees a slightly longer pause. Only when the second
+      // attempt also rate-limits does the outer catch fire and park
+      // a manual retry on the inline banner. A 429 is rejected by
+      // venice.ts before any SSE deltas land, so the failed attempt
+      // never called the streaming handlers - there is no partial
+      // text to roll back on retry. History is rebuilt from
+      // `messages` on each attempt so persisted rows from earlier
+      // tool rounds (which call onAssistantPersisted before a 429
+      // on a later round) reach the wire on the retry.
+      const oneAttempt = () =>
+        runChatLoop({
+          venice: app.venice!,
+          supabase: app.supabase!,
           thread: freshThread,
           userId: ctx.currentUserId,
           modelId: ctx.modelId,
-          history: historyOnWire,
-          signal: abortCtl.signal,
+          history: buildHistoryOnWire(),
+          signal: abortCtl!.signal,
           userMessageId: ctx.userMessageId,
           reasoningEffort: ctx.sendReasoning,
           verbosity: ctx.sendVerbosity,
@@ -2031,6 +2062,32 @@
             },
           },
         });
+
+      try {
+        let busyRetried = false;
+        for (;;) {
+          try {
+            loopResult = await oneAttempt();
+            break;
+          } catch (loopErr) {
+            if (
+              !busyRetried &&
+              loopErr instanceof VeniceError &&
+              loopErr.kind === 'rate_limit' &&
+              abortCtl?.signal.aborted !== true
+            ) {
+              busyRetried = true;
+              log.info(
+                'model busy (HTTP 429); auto-retrying once after short delay'
+              );
+              await new Promise<void>((r) =>
+                window.setTimeout(r, BUSY_RETRY_DELAY_MS)
+              );
+              continue;
+            }
+            throw loopErr;
+          }
+        }
       } finally {
         // Commit anything pending synchronously so post-loop code
         // sees the final state.
@@ -2296,9 +2353,9 @@
    * the persisted tool rows are exactly what the model needs to
    * pick up where it left off. We just rebuild the send-time
    * context against the current settings and re-enter `runExchange`
-   * with no pendingDeletes, so `historyOnWire` includes every
-   * existing row and the chat loop fires a fresh completion that
-   * continues the turn.
+   * with no pendingDeletes, so the rebuilt wire history includes
+   * every existing row and the chat loop fires a fresh completion
+   * that continues the turn.
    */
   async function retryIncompleteTurn(): Promise<void> {
     if (sending || !app.supabase || !app.venice) return;
