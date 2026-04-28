@@ -26,10 +26,10 @@ import type { AppConfig } from './config';
 
 const KEY = 'nak:session:v1';
 
-// Default 24 hours of inactivity before auto-lock. Long enough that an
-// active workday rarely re-prompts for the master password, while still
-// expiring an idle tab left open overnight on a shared machine.
-export const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
+// Default 7 days of inactivity before auto-lock. Long enough that a
+// working week rarely re-prompts for the master password, while still
+// expiring a tab left abandoned on a shared machine.
+export const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface SessionBlob {
   config: AppConfig;

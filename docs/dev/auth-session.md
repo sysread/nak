@@ -78,7 +78,7 @@ project.
 - **`sessionStorage['nak:session:v1']`** — JSON
   `{ config: AppConfig, expiresAt: number, activeThreadId?: string }`.
   Clears on tab close (sessionStorage semantics). TTL defaults to
-  24 hours.
+  7 days.
 - **`localStorage['nak:theme:v1']`** — non-secret; documented here
   only because it's on the same origin. See `./settings.md`.
 - **Supabase `auth.users`** — managed by Supabase. JWT stored in

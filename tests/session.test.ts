@@ -93,8 +93,8 @@ describe('session', () => {
     expect(sessionRemainingMs()).toBeNull();
   });
 
-  it('DEFAULT_TTL_MS is 24 hours', () => {
-    expect(DEFAULT_TTL_MS).toBe(24 * 60 * 60 * 1000);
+  it('DEFAULT_TTL_MS is 7 days', () => {
+    expect(DEFAULT_TTL_MS).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
   it('round-trips an activeThreadId on the session blob', () => {

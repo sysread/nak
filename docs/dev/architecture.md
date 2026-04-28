@@ -71,7 +71,7 @@ Three pieces cooperate to keep the user's secrets where they belong:
    plaintext. No other decrypted copy exists except…
 3. **Refresh bridge** — `src/lib/session.ts` mirrors the plaintext
    config to `sessionStorage` (`nak:session:v1`) along with an
-   `expiresAt` timestamp. On refresh within the TTL (24h default),
+   `expiresAt` timestamp. On refresh within the TTL (7d default),
    `App.svelte` skips the master-password prompt and calls
    `activate()` directly. sessionStorage clears when the tab closes;
    `App.svelte` also throttles activity events (keydown / pointerdown
