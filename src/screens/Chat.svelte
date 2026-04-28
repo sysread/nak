@@ -2554,14 +2554,29 @@
   //                          floating "↓" button re-engages follow mode.
   //
   // The scroll handler derives `followBottom` from the current
-  // position, so programmatic scrolls (streaming appends) and user
-  // scrolls go through the same code path — we just react to "is the
-  // view still near the bottom?" and set the flag accordingly. No
-  // ignore-next-event plumbing needed.
+  // position, with one wrinkle: re-engaging follow-bottom is only
+  // honored when scrollTop didn't go backwards. A user scrolling
+  // down (or a programmatic scrollToBottom) increases scrollTop;
+  // a layout shrink that clamps scrollTop down to the new max
+  // also fires 'scroll' and lands at the bottom, but that's the
+  // browser, not user intent. See `lastScrollTop` below.
   const NEAR_BOTTOM_PX = 48;
   let messagesEl: HTMLDivElement | undefined = $state();
   let followBottom = $state(true);
   let hasOverflow = $state(false);
+  // Last observed scrollTop. We diff against this in `onMessagesScroll`
+  // to distinguish a user-driven scroll-down from a browser-driven
+  // clamp. A clamp happens when the scroll container shrinks under a
+  // user who had scrolled away from the bottom: the streaming bubble
+  // collapses (reasoning panel slides closed, text becomes the
+  // Scanner, then the whole bubble disappears when `sending` flips),
+  // scrollHeight drops, and the browser pins scrollTop to the new
+  // max - which now satisfies `isNearBottom`. Without this guard the
+  // resulting 'scroll' event would silently flip `followBottom` back
+  // to true and the next streaming or messages effect would scroll
+  // the user to the bottom even though they had explicitly scrolled
+  // up to read.
+  let lastScrollTop = 0;
 
   function isNearBottom(el: HTMLElement): boolean {
     return el.scrollTop + el.clientHeight >= el.scrollHeight - NEAR_BOTTOM_PX;
@@ -2579,7 +2594,20 @@
   function onMessagesScroll(): void {
     const el = messagesEl;
     if (!el) return;
-    followBottom = isNearBottom(el);
+    const newScrollTop = el.scrollTop;
+    const atBottom = isNearBottom(el);
+    // Direction matters for the re-engage path. A user scrolling down
+    // (or a programmatic scrollToBottom) increases scrollTop; a
+    // browser clamp from a content shrink decreases it. We only
+    // honor "now at the bottom" as user intent when scrollTop didn't
+    // go backwards. The dis-engage path is symmetric: any time the
+    // view is no longer near the bottom, the lock is off.
+    if (atBottom) {
+      if (newScrollTop >= lastScrollTop) followBottom = true;
+    } else {
+      followBottom = false;
+    }
+    lastScrollTop = newScrollTop;
     hasOverflow = el.scrollHeight > el.clientHeight + 1;
   }
 
