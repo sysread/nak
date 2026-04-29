@@ -418,6 +418,15 @@ label {
   display: grid;
   grid-template-columns: 12rem 1fr;
   min-height: 28rem;
+  /* Cap the shell at the viewport minus .center's 2rem gutter on each
+     side so a tall pane (the AI tab is the canonical offender) never
+     pushes the modal past the screen edge with no way to reach the
+     bottom. The mobile rule below overrides this back to the full dvh
+     since the gutter is dropped on phones. dvh follows the visible
+     viewport as iOS Safari's URL bar collapses; the vh fallback is for
+     browsers that don't speak dvh yet. */
+  max-height: calc(100vh - 4rem);
+  max-height: calc(100dvh - 4rem);
   overflow: hidden;
 }
 
@@ -493,6 +502,12 @@ label {
   padding: 1.25rem 1.5rem;
   overflow: auto;
   min-width: 0;
+  /* Grid items default to min-height: auto, which sizes to content and
+     prevents `overflow: auto` from kicking in - the pane would push the
+     shell past its max-height instead of scrolling. min-height: 0 lets
+     the grid track collapse to the available row height so the pane's
+     own scrollbar takes over. */
+  min-height: 0;
 }
 
 .settings-pane h2 {
@@ -3369,5 +3384,9 @@ h1 {
     max-width: 100%;
     height: 100vh;
     height: 100dvh;
+    /* Drop the desktop "viewport minus 2rem gutter" cap - on mobile
+       the gutter is gone and the shell wants the full dvh, otherwise
+       max-height would clamp `height: 100dvh` back below the viewport. */
+    max-height: none;
   }
 }
