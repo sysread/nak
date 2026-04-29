@@ -49,6 +49,17 @@ export const recipeUpdate: ToolDef = {
         maxLength: 2000,
         description: 'URL provenance, or null to clear.',
       },
+      rating: {
+        type: ['integer', 'null'],
+        minimum: 1,
+        maximum: 5,
+        description:
+          "User's 1-5 star rating, or null to clear back to unrated. Only " +
+          'set this when the user has explicitly told you how they feel ' +
+          "about the recipe (e.g. \"that turned out great, give it 5 " +
+          'stars"). Do not invent a rating from reviews or your own ' +
+          'judgement.',
+      },
       change_message: {
         type: 'string',
         minLength: 1,
@@ -71,6 +82,7 @@ export const recipeUpdate: ToolDef = {
       cooklang?: string;
       source?: string | null;
       source_url?: string | null;
+      rating?: number | null;
     } = {};
     if (typeof args.title === 'string' && args.title.trim().length > 0) {
       const t = args.title.trim();
@@ -93,9 +105,23 @@ export const recipeUpdate: ToolDef = {
     else if (typeof args.source === 'string') patch.source = args.source.trim();
     if (args.source_url === null) patch.source_url = null;
     else if (typeof args.source_url === 'string') patch.source_url = args.source_url.trim();
+    // `rating` accepts null (clear), an integer 1-5, or omission
+    // (leave alone). `'rating' in args` distinguishes the explicit-
+    // null case from absence, mirroring the source / source_url
+    // handling above.
+    if ('rating' in args) {
+      if (args.rating === null) {
+        patch.rating = null;
+      } else if (typeof args.rating === 'number') {
+        if (!Number.isInteger(args.rating) || args.rating < 1 || args.rating > 5) {
+          throw new Error('rating must be an integer between 1 and 5, or null to clear');
+        }
+        patch.rating = args.rating;
+      }
+    }
     if (Object.keys(patch).length === 0) {
       throw new Error(
-        'provide at least one of title, cooklang, source, or source_url'
+        'provide at least one of title, cooklang, source, source_url, or rating'
       );
     }
     const changeMessage =

@@ -143,6 +143,32 @@ highlight; clicking the highlighted step again clears it. The
 highlight is local to your current view; switching to another recipe
 clears it automatically, and nothing is saved to the server.
 
+## Rating recipes
+
+Each recipe carries an optional 1-5 star rating. New recipes start
+unrated; the rating belongs on the "did this work?" pass after you
+actually cook it.
+
+- **In the detail pane**, click any star to set the rating. Clicking
+  the highest currently-set star clears it back to unrated. The change
+  saves immediately and lands in the recipe's history with an
+  auto-generated message ("Rated 4 stars." / "Cleared rating.") so
+  you can scan rating changes alongside content edits.
+- **In the edit form**, the rating control sits between the source URL
+  and the change-message field. The rating saves with the rest of the
+  edit, so a single change-message covers the whole edit including
+  the rating change.
+- **Asking the model**: tell Nak how you feel about the recipe ("that
+  ground-pork ragu was a 5", "drop the chickpea curry to 2 stars")
+  and it will call `recipe_update` to set or clear the rating. Nak
+  will not invent a rating on its own; it only writes a rating when
+  you've explicitly told it what to set.
+
+Sort the list by rating with the **Sort** selector at the top of the
+Cookbook list pane. Highest-rated recipes appear first, ties broken
+by most-recent edit; unrated recipes sink to the bottom so the
+sort is honest about which recipes you've actually tried.
+
 ## Editing and deleting
 
 - **Edit** from the detail pane. Changes save in place; the list
@@ -159,8 +185,8 @@ recipe`, `Fixed step 3 typo`, `Removed tahini per pantry note`.
 ## History
 
 Every save creates a version. Each version is an immutable snapshot
-of the title, source, source URL, and Cooklang at the moment of the
-save, plus the change message you wrote. Versions are kept
+of the title, source, source URL, Cooklang, and rating at the moment
+of the save, plus the change message you wrote. Versions are kept
 indefinitely - the cookbook is small and your edit log is the point.
 
 Open the **History** panel at the bottom of any recipe's detail

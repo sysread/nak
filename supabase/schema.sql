@@ -871,9 +871,35 @@ create table if not exists public.recipes (
   source text,
   source_url text,
   cooklang text not null,
+  -- User rating, 1-5 stars. Null means "unrated"; clearing the stars in
+  -- the UI writes null rather than 0 so the unrated case is
+  -- distinguishable from "actively rated zero" (which we don't allow).
+  rating smallint,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Idempotent column add for projects synced before the rating rollout.
+-- `add column if not exists` is enough on its own - the type is
+-- compatible with existing null-only data, and the constraint below
+-- guards new writes.
+alter table public.recipes
+  add column if not exists rating smallint;
+
+-- 1-5 stars, or null. Wrapped in a do-block because `add constraint`
+-- has no `if not exists` form; checking pg_constraint keeps the
+-- statement re-runnable.
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint
+     where conname = 'recipes_rating_check'
+       and conrelid = 'public.recipes'::regclass
+  ) then
+    alter table public.recipes
+      add constraint recipes_rating_check
+      check (rating is null or (rating between 1 and 5));
+  end if;
+end $$;
 
 create index if not exists recipes_user_updated_idx
   on public.recipes (user_id, updated_at desc);
@@ -928,9 +954,18 @@ create table if not exists public.recipe_versions (
   source text,
   source_url text,
   cooklang text not null,
+  -- Snapshot of `recipes.rating` at the time of the save. Same
+  -- semantics as the parent column (null = unrated, otherwise 1-5),
+  -- so a revert restores the rating along with the rest of the
+  -- editable state.
+  rating smallint,
   change_message text not null,
   created_at timestamptz not null default now()
 );
+
+-- Idempotent column add for projects synced before the rating rollout.
+alter table public.recipe_versions
+  add column if not exists rating smallint;
 
 create index if not exists recipe_versions_recipe_created_idx
   on public.recipe_versions (recipe_id, created_at desc);
@@ -965,10 +1000,10 @@ create policy "recipe_versions are self-insertable"
 -- duplicate. Runs as the sync role, which bypasses RLS by design (same
 -- posture as the journal-spam-stats backfills).
 insert into public.recipe_versions
-  (recipe_id, user_id, title, source, source_url, cooklang,
+  (recipe_id, user_id, title, source, source_url, cooklang, rating,
    change_message, created_at)
 select r.id, r.user_id, r.title, r.source, r.source_url, r.cooklang,
-       'Initial version (backfilled).', r.created_at
+       r.rating, 'Initial version (backfilled).', r.created_at
   from public.recipes r
  where not exists (
    select 1 from public.recipe_versions v where v.recipe_id = r.id
@@ -987,13 +1022,21 @@ select r.id, r.user_id, r.title, r.source, r.source_url, r.cooklang,
 -- Postgres can't tell an absent argument from a NULL one in a scalar
 -- parameter list.
 
+-- Older signatures must be dropped explicitly because Postgres treats
+-- a parameter-list change as a different overload, not a replacement.
+-- Drop both the pre-rating signature and the new one before recreate
+-- so a re-sync from any prior schema lands on a single canonical
+-- function with no overload ambiguity.
 drop function if exists public.recipe_create_with_version(
   text, text, text, text, text);
+drop function if exists public.recipe_create_with_version(
+  text, text, text, text, smallint, text);
 create or replace function public.recipe_create_with_version(
   p_title text,
   p_cooklang text,
   p_source text,
   p_source_url text,
+  p_rating smallint,
   p_change_message text
 ) returns table (
   id uuid,
@@ -1001,6 +1044,7 @@ create or replace function public.recipe_create_with_version(
   source text,
   source_url text,
   cooklang text,
+  rating smallint,
   created_at timestamptz,
   updated_at timestamptz
 )
@@ -1020,26 +1064,39 @@ begin
   if p_change_message is null or length(trim(p_change_message)) = 0 then
     raise exception 'change_message is required';
   end if;
+  -- Mirror the table check so the RPC fails fast with a readable error
+  -- before the insert. The table constraint is the load-bearing guard;
+  -- this just produces a nicer message at the API surface.
+  if p_rating is not null and (p_rating < 1 or p_rating > 5) then
+    raise exception 'rating must be between 1 and 5';
+  end if;
 
   insert into public.recipes (user_id, title, source, source_url, cooklang,
-                              created_at, updated_at)
-    values (v_uid, p_title, p_source, p_source_url, p_cooklang, v_now, v_now)
+                              rating, created_at, updated_at)
+    values (v_uid, p_title, p_source, p_source_url, p_cooklang,
+            p_rating, v_now, v_now)
     returning recipes.id into v_recipe_id;
 
   insert into public.recipe_versions
-    (recipe_id, user_id, title, source, source_url, cooklang,
+    (recipe_id, user_id, title, source, source_url, cooklang, rating,
      change_message, created_at)
     values (v_recipe_id, v_uid, p_title, p_source, p_source_url, p_cooklang,
-            p_change_message, v_now);
+            p_rating, p_change_message, v_now);
 
   return query
-    select r.id, r.title, r.source, r.source_url, r.cooklang,
+    select r.id, r.title, r.source, r.source_url, r.cooklang, r.rating,
            r.created_at, r.updated_at
       from public.recipes r where r.id = v_recipe_id;
 end $$;
 
+-- Same overload-cleanup pattern as the create RPC: drop both the
+-- pre-rating and post-rating signatures so a re-sync from any prior
+-- schema converges on a single function.
 drop function if exists public.recipe_update_with_version(
   uuid, boolean, text, boolean, text, boolean, text, boolean, text, text);
+drop function if exists public.recipe_update_with_version(
+  uuid, boolean, text, boolean, text, boolean, text, boolean, text,
+  boolean, smallint, text);
 create or replace function public.recipe_update_with_version(
   p_id uuid,
   p_set_title boolean,
@@ -1050,6 +1107,8 @@ create or replace function public.recipe_update_with_version(
   p_source text,
   p_set_source_url boolean,
   p_source_url text,
+  p_set_rating boolean,
+  p_rating smallint,
   p_change_message text
 ) returns table (
   id uuid,
@@ -1057,6 +1116,7 @@ create or replace function public.recipe_update_with_version(
   source text,
   source_url text,
   cooklang text,
+  rating smallint,
   created_at timestamptz,
   updated_at timestamptz
 )
@@ -1068,10 +1128,15 @@ declare
   v_cooklang text;
   v_source text;
   v_source_url text;
+  v_rating smallint;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
   if p_change_message is null or length(trim(p_change_message)) = 0 then
     raise exception 'change_message is required';
+  end if;
+  if p_set_rating and p_rating is not null
+     and (p_rating < 1 or p_rating > 5) then
+    raise exception 'rating must be between 1 and 5';
   end if;
 
   -- Lock the row and read current state. `for update` prevents the
@@ -1080,8 +1145,8 @@ begin
   -- recipe). The first writer commits its snapshot; the second sees the
   -- post-first-commit state and snapshots that, so history stays a
   -- linear chain with no gaps.
-  select r.title, r.cooklang, r.source, r.source_url
-    into v_title, v_cooklang, v_source, v_source_url
+  select r.title, r.cooklang, r.source, r.source_url, r.rating
+    into v_title, v_cooklang, v_source, v_source_url, v_rating
     from public.recipes r
    where r.id = p_id and r.user_id = v_uid
    for update;
@@ -1101,21 +1166,25 @@ begin
   end if;
   if p_set_source then v_source := p_source; end if;
   if p_set_source_url then v_source_url := p_source_url; end if;
+  -- Rating uses the same set-flag pattern as the other nullable fields:
+  -- absent leaves it alone; explicit null clears (back to "unrated").
+  if p_set_rating then v_rating := p_rating; end if;
 
   update public.recipes
      set title = v_title, cooklang = v_cooklang,
          source = v_source, source_url = v_source_url,
+         rating = v_rating,
          updated_at = v_now
    where recipes.id = p_id;
 
   insert into public.recipe_versions
-    (recipe_id, user_id, title, source, source_url, cooklang,
+    (recipe_id, user_id, title, source, source_url, cooklang, rating,
      change_message, created_at)
     values (p_id, v_uid, v_title, v_source, v_source_url, v_cooklang,
-            p_change_message, v_now);
+            v_rating, p_change_message, v_now);
 
   return query
-    select r.id, r.title, r.source, r.source_url, r.cooklang,
+    select r.id, r.title, r.source, r.source_url, r.cooklang, r.rating,
            r.created_at, r.updated_at
       from public.recipes r where r.id = p_id;
 end $$;

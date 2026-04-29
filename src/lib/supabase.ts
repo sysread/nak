@@ -252,6 +252,12 @@ export interface Recipe {
   source: string | null;
   source_url: string | null;
   cooklang: string;
+  /**
+   * User-set rating, 1-5 stars. `null` means unrated; cleared rows
+   * round-trip back as null so "never rated" stays distinguishable
+   * from a hypothetical zero (which the schema rejects).
+   */
+  rating: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -274,6 +280,8 @@ export interface RecipeVersion {
   source: string | null;
   source_url: string | null;
   cooklang: string;
+  /** Snapshot of the parent recipe's rating at save time. */
+  rating: number | null;
   change_message: string;
   created_at: string;
 }
@@ -1428,17 +1436,35 @@ export class SupabaseService {
   // recipe it just wrote.
 
   /**
-   * List recipes most-recent first, optionally filtered by a case-
-   * insensitive `title` substring. Capped at `limit` to keep the
-   * recipe_list tool result small (one recipe's cooklang can be
-   * several kilobytes; a runaway list would blow the context budget).
+   * List recipes, optionally filtered by a case-insensitive `title`
+   * substring. Capped at `limit` to keep the recipe_list tool result
+   * small (one recipe's cooklang can be several kilobytes; a runaway
+   * list would blow the context budget).
+   *
+   * `sort` defaults to 'updated' (most-recently-edited first). 'rating'
+   * orders by stars descending with `nulls last`, then falls back to
+   * `updated_at desc` so unrated rows still show in a stable order at
+   * the bottom and ties among same-rated rows resolve to the most
+   * recently touched.
    */
-  async listRecipes(query: string, limit: number): Promise<Recipe[]> {
+  async listRecipes(
+    query: string,
+    limit: number,
+    sort: 'updated' | 'rating' = 'updated'
+  ): Promise<Recipe[]> {
     let q = this.client
       .from('recipes')
-      .select('id, title, source, source_url, cooklang, created_at, updated_at')
-      .order('updated_at', { ascending: false })
+      .select(
+        'id, title, source, source_url, cooklang, rating, created_at, updated_at'
+      )
       .limit(limit);
+    if (sort === 'rating') {
+      q = q
+        .order('rating', { ascending: false, nullsFirst: false })
+        .order('updated_at', { ascending: false });
+    } else {
+      q = q.order('updated_at', { ascending: false });
+    }
     if (query && query.length > 0) {
       // Same escaping rationale as searchMemories: PostgREST's `.or(…)`
       // grammar treats commas and parens specially, so an unfiltered
@@ -1455,7 +1481,9 @@ export class SupabaseService {
   async getRecipe(id: string): Promise<Recipe | null> {
     const { data, error } = await this.client
       .from('recipes')
-      .select('id, title, source, source_url, cooklang, created_at, updated_at')
+      .select(
+        'id, title, source, source_url, cooklang, rating, created_at, updated_at'
+      )
       .eq('id', id)
       .maybeSingle();
     if (error) throw new SupabaseError(error.message);
@@ -1475,10 +1503,14 @@ export class SupabaseService {
     cooklang: string,
     source: string | null,
     sourceUrl: string | null,
+    rating: number | null,
     changeMessage: string
   ): Promise<Recipe> {
     if (!changeMessage || changeMessage.trim().length === 0) {
       throw new SupabaseError('changeMessage is required');
+    }
+    if (rating !== null && (rating < 1 || rating > 5 || !Number.isInteger(rating))) {
+      throw new SupabaseError('rating must be an integer between 1 and 5');
     }
     const { data, error } = await this.client.rpc(
       'recipe_create_with_version',
@@ -1487,6 +1519,7 @@ export class SupabaseService {
         p_cooklang: cooklang,
         p_source: source,
         p_source_url: sourceUrl,
+        p_rating: rating,
         p_change_message: changeMessage.trim(),
       }
     );
@@ -1518,11 +1551,20 @@ export class SupabaseService {
       cooklang?: string;
       source?: string | null;
       source_url?: string | null;
+      rating?: number | null;
     },
     changeMessage: string
   ): Promise<Recipe> {
     if (!changeMessage || changeMessage.trim().length === 0) {
       throw new SupabaseError('changeMessage is required');
+    }
+    if (
+      'rating' in patch &&
+      patch.rating !== null &&
+      patch.rating !== undefined &&
+      (patch.rating < 1 || patch.rating > 5 || !Number.isInteger(patch.rating))
+    ) {
+      throw new SupabaseError('rating must be an integer between 1 and 5');
     }
     const { data, error } = await this.client.rpc(
       'recipe_update_with_version',
@@ -1536,6 +1578,8 @@ export class SupabaseService {
         p_source: patch.source ?? null,
         p_set_source_url: 'source_url' in patch,
         p_source_url: patch.source_url ?? null,
+        p_set_rating: 'rating' in patch,
+        p_rating: patch.rating ?? null,
         p_change_message: changeMessage.trim(),
       }
     );
@@ -1561,7 +1605,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('recipe_versions')
       .select(
-        'id, recipe_id, title, source, source_url, cooklang, change_message, created_at'
+        'id, recipe_id, title, source, source_url, cooklang, rating, change_message, created_at'
       )
       .eq('recipe_id', recipeId)
       .order('created_at', { ascending: false });
@@ -1573,7 +1617,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('recipe_versions')
       .select(
-        'id, recipe_id, title, source, source_url, cooklang, change_message, created_at'
+        'id, recipe_id, title, source, source_url, cooklang, rating, change_message, created_at'
       )
       .eq('id', versionId)
       .maybeSingle();
@@ -1605,6 +1649,7 @@ export class SupabaseService {
         cooklang: v.cooklang,
         source: v.source,
         source_url: v.source_url,
+        rating: v.rating,
       },
       changeMessage
     );

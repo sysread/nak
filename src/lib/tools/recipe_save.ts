@@ -66,6 +66,16 @@ export const recipeSave: ToolDef = {
         maxLength: 2000,
         description: 'Optional URL the recipe was imported from.',
       },
+      rating: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 5,
+        description:
+          "Optional 1-5 star rating. Omit unless the user has explicitly " +
+          "indicated how they feel about the recipe. The user's own rating " +
+          'is the only thing that belongs here - never invent one based on ' +
+          'reviews, popularity, or your own assessment.',
+      },
       change_message: {
         type: 'string',
         minLength: 1,
@@ -92,6 +102,13 @@ export const recipeSave: ToolDef = {
       typeof args.source_url === 'string' && args.source_url.trim().length > 0
         ? args.source_url.trim()
         : null;
+    let rating: number | null = null;
+    if (typeof args.rating === 'number') {
+      if (!Number.isInteger(args.rating) || args.rating < 1 || args.rating > 5) {
+        throw new Error('rating must be an integer between 1 and 5');
+      }
+      rating = args.rating;
+    }
     if (!title) throw new Error('title is required');
     if (!cooklang) throw new Error('cooklang is required');
     // Guard on length — the model may ignore the schema's maxLength.
@@ -117,6 +134,7 @@ export const recipeSave: ToolDef = {
       cooklang,
       source,
       sourceUrl,
+      rating,
       changeMessage
     );
     notifyCookbookChanged();

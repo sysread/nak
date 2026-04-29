@@ -71,14 +71,15 @@ at cookbook scale (tens to low hundreds of rows per user).
 - `public.recipes` table (see `supabase/schema.sql`):
   - `id uuid`, `user_id uuid`, `title text not null`,
     `source text`, `source_url text`, `cooklang text not null`,
-    `created_at`, `updated_at`.
+    `rating smallint` (null = unrated; check constraint enforces
+    1-5), `created_at`, `updated_at`.
   - Index: `recipes_user_updated_idx (user_id, updated_at desc)`.
   - RLS: four self-* policies (select / insert / update / delete),
     same shape as `memories`.
 - `public.recipe_versions` table (see `supabase/schema.sql`):
   - `id uuid`, `recipe_id uuid` (FK to `recipes`, on-delete cascade),
     `user_id uuid`, `title`, `source`, `source_url`, `cooklang`,
-    `change_message text not null`, `created_at`.
+    `rating smallint`, `change_message text not null`, `created_at`.
   - Indexes: `recipe_versions_recipe_created_idx (recipe_id,
     created_at desc)` for the History panel; `recipe_versions_user_idx
     (user_id)` for fast RLS evaluation.

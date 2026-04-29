@@ -30,6 +30,7 @@ function sampleRecipe(overrides: Partial<Recipe> = {}): Recipe {
     source: null,
     source_url: null,
     cooklang: 'Stir @flour{200%g} into a bowl.',
+    rating: null,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
     ...overrides,
@@ -58,7 +59,7 @@ describe('recipe tools — registry', () => {
 });
 
 describe('recipe_save', () => {
-  it('calls createRecipe with trimmed title, source fields, and change_message', async () => {
+  it('calls createRecipe with trimmed title, source fields, rating, and change_message', async () => {
     const createRecipe = vi.fn().mockResolvedValue(sampleRecipe());
     const result = await recipeSave.execute(
       {
@@ -66,6 +67,7 @@ describe('recipe_save', () => {
         cooklang: 'Stir @flour{200%g}.',
         source: '  NYT  ',
         source_url: ' https://example.com ',
+        rating: 4,
         change_message: '  Imported from NYT.  ',
       },
       ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
@@ -75,6 +77,7 @@ describe('recipe_save', () => {
       'Stir @flour{200%g}.',
       'NYT',
       'https://example.com',
+      4,
       'Imported from NYT.'
     );
     expect(result).toEqual({
@@ -84,13 +87,24 @@ describe('recipe_save', () => {
     });
   });
 
-  it('passes null source / source_url when omitted', async () => {
+  it('passes null source / source_url / rating when omitted', async () => {
     const createRecipe = vi.fn().mockResolvedValue(sampleRecipe());
     await recipeSave.execute(
       { title: 'T', cooklang: 'X', change_message: 'init' },
       ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
     );
-    expect(createRecipe).toHaveBeenCalledWith('T', 'X', null, null, 'init');
+    expect(createRecipe).toHaveBeenCalledWith('T', 'X', null, null, null, 'init');
+  });
+
+  it('rejects an out-of-range rating', async () => {
+    const createRecipe = vi.fn();
+    await expect(
+      recipeSave.execute(
+        { title: 'T', cooklang: 'X', rating: 6, change_message: 'init' },
+        ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
+      )
+    ).rejects.toThrow(/rating must be an integer between 1 and 5/);
+    expect(createRecipe).not.toHaveBeenCalled();
   });
 
   it('rejects blank title', async () => {
@@ -138,10 +152,13 @@ describe('recipe_save', () => {
 });
 
 describe('recipe_list', () => {
-  it('returns a slim projection without the cooklang blob', async () => {
+  it('returns a slim projection (no cooklang) that includes rating', async () => {
     const listRecipes = vi
       .fn()
-      .mockResolvedValue([sampleRecipe({ id: 'r-1' }), sampleRecipe({ id: 'r-2' })]);
+      .mockResolvedValue([
+        sampleRecipe({ id: 'r-1', rating: 5 }),
+        sampleRecipe({ id: 'r-2' }),
+      ]);
     const out = (await recipeList.execute(
       { query: '' },
       ctxFor({ listRecipes } as unknown as Partial<SupabaseService>)
@@ -151,19 +168,43 @@ describe('recipe_list', () => {
       expect(row).not.toHaveProperty('cooklang');
       expect(row).toHaveProperty('id');
       expect(row).toHaveProperty('title');
+      expect(row).toHaveProperty('rating');
     }
+    expect(out[0]!.rating).toBe(5);
+    expect(out[1]!.rating).toBe(null);
   });
 
-  it('passes through the query filter and clamps limit', async () => {
+  it('passes through the query filter and clamps limit (default sort is updated)', async () => {
     const listRecipes = vi.fn().mockResolvedValue([]);
     await recipeList.execute(
       { query: 'pasta', limit: 9999 },
       ctxFor({ listRecipes } as unknown as Partial<SupabaseService>)
     );
     // 9999 is above MAX_LIMIT (200) and should be clamped.
-    const [q, limit] = listRecipes.mock.calls[0]!;
+    const [q, limit, sort] = listRecipes.mock.calls[0]!;
     expect(q).toBe('pasta');
     expect(limit).toBeLessThanOrEqual(200);
+    expect(sort).toBe('updated');
+  });
+
+  it('forwards sort=rating when requested', async () => {
+    const listRecipes = vi.fn().mockResolvedValue([]);
+    await recipeList.execute(
+      { sort: 'rating' },
+      ctxFor({ listRecipes } as unknown as Partial<SupabaseService>)
+    );
+    const [, , sort] = listRecipes.mock.calls[0]!;
+    expect(sort).toBe('rating');
+  });
+
+  it('coerces an unknown sort value back to updated', async () => {
+    const listRecipes = vi.fn().mockResolvedValue([]);
+    await recipeList.execute(
+      { sort: 'mystery' },
+      ctxFor({ listRecipes } as unknown as Partial<SupabaseService>)
+    );
+    const [, , sort] = listRecipes.mock.calls[0]!;
+    expect(sort).toBe('updated');
   });
 });
 
@@ -209,6 +250,37 @@ describe('recipe_update', () => {
     const [, patch, changeMessage] = updateRecipe.mock.calls[0]!;
     expect(patch).toEqual({ source: null });
     expect(changeMessage).toBe('cleared source');
+  });
+
+  it('threads a numeric rating into the patch', async () => {
+    const updateRecipe = vi.fn().mockResolvedValue(sampleRecipe());
+    await recipeUpdate.execute(
+      { id: 'r-1', rating: 5, change_message: 'loved it' },
+      ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
+    );
+    const [, patch] = updateRecipe.mock.calls[0]!;
+    expect(patch).toEqual({ rating: 5 });
+  });
+
+  it('passes explicit null for rating to clear it', async () => {
+    const updateRecipe = vi.fn().mockResolvedValue(sampleRecipe());
+    await recipeUpdate.execute(
+      { id: 'r-1', rating: null, change_message: 'undecided' },
+      ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
+    );
+    const [, patch] = updateRecipe.mock.calls[0]!;
+    expect(patch).toEqual({ rating: null });
+  });
+
+  it('rejects an out-of-range rating on update', async () => {
+    const updateRecipe = vi.fn();
+    await expect(
+      recipeUpdate.execute(
+        { id: 'r-1', rating: 0, change_message: 'bad' },
+        ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
+      )
+    ).rejects.toThrow(/rating must be an integer between 1 and 5/);
+    expect(updateRecipe).not.toHaveBeenCalled();
   });
 
   it('rejects an empty patch', async () => {
@@ -296,6 +368,7 @@ function sampleVersion(overrides: Partial<RecipeVersion> = {}): RecipeVersion {
     source: 'Old source',
     source_url: null,
     cooklang: 'Old @flour{1%cup}.',
+    rating: 3,
     change_message: 'old version',
     created_at: '2024-01-01T00:00:00Z',
     ...overrides,
@@ -322,12 +395,12 @@ function makeService(client: SupabaseClient): SupabaseService {
 }
 
 describe('SupabaseService.createRecipe', () => {
-  it('calls recipe_create_with_version RPC with the trimmed change_message', async () => {
+  it('calls recipe_create_with_version RPC with rating and the trimmed change_message', async () => {
     const rpc = vi
       .fn()
       .mockResolvedValue({ data: [sampleRecipe()], error: null });
     const svc = makeService(makeRpcOnlyClient(rpc));
-    await svc.createRecipe('T', 'X', 'NYT', null, '  init  ');
+    await svc.createRecipe('T', 'X', 'NYT', null, 4, '  init  ');
     expect(rpc).toHaveBeenCalledTimes(1);
     const [name, args] = rpc.mock.calls[0]!;
     expect(name).toBe('recipe_create_with_version');
@@ -336,16 +409,36 @@ describe('SupabaseService.createRecipe', () => {
       p_cooklang: 'X',
       p_source: 'NYT',
       p_source_url: null,
+      p_rating: 4,
       p_change_message: 'init',
     });
+  });
+
+  it('passes p_rating: null when the recipe is unrated', async () => {
+    const rpc = vi
+      .fn()
+      .mockResolvedValue({ data: [sampleRecipe()], error: null });
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await svc.createRecipe('T', 'X', null, null, null, 'init');
+    const [, args] = rpc.mock.calls[0]!;
+    expect(args.p_rating).toBe(null);
   });
 
   it('rejects an empty change_message before touching the network', async () => {
     const rpc = vi.fn();
     const svc = makeService(makeRpcOnlyClient(rpc));
     await expect(
-      svc.createRecipe('T', 'X', null, null, '   ')
+      svc.createRecipe('T', 'X', null, null, null, '   ')
     ).rejects.toThrow(/changeMessage is required/);
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('rejects an out-of-range rating before touching the network', async () => {
+    const rpc = vi.fn();
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await expect(
+      svc.createRecipe('T', 'X', null, null, 6, 'init')
+    ).rejects.toThrow(/rating must be an integer between 1 and 5/);
     expect(rpc).not.toHaveBeenCalled();
   });
 });
@@ -358,7 +451,7 @@ describe('SupabaseService.updateRecipe', () => {
     const svc = makeService(makeRpcOnlyClient(rpc));
     await svc.updateRecipe(
       'r-1',
-      { title: 'New', source: null }, // title set, source cleared, cooklang/source_url left alone
+      { title: 'New', source: null }, // title set, source cleared; cooklang/source_url/rating untouched
       'edit'
     );
     const [name, args] = rpc.mock.calls[0]!;
@@ -373,8 +466,46 @@ describe('SupabaseService.updateRecipe', () => {
       p_source: null,
       p_set_source_url: false,
       p_source_url: null,
+      p_set_rating: false,
+      p_rating: null,
       p_change_message: 'edit',
     });
+  });
+
+  it('threads rating through with the same set-flag pattern', async () => {
+    const rpc = vi
+      .fn()
+      .mockResolvedValue({ data: [sampleRecipe()], error: null });
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await svc.updateRecipe('r-1', { rating: 5 }, 'rated it');
+    const [, args] = rpc.mock.calls[0]!;
+    expect(args.p_set_rating).toBe(true);
+    expect(args.p_rating).toBe(5);
+    // None of the other set-flags should fire.
+    expect(args.p_set_title).toBe(false);
+    expect(args.p_set_cooklang).toBe(false);
+    expect(args.p_set_source).toBe(false);
+    expect(args.p_set_source_url).toBe(false);
+  });
+
+  it('clears rating with explicit null', async () => {
+    const rpc = vi
+      .fn()
+      .mockResolvedValue({ data: [sampleRecipe()], error: null });
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await svc.updateRecipe('r-1', { rating: null }, 'undecided');
+    const [, args] = rpc.mock.calls[0]!;
+    expect(args.p_set_rating).toBe(true);
+    expect(args.p_rating).toBe(null);
+  });
+
+  it('rejects an out-of-range rating before touching the network', async () => {
+    const rpc = vi.fn();
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await expect(
+      svc.updateRecipe('r-1', { rating: 6 }, 'edit')
+    ).rejects.toThrow(/rating must be an integer between 1 and 5/);
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it('rejects an empty change_message before touching the network', async () => {
@@ -424,6 +555,8 @@ describe('SupabaseService.revertRecipe', () => {
       p_source: v.source,
       p_set_source_url: true,
       p_source_url: v.source_url,
+      p_set_rating: true,
+      p_rating: v.rating,
       p_change_message: 'Reverted to v-1',
     });
   });

@@ -33,6 +33,7 @@
     MAX_RECIPE_TITLE_CHARS,
   } from '$lib/cooklang';
   import type { RecipeVersion } from '$lib/supabase';
+  import RecipeRating from '../components/RecipeRating.svelte';
 
   interface Props {
     onClose: () => void;
@@ -49,6 +50,13 @@
 
   // --- list pane state ---
   let query = $state('');
+  // Sort selector for the list pane. 'updated' (default) keeps the
+  // most-recently-edited recipe at the top; 'rating' bubbles the
+  // user's favourites up. Sort is applied client-side over the
+  // already-loaded `cookbook.recipes` so flipping the selector is
+  // instantaneous and doesn't refetch.
+  type SortMode = 'updated' | 'rating';
+  let sortMode = $state<SortMode>('updated');
   // Case-insensitive title substring filter, applied client-side over
   // the loaded list. Loading the full list once and filtering locally
   // is cheaper than round-tripping a query per keystroke, and a
@@ -56,8 +64,23 @@
   // instantaneous.
   const visibleRecipes = $derived.by(() => {
     const q = query.trim().toLowerCase();
-    if (q.length === 0) return cookbook.recipes;
-    return cookbook.recipes.filter((r) => r.title.toLowerCase().includes(q));
+    const filtered =
+      q.length === 0
+        ? cookbook.recipes
+        : cookbook.recipes.filter((r) => r.title.toLowerCase().includes(q));
+    if (sortMode === 'rating') {
+      // Sort highest-rated first; unrated recipes sink to the bottom;
+      // ties resolve by most-recent updated_at so equally-rated rows
+      // still feel "freshness aware". Spread before sort because the
+      // store array is reactive and sort() is in-place.
+      return [...filtered].sort((a, b) => {
+        const ar = a.rating ?? -1;
+        const br = b.rating ?? -1;
+        if (ar !== br) return br - ar;
+        return (b.updated_at ?? '').localeCompare(a.updated_at ?? '');
+      });
+    }
+    return filtered;
   });
 
   // --- detail / edit pane state ---
@@ -71,6 +94,10 @@
   let draftSource = $state('');
   let draftSourceUrl = $state('');
   let draftCooklang = $state('');
+  // Rating draft for the edit pane. Null = unrated; 1-5 set. Mirrored
+  // into the form's RecipeRating component so both create and update
+  // flows persist the rating in the same write as everything else.
+  let draftRating = $state<number | null>(null);
   // Required "What changed?" note. Lands on a new row in
   // `recipe_versions` so the user (and the LLM) can scan past edits
   // by intent in the History panel. Validated non-empty before save.
@@ -190,6 +217,9 @@
     // against "learn this DSL first" is hostile to the user journey
     // where they're typing a recipe in from a cookbook.
     draftCooklang = '>> servings: 4\n\n';
+    // New recipes start unrated. The user almost certainly hasn't
+    // cooked it yet - rating belongs on the "did this work?" pass.
+    draftRating = null;
     // Sensible default for the initial version - the user can replace
     // it but doesn't have to invent something on the very first save.
     draftChangeMessage = 'Created recipe.';
@@ -204,6 +234,7 @@
     draftSource = r.source ?? '';
     draftSourceUrl = r.source_url ?? '';
     draftCooklang = r.cooklang;
+    draftRating = r.rating;
     // Force the user to type a fresh description for this edit; we
     // intentionally don't carry the previous message forward, since
     // the message describes what's about to change, not the prior
@@ -253,6 +284,7 @@
             cooklang,
             source,
             source_url: sourceUrl,
+            rating: draftRating,
           },
           changeMessage
         );
@@ -262,6 +294,7 @@
           cooklang,
           source,
           sourceUrl,
+          draftRating,
           changeMessage
         );
         activeId = row.id;
@@ -280,6 +313,37 @@
       editError = err instanceof Error ? err.message : String(err);
     } finally {
       saving = false;
+    }
+  }
+
+  // Persist a rating change made on the detail pane. Click-to-rate is
+  // a one-step gesture, so we don't ask the user for a change message;
+  // we generate a parseable one ("Rated 4 stars." / "Cleared rating.")
+  // that lands in the History panel like any other version. This
+  // intentionally creates a version row - the user's request was
+  // explicit on capturing the rating in the version log.
+  async function onRateActive(next: number | null): Promise<void> {
+    if (!app.supabase || !activeId) return;
+    const r = activeRecipe;
+    if (!r) return;
+    if (r.rating === next) return; // no-op, also defensive vs. double-fire
+    const msg =
+      next === null
+        ? 'Cleared rating.'
+        : `Rated ${next} ${next === 1 ? 'star' : 'stars'}.`;
+    try {
+      await app.supabase.updateRecipe(activeId, { rating: next }, msg);
+      await refresh();
+      if (activeId) await loadVersions(activeId);
+    } catch (err) {
+      // Surface failures in the same banner the edit pane uses; we're
+      // on the detail pane and don't have a dedicated rating-error
+      // slot, but editError is already in scope and visible if the
+      // user opens edit afterward. For the read-only rating row we
+      // also fall through silently rather than rolling back the
+      // optimistic stars - the next refresh will reconcile from the
+      // store.
+      editError = err instanceof Error ? err.message : String(err);
     }
   }
 
@@ -484,6 +548,20 @@
             aria-label="Search recipes"
             bind:value={query}
           />
+          <!-- Sort selector. 'Most recent' is the default to match the
+               backing-store order; 'Rating' bubbles favourites up. -->
+          <label class="cookbook-sort-label" for="cb-sort">
+            <span class="visually-hidden">Sort recipes</span>
+            <select
+              id="cb-sort"
+              class="cookbook-sort"
+              bind:value={sortMode}
+              aria-label="Sort recipes"
+            >
+              <option value="updated">Most recent</option>
+              <option value="rating">Rating</option>
+            </select>
+          </label>
           <button type="button" class="primary" onclick={openNew}>+ New recipe</button>
         {:else}
           <button type="button" class="secondary" onclick={openList}>← Back</button>
@@ -523,9 +601,14 @@
                   onclick={() => openDetail(r.id)}
                 >
                   <span class="title-text">{r.title}</span>
-                  {#if r.source}
-                    <span class="subtle title-source">{r.source}</span>
-                  {/if}
+                  <span class="title-meta">
+                    {#if r.rating !== null && r.rating !== undefined}
+                      <RecipeRating value={r.rating} size={14} />
+                    {/if}
+                    {#if r.source}
+                      <span class="subtle title-source">{r.source}</span>
+                    {/if}
+                  </span>
                 </button>
               </li>
             {/each}
@@ -538,6 +621,23 @@
           <div class="cookbook-detail">
             <div class="cookbook-detail-header">
               <h2>{v ? v.title : r!.title}</h2>
+              <!-- Rating row. On the live recipe the widget is
+                   interactive - clicking a star persists immediately
+                   with an auto-generated change_message ("Rated 4
+                   stars."). When viewing a past version we render the
+                   snapshot's rating read-only so history reads
+                   honestly. -->
+              <div class="cookbook-detail-rating">
+                {#if v}
+                  <RecipeRating value={v.rating} size={20} />
+                {:else}
+                  <RecipeRating
+                    value={r!.rating}
+                    onChange={onRateActive}
+                    size={20}
+                  />
+                {/if}
+              </div>
               {#if v}
                 <!-- Read-only past-version view. Title above swaps to
                      the snapshot's title; this banner says when and
@@ -754,6 +854,19 @@
             />
           </div>
           <div class="form-row">
+            <!-- The rating control isn't tied to a single <input>, so
+                 we use a div instead of <label> to avoid the Svelte
+                 a11y warning about unassociated labels. The widget
+                 itself carries an aria-label so screen readers still
+                 announce the control. -->
+            <div class="form-label">Rating <span class="subtle">(optional)</span></div>
+            <RecipeRating
+              value={draftRating}
+              onChange={(next) => (draftRating = next)}
+              size={22}
+            />
+          </div>
+          <div class="form-row">
             <label for="cb-change-message">What changed?</label>
             <input
               id="cb-change-message"
@@ -915,6 +1028,58 @@
   }
   .cookbook-list-title .title-source {
     font-size: 0.8rem;
+  }
+  /* Per-row meta line under the title. Holds the rating stars and the
+     source string side-by-side so neither competes with the title. */
+  .cookbook-list-title .title-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  /* Sort selector. Sized + tinted to sit between the search input and
+     the + New recipe button without re-fighting the header layout. */
+  .cookbook-sort-label {
+    display: inline-flex;
+    align-items: center;
+  }
+  .cookbook-sort {
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+  }
+  /* Rating row sits between the title and the source line on the
+     detail pane. Small top gap so it doesn't crowd the h2; bottom
+     margin matches the existing source-paragraph rhythm. */
+  .cookbook-detail-rating {
+    margin: 0.1rem 0 0.5rem;
+  }
+  /* Stand-in for a <label> on the rating row in the edit form (the
+     widget isn't a single focusable input, so a real <label> would
+     trip a11y_label_has_associated_control). Matches sibling label
+     typography so the form stays visually balanced. */
+  .form-label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+  /* Screen-reader-only utility for labels we don't want to render
+     visually (the sort selector's <select> has its own visible value,
+     so the label is announced rather than displayed). */
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
   .cookbook-detail-header h2 {
     margin: 0 0 0.25rem;
