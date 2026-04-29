@@ -17,7 +17,10 @@ destination:
   verbosity, the "Emphasis markdown" opt-in (a bionic-style scan
   aid - when on, chat-loop folds a short formatting blurb into
   the per-turn system-prompt appendix so the model bolds terms
-  and italicises phrases), system-prompt library, web-search
+  and italicises phrases), the **About you** profile fields
+  (`userName` / `userLocation`, free-form strings injected into
+  the per-turn appendix's "User profile" block - opt-in, both
+  blank skips the block), system-prompt library, web-search
   toggle, and a "Browse memories" link to the Memories modal.
   All preferences persist to `profiles.settings`; the Memories
   link is pure navigation.
@@ -138,6 +141,12 @@ every update) so it's covered here rather than in its own file.
   - `accent`: `Accent`
   - `systemPrompts`: `SystemPrompt[]` with `{id, name, body,
     enabledByDefault}`
+  - `userName`: free-form string (1..200 chars). Absent / empty =
+    "not set" - chat-loop omits the User profile block.
+  - `userLocation`: free-form string (1..200 chars). Same opt-in
+    semantics as `userName`. Both fields are passed verbatim into
+    the per-turn appendix; the 200-char ceiling lives in
+    `USER_PROFILE_FIELD_MAX` in `supabase.ts`.
 
   Removed 2026-04: `webSearchEnabled` and `webCitationsEnabled`
   moved to the `web_search` tool (see `./tools.md`). The main

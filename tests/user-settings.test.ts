@@ -166,4 +166,35 @@ describe('coerceSettings', () => {
     expect(coerceSettings({ emphasisMarkdown: 0 })).toEqual({});
     expect(coerceSettings({ emphasisMarkdown: null })).toEqual({});
   });
+
+  it('passes through non-empty userName and userLocation strings', () => {
+    expect(coerceSettings({ userName: 'Ada' })).toEqual({ userName: 'Ada' });
+    expect(coerceSettings({ userLocation: 'Lisbon' })).toEqual({
+      userLocation: 'Lisbon',
+    });
+    expect(
+      coerceSettings({ userName: 'Ada Lovelace', userLocation: 'London' })
+    ).toEqual({ userName: 'Ada Lovelace', userLocation: 'London' });
+  });
+
+  it('drops empty / non-string profile fields so absent === blank', () => {
+    // Empty string is the "not set" sentinel. The coercer drops it
+    // so the appendix builder in chat-loop.ts never has to
+    // distinguish "user typed nothing" from "field never set."
+    expect(coerceSettings({ userName: '' })).toEqual({});
+    expect(coerceSettings({ userLocation: '' })).toEqual({});
+    expect(coerceSettings({ userName: null })).toEqual({});
+    expect(coerceSettings({ userName: 42 })).toEqual({});
+    expect(coerceSettings({ userLocation: { city: 'Lisbon' } })).toEqual({});
+  });
+
+  it('drops profile fields above the 200-char ceiling', () => {
+    // Defensive cap so a corrupt blob can't balloon the per-turn
+    // system prompt. 201 chars rejects, 200 accepts.
+    const ok = 'a'.repeat(200);
+    const tooLong = 'a'.repeat(201);
+    expect(coerceSettings({ userName: ok })).toEqual({ userName: ok });
+    expect(coerceSettings({ userName: tooLong })).toEqual({});
+    expect(coerceSettings({ userLocation: tooLong })).toEqual({});
+  });
 });

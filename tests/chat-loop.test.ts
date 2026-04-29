@@ -486,6 +486,109 @@ describe('runChatLoop', () => {
     }
   });
 
+  it('renders the User profile block when userName / userLocation is set', async () => {
+    // The profile fields ride along with every reply this account
+    // sends, in a "User profile" block at the top of the per-turn
+    // appendix. Both values are passed through verbatim - the
+    // chat-loop treats them as free-form prose, not a schema.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      userName: 'Ada',
+      userLocation: 'Lisbon',
+    });
+    const sys = seenRequests[0].messages[0];
+    expect(sys.role).toBe('system');
+    expect(typeof sys.content).toBe('string');
+    const content = sys.content as string;
+    expect(content).toContain('## User profile');
+    expect(content).toContain('Name: Ada');
+    expect(content).toContain('Location: Lisbon');
+  });
+
+  it('renders only the populated profile field when one is empty', async () => {
+    // Asymmetric: a user supplied just their name but not a location.
+    // The block still renders (the model gets the name) but the
+    // missing field stays out so the model isn't tempted to invent
+    // one.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      userName: 'Ada',
+      userLocation: '',
+    });
+    const content = seenRequests[0].messages[0].content as string;
+    expect(content).toContain('## User profile');
+    expect(content).toContain('Name: Ada');
+    expect(content).not.toContain('Location:');
+  });
+
+  it('omits the User profile block when both fields are blank or absent', async () => {
+    // Fresh-account / opted-out path. Both empty strings and an
+    // outright omission of the option keys must skip the block so
+    // the baseline prompt stays free of an empty header.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      userName: '',
+      userLocation: '',
+    });
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      // Intentionally no userName / userLocation - older callers
+      // (and tests written before the feature) must keep working.
+    });
+    expect(seenRequests).toHaveLength(2);
+    for (const req of seenRequests) {
+      expect(req.messages[0].content as string).not.toContain('## User profile');
+    }
+  });
+
   it('wraps the last user message in <user_message> tags when web search is active', async () => {
     // Venice's server-side web search inlines the search payload plus
     // its own framing ("you can use this real time information to

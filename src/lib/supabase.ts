@@ -603,7 +603,39 @@ export interface UserSettings {
    * wrong day.
    */
   journalTimezone?: string;
+  /**
+   * Free-form display name the user wants the model to address them
+   * by. Optional - absent / empty string means "no name supplied,
+   * the model has nothing to reach for." When present, chat-loop
+   * folds it into the per-turn system-prompt appendix as a short
+   * "User profile" block so every reply this turn sees the name. No
+   * format imposed: a first name, a nickname, "they/them" pronouns,
+   * a self-description, all valid. Capped at USER_PROFILE_FIELD_MAX
+   * to keep a corrupt blob from ballooning the prompt.
+   */
+  userName?: string;
+  /**
+   * Free-form location the user wants the model to know about -
+   * city, region, country, "rural Vermont", "currently roaming in
+   * Asia", whatever they want to share. Same opt-in semantics and
+   * length cap as userName. Used so weather/timezone/cultural-
+   * context questions land grounded rather than the model guessing
+   * or asking back. Not derived from IP or geolocation - we never
+   * try to detect this; the user supplies it explicitly in
+   * Settings or leaves it blank.
+   */
+  userLocation?: string;
 }
+
+/**
+ * Length ceiling applied to free-form user-profile string fields
+ * (`userName`, `userLocation`) at the coercer + updater boundary.
+ * Defensive cap so a corrupt blob can't balloon the per-turn
+ * system prompt. 200 characters is generous enough for a
+ * descriptive entry ("Brooklyn, NY - born in Lagos, partial to
+ * Pacific timezones") without being a foothold for prompt-stuffing.
+ */
+export const USER_PROFILE_FIELD_MAX = 200;
 
 /**
  * A named system prompt. `enabledByDefault` is the "ride along on every new
@@ -673,6 +705,25 @@ export function coerceSettings(raw: unknown): UserSettings {
     // the zone list client-side. The 128-char ceiling is a defensive
     // cap so a malformed blob can't balloon.
     out.journalTimezone = r.journalTimezone;
+  }
+  // userName / userLocation: free-form opt-in profile strings. Empty
+  // string is treated as absent so the prompt builder doesn't have to
+  // distinguish "user typed nothing" from "field never set" - either
+  // way the appendix block stays out. Length-capped to keep a corrupt
+  // blob from ballooning the per-turn prompt.
+  if (
+    typeof r.userName === 'string' &&
+    r.userName.length > 0 &&
+    r.userName.length <= USER_PROFILE_FIELD_MAX
+  ) {
+    out.userName = r.userName;
+  }
+  if (
+    typeof r.userLocation === 'string' &&
+    r.userLocation.length > 0 &&
+    r.userLocation.length <= USER_PROFILE_FIELD_MAX
+  ) {
+    out.userLocation = r.userLocation;
   }
   return out;
 }
@@ -832,6 +883,37 @@ export class SupabaseService {
         patch.journalTimezone.length < 128
       ) {
         merged.journalTimezone = patch.journalTimezone;
+      }
+    }
+    // Profile strings: an empty string from the patch means "clear
+    // it" (the user blanked the input and hit save), so we delete
+    // the merged key rather than persist `''`. coerceSettings drops
+    // empty strings on read too, but persisting the absence keeps
+    // the stored blob compact.
+    if ('userName' in patch) {
+      if (
+        patch.userName === undefined ||
+        (typeof patch.userName === 'string' && patch.userName.length === 0)
+      ) {
+        delete merged.userName;
+      } else if (
+        typeof patch.userName === 'string' &&
+        patch.userName.length <= USER_PROFILE_FIELD_MAX
+      ) {
+        merged.userName = patch.userName;
+      }
+    }
+    if ('userLocation' in patch) {
+      if (
+        patch.userLocation === undefined ||
+        (typeof patch.userLocation === 'string' && patch.userLocation.length === 0)
+      ) {
+        delete merged.userLocation;
+      } else if (
+        typeof patch.userLocation === 'string' &&
+        patch.userLocation.length <= USER_PROFILE_FIELD_MAX
+      ) {
+        merged.userLocation = patch.userLocation;
       }
     }
     const { error } = await this.client

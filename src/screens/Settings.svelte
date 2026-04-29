@@ -44,6 +44,8 @@
     setJournalTimezone,
     setSystemPrompts,
     setTheme,
+    setUserName,
+    setUserLocation,
   } from '$lib/state.svelte';
   import { detectTimezone, normalizeTimezone } from '$lib/journal-day';
   import { downloadFullArchive } from '$lib/journal-export';
@@ -153,6 +155,15 @@
   // user denies we snap back off, since the in-app unread dot alone
   // isn't what the toggle advertises.
   let notifyOnComplete = $state<boolean>(app.notifyOnComplete);
+  // Free-form profile fields injected into the system-prompt
+  // appendix on every turn. Saved on the explicit Save button (same
+  // pattern as journalTimezone) rather than on every keystroke -
+  // each change writes to Supabase + updates app state, and a
+  // half-typed name shouldn't fire a roundtrip per character.
+  // Persisted on `profiles.settings.userName` /
+  // `profiles.settings.userLocation`.
+  let userName = $state<string>(app.userName);
+  let userLocation = $state<string>(app.userLocation);
   let modelError = $state<string | null>(null);
   let modelInfo = $state<string | null>(null);
 
@@ -837,6 +848,70 @@
     }
   }
 
+  /**
+   * Persist the user's display name. Trims surrounding whitespace
+   * because a trailing space in a name field is almost always a
+   * typo, and the chat-loop injects this string verbatim into the
+   * per-turn prompt - "Hi  John " reads as a bug. Empty after
+   * trimming clears the setting (the updateSettings dispatch deletes
+   * the key so the stored blob stays compact). 200-char ceiling
+   * matches the supabase.ts coercer cap; over-long values get the
+   * inline error rather than a silent truncation.
+   */
+  async function onSaveUserName(next: string): Promise<void> {
+    modelError = null;
+    modelInfo = null;
+    if (!app.supabase) {
+      modelError = 'Not connected to Supabase yet.';
+      return;
+    }
+    const trimmed = next.trim();
+    if (trimmed.length > 200) {
+      modelError = 'Name is too long (max 200 characters).';
+      return;
+    }
+    const prev = userName;
+    userName = trimmed;
+    setUserName(trimmed);
+    try {
+      await app.supabase.updateSettings({ userName: trimmed });
+      modelInfo = trimmed.length > 0 ? 'Name saved.' : 'Name cleared.';
+    } catch (err) {
+      userName = prev;
+      setUserName(prev);
+      modelError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  /**
+   * Persist the user's location. Same trim + length-cap + clear-on-
+   * empty semantics as onSaveUserName; comments there apply.
+   */
+  async function onSaveUserLocation(next: string): Promise<void> {
+    modelError = null;
+    modelInfo = null;
+    if (!app.supabase) {
+      modelError = 'Not connected to Supabase yet.';
+      return;
+    }
+    const trimmed = next.trim();
+    if (trimmed.length > 200) {
+      modelError = 'Location is too long (max 200 characters).';
+      return;
+    }
+    const prev = userLocation;
+    userLocation = trimmed;
+    setUserLocation(trimmed);
+    try {
+      await app.supabase.updateSettings({ userLocation: trimmed });
+      modelInfo = trimmed.length > 0 ? 'Location saved.' : 'Location cleared.';
+    } catch (err) {
+      userLocation = prev;
+      setUserLocation(prev);
+      modelError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   async function onToggleEmphasis(next: boolean): Promise<void> {
     modelError = null;
     modelInfo = null;
@@ -1075,6 +1150,50 @@
              behavior. -->
         <h2>AI</h2>
         <p class="subtle">Default model and system prompts.</p>
+
+        <h3 class="pane-section">About you</h3>
+        <p class="subtle">
+          Optional. Anything you add here rides along on every reply
+          this account sends, in a short "User profile" block at the
+          top of the system prompt. The model uses it to address you
+          naturally and to ground location-specific answers (weather,
+          local time, regional context) without asking back. Leave
+          either field blank to skip it.
+        </p>
+        <div class="form-row">
+          <label for="user-name">Name</label>
+          <input
+            id="user-name"
+            type="text"
+            bind:value={userName}
+            placeholder="What should the model call you?"
+            spellcheck="false"
+            autocomplete="off"
+            maxlength="200"
+          />
+          <button
+            type="button"
+            class="secondary"
+            onclick={() => onSaveUserName(userName)}
+          >Save</button>
+        </div>
+        <div class="form-row">
+          <label for="user-location">Location</label>
+          <input
+            id="user-location"
+            type="text"
+            bind:value={userLocation}
+            placeholder="City, region, or however you want to describe it"
+            spellcheck="false"
+            autocomplete="off"
+            maxlength="200"
+          />
+          <button
+            type="button"
+            class="secondary"
+            onclick={() => onSaveUserLocation(userLocation)}
+          >Save</button>
+        </div>
 
         <h3 class="pane-section">Default model</h3>
         <p class="subtle">

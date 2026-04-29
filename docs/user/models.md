@@ -5,7 +5,33 @@ the default model tier, the default reasoning effort, the default
 verbosity, whether replies come back with bionic-style emphasis,
 whether web-search is available to the model, and whether
 search-grounded answers come back with inline `[1]` / `[2]` source
-markers.
+markers. The same pane is where you tell the model your name and
+location, both of which ride along on every reply.
+
+## About you
+
+Optional identity fields injected into the system prompt on every
+turn, so the model can address you naturally and ground location-
+specific answers (weather, local time, regional context) without
+asking back.
+
+- Set them in Settings -> AI -> *About you*. Fill in **Name**,
+  **Location**, both, or neither - each field saves on its own
+  **Save** button.
+- Both are free-form. Use whatever you want the model to call you
+  ("Ada", "Dr. Lovelace", "ada/she/her") and however you want to
+  describe where you are ("Lisbon", "Brooklyn, NY - mostly working
+  East-coast hours", "currently roaming Asia"). The string is
+  passed verbatim into the system prompt.
+- Leave a field blank to skip it. Both blank means no profile block
+  is sent at all and the per-turn prompt costs zero extra tokens.
+- The values follow your account across browsers (stored in your
+  Supabase profile next to the rest of your settings). They are
+  never sent anywhere except to your chosen Venice model as part
+  of the system prompt.
+- The model is told to *use* the values, not recite them. You
+  shouldn't see the assistant parroting your name back unprompted;
+  it just has the context when it would otherwise have to ask.
 
 ## Model tiers
 

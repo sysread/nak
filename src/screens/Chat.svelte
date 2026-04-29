@@ -51,6 +51,8 @@
     setJournalTimezone,
     setSystemPrompts,
     setTheme,
+    setUserName,
+    setUserLocation,
   } from '$lib/state.svelte';
   import { notifications, notifyTurnComplete, markThreadRead } from '$lib/notifications.svelte';
   import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
@@ -1090,6 +1092,12 @@
       // setting is absent.
       setJournalAutomaticEnabled(s.journalAutomaticEnabled ?? true);
       if (s.journalTimezone) setJournalTimezone(s.journalTimezone);
+      // Profile fields: empty string is the "not set" sentinel that
+      // chat-loop's appendix builder treats as absent. Always assign
+      // - explicit absence in the blob clears whatever was carried
+      // over from a prior unlock or another tab.
+      setUserName(s.userName ?? '');
+      setUserLocation(s.userLocation ?? '');
       // If the server has a theme choice and it differs from the cached one,
       // apply it now. setTheme also re-caches, so subsequent loads are fast.
       if (s.colorMode || s.accent) {
@@ -1796,6 +1804,8 @@
       sendReasoning,
       sendVerbosity,
       sendEmphasis: app.emphasisMarkdown,
+      sendUserName: app.userName,
+      sendUserLocation: app.userLocation,
       originalText: text,
       userMessageId,
     });
@@ -1826,6 +1836,16 @@
      * on their own send paths.
      */
     sendEmphasis: boolean;
+    /**
+     * Snapshot of the user's name + location from Settings, taken at
+     * send time. Same rationale as sendEmphasis - if the user opens
+     * Settings and edits their name mid-stream, the in-flight turn
+     * keeps the value the model already saw rather than swapping
+     * mid-response. Empty strings are passed through; the chat-loop
+     * treats them as "not set" and skips the appendix block.
+     */
+    sendUserName: string;
+    sendUserLocation: string;
     originalText: string;
     /**
      * The Supabase id of the user message that opened this exchange.
@@ -1953,6 +1973,8 @@
           reasoningEffort: ctx.sendReasoning,
           verbosity: ctx.sendVerbosity,
           emphasisMarkdown: ctx.sendEmphasis,
+          userName: ctx.sendUserName,
+          userLocation: ctx.sendUserLocation,
           journalTimezone: app.journalTimezone || null,
           handlers: {
             onTextUpdate: (t) => {
@@ -2335,6 +2357,8 @@
       sendReasoning,
       sendVerbosity,
       sendEmphasis: app.emphasisMarkdown,
+      sendUserName: app.userName,
+      sendUserLocation: app.userLocation,
       originalText: userMessage.content,
       userMessageId: userMessage.id,
     });
@@ -2404,6 +2428,8 @@
       sendReasoning,
       sendVerbosity,
       sendEmphasis: app.emphasisMarkdown,
+      sendUserName: app.userName,
+      sendUserLocation: app.userLocation,
       originalText: userMessage.content,
       userMessageId: userMessage.id,
     });

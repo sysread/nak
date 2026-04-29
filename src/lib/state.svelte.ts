@@ -130,6 +130,24 @@ interface AppState {
    * computation and into the journaling worker's start message.
    */
   journalTimezone: string;
+  /**
+   * Free-form display name the user entered in Settings -> AI ->
+   * About you. Empty string means "not set"; chat-loop reads both
+   * profile fields per-turn and only emits the User profile block
+   * when at least one of them is non-empty. Seeded blank on
+   * activate(), overwritten from Supabase
+   * `profiles.settings.userName` on unlock.
+   */
+  userName: string;
+  /**
+   * Free-form location the user entered in Settings -> AI -> About
+   * you. Same opt-in semantics as userName. Used so the model can
+   * answer location-grounded questions (weather, local time,
+   * regional context) without guessing or asking back. Seeded blank
+   * on activate(), overwritten from Supabase
+   * `profiles.settings.userLocation` on unlock.
+   */
+  userLocation: string;
   error: string | null;
 }
 
@@ -151,6 +169,8 @@ export const app = $state<AppState>({
   notifyOnComplete: false,
   journalAutomaticEnabled: true,
   journalTimezone: detectTimezone(),
+  userName: '',
+  userLocation: '',
   error: null,
 });
 
@@ -180,6 +200,25 @@ export function setEmphasisMarkdown(enabled: boolean): void {
 
 export function setNotifyOnComplete(enabled: boolean): void {
   app.notifyOnComplete = enabled;
+}
+
+/**
+ * Update the in-memory display name. Caller is responsible for the
+ * Supabase persist side (Settings.svelte calls
+ * `updateSettings({ userName })`). Empty string is "not set" - the
+ * chat-loop's per-turn appendix builder treats it the same as absent.
+ */
+export function setUserName(name: string): void {
+  app.userName = name;
+}
+
+/**
+ * Update the in-memory location. Caller is responsible for the
+ * Supabase persist side (Settings.svelte calls
+ * `updateSettings({ userLocation })`). Empty string is "not set".
+ */
+export function setUserLocation(location: string): void {
+  app.userLocation = location;
 }
 
 /**
@@ -249,6 +288,11 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   // unlock; this seed keeps the app functional before that arrives.
   app.journalAutomaticEnabled = true;
   app.journalTimezone = detectTimezone();
+  // Profile fields seed empty: a fresh-account first turn must not
+  // ship a stale name/location from a previous unlock. Chat.svelte
+  // overwrites these from Supabase `profiles.settings` after sign-in.
+  app.userName = '';
+  app.userLocation = '';
   app.phase = 'unlocked';
   app.error = null;
   if (opts.persist !== false) saveSession(config);
@@ -320,6 +364,10 @@ export function lock(): void {
   // inheriting the previous account's choices.
   app.journalAutomaticEnabled = true;
   app.journalTimezone = detectTimezone();
+  // Profile: same rationale - never leak the previous account's
+  // name/location across a lock-then-unlock-as-someone-else flow.
+  app.userName = '';
+  app.userLocation = '';
   app.systemPrompts = [];
   app.phase = 'locked';
   clearSession();
