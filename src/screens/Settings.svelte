@@ -29,6 +29,23 @@
    *
    * The `busy` flag is shared across forms so double-submits during an
    * in-flight save are harmless.
+   *
+   * Convention: AI / Journal / Appearance controls auto-apply on
+   * change. No Save buttons. Each handler does an optimistic in-memory
+   * flip + setter, then writes through to Supabase via
+   * `updateSettings`, then rolls back the in-memory state if the write
+   * throws. Radios and selects fire on `change`, checkboxes on
+   * `change`, free-form text inputs on the input's `change` event
+   * (blur or Enter, only when the value differs) so a half-typed
+   * value doesn't fire a roundtrip per keystroke. The Keys and
+   * Security panes are deliberate exceptions - they re-encrypt the
+   * config blob and need a deliberate Save gesture so a typo can't
+   * lock the user out. The Journal -> Day boundary timezone field
+   * is also deliberate: IANA-zone validation needs a commit gesture
+   * so a half-typed zone (e.g. "America/") doesn't keep erroring on
+   * every keystroke. Those three are the only Save buttons in the
+   * modal; if you find yourself adding another one, the convention
+   * says you probably want auto-apply with rollback instead.
    */
   import { changePassword, saveConfig, toExportedConfig } from '$lib/config';
   import {

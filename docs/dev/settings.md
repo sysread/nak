@@ -236,6 +236,34 @@ every update) so it's covered here rather than in its own file.
   `./build-deploy.md` for how the SW update-prompt pipeline is
   wired.
 
+## Conventions
+
+- **Auto-apply, no Save buttons.** AI, Journal, and Appearance
+  pane controls write through the moment the user touches them.
+  Each handler does an optimistic in-memory flip via a
+  `state.svelte.ts` setter, then `app.supabase.updateSettings({
+  ... })`, then rolls the in-memory state back on throw. Radios
+  and selects fire on `change`; checkboxes on `change`; free-form
+  text inputs on the input's `change` event (blur or Enter, only
+  when the value differs) so a half-typed value doesn't fire a
+  roundtrip per keystroke. The convention exists because it's
+  what the user expects from a settings surface where every
+  control is one decision wide; a Save button between the click
+  and the effect just adds a step the user always wants to
+  complete anyway. If you're tempted to add a Save button to a
+  preference, the answer is almost always auto-apply with
+  rollback. The known exceptions:
+  - **Keys** and **Security** panes need an explicit Save - they
+    re-encrypt the config blob, and a typo on auto-apply could
+    lock the user out.
+  - **Journal -> Day boundary** has a Save button because the
+    IANA-zone validation in `normalizeTimezone()` needs a commit
+    gesture. Auto-applying on every keystroke would surface an
+    error mid-typing for partially-formed zones like
+    `America/`. That's the only "validation gate forces a button"
+    case in the modal; copy the rationale into a comment if a
+    new field needs the same treatment.
+
 ## Gotchas
 
 - **Read-then-write on `profiles.settings`.** Not safe under
