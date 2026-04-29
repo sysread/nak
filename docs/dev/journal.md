@@ -88,9 +88,18 @@ Unlike memories, entries are not linked into a graph.
 - `src/lib/tools/journal_{list,read,search,delete}.ts` —
   user-facing tools; registered in `journalToolbox`, gated
   (user-toggleable in the chat composer's tool picker).
-  The agent itself does NOT use any tool; it goes through
-  `response_format=json_object` and writes the entry
-  directly.
+  Distinct from the agent's own toolbox below.
+- `src/lib/tools/journal_agent_toolbox.ts` —
+  `journalAgentToolbox`, the read-only set the background
+  agent calls during input-gathering rounds:
+  `memory_search` and `conversation_search`. No write
+  tools - the entry itself is still emitted through
+  `response_format=json_object`, never as
+  `tool_calls.arguments` (see Gotchas). The agent's
+  `toolCtx.threadId` is the thread BEING JOURNALED, so
+  `conversation_search`'s default current-thread
+  exclusion keeps the agent from pulling its own source
+  conversation back in via search.
 - `src/lib/embeddings/sources/journal.ts` —
   `createJournalSource(supabase)`. Text =
   `${entry_date}\n${topics}\nmood: ${mood}\n\n${content}`.
@@ -386,12 +395,18 @@ and `journalTimezone?: string` (IANA zone).
   substrate, via the source adapter at
   `src/lib/embeddings/sources/journal.ts`. See
   [embeddings.md](./embeddings.md).
-- **Tools.** `journalToolbox` (user-facing CRUD + search)
-  is gated and toggleable in the composer's tool picker.
-  The background agent does NOT use a tool to write; the
-  upsert goes through `response_format=json_object` and
-  a direct `supabase.upsertJournalAutomaticEntry` call.
-  See [tools.md](./tools.md).
+- **Tools.** Two separate toolboxes. `journalToolbox`
+  (user-facing CRUD + search) is gated and toggleable in
+  the composer's tool picker - what the main chat model
+  reaches for when the user wants to query their journal.
+  `journalAgentToolbox` (read-only `memory_search` +
+  `conversation_search`) is what the background agent
+  itself calls during input-gathering rounds, so it can
+  pull in adjacent context when writing the entry. The
+  agent never writes through a tool call - the upsert
+  still goes through `response_format=json_object` and a
+  direct `supabase.upsertJournalAutomaticEntry`. See
+  [tools.md](./tools.md).
 - **Settings.** The Journal pane owns the toggle +
   timezone + export buttons. See [settings.md](./settings.md).
 - **Chat.** The drawer gains a Journal tab between
@@ -405,20 +420,26 @@ and `journalTimezone?: string` (IANA zone).
   `src/lib/agents/journal/`, NOT `.../reflection/` - the
   reflection folder is the memory-extraction agent. When
   grepping, use `journal` for this feature.
-- **Structured output, not tools.** The agent talks to
-  Venice with `response_format: {type: 'json_object'}`
-  and parses the model's `{worthy, reasoning, entry?}`
-  payload. An earlier tool-call shape (`journal_upsert`)
-  ate too many writes to long-Markdown threads because
-  the entry body had to survive two layers of JSON
-  escaping (the streamed `tool_calls.arguments` string
-  on the wire, then the inner `content` field). Keeping
-  the journal body in a single layer of provider-issued
-  JSON dropped silent failures to near zero. If you ever
-  need a tool path back (e.g. for a future agent-driven
-  delete flow), expose a NEW tool rather than restoring
-  `journal_upsert` so the always-on JSON-output path
-  stays the only writer.
+- **Structured output for the WRITE, tools for the
+  READ.** The agent talks to Venice through the headless
+  tool loop now (`runHeadlessToolLoop` with
+  `journalAgentToolbox`), so it can call
+  `memory_search` and `conversation_search` during
+  input-gathering rounds. But the entry itself is still
+  emitted through `response_format: {type: 'json_object'}`
+  in the model's final text - never as
+  `tool_calls.arguments`. An earlier write-via-tool-call
+  shape (`journal_upsert`) ate too many writes to
+  long-Markdown threads because the entry body had to
+  survive two layers of JSON escaping (the streamed
+  `tool_calls.arguments` string on the wire, then the
+  inner `content` field). The read tools the agent calls
+  now don't have that problem - their arguments are
+  short query strings. If you ever need a write tool
+  path back (e.g. for a future agent-driven delete
+  flow), expose a NEW tool rather than restoring
+  `journal_upsert`; the always-on JSON-output path stays
+  the only writer.
 - **Timezone recomputation per cycle.** `loop.ts`
   recomputes `entryDate` every iteration so an idle
   worker that straddles midnight still writes to the

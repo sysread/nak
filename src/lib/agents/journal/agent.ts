@@ -3,14 +3,14 @@
  * a completed conversation: fetch the thread's messages up to the
  * claimed terminal assistant message, read today's existing automatic
  * entry (so the prompt can tell the agent to extend rather than
- * duplicate), call Venice with `response_format: {type:'json_object'}`,
- * parse the model's structured decision, and - when `worthy=true` -
- * write the entry AND advance the thread's `last_journaled_msg_id`
- * pointer in a single atomic Postgres transaction via
- * `supabase.upsertJournalEntryAndMarkThread`. The atomicity matters:
- * a successful entry write that fails to advance the pointer would
- * loop the worker on the same conversation; a pointer advance
- * without a successful entry write would orphan it.
+ * duplicate), drive a tool-call loop with read-only memory and
+ * conversation searches, parse the model's structured decision, and -
+ * when `worthy=true` - write the entry AND advance the thread's
+ * `last_journaled_msg_id` pointer in a single atomic Postgres
+ * transaction via `supabase.upsertJournalEntryAndMarkThread`. The
+ * atomicity matters: a successful entry write that fails to advance
+ * the pointer would loop the worker on the same conversation; a
+ * pointer advance without a successful entry write would orphan it.
  *
  * Mirrors `../reflection/agent.ts` in the thread-fetch / slice / model
  * pinning pieces but diverges in three ways:
@@ -27,23 +27,32 @@
  *     thread, in order, in the background" anyway.
  *
  *   - Output: structured JSON via response_format, not a tool call.
- *     The earlier tool-call shape ran the entry's Markdown body
- *     through two layers of JSON escaping (the outer streamed
- *     `arguments` string, then the inner content field) and lost
- *     escaping on roughly any conversation longer than a paragraph.
- *     `wrote=true, 0 successful tool calls` runs were the visible
- *     symptom; the silent failure was that the local JSON.parse on
- *     the assembled arguments string would throw, the worker would
- *     log "wrote=false" anyway because successfulToolCalls stayed at
- *     zero, and the user got an empty journal. response_format only
- *     produces one layer of JSON, which is the failure mode the
- *     model is actually trained on.
+ *     The earlier "write the entry through tool_call.arguments" shape
+ *     ran the Markdown body through two layers of JSON escaping (the
+ *     outer streamed `arguments` string, then the inner content
+ *     field) and lost escaping on roughly any conversation longer
+ *     than a paragraph. `wrote=true, 0 successful tool calls` runs
+ *     were the visible symptom; the silent failure was that the local
+ *     JSON.parse on the assembled arguments string would throw, the
+ *     worker would log "wrote=false" anyway because
+ *     successfulToolCalls stayed at zero, and the user got an empty
+ *     journal. response_format only produces one layer of JSON, which
+ *     is the failure mode the model is actually trained on. The
+ *     tool-call rounds the agent now uses for INPUT (memory_search /
+ *     conversation_search) don't suffer from this - their arguments
+ *     are short query strings, not multi-paragraph Markdown.
  *
- *   - No tool calls means no toolbox. The agent talks to Venice
- *     directly via `streamChat` and writes through the supabase
- *     service from inside this file. Reasoning the model wrote about
- *     its decision is plumbed up to the worker so the log line can
- *     show the why alongside the what.
+ *   - Read-only toolbox (`journalAgentToolbox`): `memory_search` and
+ *     `conversation_search` only. Lets the agent pull in adjacent
+ *     context (saved memories about a recurring theme, prior threads
+ *     the user is implicitly referring back to) without giving it any
+ *     ability to mutate user state. The toolCtx's `threadId` is set
+ *     to `req.input.threadId` - the conversation BEING JOURNALED, not
+ *     whatever thread the user has open in the UI - so
+ *     `conversation_search`'s default current-thread exclusion keeps
+ *     the agent from pulling its own source conversation back in.
+ *     Reasoning the model wrote about its decision is plumbed up to
+ *     the worker so the log line can show the why alongside the what.
  *
  * Does NOT touch leases, claims, or the thread-marking RPC - those
  * live in `./loop.ts` and `./worker.ts`. This class is pure logic.
@@ -53,6 +62,8 @@ import type { SupabaseService, Message } from '../../supabase';
 import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
 import { createLogger } from '../../logger.svelte';
 import { sanitizeToolCallsForWire } from '../../tools/wire';
+import { runHeadlessToolLoop } from '../../tools/run';
+import { journalAgentToolbox } from '../../tools/journal_agent_toolbox';
 import type { ReasoningEffort } from '../../models';
 import { buildJournalPrompt, buildJournalRegeneratePrompt } from './prompt';
 import {
@@ -240,16 +251,12 @@ export function parseJournalDecision(text: string): JournalDecision | null {
 export class JournalAgent implements Agent<JournalInput, JournalOutput> {
   readonly name = 'journal';
   readonly model: string;
-  // No tools - the agent decides + writes through structured output
-  // and a direct supabase call. Empty toolbox satisfies the
-  // `Agent<I,O>` contract; consumers that walk an agent's toolbox
-  // treat an empty `tools` array as "nothing to register".
-  readonly toolbox = {
-    name: 'journal-agent',
-    description:
-      'Empty toolbox - the journaling agent uses response_format=json_object instead of tool calls.',
-    tools: [],
-  };
+  // Read-only memory + conversation search. The entry itself is still
+  // emitted through `response_format=json_object` in the model's final
+  // text - tool calls happen only during input-gathering rounds, so
+  // the multi-layer JSON-escaping problem the original tool-call write
+  // shape suffered from doesn't apply here.
+  readonly toolbox = journalAgentToolbox;
 
   constructor(
     private venice: VeniceClient,
@@ -373,26 +380,34 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
       // logs. The note also surfaces "Venice itself is unreachable"
       // separately from "agent reasoned through a skip" - if the
       // reachable-Venice line lands but the finished-thread line
-      // never does, the streamChat call hung.
+      // never does, the tool-loop hung.
       log.info(
         `asking model about thread ${req.input.threadId} ` +
           `(${slice.length} messages, ${existingEntry ? 'extending prior entry' : 'first pass'})`
       );
 
-      // Single streaming call. No tool loop - structured output makes
-      // the round-trip a one-shot. Drain text events into finalText;
-      // ignore reasoning / usage / citations.
-      let finalText = '';
-      const stream = this.venice.streamChat({
+      // Tool loop with the read-only journalAgentToolbox. The model
+      // can call memory_search and conversation_search across rounds
+      // to gather context, then settles on a JSON-formatted final
+      // text (response_format pinned on every round). toolCtx.threadId
+      // is the thread BEING JOURNALED so conversation_search's default
+      // current-thread filter excludes the agent's own source convo.
+      const loopResult = await runHeadlessToolLoop({
+        venice: this.venice,
         model: this.model,
         messages: convo,
+        toolbox: this.toolbox,
+        toolCtx: {
+          supabase: this.supabase,
+          venice: this.venice,
+          userId: req.userId,
+          threadId: req.input.threadId,
+        },
+        signal,
         responseFormat: JOURNAL_RESPONSE_FORMAT,
         reasoningEffort: JOURNAL_REASONING_EFFORT,
-        signal,
       });
-      for await (const ev of stream) {
-        if (ev.type === 'text') finalText += ev.delta;
-      }
+      const finalText = loopResult.finalText;
 
       if (signal.aborted) {
         return {
@@ -402,7 +417,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
             entryWritten: false,
             reasoning: null,
           },
-          toolCalls: 0,
+          toolCalls: loopResult.toolCalls,
           stoppedReason: 'aborted',
         };
       }
@@ -419,7 +434,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
             entryWritten: false,
             reasoning: null,
           },
-          toolCalls: 0,
+          toolCalls: loopResult.toolCalls,
           stoppedReason: 'done',
         };
       }
@@ -432,7 +447,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
             entryWritten: false,
             reasoning: decision.reasoning,
           },
-          toolCalls: 0,
+          toolCalls: loopResult.toolCalls,
           stoppedReason: 'done',
         };
       }
@@ -478,7 +493,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
             entryWritten: false,
             reasoning: decision.reasoning,
           },
-          toolCalls: 0,
+          toolCalls: loopResult.toolCalls,
           stoppedReason: 'error',
           error: err instanceof Error ? err.message : String(err),
         };
@@ -491,7 +506,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
           entryWritten: true,
           reasoning: decision.reasoning,
         },
-        toolCalls: 0,
+        toolCalls: loopResult.toolCalls,
         stoppedReason: 'done',
       };
     } catch (err) {
@@ -567,17 +582,37 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
         `(${allMessages.length} messages)`
     );
 
-    let finalText = '';
-    const stream = this.venice.streamChat({
+    // Resolve the signed-in user's id from the supabase client. The
+    // tools we hand the loop (memory_search, conversation_search) get
+    // user-scoping via the JWT on `ctx.supabase` and don't read
+    // `ctx.userId`, but the ToolContext contract requires it; surfacing
+    // the session error here is preferable to handing the loop an empty
+    // string and discovering it later through an RLS failure deeper in.
+    const session = await this.supabase.getSession();
+    if (!session) {
+      throw new Error('Not signed in - cannot regenerate.');
+    }
+
+    // Same tool loop as the worker run() path - read-only memory and
+    // conversation search, structured JSON output. ctx.threadId is the
+    // thread the entry is FOR, so conversation_search excludes the
+    // source conversation by default.
+    const loopResult = await runHeadlessToolLoop({
+      venice: this.venice,
       model: this.model,
       messages: convo,
+      toolbox: this.toolbox,
+      toolCtx: {
+        supabase: this.supabase,
+        venice: this.venice,
+        userId: session.user.id,
+        threadId: args.threadId,
+      },
+      signal,
       responseFormat: JOURNAL_RESPONSE_FORMAT,
       reasoningEffort: JOURNAL_REASONING_EFFORT,
-      signal,
     });
-    for await (const ev of stream) {
-      if (ev.type === 'text') finalText += ev.delta;
-    }
+    const finalText = loopResult.finalText;
 
     if (signal.aborted) throw new Error('Regenerate aborted mid-stream.');
 
