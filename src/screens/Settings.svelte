@@ -156,12 +156,12 @@
   // isn't what the toggle advertises.
   let notifyOnComplete = $state<boolean>(app.notifyOnComplete);
   // Free-form profile fields injected into the system-prompt
-  // appendix on every turn. Saved on the explicit Save button (same
-  // pattern as journalTimezone) rather than on every keystroke -
-  // each change writes to Supabase + updates app state, and a
-  // half-typed name shouldn't fire a roundtrip per character.
-  // Persisted on `profiles.settings.userName` /
-  // `profiles.settings.userLocation`.
+  // appendix on every turn. Saved on the input's `change` event
+  // (fires on blur or Enter when the value changed) so a half-typed
+  // name doesn't fire a roundtrip per keystroke but the user never
+  // has to find a Save button - same hands-off feel as the toggles
+  // and radios on this pane. Persisted on
+  // `profiles.settings.userName` / `profiles.settings.userLocation`.
   let userName = $state<string>(app.userName);
   let userLocation = $state<string>(app.userLocation);
   let modelError = $state<string | null>(null);
@@ -1170,12 +1170,9 @@
             spellcheck="false"
             autocomplete="off"
             maxlength="200"
+            onchange={(e) =>
+              onSaveUserName((e.currentTarget as HTMLInputElement).value)}
           />
-          <button
-            type="button"
-            class="secondary"
-            onclick={() => onSaveUserName(userName)}
-          >Save</button>
         </div>
         <div class="form-row">
           <label for="user-location">Location</label>
@@ -1187,12 +1184,9 @@
             spellcheck="false"
             autocomplete="off"
             maxlength="200"
+            onchange={(e) =>
+              onSaveUserLocation((e.currentTarget as HTMLInputElement).value)}
           />
-          <button
-            type="button"
-            class="secondary"
-            onclick={() => onSaveUserLocation(userLocation)}
-          >Save</button>
         </div>
 
         <h3 class="pane-section">Default model</h3>
