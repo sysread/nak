@@ -257,6 +257,28 @@ export interface Recipe {
 }
 
 /**
+ * One immutable snapshot in a recipe's history. Every create and every
+ * update writes one row via the `recipe_create_with_version` /
+ * `recipe_update_with_version` RPCs. The latest row by `created_at`
+ * always matches the parent `recipes` row by content; older rows are
+ * the trail of past states the user can browse and revert to.
+ *
+ * `change_message` is required - the UI Edit form and the LLM
+ * `recipe_save` / `recipe_update` tools all force a non-empty value
+ * before the RPC is called.
+ */
+export interface RecipeVersion {
+  id: string;
+  recipe_id: string;
+  title: string;
+  source: string | null;
+  source_url: string | null;
+  cooklang: string;
+  change_message: string;
+  created_at: string;
+}
+
+/**
  * One journal-entry row. The Journal feature lets a date have any
  * number of entries; the UI groups them by `entry_date` and assembles
  * a compound day view per click.
@@ -1358,34 +1380,54 @@ export class SupabaseService {
     return (data as Recipe | null) ?? null;
   }
 
+  /**
+   * Create a recipe and snapshot the initial state into
+   * `recipe_versions` atomically via the
+   * `recipe_create_with_version` RPC. `changeMessage` is required —
+   * it appears in the History panel as the description of the
+   * initial save (e.g. "Imported from NYT Cooking", "Created by
+   * hand").
+   */
   async createRecipe(
     title: string,
     cooklang: string,
-    source: string | null = null,
-    sourceUrl: string | null = null
+    source: string | null,
+    sourceUrl: string | null,
+    changeMessage: string
   ): Promise<Recipe> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const { data: row, error } = await this.client
-      .from('recipes')
-      .insert({
-        user_id: session.user.id,
-        title,
-        cooklang,
-        source,
-        source_url: sourceUrl,
-      })
-      .select('id, title, source, source_url, cooklang, created_at, updated_at')
-      .single();
+    if (!changeMessage || changeMessage.trim().length === 0) {
+      throw new SupabaseError('changeMessage is required');
+    }
+    const { data, error } = await this.client.rpc(
+      'recipe_create_with_version',
+      {
+        p_title: title,
+        p_cooklang: cooklang,
+        p_source: source,
+        p_source_url: sourceUrl,
+        p_change_message: changeMessage.trim(),
+      }
+    );
     if (error) throw new SupabaseError(error.message);
-    return row as Recipe;
+    const rows = (data ?? []) as Recipe[];
+    if (rows.length === 0) {
+      throw new SupabaseError('create returned no row');
+    }
+    return rows[0]!;
   }
 
   /**
    * Partial update. Caller guarantees at least one field in `patch`
-   * is set — enforced by the recipe_update tool before it reaches
-   * here. Bumps updated_at so the list orders freshly-edited recipes
-   * to the top.
+   * is set - enforced by the recipe_update tool and the Cookbook
+   * Edit pane before this method runs. Goes through
+   * `recipe_update_with_version` so the prior state is snapshotted
+   * into `recipe_versions` in the same transaction. `changeMessage`
+   * is required and lands on the new version row.
+   *
+   * The boolean-flag pairs (`p_set_*` + value) preserve the
+   * "absent leaves field unchanged; explicit null clears" semantics
+   * across the wire: TypeScript's `'field' in patch` distinguishes
+   * the two cases, but the Postgres parameter list cannot.
    */
   async updateRecipe(
     id: string,
@@ -1394,21 +1436,96 @@ export class SupabaseService {
       cooklang?: string;
       source?: string | null;
       source_url?: string | null;
-    }
+    },
+    changeMessage: string
   ): Promise<Recipe> {
-    const { data: row, error } = await this.client
-      .from('recipes')
-      .update({ ...patch, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('id, title, source, source_url, cooklang, created_at, updated_at')
-      .single();
+    if (!changeMessage || changeMessage.trim().length === 0) {
+      throw new SupabaseError('changeMessage is required');
+    }
+    const { data, error } = await this.client.rpc(
+      'recipe_update_with_version',
+      {
+        p_id: id,
+        p_set_title: 'title' in patch,
+        p_title: patch.title ?? null,
+        p_set_cooklang: 'cooklang' in patch,
+        p_cooklang: patch.cooklang ?? null,
+        p_set_source: 'source' in patch,
+        p_source: patch.source ?? null,
+        p_set_source_url: 'source_url' in patch,
+        p_source_url: patch.source_url ?? null,
+        p_change_message: changeMessage.trim(),
+      }
+    );
     if (error) throw new SupabaseError(error.message);
-    return row as Recipe;
+    const rows = (data ?? []) as Recipe[];
+    if (rows.length === 0) {
+      throw new SupabaseError('update returned no row');
+    }
+    return rows[0]!;
   }
 
   async deleteRecipe(id: string): Promise<void> {
     const { error } = await this.client.from('recipes').delete().eq('id', id);
     if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * List a recipe's full version history, newest first. Cold path —
+   * called only when the History panel opens, never as part of the
+   * recipe-list bulk fetch.
+   */
+  async listRecipeVersions(recipeId: string): Promise<RecipeVersion[]> {
+    const { data, error } = await this.client
+      .from('recipe_versions')
+      .select(
+        'id, recipe_id, title, source, source_url, cooklang, change_message, created_at'
+      )
+      .eq('recipe_id', recipeId)
+      .order('created_at', { ascending: false });
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as RecipeVersion[];
+  }
+
+  async getRecipeVersion(versionId: string): Promise<RecipeVersion | null> {
+    const { data, error } = await this.client
+      .from('recipe_versions')
+      .select(
+        'id, recipe_id, title, source, source_url, cooklang, change_message, created_at'
+      )
+      .eq('id', versionId)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    return (data as RecipeVersion | null) ?? null;
+  }
+
+  /**
+   * Roll a recipe back to the content of an earlier version. Implemented
+   * as a normal update whose patch is the chosen version's snapshot —
+   * the revert itself becomes a new version row, so a misclick is
+   * recoverable too. Throws if the version belongs to a different
+   * recipe (defense against stale UI state passing the wrong id).
+   */
+  async revertRecipe(
+    recipeId: string,
+    versionId: string,
+    changeMessage: string
+  ): Promise<Recipe> {
+    const v = await this.getRecipeVersion(versionId);
+    if (!v) throw new SupabaseError('version not found');
+    if (v.recipe_id !== recipeId) {
+      throw new SupabaseError('version belongs to a different recipe');
+    }
+    return this.updateRecipe(
+      recipeId,
+      {
+        title: v.title,
+        cooklang: v.cooklang,
+        source: v.source,
+        source_url: v.source_url,
+      },
+      changeMessage
+    );
   }
 
   // journal_entries (Journal) ---------------------------------------

@@ -34,8 +34,10 @@ export const recipeSave: ToolDef = {
     'numbered list. Wrap a long instruction across lines by prefixing ' +
     'continuation lines with `> ` (merged into the previous step). `source` ' +
     'is an optional free-form provenance string; `source_url` is the URL if ' +
-    'the recipe was imported from the web. Returns the created ' +
-    '{id, title, updated_at}.',
+    'the recipe was imported from the web. `change_message` is REQUIRED and ' +
+    "appears in the recipe's history panel as the description of this " +
+    'initial save (e.g. "Imported from NYT Cooking", "Captured from the ' +
+    "user's handwritten card\"). Returns the created {id, title, updated_at}.",
   shortDescription: 'save a recipe to the cookbook',
   parameters: {
     type: 'object',
@@ -64,8 +66,19 @@ export const recipeSave: ToolDef = {
         maxLength: 2000,
         description: 'Optional URL the recipe was imported from.',
       },
+      change_message: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 500,
+        description:
+          "One-line note describing why you are saving this recipe. " +
+          'Stored in the recipe\'s version history and shown to the user ' +
+          'in the History panel. Examples: "Imported from NYT Cooking", ' +
+          '"Captured from prose the user pasted", "Adapted Smitten ' +
+          "Kitchen pasta with the user's pantry constraints\".",
+      },
     },
-    required: ['title', 'cooklang'],
+    required: ['title', 'cooklang', 'change_message'],
     additionalProperties: false,
   },
   async execute(args, ctx) {
@@ -94,7 +107,18 @@ export const recipeSave: ToolDef = {
         `title exceeds ${MAX_RECIPE_TITLE_CHARS}-char limit (got ${title.length})`
       );
     }
-    const row = await ctx.supabase.createRecipe(title, cooklang, source, sourceUrl);
+    const changeMessage =
+      typeof args.change_message === 'string' ? args.change_message.trim() : '';
+    if (!changeMessage) {
+      throw new Error('change_message is required');
+    }
+    const row = await ctx.supabase.createRecipe(
+      title,
+      cooklang,
+      source,
+      sourceUrl,
+      changeMessage
+    );
     notifyCookbookChanged();
     return { id: row.id, title: row.title, updated_at: row.updated_at };
   },

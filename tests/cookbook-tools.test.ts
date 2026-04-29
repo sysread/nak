@@ -17,7 +17,9 @@ import { recipeList } from '../src/lib/tools/recipe_list';
 import { recipeGet } from '../src/lib/tools/recipe_get';
 import { recipeUpdate } from '../src/lib/tools/recipe_update';
 import { recipeDelete } from '../src/lib/tools/recipe_delete';
-import type { SupabaseService, Recipe } from '../src/lib/supabase';
+import { SupabaseService } from '../src/lib/supabase';
+import type { Recipe, RecipeVersion } from '../src/lib/supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VeniceClient } from '../src/lib/venice';
 import { MAX_RECIPE_COOKLANG_CHARS } from '../src/lib/cooklang';
 
@@ -56,7 +58,7 @@ describe('recipe tools — registry', () => {
 });
 
 describe('recipe_save', () => {
-  it('calls createRecipe with trimmed title and source fields', async () => {
+  it('calls createRecipe with trimmed title, source fields, and change_message', async () => {
     const createRecipe = vi.fn().mockResolvedValue(sampleRecipe());
     const result = await recipeSave.execute(
       {
@@ -64,6 +66,7 @@ describe('recipe_save', () => {
         cooklang: 'Stir @flour{200%g}.',
         source: '  NYT  ',
         source_url: ' https://example.com ',
+        change_message: '  Imported from NYT.  ',
       },
       ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
     );
@@ -71,7 +74,8 @@ describe('recipe_save', () => {
       'Test Recipe',
       'Stir @flour{200%g}.',
       'NYT',
-      'https://example.com'
+      'https://example.com',
+      'Imported from NYT.'
     );
     expect(result).toEqual({
       id: 'r-1',
@@ -83,16 +87,16 @@ describe('recipe_save', () => {
   it('passes null source / source_url when omitted', async () => {
     const createRecipe = vi.fn().mockResolvedValue(sampleRecipe());
     await recipeSave.execute(
-      { title: 'T', cooklang: 'X' },
+      { title: 'T', cooklang: 'X', change_message: 'init' },
       ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
     );
-    expect(createRecipe).toHaveBeenCalledWith('T', 'X', null, null);
+    expect(createRecipe).toHaveBeenCalledWith('T', 'X', null, null, 'init');
   });
 
   it('rejects blank title', async () => {
     await expect(
       recipeSave.execute(
-        { title: '   ', cooklang: 'X' },
+        { title: '   ', cooklang: 'X', change_message: 'init' },
         ctxFor({ createRecipe: vi.fn() } as unknown as Partial<SupabaseService>)
       )
     ).rejects.toThrow(/title is required/);
@@ -103,10 +107,32 @@ describe('recipe_save', () => {
     const oversize = 'x'.repeat(MAX_RECIPE_COOKLANG_CHARS + 1);
     await expect(
       recipeSave.execute(
-        { title: 'T', cooklang: oversize },
+        { title: 'T', cooklang: oversize, change_message: 'init' },
         ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
       )
     ).rejects.toThrow(/exceeds/);
+    expect(createRecipe).not.toHaveBeenCalled();
+  });
+
+  it('rejects when change_message is missing', async () => {
+    const createRecipe = vi.fn();
+    await expect(
+      recipeSave.execute(
+        { title: 'T', cooklang: 'X' },
+        ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
+      )
+    ).rejects.toThrow(/change_message is required/);
+    expect(createRecipe).not.toHaveBeenCalled();
+  });
+
+  it('rejects when change_message is whitespace', async () => {
+    const createRecipe = vi.fn();
+    await expect(
+      recipeSave.execute(
+        { title: 'T', cooklang: 'X', change_message: '   ' },
+        ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
+      )
+    ).rejects.toThrow(/change_message is required/);
     expect(createRecipe).not.toHaveBeenCalled();
   });
 });
@@ -162,32 +188,34 @@ describe('recipe_get', () => {
 });
 
 describe('recipe_update', () => {
-  it('calls updateRecipe with only the fields present in the patch', async () => {
+  it('calls updateRecipe with patch fields and trimmed change_message', async () => {
     const updateRecipe = vi.fn().mockResolvedValue(sampleRecipe());
     await recipeUpdate.execute(
-      { id: 'r-1', title: 'New' },
+      { id: 'r-1', title: 'New', change_message: '  Renamed.  ' },
       ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
     );
-    const [id, patch] = updateRecipe.mock.calls[0]!;
+    const [id, patch, changeMessage] = updateRecipe.mock.calls[0]!;
     expect(id).toBe('r-1');
     expect(patch).toEqual({ title: 'New' });
+    expect(changeMessage).toBe('Renamed.');
   });
 
   it('passes explicit null for source to clear it', async () => {
     const updateRecipe = vi.fn().mockResolvedValue(sampleRecipe());
     await recipeUpdate.execute(
-      { id: 'r-1', source: null },
+      { id: 'r-1', source: null, change_message: 'cleared source' },
       ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
     );
-    const [, patch] = updateRecipe.mock.calls[0]!;
+    const [, patch, changeMessage] = updateRecipe.mock.calls[0]!;
     expect(patch).toEqual({ source: null });
+    expect(changeMessage).toBe('cleared source');
   });
 
   it('rejects an empty patch', async () => {
     const updateRecipe = vi.fn();
     await expect(
       recipeUpdate.execute(
-        { id: 'r-1' },
+        { id: 'r-1', change_message: 'noop' },
         ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
       )
     ).rejects.toThrow(/at least one of/);
@@ -199,10 +227,32 @@ describe('recipe_update', () => {
     const oversize = 'x'.repeat(MAX_RECIPE_COOKLANG_CHARS + 1);
     await expect(
       recipeUpdate.execute(
-        { id: 'r-1', cooklang: oversize },
+        { id: 'r-1', cooklang: oversize, change_message: 'big edit' },
         ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
       )
     ).rejects.toThrow(/exceeds/);
+    expect(updateRecipe).not.toHaveBeenCalled();
+  });
+
+  it('rejects when change_message is missing', async () => {
+    const updateRecipe = vi.fn();
+    await expect(
+      recipeUpdate.execute(
+        { id: 'r-1', title: 'New' },
+        ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
+      )
+    ).rejects.toThrow(/change_message is required/);
+    expect(updateRecipe).not.toHaveBeenCalled();
+  });
+
+  it('rejects when change_message is whitespace', async () => {
+    const updateRecipe = vi.fn();
+    await expect(
+      recipeUpdate.execute(
+        { id: 'r-1', title: 'New', change_message: '   ' },
+        ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
+      )
+    ).rejects.toThrow(/change_message is required/);
     expect(updateRecipe).not.toHaveBeenCalled();
   });
 });
@@ -227,5 +277,173 @@ describe('recipe_delete', () => {
       )
     ).rejects.toThrow(/id is required/);
     expect(deleteRecipe).not.toHaveBeenCalled();
+  });
+});
+
+// SupabaseService recipe-versioning surface ---------------------------------
+//
+// We don't have Postgres in unit-test land, so the RPC bodies themselves
+// (atomicity, FOR UPDATE locking, the snapshot insert) are out of scope here.
+// What we CAN pin is the wire shape: createRecipe / updateRecipe call the
+// right RPC with the right arg names + boolean flags, and revertRecipe wires
+// the chosen version's content into a normal update call.
+
+function sampleVersion(overrides: Partial<RecipeVersion> = {}): RecipeVersion {
+  return {
+    id: 'v-1',
+    recipe_id: 'r-1',
+    title: 'Old title',
+    source: 'Old source',
+    source_url: null,
+    cooklang: 'Old @flour{1%cup}.',
+    change_message: 'old version',
+    created_at: '2024-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+function makeRpcOnlyClient(rpcImpl: ReturnType<typeof vi.fn>): SupabaseClient {
+  // Minimal stub: only `.rpc` is exercised by the create/update paths.
+  return {
+    rpc: rpcImpl,
+    // `.from` should not be called by create/update; if it is, the test will
+    // fail loudly with an unhandled tool call.
+    from: vi.fn(() => {
+      throw new Error('unexpected from() call');
+    }),
+  } as unknown as SupabaseClient;
+}
+
+function makeService(client: SupabaseClient): SupabaseService {
+  return new SupabaseService(
+    { supabaseUrl: 'http://example.test', supabaseAnonKey: 'anon' },
+    { client }
+  );
+}
+
+describe('SupabaseService.createRecipe', () => {
+  it('calls recipe_create_with_version RPC with the trimmed change_message', async () => {
+    const rpc = vi
+      .fn()
+      .mockResolvedValue({ data: [sampleRecipe()], error: null });
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await svc.createRecipe('T', 'X', 'NYT', null, '  init  ');
+    expect(rpc).toHaveBeenCalledTimes(1);
+    const [name, args] = rpc.mock.calls[0]!;
+    expect(name).toBe('recipe_create_with_version');
+    expect(args).toEqual({
+      p_title: 'T',
+      p_cooklang: 'X',
+      p_source: 'NYT',
+      p_source_url: null,
+      p_change_message: 'init',
+    });
+  });
+
+  it('rejects an empty change_message before touching the network', async () => {
+    const rpc = vi.fn();
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await expect(
+      svc.createRecipe('T', 'X', null, null, '   ')
+    ).rejects.toThrow(/changeMessage is required/);
+    expect(rpc).not.toHaveBeenCalled();
+  });
+});
+
+describe('SupabaseService.updateRecipe', () => {
+  it('translates an absent field into p_set_*=false and an explicit null into p_set_*=true with null value', async () => {
+    const rpc = vi
+      .fn()
+      .mockResolvedValue({ data: [sampleRecipe()], error: null });
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await svc.updateRecipe(
+      'r-1',
+      { title: 'New', source: null }, // title set, source cleared, cooklang/source_url left alone
+      'edit'
+    );
+    const [name, args] = rpc.mock.calls[0]!;
+    expect(name).toBe('recipe_update_with_version');
+    expect(args).toEqual({
+      p_id: 'r-1',
+      p_set_title: true,
+      p_title: 'New',
+      p_set_cooklang: false,
+      p_cooklang: null,
+      p_set_source: true,
+      p_source: null,
+      p_set_source_url: false,
+      p_source_url: null,
+      p_change_message: 'edit',
+    });
+  });
+
+  it('rejects an empty change_message before touching the network', async () => {
+    const rpc = vi.fn();
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await expect(
+      svc.updateRecipe('r-1', { title: 'New' }, '  ')
+    ).rejects.toThrow(/changeMessage is required/);
+    expect(rpc).not.toHaveBeenCalled();
+  });
+});
+
+describe('SupabaseService.revertRecipe', () => {
+  // revertRecipe is two calls: getRecipeVersion (a `from` chain) then
+  // updateRecipe (an `rpc` call). We stub both via a custom client so we
+  // can assert the patch fed into the RPC matches the version's content.
+  function makeRevertClient(version: RecipeVersion | null) {
+    const rpc = vi
+      .fn()
+      .mockResolvedValue({ data: [sampleRecipe()], error: null });
+    const eq = vi.fn().mockReturnValue({
+      maybeSingle: vi.fn().mockResolvedValue({ data: version, error: null }),
+    });
+    const select = vi.fn().mockReturnValue({ eq });
+    const from = vi.fn().mockReturnValue({ select });
+    return {
+      rpc,
+      client: { from, rpc } as unknown as SupabaseClient,
+    };
+  }
+
+  it('looks up the version, then calls updateRecipe with its content + change message', async () => {
+    const v = sampleVersion();
+    const { rpc, client } = makeRevertClient(v);
+    const svc = makeService(client);
+    await svc.revertRecipe('r-1', 'v-1', 'Reverted to v-1');
+    expect(rpc).toHaveBeenCalledTimes(1);
+    const [name, args] = rpc.mock.calls[0]!;
+    expect(name).toBe('recipe_update_with_version');
+    expect(args).toMatchObject({
+      p_id: 'r-1',
+      p_set_title: true,
+      p_title: v.title,
+      p_set_cooklang: true,
+      p_cooklang: v.cooklang,
+      p_set_source: true,
+      p_source: v.source,
+      p_set_source_url: true,
+      p_source_url: v.source_url,
+      p_change_message: 'Reverted to v-1',
+    });
+  });
+
+  it('throws when the version belongs to a different recipe', async () => {
+    const v = sampleVersion({ recipe_id: 'r-OTHER' });
+    const { rpc, client } = makeRevertClient(v);
+    const svc = makeService(client);
+    await expect(svc.revertRecipe('r-1', 'v-1', 'msg')).rejects.toThrow(
+      /different recipe/
+    );
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('throws when the version is not found', async () => {
+    const { rpc, client } = makeRevertClient(null);
+    const svc = makeService(client);
+    await expect(svc.revertRecipe('r-1', 'v-missing', 'msg')).rejects.toThrow(
+      /version not found/
+    );
+    expect(rpc).not.toHaveBeenCalled();
   });
 });

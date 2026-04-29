@@ -32,9 +32,14 @@ at cookbook scale (tens to low hundreds of rows per user).
 - `src/lib/tools/recipe_save.ts`, `recipe_list.ts`, `recipe_get.ts`,
   `recipe_update.ts`, `recipe_delete.ts` — the five LLM tools.
   Mutating tools fire `notifyCookbookChanged` on success.
-- `src/lib/supabase.ts` — `Recipe` type + `createRecipe / updateRecipe
-  / deleteRecipe / getRecipe / listRecipes` methods. Lives between
-  the memory methods and the background-worker pipeline block.
+- `src/lib/supabase.ts` — `Recipe` and `RecipeVersion` types +
+  `createRecipe / updateRecipe / deleteRecipe / getRecipe /
+  listRecipes / listRecipeVersions / getRecipeVersion / revertRecipe`
+  methods. Lives between the memory methods and the
+  background-worker pipeline block. `createRecipe` / `updateRecipe`
+  go through the `recipe_create_with_version` /
+  `recipe_update_with_version` RPCs so the parent row and the
+  history snapshot land in one transaction.
 - `src/screens/Cookbook.svelte` — three-pane modal (list, detail,
   edit). Mirrors `Settings.svelte`'s shell / escape / click-outside-
   to-close conventions; styles scoped locally rather than added to
@@ -70,6 +75,16 @@ at cookbook scale (tens to low hundreds of rows per user).
   - Index: `recipes_user_updated_idx (user_id, updated_at desc)`.
   - RLS: four self-* policies (select / insert / update / delete),
     same shape as `memories`.
+- `public.recipe_versions` table (see `supabase/schema.sql`):
+  - `id uuid`, `recipe_id uuid` (FK to `recipes`, on-delete cascade),
+    `user_id uuid`, `title`, `source`, `source_url`, `cooklang`,
+    `change_message text not null`, `created_at`.
+  - Indexes: `recipe_versions_recipe_created_idx (recipe_id,
+    created_at desc)` for the History panel; `recipe_versions_user_idx
+    (user_id)` for fast RLS evaluation.
+  - RLS: select + insert self-* policies only. Versions are
+    immutable - no update or delete policy. A cascade delete from
+    `recipes` is the only way a version row leaves the table.
 - Parsed shape (`src/lib/cooklang.ts::Recipe`): `{ metadata, steps,
   ingredients, cookware, timers }`. The DB stores raw source; the
   parsed shape is re-derived at read time.
@@ -92,6 +107,58 @@ at cookbook scale (tens to low hundreds of rows per user).
 - Tool contract follows the standard `ToolDef` (see `./tools.md`);
   mutating tools (`recipe_save / update / delete`) call
   `notifyCookbookChanged()` before returning.
+
+## Versioning
+
+Every create and every update writes one immutable snapshot into
+`recipe_versions` along with a required `change_message` describing
+the edit. Two writes per mutation, one transaction: both
+`recipe_create_with_version` and `recipe_update_with_version` are
+plpgsql RPCs, so either both rows land or neither does.
+
+The shape is **denormalized cache + immutable log**: the `recipes`
+row stays the canonical-current state, and `recipe_versions` is the
+audit trail. Hot reads (list pane, detail render, drawer tab) keep
+their one-table projection; the History panel is a cold path that
+fetches `recipe_versions` lazily on first detail-pane open.
+
+**Why both** (instead of a `current_version_id` pointer on
+`recipes`): every existing read path projects directly off `recipes`
+and `cookbook.recipes[]` is denormalized in the store too. A
+pointer would force a join on every read for no user-visible win,
+since History only matters when the user opens the panel. The
+duplicate bytes per snapshot are trivial at single-user cookbook
+scale (a typical recipe is 1-3 KiB; even a hundred edits is well
+under a megabyte).
+
+**Atomicity**: `recipe_update_with_version` takes a `for update`
+lock on the parent row before snapshotting, so concurrent writers
+(the user editing in the modal while the model also calls
+`recipe_update`) serialize. The first writer commits its snapshot;
+the second sees the post-first-commit state and snapshots that. No
+gaps in the history chain, no surprise overwrites.
+
+**No revert RPC**: revert is a normal update whose patch happens to
+come from a past version row. `revertRecipe` reads the snapshot,
+then calls `updateRecipe` with that content. The revert itself
+becomes a new version row, so a misclick is recoverable.
+
+**No history LLM tools** (deliberately): the model has no
+`recipe_versions_list` or `recipe_revert` tool, only the existing
+`recipe_save` / `recipe_update` / etc. History viewing and revert
+are user-directed UX flows; letting the model revert without an
+explicit user prompt is a footgun without a clear win. The model
+can already author whatever content it wants via `recipe_update`,
+and the user has revert in the modal. Revisit if a need surfaces.
+
+**Backfill**: existing recipes that predate the rollout get one
+"Initial version (backfilled)" row inserted at sync time. The seed
+is idempotent (`not exists` predicate), so re-running `mise run
+sync` is a no-op.
+
+**Retention**: unbounded by design. The cookbook is small and the
+user opted in to keeping every revision so the History panel reads
+as a complete diary.
 
 ## Interactions
 

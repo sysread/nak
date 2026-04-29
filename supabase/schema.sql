@@ -896,6 +896,230 @@ drop policy if exists "recipes are self-deletable" on public.recipes;
 create policy "recipes are self-deletable" on public.recipes
   for delete using (auth.uid() = user_id);
 
+-- recipe_versions --------------------------------------------------------
+--
+-- Immutable change log for `recipes`. Every create and every update
+-- writes one snapshot row here capturing the full editable state
+-- (title, cooklang, source, source_url) plus a required free-form
+-- `change_message` describing the edit. The most-recent version row
+-- always matches the corresponding `recipes` row by content; the
+-- `recipes` row stays the denormalized cache so hot reads (list,
+-- detail pane, drawer tab) remain one-table and one-index.
+--
+-- Why both: every read path today projects directly off `recipes` and
+-- `cookbook.recipes[]` is denormalized too. A `current_version_id`
+-- pointer would force a join on every read for no user-visible win,
+-- since history is a cold path opened only when the user clicks into
+-- it. Mirroring the current row into `recipe_versions` on every
+-- mutation costs O(recipe size) bytes per edit, which is trivial at
+-- single-user cookbook scale.
+--
+-- Retention is unbounded by design - the user opted in to keeping
+-- every revision so the History panel reads as a complete diary.
+--
+-- Versions are immutable: select / insert policies only. A cascade
+-- delete from `recipes` is the only way a row leaves this table.
+
+create table if not exists public.recipe_versions (
+  id uuid primary key default gen_random_uuid(),
+  recipe_id uuid not null references public.recipes(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  title text not null,
+  source text,
+  source_url text,
+  cooklang text not null,
+  change_message text not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists recipe_versions_recipe_created_idx
+  on public.recipe_versions (recipe_id, created_at desc);
+
+-- Defensive user-scoped index. Most queries filter by recipe_id (which
+-- is itself user-scoped via the FK), but RLS policy evaluation reads
+-- user_id directly and a dedicated index keeps that fast as the table
+-- grows.
+create index if not exists recipe_versions_user_idx
+  on public.recipe_versions (user_id);
+
+alter table public.recipe_versions enable row level security;
+
+drop policy if exists "recipe_versions are self-selectable"
+  on public.recipe_versions;
+create policy "recipe_versions are self-selectable"
+  on public.recipe_versions
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "recipe_versions are self-insertable"
+  on public.recipe_versions;
+create policy "recipe_versions are self-insertable"
+  on public.recipe_versions
+  for insert with check (auth.uid() = user_id);
+
+-- No update / delete policies - versions are immutable once written.
+-- Deletes flow only through the `on delete cascade` from `recipes`.
+
+-- Backfill: every recipe that predates the versioning rollout gets one
+-- "Initial version" row so the History panel is non-empty on day one.
+-- Idempotent via `not exists` - re-running `mise run sync` does not
+-- duplicate. Runs as the sync role, which bypasses RLS by design (same
+-- posture as the journal-spam-stats backfills).
+insert into public.recipe_versions
+  (recipe_id, user_id, title, source, source_url, cooklang,
+   change_message, created_at)
+select r.id, r.user_id, r.title, r.source, r.source_url, r.cooklang,
+       'Initial version (backfilled).', r.created_at
+  from public.recipes r
+ where not exists (
+   select 1 from public.recipe_versions v where v.recipe_id = r.id
+ );
+
+-- Recipe versioning RPCs -------------------------------------------------
+--
+-- `security invoker` so RLS still applies; the function bodies also
+-- assert `auth.uid()` defensively (same belt + suspenders pattern as
+-- the worker-lease RPCs above). Both RPCs run inside one transaction
+-- by virtue of being plpgsql functions, so the snapshot insert and
+-- the parent insert/update either both land or neither does.
+--
+-- The update RPC uses paired `p_set_<field> boolean` flags to
+-- distinguish "leave field alone" from "clear to null", since
+-- Postgres can't tell an absent argument from a NULL one in a scalar
+-- parameter list.
+
+drop function if exists public.recipe_create_with_version(
+  text, text, text, text, text);
+create or replace function public.recipe_create_with_version(
+  p_title text,
+  p_cooklang text,
+  p_source text,
+  p_source_url text,
+  p_change_message text
+) returns table (
+  id uuid,
+  title text,
+  source text,
+  source_url text,
+  cooklang text,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_recipe_id uuid;
+  v_now timestamptz := now();
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  if p_title is null or length(trim(p_title)) = 0 then
+    raise exception 'title is required';
+  end if;
+  if p_cooklang is null or length(p_cooklang) = 0 then
+    raise exception 'cooklang is required';
+  end if;
+  if p_change_message is null or length(trim(p_change_message)) = 0 then
+    raise exception 'change_message is required';
+  end if;
+
+  insert into public.recipes (user_id, title, source, source_url, cooklang,
+                              created_at, updated_at)
+    values (v_uid, p_title, p_source, p_source_url, p_cooklang, v_now, v_now)
+    returning recipes.id into v_recipe_id;
+
+  insert into public.recipe_versions
+    (recipe_id, user_id, title, source, source_url, cooklang,
+     change_message, created_at)
+    values (v_recipe_id, v_uid, p_title, p_source, p_source_url, p_cooklang,
+            p_change_message, v_now);
+
+  return query
+    select r.id, r.title, r.source, r.source_url, r.cooklang,
+           r.created_at, r.updated_at
+      from public.recipes r where r.id = v_recipe_id;
+end $$;
+
+drop function if exists public.recipe_update_with_version(
+  uuid, boolean, text, boolean, text, boolean, text, boolean, text, text);
+create or replace function public.recipe_update_with_version(
+  p_id uuid,
+  p_set_title boolean,
+  p_title text,
+  p_set_cooklang boolean,
+  p_cooklang text,
+  p_set_source boolean,
+  p_source text,
+  p_set_source_url boolean,
+  p_source_url text,
+  p_change_message text
+) returns table (
+  id uuid,
+  title text,
+  source text,
+  source_url text,
+  cooklang text,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_now timestamptz := now();
+  v_title text;
+  v_cooklang text;
+  v_source text;
+  v_source_url text;
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  if p_change_message is null or length(trim(p_change_message)) = 0 then
+    raise exception 'change_message is required';
+  end if;
+
+  -- Lock the row and read current state. `for update` prevents the
+  -- snapshot from going stale if two writers race (the user editing in
+  -- the modal while the model also calls recipe_update on the same
+  -- recipe). The first writer commits its snapshot; the second sees the
+  -- post-first-commit state and snapshots that, so history stays a
+  -- linear chain with no gaps.
+  select r.title, r.cooklang, r.source, r.source_url
+    into v_title, v_cooklang, v_source, v_source_url
+    from public.recipes r
+   where r.id = p_id and r.user_id = v_uid
+   for update;
+  if not found then raise exception 'recipe % not found', p_id; end if;
+
+  if p_set_title then
+    if p_title is null or length(trim(p_title)) = 0 then
+      raise exception 'title cannot be cleared';
+    end if;
+    v_title := p_title;
+  end if;
+  if p_set_cooklang then
+    if p_cooklang is null or length(p_cooklang) = 0 then
+      raise exception 'cooklang cannot be cleared';
+    end if;
+    v_cooklang := p_cooklang;
+  end if;
+  if p_set_source then v_source := p_source; end if;
+  if p_set_source_url then v_source_url := p_source_url; end if;
+
+  update public.recipes
+     set title = v_title, cooklang = v_cooklang,
+         source = v_source, source_url = v_source_url,
+         updated_at = v_now
+   where recipes.id = p_id;
+
+  insert into public.recipe_versions
+    (recipe_id, user_id, title, source, source_url, cooklang,
+     change_message, created_at)
+    values (p_id, v_uid, v_title, v_source, v_source_url, v_cooklang,
+            p_change_message, v_now);
+
+  return query
+    select r.id, r.title, r.source, r.source_url, r.cooklang,
+           r.created_at, r.updated_at
+      from public.recipes r where r.id = p_id;
+end $$;
+
 -- worker_leases ----------------------------------------------------------
 --
 -- Singleton per user per worker kind: at most one worker of a given kind

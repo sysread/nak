@@ -150,6 +150,39 @@ clears it automatically, and nothing is saved to the server.
 - **Delete** from the detail pane. Confirmation is required and the
   delete is permanent — Nak doesn't keep a trash bin for recipes.
 
+Every save (create or edit) prompts you for a one-line **What
+changed?** note. It's required and lands in the recipe's history so
+you can scan past edits by intent rather than by content. Examples
+of useful messages: `Imported from NYT Cooking`, `Doubled the
+recipe`, `Fixed step 3 typo`, `Removed tahini per pantry note`.
+
+## History
+
+Every save creates a version. Each version is an immutable snapshot
+of the title, source, source URL, and Cooklang at the moment of the
+save, plus the change message you wrote. Versions are kept
+indefinitely - the cookbook is small and your edit log is the point.
+
+Open the **History** panel at the bottom of any recipe's detail
+pane to see the full edit log, newest first. Each row shows when
+the version was saved and the change message. The latest row is
+labelled **current** - what you're looking at on the page.
+
+Click any past row to view that snapshot read-only. The recipe
+above swaps to the version's content, and a banner at the top tells
+you which version you're viewing. Two controls appear:
+
+- **Back to current** returns you to the live recipe.
+- **Revert to this version** rolls the recipe back: the live state
+  becomes whatever the snapshot held. The revert itself is recorded
+  as a new version (with its own change message), so a misclick is
+  recoverable - just revert again to the version you came from.
+
+Nak (the model) creates versions too. When you ask the model to
+edit a recipe, it provides its own change message describing what
+it changed and why; that message appears in the History panel
+alongside your hand-written ones.
+
 ## Copying for another app
 
 Two copy buttons on every detail pane:

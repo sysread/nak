@@ -32,6 +32,7 @@
     MAX_RECIPE_COOKLANG_CHARS,
     MAX_RECIPE_TITLE_CHARS,
   } from '$lib/cooklang';
+  import type { RecipeVersion } from '$lib/supabase';
 
   interface Props {
     onClose: () => void;
@@ -70,9 +71,24 @@
   let draftSource = $state('');
   let draftSourceUrl = $state('');
   let draftCooklang = $state('');
+  // Required "What changed?" note. Lands on a new row in
+  // `recipe_versions` so the user (and the LLM) can scan past edits
+  // by intent in the History panel. Validated non-empty before save.
+  let draftChangeMessage = $state('');
   let editError = $state<string | null>(null);
   let saving = $state(false);
   let copyFeedback = $state<string | null>(null);
+
+  // --- history state (lazy per detail pane) ---
+  // null until the first listRecipeVersions resolves; an empty array
+  // afterwards if the recipe somehow has no versions (shouldn't happen
+  // post-rollout, but we render a graceful empty state either way).
+  let versions = $state<RecipeVersion[] | null>(null);
+  let versionsLoading = $state(false);
+  let versionsError = $state<string | null>(null);
+  // null = viewing the live recipe; non-null = showing the snapshot for
+  // that version id read-only with revert / back-to-current actions.
+  let viewingVersionId = $state<string | null>(null);
 
   // Computed preview HTML for the edit pane. We debounce via derived —
   // Svelte only reruns when draftCooklang actually changes — so typing
@@ -83,6 +99,42 @@
   async function refresh(): Promise<void> {
     if (!app.supabase) return;
     await loadRecipes(app.supabase);
+  }
+
+  // Lazy: only load history when the user actually opens a detail
+  // pane. `cookbook.recipes[]` deliberately stays free of versions so
+  // the bulk recipe-list fetch keeps its slim shape.
+  async function loadVersions(recipeId: string): Promise<void> {
+    if (!app.supabase) return;
+    versionsLoading = true;
+    versionsError = null;
+    try {
+      versions = await app.supabase.listRecipeVersions(recipeId);
+    } catch (err) {
+      versionsError = err instanceof Error ? err.message : String(err);
+    } finally {
+      versionsLoading = false;
+    }
+  }
+
+  function clearVersionState(): void {
+    versions = null;
+    versionsError = null;
+    viewingVersionId = null;
+  }
+
+  // Compact human-readable timestamp for History rows. Locale-aware
+  // and falls back to the raw string if Date parsing fails.
+  function formatVersionDate(iso: string): string {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   }
 
   // URL-driven sync. When `route.recipe` changes externally (browser
@@ -99,10 +151,13 @@
       activeId = null;
       editError = null;
       copyFeedback = null;
+      clearVersionState();
     } else {
       activeId = id;
       pane = 'detail';
       copyFeedback = null;
+      clearVersionState();
+      void loadVersions(id);
     }
   });
 
@@ -112,6 +167,7 @@
     activeId = null;
     editError = null;
     copyFeedback = null;
+    clearVersionState();
     navigate({ recipe: null });
   }
 
@@ -119,6 +175,8 @@
     activeId = id;
     pane = 'detail';
     copyFeedback = null;
+    clearVersionState();
+    void loadVersions(id);
     navigate({ recipe: id });
   }
 
@@ -132,6 +190,9 @@
     // against "learn this DSL first" is hostile to the user journey
     // where they're typing a recipe in from a cookbook.
     draftCooklang = '>> servings: 4\n\n';
+    // Sensible default for the initial version - the user can replace
+    // it but doesn't have to invent something on the very first save.
+    draftChangeMessage = 'Created recipe.';
     editError = null;
     pane = 'edit';
   }
@@ -143,6 +204,11 @@
     draftSource = r.source ?? '';
     draftSourceUrl = r.source_url ?? '';
     draftCooklang = r.cooklang;
+    // Force the user to type a fresh description for this edit; we
+    // intentionally don't carry the previous message forward, since
+    // the message describes what's about to change, not the prior
+    // state.
+    draftChangeMessage = '';
     editError = null;
     pane = 'edit';
   }
@@ -152,6 +218,7 @@
     if (!app.supabase) return;
     const title = draftTitle.trim();
     const cooklang = draftCooklang;
+    const changeMessage = draftChangeMessage.trim();
     if (title.length === 0) {
       editError = 'Title is required.';
       return;
@@ -168,6 +235,10 @@
       editError = `Recipe source exceeds ${MAX_RECIPE_COOKLANG_CHARS}-char limit.`;
       return;
     }
+    if (changeMessage.length === 0) {
+      editError = 'Describe what changed before saving.';
+      return;
+    }
     saving = true;
     editError = null;
     try {
@@ -175,22 +246,31 @@
       const sourceUrl =
         draftSourceUrl.trim().length > 0 ? draftSourceUrl.trim() : null;
       if (activeId) {
-        await app.supabase.updateRecipe(activeId, {
-          title,
-          cooklang,
-          source,
-          source_url: sourceUrl,
-        });
+        await app.supabase.updateRecipe(
+          activeId,
+          {
+            title,
+            cooklang,
+            source,
+            source_url: sourceUrl,
+          },
+          changeMessage
+        );
       } else {
         const row = await app.supabase.createRecipe(
           title,
           cooklang,
           source,
-          sourceUrl
+          sourceUrl,
+          changeMessage
         );
         activeId = row.id;
       }
       await refresh();
+      // Reload the History panel for the recipe we just touched - the
+      // new version is the latest entry, and we want it visible the
+      // moment the user lands back on the detail pane.
+      if (activeId) await loadVersions(activeId);
       pane = 'detail';
       // Create flow lands us on a recipe id that wasn't in the URL;
       // update flow keeps the same id. Either way we reconcile the
@@ -286,6 +366,59 @@
     const r = activeRecipe;
     return r ? cooklangToHtml(r.cooklang) : '';
   });
+
+  // The version row currently being viewed read-only, or null when the
+  // detail pane is showing the live recipe.
+  const viewedVersion = $derived.by<RecipeVersion | null>(() => {
+    if (!viewingVersionId || !versions) return null;
+    return versions.find((v) => v.id === viewingVersionId) ?? null;
+  });
+
+  // Render-time HTML for the read-only past version. Goes through the
+  // exact same `cooklangToHtml` as the live recipe so what the user
+  // saw when they saved that version is what they see when they
+  // browse back to it.
+  const viewedHtml = $derived(
+    viewedVersion ? cooklangToHtml(viewedVersion.cooklang) : ''
+  );
+
+  function onViewVersion(versionId: string): void {
+    viewingVersionId = versionId;
+    copyFeedback = null;
+  }
+
+  function onBackToCurrent(): void {
+    viewingVersionId = null;
+  }
+
+  // Revert: copy the chosen version's content into a new edit. We use
+  // window.prompt for the change message to mirror the existing
+  // window.confirm pattern on Delete - both are interrupting flows the
+  // user explicitly initiated, and a full inline form for a one-line
+  // note would be overkill. The default text is a sensible "reverted
+  // to <date>" string so the user can hit Enter and move on.
+  async function onRevert(v: RecipeVersion): Promise<void> {
+    if (!app.supabase || !activeId) return;
+    const suggested = `Reverted to version from ${formatVersionDate(v.created_at)}.`;
+    const msg = window.prompt(
+      'Describe this revert (required):',
+      suggested
+    );
+    if (msg === null) return; // user cancelled
+    const trimmed = msg.trim();
+    if (trimmed.length === 0) {
+      versionsError = 'A change message is required to revert.';
+      return;
+    }
+    try {
+      await app.supabase.revertRecipe(activeId, v.id, trimmed);
+      viewingVersionId = null;
+      await refresh();
+      await loadVersions(activeId);
+    } catch (err) {
+      versionsError = err instanceof Error ? err.message : String(err);
+    }
+  }
 
   // Click an instruction step to move a theme-tinted highlight onto
   // it — a light "I'm on this step" marker for the reader cooking
@@ -401,10 +534,23 @@
       {:else if pane === 'detail'}
         {#if activeRecipe}
           {@const r = activeRecipe}
+          {@const v = viewedVersion}
           <div class="cookbook-detail">
             <div class="cookbook-detail-header">
-              <h2>{r!.title}</h2>
-              {#if r!.source || r!.source_url}
+              <h2>{v ? v.title : r!.title}</h2>
+              {#if v}
+                <!-- Read-only past-version view. Title above swaps to
+                     the snapshot's title; this banner says when and
+                     why, with controls to bail back to the live recipe
+                     or roll forward into a revert. The history list
+                     below the body stays visible so the user can
+                     hop between snapshots without leaving the pane. -->
+                <p class="subtle cookbook-version-banner-meta">
+                  Viewing version from
+                  <strong>{formatVersionDate(v.created_at)}</strong> —
+                  <em>{v.change_message}</em>
+                </p>
+              {:else if r!.source || r!.source_url}
                 <p class="subtle">
                   {#if r!.source}{r!.source}{/if}
                   {#if r!.source && r!.source_url} — {/if}
@@ -416,6 +562,27 @@
                 </p>
               {/if}
             </div>
+            {#if v}
+              <!-- Version-mode actions. Distinct from the live action
+                   bar below: read-only viewing has only "back to
+                   current" and "revert"; copy / edit / delete only
+                   make sense on the live recipe. -->
+              <div class="cookbook-actions">
+                <button
+                  type="button"
+                  class="secondary"
+                  onclick={onBackToCurrent}
+                >← Back to current</button>
+                <button
+                  type="button"
+                  class="primary"
+                  onclick={() => onRevert(v)}
+                >Revert to this version</button>
+              </div>
+              <div class="cookbook-render">
+                {@html viewedHtml}
+              </div>
+            {:else}
             <!-- Icon-only action bar. Each button carries a `title` +
                  `aria-label` so the purpose stays discoverable without
                  the visual weight of text labels — the four actions
@@ -506,6 +673,50 @@
             <div class="cookbook-render" onclick={onRenderClick}>
               {@html detailHtml}
             </div>
+            {/if}
+            <!-- History panel. Lazy-loaded on detail open; collapsed by
+                 default so the recipe stays the focal point. Clicking a
+                 row swaps the body above into the read-only past
+                 version, with revert / back-to-current controls in the
+                 banner. The "current state" header at the top of the
+                 list is non-interactive and just anchors the user when
+                 they're scanning back through edits. -->
+            <details class="cookbook-history" open={viewingVersionId !== null}>
+              <summary>
+                History {versions ? `(${versions.length})` : ''}
+              </summary>
+              {#if versionsLoading}
+                <p class="subtle">Loading history…</p>
+              {:else if versionsError}
+                <p class="error">{versionsError}</p>
+              {:else if versions && versions.length > 0}
+                <ul class="cookbook-history-list">
+                  {#each versions as ver, i (ver.id)}
+                    {@const isCurrent = i === 0}
+                    <li>
+                      <button
+                        type="button"
+                        class="cookbook-history-row"
+                        class:is-active={!isCurrent && viewingVersionId === ver.id}
+                        class:is-current={isCurrent && viewingVersionId === null}
+                        onclick={() =>
+                          isCurrent ? onBackToCurrent() : onViewVersion(ver.id)}
+                      >
+                        <span class="cookbook-history-date">
+                          {formatVersionDate(ver.created_at)}
+                          {#if isCurrent}<span class="cookbook-history-badge">current</span>{/if}
+                        </span>
+                        <span class="cookbook-history-message">
+                          {ver.change_message}
+                        </span>
+                      </button>
+                    </li>
+                  {/each}
+                </ul>
+              {:else if versions}
+                <p class="subtle">No history yet.</p>
+              {/if}
+            </details>
           </div>
         {:else}
           <p class="subtle">Recipe not found.</p>
@@ -541,6 +752,20 @@
               maxlength={2000}
               placeholder="https://…"
             />
+          </div>
+          <div class="form-row">
+            <label for="cb-change-message">What changed?</label>
+            <input
+              id="cb-change-message"
+              type="text"
+              bind:value={draftChangeMessage}
+              maxlength={500}
+              placeholder="e.g. Doubled the recipe; fixed step 3"
+              required
+            />
+            <p class="subtle cookbook-change-message-hint">
+              A one-line note for this recipe's history. Required.
+            </p>
           </div>
           <div class="cookbook-edit-panes">
             <div class="form-row cookbook-edit-source-col">
@@ -968,5 +1193,98 @@
     max-height: 320px;
     overflow: auto;
     background: var(--bg);
+  }
+  .cookbook-change-message-hint {
+    font-size: 0.75rem;
+    margin: 0.25rem 0 0;
+  }
+  /* Version banner sits in the detail-header slot when viewing a past
+     snapshot. Renders as a muted line under the title rather than a
+     full alert pill - the action bar below is the load-bearing
+     affordance and we don't want to compete with it visually. */
+  .cookbook-version-banner-meta {
+    margin: 0 0 0.75rem;
+    font-size: 0.85rem;
+  }
+  /* History panel. Lives at the bottom of the detail pane, collapsed
+     by default. Border-top reads as "the recipe ends here, history
+     starts below"; the summary stays muted so the recipe content
+     keeps visual priority. */
+  .cookbook-history {
+    margin-top: 1.25rem;
+    border-top: 1px solid var(--border);
+    padding-top: 0.75rem;
+  }
+  .cookbook-history > summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--muted);
+    user-select: none;
+    padding: 0.25rem 0;
+  }
+  .cookbook-history > summary:hover {
+    color: var(--text);
+  }
+  .cookbook-history-list {
+    list-style: none;
+    padding: 0;
+    margin: 0.5rem 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .cookbook-history-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.15rem;
+    width: 100%;
+    padding: 0.5rem 0.6rem;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .cookbook-history-row:hover {
+    background: var(--bg-2);
+    border-color: var(--border);
+  }
+  /* Currently-viewed past version: accent-weak fill + accent border so
+     it's obvious which row the body above is mirroring. */
+  .cookbook-history-row.is-active {
+    background: var(--accent-weak);
+    border-color: var(--accent);
+  }
+  /* The latest row when no past version is being viewed - subtle tint
+     that signals "this is what you're looking at" without competing
+     with the detail body. */
+  .cookbook-history-row.is-current {
+    background: var(--bg-2);
+    border-color: var(--border);
+  }
+  .cookbook-history-date {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+  .cookbook-history-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    background: var(--accent-weak);
+    color: var(--text);
+  }
+  .cookbook-history-message {
+    color: var(--text);
   }
 </style>

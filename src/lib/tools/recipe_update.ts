@@ -24,8 +24,11 @@ export const recipeUpdate: ToolDef = {
     'the ingredients list, not in the numbered instructions); a dash-only ' +
     'line (e.g. `--` alone) resets the section so subsequent prose renders ' +
     'as flat numbered instructions. Long steps split across lines by ' +
-    'prefixing continuations with `> `. Use recipe_list first to find ids. ' +
-    'Returns the updated row.',
+    'prefixing continuations with `> `. `change_message` is REQUIRED and ' +
+    "appears in the recipe's history panel as the description of this " +
+    'edit (e.g. "Fixed a typo in step 3", "Doubled the recipe", ' +
+    "\"Added the user's substitution for tahini\"). Use recipe_list first " +
+    'to find ids. Returns the updated row.',
   shortDescription: 'edit a saved recipe',
   parameters: {
     type: 'object',
@@ -46,8 +49,18 @@ export const recipeUpdate: ToolDef = {
         maxLength: 2000,
         description: 'URL provenance, or null to clear.',
       },
+      change_message: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 500,
+        description:
+          'One-line note describing what changed and why. Stored in the ' +
+          "recipe's version history and shown to the user in the History " +
+          'panel. Examples: "Fixed servings metadata", "Removed tahini ' +
+          'per user dietary note", "Cleaned up imported prose".',
+      },
     },
-    required: ['id'],
+    required: ['id', 'change_message'],
     additionalProperties: false,
   },
   async execute(args, ctx) {
@@ -85,7 +98,12 @@ export const recipeUpdate: ToolDef = {
         'provide at least one of title, cooklang, source, or source_url'
       );
     }
-    const row = await ctx.supabase.updateRecipe(id, patch);
+    const changeMessage =
+      typeof args.change_message === 'string' ? args.change_message.trim() : '';
+    if (!changeMessage) {
+      throw new Error('change_message is required');
+    }
+    const row = await ctx.supabase.updateRecipe(id, patch, changeMessage);
     notifyCookbookChanged();
     return row;
   },
