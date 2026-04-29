@@ -3807,23 +3807,23 @@
           </svg>
         </button>
         <div class="title-wrap">
-          {#if !currentThread}
-            <div class="subtle">Start a new conversation</div>
-          {:else if renaming}
-            <input
-              class="title-input"
-              bind:this={titleInputEl}
-              bind:value={renameBuffer}
-              onkeydown={onTitleKey}
-              onblur={commitRename}
-              maxlength="80"
-            />
-          {:else}
-            <button
-              class="title-btn"
-              title="Click to rename"
-              onclick={startRename}
-            >{currentThread.title || 'Untitled'}</button>
+          {#if currentThread}
+            {#if renaming}
+              <input
+                class="title-input"
+                bind:this={titleInputEl}
+                bind:value={renameBuffer}
+                onkeydown={onTitleKey}
+                onblur={commitRename}
+                maxlength="80"
+              />
+            {:else}
+              <button
+                class="title-btn"
+                title="Click to rename"
+                onclick={startRename}
+              >{currentThread.title || 'Untitled'}</button>
+            {/if}
           {/if}
         </div>
         <!-- Logs drawer toggle. Document-glyph icon so the button reads
