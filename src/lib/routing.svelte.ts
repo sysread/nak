@@ -4,10 +4,14 @@
  *
  *   cid     = active thread id
  *   drawer  = 'chats' | 'recipes' | 'journal'  (sidebar tab; absent = 'chats')
- *   modal   = 'settings'|'cookbook'|'help'|'memories'|'journal'
- *   recipe  = recipe id when modal=cookbook
+ *   modal   = 'settings' | 'help' | 'memories' | 'samskara'  (utility overlays)
+ *   recipe  = recipe id; selecting one switches the main panel to the recipe detail
  *   doc     = docs/user/ path when modal=help
- *   journal_date = YYYY-MM-DD focused in the journal modal
+ *   journal_date = YYYY-MM-DD; selecting one switches the main panel to that day
+ *
+ * recipe and journal_date are primary content selectors, not sub-params of modal.
+ * Recipes and journal entries open inline in the main panel (not as modal overlays).
+ * Settings, Help, Memories, and Samskara remain as modal overlays.
  *
  * The deploy target is GitHub Pages with no SPA fallback, so path-style
  * routes (/settings, /recipes/<id>) would 404 on refresh. Every routed
@@ -33,13 +37,7 @@
  * owns.
  */
 
-export type Modal =
-  | 'settings'
-  | 'cookbook'
-  | 'help'
-  | 'memories'
-  | 'samskara'
-  | 'journal';
+export type Modal = 'settings' | 'help' | 'memories' | 'samskara';
 export type DrawerTab = 'chats' | 'recipes' | 'journal';
 
 export interface Route {
@@ -49,8 +47,8 @@ export interface Route {
   recipe: string | null;
   doc: string | null;
   /**
-   * YYYY-MM-DD focused in the Journal daily view when
-   * `modal === 'journal'`. Absent on the list view.
+   * YYYY-MM-DD for the focused Journal day. Selecting a date switches
+   * the main panel to that day's view. Absent defaults to today.
    */
   journal_date: string | null;
 }
@@ -65,11 +63,9 @@ const ROUTED_KEYS = [
 ] as const;
 const MODAL_VALUES: readonly Modal[] = [
   'settings',
-  'cookbook',
   'help',
   'memories',
   'samskara',
-  'journal',
 ];
 const DRAWER_VALUES: readonly DrawerTab[] = ['chats', 'recipes', 'journal'];
 

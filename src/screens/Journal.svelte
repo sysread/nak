@@ -1,20 +1,17 @@
 <script lang="ts">
   /*
-   * Journal modal. Daily-view-only surface - the drawer's day index
-   * is the equivalent of a list view, so the modal itself just shows
-   * one day at a time and lets the user step day-by-day from there.
+   * Journal panel - inline daily-view surface. The sidebar JournalList
+   * component is the day-index browse surface; clicking a date there
+   * sets route.journal_date and mounts this panel on that day's entries.
    *
-   * route.journal_date carries the focused day. When absent (the
-   * drawer footer's "Open journal" button passes nothing) the modal
-   * defaults to today via the local-timezone helper. Closing the
-   * modal returns the user to whatever drawer tab they came from -
-   * there is no in-modal back-to-list affordance because there is
-   * no list to go back to.
+   * route.journal_date carries the focused day. When absent the panel
+   * defaults to today via the local-timezone helper. Date navigation
+   * (prev/next/today buttons) lives in Chat.svelte's top-bar and calls
+   * navigate({ journal_date: ... }) directly using shiftDay from
+   * $lib/journal-day.
    *
-   * Chrome mirrors Memories.svelte - single scrolling column on top of
-   * a shared backdrop. CSS classes are parallel (`.journal-shell`
-   * etc.) so the two modals stay visually lockstep without sharing
-   * styles.
+   * Compose mode (new entry / edit entry) is entirely panel-local state
+   * and is not routed - it's a transient form state, not bookmarkable.
    */
   import { app } from '$lib/state.svelte';
   import { route, navigate } from '$lib/routing.svelte';
@@ -29,28 +26,27 @@
     acceptRegeneratedEntry,
   } from '$lib/journal-store.svelte';
   import { downloadEntryMarkdown } from '$lib/journal-export';
-  import { todayInZone } from '$lib/journal-day';
+  import { todayInZone, formatDateFull } from '$lib/journal-day';
   import { onJournalChange } from '$lib/journal-events';
   import Markdown from '../components/Markdown.svelte';
   import type { JournalEntry } from '$lib/supabase';
-
-  interface Props {
-    onClose: () => void;
-  }
-  let { onClose }: Props = $props();
 
   // Cap parallels MAX_JOURNAL_CONTENT_CHARS in
   // src/lib/agents/journal/types.ts - a user entry and an agent entry
   // live in the same column, so they should respect the same ceiling.
   const MAX_ENTRY_CHARS = 16000;
+  interface Props {
+    // When Chat.svelte's top-bar "new entry" button flips this to true,
+    // the panel opens the compose form and resets it.
+    triggerNewEntry?: boolean;
+  }
+  let { triggerNewEntry = $bindable(false) }: Props = $props();
+
   const MAX_MOOD_CHARS = 80;
   const MAX_TOPIC_CHARS = 60;
   const MAX_PERSON_CHARS = 60;
 
   const today = $derived(todayInZone(app.journalTimezone || null));
-  // Default to today when the route doesn't specify a date - the
-  // drawer's "Open journal" footer button intentionally passes no
-  // journal_date so the modal lands on the user's most-current day.
   const focusedDate = $derived(route.journal_date ?? today);
 
   let deleteTargetId = $state<string | null>(null);
@@ -181,29 +177,19 @@
 
   function openConversation(threadId: string | null): void {
     if (!threadId) return;
-    navigate({ cid: threadId, modal: null, journal_date: null });
+    // Switch to the Chats tab and open this thread. Clearing journal_date
+    // removes the journal param from the URL so the state reads cleanly.
+    navigate({ cid: threadId, drawer: null, journal_date: null });
   }
 
-  function goToDay(date: string): void {
-    navigate({ journal_date: date });
-  }
-
-  // Add/subtract one calendar day to the YYYY-MM-DD key. Uses UTC math
-  // on purpose - we're shifting an already-bucketed date key, not
-  // translating a wall-clock moment, so zone-agnostic stepping is
-  // correct.
-  function shiftDay(ymd: string, delta: number): string {
-    const [y, m, d] = ymd.split('-').map((n) => Number.parseInt(n, 10));
-    if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
-      return ymd;
+  // Chat.svelte's top-bar "new entry" button sets triggerNewEntry = true.
+  // The $bindable prop lets this effect reset it (two-way).
+  $effect(() => {
+    if (triggerNewEntry) {
+      startCompose(null);
+      triggerNewEntry = false;
     }
-    const utc = new Date(Date.UTC(y, m - 1, d));
-    utc.setUTCDate(utc.getUTCDate() + delta);
-    const yy = utc.getUTCFullYear();
-    const mm = String(utc.getUTCMonth() + 1).padStart(2, '0');
-    const dd = String(utc.getUTCDate()).padStart(2, '0');
-    return `${yy}-${mm}-${dd}`;
-  }
+  });
 
   function startCompose(entry: JournalEntry | null): void {
     if (entry) {
@@ -432,86 +418,16 @@
     }
   }
 
-  // Compact ISO-flavoured form ("SUN 2026-04-19") for the daily-view
-  // title. Short weekday + ISO date keeps the title to a single line
-  // on any reasonable phone width and matches the daynav button row.
-  // Uses UTC interpretation because the key is already a zone-agnostic
-  // day bucket; letting the local zone nudge it would flip the label
-  // for dates straddling midnight.
-  function formatDateCompact(ymd: string): string {
-    const [y, m, d] = ymd.split('-').map((n) => Number.parseInt(n, 10));
-    if (!Number.isFinite(y)) return ymd;
-    const dt = new Date(Date.UTC(y, m - 1, d));
-    try {
-      const weekday = new Intl.DateTimeFormat(undefined, {
-        weekday: 'short',
-        timeZone: 'UTC',
-      }).format(dt);
-      return `${weekday.toUpperCase()} ${ymd}`;
-    } catch {
-      return ymd;
-    }
-  }
 </script>
 
-<!--
-  Escape and click-outside both dismiss. The outer `.center` is the
-  backdrop — only close when the target IS the backdrop so clicks
-  inside `.journal-shell` don't spuriously close. Same pattern
-  as Memories / Settings / Help.
--->
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
-
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<div
-  class="center journal-backdrop"
-  onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}
->
-  <div
-    class="journal-shell"
-    role="dialog"
-    aria-modal="true"
-    aria-label="Journal"
-  >
-    <button
-      type="button"
-      class="journal-close"
-      onclick={onClose}
-      aria-label="Close journal"
-      title="Close"
-    >×</button>
-
-    <header class="journal-header">
-      <div class="journal-daynav">
-        <button
-          type="button"
-          class="secondary"
-          onclick={() => goToDay(shiftDay(focusedDate, -1))}
-          aria-label="Previous day"
-          title="Previous day"
-        >‹</button>
-        <button
-          type="button"
-          class="secondary"
-          onclick={() => goToDay(shiftDay(focusedDate, 1))}
-          aria-label="Next day"
-          title="Next day"
-          disabled={focusedDate >= today}
-        >›</button>
-        {#if focusedDate !== today}
-          <button
-            type="button"
-            class="secondary"
-            onclick={() => goToDay(today)}
-            title="Jump to today's entry"
-          >Today</button>
-        {/if}
-      </div>
-      <h1 class="journal-title daily-title">{formatDateCompact(focusedDate)}</h1>
-    </header>
-
-    <section class="journal-body">
+<!-- Journal panel body. Date navigation lives in Chat.svelte's top-bar
+     (prev/next/today buttons calling navigate({ journal_date })). This
+     component owns the date heading and the entries for the focused day,
+     plus the compose mode for writing new entries. -->
+<section class="journal-panel journal-body">
+  <!-- Date heading. Sits at the top of the scrollable body so the user
+       always knows which day they're reading, independent of the top-bar. -->
+  <h2 class="journal-day-heading">{formatDateFull(focusedDate)}</h2>
       {#if journal.error}<p class="error">{journal.error}</p>{/if}
       <!--
           Compound day view. The dayEntriesOrdered list is already
@@ -547,30 +463,15 @@
 
         {#if dayEntriesOrdered.length === 0 && composeMode === 'none'}
           <p class="subtle journal-empty-day-text">
-            Nothing saved for this day. Use <em>Write an entry</em> below
+            Nothing saved for this day. Use the new-entry button above
             to start one, or keep chatting - the automatic journaler
             will fill in a page once it has something worth writing.
           </p>
         {/if}
 
-        <!--
-          Footer "Write an entry" button. Only when no compose form is
-          already on screen. Always available regardless of whether the
-          day already has user entries; the schema allows multiple per
-          day. The button intentionally sits below the entries so its
-          presence doesn't compete visually with reading the day.
-        -->
-        {#if composeMode === 'none'}
-        <div class="journal-write-action">
-          <button
-            type="button"
-            onclick={() => startCompose(null)}
-          >Write an entry</button>
-        </div>
-      {/if}
-    </section>
-  </div>
-</div>
+      <!-- "Write an entry" button removed: the top-bar new-entry button
+           is the primary compose affordance now. -->
+</section>
 
 <!--
   Snippets for the compound day view. Pulled out as top-level
@@ -1003,92 +904,35 @@
     gap: 0.3rem;
   }
 
-  .journal-write-action {
-    margin-top: 1.25rem;
-    display: flex;
-    justify-content: center;
-  }
-
   .journal-empty-day-text {
     margin: 1rem 0;
   }
 
-  /* Parallel to .memories-shell / .help-shell / .settings-shell. */
-  .journal-shell {
-    position: relative;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    box-shadow: var(--shadow-modal);
-    width: 100%;
-    max-width: 52rem;
-    display: grid;
-    grid-template-rows: auto 1fr;
-    height: min(44rem, 88vh);
-    overflow: hidden;
-  }
-
-  .journal-close {
-    position: absolute;
-    top: 0.5rem;
-    right: 0.5rem;
-    z-index: 2;
-    width: 2rem;
-    height: 2rem;
-    padding: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.4rem;
-    line-height: 1;
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 50%;
-    cursor: pointer;
-  }
-
-  .journal-close:hover {
-    background: var(--bg-2);
-  }
-
-  .journal-header {
-    padding: 1rem 1.25rem 0.75rem;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-2);
-    padding-right: 3rem;
-  }
-
-  .journal-title {
+  /* Date heading at the top of the scrollable body. Centered and sized
+     to read as a clear section title above the day's entries without
+     competing with the entry text. */
+  .journal-day-heading {
+    margin: 0 0 1.25rem;
     font-size: 1.1rem;
-    margin: 0 0 0.25rem;
-  }
-
-  .daily-title {
-    /* Sits on its own row below .journal-daynav (see template). The
-       ISO-flavoured compact form (formatDateCompact - "SUN 2026-04-19")
-       lets the title stay a single line on a phone, and stepping the
-       size down from the journal-list h1 keeps the header chrome
-       visually quiet now that it spans two rows. text-align is offset
-       slightly left of viewport center on mobile because the header
-       carries `padding-right: 3rem` to clear the absolute-positioned
-       close button in the top-right; the offset is a fraction of an em
-       and reads as centered for a 14-character string. */
+    font-weight: 700;
+    color: var(--text);
     text-align: center;
-    margin: 0.4rem 0 0;
-    font-size: 0.95rem;
-    font-weight: 600;
+    letter-spacing: 0.01em;
   }
 
-  .journal-daynav {
-    display: flex;
-    gap: 0.4rem;
-    align-items: center;
+  /* Inline journal panel. Fills the main content column as a flex
+     item; .chat (the parent) is already flex-column. */
+  .journal-panel {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    background: var(--surface);
   }
 
   .journal-body {
     padding: 1rem 1.25rem;
     overflow-y: auto;
+    height: 100%;
     min-width: 0;
   }
 
@@ -1117,13 +961,13 @@
 
   .journal-card-body {
     font-size: 0.95rem;
+    /* 1.75 = ~25% above the default 1.4 body line-height. Journal prose
+       is longer-form than chat messages; the extra leading makes multi-
+       paragraph entries easier to scan without feeling cramped. */
+    line-height: 1.75;
     color: var(--text);
     /* Mirror .msg's wrapping rules so the rendered markdown wraps to
-       the card's width rather than running off the right edge.
-       Without these, prose with em-dash compounds ("anxiety-secondary")
-       or long hashes/URLs renders as a single overflowing line - the
-       Markdown component itself doesn't carry these styles, it relies
-       on the container. */
+       the card's width rather than running off the right edge. */
     overflow-wrap: anywhere;
     word-break: break-word;
     min-width: 0;
@@ -1259,18 +1103,7 @@
     flex-wrap: wrap;
   }
 
-  /*
-   * Small-screen inner padding. The shared `.center`-modal full-bleed
-   * rules (styles.css, bottom) take the shell edge-to-edge on mobile;
-   * here we tighten the journal's own header / body / card paddings so
-   * the gained width reaches the entry text rather than feeding a
-   * widened inner gutter.
-   */
   @media (max-width: 720px) {
-    .journal-header {
-      padding: 0.75rem 0.75rem 0.6rem;
-      padding-right: 3rem;
-    }
     .journal-body {
       padding: 0.75rem;
     }

@@ -1,21 +1,23 @@
 <script lang="ts">
   /*
-   * Cookbook modal — full-screen recipe manager. Three panes that share
-   * one shell:
+   * Recipe panel - inline recipe viewer. Two panes that share one shell:
    *
-   *   list    — search + table of recipes + "+ New" button.
-   *   detail  — rendered Cooklang output + Copy plain text + Edit + Delete.
-   *   edit    — title / source / source_url / cooklang textarea form.
+   *   list   — empty/selection state shown when no recipe is selected.
+   *            The sidebar RecipeList component is the actual browse
+   *            surface; clicking a recipe there sets route.recipe and
+   *            mounts this panel on the detail pane.
+   *   detail — rendered Cooklang output + Copy + Edit + Delete.
+   *   edit   — title / source / source_url / cooklang textarea form.
    *
-   * State flow is deliberately imperative: a pane switch is a local
-   * `$state` change, not routing. The modal is modal — it owns its
-   * own focus and escape handling — and nothing outside needs to know
-   * which pane we're on.
+   * Pane state is local ($state), not routed. route.recipe is the only
+   * routed key: null means "nothing selected" (list/empty pane), non-null
+   * means "show this recipe's detail". Navigating away from a recipe
+   * calls navigate({ recipe: null }) which lands back on the empty pane.
    *
    * Data source is `cookbook.recipes` from the cookbook store (see
    * `src/lib/cookbook-store.svelte.ts`). We load on mount and listen
    * for `COOKBOOK_CHANGE_EVENT` so an LLM `recipe_save` call mid-
-   * session refreshes the list automatically.
+   * session refreshes the detail automatically.
    */
   import { onMount, onDestroy } from 'svelte';
   import { app } from '$lib/state.svelte';
@@ -36,52 +38,17 @@
   import RecipeRating from '../components/RecipeRating.svelte';
 
   interface Props {
-    onClose: () => void;
+    // When Chat.svelte's top-bar "new recipe" button flips this to true,
+    // the panel opens the edit form for a new recipe and resets it.
+    triggerNew?: boolean;
   }
-  let { onClose }: Props = $props();
+  let { triggerNew = $bindable(false) }: Props = $props();
 
   type Pane = 'list' | 'detail' | 'edit';
-  // Initial pane is driven by the router: opening cookbook with
-  // `?modal=cookbook&recipe=<id>` in the URL mounts us straight on
-  // the recipe's detail pane; a bare `?modal=cookbook` opens to the
-  // list. The `$effect` below keeps this in sync if `route.recipe`
-  // changes after mount (browser back / forward).
+  // 'list' is the empty/unselected state shown when route.recipe is null.
+  // route.recipe drives initial pane on mount and stays in sync via the
+  // $effect below (browser back / forward, drawer navigation).
   let pane = $state<Pane>(route.recipe ? 'detail' : 'list');
-
-  // --- list pane state ---
-  let query = $state('');
-  // Sort selector for the list pane. 'updated' (default) keeps the
-  // most-recently-edited recipe at the top; 'rating' bubbles the
-  // user's favourites up. Sort is applied client-side over the
-  // already-loaded `cookbook.recipes` so flipping the selector is
-  // instantaneous and doesn't refetch.
-  type SortMode = 'updated' | 'rating';
-  let sortMode = $state<SortMode>('updated');
-  // Case-insensitive title substring filter, applied client-side over
-  // the loaded list. Loading the full list once and filtering locally
-  // is cheaper than round-tripping a query per keystroke, and a
-  // personal cookbook is small enough that in-memory filtering is
-  // instantaneous.
-  const visibleRecipes = $derived.by(() => {
-    const q = query.trim().toLowerCase();
-    const filtered =
-      q.length === 0
-        ? cookbook.recipes
-        : cookbook.recipes.filter((r) => r.title.toLowerCase().includes(q));
-    if (sortMode === 'rating') {
-      // Sort highest-rated first; unrated recipes sink to the bottom;
-      // ties resolve by most-recent updated_at so equally-rated rows
-      // still feel "freshness aware". Spread before sort because the
-      // store array is reactive and sort() is in-place.
-      return [...filtered].sort((a, b) => {
-        const ar = a.rating ?? -1;
-        const br = b.rating ?? -1;
-        if (ar !== br) return br - ar;
-        return (b.updated_at ?? '').localeCompare(a.updated_at ?? '');
-      });
-    }
-    return filtered;
-  });
 
   // --- detail / edit pane state ---
   let activeId = $state<string | null>(route.recipe);
@@ -165,11 +132,10 @@
   }
 
   // URL-driven sync. When `route.recipe` changes externally (browser
-  // back / forward while the modal is open), mirror the change into
-  // the modal's local pane+activeId. The in-modal openList / openDetail
-  // helpers below also call `navigate` so clicks walk in lockstep.
-  // Edit / new panes are intentionally not routed - they're transient
-  // form states, not bookmarkable.
+  // back / forward, sidebar click), mirror the change into the panel's
+  // local pane+activeId. openList / openDetail below also call navigate
+  // so clicks walk in lockstep. Edit / new panes are intentionally not
+  // routed - they're transient form states, not bookmarkable.
   $effect(() => {
     const id = route.recipe;
     if (id === activeId) return;
@@ -196,15 +162,6 @@
     copyFeedback = null;
     clearVersionState();
     navigate({ recipe: null });
-  }
-
-  function openDetail(id: string): void {
-    activeId = id;
-    pane = 'detail';
-    copyFeedback = null;
-    clearVersionState();
-    void loadVersions(id);
-    navigate({ recipe: id });
   }
 
   function openNew(): void {
@@ -413,15 +370,23 @@
     window.removeEventListener(COOKBOOK_CHANGE_EVENT, onCookbookChange);
   });
 
+  // Chat.svelte's top-bar "new recipe" button sets triggerNew = true.
+  // The $bindable prop lets this effect reset it (two-way).
+  $effect(() => {
+    if (triggerNew) {
+      openNew();
+      triggerNew = false;
+    }
+  });
+
   function onEscape(e: KeyboardEvent): void {
     if (e.key !== 'Escape') return;
-    // Escape ladders back: edit → detail-or-list, detail → list, list → close.
+    // Escape ladders back: edit → detail-or-empty, detail → empty.
+    // On the empty/list pane there is no modal to dismiss.
     if (pane === 'edit') {
       pane = activeId ? 'detail' : 'list';
     } else if (pane === 'detail') {
       openList();
-    } else {
-      onClose();
     }
   }
 
@@ -518,102 +483,26 @@
 
 <svelte:window onkeydown={onEscape} />
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<div
-  class="center cookbook-backdrop"
-  onclick={(e) => {
-    if (e.target === e.currentTarget) onClose();
-  }}
->
-  <div
-    class="cookbook-shell"
-    role="dialog"
-    aria-modal="true"
-    aria-label="Cookbook"
-  >
-    <header class="cookbook-header">
-      <h1>Cookbook</h1>
-      <!-- Right-side controls share one flex row so the close (×) button
-           can't overlap the Back button on the detail/edit panes. Keep
-           `cookbook-close` last — it's the outermost "leave this view"
-           action, so it reads naturally to the right of pane-local
-           controls (Back on detail/edit; search + New on list). -->
-      <div class="cookbook-header-actions">
-        {#if pane === 'list'}
-          <input
-            type="search"
-            class="cookbook-search"
-            placeholder="Search recipes"
-            aria-label="Search recipes"
-            bind:value={query}
-          />
-          <!-- Sort selector. 'Most recent' is the default to match the
-               backing-store order; 'Rating' bubbles favourites up. -->
-          <label class="cookbook-sort-label" for="cb-sort">
-            <span class="visually-hidden">Sort recipes</span>
-            <select
-              id="cb-sort"
-              class="cookbook-sort"
-              bind:value={sortMode}
-              aria-label="Sort recipes"
-            >
-              <option value="updated">Most recent</option>
-              <option value="rating">Rating</option>
-            </select>
-          </label>
-          <button type="button" class="primary" onclick={openNew}>+ New recipe</button>
-        {:else}
-          <button type="button" class="secondary" onclick={openList}>← Back</button>
-        {/if}
-        <button
-          type="button"
-          class="cookbook-close"
-          onclick={onClose}
-          aria-label="Close cookbook"
-          title="Close"
-        >×</button>
-      </div>
-    </header>
+<div class="cookbook-panel">
+  <!-- Panel toolbar: only shown when a recipe is open (detail or edit),
+       providing the Back navigation to deselect it. The "new recipe"
+       button lives in Chat.svelte's top-bar and triggers via the
+       triggerNew prop rather than appearing here. -->
+  {#if pane !== 'list'}
+    <div class="cookbook-panel-toolbar">
+      <button type="button" class="secondary" onclick={openList}>← Back</button>
+    </div>
+  {/if}
 
-    <section class="cookbook-body">
+  <section class="cookbook-body">
       {#if pane === 'list'}
-        {#if cookbook.loading && cookbook.recipes.length === 0}
-          <p class="subtle">Loading recipes…</p>
-        {:else if cookbook.error}
-          <p class="error">{cookbook.error}</p>
-        {:else if visibleRecipes.length === 0}
-          <p class="subtle">
-            {#if cookbook.recipes.length === 0}
-              No recipes yet. Click "+ New recipe" to add one, or ask Nak to save
-              one from the web.
-            {:else}
-              No recipes match "{query}".
-            {/if}
-          </p>
-        {:else}
-          <ul class="cookbook-list">
-            {#each visibleRecipes as r (r.id)}
-              <li class="cookbook-list-row">
-                <button
-                  type="button"
-                  class="cookbook-list-title"
-                  onclick={() => openDetail(r.id)}
-                >
-                  <span class="title-text">{r.title}</span>
-                  <span class="title-meta">
-                    {#if r.rating !== null && r.rating !== undefined}
-                      <RecipeRating value={r.rating} size={14} />
-                    {/if}
-                    {#if r.source}
-                      <span class="subtle title-source">{r.source}</span>
-                    {/if}
-                  </span>
-                </button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
+        <!-- Empty/unselected state. The sidebar RecipeList is the browse
+             surface; clicking a recipe there selects it and switches this
+             panel to the detail pane. The "+ New recipe" button in the
+             toolbar above is the create entry point. -->
+        <p class="subtle cookbook-empty-hint">
+          Select a recipe from the sidebar, or click <strong>+ New recipe</strong> above.
+        </p>
       {:else if pane === 'detail'}
         {#if activeRecipe}
           {@const r = activeRecipe}
@@ -919,137 +808,58 @@
         </form>
       {/if}
     </section>
-  </div>
 </div>
 
 <style>
-  .cookbook-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 40;
-    padding: 1rem;
-  }
-  .cookbook-shell {
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    box-shadow: var(--shadow-modal);
-    width: min(1100px, 100%);
-    max-height: calc(100vh - 2rem);
+  /* Inline recipe panel. Fills the main content area as a flex column;
+     the parent .chat already handles overall column layout. */
+  .cookbook-panel {
     display: flex;
     flex-direction: column;
-    position: relative;
-    overflow: hidden;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    background: var(--surface);
   }
-  /* Lives in `.cookbook-header-actions` now — see the template comment
-     there. Keep the transparent / borderless look so the glyph reads as
-     the modal's "dismiss" affordance rather than competing with the
-     adjacent bordered buttons (Back, + New recipe). */
-  .cookbook-close {
-    background: transparent;
-    border: none;
-    color: var(--text);
-    font-size: 1.5rem;
-    cursor: pointer;
-    line-height: 1;
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-  }
-  .cookbook-close:hover {
-    background: var(--border);
-  }
-  /* Title bar: a filled strip (--bg-2) sitting above the main recipe
-     surface (--surface). The tone shift reads as a proper header
-     rather than "content with a rule under it", and the border-bottom
-     continues to anchor the bottom edge crisply against the body. */
-  .cookbook-header {
-    padding: 0.85rem 1rem;
-    background: var(--bg-2);
+  /* Thin action strip at the top of the panel. A single back or new
+     button sits here so the recipe body gets as much vertical space as
+     possible while still providing clear navigation. */
+  .cookbook-panel-toolbar {
+    padding: 0.5rem 1rem;
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-  }
-  .cookbook-header h1 {
-    margin: 0;
-    font-size: 1.25rem;
-  }
-  .cookbook-header-actions {
-    display: flex;
     gap: 0.5rem;
-    align-items: center;
+    background: var(--bg-2);
+    flex-shrink: 0;
   }
-  .cookbook-search {
-    padding: 0.35rem 0.6rem;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg);
-    color: var(--text);
+  /* Hint text shown when no recipe is selected. Sits inside the
+     scrollable .cookbook-body so it occupies the same slot the detail
+     content would. */
+  .cookbook-empty-hint {
+    padding: 2rem 1.5rem;
+    text-align: center;
   }
   .cookbook-body {
-    padding: 1rem;
+    padding: 1.5rem 2rem;
     overflow: auto;
     flex: 1;
   }
-  .cookbook-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-  .cookbook-list-row {
-    border-bottom: 1px solid var(--border);
-  }
-  .cookbook-list-title {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.15rem;
-    width: 100%;
-    padding: 0.65rem 0.5rem;
-    background: transparent;
-    border: none;
-    color: var(--text);
-    text-align: left;
-    cursor: pointer;
-    border-radius: 4px;
-  }
-  .cookbook-list-title:hover {
-    background: var(--border);
-  }
-  .cookbook-list-title .title-text {
-    font-weight: 600;
-  }
-  .cookbook-list-title .title-source {
-    font-size: 0.8rem;
-  }
-  /* Per-row meta line under the title. Holds the rating stars and the
-     source string side-by-side so neither competes with the title. */
-  .cookbook-list-title .title-meta {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-  }
-  /* Sort selector. Sized + tinted to sit between the search input and
-     the + New recipe button without re-fighting the header layout. */
-  .cookbook-sort-label {
-    display: inline-flex;
-    align-items: center;
-  }
-  .cookbook-sort {
-    padding: 0.35rem 0.5rem;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg);
-    color: var(--text);
-    font: inherit;
+
+  /* Two-column ingredient list on wide panels. CSS columns keeps the
+     natural list flow so items read top-to-bottom in each column rather
+     than left-to-right across the row. The 480px threshold is roughly
+     where a two-column list stops feeling crowded — below it we let the
+     list collapse back to one column. avoid-column-break on li prevents
+     a single ingredient from being split across columns. */
+  @media (min-width: 700px) {
+    .cookbook-render :global(ul.cook-ingredients) {
+      column-count: 2;
+      column-gap: 2rem;
+    }
+    .cookbook-render :global(ul.cook-ingredients li) {
+      break-inside: avoid;
+    }
   }
   /* Rating row sits between the title and the source line on the
      detail pane. Small top gap so it doesn't crowd the h2; bottom
@@ -1066,20 +876,6 @@
     font-size: 0.85rem;
     font-weight: 600;
     margin-bottom: 0.25rem;
-  }
-  /* Screen-reader-only utility for labels we don't want to render
-     visually (the sort selector's <select> has its own visible value,
-     so the label is announced rather than displayed). */
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
   }
   .cookbook-detail-header h2 {
     margin: 0 0 0.25rem;

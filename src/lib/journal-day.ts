@@ -109,6 +109,68 @@ export function detectTimezone(): string {
 }
 
 /**
+ * Add or subtract `delta` calendar days from a YYYY-MM-DD key. Uses
+ * UTC math - we're shifting an already-bucketed date key, not
+ * translating a wall-clock moment, so zone-agnostic stepping is correct.
+ */
+export function shiftDay(ymd: string, delta: number): string {
+  const [y, m, d] = ymd.split('-').map((n) => Number.parseInt(n, 10));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) {
+    return ymd;
+  }
+  const utc = new Date(Date.UTC(y, m - 1, d));
+  utc.setUTCDate(utc.getUTCDate() + delta);
+  const yy = utc.getUTCFullYear();
+  const mm = String(utc.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(utc.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+/**
+ * Full human-readable date for a YYYY-MM-DD key ("Tuesday, April 28, 2026").
+ * Used as the day heading inside the journal panel body where there is
+ * enough horizontal space for a complete label. Uses UTC interpretation
+ * because the key is a zone-agnostic day bucket.
+ */
+export function formatDateFull(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map((n) => Number.parseInt(n, 10));
+  if (!Number.isFinite(y)) return ymd;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      timeZone: 'UTC',
+    }).format(dt);
+  } catch {
+    return ymd;
+  }
+}
+
+/**
+ * Compact human-readable label for a YYYY-MM-DD key ("SUN 2026-04-19").
+ * Short weekday + ISO date stays to a single line at any reasonable
+ * phone width. Uses UTC interpretation because the key is a
+ * zone-agnostic day bucket.
+ */
+export function formatDateCompact(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map((n) => Number.parseInt(n, 10));
+  if (!Number.isFinite(y)) return ymd;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  try {
+    const weekday = new Intl.DateTimeFormat(undefined, {
+      weekday: 'short',
+      timeZone: 'UTC',
+    }).format(dt);
+    return `${weekday.toUpperCase()} ${ymd}`;
+  } catch {
+    return ymd;
+  }
+}
+
+/**
  * Validate an IANA zone name by round-tripping it through
  * `Intl.DateTimeFormat`. Returns the original string when the runtime
  * accepts it; null when the zone is unknown. Callers use this to guard

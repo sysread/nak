@@ -2840,11 +2840,40 @@ h1 {
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--border);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+  /* Required for .journal-topbar-nav absolute centering. */
+  position: relative;
 }
 
 .title-wrap {
   flex: 1;
   min-width: 0;
+}
+
+/* Non-interactive section label used in the recipes and journal top-bar.
+   Inherits the .title-btn shape so the label occupies the same slot as
+   the conversation title without behaving like a button. */
+.panel-section-label {
+  display: block;
+  cursor: default;
+  font-weight: 500;
+  color: var(--muted);
+}
+.panel-section-label:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* Journal date-navigation cluster in the top-bar. Centered within the
+   bar via absolute positioning so the hamburger + new-entry buttons can
+   stay left-aligned without displacing the nav. The empty .title-wrap
+   after it keeps the flex layout from collapsing. */
+.journal-topbar-nav {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
 }
 
 .title-btn {

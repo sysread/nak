@@ -104,6 +104,8 @@
   import Samskara from './Samskara.svelte';
   import Settings from './Settings.svelte';
   import Cookbook from './Cookbook.svelte';
+  import RecipeList from '../components/RecipeList.svelte';
+  import JournalList from '../components/JournalList.svelte';
   import {
     cookbook,
     loadRecipes,
@@ -114,6 +116,7 @@
     loadJournalEntries,
   } from '$lib/journal-store.svelte';
   import { JOURNAL_CHANGE_EVENT } from '$lib/journal-events';
+  import { todayInZone, shiftDay } from '$lib/journal-day';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -144,9 +147,16 @@
   const showSettings = $derived(route.modal === 'settings');
   const showHelp = $derived(route.modal === 'help');
   const showMemories = $derived(route.modal === 'memories');
-  const showCookbook = $derived(route.modal === 'cookbook');
   const showSamskara = $derived(route.modal === 'samskara');
-  const showJournal = $derived(route.modal === 'journal');
+  // Trigger flags for the recipe and journal "new" top-bar buttons.
+  // Chat.svelte sets these to true; the panel component resets them
+  // via the $bindable prop after handling the event.
+  let cookbookTriggerNew = $state(false);
+  let journalTriggerNew = $state(false);
+  // Focused date for the journal top-bar navigation. Derived from the
+  // route so back/forward keeps the header in sync with the panel.
+  const journalToday = $derived(todayInZone(app.journalTimezone || null));
+  const journalFocusedDate = $derived(route.journal_date ?? journalToday);
   /**
    * Sidebar drawer tab. Backed by `route.drawer` - absent in the URL
    * means "chats" (the default). 'recipes' and 'journal' render
@@ -157,50 +167,8 @@
   const drawerTab = $derived<'chats' | 'recipes' | 'journal'>(
     route.drawer ?? 'chats'
   );
-  /** Recipe-side search, separate from conversation search. */
-  let recipeDrawerQuery = $state('');
-  const visibleDrawerRecipes = $derived.by(() => {
-    const q = recipeDrawerQuery.trim().toLowerCase();
-    if (q.length === 0) return cookbook.recipes;
-    return cookbook.recipes.filter((r) => r.title.toLowerCase().includes(q));
-  });
-  /** Journal-side search. Filters by content / topics / mood
-      substring match - the drawer is a glance surface; the modal
-      does the semantic search for the same query. Results are
-      then collapsed to one row per date so the drawer reads as a
-      day index rather than an entry list (multiple entries on the
-      same date all link to the same day-view anyway). */
-  let journalDrawerQuery = $state('');
-  const visibleDrawerJournal = $derived.by<
-    { entry_date: string; count: number; matchId: string }[]
-  >(() => {
-    const q = journalDrawerQuery.trim().toLowerCase();
-    const matches = q.length === 0
-      ? journal.entries
-      : journal.entries.filter((e) => {
-          if (e.content.toLowerCase().includes(q)) return true;
-          if (e.mood && e.mood.toLowerCase().includes(q)) return true;
-          for (const t of e.topics) {
-            if (t.toLowerCase().includes(q)) return true;
-          }
-          return false;
-        });
-    // Aggregate to one row per entry_date. journal.entries is sorted
-    // newest-day-first; preserve that order via a Map (insertion-ordered).
-    // matchId carries any one entry's id so the row's #each key stays
-    // stable across re-renders even when the count changes.
-    const byDay = new Map<string, { count: number; matchId: string }>();
-    for (const e of matches) {
-      const cur = byDay.get(e.entry_date);
-      if (cur) cur.count += 1;
-      else byDay.set(e.entry_date, { count: 1, matchId: e.id });
-    }
-    return Array.from(byDay, ([entry_date, v]) => ({
-      entry_date,
-      count: v.count,
-      matchId: v.matchId,
-    }));
-  });
+  // Recipe and journal search/listing state has moved to the
+  // RecipeList and JournalList sidebar components respectively.
 
   function onPickRecipesTab(): void {
     navigate({ drawer: 'recipes' }, { replace: true });
@@ -255,14 +223,6 @@
     if (!app.supabase) return;
     if (!journal.loaded) return;
     void loadJournalEntries(app.supabase, { limit: 200 });
-  }
-
-  function openRecipeFromDrawer(id: string): void {
-    navigate({ modal: 'cookbook', recipe: id });
-  }
-
-  function onCookbookModalClose(): void {
-    navigate({ modal: null, recipe: null });
   }
 
   function onCookbookStoreChanged(): void {
@@ -3411,7 +3371,8 @@
           <!-- Search replaces the old "+ New thread" button — the
                topbar's `.new-thread-mini` icon (now visible on every
                viewport, not just mobile) is the primary new-thread
-               affordance. -->
+               affordance. Recipe and journal search live inside their
+               respective listing components below. -->
           <input
             type="search"
             class="sidebar-search-input"
@@ -3419,22 +3380,6 @@
             aria-label="Search conversations"
             bind:value={searchQuery}
             onkeydown={onSearchKey}
-          />
-        {:else if drawerTab === 'recipes'}
-          <input
-            type="search"
-            class="sidebar-search-input"
-            placeholder="Search recipes"
-            aria-label="Search recipes"
-            bind:value={recipeDrawerQuery}
-          />
-        {:else}
-          <input
-            type="search"
-            class="sidebar-search-input"
-            placeholder="Search journal"
-            aria-label="Search journal"
-            bind:value={journalDrawerQuery}
           />
         {/if}
       </header>
@@ -3618,86 +3563,14 @@
         {/if}
       </div>
       {:else if drawerTab === 'recipes'}
-        <!-- Recipes tab. Click opens the Cookbook modal on the detail
-             pane for that recipe. The list itself is a flattened read-
-             only view into `cookbook.recipes`; editing flows through
-             the modal, which owns the edit form and the delete
-             confirmation. -->
-        <div class="recipe-drawer-list">
-          {#if cookbook.loading && cookbook.recipes.length === 0}
-            <p class="subtle" style="padding:0.75rem">Loading recipes…</p>
-          {:else if visibleDrawerRecipes.length === 0}
-            <p class="subtle" style="padding:0.75rem">
-              {#if cookbook.recipes.length === 0}
-                No recipes yet. Open the Cookbook to add one.
-              {:else}
-                No matches.
-              {/if}
-            </p>
-          {:else}
-            {#each visibleDrawerRecipes as r (r.id)}
-              <div class="row thread-row" data-recipe-id={r.id}>
-                <button
-                  class="thread grow"
-                  onclick={() => openRecipeFromDrawer(r.id)}
-                  title={r.title}
-                >{r.title}</button>
-              </div>
-            {/each}
-          {/if}
-          <div class="recipe-drawer-footer">
-            <button
-              type="button"
-              class="secondary"
-              onclick={() => navigate({ modal: 'cookbook' })}
-            >Open cookbook</button>
-          </div>
-        </div>
+        <!-- Recipes tab. RecipeList owns the search, sort, and item
+             rows. Clicking a recipe navigates to it inline in the main
+             panel (no modal). -->
+        <RecipeList />
       {:else}
-        <!-- Journal tab. One row per date - entries on the same day
-             all open the same day-view in the modal, so collapsing
-             keeps the drawer as a day index. The footer button opens
-             the modal on today's day-view. Semantic search and compose
-             live in the modal proper. -->
-        <div class="recipe-drawer-list">
-          {#if journal.loading && !journal.loaded}
-            <p class="subtle" style="padding:0.75rem">Loading journal…</p>
-          {:else if journal.error}
-            <p class="error" style="padding:0.75rem">
-              Couldn't load journal: {journal.error}
-            </p>
-          {:else if visibleDrawerJournal.length === 0}
-            <p class="subtle" style="padding:0.75rem">
-              {#if journal.entries.length === 0}
-                No journal entries yet. Open Journal to add one.
-              {:else}
-                No matches.
-              {/if}
-            </p>
-          {:else}
-            {#each visibleDrawerJournal as day (day.entry_date)}
-              <div class="row thread-row" data-journal-day={day.entry_date}>
-                <button
-                  class="thread grow"
-                  onclick={() => navigate({ modal: 'journal', journal_date: day.entry_date })}
-                  title={`${day.entry_date} (${day.count} ${day.count === 1 ? 'entry' : 'entries'})`}
-                >
-                  <span>{day.entry_date}</span>
-                  <span class="subtle" style="margin-left:0.4rem;font-size:0.75rem">
-                    {day.count === 1 ? '1 entry' : `${day.count} entries`}
-                  </span>
-                </button>
-              </div>
-            {/each}
-          {/if}
-          <div class="recipe-drawer-footer">
-            <button
-              type="button"
-              class="secondary"
-              onclick={() => navigate({ modal: 'journal' })}
-            >Open journal</button>
-          </div>
-        </div>
+        <!-- Journal tab. JournalList owns the search and date rows.
+             Clicking a date navigates to that day in the main panel. -->
+        <JournalList />
       {/if}
       <footer>
         <div class="subtle" style="margin-bottom:0.4rem;font-size:0.8rem">
@@ -3742,7 +3615,7 @@
           </button>
           <button
             class="secondary icon-btn"
-            onclick={() => navigate({ modal: 'cookbook' })}
+            onclick={() => onPickRecipesTab()}
             title="Cookbook"
             aria-label="Cookbook"
           >
@@ -3820,62 +3693,136 @@
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
-        <button
-          class="secondary icon-btn new-thread-mini"
-          onclick={newThread}
-          disabled={currentIsEmpty}
-          title={currentIsEmpty ? "You're already on an empty thread." : 'Start a new conversation'}
-          aria-label="Start a new conversation"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-          </svg>
-        </button>
-        <div class="title-wrap">
-          {#if currentThread}
-            {#if renaming}
-              <input
-                class="title-input"
-                bind:this={titleInputEl}
-                bind:value={renameBuffer}
-                onkeydown={onTitleKey}
-                onblur={commitRename}
-                maxlength="80"
-              />
-            {:else}
-              <button
-                class="title-btn"
-                title="Click to rename"
-                onclick={startRename}
-              >{currentThread.title || 'Untitled'}</button>
+        {#if drawerTab === 'chats'}
+          <!-- Chats top-bar: new-thread + title (inline-renameable) +
+               logs-toggle. Unchanged from the single-panel design. -->
+          <button
+            class="secondary icon-btn new-thread-mini"
+            onclick={newThread}
+            disabled={currentIsEmpty}
+            title={currentIsEmpty ? "You're already on an empty thread." : 'Start a new conversation'}
+            aria-label="Start a new conversation"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+          </button>
+          <div class="title-wrap">
+            {#if currentThread}
+              {#if renaming}
+                <input
+                  class="title-input"
+                  bind:this={titleInputEl}
+                  bind:value={renameBuffer}
+                  onkeydown={onTitleKey}
+                  onblur={commitRename}
+                  maxlength="80"
+                />
+              {:else}
+                <button
+                  class="title-btn"
+                  title="Click to rename"
+                  onclick={startRename}
+                >{currentThread.title || 'Untitled'}</button>
+              {/if}
             {/if}
-          {/if}
-        </div>
-        <!-- Logs drawer toggle. Document-glyph icon so the button reads
-             as "open the reading panel" rather than "new document".
-             Placed after `.title-wrap` so the flex layout parks it on
-             the right edge, aligned with the right-anchored drawer it
-             opens. Wired to the logsDrawer rune singleton; the
-             LogsDrawer component mounted at Chat root watches the
-             same state. -->
-        <button
-          class="secondary icon-btn logs-toggle"
-          onclick={() => logsDrawer.toggle()}
-          title={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
-          aria-label={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
-          aria-expanded={logsDrawer.state.open}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-            <line x1="16" y1="13" x2="8" y2="13" />
-            <line x1="16" y1="17" x2="8" y2="17" />
-            <line x1="10" y1="9" x2="8" y2="9" />
-          </svg>
-        </button>
+          </div>
+          <!-- Logs drawer toggle. Document-glyph icon so the button reads
+               as "open the reading panel" rather than "new document".
+               Wired to the logsDrawer rune singleton; the LogsDrawer
+               component mounted at Chat root watches the same state. -->
+          <button
+            class="secondary icon-btn logs-toggle"
+            onclick={() => logsDrawer.toggle()}
+            title={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
+            aria-label={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
+            aria-expanded={logsDrawer.state.open}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <line x1="10" y1="9" x2="8" y2="9" />
+            </svg>
+          </button>
+
+        {:else if drawerTab === 'recipes'}
+          <!-- Recipes top-bar: new-recipe button mirrors the new-thread
+               button in the chats top-bar. Triggers the Cookbook panel
+               to open the edit form for a fresh recipe via the
+               $bindable cookbookTriggerNew prop. -->
+          <button
+            class="secondary icon-btn new-thread-mini"
+            onclick={() => (cookbookTriggerNew = true)}
+            title="New recipe"
+            aria-label="New recipe"
+          >
+            <!-- Feather "file-text" — document with lines, reads as
+                 "new document with content" / recipe card. -->
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <line x1="10" y1="9" x2="8" y2="9" />
+            </svg>
+          </button>
+          <div class="title-wrap">
+            <span class="title-btn panel-section-label">Recipes</span>
+          </div>
+
+        {:else}
+          <!-- Journal top-bar: new-entry + day navigation. Nav order is
+               [<] [Today] [>] so the primary forward/back symmetry is
+               unbroken with Today nestled in between as the "home" action.
+               Date display moved into Journal.svelte's body as a heading. -->
+          <button
+            class="secondary icon-btn new-thread-mini"
+            onclick={() => (journalTriggerNew = true)}
+            title="New journal entry"
+            aria-label="New journal entry"
+          >
+            <!-- Feather "book-open" — open book reads as journal/diary. -->
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+            </svg>
+          </button>
+          <div class="journal-topbar-nav">
+            <button
+              type="button"
+              class="secondary"
+              onclick={() => navigate({ journal_date: shiftDay(journalFocusedDate, -1) })}
+              aria-label="Previous day"
+              title="Previous day"
+            >‹</button>
+            {#if journalFocusedDate !== journalToday}
+              <button
+                type="button"
+                class="secondary"
+                onclick={() => navigate({ journal_date: journalToday })}
+                title="Jump to today"
+              >Today</button>
+            {/if}
+            <button
+              type="button"
+              class="secondary"
+              onclick={() => navigate({ journal_date: shiftDay(journalFocusedDate, 1) })}
+              aria-label="Next day"
+              title="Next day"
+              disabled={journalFocusedDate >= journalToday}
+            >›</button>
+          </div>
+          <div class="title-wrap"></div>
+        {/if}
       </div>
+
+      {#if drawerTab === 'chats'}
       <div class="messages-wrap">
         <div
           class="messages"
@@ -4591,6 +4538,19 @@
           </div>
         </div>
       </div>
+      {:else if drawerTab === 'recipes'}
+        <!-- Recipe panel. Cookbook.svelte now renders inline - no modal
+             wrapper, no list pane. Selecting a recipe is done from the
+             sidebar RecipeList. The triggerNew prop wires the top-bar
+             "+ New recipe" button to the panel's openNew() flow. -->
+        <Cookbook bind:triggerNew={cookbookTriggerNew} />
+      {:else}
+        <!-- Journal panel. Journal.svelte now renders inline - no modal
+             wrapper, no header. Date navigation in the top-bar drives
+             route.journal_date, which the panel reads. The triggerNewEntry
+             prop wires the top-bar book button to the compose flow. -->
+        <Journal bind:triggerNewEntry={journalTriggerNew} />
+      {/if}
     </main>
     <!-- Right-edge logs panel. On desktop it's the third grid column
          of .shell (mirror of the threads sidebar on the left); on
@@ -4607,12 +4567,12 @@
        without the transcript being a containing block for its
        fixed positioning. -->
   <ExtractedTextDrawer />
-  <!-- Top-right toast stack for samskara-formation events. Listens
-       on a window CustomEvent dispatched by SamskaraManager when
-       the formation worker reports a fresh mint. Subtle by design -
-       the underlying predictive model is meant to stay background.
-       See docs/dev/samskara.md. -->
-  <SamskaraToasts />
+  <!-- Samskara mood toasts are tied to the conversation stream - only
+       relevant in the chats panel. Suppress them on the recipe and
+       journal panels where no conversation is running. -->
+  {#if drawerTab === 'chats'}
+    <SamskaraToasts />
+  {/if}
 
   <!--
     Modal overlays. Rendered alongside the shell (above via their
@@ -4638,12 +4598,6 @@
   {#if showSamskara}
     <Samskara onClose={() => navigate({ modal: null })} />
   {/if}
-  {#if showCookbook}
-    <Cookbook onClose={onCookbookModalClose} />
-  {/if}
-  {#if showJournal}
-    <Journal
-      onClose={() => navigate({ modal: null, journal_date: null })}
-    />
-  {/if}
+  <!-- Cookbook and Journal now render inline in the main panel
+       (drawerTab === 'recipes' / 'journal') rather than as modals. -->
 {/if}
