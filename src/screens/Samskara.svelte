@@ -181,9 +181,14 @@
       // Order clusters by their representative's score (descending)
       // so the most-relevant theme leads. The representative is the
       // first member after the per-cohort score-desc sort above.
-      const clusters: ClusterView[] = [...bySeq.values()]
-        .map((members) => ({
-          seq: clusterMap.get(members[0].id)?.clusterSeq ?? 0,
+      // Use bySeq.entries() to carry the bucket key through - the key
+      // is either the real clusterSeq or the unique negative fallback
+      // assigned above. Previously used a fresh clusterMap lookup with
+      // ?? 0 fallback, which made every unassigned cluster get seq=0
+      // and caused duplicate each-block keys.
+      const clusters: ClusterView[] = [...bySeq.entries()]
+        .map(([seq, members]) => ({
+          seq,
           representative: members[0],
           siblings: members.slice(1),
         }))
@@ -829,6 +834,16 @@
                         {row.valenceMin} &le; v &lt; {MOOD_TABLE[i - 1].valenceMin}
                       {/if}
                     </span>
+                    <!-- Compact threshold shown on mobile in place of the
+                         full label + verbose range. Just the binding bound
+                         so the column stays narrow enough to read the cells. -->
+                    <span class="mood-row-range-compact" aria-hidden="true">
+                      {#if row.valenceMin === -Infinity}
+                        &lt; {MOOD_TABLE[i - 1].valenceMin}
+                      {:else}
+                        &ge; {row.valenceMin}
+                      {/if}
+                    </span>
                   </th>
                   <td class="mood-cell">
                     <span class="mood-glyph" aria-hidden="true">{row.confidentEmoji}</span>
@@ -1310,9 +1325,12 @@
   /* Wrap the table so it can scroll horizontally on very narrow
      viewports rather than overflowing the modal shell. min-width
      keeps the cells readable - shrinking below this just turns the
-     table into hieroglyphics. */
+     table into hieroglyphics. container-type enables the @container
+     rule below, which drops the label column when the wrapper is too
+     narrow to show the full table without scrolling. */
   .mood-legend-table-wrap {
     overflow-x: auto;
+    container-type: inline-size;
   }
 
   .mood-legend-table {
@@ -1320,6 +1338,37 @@
     min-width: 22rem;
     border-collapse: collapse;
     font-size: 0.85rem;
+  }
+
+  /* Equal-width data columns. Both cells carry width: 50% so the
+     browser's table-layout: auto gives them identical share of the
+     space left over after the label column takes its minimum width. */
+  .mood-legend-table thead th:nth-child(2),
+  .mood-legend-table thead th:nth-child(3) {
+    width: 50%;
+  }
+
+  /* When the wrapper is narrower than the table's min-width, the label
+     column would trigger horizontal scrolling. Drop it entirely, relax
+     min-width so the two data columns fill the available space, and also
+     hide the word labels inside the cells - leaving only the emoji glyphs.
+     Both changes fire at the same threshold: once the table is narrow
+     enough to lose its row-label column, the cell text goes too. A
+     separate lower threshold is impractical because padding leaves the
+     wrapper no narrower than ~17rem even on a 320px phone. */
+  @container (max-width: 22rem) {
+    .mood-legend-table {
+      min-width: 0;
+    }
+    .mood-legend-table th:first-child,
+    .mood-legend-table td:first-child {
+      display: none;
+    }
+    /* Higher specificity than the standalone .mood-cell-label { display: block }
+       rule that appears later in this stylesheet and would otherwise win. */
+    .mood-cell .mood-cell-label {
+      display: none;
+    }
   }
 
   .mood-legend-table th,
@@ -1385,6 +1434,12 @@
        columns; nowrap keeps each range on one line. The wrapping
        table-wrap above handles overflow at the table level. */
     white-space: nowrap;
+  }
+
+  /* Compact threshold label for mobile. Hidden on desktop where the full
+     .mood-row-name + .mood-row-range is shown instead. */
+  .mood-row-range-compact {
+    display: none;
   }
 
   .mood-cell {
@@ -1809,6 +1864,20 @@
        value+label legible at small sizes. */
     .counts-grid {
       grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+    }
+    /* Mood map: hide the verbose label + range in the first column and
+       show the compact threshold instead. This collapses the label
+       column enough that both data columns are visible without scrolling. */
+    .mood-row-name,
+    .mood-row-range {
+      display: none;
+    }
+    .mood-row-range-compact {
+      display: block;
+      font-size: 0.72rem;
+      font-weight: 400;
+      color: var(--muted);
+      white-space: nowrap;
     }
   }
 </style>
