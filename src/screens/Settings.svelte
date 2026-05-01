@@ -47,7 +47,13 @@
    * modal; if you find yourself adding another one, the convention
    * says you probably want auto-apply with rollback instead.
    */
-  import { changePassword, saveConfig, toExportedConfig } from '$lib/config';
+  import { changePassword, loadConfig, saveConfig, toExportedConfig } from '$lib/config';
+  import {
+    isBiometricSupported,
+    isBiometricEnrolled,
+    enrollBiometric,
+    clearBiometric,
+  } from '$lib/biometric';
   import {
     app,
     activate,
@@ -718,6 +724,65 @@
   let pwError = $state<string | null>(null);
   let pwInfo = $state<string | null>(null);
 
+  // Biometric unlock toggle. `bioSupported` is the platform-level
+  // "is there a user-verifying authenticator" probe (resolves async on
+  // mount); `bioEnrolled` reflects whether we already wrote a wrapped
+  // password to localStorage. The two together drive the three-state
+  // UI: unsupported -> explanation; supported + not enrolled -> Enable
+  // form (asks for the master password to verify it before wrapping);
+  // supported + enrolled -> Disable button.
+  let bioSupported = $state(false);
+  let bioEnrolled = $state(isBiometricEnrolled());
+  let bioPassword = $state('');
+  let bioError = $state<string | null>(null);
+  let bioInfo = $state<string | null>(null);
+  let bioBusy = $state(false);
+
+  $effect(() => {
+    void isBiometricSupported().then((ok) => {
+      bioSupported = ok;
+    });
+  });
+
+  async function onEnableBiometric(e: SubmitEvent): Promise<void> {
+    e.preventDefault();
+    bioError = null;
+    bioInfo = null;
+    if (!bioPassword) {
+      bioError = 'Enter your master password to confirm before enrolling.';
+      return;
+    }
+    bioBusy = true;
+    try {
+      // Verify the password actually decrypts the stored config
+      // before we wrap it. If we accepted any string blindly the
+      // user could enroll a typo and only discover it at unlock
+      // time, by which point the typed-password fallback also
+      // would not work.
+      const decrypted = await loadConfig(bioPassword);
+      if (!decrypted) {
+        bioError = 'No stored config to protect with biometric unlock.';
+        return;
+      }
+      await enrollBiometric(bioPassword);
+      bioEnrolled = true;
+      bioPassword = '';
+      bioInfo = 'Biometric unlock enabled on this device.';
+    } catch (err) {
+      bioError = err instanceof Error ? err.message : String(err);
+    } finally {
+      bioBusy = false;
+    }
+  }
+
+  function onDisableBiometric(): void {
+    bioError = null;
+    bioInfo = null;
+    clearBiometric();
+    bioEnrolled = false;
+    bioInfo = 'Biometric unlock disabled on this device.';
+  }
+
   let busy = $state(false);
 
   // --- About pane ---
@@ -1079,6 +1144,18 @@
     busy = true;
     try {
       await changePassword(pwCurrent, pwNew);
+      // Any biometric enrollment wraps the OLD password; rotating
+      // invalidates that blob. Re-enrolling transparently would
+      // require running the biometric gesture inside this handler,
+      // which is a UX surprise (the user came here to change a
+      // password, not to authenticate via biometric). Wipe and
+      // surface a hint so the user can re-enroll deliberately.
+      const hadBio = bioEnrolled;
+      if (hadBio) {
+        clearBiometric();
+        bioEnrolled = false;
+        bioInfo = 'Biometric unlock cleared - re-enable below to use it again.';
+      }
       pwInfo = 'Master password changed.';
       pwCurrent = '';
       pwNew = '';
@@ -1753,6 +1830,50 @@
           {#if pwInfo}<p class="subtle">{pwInfo}</p>{/if}
           <button type="submit" disabled={busy}>Change password</button>
         </form>
+
+        <h2 style="margin-top:1.5rem">Biometric unlock</h2>
+        <p class="subtle">
+          On devices with TouchID, FaceID, Windows Hello, or fingerprint
+          unlock, you can skip typing the master password. This setting is
+          per-device - enabling it here only affects this browser on this
+          device. Your master password is stored in encrypted form, sealed
+          to this device's secure hardware; it can only be unwrapped after
+          a successful biometric or device-PIN check.
+        </p>
+        {#if !bioSupported}
+          <p class="subtle" style="font-size:0.85rem">
+            This browser or device does not expose a built-in biometric
+            authenticator. Biometric unlock is unavailable here.
+          </p>
+        {:else if bioEnrolled}
+          <p class="subtle" style="font-size:0.85rem">
+            Biometric unlock is currently <strong>enabled</strong> on this
+            device.
+          </p>
+          <button type="button" class="secondary" onclick={onDisableBiometric}>
+            Disable biometric unlock
+          </button>
+          {#if bioInfo}<p class="subtle">{bioInfo}</p>{/if}
+          {#if bioError}<p class="error">{bioError}</p>{/if}
+        {:else}
+          <form onsubmit={onEnableBiometric}>
+            <p class="subtle" style="font-size:0.85rem">
+              Confirm your master password to enable biometric unlock. You
+              will be prompted by your device for biometric / PIN
+              verification immediately afterward.
+            </p>
+            <div class="form-row">
+              <label for="bio-pw">Master password</label>
+              <SecretInput id="bio-pw" bind:value={bioPassword} required
+                           autocomplete="current-password" />
+            </div>
+            {#if bioError}<p class="error">{bioError}</p>{/if}
+            {#if bioInfo}<p class="subtle">{bioInfo}</p>{/if}
+            <button type="submit" disabled={bioBusy}>
+              {bioBusy ? 'Enrolling…' : 'Enable biometric unlock'}
+            </button>
+          </form>
+        {/if}
       {:else if group === 'about'}
         <!-- About pane: surfaces the build fingerprint and lets the
              user pull the latest deploy on demand. Paired with the
