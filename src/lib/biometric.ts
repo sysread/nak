@@ -44,6 +44,10 @@
  * which is a UX surprise. Wiping is simpler and safer.
  */
 
+import { createLogger } from './logger.svelte';
+
+const log = createLogger('biometric');
+
 const STORAGE_KEY = 'nak:biometric:v1';
 
 // PRF input salt. Stable per-enrollment - regenerated whenever we
@@ -212,6 +216,31 @@ function readPrfFirst(cred: PublicKeyCredential): ArrayBuffer | null {
   return ext?.prf?.results?.first ?? null;
 }
 
+/**
+ * Human-readable summary of the prf field of a credential's
+ * clientExtensionResults. Surfaced in failure messages so a user
+ * who hits "no PRF result" can tell us whether the authenticator
+ * ack'd PRF (`enabled: true`) but refused to compute it, or whether
+ * it dropped the extension entirely (no prf field at all). The two
+ * have very different remediations.
+ */
+function summarizePrf(cred: PublicKeyCredential): string {
+  const ext = cred.getClientExtensionResults() as {
+    prf?: { enabled?: boolean; results?: { first?: ArrayBuffer; second?: ArrayBuffer } };
+  };
+  if (!ext) return 'no extension results';
+  if (!ext.prf) return 'prf: undefined (extension was dropped)';
+  const parts: string[] = [];
+  if ('enabled' in ext.prf) parts.push(`enabled=${String(ext.prf.enabled)}`);
+  if (ext.prf.results) {
+    const f = ext.prf.results.first;
+    parts.push(`first=${f instanceof ArrayBuffer ? `${f.byteLength}B` : 'missing'}`);
+  } else {
+    parts.push('results=undefined');
+  }
+  return `prf: { ${parts.join(', ')} }`;
+}
+
 interface RegistrationExtensions {
   prf: { eval: { first: ArrayBuffer } };
 }
@@ -319,8 +348,12 @@ export async function enrollBiometric(password: string): Promise<void> {
   // output. The cost is a one-time second biometric prompt during
   // enrollment on browsers that don't inline PRF; subsequent
   // unlocks are still single-prompt.
+  log.debug('credential created; checking for inline PRF result', {
+    summary: summarizePrf(cred),
+  });
   let prfOutput = readPrfFirst(cred);
   if (!prfOutput) {
+    log.debug('no inline PRF; running get() fallback');
     // Run a get() right away to harvest the PRF output. The user
     // sees a second biometric prompt during enrollment - acceptable
     // one-time cost on Safari; never repeats on subsequent unlocks.
@@ -344,9 +377,33 @@ export async function enrollBiometric(password: string): Promise<void> {
     if (!got) throw new Error('Biometric enrollment was cancelled.');
     prfOutput = readPrfFirst(got);
     if (!prfOutput) {
+      // Diagnostic dump for the user-facing error. The two summaries
+      // tell us very different things:
+      //   - "prf: undefined" on both: the credential provider stripped
+      //     the extension. Common on Bitwarden's Android passkey
+      //     provider, which doesn't implement PRF.
+      //   - "enabled=true, results=undefined" on get(): the provider
+      //     ack'd PRF on registration but is refusing to compute the
+      //     output. This happens on some Chrome/Android+Play-Services
+      //     combinations where hmac-secret is gated server-side.
+      //   - Anything else: surface verbatim and we'll figure it out
+      //     from the report.
+      const createSummary = summarizePrf(cred);
+      const getSummary = summarizePrf(got);
+      // Diagnostic dump into the in-app Logs drawer (left panel,
+      // gated on the Appearance pane's Default log level). Mobile
+      // users without a USB-tethered DevTools session can read this
+      // directly off the device. Quiet on the happy path; only
+      // fires on this exact failure.
+      log.warn('PRF result missing on both create() and get()', {
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'n/a',
+        createExt: cred.getClientExtensionResults(),
+        getExt: got.getClientExtensionResults(),
+      });
       throw new Error(
-        'This device did not return a PRF result. Biometric unlock cannot ' +
-          'be enabled here.',
+        'Biometric unlock could not be enabled: the credential provider ' +
+          'did not return a PRF result. ' +
+          `On register: ${createSummary}. On verify: ${getSummary}.`,
       );
     }
   }
