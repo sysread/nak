@@ -298,22 +298,29 @@ export async function enrollBiometric(password: string): Promise<void> {
     throw new Error('Biometric enrollment was cancelled.');
   }
 
-  // Some browsers (Safari 18 in particular) do NOT evaluate PRF on
-  // create(); they only return `prf.enabled: true` and require a
-  // follow-up get() to actually compute the output. Try the inline
-  // path first; fall back to a get() if needed.
+  // PRF availability reporting is wildly inconsistent across user
+  // agents:
+  //   - Chrome desktop with a built-in TouchID: evaluates PRF inline
+  //     on create() and returns the output under
+  //     `prf.results.first`. One prompt total.
+  //   - Safari 18 (iOS / macOS): returns `prf.enabled: true` on
+  //     create() but does NOT evaluate PRF; requires a follow-up
+  //     get() to actually compute the output.
+  //   - Chrome Android (incl. Pixel 9): often returns NEITHER an
+  //     inline result NOR the `prf.enabled` flag on create(), even
+  //     when the underlying StrongBox authenticator fully supports
+  //     PRF. The flag is only populated reliably on get().
+  //
+  // Gating on `prf.enabled === true` was rejecting Android Chrome
+  // outright, which is the platform we care most about for mobile
+  // unlock. Drop the gate: if there's no inline result, ALWAYS run
+  // a follow-up get() and treat that result as authoritative. Only
+  // declare unsupported if the get() also fails to produce a PRF
+  // output. The cost is a one-time second biometric prompt during
+  // enrollment on browsers that don't inline PRF; subsequent
+  // unlocks are still single-prompt.
   let prfOutput = readPrfFirst(cred);
   if (!prfOutput) {
-    const ext = cred.getClientExtensionResults() as {
-      prf?: { enabled?: boolean };
-    };
-    if (!ext?.prf?.enabled) {
-      throw new Error(
-        'This device registered a passkey but does not support the PRF ' +
-          'extension that biometric unlock relies on. Biometric unlock is ' +
-          'unavailable here.',
-      );
-    }
     // Run a get() right away to harvest the PRF output. The user
     // sees a second biometric prompt during enrollment - acceptable
     // one-time cost on Safari; never repeats on subsequent unlocks.
