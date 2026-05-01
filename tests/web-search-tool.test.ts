@@ -161,6 +161,50 @@ describe('web_search — execute() shape', () => {
     expect(result).toEqual({ answer: 'nothing to cite', citations: [] });
   });
 
+  it('throws a descriptive error when the sub-agent stream produces no text', async () => {
+    // Empty-stream failure mode: the sub-completion finished but
+    // emitted no text events. Without this throw, the tool would
+    // silently return `{answer: '', citations: []}` - indistinguishable
+    // from a successful "no results" answer, leaving the calling LLM
+    // no way to tell whether to retry, rephrase, or surface the
+    // failure to the user. The throw routes through chat-loop's
+    // encodeToolContent into `{error: "..."}` on the tool-result row.
+    const { venice } = mkVenice(() => []);
+    await expect(
+      webSearch.execute({ query: 'q' }, ctxFor(venice))
+    ).rejects.toThrow(/no answer text/i);
+  });
+
+  it('throws on whitespace-only stream output', async () => {
+    // Tripwire on the trim() check: a stream that emits only
+    // whitespace is the same failure shape as a fully empty stream
+    // from the calling LLM's perspective.
+    const { venice } = mkVenice(() => [
+      { type: 'text', delta: '   ' },
+      { type: 'text', delta: '\n\n' },
+    ]);
+    await expect(
+      webSearch.execute({ query: 'q' }, ctxFor(venice))
+    ).rejects.toThrow(/no answer text/i);
+  });
+
+  it('throws when only citations arrive without any answer prose', async () => {
+    // The backend can return citations without the model emitting any
+    // text (e.g. content filter trimmed the synthesis). Citations
+    // alone are not a usable tool result - the calling LLM gets no
+    // synthesis to relay or build on - so we surface this as an
+    // error rather than handing back a bare citation list.
+    const { venice } = mkVenice(() => [
+      {
+        type: 'citations',
+        citations: [{ index: 1, url: 'https://example.com/a' }],
+      },
+    ]);
+    await expect(
+      webSearch.execute({ query: 'q' }, ctxFor(venice))
+    ).rejects.toThrow(/no answer text/i);
+  });
+
   it('forwards context_hint into the user turn when provided', async () => {
     const { venice, seen } = mkVenice(() => [{ type: 'text', delta: 'ok' }]);
     await webSearch.execute(

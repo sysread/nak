@@ -75,11 +75,14 @@ export const RESEARCH_DOCS_SYSTEM_PROMPT_HEADER =
   'app that runs in the user\'s browser. Answer the caller\'s question ' +
   'using only the bundled user-facing docs below. Keep replies to ' +
   '2-5 sentences of plain prose. If the docs do not cover the topic, ' +
-  'say so directly rather than guessing. Do not describe what you are ' +
-  'doing or preamble - just answer. At the end, on a separate line, ' +
-  'write "Sources: " followed by a comma-separated list of the doc ' +
-  'paths (relative to docs/user/) you relied on; write "Sources: none" ' +
-  'if you did not need any.';
+  'write a brief 1-2 sentence note naming what you looked for and ' +
+  'stating that no matching content was found - never return only the ' +
+  'Sources line, the prose is what tells the caller you searched and ' +
+  'came up empty. Do not describe what you are doing or preamble - ' +
+  'just answer. At the end, on a separate line, write "Sources: " ' +
+  'followed by a comma-separated list of the doc paths (relative to ' +
+  'docs/user/) you relied on; write "Sources: none" if you did not ' +
+  'need any.';
 
 /**
  * System prompt when `include_internal_dev_docs` is true. The corpus
@@ -98,13 +101,16 @@ export const RESEARCH_DOCS_DEV_SYSTEM_PROMPT_HEADER =
   'helps (e.g. user-visible behavior in docs/user/ plus the internal ' +
   'design note in docs/dev/). Keep replies to 2-5 sentences of plain ' +
   'prose unless the question is about internal architecture, in which ' +
-  'case longer is fine. If the docs do not cover the topic, say so ' +
-  'directly rather than guessing. Do not preamble - just answer. At ' +
-  'the end, on a separate line, write "Sources: " followed by a ' +
-  'comma-separated list of paths including the tree prefix (e.g. ' +
-  '`docs/user/memory.md`, `docs/dev/memory.md`) so the caller can ' +
-  'tell which tree each cite came from; write "Sources: none" if you ' +
-  'did not need any.';
+  'case longer is fine. If the docs do not cover the topic, write a ' +
+  'brief 1-2 sentence note naming what you looked for across both ' +
+  'trees and stating that no matching content was found - never return ' +
+  'only the Sources line, the prose is what tells the caller you ' +
+  'searched and came up empty. Do not preamble - just answer. At the ' +
+  'end, on a separate line, write "Sources: " followed by a comma- ' +
+  'separated list of paths including the tree prefix (e.g. ' +
+  '`docs/user/memory.md`, `docs/dev/memory.md`) so the caller can tell ' +
+  'which tree each cite came from; write "Sources: none" if you did ' +
+  'not need any.';
 
 /**
  * Format the bundled docs as one flat blob. Each doc is delimited by a
@@ -264,7 +270,50 @@ export const researchDocs: ToolDef = {
       // drop defensively rather than recursing or erroring.
     }
 
+    // Empty stream: the sub-completion finished but emitted no text
+    // events at all. Common causes: fast-tier transient failure,
+    // content-filter rejection, the model hitting maxTokens before the
+    // first text token, or a model that emitted only reasoning tokens
+    // and gave up. Throw rather than silently returning `{answer: '',
+    // sources: []}` - that empty shape is indistinguishable from a
+    // successful "no results" response and gives the calling model no
+    // signal about whether to retry, rephrase, or surface the failure
+    // to the user. The throw routes through chat-loop's
+    // encodeToolContent into `{error: "..."}` on the tool-result row,
+    // which the main model can read and act on.
+    if (raw.trim().length === 0) {
+      log.warn('sub-agent stream completed with no text content');
+      throw new Error(
+        'research_docs: sub-agent stream completed with no text content. ' +
+          'This usually indicates a transient fast-tier failure, a ' +
+          'content-filter rejection, or the model exhausting its output ' +
+          'budget before producing any prose. Retry the call; if it keeps ' +
+          'happening, rephrase the query or surface the failure to the user.'
+      );
+    }
+
     const { answer, sources } = parseResearchResult(raw, { keepPrefixes: includeDev });
+
+    // Degenerate parse: the stream produced text but the only thing it
+    // produced was the trailing "Sources: ..." line, leaving the answer
+    // empty. The system prompt explicitly tells the sub-model to write
+    // 1-2 sentences of prose even when the docs don't cover the topic,
+    // so an empty answer means the sub-model ignored that instruction.
+    // Same rationale as the empty-stream case above: throw rather than
+    // hand back `{answer: '', sources: [...]}` and force the calling
+    // model to guess what happened.
+    if (answer.length === 0) {
+      log.warn('sub-agent emitted only the Sources trailer with no prose');
+      throw new Error(
+        'research_docs: sub-agent emitted only a "Sources" trailer with no ' +
+          'prose answer. This is a sub-model misbehavior (the prompt ' +
+          'instructs it to always write at least a brief note about what ' +
+          'was searched). Retry the call, optionally with a rephrased ' +
+          'query or `include_internal_dev_docs: true` if the topic is ' +
+          'about Nak\'s internals.'
+      );
+    }
+
     log.info(`done: ${sources.length} source(s)`);
     return { answer, sources };
   },

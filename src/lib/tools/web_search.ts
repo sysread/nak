@@ -82,7 +82,11 @@ export const WEB_SEARCH_SYSTEM_PROMPT = [
   'Output: 2-4 sentences. Mark sourced claims with ^N^ superscripts',
   'where N is a 1-based citation index. Do not preamble, do not',
   'describe what you are doing, do not apologize if a source is',
-  'missing - just answer.',
+  'missing - just answer. If the live search turns up nothing useful',
+  'or nothing recent enough to answer the query, write a brief 1-2',
+  'sentence note saying what you searched for and that no relevant',
+  'results were found - never return an empty response, the prose is',
+  'what tells the caller you tried and came up dry.',
 ].join('\n');
 
 export const webSearch: ToolDef = {
@@ -168,8 +172,35 @@ export const webSearch: ToolDef = {
       // recursing.
     }
 
+    const trimmed = answer.trim();
+
+    // Empty answer: the sub-completion finished but emitted no usable
+    // prose. Common causes: fast-tier transient failure, content-filter
+    // rejection, the search backend returning zero hits and the model
+    // emitting nothing rather than a no-results note, or the model
+    // exhausting its output budget on reasoning before reaching text.
+    // Throw rather than hand back `{answer: '', citations: [...]}` -
+    // that empty shape is indistinguishable from a successful "no
+    // results" response and gives the calling model no signal about
+    // whether to retry, rephrase, or surface the failure to the user.
+    // The throw routes through chat-loop's encodeToolContent into
+    // `{error: "..."}` on the tool-result row.
+    if (trimmed.length === 0) {
+      log.warn(
+        `sub-agent stream completed with no text content (${citations.length} citation(s) seen)`
+      );
+      throw new Error(
+        'web_search: sub-agent stream completed with no answer text. ' +
+          'This usually indicates a transient fast-tier failure, a ' +
+          'content-filter rejection, or the search backend returning no ' +
+          'usable hits without a no-results note. Retry the call; if it ' +
+          'keeps happening, rephrase the query or surface the failure to ' +
+          'the user.'
+      );
+    }
+
     log.info(`done: ${citations.length} source(s)`);
 
-    return { answer: answer.trim(), citations };
+    return { answer: trimmed, citations };
   },
 };
