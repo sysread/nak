@@ -14,7 +14,7 @@
  * resolve/reject values and assert what arguments it saw.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { runHeadlessToolLoop } from '../src/lib/tools/run';
+import { runHeadlessToolLoop, MAX_AGENT_DEPTH } from '../src/lib/tools/run';
 import type { Toolbox, ToolContext, ToolDef } from '../src/lib/tools/types';
 import type { VeniceClient, VeniceMessage, StreamEvent } from '../src/lib/venice';
 import type { SupabaseService } from '../src/lib/supabase';
@@ -361,5 +361,107 @@ describe('runHeadlessToolLoop — abort and limits', () => {
     // The child was linked with `once: true`, so parent aborting
     // propagates at abort-time.
     expect(seenSignal!.aborted).toBe(true);
+  });
+});
+
+describe('runHeadlessToolLoop — agent recursion depth', () => {
+  it('stamps depth=1 on the per-call ctx when the caller is the main chat (depth 0)', async () => {
+    // Main-chat semantics: caller's toolCtx has depth 0 (or undefined).
+    // The agent we are starting runs at depth 1, and the tool should
+    // see ctx.depth === 1 so a future spawn checks against the right
+    // base.
+    let seenDepth: number | undefined = -1;
+    const { venice } = makeVenice([
+      [
+        {
+          type: 'tool_call',
+          toolCall: { id: 'c1', type: 'function', function: { name: 'spy', arguments: '{}' } },
+        },
+      ],
+      [{ type: 'text', delta: 'ok' }],
+    ]);
+    const { toolbox } = makeToolbox(async (_args, ctx: ToolContext) => {
+      seenDepth = ctx.depth;
+      return null;
+    });
+
+    await runHeadlessToolLoop({
+      venice,
+      model: 'm',
+      messages: [{ role: 'user', content: 'go' }],
+      toolbox,
+      toolCtx: baseCtx(),
+      signal: new AbortController().signal,
+    });
+
+    expect(seenDepth).toBe(1);
+  });
+
+  it('bumps depth on each level of nesting', async () => {
+    // Caller at depth 1 (e.g. an agent's tool that spawned this one)
+    // should see its tools running at depth 2.
+    let seenDepth: number | undefined = -1;
+    const { venice } = makeVenice([
+      [
+        {
+          type: 'tool_call',
+          toolCall: { id: 'c1', type: 'function', function: { name: 'spy', arguments: '{}' } },
+        },
+      ],
+      [{ type: 'text', delta: 'ok' }],
+    ]);
+    const { toolbox } = makeToolbox(async (_args, ctx: ToolContext) => {
+      seenDepth = ctx.depth;
+      return null;
+    });
+
+    await runHeadlessToolLoop({
+      venice,
+      model: 'm',
+      messages: [{ role: 'user', content: 'go' }],
+      toolbox,
+      toolCtx: { ...baseCtx(), depth: 1 },
+      signal: new AbortController().signal,
+    });
+
+    expect(seenDepth).toBe(2);
+  });
+
+  it('throws before any Venice call when depth would exceed MAX_AGENT_DEPTH', async () => {
+    // Caller already at the cap; the agent we are about to start
+    // would run at MAX_AGENT_DEPTH + 1, which is over.
+    const { venice } = makeVenice([]);
+    const { toolbox } = makeToolbox();
+
+    await expect(
+      runHeadlessToolLoop({
+        venice,
+        model: 'm',
+        messages: [{ role: 'user', content: 'go' }],
+        toolbox,
+        toolCtx: { ...baseCtx(), depth: MAX_AGENT_DEPTH },
+        signal: new AbortController().signal,
+      })
+    ).rejects.toThrow(/depth limit/);
+
+    expect(venice.streamChat).not.toHaveBeenCalled();
+  });
+
+  it('allows depth exactly at MAX_AGENT_DEPTH (caller at MAX-1)', async () => {
+    // Boundary case: caller depth MAX-1 means the agent runs at MAX.
+    // That's the deepest legitimate level - it must not throw.
+    const { venice } = makeVenice([[{ type: 'text', delta: 'ok' }]]);
+    const { toolbox } = makeToolbox();
+
+    const result = await runHeadlessToolLoop({
+      venice,
+      model: 'm',
+      messages: [{ role: 'user', content: 'hi' }],
+      toolbox,
+      toolCtx: { ...baseCtx(), depth: MAX_AGENT_DEPTH - 1 },
+      signal: new AbortController().signal,
+    });
+
+    expect(result.finalText).toBe('ok');
   });
 });

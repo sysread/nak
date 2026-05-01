@@ -2128,7 +2128,7 @@
         await deletePromise;
       }
       if (loopResult.stoppedByLimit && !loopResult.finalText) {
-        error = { text: 'Stopped: tool-call loop hit the 5-round limit.' };
+        error = { text: 'Stopped: tool-call loop hit the 20-round limit.' };
       }
       streamingText = '';
       streamingReasoning = '';

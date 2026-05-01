@@ -60,8 +60,15 @@ import { recallOpeningMemories } from './opening-recall';
 import { detectTimezone, todayInZone } from './journal-day';
 import type { JournalEntry } from './supabase';
 
-/** Upper bound on rounds to prevent a runaway tool-call loop. */
-export const MAX_ROUNDS = 5;
+/**
+ * Upper bound on rounds to prevent a runaway tool-call loop. Acts as
+ * a coarse backstop only - the real bound on agent recursion lives in
+ * `tools/run.ts` as `MAX_AGENT_DEPTH`. Set generously so a legitimate
+ * multi-tool turn (web_search, then a memory_recall pass, then a
+ * cookbook write, then a final reply) doesn't bump into it; if a turn
+ * actually hits the cap, the model is misbehaving rather than working.
+ */
+export const MAX_ROUNDS = 20;
 
 /**
  * Hard cap on the wait for samskara priming before the first
@@ -1242,6 +1249,11 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         userId,
         threadId: thread.id,
         signal: ctl.signal,
+        // Main chat is the root of the agent-recursion tree; tools
+        // dispatched here run at depth 0. A tool that spawns an
+        // agent passes this through so `runHeadlessToolLoop` can
+        // compute the bumped depth and apply the MAX_AGENT_DEPTH cap.
+        depth: 0,
       };
       let args: Record<string, unknown>;
       try {

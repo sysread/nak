@@ -36,8 +36,33 @@ import { sanitizeToolCallsForWire } from './wire';
 import type { VeniceClient, VeniceMessage, ResponseFormat } from '../venice';
 import type { ReasoningEffort } from '../models';
 
-/** Upper bound on rounds a headless run can take. Prevents runaway loops. */
-export const DEFAULT_MAX_ROUNDS = 8;
+/**
+ * Upper bound on rounds a headless run can take. Acts as a coarse
+ * backstop, not a per-task cap - real protection against a runaway
+ * agent-spawning chain comes from MAX_AGENT_DEPTH below. Set high
+ * enough that a legitimately tool-heavy agent (the journal agent
+ * sometimes wants several memory_search + conversation_search rounds
+ * before settling on a JSON entry) doesn't bump into it under normal
+ * use; if a run actually hits this, something is misbehaving.
+ */
+export const DEFAULT_MAX_ROUNDS = 20;
+
+/**
+ * Maximum nested-agent depth allowed below the main chat. The main
+ * chat itself is depth 0; the first agent it spawns runs at depth 1;
+ * an agent spawned by that agent's tool runs at depth 2; and so on.
+ * `runHeadlessToolLoop` rejects an agent run whose effective depth
+ * would exceed this cap, so the recursion main_chat -> agent -> agent
+ * -> ... bottoms out at three levels of agents.
+ *
+ * In practice the registered toolboxes today don't expose a path that
+ * recurses this deep (recall agents only get `*_search` tools, the
+ * journal agent only gets `*_search`, the reflection agent gets the
+ * memory CRUD tools without `memory_recall`). The cap exists as a
+ * defensive backstop so a future toolbox change that accidentally
+ * grants an agent a recursive tool can't hang the worker / chat tab.
+ */
+export const MAX_AGENT_DEPTH = 3;
 
 /**
  * Compose a child AbortController whose `.abort()` fires whenever the
@@ -162,6 +187,22 @@ export async function runHeadlessToolLoop(
   const { venice, model, toolbox, toolCtx, signal } = opts;
   const maxRounds = opts.maxRounds ?? DEFAULT_MAX_ROUNDS;
 
+  // Recursion-depth check. `toolCtx.depth` is the agent depth of the
+  // tool that spawned us (0 when the caller is the main chat). The
+  // agent we are starting runs at one level deeper; if that would
+  // exceed the cap we refuse before the first Venice call so the
+  // calling tool surfaces the failure as a tool-result error and the
+  // model can adapt rather than the worker silently hanging on an
+  // ever-growing stack of in-flight Venice streams.
+  const incomingDepth = toolCtx.depth ?? 0;
+  const effectiveDepth = incomingDepth + 1;
+  if (effectiveDepth > MAX_AGENT_DEPTH) {
+    throw new Error(
+      `agent depth limit (${MAX_AGENT_DEPTH}) exceeded; ` +
+        `would run at depth ${effectiveDepth}`
+    );
+  }
+
   // Local copy — we extend with assistant+tool turns each round but
   // must not mutate the caller's array.
   const messages: VeniceMessage[] = [...opts.messages];
@@ -213,7 +254,15 @@ export async function runHeadlessToolLoop(
     // composing the next round's message list.
     const executions = roundCalls.map(async (call) => {
       const ctl = childController(signal);
-      const ctx: ToolContext = { ...toolCtx, signal: ctl.signal };
+      // Stamp the per-call ctx with this agent's depth so a tool that
+      // tries to spawn yet another agent sees an incremented value
+      // and the next runHeadlessToolLoop's depth check is computed
+      // off the right base.
+      const ctx: ToolContext = {
+        ...toolCtx,
+        signal: ctl.signal,
+        depth: effectiveDepth,
+      };
       let args: Record<string, unknown>;
       try {
         // OpenAI streams `arguments` as a JSON string, one fragment

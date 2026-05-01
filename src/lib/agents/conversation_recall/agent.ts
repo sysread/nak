@@ -152,6 +152,9 @@ export class ConversationRecallAgent
           venice: this.venice,
           userId: req.userId,
           threadId: req.input.threadId,
+          // Forward the caller's depth; runHeadlessToolLoop bumps
+          // and enforces MAX_AGENT_DEPTH internally.
+          depth: req.depth,
         },
         signal,
         responseFormat: CONVERSATION_RECALL_RESPONSE_FORMAT,

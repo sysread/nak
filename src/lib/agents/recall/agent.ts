@@ -255,6 +255,9 @@ export class RecallAgent implements Agent<RecallInput, RecallOutput> {
           venice: this.venice,
           userId: req.userId,
           threadId: req.input.threadId,
+          // Forward the caller's depth; runHeadlessToolLoop bumps
+          // and enforces MAX_AGENT_DEPTH internally.
+          depth: req.depth,
         },
         signal,
         responseFormat: RECALL_RESPONSE_FORMAT,

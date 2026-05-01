@@ -34,6 +34,23 @@ export interface ToolContext {
   userId: string;
   threadId: string;
   signal: AbortSignal;
+  /**
+   * Agent-recursion depth this tool is running at. 0 means the main
+   * chat loop dispatched the call; N means we are N agents deep below
+   * the main chat (main chat -> tool -> agent -> tool -> agent -> ...).
+   * `runHeadlessToolLoop` reads this off the incoming `toolCtx`,
+   * increments it once for the agent it is starting, and stamps the
+   * incremented value onto the per-call ctx its own tools see. A tool
+   * that spawns an agent passes its own ctx.depth into the agent run
+   * request so the bump compounds. Optional/undefined is treated as
+   * 0 - older callers and tests that don't construct a ctx with this
+   * field still behave like the main chat. The hard cap lives in
+   * `tools/run.ts` as `MAX_AGENT_DEPTH`; trying to start an agent
+   * deeper than that throws before the agent does any work, so a
+   * runaway agent-spawning chain bottoms out instead of stack-
+   * exploding.
+   */
+  depth?: number;
 }
 
 /**

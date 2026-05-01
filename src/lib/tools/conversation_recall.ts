@@ -82,6 +82,9 @@ export const conversationRecall: ToolDef = {
       userId: ctx.userId,
       threadId: ctx.threadId,
       signal: ctx.signal,
+      // Forward our depth so the agent's tool loop bumps from the
+      // right base when checking MAX_AGENT_DEPTH.
+      depth: ctx.depth,
     });
 
     if (result.stoppedReason === 'error') {
