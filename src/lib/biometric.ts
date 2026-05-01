@@ -379,13 +379,24 @@ export async function enrollBiometric(password: string): Promise<void> {
     if (!prfOutput) {
       // Diagnostic dump for the user-facing error. The two summaries
       // tell us very different things:
-      //   - "prf: undefined" on both: the credential provider stripped
-      //     the extension. Common on Bitwarden's Android passkey
-      //     provider, which doesn't implement PRF.
+      //   - "prf: undefined (extension was dropped)" on BOTH plus
+      //     entirely empty clientExtensionResults dictionaries, on
+      //     Chrome/Android: the request went through Android's
+      //     Credential Manager framework, which today does not
+      //     marshal WebAuthn extension results (incl. hmac-secret /
+      //     PRF) back from the credential provider to the browser.
+      //     The authenticator likely computed hmac-secret correctly
+      //     but the response was stripped at the framework boundary.
+      //     There is no app-level workaround; tracked upstream in
+      //     Chromium. Confirmed broken on Chrome 147 + Pixel 9.
+      //   - "prf: undefined" on both with non-Android UAs: the
+      //     credential provider ack'd registration but stripped the
+      //     extension. Bitwarden's older Android passkey provider
+      //     behaves this way.
       //   - "enabled=true, results=undefined" on get(): the provider
       //     ack'd PRF on registration but is refusing to compute the
-      //     output. This happens on some Chrome/Android+Play-Services
-      //     combinations where hmac-secret is gated server-side.
+      //     output. Some Chrome/Android+Play-Services combinations
+      //     where hmac-secret is gated server-side.
       //   - Anything else: surface verbatim and we'll figure it out
       //     from the report.
       const createSummary = summarizePrf(cred);
@@ -400,6 +411,27 @@ export async function enrollBiometric(password: string): Promise<void> {
         createExt: cred.getClientExtensionResults(),
         getExt: got.getClientExtensionResults(),
       });
+      // Empty clientExtensionResults on Android Chrome is a near-
+      // certain Credential Manager fingerprint. Tell the user that
+      // directly rather than asking them to chase provider settings
+      // - those won't help. iOS / desktop falls back to the generic
+      // message.
+      const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+      const looksAndroidChrome = /Android/i.test(ua) && /Chrome\//.test(ua);
+      const createExtEmpty = Object.keys(cred.getClientExtensionResults()).length === 0;
+      const getExtEmpty = Object.keys(got.getClientExtensionResults()).length === 0;
+      if (looksAndroidChrome && createExtEmpty && getExtEmpty) {
+        throw new Error(
+          'Biometric unlock can\'t be enabled here: Chrome on Android ' +
+            'currently routes passkey requests through the Android Credential ' +
+            'Manager framework, which does not yet pass WebAuthn extension ' +
+            'results (including the PRF extension this feature relies on) ' +
+            'back to the browser. Until that ships in Chrome / Play Services, ' +
+            'biometric unlock is unavailable on Android Chrome. Use the ' +
+            'typed-master-password path instead. ' +
+            `(Diagnostic: register=${createSummary}; verify=${getSummary}.)`,
+        );
+      }
       throw new Error(
         'Biometric unlock could not be enabled: the credential provider ' +
           'did not return a PRF result. ' +
