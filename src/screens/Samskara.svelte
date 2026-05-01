@@ -1043,7 +1043,7 @@
       {#snippet fireRow(fire: SamskaraFireDiagnosticRow)}
         <div class="fire-head">
           <span class="fire-tier">T{fire.samskara?.tier ?? '?'}</span>
-          <span class="fire-score" title="cosine * sqrt(health * confidence)">
+          <span class="fire-score" title="cosine^1.3 * sqrt(health * confidence) * sample-size bonus">
             score {fire.score.toFixed(3)}
           </span>
           {#if fire.samskara}

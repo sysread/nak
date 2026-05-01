@@ -8,10 +8,10 @@
  *      hundred tokens of "current best model of the user." Rendered
  *      as a leading paragraph.
  *   2. The situational fire from this specific turn — top-k samskaras
- *      ranked by cosine * sqrt(health * confidence). Rendered as a
- *      bullet list, weakest-but-relevant ones rendered in shortened
- *      form when budget tightens so the long tail stays present
- *      without dominating.
+ *      ranked by cosine^1.3 * sqrt(health * confidence) * sample-size
+ *      bonus. Rendered as a bullet list, weakest-but-relevant ones
+ *      rendered in shortened form when budget tightens so the long
+ *      tail stays present without dominating.
  *
  * Either signal may be empty (cold start has neither; a turn where
  * cosine fire returned nothing has only the compound). An entirely

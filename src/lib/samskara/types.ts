@@ -24,7 +24,7 @@ export interface FiredSamskara {
   valence: number | null;
   confidence: number;
   health: number;
-  /** cosine * sqrt(health * confidence) at fire time. Higher = more relevant. */
+  /** cosine^1.3 * sqrt(health * confidence) * sample-size bonus at fire time. Higher = more relevant. */
   score: number;
 }
 

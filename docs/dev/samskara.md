@@ -478,19 +478,32 @@ sleep (60s).
 `samskara_fire_top_k` ranks by three multiplicands:
 
 ```text
-score = (1 - cosine_distance)
+score = power(max(1 - cosine_distance, 0), 1.3)
       * sqrt(max(health * confidence, 0))
       * (1 + 0.1 * ln(1 + confirm_count + disconfirm_count))
 ```
 
-The first term is cosine similarity. The sqrt term softens
-both the confidence and health axes so a strong-but-distant
-samskara can't crush a weak-but-relevant one. The ln term is a
-sample-size bonus: two samskaras with identical confidence but
-different sample sizes (4/5 vs 80/100 confirms) rank by sample
-size when cosine and health are close. Caps at ~1.46x for
-N=100; a brand-new samskara at N=0 still ranks normally so it
-can fire and accumulate signal.
+The first term is cosine similarity raised to a mild power
+(1.3). Linear cosine let well-tested off-topic samskaras
+(cos=0.20, sqrt term ~1.0) outrank mid-quality on-topic ones
+(cos=0.55, sqrt term ~0.5) because the multiplicative
+health/confidence/N terms could close the gap; powering the
+cosine factor cuts a 0.20 match by ~45% and a 0.70 match by
+only ~9%, so the long tail stays present (no SQL threshold)
+but topical samskaras stop crashing into unrelated turns. The
+greatest(..., 0) clamp guards against the (rare) negative
+cosine case where power() would otherwise raise on a
+fractional exponent. The 1.3 exponent is the conservative end
+of the dial; if it under-corrects in practice, 1.5 is the next
+step up.
+
+The sqrt term softens both the confidence and health axes so a
+strong-but-distant samskara can't crush a weak-but-relevant
+one. The ln term is a sample-size bonus: two samskaras with
+identical confidence but different sample sizes (4/5 vs 80/100
+confirms) rank by sample size when cosine and health are
+close. Caps at ~1.46x for N=100; a brand-new samskara at N=0
+still ranks normally so it can fire and accumulate signal.
 
 ### Reinforcement formula
 
@@ -652,10 +665,13 @@ summarizer reads samskaras to feed the agent.
   is exactly the signal we want to surface, because cohort
   reinforcement can pull them back from the brink and the
   formation worker can mint a tier-2 compound from the cohort
-  later. The fire RPC ranks by `cosine * sqrt(health *
+  later. The fire RPC ranks by `cosine^1.3 * sqrt(health *
   confidence) * (1 + 0.1 * ln(1 + N))` so weak-but-relevant
-  samskaras break through. The token budget in `formatPriming`
-  is what bounds the long tail, not a SQL filter.
+  samskaras break through (the 1.3 power on the cosine factor
+  is a relevance nudge, not a threshold - matches still rank
+  smoothly down toward zero). The token budget in
+  `formatPriming` is what bounds the long tail, not a SQL
+  filter.
 - **Two injection mechanisms, both always-on.** The compound
   prose summary captures stable bias across every turn; the
   per-turn cosine fire surfaces situational bias. Either one

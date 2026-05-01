@@ -3078,10 +3078,13 @@ export class SupabaseService {
 
   /**
    * Top-K cosine fire over the user's samskaras. Ranks by
-   * `cosine * sqrt(health * confidence)` so weak-but-relevant samskaras
-   * can break through against strong-but-distant ones. The caller
-   * computes `kMax` as `ceil(K_BASE * log10(N + 10))` per the agreed
-   * log10 dampening on priming volume.
+   * `cosine^1.3 * sqrt(health * confidence) * sample-size bonus` so
+   * weak-but-relevant samskaras can break through against strong-but-
+   * distant ones, while topical samskaras whose cosine is genuinely
+   * low get pushed further down (the 1.3 power on cosine is a
+   * relevance nudge, not a threshold). The caller computes `kMax` as
+   * `ceil(K_BASE * log10(N + 10))` per the agreed log10 dampening on
+   * priming volume.
    */
   async samskaraFireTopK(
     queryEmbedding: number[],
@@ -3740,9 +3743,9 @@ export class SupabaseService {
 
 /**
  * Row shape returned by `samskara_fire_top_k`. The `score` column is
- * the ranked weight `cosine * sqrt(health * confidence)`; callers
- * include it in the priming block so the chat model can perceive the
- * relative weight of each fired samskara.
+ * the ranked weight `cosine^1.3 * sqrt(health * confidence) *
+ * sample-size bonus`; callers include it in the priming block so the
+ * chat model can perceive the relative weight of each fired samskara.
  */
 export interface SamskaraFireRow {
   id: string;

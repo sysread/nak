@@ -2088,7 +2088,7 @@ create table if not exists public.samskaras (
   -- Decays over time and on disconfirm; clamped to [0, 1]. NO health
   -- threshold filter at fire time — three near-dead samskaras
   -- co-firing is exactly the cohort-reinforcement signal we want to
-  -- preserve. The fire RPC ranks by cosine * sqrt(health *
+  -- preserve. The fire RPC ranks by cosine^1.3 * sqrt(health *
   -- confidence) so weak-but-relevant samskaras can break through, and
   -- the formatPriming token budget bounds the long tail in the
   -- application layer.
@@ -2189,9 +2189,9 @@ create table if not exists public.samskara_fires (
   thread_id uuid not null references public.threads(id) on delete cascade,
   cohort_id uuid not null,
   fired_at timestamptz not null default now(),
-  -- The cosine * sqrt(health * confidence) ranking score at fire
-  -- time. Kept for analytics — useful when a debugging session asks
-  -- "why did this samskara fire here?".
+  -- The cosine^1.3 * sqrt(health * confidence) * sample-size bonus
+  -- ranking score at fire time. Kept for analytics — useful when a
+  -- debugging session asks "why did this samskara fire here?".
   score real not null,
   was_confirmed boolean
 );
@@ -2317,10 +2317,14 @@ create policy "samskara compound summary self-deletable"
 -- these change return shape over time; `create or replace` can't
 -- handle that.
 
--- Top-K fire query. Ranks by cosine * sqrt(health * confidence) so
--- weak-but-relevant samskaras can break through against strong-but-
--- distant ones. Returns enough columns for the priming formatter to
--- render without a follow-up SELECT.
+-- Top-K fire query. Ranks by cosine^1.3 * sqrt(health * confidence)
+-- * sample-size bonus so weak-but-relevant samskaras can break
+-- through against strong-but-distant ones, while topical samskaras
+-- whose cosine is genuinely low get pushed further down (a
+-- well-tested off-topic samskara was outranking a mid-quality
+-- on-topic one when the cosine factor was linear). Returns enough
+-- columns for the priming formatter to render without a follow-up
+-- SELECT.
 --
 -- `k_max` is computed by the caller as
 -- `ceil(K_BASE * log10(live_samskara_count + 10))` — the log10 cap
@@ -2342,10 +2346,23 @@ create or replace function public.samskara_fire_top_k(
 )
 language sql stable security invoker as $$
   -- Ranking has three multiplicands:
-  --   - cosine similarity (1 - distance) — semantic relevance to the
-  --     user's current message
+  --   - power(cosine_similarity, 1.3) — semantic relevance to the
+  --     user's current message, with the cosine factor raised to a
+  --     mild power so weak-cosine matches get discounted faster
+  --     than strong ones. Linear cosine (the original) let a
+  --     well-tested off-topic samskara (cos=0.20, sqrt term ~1.0)
+  --     outrank a mid-quality on-topic one (cos=0.55, sqrt term
+  --     ~0.5) because the multiplicative health/confidence/N terms
+  --     could close the gap. Powering the cosine factor cuts a 0.20
+  --     match by ~45% and a 0.70 match by only ~9%, so the long
+  --     tail stays present (no SQL threshold) but topical samskaras
+  --     stop crashing into unrelated turns. The greatest(..., 0)
+  --     clamp guards against the (rare) negative cosine case where
+  --     power() would otherwise raise on a fractional exponent.
+  --     The 1.3 exponent is the conservative end of the dial; if
+  --     it under-corrects in practice, 1.5 is the next step up.
   --   - sqrt(health * confidence) — softens both axes so a strong-
-  --     but-distant samskara can't crush a weak-but-relevant one
+  --     but-distant samskara can't crush a weak-but-relevant one.
   --   - (1 + 0.1 * ln(1 + N)) where N = confirm + disconfirm —
   --     sample-size bonus. A samskara with 4/5 confirms and one with
   --     80/100 confirms have identical confidence; this term lets
@@ -2361,7 +2378,7 @@ language sql stable security invoker as $$
          s.confidence,
          s.health,
          (
-           (1 - (s.prediction_embedding <=> p_query_embedding))
+           power(greatest(1 - (s.prediction_embedding <=> p_query_embedding), 0.0)::double precision, 1.3)
            * sqrt(greatest(s.health * s.confidence, 0.0))
            * (1 + 0.1 * ln(1 + s.confirm_count + s.disconfirm_count))
          )::real as score
