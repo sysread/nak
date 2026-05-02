@@ -151,6 +151,20 @@ alter table public.threads
 alter table public.threads
   add column if not exists title_manually_set boolean not null default false;
 
+-- Cached intuition payload for the most recent round it was computed
+-- on. Holds {perception, drives:{...}, synthesis, computed_at_round,
+-- computed_at_band, computed_at_confident, computed_at_at} - see
+-- src/lib/intuition/types.ts for the canonical shape. Refreshed by
+-- the chat-loop synchronously when (a) the model calls update_title
+-- mid-turn or (b) the user's mood band/confidence changed since the
+-- cache was last written, or (c) the staleness fuse trips after N
+-- rounds without a refresh. Reused as-is on every other round so the
+-- 7-call pipeline (perception + 5 drives + synthesis) doesn't run on
+-- every chitchat turn. Null on cold-start threads; the first refresh
+-- typically lands during turn 1 via the title trigger.
+alter table public.threads
+  add column if not exists intuition_payload jsonb;
+
 create index if not exists threads_user_updated_idx
   on public.threads (user_id, updated_at desc);
 

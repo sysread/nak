@@ -69,6 +69,11 @@ changing a contract that other features depend on.
   samskaras compounds into a prose summary that lives
   always-on in the system prompt; mints surface as a subtle
   top-right toast.
+- [Intuition](./intuition.md) — the subconscious layer. A
+  perception agent + five drives + a synthesis agent that
+  produces a `<think>`-tagged internal monologue, injected
+  ahead of the next completion. Cached per-thread; refreshed
+  on title changes, mood-band shifts, and a staleness fuse.
 - [Settings](./settings.md) — the settings modal +
   `profiles.settings` JSONB + theme.
 - [Help](./help.md) — in-app rendering of `docs/user/`.

@@ -39,6 +39,7 @@ function mkThread(overrides: Partial<Thread> = {}): Thread {
     toolboxes_enabled: [],
     archived: false,
     title_manually_set: false,
+    intuition_payload: null,
     created_at: 'now',
     updated_at: 'now',
     ...overrides,

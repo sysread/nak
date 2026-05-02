@@ -86,6 +86,21 @@ export interface Thread {
   created_at: string;
   updated_at: string;
   /**
+   * Cached intuition payload for this thread. Holds the perception, the
+   * five drive reactions, the synthesised internal-monologue, and the
+   * round/mood snapshot the cache was written against. Refreshed
+   * synchronously by the chat-loop on title-tool fires and on mood-band
+   * shifts; reused as-is between refreshes so the perception + 5 drives
+   * + synthesis pipeline doesn't run on every chitchat turn. Null on
+   * threads that haven't accumulated a refresh yet (cold start).
+   *
+   * The payload shape is defined in src/lib/intuition/types.ts and
+   * coerced from jsonb on read; we deliberately keep this column
+   * loosely-typed at the row layer (just `unknown`) so the intuition
+   * module owns the parse, the same way other jsonb columns do.
+   */
+  intuition_payload: unknown;
+  /**
    * App-local flag: true when this thread exists only in memory (the user
    * clicked "new thread" but hasn't sent a message or renamed it yet).
    * Drafts are never sent to Supabase — they materialize on first save.
@@ -120,6 +135,11 @@ function coerceThread(row: Record<string, unknown>): Thread {
     toolboxes_enabled,
     archived: row.archived === true,
     title_manually_set: row.title_manually_set === true,
+    // Pass jsonb through unchanged. The intuition module owns the
+    // parse/coerce - see src/lib/intuition/cache.ts. A drifting row
+    // that doesn't match the expected shape is treated as "no cache"
+    // there and a fresh refresh runs on the next trigger.
+    intuition_payload: row.intuition_payload ?? null,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
@@ -1166,6 +1186,7 @@ export class SupabaseService {
           toolboxes_enabled: [],
           archived: row.archived,
           title_manually_set: false,
+          intuition_payload: null,
           created_at: row.updated_at,
           updated_at: row.updated_at,
         },
@@ -1324,6 +1345,30 @@ export class SupabaseService {
     const { error } = await this.client
       .from('threads')
       .update({ verbosity })
+      .eq('id', threadId);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Persist the cached intuition payload for this thread. Pass `null`
+   * to clear (used by tests; the chat-loop only ever writes a fresh
+   * payload). Doesn't bump updated_at - intuition is internal state
+   * that shouldn't promote the thread to the top of the sidebar, same
+   * discipline as the toolbox / verbosity / reasoning-effort setters.
+   *
+   * Loose typing on `payload`: the column is jsonb and the intuition
+   * module owns the canonical shape (see
+   * src/lib/intuition/types.ts#IntuitionPayload). Routing the parse
+   * through there means a future shape change touches one file rather
+   * than every Supabase call site.
+   */
+  async setThreadIntuitionPayload(
+    threadId: string,
+    payload: unknown
+  ): Promise<void> {
+    const { error } = await this.client
+      .from('threads')
+      .update({ intuition_payload: payload })
       .eq('id', threadId);
     if (error) throw new SupabaseError(error.message);
   }

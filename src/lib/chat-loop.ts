@@ -59,6 +59,17 @@ import {
 import { recallOpeningMemories } from './opening-recall';
 import { detectTimezone, todayInZone } from './journal-day';
 import type { JournalEntry } from './supabase';
+import {
+  buildIntuitionThinkMessage,
+  countUserRounds,
+  evaluatePreRoundTrigger,
+  evaluateTitleTrigger,
+  readIntuitionCache,
+  runIntuitionPipeline,
+  withIntuitionInflight,
+  writeIntuitionCache,
+  type IntuitionPayload,
+} from './intuition';
 
 /**
  * Upper bound on rounds to prevent a runaway tool-call loop. Acts as
@@ -570,6 +581,14 @@ export interface ChatLoopHandlers {
    * end-of-turn `refreshThreads()` to pick the new title up.
    */
   onTitleChange?(title: string): void;
+  /**
+   * A fresh intuition payload was computed for this thread (pre-round
+   * trigger, title trigger, or stale-fuse). Fires with the new payload
+   * so the UI can update the modal / inline indicator without waiting
+   * for the next thread re-fetch. Skipped on rounds where the cache is
+   * reused as-is - we only signal *changes*.
+   */
+  onIntuitionUpdate?(payload: IntuitionPayload): void;
 }
 
 export interface ChatLoopOptions {
@@ -647,6 +666,26 @@ export interface ChatLoopOptions {
    * samskara to keep working.
    */
   userMessageId?: string;
+  /**
+   * Concrete Venice model id used by the intuition pipeline (perception
+   * + 5 drives + synthesis). Caller resolves the fast tier. Omitted /
+   * undefined disables the intuition feature entirely on this turn -
+   * older callers (older test fixtures) keep working without knowing
+   * the field exists. The cache is left untouched when this is absent,
+   * so a turn without an intuition model doesn't invalidate prior
+   * payloads.
+   */
+  intuitionModelId?: string;
+  /**
+   * Mood snapshot at turn-entry. The chat-loop compares it against the
+   * cached payload's mood snapshot to decide whether the band /
+   * confidence column has shifted enough to warrant a refresh. Null /
+   * undefined disables the mood-shift trigger - the title trigger and
+   * stale fuse still operate. Both bands and column come from the same
+   * MOOD_TABLE the samskara mood pill renders against (see
+   * src/lib/samskara/events.ts).
+   */
+  intuitionMood?: { band: number; column: 'confident' | 'tentative' } | null;
 }
 
 /** Non-error completion shape returned to the caller. */
@@ -818,6 +857,8 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     userMessageId,
     userName,
     userLocation,
+    intuitionModelId,
+    intuitionMood,
   } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
@@ -1014,6 +1055,56 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       role: 'assistant',
       content: priming.openingRecallBlock,
     });
+  }
+
+  // Intuition layer: subconscious read of the conversation, injected as
+  // a synthetic <think> turn so the conscious response factors in the
+  // five-drive synthesis. Skipped entirely when intuitionModelId is
+  // absent (older callers / tests), so a turn without an intuition
+  // model just runs as before. The cache lives on threads.intuition_payload;
+  // we read once at turn entry, optionally refresh, and replace
+  // (not append) on a mid-turn title trigger so the model never sees
+  // two competing <think> blocks.
+  //
+  // The round id is the user-message count in history INCLUDING the
+  // just-sent user turn. Tool-using rounds inflate the chat-loop's
+  // internal `round` counter but do not change the user-round - one
+  // user message, one round id, regardless of how many tool calls
+  // happen during the response.
+  const currentUserRound = countUserRounds(history);
+  let intuitionCache: IntuitionPayload | null = readIntuitionCache(thread);
+  let intuitionMessageIdx: number | null = null;
+  if (intuitionModelId) {
+    const preTrigger = evaluatePreRoundTrigger({
+      cache: intuitionCache,
+      round: currentUserRound,
+      mood: intuitionMood ?? null,
+    });
+    if (preTrigger) {
+      const fresh = await withIntuitionInflight(thread.id, () =>
+        runIntuitionPipeline({
+          venice,
+          model: intuitionModelId,
+          history,
+          signal,
+          round: currentUserRound,
+          mood: intuitionMood ?? null,
+          trigger: preTrigger,
+        })
+      );
+      if (fresh) {
+        intuitionCache = fresh;
+        // Persist fire-and-forget. A write failure logs inside
+        // writeIntuitionCache but the in-memory cache still drives this
+        // turn's response - we don't block on Supabase.
+        void writeIntuitionCache(supabase, thread.id, fresh);
+        handlers?.onIntuitionUpdate?.(fresh);
+      }
+    }
+  }
+  if (intuitionCache) {
+    history.push(buildIntuitionThinkMessage(intuitionCache));
+    intuitionMessageIdx = history.length - 1;
   }
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -1345,6 +1436,55 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         }
       }
     }
+
+    // Mid-turn intuition trigger: if any update_title call succeeded
+    // this round, the topic has meaningfully shifted - run the
+    // pipeline before the next streamChat round so the model's next
+    // response factors in the fresh subconscious read. Skipped when
+    // the cache is already current for this user-round (the pre-round
+    // trigger already fired earlier this same turn, or a prior in-turn
+    // title call already covered it - rare). Replaces the prior
+    // ephemeral message rather than appending so the model never sees
+    // two competing <think> blocks; the first <think> would have been
+    // computed against the pre-rename perception and is now obsolete.
+    if (intuitionModelId) {
+      const titleSucceeded = settled.some(
+        (r) => r.ok && r.call.function.name === updateTitle.name
+      );
+      if (titleSucceeded) {
+        const titleTrigger = evaluateTitleTrigger({
+          cache: intuitionCache,
+          round: currentUserRound,
+          mood: intuitionMood ?? null,
+        });
+        if (titleTrigger) {
+          const fresh = await withIntuitionInflight(thread.id, () =>
+            runIntuitionPipeline({
+              venice,
+              model: intuitionModelId,
+              history,
+              signal,
+              round: currentUserRound,
+              mood: intuitionMood ?? null,
+              trigger: titleTrigger,
+            })
+          );
+          if (fresh) {
+            intuitionCache = fresh;
+            void writeIntuitionCache(supabase, thread.id, fresh);
+            handlers?.onIntuitionUpdate?.(fresh);
+            const refreshedMsg = buildIntuitionThinkMessage(fresh);
+            if (intuitionMessageIdx !== null) {
+              history[intuitionMessageIdx] = refreshedMsg;
+            } else {
+              history.push(refreshedMsg);
+              intuitionMessageIdx = history.length - 1;
+            }
+          }
+        }
+      }
+    }
+
     // Loop back for another round. The model will see the tool results
     // in the extended history and either produce a final answer or
     // request more tool calls.

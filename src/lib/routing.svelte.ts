@@ -4,7 +4,7 @@
  *
  *   cid     = active thread id
  *   drawer  = 'chats' | 'recipes' | 'journal'  (sidebar tab; absent = 'chats')
- *   modal   = 'settings' | 'help' | 'memories' | 'samskara'  (utility overlays)
+ *   modal   = 'settings' | 'help' | 'memories' | 'samskara' | 'intuition'  (utility overlays)
  *   recipe  = recipe id; selecting one switches the main panel to the recipe detail
  *   doc     = docs/user/ path when modal=help
  *   journal_date = YYYY-MM-DD; selecting one switches the main panel to that day
@@ -37,7 +37,7 @@
  * owns.
  */
 
-export type Modal = 'settings' | 'help' | 'memories' | 'samskara';
+export type Modal = 'settings' | 'help' | 'memories' | 'samskara' | 'intuition';
 export type DrawerTab = 'chats' | 'recipes' | 'journal';
 
 export interface Route {
@@ -66,6 +66,7 @@ const MODAL_VALUES: readonly Modal[] = [
   'help',
   'memories',
   'samskara',
+  'intuition',
 ];
 const DRAWER_VALUES: readonly DrawerTab[] = ['chats', 'recipes', 'journal'];
 

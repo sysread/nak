@@ -102,10 +102,13 @@
   import Memories from './Memories.svelte';
   import Journal from './Journal.svelte';
   import Samskara from './Samskara.svelte';
+  import Intuition from './Intuition.svelte';
   import Settings from './Settings.svelte';
   import Cookbook from './Cookbook.svelte';
   import RecipeList from '../components/RecipeList.svelte';
   import JournalList from '../components/JournalList.svelte';
+  import IntuitionPill from '../components/IntuitionPill.svelte';
+  import IntuitionCard from '../components/IntuitionCard.svelte';
   import {
     cookbook,
     loadRecipes,
@@ -117,6 +120,9 @@
   } from '$lib/journal-store.svelte';
   import { JOURNAL_CHANGE_EVENT } from '$lib/journal-events';
   import { todayInZone, shiftDay } from '$lib/journal-day';
+  import { moodState } from '$lib/samskara/mood.svelte';
+  import { bandIndexFor, columnFor } from '$lib/samskara/events';
+  import { coerceIntuitionPayload, type IntuitionPayload } from '$lib/intuition';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -148,6 +154,7 @@
   const showHelp = $derived(route.modal === 'help');
   const showMemories = $derived(route.modal === 'memories');
   const showSamskara = $derived(route.modal === 'samskara');
+  const showIntuition = $derived(route.modal === 'intuition');
   // Trigger flags for the recipe and journal "new" top-bar buttons.
   // Chat.svelte sets these to true; the panel component resets them
   // via the $bindable prop after handling the event.
@@ -1303,6 +1310,15 @@
     activeThreadId ? findThread(activeThreadId) ?? null : null
   );
 
+  // Active thread's cached intuition payload, coerced from the
+  // jsonb column. Null on cold threads or shape drift; the modal
+  // and the inline card both gate on this being non-null. Reactive
+  // because patchThread() (used by onIntuitionUpdate) re-derives
+  // currentThread, which re-runs this expression.
+  const currentIntuitionPayload = $derived<IntuitionPayload | null>(
+    currentThread ? coerceIntuitionPayload(currentThread.intuition_payload) : null
+  );
+
   const defaultTier = $derived<ModelTier>(app.defaultModel ?? DEFAULT_TIER);
   const currentTier = $derived<ModelTier>(
     resolveTier(currentThread?.model ?? null, defaultTier)
@@ -1487,6 +1503,7 @@
       toolboxes_enabled: [],
       archived: false,
       title_manually_set: false,
+      intuition_payload: null,
       created_at: now,
       updated_at: now,
       isDraft: true,
@@ -1914,6 +1931,20 @@
       // `messages` on each attempt so persisted rows from earlier
       // tool rounds (which call onAssistantPersisted before a 429
       // on a later round) reach the wire on the retry.
+      // Snapshot the mood at turn-entry. The intuition layer compares
+      // it against the cached payload's snapshot to decide whether to
+      // refresh; mid-turn mood mints don't affect this turn (they get
+      // applied to the *next* user round). null when the thread has
+      // never fired or while the seed query is in flight - intuition
+      // skips the mood-shift trigger in that case but the title and
+      // stale-fuse triggers still work.
+      const moodSnapshot = moodState.current;
+      const intuitionMoodArg = moodSnapshot
+        ? {
+            band: bandIndexFor(moodSnapshot.valence),
+            column: columnFor(moodSnapshot.confidence),
+          }
+        : null;
       const oneAttempt = () =>
         runChatLoop({
           venice: app.venice!,
@@ -1930,6 +1961,8 @@
           userName: ctx.sendUserName,
           userLocation: ctx.sendUserLocation,
           journalTimezone: app.journalTimezone || null,
+          intuitionModelId: MODELS.fast.id,
+          intuitionMood: intuitionMoodArg,
           handlers: {
             onTextUpdate: (t) => {
               pending = t;
@@ -2035,6 +2068,17 @@
               setTimeout(() => {
                 toolboxFlash = false;
               }, 600);
+            },
+            onIntuitionUpdate: (payload: IntuitionPayload) => {
+              // Patch the in-memory thread row so the modal and any
+              // inline indicator pick up the fresh perception/drives/
+              // synthesis without waiting for a full thread re-fetch.
+              // The chat-loop already persisted to Supabase fire-and-
+              // forget; this is the optimistic UI update that makes
+              // the new payload visible immediately.
+              patchThread(ctx.threadId, {
+                intuition_payload: payload,
+              });
             },
           },
         });
@@ -2847,7 +2891,14 @@
     // (unlikely, but the model could do it). `assistantId` anchors
     // the block to its originating assistant row for debugging /
     // future deep-link needs.
-    | { kind: 'rename'; key: string; assistantId: string; title: string };
+    | { kind: 'rename'; key: string; assistantId: string; title: string }
+    // Inline subconscious-read card. Anchored to the user message at
+    // the same user-round as `payload.computed_at_round`. Only one
+    // ever appears in the transcript at a time because the cache only
+    // holds the most recent payload; older rounds render without a
+    // card. The card itself owns its expand/collapse state (see
+    // IntuitionCard.svelte).
+    | { kind: 'intuition'; payload: IntuitionPayload };
 
   // Tool names rendered as something other than a standard tool-call
   // card:
@@ -2918,11 +2969,38 @@
         resultsByCallId[m.tool_call_id] = m;
       }
     }
+    // Inline-card emission: walk user messages in order and emit the
+    // intuition card immediately after the user message whose round
+    // matches `payload.computed_at_round`. The cache only holds the
+    // most recent payload, so this fires at most once across the
+    // whole transcript - older rounds render without a card. Reading
+    // the payload reactively here keeps the card in sync with
+    // onIntuitionUpdate's optimistic patch (no separate effect
+    // wiring needed).
+    const intuitionPayload = currentIntuitionPayload;
+    let userRoundCounter = 0;
     // Second pass: emit blocks, folding assistant-with-tool_calls rows
     // into a tool-group that carries the matching result rows.
     const blocks: MessageBlock[] = [];
     for (const m of messages) {
       if (m.role === 'tool') continue; // folded under their assistant parent
+      if (m.role === 'user') {
+        userRoundCounter++;
+        blocks.push({ kind: 'plain', message: m });
+        // Drop the intuition card immediately after the user message
+        // whose round id matches the cached payload. Anchor on the
+        // user side so the card sits between the user's prompt and
+        // the assistant's reply, matching the mental model "the
+        // assistant had this thought after reading their message,
+        // before responding".
+        if (
+          intuitionPayload &&
+          intuitionPayload.computed_at_round === userRoundCounter
+        ) {
+          blocks.push({ kind: 'intuition', payload: intuitionPayload });
+        }
+        continue;
+      }
       if (
         m.role === 'assistant' &&
         m.tool_calls &&
@@ -3835,7 +3913,15 @@
           bind:this={messagesEl}
           onscroll={onMessagesScroll}
         >
-          {#each messageBlocks as block (block.kind === 'plain' ? block.message.id : block.kind === 'rename' ? `rename:${block.key}` : block.assistant.id)}
+          {#each messageBlocks as block (
+            block.kind === 'plain'
+              ? block.message.id
+              : block.kind === 'rename'
+              ? `rename:${block.key}`
+              : block.kind === 'intuition'
+              ? `intuition:${block.payload.computed_at_round}:${block.payload.computed_at_at}`
+              : block.assistant.id
+          )}
             {#if block.kind === 'tool-group'}
               <!-- Tool-group bubble: reuse AssistantBody for the markdown
                    / reasoning / citations triad, with `<ToolCalls>`
@@ -3879,6 +3965,15 @@
               <div class="renamed-to" role="note" aria-label="Conversation renamed">
                 Renamed to <em>{block.title}</em>
               </div>
+            {:else if block.kind === 'intuition'}
+              <!-- Inline subconscious-read card. Sits between the
+                   user message it was computed for and the assistant
+                   response that followed. Distinct visual register
+                   (dashed border, no avatar) so it reads as
+                   commentary alongside the conversation, not a
+                   message in it. Component owns its expand/collapse
+                   state. -->
+              <IntuitionCard payload={block.payload} />
             {:else if block.message.role === 'assistant'}
               <div
                 class="msg assistant"
@@ -4578,6 +4673,10 @@
        journal panels where no conversation is running. -->
   {#if drawerTab === 'chats'}
     <SamskaraToasts />
+    <!-- Intuition pill sits to the LEFT of the mood pill (same fixed
+         row). Suppressed on cold threads where no payload exists yet -
+         the pill itself only renders when a payload is present. -->
+    <IntuitionPill payload={currentIntuitionPayload} />
   {/if}
 
   <!--
@@ -4603,6 +4702,12 @@
   {/if}
   {#if showSamskara}
     <Samskara onClose={() => navigate({ modal: null })} />
+  {/if}
+  {#if showIntuition}
+    <Intuition
+      onClose={() => navigate({ modal: null })}
+      threads={loadedThreads}
+    />
   {/if}
   <!-- Cookbook and Journal now render inline in the main panel
        (drawerTab === 'recipes' / 'journal') rather than as modals. -->
