@@ -279,11 +279,18 @@ export async function enrollBiometric(password: string): Promise<void> {
   }
 
   const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
-  // userHandle is opaque to the RP but must be present and stable
-  // per "user". A single Nak install only has one master password,
-  // so a deterministic ID derived from origin is fine; a random
-  // 16-byte ID would be equally fine.
-  const userId = new TextEncoder().encode('nak-master');
+  // user.id MUST be a random per-enrollment buffer, NOT a deterministic
+  // string. Credential providers (notably Bitwarden's Android passkey
+  // provider) use user.id as a primary key to distinguish accounts on
+  // the RP. A fixed user.id across re-enrollments collides with prior
+  // entries: the provider may skip the actual passkey creation, save
+  // the form-typed master password as a regular password entry, and
+  // return an empty / invalid response that produces empty
+  // clientExtensionResults. The passkey-prf-playground reference
+  // implementation uses 64 random bytes per registration; we match.
+  // Cost: re-enrolling leaves an orphaned passkey entry in the user's
+  // provider that they can clean up manually.
+  const userId = crypto.getRandomValues(new Uint8Array(64));
   // Challenge for create() is required by the spec. No verification
   // path uses it (we are not validating attestation), so a fresh
   // random buffer suffices.
@@ -299,7 +306,11 @@ export async function enrollBiometric(password: string): Promise<void> {
     rp: { name: 'Nak', id: window.location.hostname },
     user: {
       id: userId,
-      name: 'Nak master password',
+      // Credential providers display user.name as the entry's
+      // "username" in their passkey-list UI. "Nak master password"
+      // shown as a username reads as nonsense; the master password
+      // string itself never goes here. Stick to a short identifier.
+      name: 'Nak',
       displayName: 'Nak',
     },
     // ES256 + RS256 covers every platform authenticator we care

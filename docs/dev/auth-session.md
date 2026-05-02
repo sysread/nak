@@ -260,9 +260,20 @@ Manager. The extra prompt only costs the user one tap during
 the one-time enrollment; subsequent unlocks are still
 single-prompt.
 
-Three other configuration knobs are load-bearing for the
+Four other configuration knobs are load-bearing for the
 Android Chrome path:
 
+- `user.id` must be a fresh random buffer per registration (we
+  use 64 random bytes). A deterministic / stable `user.id`
+  collides with prior entries in the credential provider's
+  account index - Bitwarden's Android provider in particular
+  responds to a colliding user.id by saving the form-typed
+  password as a regular password entry, skipping the actual
+  passkey creation, and returning an empty
+  `clientExtensionResults`. This was the root cause of the early
+  enrollment failures. Cost: re-enrolling leaves orphaned
+  passkey entries in the user's provider that they clean up
+  manually.
 - `rp.id: window.location.hostname` must be set explicitly. Chrome
   desktop derives it from the origin if omitted; Chrome / Android
   via Credential Manager refuses to register without an explicit
