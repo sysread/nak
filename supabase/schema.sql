@@ -1186,17 +1186,24 @@ begin
   if p_data is null or length(p_data) = 0 then
     raise exception 'data is required';
   end if;
-  -- ON CONFLICT ... DO UPDATE ... RETURNING is the pattern that gives
-  -- a returned id on both fresh insert and existing-row hit. The
-  -- DO UPDATE body is a no-op (sets sha256 to itself) because we
-  -- only need the side effect of forcing RETURNING to fire on
-  -- conflict; the row's contents don't change.
+  -- Two-step upsert that respects the table's no-update RLS posture.
+  -- DO UPDATE would trip the RLS update policy that intentionally
+  -- doesn't exist (recipe_images rows are immutable - byte changes
+  -- mean a different sha256, which means a different row), so we use
+  -- DO NOTHING and follow up with a SELECT for the existing id when
+  -- the insert was suppressed by the conflict. The SELECT goes
+  -- through the SELECT policy (auth.uid() = user_id) which is
+  -- satisfied by construction.
   insert into public.recipe_images
     (user_id, sha256, mime_type, size_bytes, data)
     values (v_uid, p_sha256, p_mime_type, p_size_bytes, p_data)
-    on conflict (user_id, sha256) do update
-      set sha256 = excluded.sha256
+    on conflict (user_id, sha256) do nothing
     returning id into v_id;
+  if v_id is null then
+    select id into v_id
+      from public.recipe_images
+     where user_id = v_uid and sha256 = p_sha256;
+  end if;
   return v_id;
 end $$;
 
