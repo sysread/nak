@@ -16,32 +16,55 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runHeadlessToolLoop, MAX_AGENT_DEPTH } from '../src/lib/tools/run';
 import type { Toolbox, ToolContext, ToolDef } from '../src/lib/tools/types';
-import type { VeniceClient, VeniceMessage, StreamEvent } from '../src/lib/venice';
+import type {
+  ChatCompletion,
+  OpenAIToolCall,
+  VeniceClient,
+  VeniceMessage,
+} from '../src/lib/venice';
 import type { SupabaseService } from '../src/lib/supabase';
 
-/** Script a venice.streamChat with a canned sequence of StreamEvents. */
+/**
+ * Per-round shape the test scripts. The headless loop now drives
+ * `venice.completeChat`, which returns a single record per round
+ * rather than a stream of events. Tests script `{text, toolCalls?}`
+ * for each round; the helper fills the rest of the ChatCompletion
+ * shape with empty defaults.
+ */
+interface RoundScript {
+  text?: string;
+  toolCalls?: OpenAIToolCall[];
+}
+
+/** Script a venice.completeChat with one canned ChatCompletion per round. */
 function makeVenice(
-  rounds: StreamEvent[][]
+  rounds: RoundScript[]
 ): { venice: VeniceClient; streamCalls: VeniceMessage[][] } {
-  // Each round's events come from rounds[i]; we shift off the front so
-  // call 1 sees rounds[0], call 2 sees rounds[1], etc.
+  // Each round's response comes from rounds[i]; we shift off the front
+  // so call 1 sees rounds[0], call 2 sees rounds[1], etc. Naming the
+  // observation array `streamCalls` for diff churn reasons - it still
+  // captures the per-round message list.
   const remaining = rounds.slice();
   const streamCalls: VeniceMessage[][] = [];
-  const streamChat = vi.fn(
-    (req: { messages: VeniceMessage[] }): AsyncGenerator<StreamEvent, void, void> => {
+  const completeChat = vi.fn(
+    async (req: { messages: VeniceMessage[] }): Promise<ChatCompletion> => {
       // Snapshot the messages we were called with so assertions can
       // inspect round-N's payload without racing the loop's own
       // in-place extensions.
       streamCalls.push(req.messages.map((m) => ({ ...m })));
-      const events = remaining.shift() ?? [];
-      async function* gen(): AsyncGenerator<StreamEvent, void, void> {
-        for (const ev of events) yield ev;
-      }
-      return gen();
+      const script = remaining.shift() ?? {};
+      return {
+        text: script.text ?? '',
+        reasoning: '',
+        toolCalls: script.toolCalls ?? [],
+        usage: null,
+        citations: [],
+        finishReason: (script.toolCalls ?? []).length > 0 ? 'tool_calls' : 'stop',
+      };
     }
   );
   return {
-    venice: { streamChat } as unknown as VeniceClient,
+    venice: { completeChat } as unknown as VeniceClient,
     streamCalls,
   };
 }
@@ -73,7 +96,7 @@ function baseCtx(): Omit<ToolContext, 'signal'> {
 
 describe('runHeadlessToolLoop — terminal paths', () => {
   it('returns finalText and exits when round 1 has no tool calls', async () => {
-    const { venice } = makeVenice([[{ type: 'text', delta: 'hello ' }, { type: 'text', delta: 'world' }]]);
+    const { venice } = makeVenice([{ text: 'hello world' }]);
     const { toolbox, spy } = makeToolbox();
 
     const result = await runHeadlessToolLoop({
@@ -95,18 +118,17 @@ describe('runHeadlessToolLoop — terminal paths', () => {
   it('executes a tool call, feeds the result back, and exits on the next terminal round', async () => {
     const { venice, streamCalls } = makeVenice([
       // Round 1: model asks for one tool call.
-      [
-        {
-          type: 'tool_call',
-          toolCall: {
+      {
+        toolCalls: [
+          {
             id: 'call-1',
             type: 'function',
             function: { name: 'spy', arguments: '{"x":1}' },
           },
-        },
-      ],
-      // Round 2: model replies with text only — loop exits.
-      [{ type: 'text', delta: 'done' }],
+        ],
+      },
+      // Round 2: model replies with text only - loop exits.
+      { text: 'done' },
     ]);
     const { toolbox, spy } = makeToolbox(async () => ({ echoed: true }));
 
@@ -147,25 +169,21 @@ describe('runHeadlessToolLoop — terminal paths', () => {
     });
 
     const { venice } = makeVenice([
-      [
-        {
-          type: 'tool_call',
-          toolCall: {
+      {
+        toolCalls: [
+          {
             id: 'c1',
             type: 'function',
             function: { name: 'spy', arguments: '{"n":1}' },
           },
-        },
-        {
-          type: 'tool_call',
-          toolCall: {
+          {
             id: 'c2',
             type: 'function',
             function: { name: 'spy', arguments: '{"n":2}' },
           },
-        },
-      ],
-      [{ type: 'text', delta: 'done' }],
+        ],
+      },
+      { text: 'done' },
     ]);
     const { toolbox } = makeToolbox(async () => {
       startTimes.push(Date.now());
@@ -193,17 +211,16 @@ describe('runHeadlessToolLoop — terminal paths', () => {
 describe('runHeadlessToolLoop — error paths', () => {
   it('surfaces a tool error as a JSON-encoded tool-result and continues', async () => {
     const { venice, streamCalls } = makeVenice([
-      [
-        {
-          type: 'tool_call',
-          toolCall: {
+      {
+        toolCalls: [
+          {
             id: 'c1',
             type: 'function',
             function: { name: 'spy', arguments: '{}' },
           },
-        },
-      ],
-      [{ type: 'text', delta: 'ok' }],
+        ],
+      },
+      { text: 'ok' },
     ]);
     const { toolbox } = makeToolbox(async () => {
       throw new Error('tool blew up');
@@ -235,17 +252,16 @@ describe('runHeadlessToolLoop — error paths', () => {
     // The tool must not run with unparsed args; the model sees the
     // JSON parse error on its next turn and can retry.
     const { venice } = makeVenice([
-      [
-        {
-          type: 'tool_call',
-          toolCall: {
+      {
+        toolCalls: [
+          {
             id: 'c1',
             type: 'function',
             function: { name: 'spy', arguments: '{broken' },
           },
-        },
-      ],
-      [{ type: 'text', delta: 'recovered' }],
+        ],
+      },
+      { text: 'recovered' },
     ]);
     const { toolbox, spy } = makeToolbox();
 
@@ -265,10 +281,9 @@ describe('runHeadlessToolLoop — error paths', () => {
 
 describe('runHeadlessToolLoop — abort and limits', () => {
   it('short-circuits with rounds=0 when the signal is already aborted', async () => {
-    // No events scripted — if the loop calls streamChat at all, the
-    // empty generator returns nothing and the loop hangs forever (a
-    // timeout would expose that). The pre-aborted check prevents the
-    // call entirely.
+    // No rounds scripted - if the loop calls completeChat at all, the
+    // default empty response would still drive a tool-less terminal
+    // round. The pre-aborted check prevents the call entirely.
     const { venice } = makeVenice([]);
     const { toolbox } = makeToolbox();
     const ac = new AbortController();
@@ -285,22 +300,21 @@ describe('runHeadlessToolLoop — abort and limits', () => {
 
     expect(result.rounds).toBe(0);
     expect(result.finalText).toBe('');
-    expect(venice.streamChat).not.toHaveBeenCalled();
+    expect(venice.completeChat).not.toHaveBeenCalled();
   });
 
   it('honors maxRounds as a circuit breaker and reports stoppedByLimit', async () => {
     // Every round asks for a tool call; no round ever produces terminal
     // text. Without maxRounds this would loop forever.
-    const makeRound = (id: string): StreamEvent[] => [
-      {
-        type: 'tool_call',
-        toolCall: {
+    const makeRound = (id: string): RoundScript => ({
+      toolCalls: [
+        {
           id,
           type: 'function',
           function: { name: 'spy', arguments: '{}' },
         },
-      },
-    ];
+      ],
+    });
     const { venice } = makeVenice([makeRound('a'), makeRound('b'), makeRound('c')]);
     const { toolbox } = makeToolbox();
 
@@ -327,17 +341,16 @@ describe('runHeadlessToolLoop — abort and limits', () => {
     // reports aborted once the parent is aborted.
     let seenSignal: AbortSignal | undefined;
     const { venice } = makeVenice([
-      [
-        {
-          type: 'tool_call',
-          toolCall: {
+      {
+        toolCalls: [
+          {
             id: 'c1',
             type: 'function',
             function: { name: 'spy', arguments: '{}' },
           },
-        },
-      ],
-      [{ type: 'text', delta: 'ok' }],
+        ],
+      },
+      { text: 'ok' },
     ]);
     const { toolbox } = makeToolbox(async (_args, ctx: ToolContext) => {
       seenSignal = ctx.signal;
@@ -372,13 +385,12 @@ describe('runHeadlessToolLoop — agent recursion depth', () => {
     // base.
     let seenDepth: number | undefined = -1;
     const { venice } = makeVenice([
-      [
-        {
-          type: 'tool_call',
-          toolCall: { id: 'c1', type: 'function', function: { name: 'spy', arguments: '{}' } },
-        },
-      ],
-      [{ type: 'text', delta: 'ok' }],
+      {
+        toolCalls: [
+          { id: 'c1', type: 'function', function: { name: 'spy', arguments: '{}' } },
+        ],
+      },
+      { text: 'ok' },
     ]);
     const { toolbox } = makeToolbox(async (_args, ctx: ToolContext) => {
       seenDepth = ctx.depth;
@@ -402,13 +414,12 @@ describe('runHeadlessToolLoop — agent recursion depth', () => {
     // should see its tools running at depth 2.
     let seenDepth: number | undefined = -1;
     const { venice } = makeVenice([
-      [
-        {
-          type: 'tool_call',
-          toolCall: { id: 'c1', type: 'function', function: { name: 'spy', arguments: '{}' } },
-        },
-      ],
-      [{ type: 'text', delta: 'ok' }],
+      {
+        toolCalls: [
+          { id: 'c1', type: 'function', function: { name: 'spy', arguments: '{}' } },
+        ],
+      },
+      { text: 'ok' },
     ]);
     const { toolbox } = makeToolbox(async (_args, ctx: ToolContext) => {
       seenDepth = ctx.depth;
@@ -444,13 +455,13 @@ describe('runHeadlessToolLoop — agent recursion depth', () => {
       })
     ).rejects.toThrow(/depth limit/);
 
-    expect(venice.streamChat).not.toHaveBeenCalled();
+    expect(venice.completeChat).not.toHaveBeenCalled();
   });
 
   it('allows depth exactly at MAX_AGENT_DEPTH (caller at MAX-1)', async () => {
     // Boundary case: caller depth MAX-1 means the agent runs at MAX.
     // That's the deepest legitimate level - it must not throw.
-    const { venice } = makeVenice([[{ type: 'text', delta: 'ok' }]]);
+    const { venice } = makeVenice([{ text: 'ok' }]);
     const { toolbox } = makeToolbox();
 
     const result = await runHeadlessToolLoop({

@@ -18,7 +18,13 @@ import {
   INTERRUPTED_MARKER,
   buildThreadAttachmentsBlock,
 } from '../src/lib/chat-loop';
-import type { ChatRequest, StreamEvent, Citation } from '../src/lib/venice';
+import type {
+  ChatCompletion,
+  ChatRequest,
+  Citation,
+  StreamEvent,
+  TokenUsage,
+} from '../src/lib/venice';
 import type { VeniceClient } from '../src/lib/venice';
 import type {
   SupabaseService,
@@ -143,22 +149,58 @@ function mockSupabase(overrides: Partial<MockSupabase> = {}): {
 }
 
 /**
- * Build a VeniceClient whose streamChat yields the configured events for
- * round N on its Nth invocation. Used to script a multi-round
- * conversation. `sleepBetween` inserts an awaited microtask between
- * events so concurrency can be observed in tests.
+ * Build a VeniceClient whose streamChat yields the configured events
+ * for round N on its Nth invocation. Used to script a multi-round
+ * conversation.
+ *
+ * Both `streamChat` and `completeChat` draw from the same round queue
+ * - the main chat loop streams (so its rounds come off the queue as
+ * SSE events) and the background sub-tools (web_search,
+ * research_docs, analyze_image, the headless tool loop) call
+ * completeChat (so for those rounds the helper folds the same event
+ * list into a single ChatCompletion record). Tests script every round
+ * the same way regardless of which path consumes it - the per-round
+ * counter advances on either method.
  */
 function mockVenice(roundEvents: StreamEvent[][]): VeniceClient {
   let i = 0;
+  function nextRound(): StreamEvent[] {
+    return roundEvents[i++] ?? [];
+  }
+  function eventsToCompletion(events: StreamEvent[]): ChatCompletion {
+    let text = '';
+    let reasoning = '';
+    const toolCalls: OpenAIToolCall[] = [];
+    let citations: Citation[] = [];
+    let usage: TokenUsage | null = null;
+    for (const ev of events) {
+      if (ev.type === 'text') text += ev.delta;
+      else if (ev.type === 'reasoning') reasoning += ev.delta;
+      else if (ev.type === 'tool_call') toolCalls.push(ev.toolCall);
+      else if (ev.type === 'citations') citations = ev.citations;
+      else if (ev.type === 'usage') usage = ev.usage;
+    }
+    return {
+      text,
+      reasoning,
+      toolCalls,
+      usage,
+      citations,
+      finishReason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
+    };
+  }
   return {
     async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
-      const events = roundEvents[i++] ?? [];
+      const events = nextRound();
       for (const ev of events) {
         // Yield on a microtask so the consuming loop's state updates
-        // interleave with delta emission — closer to real streaming.
+        // interleave with delta emission - closer to real streaming.
         await Promise.resolve();
         yield ev;
       }
+    },
+    async completeChat(): Promise<ChatCompletion> {
+      return eventsToCompletion(nextRound());
     },
     // memory_search embeds its query before running the similarity RPC;
     // any test that drives a non-empty search through the loop hits this.

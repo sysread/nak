@@ -25,7 +25,18 @@ import {
 } from '../src/lib/tools';
 import { conversationRecall } from '../src/lib/tools/conversation_recall';
 import type { SupabaseService, Message } from '../src/lib/supabase';
-import type { VeniceClient, StreamEvent, VeniceMessage } from '../src/lib/venice';
+import type { ChatCompletion, VeniceClient, VeniceMessage } from '../src/lib/venice';
+
+function makeCompletion(text: string): ChatCompletion {
+  return {
+    text,
+    reasoning: '',
+    toolCalls: [],
+    usage: null,
+    citations: [],
+    finishReason: 'stop',
+  };
+}
 
 function makeMessage(overrides: Partial<Message>): Message {
   return {
@@ -110,17 +121,12 @@ describe('conversation_recall — execute() routes through ConversationRecallAge
     const listMessages = vi.fn(async () => messages);
     const svc = { listMessages } as unknown as SupabaseService;
 
-    const streamEvents: StreamEvent[] = [
-      {
-        type: 'text',
-        delta:
-          '{"kind":"note","note":"I remember we settled on cacio e pepe last time we did Italian."}',
-      },
-    ];
-    const streamChat = vi.fn(async function* (): AsyncGenerator<StreamEvent, void, void> {
-      for (const ev of streamEvents) yield ev;
-    });
-    const venice = { streamChat, embed: vi.fn() } as unknown as VeniceClient;
+    const completeChat = vi.fn(async () =>
+      makeCompletion(
+        '{"kind":"note","note":"I remember we settled on cacio e pepe last time we did Italian."}'
+      )
+    );
+    const venice = { completeChat, embed: vi.fn() } as unknown as VeniceClient;
 
     const result = await conversationRecall.execute({}, ctxFor(svc, venice));
 
@@ -133,7 +139,7 @@ describe('conversation_recall — execute() routes through ConversationRecallAge
 
   it('forwards the topic arg into the agent\u2019s prompt', async () => {
     // The topic string should reach the final user turn the agent
-    // sends to Venice. Intercept streamChat and grep for the topic
+    // sends to Venice. Intercept completeChat and grep for the topic
     // in the last message.
     const messages: Message[] = [
       makeMessage({ id: 'u1', role: 'user', content: 'pick up where we left off' }),
@@ -143,16 +149,11 @@ describe('conversation_recall — execute() routes through ConversationRecallAge
     } as unknown as SupabaseService;
 
     const seen: VeniceMessage[][] = [];
-    const streamChat = vi.fn(
-      (req: { messages: VeniceMessage[] }): AsyncGenerator<StreamEvent, void, void> => {
-        seen.push(req.messages);
-        async function* gen(): AsyncGenerator<StreamEvent, void, void> {
-          yield { type: 'text', delta: '{"kind":"none"}' };
-        }
-        return gen();
-      }
-    );
-    const venice = { streamChat, embed: vi.fn() } as unknown as VeniceClient;
+    const completeChat = vi.fn(async (req: { messages: VeniceMessage[] }) => {
+      seen.push(req.messages);
+      return makeCompletion('{"kind":"none"}');
+    });
+    const venice = { completeChat, embed: vi.fn() } as unknown as VeniceClient;
 
     await conversationRecall.execute(
       { topic: 'the Lisbon move' },
@@ -172,10 +173,8 @@ describe('conversation_recall — execute() routes through ConversationRecallAge
     const svc = {
       listMessages: vi.fn(async () => messages),
     } as unknown as SupabaseService;
-    const streamChat = vi.fn(async function* (): AsyncGenerator<StreamEvent, void, void> {
-      yield { type: 'text', delta: '{"kind":"none"}' };
-    });
-    const venice = { streamChat, embed: vi.fn() } as unknown as VeniceClient;
+    const completeChat = vi.fn(async () => makeCompletion('{"kind":"none"}'));
+    const venice = { completeChat, embed: vi.fn() } as unknown as VeniceClient;
 
     const result = await conversationRecall.execute({}, ctxFor(svc, venice));
     expect(result).toEqual({ kind: 'none' });
@@ -192,7 +191,7 @@ describe('conversation_recall — execute() routes through ConversationRecallAge
       }),
     } as unknown as SupabaseService;
     const venice = {
-      streamChat: vi.fn(),
+      completeChat: vi.fn(),
       embed: vi.fn(),
     } as unknown as VeniceClient;
 

@@ -216,7 +216,11 @@ export async function runHeadlessToolLoop(
     if (signal.aborted) break;
     rounds++;
 
-    const stream = venice.streamChat({
+    // Non-streaming: each round is a single POST + parsed response.
+    // Background agents don't have a UI surface to render tokens
+    // incrementally into, and the multi-round tool loop already
+    // serialises rounds anyway - streaming would only add latency.
+    const completion = await venice.completeChat({
       model,
       messages,
       signal,
@@ -225,19 +229,12 @@ export async function runHeadlessToolLoop(
       reasoningEffort: opts.reasoningEffort,
     });
 
-    let roundText = '';
-    const roundCalls: OpenAIToolCall[] = [];
-    for await (const ev of stream) {
-      if (ev.type === 'text') {
-        roundText += ev.delta;
-      } else if (ev.type === 'tool_call') {
-        roundCalls.push(ev.toolCall);
-      }
-      // 'usage' events are ignored — headless runs don't surface
-      // per-turn token usage to the caller. If an agent ever cares,
-      // add a `onUsage` callback rather than putting it on the
-      // return shape.
-    }
+    const roundText = completion.text;
+    const roundCalls: OpenAIToolCall[] = completion.toolCalls;
+    // `completion.usage` is intentionally ignored - headless runs
+    // don't surface per-turn token usage to the caller. If an agent
+    // ever cares, add a `onUsage` callback rather than putting it on
+    // the return shape.
 
     // No tool calls → this is the terminal response. We're done.
     if (roundCalls.length === 0) {

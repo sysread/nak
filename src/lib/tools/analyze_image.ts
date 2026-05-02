@@ -143,25 +143,19 @@ export const analyzeImage: ToolDef = {
     ];
 
     // VISION_ANALYSIS_MODEL is decoupled from any user-facing tier so
-    // a tier retarget doesn't silently break image analysis.
-    const stream = ctx.venice.streamChat({
+    // a tier retarget doesn't silently break image analysis. Uses the
+    // non-streaming completion endpoint - this is a background sub-
+    // call with no UI to render token-by-token into, and the one-shot
+    // path avoids the SSE-only failure modes other sub-tools used to
+    // hit.
+    const result = await ctx.venice.completeChat({
       model: VISION_ANALYSIS_MODEL,
       messages,
       signal: ctx.signal,
       maxTokens: 1024,
     });
 
-    let answer = '';
-    for await (const ev of stream) {
-      if (ev.type === 'text') {
-        answer += ev.delta;
-      }
-      // Drop reasoning / usage / tool_call / citations. The sub-call
-      // has no tools and should not emit citations; drop defensively
-      // rather than recursing or erroring.
-    }
-
-    const trimmed = answer.trim();
+    const trimmed = result.text.trim();
     if (trimmed.length === 0) {
       // Empty completion means the vision sub-call produced no text -
       // typically a transient provider blip (model overloaded, network

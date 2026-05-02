@@ -253,27 +253,22 @@ export const researchDocs: ToolDef = {
 
     // Dev-mode answers can run longer - architecture questions aren't
     // well-served by the 2-5 sentence cap that fits user-help questions.
-    const stream = ctx.venice.streamChat({
+    // Non-streaming sub-completion: there's no UI surface to render
+    // tokens incrementally, and the one-shot endpoint avoids the SSE
+    // failure modes streaming sub-calls exhibit.
+    const result = await ctx.venice.completeChat({
       model: VENICE_RESEARCH_DOCS_MODEL,
       messages,
       signal: ctx.signal,
       maxTokens: includeDev ? 1500 : 600,
     });
 
-    let raw = '';
-    for await (const ev of stream) {
-      if (ev.type === 'text') {
-        raw += ev.delta;
-      }
-      // Drop reasoning / usage / tool_call / citations. The sub-call
-      // offers no tools and should emit no citations (no web search);
-      // drop defensively rather than recursing or erroring.
-    }
+    const raw = result.text;
 
-    // Empty stream: the sub-completion finished but emitted no text
-    // events at all. Common causes: fast-tier transient failure,
-    // content-filter rejection, the model hitting maxTokens before the
-    // first text token, or a model that emitted only reasoning tokens
+    // Empty completion: the sub-call returned but produced no text
+    // content. Common causes: fast-tier transient failure,
+    // content-filter rejection, the model hitting maxTokens before any
+    // visible token, or a model that produced only reasoning content
     // and gave up. Throw rather than silently returning `{answer: '',
     // sources: []}` - that empty shape is indistinguishable from a
     // successful "no results" response and gives the calling model no
@@ -282,9 +277,9 @@ export const researchDocs: ToolDef = {
     // encodeToolContent into `{error: "..."}` on the tool-result row,
     // which the main model can read and act on.
     if (raw.trim().length === 0) {
-      log.warn('sub-agent stream completed with no text content');
+      log.warn('sub-agent completion produced no text content');
       throw new Error(
-        'research_docs: sub-agent stream completed with no text content. ' +
+        'research_docs: sub-agent completion produced no text content. ' +
           'This usually indicates a transient fast-tier failure, a ' +
           'content-filter rejection, or the model exhausting its output ' +
           'budget before producing any prose. Retry the call; if it keeps ' +

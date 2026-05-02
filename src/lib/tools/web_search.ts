@@ -31,7 +31,7 @@
  * always-on web-search path fed still works, just sourced from here.
  */
 import type { ToolDef } from './types';
-import type { Citation, StreamEvent, VeniceMessage } from '../venice';
+import type { VeniceMessage } from '../venice';
 import { VENICE_WEB_SEARCH_MODEL } from '../models';
 import { createLogger } from '../logger.svelte';
 
@@ -149,7 +149,13 @@ export const webSearch: ToolDef = {
       { role: 'user', content: userTurn },
     ];
 
-    const stream = ctx.venice.streamChat({
+    // Non-streaming completion. Background sub-agents have no UI to
+    // render token-by-token into, and SSE adds latency the user can't
+    // see. Equally important: the silent "stream finished with no
+    // text" failure mode this tool used to hit was a Venice SSE quirk
+    // - the non-streaming endpoint returns the answer + citations in
+    // one shot or surfaces an HTTP error, no in-between.
+    const result = await ctx.venice.completeChat({
       model: VENICE_WEB_SEARCH_MODEL,
       messages,
       signal: ctx.signal,
@@ -158,21 +164,7 @@ export const webSearch: ToolDef = {
       maxTokens: 400,
     });
 
-    let answer = '';
-    let citations: Citation[] = [];
-    for await (const ev of stream as AsyncGenerator<StreamEvent, void, void>) {
-      if (ev.type === 'text') {
-        answer += ev.delta;
-      } else if (ev.type === 'citations') {
-        citations = ev.citations;
-      }
-      // Ignore reasoning / usage / tool_call events. The sub-call
-      // does not offer any tools, so tool_call shouldn't fire; if
-      // the model somehow emits one we drop it rather than
-      // recursing.
-    }
-
-    const trimmed = answer.trim();
+    const trimmed = result.text.trim();
 
     // Empty answer: the sub-completion finished but emitted no usable
     // prose. Common causes: fast-tier transient failure, content-filter
@@ -187,10 +179,10 @@ export const webSearch: ToolDef = {
     // `{error: "..."}` on the tool-result row.
     if (trimmed.length === 0) {
       log.warn(
-        `sub-agent stream completed with no text content (${citations.length} citation(s) seen)`
+        `sub-agent completion produced no text content (${result.citations.length} citation(s) seen)`
       );
       throw new Error(
-        'web_search: sub-agent stream completed with no answer text. ' +
+        'web_search: sub-agent completion produced no answer text. ' +
           'This usually indicates a transient fast-tier failure, a ' +
           'content-filter rejection, or the search backend returning no ' +
           'usable hits without a no-results note. Retry the call; if it ' +
@@ -199,8 +191,8 @@ export const webSearch: ToolDef = {
       );
     }
 
-    log.info(`done: ${citations.length} source(s)`);
+    log.info(`done: ${result.citations.length} source(s)`);
 
-    return { answer: trimmed, citations };
+    return { answer: trimmed, citations: result.citations };
   },
 };

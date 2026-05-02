@@ -14,7 +14,12 @@ import {
 } from '../src/lib/agents/conversation_recall/prompt';
 import { conversationRecallToolbox } from '../src/lib/tools/conversation_recall_toolbox';
 import type { SupabaseService, Message } from '../src/lib/supabase';
-import type { VeniceClient, VeniceMessage, StreamEvent } from '../src/lib/venice';
+import type {
+  ChatCompletion,
+  OpenAIToolCall,
+  VeniceClient,
+  VeniceMessage,
+} from '../src/lib/venice';
 
 function makeMessage(overrides: Partial<Message>): Message {
   return {
@@ -54,33 +59,42 @@ interface RecordedStreamCall {
   toolNames: string[];
 }
 
-function makeVenice(rounds: StreamEvent[][]): {
+interface RoundScript {
+  text?: string;
+  toolCalls?: OpenAIToolCall[];
+}
+
+function makeVenice(rounds: RoundScript[]): {
   venice: VeniceClient;
   streamCalls: RecordedStreamCall[];
 } {
   const remaining = rounds.slice();
   const streamCalls: RecordedStreamCall[] = [];
-  const streamChat = vi.fn(
-    (req: {
+  const completeChat = vi.fn(
+    async (req: {
       messages: VeniceMessage[];
       responseFormat?: unknown;
       tools?: Array<{ function: { name: string } }>;
-    }): AsyncGenerator<StreamEvent, void, void> => {
+    }): Promise<ChatCompletion> => {
       streamCalls.push({
         messages: req.messages.map((m) => ({ ...m })),
         responseFormat: req.responseFormat,
         toolNames: (req.tools ?? []).map((t) => t.function.name),
       });
-      const events = remaining.shift() ?? [];
-      async function* gen(): AsyncGenerator<StreamEvent, void, void> {
-        for (const ev of events) yield ev;
-      }
-      return gen();
+      const script = remaining.shift() ?? {};
+      return {
+        text: script.text ?? '',
+        reasoning: '',
+        toolCalls: script.toolCalls ?? [],
+        usage: null,
+        citations: [],
+        finishReason: (script.toolCalls ?? []).length > 0 ? 'tool_calls' : 'stop',
+      };
     }
   );
   return {
     venice: {
-      streamChat,
+      completeChat,
       // conversation_search embeds the query before hitting
       // searchThreads. A 1024-dim zero vector satisfies padding math.
       embed: vi.fn(async () => ({
@@ -161,13 +175,9 @@ describe('ConversationRecallAgent — run() happy path', () => {
     ];
     const { svc } = makeSupabase(messages);
     const { venice, streamCalls } = makeVenice([
-      [
-        {
-          type: 'text',
-          delta:
-            '{"kind":"note","note":"I remember the user prefers cacio e pepe when they pick Italian."}',
-        },
-      ],
+      {
+        text: '{"kind":"note","note":"I remember the user prefers cacio e pepe when they pick Italian."}',
+      },
     ]);
     const agent = new ConversationRecallAgent(venice, svc, 'test-model');
 
@@ -204,9 +214,7 @@ describe('ConversationRecallAgent — run() happy path', () => {
     const { svc } = makeSupabase([
       makeMessage({ id: 'u1', role: 'user', content: 'same topic as before' }),
     ]);
-    const { venice, streamCalls } = makeVenice([
-      [{ type: 'text', delta: '{"kind":"none"}' }],
-    ]);
+    const { venice, streamCalls } = makeVenice([{ text: '{"kind":"none"}' }]);
     const agent = new ConversationRecallAgent(venice, svc, 'test-model');
 
     await agent.run({
@@ -223,7 +231,7 @@ describe('ConversationRecallAgent — run() happy path', () => {
     const { svc } = makeSupabase([
       makeMessage({ id: 'u1', role: 'user', content: 'what time is it' }),
     ]);
-    const { venice } = makeVenice([[{ type: 'text', delta: '{"kind":"none"}' }]]);
+    const { venice } = makeVenice([{ text: '{"kind":"none"}' }]);
     const agent = new ConversationRecallAgent(venice, svc, 'test-model');
 
     const result = await agent.run({
@@ -240,7 +248,7 @@ describe('ConversationRecallAgent — run() happy path', () => {
       makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
     ]);
     const { venice } = makeVenice([
-      [{ type: 'text', delta: 'I could not recall anything relevant.' }],
+      { text: 'I could not recall anything relevant.' },
     ]);
     const agent = new ConversationRecallAgent(venice, svc, 'test-model');
 
@@ -273,7 +281,7 @@ describe('ConversationRecallAgent — edge cases', () => {
 
     expect(result.stoppedReason).toBe('aborted');
     expect(svc.listMessages).not.toHaveBeenCalled();
-    expect(venice.streamChat).not.toHaveBeenCalled();
+    expect(venice.completeChat).not.toHaveBeenCalled();
   });
 
   it('returns done with an empty note when no user turn is in the thread', async () => {
@@ -291,7 +299,7 @@ describe('ConversationRecallAgent — edge cases', () => {
     expect(result.stoppedReason).toBe('done');
     expect(result.output.note).toEqual({ kind: 'none' });
     expect(result.output.inputMessageCount).toBe(0);
-    expect(venice.streamChat).not.toHaveBeenCalled();
+    expect(venice.completeChat).not.toHaveBeenCalled();
   });
 
   it('captures a thrown error and returns stoppedReason=error with a message', async () => {

@@ -24,7 +24,12 @@ import {
 import { RECALL_PROMPT } from '../src/lib/agents/recall/prompt';
 import { recallToolbox } from '../src/lib/tools/recall_toolbox';
 import type { SupabaseService, Message } from '../src/lib/supabase';
-import type { VeniceClient, VeniceMessage, StreamEvent } from '../src/lib/venice';
+import type {
+  ChatCompletion,
+  OpenAIToolCall,
+  VeniceClient,
+  VeniceMessage,
+} from '../src/lib/venice';
 
 function makeMessage(overrides: Partial<Message>): Message {
   return {
@@ -60,9 +65,9 @@ function makeSupabase(messages: Message[]): {
 }
 
 /**
- * Scripted venice whose `streamChat` yields a canned StreamEvent[]
- * per round. `streamCalls` captures every call's full request so
- * tests can inspect messages AND the response_format / tools fields.
+ * Scripted venice whose `completeChat` returns a canned response per
+ * round. `streamCalls` captures every call's full request so tests can
+ * inspect messages AND the response_format / tools fields.
  */
 interface RecordedStreamCall {
   messages: VeniceMessage[];
@@ -70,33 +75,42 @@ interface RecordedStreamCall {
   toolNames: string[];
 }
 
-function makeVenice(rounds: StreamEvent[][]): {
+interface RoundScript {
+  text?: string;
+  toolCalls?: OpenAIToolCall[];
+}
+
+function makeVenice(rounds: RoundScript[]): {
   venice: VeniceClient;
   streamCalls: RecordedStreamCall[];
 } {
   const remaining = rounds.slice();
   const streamCalls: RecordedStreamCall[] = [];
-  const streamChat = vi.fn(
-    (req: {
+  const completeChat = vi.fn(
+    async (req: {
       messages: VeniceMessage[];
       responseFormat?: unknown;
       tools?: Array<{ function: { name: string } }>;
-    }): AsyncGenerator<StreamEvent, void, void> => {
+    }): Promise<ChatCompletion> => {
       streamCalls.push({
         messages: req.messages.map((m) => ({ ...m })),
         responseFormat: req.responseFormat,
         toolNames: (req.tools ?? []).map((t) => t.function.name),
       });
-      const events = remaining.shift() ?? [];
-      async function* gen(): AsyncGenerator<StreamEvent, void, void> {
-        for (const ev of events) yield ev;
-      }
-      return gen();
+      const script = remaining.shift() ?? {};
+      return {
+        text: script.text ?? '',
+        reasoning: '',
+        toolCalls: script.toolCalls ?? [],
+        usage: null,
+        citations: [],
+        finishReason: (script.toolCalls ?? []).length > 0 ? 'tool_calls' : 'stop',
+      };
     }
   );
   return {
     venice: {
-      streamChat,
+      completeChat,
       // Embedding calls happen inside memory_search; stub a 1024-dim
       // vector so any round that routes through searchMemoriesByEmbedding
       // doesn't explode on the tool-side Math.
@@ -249,12 +263,9 @@ describe('RecallAgent — run() happy path', () => {
     ];
     const { svc } = makeSupabase(messages);
     const { venice, streamCalls } = makeVenice([
-      [
-        {
-          type: 'text',
-          delta: '{"kind":"note","note":"I remember the user already has a dentist back home."}',
-        },
-      ],
+      {
+        text: '{"kind":"note","note":"I remember the user already has a dentist back home."}',
+      },
     ]);
     const agent = new RecallAgent(venice, svc, 'test-model');
 
@@ -294,7 +305,7 @@ describe('RecallAgent — run() happy path', () => {
     const { svc } = makeSupabase([
       makeMessage({ id: 'u1', role: 'user', content: 'what time is it' }),
     ]);
-    const { venice } = makeVenice([[{ type: 'text', delta: '{"kind":"none"}' }]]);
+    const { venice } = makeVenice([{ text: '{"kind":"none"}' }]);
     const agent = new RecallAgent(venice, svc, 'test-model');
 
     const result = await agent.run({
@@ -311,7 +322,7 @@ describe('RecallAgent — run() happy path', () => {
       makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
     ]);
     const { venice } = makeVenice([
-      [{ type: 'text', delta: 'I could not remember anything.' }],
+      { text: 'I could not remember anything.' },
     ]);
     const agent = new RecallAgent(venice, svc, 'test-model');
 
@@ -347,13 +358,13 @@ describe('RecallAgent — edge cases', () => {
 
     expect(result.stoppedReason).toBe('aborted');
     expect(svc.listMessages).not.toHaveBeenCalled();
-    expect(venice.streamChat).not.toHaveBeenCalled();
+    expect(venice.completeChat).not.toHaveBeenCalled();
   });
 
   it('returns done with an empty note when no user turn is in the thread', async () => {
     // Pathological: the first row is an assistant greeting. Nothing
     // to recall against, and we avoid a wasted Venice call by
-    // short-circuiting before streamChat.
+    // short-circuiting before completeChat.
     const { svc } = makeSupabase([
       makeMessage({ id: 'a1', role: 'assistant', content: 'auto-greet' }),
     ]);
@@ -368,7 +379,7 @@ describe('RecallAgent — edge cases', () => {
     expect(result.stoppedReason).toBe('done');
     expect(result.output.note).toEqual({ kind: 'none' });
     expect(result.output.inputMessageCount).toBe(0);
-    expect(venice.streamChat).not.toHaveBeenCalled();
+    expect(venice.completeChat).not.toHaveBeenCalled();
   });
 
   it('captures a thrown error and returns stoppedReason=error with a message', async () => {

@@ -9,10 +9,10 @@
  * model-call logic so it can be unit-tested with a mock VeniceClient.
  *
  * Why not split into per-phase agent classes: each phase shares the
- * exact same plumbing (build one prompt, call streamChat, accumulate
- * deltas, parse JSON, error-handle). Splitting would multiply the
- * boilerplate without adding insight. The `phase` arg on each method
- * is intentionally implicit in the method name.
+ * exact same plumbing (build one prompt, call completeChat, parse
+ * JSON, error-handle). Splitting would multiply the boilerplate
+ * without adding insight. The `phase` arg on each method is
+ * intentionally implicit in the method name.
  */
 import type { VeniceClient } from '../../venice';
 import { VeniceError } from '../../venice';
@@ -91,10 +91,11 @@ function tryParseJson<T>(raw: string): T | null {
 }
 
 /**
- * Drive a single non-streaming Venice call. We accumulate text deltas
- * because streamChat is the only entry point and the alternative
- * (non-streaming completions) wasn't broken out separately. Same
- * pattern the summary agent uses.
+ * Drive a single non-streaming Venice completion. Same pattern the
+ * summary agent uses; the response body is read directly off
+ * `completeChat`'s ChatCompletion - no streaming-deltas path
+ * because background JSON-shaped agents have no UI surface to
+ * incrementally render into.
  */
 async function callOnce(
   venice: VeniceClient,
@@ -104,8 +105,7 @@ async function callOnce(
   signal: AbortSignal,
   maxTokens: number
 ): Promise<string> {
-  let raw = '';
-  for await (const ev of venice.streamChat({
+  const result = await venice.completeChat({
     model,
     messages: [
       { role: 'system', content: systemPrompt },
@@ -113,10 +113,8 @@ async function callOnce(
     ],
     maxTokens,
     signal,
-  })) {
-    if (ev.type === 'text') raw += ev.delta;
-  }
-  return raw;
+  });
+  return result.text;
 }
 
 export class SamskaraAgent {

@@ -68,13 +68,13 @@ on the first turn, and the mid-turn trigger picks up there.
   `STALE_FUSE_ROUNDS`, and `countUserRounds` (the round-id
   counter). Schema-versioned (`v: 1`); a drift / unknown-version
   row reads as null and triggers a fresh refresh.
-- `src/lib/intuition/pipeline.ts` - `runIntuitionPipeline`. Drains
-  Venice's streamChat into single text accumulators, the same
-  pattern the samskara and summary agents use. Per-drive failures
-  are tolerated (the drive is omitted from `payload.drives` and
-  synthesis runs against the rest); perception or synthesis
-  failure aborts the run and returns null so the caller leaves
-  the prior cache in place.
+- `src/lib/intuition/pipeline.ts` - `runIntuitionPipeline`. Each
+  stage hits Venice's non-streaming `completeChat` and reads the
+  single text response, the same pattern the samskara and summary
+  agents use. Per-drive failures are tolerated (the drive is
+  omitted from `payload.drives` and synthesis runs against the
+  rest); perception or synthesis failure aborts the run and
+  returns null so the caller leaves the prior cache in place.
 - `src/lib/intuition/cache.ts` - `readIntuitionCache` /
   `writeIntuitionCache` plus `withIntuitionInflight`, a tab-local
   registry that collapses two near-simultaneous triggers (e.g.
@@ -225,10 +225,10 @@ the most recent fire.
   call - it matches drive prompts too. Use
   `objective *perception*` (unique to the perception prompt)
   and `# Your Drive: <Name>` for individual drives.
-- **Pipeline is non-streaming.** Each stage drains Venice's
-  streamChat into a single text accumulator. The user
-  visually sees the latency as a longer pause before the
-  conscious response starts streaming - 7 calls on the fast
+- **Pipeline is non-streaming.** Each stage hits Venice's
+  one-shot `completeChat` and reads the single text response.
+  The user visually sees the latency as a longer pause before
+  the conscious response starts streaming - 7 calls on the fast
   tier collapse to ~3 sequential roundtrips because the 5
   drives run in parallel.
 - **Refresh failures leave the prior cache in place.**

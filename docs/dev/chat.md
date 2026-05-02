@@ -36,8 +36,13 @@ A chat turn goes:
   loop is unit-testable without a Svelte runtime.
 - `src/lib/models.ts` — `ModelTier`, `MODELS`, `UTILITY_TIER`, and
   the `VENICE_*_MODEL` constants that every agent also imports.
-- `src/lib/venice.ts` — the Venice REST client. `streamChat`
-  returns an async generator of `StreamEvent`; `embed` is a
+- `src/lib/venice.ts` — the Venice REST client. Two chat-completion
+  entry points: `streamChat` (SSE-streaming, used only by this
+  chat loop) returns an async generator of `StreamEvent`;
+  `completeChat` (one-shot non-streaming POST, used by every
+  background path - sub-agents, headless tool loop, web_search /
+  research_docs / analyze_image, the intuition / samskara / summary
+  pipelines) returns a flat `ChatCompletion` record. `embed` is a
   synchronous fetch.
 - `src/lib/supabase.ts` — thread CRUD, `addMessage`, message and
   thread realtime subscriptions.
@@ -136,11 +141,23 @@ A chat turn goes:
   shapes: plain text, assistant-with-tool-calls, and tool-result.
   Every feature that replays history should use this rather than
   building wire messages by hand; the shape is subtle.
-- `streamChat(req): AsyncGenerator<StreamEvent>` — three event
-  types: `{type:'text', delta}`, `{type:'tool_call', toolCall}`
-  (fires once per call, after the accumulator has assembled the
-  arguments JSON from its fragments), `{type:'usage', usage}`
-  (fires once after the terminal event).
+- `streamChat(req): AsyncGenerator<StreamEvent>` — five event
+  types: `{type:'text', delta}`, `{type:'reasoning', delta}`,
+  `{type:'tool_call', toolCall}` (fires once per call, after the
+  accumulator has assembled the arguments JSON from its
+  fragments), `{type:'usage', usage}` (fires once after the
+  terminal event), `{type:'citations', citations}`. Used only by
+  this main user-facing chat loop - background callers use
+  `completeChat`.
+- `completeChat(req): Promise<ChatCompletion>` - non-streaming
+  one-shot. Returns the same fields the streaming path would
+  produce (`text`, `reasoning`, `toolCalls`, `usage`, `citations`,
+  `finishReason`) as a flat record. Lower latency than streaming
+  for headless callers (no SSE flush-per-token serialisation), and
+  immune to provider-specific stream-only failure modes (e.g. the
+  silent "stream completed with no text" condition the web_search
+  tool kept hitting on Venice). The two methods share their wire
+  body builder so behaviour stays in lockstep.
 - `ChatLoopHandlers` - the event surface the UI uses: text
   updates, tool start/done/error, persistence events,
   `onToolboxesEnabledChange` (for the composer toolbox flash when
@@ -152,7 +169,7 @@ A chat turn goes:
 
 ## Interactions with other features
 
-- **Tools** - every round's `streamChat` call passes `tools:
+- **Tools** - every main-chat round's `streamChat` call passes `tools:
   buildToolList(thread.toolboxes_enabled)`. Tool calls arrive as
   `StreamEvent` of type `tool_call`; `executeToolCall` dispatches
   them against the registry; results are persisted as

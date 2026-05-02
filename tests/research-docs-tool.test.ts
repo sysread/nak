@@ -31,7 +31,7 @@ import {
 } from '../src/lib/tools/research_docs';
 import { MODELS } from '../src/lib/models';
 import type { SupabaseService } from '../src/lib/supabase';
-import type { ChatRequest, StreamEvent, VeniceClient } from '../src/lib/venice';
+import type { ChatCompletion, ChatRequest, VeniceClient } from '../src/lib/venice';
 
 function ctxFor(venice: VeniceClient): ToolContext {
   return {
@@ -43,21 +43,28 @@ function ctxFor(venice: VeniceClient): ToolContext {
   };
 }
 
-function mkVenice(handler: (req: ChatRequest) => StreamEvent[]): {
+function makeCompletion(text: string): ChatCompletion {
+  return {
+    text,
+    reasoning: '',
+    toolCalls: [],
+    usage: null,
+    citations: [],
+    finishReason: 'stop',
+  };
+}
+
+function mkVenice(handler: (req: ChatRequest) => string): {
   venice: VeniceClient;
   seen: ChatRequest[];
 } {
   const seen: ChatRequest[] = [];
-  const streamChat = vi.fn(async function* (req: ChatRequest): AsyncGenerator<
-    StreamEvent,
-    void,
-    void
-  > {
+  const completeChat = vi.fn(async (req: ChatRequest): Promise<ChatCompletion> => {
     seen.push(req);
-    for (const ev of handler(req)) yield ev;
+    return makeCompletion(handler(req));
   });
   return {
-    venice: { streamChat, embed: vi.fn() } as unknown as VeniceClient,
+    venice: { completeChat, embed: vi.fn() } as unknown as VeniceClient,
     seen,
   };
 }
@@ -140,7 +147,7 @@ describe('research_docs - registry scoping', () => {
 
 describe('research_docs - execute() shape', () => {
   it('throws on an empty or missing query', async () => {
-    const { venice } = mkVenice(() => []);
+    const { venice } = mkVenice(() => '');
     await expect(
       researchDocs.execute({} as Record<string, unknown>, ctxFor(venice))
     ).rejects.toThrow(/non-empty.*query/i);
@@ -153,10 +160,9 @@ describe('research_docs - execute() shape', () => {
   });
 
   it('fires a sub-completion with fast-tier model, bundled docs in system prompt, capped tokens', async () => {
-    const { venice, seen } = mkVenice(() => [
-      { type: 'text', delta: 'Nak stores memories in IndexedDB. ' },
-      { type: 'text', delta: '\n\nSources: memory.md' },
-    ]);
+    const { venice, seen } = mkVenice(
+      () => 'Nak stores memories in IndexedDB. \n\nSources: memory.md'
+    );
     await researchDocs.execute(
       { query: 'where does Nak store memories?' },
       ctxFor(venice)
@@ -186,11 +192,11 @@ describe('research_docs - execute() shape', () => {
   });
 
   it('returns { answer, sources } by parsing the trailing Sources line', async () => {
-    const { venice } = mkVenice(() => [
-      { type: 'text', delta: 'Yes. Nak supports PWA install on iOS. ' },
-      { type: 'text', delta: 'See the install guide for details.' },
-      { type: 'text', delta: '\n\nSources: install-pwa.md, getting-started.md' },
-    ]);
+    const { venice } = mkVenice(
+      () =>
+        'Yes. Nak supports PWA install on iOS. See the install guide for details.\n\n' +
+        'Sources: install-pwa.md, getting-started.md'
+    );
     const result = await researchDocs.execute(
       { query: 'can I install Nak as a PWA?' },
       ctxFor(venice)
@@ -203,9 +209,9 @@ describe('research_docs - execute() shape', () => {
   });
 
   it('returns an empty sources array when the sub-model writes "Sources: none"', async () => {
-    const { venice } = mkVenice(() => [
-      { type: 'text', delta: 'The docs do not cover that.\n\nSources: none' },
-    ]);
+    const { venice } = mkVenice(
+      () => 'The docs do not cover that.\n\nSources: none'
+    );
     const result = (await researchDocs.execute(
       { query: 'does Nak support voice input?' },
       ctxFor(venice)
@@ -214,18 +220,18 @@ describe('research_docs - execute() shape', () => {
     expect(result.answer).toBe('The docs do not cover that.');
   });
 
-  it('throws a descriptive error when the sub-agent stream produces no text', async () => {
-    // Empty-stream failure mode: the sub-completion finished but emitted
-    // no text events. Without this throw, the tool would silently return
-    // `{answer: '', sources: []}` - indistinguishable from a successful
-    // "no results" answer, leaving the calling LLM no way to tell whether
-    // to retry, rephrase, or surface the failure to the user. The throw
-    // routes through chat-loop's encodeToolContent into `{error: "..."}`
-    // on the tool-result row.
-    const { venice } = mkVenice(() => []);
+  it('throws a descriptive error when the sub-agent completion produces no text', async () => {
+    // Empty-completion failure mode: the sub-call returned but its
+    // text was empty. Without this throw, the tool would silently
+    // return `{answer: '', sources: []}` - indistinguishable from a
+    // successful "no results" answer, leaving the calling LLM no way
+    // to tell whether to retry, rephrase, or surface the failure to
+    // the user. The throw routes through chat-loop's
+    // encodeToolContent into `{error: "..."}` on the tool-result row.
+    const { venice } = mkVenice(() => '');
     await expect(
       researchDocs.execute({ query: 'q' }, ctxFor(venice))
-    ).rejects.toThrow(/stream completed with no text content/i);
+    ).rejects.toThrow(/completion produced no text content/i);
   });
 
   it('throws when the sub-agent emits only the Sources trailer with no prose', async () => {
@@ -233,9 +239,9 @@ describe('research_docs - execute() shape', () => {
     // instruction to always write at least a brief no-results note and
     // emitted only the trailer. Without this throw, the tool would
     // silently return `{answer: '', sources: []}` - same problem as the
-    // empty-stream case. Sources can be empty (Sources: none) or non-
-    // empty; either way an empty answer is the misbehavior we surface.
-    const { venice } = mkVenice(() => [{ type: 'text', delta: 'Sources: none' }]);
+    // empty-completion case. Sources can be empty (Sources: none) or
+    // non-empty; either way an empty answer is the misbehavior we surface.
+    const { venice } = mkVenice(() => 'Sources: none');
     await expect(
       researchDocs.execute({ query: 'q' }, ctxFor(venice))
     ).rejects.toThrow(/Sources.*trailer.*no prose/i);
@@ -245,29 +251,24 @@ describe('research_docs - execute() shape', () => {
     // Tripwire on the second branch of the empty-answer check. A trailer
     // that names sources is no more useful than `Sources: none` if the
     // answer is empty - the calling LLM has no synthesis to act on.
-    const { venice } = mkVenice(() => [
-      { type: 'text', delta: '\n\nSources: memory.md' },
-    ]);
+    const { venice } = mkVenice(() => '\n\nSources: memory.md');
     await expect(
       researchDocs.execute({ query: 'q' }, ctxFor(venice))
     ).rejects.toThrow(/Sources.*trailer.*no prose/i);
   });
 
-  it('throws on whitespace-only stream output', async () => {
+  it('throws on whitespace-only completion output', async () => {
     // `raw.trim().length === 0` catches the case where the sub-model
-    // emitted nothing but whitespace. Same failure-shape as a fully
-    // empty stream from the calling LLM's perspective.
-    const { venice } = mkVenice(() => [
-      { type: 'text', delta: '   ' },
-      { type: 'text', delta: '\n\n' },
-    ]);
+    // produced only whitespace. Same failure-shape as a fully empty
+    // completion from the calling LLM's perspective.
+    const { venice } = mkVenice(() => '   \n\n');
     await expect(
       researchDocs.execute({ query: 'q' }, ctxFor(venice))
-    ).rejects.toThrow(/stream completed with no text content/i);
+    ).rejects.toThrow(/completion produced no text content/i);
   });
 
   it('forwards context_hint into the user turn when provided', async () => {
-    const { venice, seen } = mkVenice(() => [{ type: 'text', delta: 'ok\n\nSources: none' }]);
+    const { venice, seen } = mkVenice(() => 'ok\n\nSources: none');
     await researchDocs.execute(
       {
         query: 'how do I change the model?',
@@ -282,14 +283,14 @@ describe('research_docs - execute() shape', () => {
   });
 
   it('omits the context_hint preamble when absent', async () => {
-    const { venice, seen } = mkVenice(() => [{ type: 'text', delta: 'ok\n\nSources: none' }]);
+    const { venice, seen } = mkVenice(() => 'ok\n\nSources: none');
     await researchDocs.execute({ query: 'q' }, ctxFor(venice));
     const userMsg = seen[0].messages.find((m) => m.role === 'user');
     expect(userMsg?.content).toBe('Question: q');
   });
 
   it('propagates ctx.signal into the sub-call so cancellation cascades', async () => {
-    const { venice, seen } = mkVenice(() => [{ type: 'text', delta: 'ok\n\nSources: none' }]);
+    const { venice, seen } = mkVenice(() => 'ok\n\nSources: none');
     const ctl = new AbortController();
     const ctx: ToolContext = {
       supabase: {} as SupabaseService,
@@ -305,9 +306,7 @@ describe('research_docs - execute() shape', () => {
 
 describe('research_docs - include_internal_dev_docs', () => {
   it('swaps in the dev-aware system prompt header when the flag is true', async () => {
-    const { venice, seen } = mkVenice(() => [
-      { type: 'text', delta: 'arch answer\n\nSources: none' },
-    ]);
+    const { venice, seen } = mkVenice(() => 'arch answer\n\nSources: none');
     await researchDocs.execute(
       { query: 'how is memory wired internally?', include_internal_dev_docs: true },
       ctxFor(venice)
@@ -321,9 +320,7 @@ describe('research_docs - include_internal_dev_docs', () => {
   });
 
   it('bundles both user and dev docs into the system prompt when the flag is true', async () => {
-    const { venice, seen } = mkVenice(() => [
-      { type: 'text', delta: 'arch answer\n\nSources: none' },
-    ]);
+    const { venice, seen } = mkVenice(() => 'arch answer\n\nSources: none');
     await researchDocs.execute(
       { query: 'q', include_internal_dev_docs: true },
       ctxFor(venice)
@@ -340,9 +337,7 @@ describe('research_docs - include_internal_dev_docs', () => {
   });
 
   it('does not bundle dev docs when the flag is explicitly false', async () => {
-    const { venice, seen } = mkVenice(() => [
-      { type: 'text', delta: 'answer\n\nSources: none' },
-    ]);
+    const { venice, seen } = mkVenice(() => 'answer\n\nSources: none');
     await researchDocs.execute(
       { query: 'q', include_internal_dev_docs: false },
       ctxFor(venice)
@@ -359,14 +354,11 @@ describe('research_docs - include_internal_dev_docs', () => {
     // "docs/dev/memory.md" into "memory.md" and make the source
     // ambiguous with "docs/user/memory.md". This test locks the
     // preservation behavior.
-    const { venice } = mkVenice(() => [
-      {
-        type: 'text',
-        delta:
-          'Memories live in IndexedDB locally, synced via Supabase.\n\n' +
-          'Sources: docs/user/memory.md, docs/dev/memory.md',
-      },
-    ]);
+    const { venice } = mkVenice(
+      () =>
+        'Memories live in IndexedDB locally, synced via Supabase.\n\n' +
+        'Sources: docs/user/memory.md, docs/dev/memory.md'
+    );
     const result = (await researchDocs.execute(
       { query: 'where do memories live?', include_internal_dev_docs: true },
       ctxFor(venice)
@@ -380,14 +372,14 @@ describe('research_docs - include_internal_dev_docs', () => {
     // explanations). Assert that the cap is at least strictly larger
     // than the default, without pinning an exact number - future
     // tuning can lift either bound without churning this test.
-    const { venice: veniceDefault, seen: seenDefault } = mkVenice(() => [
-      { type: 'text', delta: 'x\n\nSources: none' },
-    ]);
+    const { venice: veniceDefault, seen: seenDefault } = mkVenice(
+      () => 'x\n\nSources: none'
+    );
     await researchDocs.execute({ query: 'q' }, ctxFor(veniceDefault));
 
-    const { venice: veniceDev, seen: seenDev } = mkVenice(() => [
-      { type: 'text', delta: 'x\n\nSources: none' },
-    ]);
+    const { venice: veniceDev, seen: seenDev } = mkVenice(
+      () => 'x\n\nSources: none'
+    );
     await researchDocs.execute(
       { query: 'q', include_internal_dev_docs: true },
       ctxFor(veniceDev)

@@ -16,9 +16,10 @@
  * and 3 plus the slowest drive call - typically 3 sequential
  * roundtrips on the fast model.
  *
- * The pipeline is non-streaming. Each stage drains the streamChat
- * generator into a single text response, mirroring the same pattern
- * the samskara agent uses (see src/lib/agents/samskara/agent.ts).
+ * The pipeline is non-streaming. Each stage hits Venice's one-shot
+ * completion endpoint via `venice.completeChat` and reads the single
+ * text result, mirroring the same pattern the samskara agent uses
+ * (see src/lib/agents/samskara/agent.ts).
  *
  * Failure model:
  *   - Perception failure aborts the pipeline. Returns null so the
@@ -52,10 +53,9 @@ import type { IntuitionPayload, IntuitionTrigger } from './types';
 const log = createLogger('intuition');
 
 /**
- * Drive a single non-streaming Venice call. Same pattern the
- * samskara and summary agents use - drain streamChat into a single
- * accumulated text. Reasoning deltas are ignored; only `text` events
- * contribute to the result.
+ * Drive a single non-streaming Venice completion. Same pattern the
+ * samskara and summary agents use; reasoning content on the response
+ * is ignored, only the body text contributes.
  */
 async function callOnce(
   venice: VeniceClient,
@@ -65,8 +65,7 @@ async function callOnce(
   signal: AbortSignal,
   maxTokens: number
 ): Promise<string> {
-  let raw = '';
-  for await (const ev of venice.streamChat({
+  const result = await venice.completeChat({
     model,
     messages: [
       { role: 'system', content: systemPrompt },
@@ -74,10 +73,8 @@ async function callOnce(
     ],
     maxTokens,
     signal,
-  })) {
-    if (ev.type === 'text') raw += ev.delta;
-  }
-  return raw.trim();
+  });
+  return result.text.trim();
 }
 
 /**
@@ -251,8 +248,7 @@ export async function runIntuitionPipeline(
 
   let synthesisRaw: string;
   try {
-    let raw = '';
-    for await (const ev of venice.streamChat({
+    const result = await venice.completeChat({
       model,
       messages: [
         { role: 'system', content: SYNTHESIS_PROMPT },
@@ -261,10 +257,8 @@ export async function runIntuitionPipeline(
       ],
       maxTokens: 500,
       signal,
-    })) {
-      if (ev.type === 'text') raw += ev.delta;
-    }
-    synthesisRaw = raw.trim();
+    });
+    synthesisRaw = result.text.trim();
   } catch (err) {
     if (err instanceof VeniceError && err.kind === 'rate_limit') {
       log.warn('synthesis rate-limited; leaving prior cache in place');
