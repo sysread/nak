@@ -704,6 +704,15 @@ export interface ChatLoopResult {
    */
   interrupted: boolean;
   /**
+   * True when the terminal assistant row could not be committed because
+   * another device inserted a new user message after the user message
+   * this loop was responding to. The generated content is discarded
+   * server-side; the caller should surface a "conversation changed on
+   * another device" prompt rather than treating this as an error.
+   * Only set when userMessageId was provided; always false otherwise.
+   */
+  conflictDetected: boolean;
+  /**
    * The thread's enabled gated-toolbox set at the end of the loop.
    * Callers persist this back to local state so subsequent user sends
    * see the same surface the model last saw.
@@ -874,6 +883,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   let roundsRun = 0;
   let stoppedByLimit = false;
   let interrupted = false;
+  let conflictDetected = false;
   // Track the last assistant row we persisted across rounds. End-of-
   // turn samskara substrate writes pair the opening user message with
   // whichever assistant row closed the turn — final text or terminal
@@ -1247,22 +1257,35 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           roundText.length > 0
             ? `${roundText}\n\n${INTERRUPTED_MARKER}`
             : INTERRUPTED_MARKER;
-        const msg = await supabase.addMessage(
-          thread.id,
-          'assistant',
-          interruptedContent,
-          {
-            model: modelId,
-            // Usage frame often doesn't land before the abort - Venice
-            // emits it after the last choice-bearing frame. The column
-            // is nullable; the context ring simply hides on absence.
-            usage: roundUsage,
-            reasoning: roundReasoning.length > 0 ? roundReasoning : null,
-            citations: finalCitations,
+        const commitOpts = {
+          model: modelId,
+          // Usage frame often doesn't land before the abort - Venice
+          // emits it after the last choice-bearing frame. The column
+          // is nullable; the context ring simply hides on absence.
+          usage: roundUsage,
+          reasoning: roundReasoning.length > 0 ? roundReasoning : null,
+          citations: finalCitations,
+        };
+        // Use the atomic commit path when we have a user message anchor so
+        // a conflicting send from another device blocks the insert. Fall
+        // back to addMessage for older callers / tests that don't supply it.
+        if (userMessageId) {
+          const result = await supabase.commitAssistantMessage(
+            thread.id, interruptedContent, commitOpts, userMessageId
+          );
+          if (result.conflict) {
+            conflictDetected = true;
+          } else {
+            handlers?.onAssistantPersisted?.(result.message);
+            lastAssistantId = result.message.id;
           }
-        );
-        handlers?.onAssistantPersisted?.(msg);
-        lastAssistantId = msg.id;
+        } else {
+          const msg = await supabase.addMessage(
+            thread.id, 'assistant', interruptedContent, commitOpts
+          );
+          handlers?.onAssistantPersisted?.(msg);
+          lastAssistantId = msg.id;
+        }
       }
       finalText = roundText;
       break;
@@ -1288,7 +1311,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         //   3. null - no citations to render.
         const finalCitations =
           roundCitations ?? (toolCitations.length > 0 ? toolCitations : null);
-        const msg = await supabase.addMessage(thread.id, 'assistant', roundText, {
+        const commitOpts = {
           model: modelId,
           usage: roundUsage,
           // Reasoning / citations ride along on the assistant row so
@@ -1298,9 +1321,25 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           // turn actually had none."
           reasoning: roundReasoning.length > 0 ? roundReasoning : null,
           citations: finalCitations,
-        });
-        handlers?.onAssistantPersisted?.(msg);
-        lastAssistantId = msg.id;
+        };
+        // Use the atomic commit path when we have a user message anchor so
+        // a conflicting send from another device blocks the insert. Fall
+        // back to addMessage for older callers / tests that don't supply it.
+        if (userMessageId) {
+          const result = await supabase.commitAssistantMessage(
+            thread.id, roundText, commitOpts, userMessageId
+          );
+          if (result.conflict) {
+            conflictDetected = true;
+          } else {
+            handlers?.onAssistantPersisted?.(result.message);
+            lastAssistantId = result.message.id;
+          }
+        } else {
+          const msg = await supabase.addMessage(thread.id, 'assistant', roundText, commitOpts);
+          handlers?.onAssistantPersisted?.(msg);
+          lastAssistantId = msg.id;
+        }
       }
       finalText = roundText;
       break;
@@ -1514,5 +1553,5 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     void recordSubstrateStub(supabase, thread.id, userMessageId, lastAssistantId);
   }
 
-  return { finalText, roundsRun, stoppedByLimit, interrupted, toolboxesEnabled };
+  return { finalText, roundsRun, stoppedByLimit, interrupted, conflictDetected, toolboxesEnabled };
 }

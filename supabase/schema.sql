@@ -4698,6 +4698,99 @@ language sql stable security invoker as $$
     left join public.journal_spam_stats s on s.user_id = auth.uid()
 $$;
 
+-- Atomic assistant-message commit with conflict detection -----------------
+--
+-- Terminal assistant rows from the chat-loop are written through this
+-- function instead of a plain INSERT. Two safety checks run inside the
+-- same serialized transaction:
+--
+--   1. The thread row is locked (SELECT ... FOR UPDATE) so two devices
+--      that both finish streaming at the same moment cannot both pass
+--      the conflict check and both insert an assistant response.
+--
+--   2. A "newer user message" check: if any user message in the thread
+--      was created AFTER p_user_message_id, this device was streaming
+--      against a stale context. The response is discarded and the client
+--      surfaces a "conversation changed on another device" prompt.
+--
+-- Returns a jsonb discriminated union:
+--   { "conflict": true }
+--   { "conflict": false, "message": <messages row as json> }
+--
+-- security invoker so the caller's RLS session applies - the thread
+-- lock and the message insert are both subject to the owner-only
+-- policies on threads and messages.
+drop function if exists public.add_assistant_message(uuid, uuid, text, text, jsonb, text, jsonb);
+create or replace function public.add_assistant_message(
+  p_thread_id       uuid,
+  p_user_message_id uuid,
+  p_content         text,
+  p_model           text,
+  p_usage           jsonb,
+  p_reasoning       text,
+  p_citations       jsonb
+) returns jsonb
+language plpgsql
+security invoker
+as $$
+declare
+  v_anchor_ts timestamptz;
+  v_msg       record;
+begin
+  -- Lock the thread to serialize concurrent commit attempts. Two devices
+  -- finishing at the same moment would otherwise both see "no conflict"
+  -- and both insert, producing a duplicate assistant turn.
+  perform id
+    from public.threads
+    where id = p_thread_id
+    for update;
+
+  if not found then
+    raise exception 'thread not found or not accessible';
+  end if;
+
+  -- Fetch the timestamp of the user message we are responding to.
+  -- If it has been deleted we treat that as a conflict rather than
+  -- inserting an orphaned assistant row.
+  select created_at into v_anchor_ts
+    from public.messages
+    where id = p_user_message_id;
+
+  if not found then
+    return jsonb_build_object('conflict', true);
+  end if;
+
+  -- Any user message created AFTER our anchor means a different device
+  -- sent a new prompt while we were streaming. Our response was
+  -- computed without that context, so we must not commit it.
+  if exists (
+    select 1 from public.messages
+      where thread_id  = p_thread_id
+        and role       = 'user'
+        and id        != p_user_message_id
+        and created_at > v_anchor_ts
+  ) then
+    return jsonb_build_object('conflict', true);
+  end if;
+
+  insert into public.messages
+    (thread_id, role, content, model, usage, reasoning, citations)
+  values
+    (p_thread_id, 'assistant', trim(p_content), p_model, p_usage, p_reasoning, p_citations)
+  returning * into v_msg;
+
+  -- Bump updated_at so the thread jumps to the top of the sidebar.
+  update public.threads
+    set updated_at = now()
+    where id = p_thread_id;
+
+  return jsonb_build_object(
+    'conflict', false,
+    'message',  row_to_json(v_msg)
+  );
+end;
+$$;
+
 -- Realtime subscriptions --------------------------------------------------
 --
 -- The client subscribes to INSERTs on `messages` (filtered by thread_id)

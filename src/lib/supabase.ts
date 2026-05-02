@@ -3228,6 +3228,53 @@ export class SupabaseService {
   }
 
   /**
+   * Atomic terminal-assistant-message insert with conflict detection.
+   * Routes through the `add_assistant_message` Postgres function which:
+   *   1. Locks the thread row to prevent two devices from both committing.
+   *   2. Checks for any user message created after p_user_message_id. If
+   *      one exists the response was generated against a stale context and
+   *      must not land - the function returns { conflict: true }.
+   *   3. Inserts the assistant row and bumps threads.updated_at.
+   *
+   * Returns { conflict: true } when the check fires, or
+   * { conflict: false, message } on success. The caller (chat-loop) treats
+   * a conflict as a non-error early exit rather than throwing, so the UI
+   * can show a focused "conversation changed on another device" prompt
+   * instead of the generic error banner.
+   *
+   * Only used for terminal assistant rows (the final answer and
+   * user-interrupted rows). Intermediate tool-calling rounds use the
+   * regular addMessage path - they are same-device and same-context by
+   * construction, so the conflict check would be noise.
+   */
+  async commitAssistantMessage(
+    threadId: string,
+    content: string,
+    opts: {
+      model?: string | null;
+      usage?: TokenUsage | null;
+      reasoning?: string | null;
+      citations?: Citation[] | null;
+    },
+    userMessageId: string
+  ): Promise<{ conflict: true } | { conflict: false; message: Message }> {
+    const trimmed = content.trim();
+    const { data, error } = await this.client.rpc('add_assistant_message', {
+      p_thread_id:       threadId,
+      p_user_message_id: userMessageId,
+      p_content:         trimmed,
+      p_model:           opts.model ?? null,
+      p_usage:           opts.usage ?? null,
+      p_reasoning:       opts.reasoning ?? null,
+      p_citations:       opts.citations ?? null,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const result = data as { conflict: boolean; message?: unknown };
+    if (result.conflict) return { conflict: true };
+    return { conflict: false, message: result.message as Message };
+  }
+
+  /**
    * Hard-delete a contiguous batch of message rows. Used by the
    * regenerate-from-here flow: the rows for the discarded turn(s) stay
    * in the DB while the replacement is in flight (so a mid-stream

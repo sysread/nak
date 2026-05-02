@@ -67,6 +67,13 @@
     type NewAttachment,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
+  import {
+    saveDraft,
+    updateDraftText,
+    deleteDraft,
+    loadDraft,
+    type StreamingDraft,
+  } from '$lib/draft-store';
   import { GATED_TOOLBOX_META } from '$lib/tools';
   import { drainSharesForComposer } from '$lib/share-intake';
   import {
@@ -581,6 +588,51 @@
   // $state, the template wouldn't re-render when abortCtl flips back
   // to null and the button would stay on its last frame.
   let abortCtl = $state<AbortController | null>(null);
+
+  // Screen wake lock held for the duration of an active streaming round.
+  // Prevents Chrome on Android from freezing the tab while the LLM
+  // response is still in flight. Auto-released by the browser when the
+  // page hides; re-acquired on visibility-visible if streaming is still
+  // going (see the $effect below). The lock is best-effort: it is simply
+  // absent when the API is unavailable or the user denies permission.
+  let activeLock: WakeLockSentinel | null = null;
+
+  async function acquireWakeLock(): Promise<void> {
+    if (!('wakeLock' in navigator)) return;
+    try {
+      activeLock = await navigator.wakeLock.request('screen');
+      // The browser releases the lock automatically when the page hides.
+      // Clear our reference so we know to re-acquire on visibility-visible.
+      activeLock.addEventListener('release', () => { activeLock = null; });
+    } catch {
+      // Permission denied or API unavailable - not fatal, streaming just
+      // becomes freeze-susceptible on mobile the same as before.
+    }
+  }
+
+  function releaseWakeLock(): void {
+    activeLock?.release().catch(() => {});
+    activeLock = null;
+  }
+
+  // Re-acquire after a page-hide/show cycle while streaming is still active.
+  // The browser releases any held wake lock when the page hides; without
+  // this effect, returning to the tab mid-stream would leave the lock gone.
+  $effect(() => {
+    if (!sending) return;
+    const handleVisibility = (): void => {
+      if (document.visibilityState === 'visible' && sending && !activeLock) {
+        void acquireWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  });
+
+  // An interrupted draft detected at thread-load time. Set when a prior
+  // streaming session ended abruptly (app closed, browser froze) and left
+  // an un-committed response in IndexedDB. Cleared on retry or dismiss.
+  let interruptedDraft = $state<StreamingDraft | null>(null);
 
   // Pending attachments — one chip per queued file. Populated by the
   // file picker, the paste handler, and the drop handler; cleared on
@@ -1263,6 +1315,7 @@
     navigate({ cid: id });
     messages = [];
     streamingText = '';
+    interruptedDraft = null;
     // Re-seed the active prompt set from defaults whenever the user
     // switches threads - per-thread toggles are not persisted, so a
     // thread switch is effectively a fresh start for this UI state.
@@ -1288,6 +1341,20 @@
       // against a late response stomping newer state.
       if (activeThreadId !== id) return;
       messages = fetched;
+      // Check for an orphaned streaming draft from a previous session
+      // that ended abruptly (tab close, Chrome freeze, power loss). A
+      // draft is orphaned when the last message in the thread is a user
+      // message - meaning the assistant response never committed. If the
+      // response DID commit, the draft was also deleted in the finally
+      // block, so loadDraft returns null and nothing is shown.
+      interruptedDraft = null;
+      const lastMsg = fetched.at(-1);
+      if (lastMsg?.role === 'user') {
+        const draft = await loadDraft(id);
+        if (draft && draft.userMessageId === lastMsg.id && activeThreadId === id) {
+          interruptedDraft = draft;
+        }
+      }
       // Land on the latest exchange. The auto-scroll effect is gated on
       // an active completion (so a realtime echo can't hijack the view
       // out from under the user), which means thread-load can't
@@ -1855,6 +1922,9 @@
     }
     error = null;
     streamingError = null;
+    // Clear any orphaned-draft recovery banner at the start of a new
+    // exchange so the retry button doesn't persist alongside the new stream.
+    interruptedDraft = null;
     sending = true;
     streamingText = '';
     abortCtl = new AbortController();
@@ -1908,6 +1978,10 @@
         streamingText = pending;
         pending = null;
       }
+      // Piggyback the IDB draft flush on every display flush (~500ms).
+      // Best-effort: a write failure is swallowed so a broken IDB never
+      // stalls the visible render path.
+      void updateDraftText(ctx.threadId, streamingText, streamingReasoning).catch(() => {});
     };
     const cancelPending = (): void => {
       if (flushTimer !== 0) {
@@ -1915,6 +1989,24 @@
         flushTimer = 0;
       }
     };
+
+    // Persist a draft record at turn start so a crash or page-close
+    // leaves a recoverable marker in IndexedDB. Updated on each
+    // display-flush tick; deleted in the finally block on any clean exit.
+    void saveDraft({
+      threadId: ctx.threadId,
+      userMessageId: ctx.userMessageId,
+      modelId: ctx.modelId,
+      text: '',
+      reasoning: '',
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+    }).catch(() => {});
+
+    // Hold a screen wake lock for the duration of the streaming round so
+    // Chrome on Android does not freeze the tab while the LLM is in
+    // flight. Best-effort: absence of the lock is not fatal.
+    await acquireWakeLock();
 
     try {
       let loopResult;
@@ -2168,6 +2260,16 @@
       if (loopResult.stoppedByLimit && !loopResult.finalText) {
         error = { text: 'Stopped: tool-call loop hit the 20-round limit.' };
       }
+      // Conflict: another device inserted a user message while we were
+      // streaming. The generated assistant row was discarded server-side.
+      // Show an inline error so the user knows to look at the other
+      // device for the new context - no retry closure because the right
+      // action is to navigate away and back once the other turn lands.
+      if (loopResult.conflictDetected) {
+        streamingError = {
+          text: 'This conversation was updated on another device while a response was generating. The response was discarded - refresh this thread to see the latest.',
+        };
+      }
       streamingText = '';
       streamingReasoning = '';
       streamingReasoningOpen = false;
@@ -2175,11 +2277,9 @@
       // Surface the completion to the notifications service: either
       // fires an OS notification (tab backgrounded + permission granted)
       // or sets an unread dot on the sidebar row. Skip on user-initiated
-      // stop (they know they hit Stop) and on a limit-without-text
-      // outcome (no actual reply to report). The service itself no-ops
-      // when the completed thread is the active one, so tagging the
-      // current thread here is harmless.
-      if (!loopResult.interrupted && loopResult.finalText.length > 0) {
+      // stop (they know they hit Stop), on a limit-without-text outcome
+      // (no actual reply to report), and on conflict (nothing committed).
+      if (!loopResult.interrupted && !loopResult.conflictDetected && loopResult.finalText.length > 0) {
         const threadForNotif = findThread(ctx.threadId);
         notifyTurnComplete({
           threadId: ctx.threadId,
@@ -2250,6 +2350,12 @@
     } finally {
       sending = false;
       abortCtl = null;
+      releaseWakeLock();
+      // Delete the streaming draft on any clean exit (success, conflict,
+      // abort, or error). The draft's purpose is crash recovery; once
+      // runExchange returns - even with an error - the session is coherent
+      // and there is nothing to recover from on the next open.
+      void deleteDraft(ctx.threadId).catch(() => {});
       // Always clear the close timer on exit — a stale timer firing
       // after a new send has started would flip the panel shut
       // mid-reasoning on the next turn.
@@ -2289,6 +2395,56 @@
    * time. End-of-turn substrate writes a new row; the orphaned old
    * row still carries training signal (schema-documented).
    */
+  /**
+   * Retry an interrupted streaming completion. Called from the orphaned-
+   * draft recovery banner. Re-runs runExchange with the original user
+   * message id so the assistant response slot is filled. Uses the current
+   * thread settings (model, reasoning effort, etc.) rather than the
+   * captured ones - the same "current settings apply" policy as
+   * regenerateFrom.
+   */
+  async function retryInterrupted(): Promise<void> {
+    if (sending || !app.supabase || !app.venice || !interruptedDraft) return;
+    const draft = interruptedDraft;
+    interruptedDraft = null;
+    // Delete the draft now so a subsequent crash doesn't loop the user
+    // into an infinite recovery prompt for the same turn.
+    void deleteDraft(draft.threadId).catch(() => {});
+    const active = findThread(draft.threadId);
+    if (!active || active.isDraft || active.archived) return;
+    const tier = resolveTier(active.model ?? null, defaultTier);
+    const tierSpec = MODELS[tier];
+    const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
+      ? resolveReasoningEffort(
+          active.reasoning_effort ?? null,
+          defaultReasoning,
+          tierSpec.defaultReasoningEffort
+        )
+      : undefined;
+    const sendVerbosity: Verbosity = resolveVerbosity(active.verbosity ?? null, defaultVerbosity);
+    const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
+      .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
+      .map((p) => ({ role: 'system' as const, content: p.body }));
+    const currentUserId = session?.user.id ?? active.user_id;
+    followBottom = true;
+    // originalText is not captured in the draft but runExchange only uses
+    // it as a display hint; leaving it empty is safe.
+    await runExchange({
+      threadId: draft.threadId,
+      currentUserId,
+      modelId: tierSpec.id,
+      tierSpec,
+      systemMessages,
+      sendReasoning,
+      sendVerbosity,
+      sendEmphasis: app.emphasisMarkdown,
+      sendUserName: app.userName,
+      sendUserLocation: app.userLocation,
+      originalText: '',
+      userMessageId: draft.userMessageId,
+    });
+  }
+
   async function regenerateFrom(assistantMessageId: string): Promise<void> {
     if (sending || !app.supabase || !app.venice) return;
     const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
@@ -4040,6 +4196,51 @@
                     <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
                   </svg>
                 </button>
+              </div>
+            </div>
+          {/if}
+          {#if interruptedDraft}
+            <!-- Orphaned-draft recovery banner. Shown when thread load
+                 finds an IndexedDB streaming draft whose user message
+                 has no committed assistant response - meaning the prior
+                 session ended abruptly (tab close, Chrome mobile freeze,
+                 power loss) before the LLM response landed. Offers a
+                 one-click retry (re-runs the exchange against the same
+                 user message) and a dismiss to discard the draft and
+                 move on. Rendered at the tail of the transcript so it
+                 sits right after the orphaned user message. -->
+            <div class="msg assistant msg-incomplete" role="note">
+              <div class="msg-incomplete-body">
+                <div class="msg-incomplete-text">
+                  Previous response was interrupted. Retry to generate a new one.
+                </div>
+                <button
+                  type="button"
+                  class="secondary icon-btn msg-incomplete-retry"
+                  onclick={() => void retryInterrupted()}
+                  disabled={sending}
+                  aria-label="Retry interrupted response"
+                  title="Retry"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                       stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="23 4 23 10 17 10" />
+                    <polyline points="1 20 1 14 7 14" />
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+                    <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  class="secondary icon-btn msg-incomplete-dismiss"
+                  onclick={() => {
+                    void deleteDraft(interruptedDraft!.threadId).catch(() => {});
+                    interruptedDraft = null;
+                  }}
+                  aria-label="Dismiss"
+                  title="Dismiss"
+                >×</button>
               </div>
             </div>
           {/if}
