@@ -226,28 +226,54 @@ localStorage can read the password directly. The PRF (Pseudorandom
 Function) extension to WebAuthn is the right primitive:
 
 1. At enrollment, `navigator.credentials.create()` registers a
-   platform passkey AND evaluates `extensions.prf.eval.first` over
-   a freshly generated 32-byte salt. The PRF output is HMAC over
-   (a credential-bound key, the salt) - the credential-bound key
-   never leaves the secure element, and the HMAC only runs after a
-   successful `userVerification: 'required'` gesture.
-2. The PRF output is imported as a 256-bit AES-GCM key and used to
-   wrap the master password. The wrap (plus credential ID and
+   discoverable platform passkey with `extensions.prf: {}` -
+   empty input, just enables the extension. The credential-bound
+   HMAC key is provisioned inside the secure element; nothing
+   leaves it.
+2. A follow-up `navigator.credentials.get()` against the
+   just-created credential evaluates PRF with `extensions.prf:
+   { eval: { first: salt } }` over a freshly generated 32-byte
+   salt. The PRF output is HMAC over (the credential-bound key,
+   the salt) - only computed after a successful
+   `userVerification: 'required'` gesture.
+3. The PRF output is imported as a 256-bit AES-GCM key and used
+   to wrap the master password. The wrap (plus credential ID and
    salt) goes into `localStorage['nak:biometric:v1']`.
-3. At unlock, `navigator.credentials.get()` re-evaluates PRF over
+4. At unlock, `navigator.credentials.get()` re-evaluates PRF over
    the same salt with the same credential, deriving the same AES
    key, which unwraps the password. The unwrapped string is fed
    into the unchanged `loadConfig(password)` -> `activate(config)`
    flow.
 
-Browser support: PRF is in Chrome 113+, Edge 113+, Safari 18 (iOS
-18 / macOS 15)+, recent Firefox. We feature-detect at enrollment:
-if the authenticator does not return a PRF result and does not
-report `prf.enabled: true`, enrollment aborts and nothing is
-persisted. Safari historically returns `prf.enabled: true` on
-`create()` but does not evaluate PRF until a follow-up `get()`;
-the enrollment path handles that by chaining a second prompt
-inline (one-time UX cost, never repeats on subsequent unlocks).
+Why two prompts on enrollment instead of one: passing
+`extensions.prf: { eval: { first: salt } }` on `create()` is
+spec-legal but breaks on Chrome / Android (as of Chrome 147).
+The Credential Manager + provider stack silently drops the
+entire `prf` extension when it can't perform inline evaluation,
+returning an empty `clientExtensionResults` instead of
+`{ prf: { enabled: true } }`. The
+[passkey-prf-playground](https://www.passkeyprf.com/) reference
+does empty-on-create + eval-on-get, and it's the only pattern
+that works reliably across Chrome desktop, Edge, Safari 18+,
+**and** Chrome / Android with Bitwarden / Google Password
+Manager. The extra prompt only costs the user one tap during
+the one-time enrollment; subsequent unlocks are still
+single-prompt.
+
+Three other configuration knobs are load-bearing for the
+Android Chrome path:
+
+- `rp.id: window.location.hostname` must be set explicitly. Chrome
+  desktop derives it from the origin if omitted; Chrome / Android
+  via Credential Manager refuses to register without an explicit
+  id and may drop extensions.
+- `authenticatorSelection.residentKey: 'required'` (discoverable).
+  `'discouraged'` produces wildly inconsistent behavior on Android
+  Credential Manager - including the empty-extensions failure
+  mode. Cost: one resident-key slot on the authenticator, which
+  every modern platform authenticator has plenty of.
+- No `requireResidentKey` field. It's deprecated; pass only
+  `residentKey` instead.
 
 The wrapped password is invalidated by anything that changes the
 password it wraps:

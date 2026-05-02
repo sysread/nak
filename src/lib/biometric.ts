@@ -242,7 +242,10 @@ function summarizePrf(cred: PublicKeyCredential): string {
 }
 
 interface RegistrationExtensions {
-  prf: { eval: { first: ArrayBuffer } };
+  // PRF extension on create() takes an empty input - we only want
+  // to enable it; the actual eval happens on the follow-up get().
+  // See enrollBiometric for the rationale.
+  prf: Record<string, never>;
 }
 
 interface AssertionExtensions {
@@ -288,7 +291,12 @@ export async function enrollBiometric(password: string): Promise<void> {
 
   const publicKey: PublicKeyCredentialCreationOptions = {
     challenge,
-    rp: { name: 'Nak' },
+    // rp.id MUST be set explicitly to the page hostname for Android
+    // Chrome to accept the request. Chrome on desktop will derive it
+    // implicitly from the origin if omitted, but Chrome on Android
+    // (via Credential Manager) refuses to register without an
+    // explicit id and the provider may silently drop extensions.
+    rp: { name: 'Nak', id: window.location.hostname },
     user: {
       id: userId,
       name: 'Nak master password',
@@ -305,18 +313,33 @@ export async function enrollBiometric(password: string): Promise<void> {
     authenticatorSelection: {
       authenticatorAttachment: 'platform',
       userVerification: 'required',
-      // Discoverable credentials would let a fresh browser find the
-      // passkey without us holding the credential ID, but they also
-      // burn a "resident key" slot on the authenticator. We keep
-      // the credential ID locally and look it up via
-      // allowCredentials; resident is unnecessary.
-      residentKey: 'discouraged',
-      requireResidentKey: false,
+      // residentKey: 'required' creates a discoverable credential
+      // (resident key on the authenticator, named entry in the
+      // user's passkey manager UI). 'discouraged' previously let
+      // the authenticator decide and Android Credential Manager
+      // returned wildly inconsistent behavior including silently
+      // dropping the prf extension. The passkey-prf-playground
+      // reference implementation also uses 'required' and is the
+      // only configuration that produces PRF output reliably on
+      // Chrome/Android with Bitwarden / Google Password Manager.
+      // The cost of resident is one slot on the authenticator,
+      // which every modern platform authenticator has plenty of.
+      residentKey: 'required',
     },
     timeout: 60_000,
     attestation: 'none',
+    // PRF on create() is just `{}` - enable the extension, do not
+    // ask for an inline eval. Passing `{ eval: { first: salt } }`
+    // here is spec-legal but Chrome on Android (and some other
+    // implementations) silently drops the entire prf extension
+    // when it can't perform inline evaluation, returning an empty
+    // clientExtensionResults dictionary instead of `enabled: true`.
+    // Empty `{}` matches the passkey-prf-playground pattern and
+    // works across iOS Safari 18+, Chrome desktop, Edge, and
+    // Chrome Android. The actual PRF evaluation always happens on
+    // the follow-up get() below.
     extensions: {
-      prf: { eval: { first: salt as BufferSource } },
+      prf: {},
     } as unknown as RegistrationExtensions,
   };
 
@@ -327,117 +350,56 @@ export async function enrollBiometric(password: string): Promise<void> {
     throw new Error('Biometric enrollment was cancelled.');
   }
 
-  // PRF availability reporting is wildly inconsistent across user
-  // agents:
-  //   - Chrome desktop with a built-in TouchID: evaluates PRF inline
-  //     on create() and returns the output under
-  //     `prf.results.first`. One prompt total.
-  //   - Safari 18 (iOS / macOS): returns `prf.enabled: true` on
-  //     create() but does NOT evaluate PRF; requires a follow-up
-  //     get() to actually compute the output.
-  //   - Chrome Android (incl. Pixel 9): often returns NEITHER an
-  //     inline result NOR the `prf.enabled` flag on create(), even
-  //     when the underlying StrongBox authenticator fully supports
-  //     PRF. The flag is only populated reliably on get().
-  //
-  // Gating on `prf.enabled === true` was rejecting Android Chrome
-  // outright, which is the platform we care most about for mobile
-  // unlock. Drop the gate: if there's no inline result, ALWAYS run
-  // a follow-up get() and treat that result as authoritative. Only
-  // declare unsupported if the get() also fails to produce a PRF
-  // output. The cost is a one-time second biometric prompt during
-  // enrollment on browsers that don't inline PRF; subsequent
-  // unlocks are still single-prompt.
-  log.debug('credential created; checking for inline PRF result', {
+  log.debug('credential created', {
     summary: summarizePrf(cred),
   });
-  let prfOutput = readPrfFirst(cred);
+
+  // Always do a follow-up get() to harvest the PRF output. Per the
+  // WebAuthn PRF spec the create() call only signals support
+  // (`prf.enabled`); the actual hmac-secret evaluation happens
+  // during the assertion. Two prompts on enrollment, one on every
+  // subsequent unlock - the predictable cross-platform pattern.
+  log.debug('running get() to evaluate PRF');
+  const getChallenge = crypto.getRandomValues(new Uint8Array(32));
+  const got = (await navigator.credentials.get({
+    publicKey: {
+      challenge: getChallenge,
+      // rp.id is implicit on get() - we look up by credential id.
+      allowCredentials: [
+        {
+          id: cred.rawId,
+          type: 'public-key',
+        },
+      ],
+      userVerification: 'required',
+      timeout: 60_000,
+      extensions: {
+        prf: { eval: { first: salt as BufferSource } },
+      } as unknown as AssertionExtensions,
+    },
+  })) as PublicKeyCredential | null;
+  if (!got) throw new Error('Biometric enrollment was cancelled.');
+  const prfOutput = readPrfFirst(got);
   if (!prfOutput) {
-    log.debug('no inline PRF; running get() fallback');
-    // Run a get() right away to harvest the PRF output. The user
-    // sees a second biometric prompt during enrollment - acceptable
-    // one-time cost on Safari; never repeats on subsequent unlocks.
-    const getChallenge = crypto.getRandomValues(new Uint8Array(32));
-    const got = (await navigator.credentials.get({
-      publicKey: {
-        challenge: getChallenge,
-        allowCredentials: [
-          {
-            id: cred.rawId,
-            type: 'public-key',
-          },
-        ],
-        userVerification: 'required',
-        timeout: 60_000,
-        extensions: {
-          prf: { eval: { first: salt as BufferSource } },
-        } as unknown as AssertionExtensions,
-      },
-    })) as PublicKeyCredential | null;
-    if (!got) throw new Error('Biometric enrollment was cancelled.');
-    prfOutput = readPrfFirst(got);
-    if (!prfOutput) {
-      // Diagnostic dump for the user-facing error. The two summaries
-      // tell us very different things:
-      //   - "prf: undefined (extension was dropped)" on BOTH plus
-      //     entirely empty clientExtensionResults dictionaries, on
-      //     Chrome/Android: the request went through Android's
-      //     Credential Manager framework, which today does not
-      //     marshal WebAuthn extension results (incl. hmac-secret /
-      //     PRF) back from the credential provider to the browser.
-      //     The authenticator likely computed hmac-secret correctly
-      //     but the response was stripped at the framework boundary.
-      //     There is no app-level workaround; tracked upstream in
-      //     Chromium. Confirmed broken on Chrome 147 + Pixel 9.
-      //   - "prf: undefined" on both with non-Android UAs: the
-      //     credential provider ack'd registration but stripped the
-      //     extension. Bitwarden's older Android passkey provider
-      //     behaves this way.
-      //   - "enabled=true, results=undefined" on get(): the provider
-      //     ack'd PRF on registration but is refusing to compute the
-      //     output. Some Chrome/Android+Play-Services combinations
-      //     where hmac-secret is gated server-side.
-      //   - Anything else: surface verbatim and we'll figure it out
-      //     from the report.
-      const createSummary = summarizePrf(cred);
-      const getSummary = summarizePrf(got);
-      // Diagnostic dump into the in-app Logs drawer (left panel,
-      // gated on the Appearance pane's Default log level). Mobile
-      // users without a USB-tethered DevTools session can read this
-      // directly off the device. Quiet on the happy path; only
-      // fires on this exact failure.
-      log.warn('PRF result missing on both create() and get()', {
-        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'n/a',
-        createExt: cred.getClientExtensionResults(),
-        getExt: got.getClientExtensionResults(),
-      });
-      // Empty clientExtensionResults on Android Chrome is a near-
-      // certain Credential Manager fingerprint. Tell the user that
-      // directly rather than asking them to chase provider settings
-      // - those won't help. iOS / desktop falls back to the generic
-      // message.
-      const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-      const looksAndroidChrome = /Android/i.test(ua) && /Chrome\//.test(ua);
-      const createExtEmpty = Object.keys(cred.getClientExtensionResults()).length === 0;
-      const getExtEmpty = Object.keys(got.getClientExtensionResults()).length === 0;
-      if (looksAndroidChrome && createExtEmpty && getExtEmpty) {
-        throw new Error(
-          'Biometric unlock can\'t be enabled here: Chrome on Android ' +
-            'currently routes passkey requests through the Android Credential ' +
-            'Manager framework, which does not yet pass WebAuthn extension ' +
-            'results (including the PRF extension this feature relies on) ' +
-            'back to the browser. Until that ships in Chrome / Play Services, ' +
-            'biometric unlock is unavailable on Android Chrome. Use the ' +
-            'typed-master-password path instead. ' +
-            `(Diagnostic: register=${createSummary}; verify=${getSummary}.)`,
-        );
-      }
-      throw new Error(
-        'Biometric unlock could not be enabled: the credential provider ' +
-          'did not return a PRF result. ' +
-          `On register: ${createSummary}. On verify: ${getSummary}.`,
-      );
-    }
+    const createSummary = summarizePrf(cred);
+    const getSummary = summarizePrf(got);
+    // Diagnostic dump into the in-app Logs drawer (left panel,
+    // gated on the Appearance pane's Default log level). Mobile
+    // users without a USB-tethered DevTools session can read this
+    // directly off the device. Quiet on the happy path; only
+    // fires on this exact failure.
+    log.warn('PRF result missing on get()', {
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'n/a',
+      createExt: cred.getClientExtensionResults(),
+      getExt: got.getClientExtensionResults(),
+    });
+    throw new Error(
+      'Biometric unlock could not be enabled: the credential provider ' +
+        'did not return a PRF result. This usually means the provider ' +
+        'or device authenticator does not implement the WebAuthn PRF ' +
+        'extension yet. ' +
+        `(Diagnostic: register=${createSummary}; verify=${getSummary}.)`,
+    );
   }
 
   const aesKey = await prfOutputToAesKey(prfOutput);

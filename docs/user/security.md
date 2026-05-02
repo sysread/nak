@@ -50,20 +50,14 @@ never reaches the browser, and neither does the unwrap key.
 - Your browser doesn't expose a built-in user-verifying
   authenticator (older mobile Safari, Firefox without WebAuthn
   enabled, etc.). The Settings toggle is hidden.
-- Your platform supports WebAuthn but not the PRF extension that
-  this feature relies on (most pre-2024 builds). Enrollment will
-  fail with an explanation; nothing is stored, and the typed-
-  password path keeps working.
-- **Chrome on Android** (as of Chrome 147 / late 2025): Chrome
-  routes passkey requests through Android's Credential Manager
-  framework, which does not yet propagate WebAuthn extension
-  results back to the browser. The PRF output never reaches
-  Chrome, so biometric unlock can't be enabled. This affects all
-  passkey providers on Android Chrome — Google Play Services,
-  Bitwarden, 1Password — because the limitation is at the
-  framework layer, not the provider. Use the typed master
-  password until Chrome / Play Services ship the fix. iOS Safari
-  18+ and desktop browsers are unaffected.
+- Your credential provider or device authenticator doesn't
+  implement the WebAuthn PRF extension that this feature relies
+  on (some older Android Play Services builds, some older
+  third-party passkey providers). Enrollment will fail with a
+  diagnostic message; nothing is stored, and the typed-password
+  path keeps working. If you hit this, make sure your device
+  passkey provider (Google Password Manager, Bitwarden, etc.) is
+  up to date.
 - You changed your master password — the existing biometric
   enrollment wraps the old password and can't decrypt the new
   blob. Settings clears the old enrollment and prompts you to
