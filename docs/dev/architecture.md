@@ -148,14 +148,33 @@ Load-bearing patterns the schema uses repeatedly:
 ## Venice adapter
 
 `src/lib/venice.ts` is the browser-side REST client for Venice's
-OpenAI-compatible endpoints. Two methods matter:
+OpenAI-compatible endpoints. Three chat methods matter:
 
 - `streamChat(req)` — async generator yielding `StreamEvent`s
-  (`text`, `tool_call`, `usage`). Implemented as a POST with SSE
-  framing; we parse frames by splitting on `\n\n` because the
-  browser's `EventSource` API is GET-only and can't set the
-  `Authorization` header.
+  (`text`, `reasoning`, `tool_call`, `usage`, `citations`).
+  Implemented as a POST with SSE framing; we parse frames by
+  splitting on `\n\n` because the browser's `EventSource` API is
+  GET-only and can't set the `Authorization` header. Used ONLY by
+  the main user-facing chat loop, where token-by-token rendering
+  makes the app feel alive.
+- `completeChat(req)` — non-streaming POST returning a single
+  `ChatCompletion` record with the same fields as the streaming
+  events would produce. Used by every background path: the
+  intuition / samskara / summary / recall / reflection / journal /
+  conversation_recall agents and the headless tool loop they share,
+  plus the web_search / research_docs / analyze_image sub-tools.
+  Background callers don't have a UI surface to render
+  token-by-token into, and SSE costs measurable per-chunk latency
+  the user can't see; non-streaming also sidesteps provider-
+  specific stream-only failure modes (e.g. the silent
+  "stream completed with no text" condition Venice's web-search
+  flow used to throw on).
 - `embed(req)` — synchronous `fetch` against `/embeddings`.
+
+Both chat methods share their wire body builder via a private
+`buildChatBody(req, streaming)` helper — toggling the `stream`
+flag is the only difference, so a wire-shape change can't drift
+between them.
 
 Token-usage reporting requires `stream_options:
 { include_usage: true }` on the request; Venice emits a final SSE

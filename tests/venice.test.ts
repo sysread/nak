@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { VeniceClient, VeniceError, parseSseFrame } from '../src/lib/venice';
+import {
+  VeniceClient,
+  VeniceError,
+  parseSseFrame,
+  parseChatCompletion,
+} from '../src/lib/venice';
 
 function encoder(): TextEncoder {
   return new TextEncoder();
@@ -730,6 +735,244 @@ describe('VeniceClient.streamChat', () => {
     await expect(async () => {
       for await (const _ of client.streamChat({ model: 'm', messages: [] })) void _;
     }).rejects.toBeInstanceOf(VeniceError);
+  });
+});
+
+describe('VeniceClient.completeChat', () => {
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  it('POSTs without stream / stream_options and returns the parsed completion', async () => {
+    // Background callers go through completeChat to avoid SSE latency
+    // and the stream-only failure modes that bit web_search. The wire
+    // body must therefore NOT carry stream=true or stream_options - if
+    // those leak in, the provider opens an SSE response and the JSON
+    // parse below would throw.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: 'hello world',
+            },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+      })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await client.completeChat({
+      model: 'm',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(result.text).toBe('hello world');
+    expect(result.finishReason).toBe('stop');
+    expect(result.usage).toEqual({
+      prompt_tokens: 4,
+      completion_tokens: 2,
+      total_tokens: 6,
+    });
+    expect(result.toolCalls).toEqual([]);
+    expect(result.citations).toEqual([]);
+    expect(result.reasoning).toBe('');
+
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).not.toHaveProperty('stream');
+    expect(body).not.toHaveProperty('stream_options');
+  });
+
+  it('omits include_search_results_in_stream from venice_parameters even with web search on', async () => {
+    // The flag exists only because the streaming endpoint defaults to
+    // dropping the citations list - the non-streaming response always
+    // carries citations at the top level. Sending the flag on a non-
+    // streaming request is harmless but noise; pin its absence so a
+    // future refactor doesn't accidentally let it leak across.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+      })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await client.completeChat({
+      model: 'm',
+      messages: [],
+      webSearch: 'on',
+    });
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.venice_parameters).toEqual({
+      include_venice_system_prompt: false,
+      enable_web_scraping: true,
+      enable_web_search: 'on',
+      enable_web_citations: true,
+    });
+  });
+
+  it('returns assembled tool_calls when the model emits any', async () => {
+    // Non-streaming responses ship tool_calls already assembled on
+    // `message.tool_calls` - no fragment-stitching needed. Each entry's
+    // `arguments` is a JSON string the caller is expected to parse.
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'spy', arguments: '{"x":1}' },
+                },
+              ],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+      })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await client.completeChat({ model: 'm', messages: [] });
+    expect(result.toolCalls).toEqual([
+      {
+        id: 'call_1',
+        type: 'function',
+        function: { name: 'spy', arguments: '{"x":1}' },
+      },
+    ]);
+    expect(result.text).toBe('');
+    expect(result.finishReason).toBe('tool_calls');
+  });
+
+  it('surfaces venice_parameters.web_search_citations on the result', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        choices: [{ message: { content: 'sourced answer' }, finish_reason: 'stop' }],
+        venice_parameters: {
+          web_search_citations: [
+            { title: 'A', url: 'https://a.example' },
+            { url: 'https://b.example' },
+          ],
+        },
+      })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await client.completeChat({ model: 'm', messages: [] });
+    expect(result.citations).toEqual([
+      { index: 1, title: 'A', url: 'https://a.example' },
+      { index: 2, url: 'https://b.example' },
+    ]);
+  });
+
+  it('throws auth error on 401', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response('bad key', { status: 401 }));
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(
+      client.completeChat({ model: 'm', messages: [] })
+    ).rejects.toMatchObject({ kind: 'auth', status: 401 });
+  });
+
+  it('throws parse error on non-JSON response body', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response('definitely not json', { status: 200 }));
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(
+      client.completeChat({ model: 'm', messages: [] })
+    ).rejects.toMatchObject({ kind: 'parse' });
+  });
+});
+
+describe('parseChatCompletion', () => {
+  it('renders missing content as empty string rather than null', () => {
+    // The OpenAI shape allows `content: null` when the model produced
+    // only tool calls. Callers should be able to read .text without a
+    // nullable check.
+    const result = parseChatCompletion({
+      choices: [{ message: { role: 'assistant', content: null }, finish_reason: 'tool_calls' }],
+    });
+    expect(result.text).toBe('');
+    expect(result.finishReason).toBe('tool_calls');
+  });
+
+  it('drops malformed tool_calls without an id or function name', () => {
+    // A tool call without an id or name can't be safely executed -
+    // OpenAI requires both. Mirror the streaming path's defensive drop.
+    const result = parseChatCompletion({
+      choices: [
+        {
+          message: {
+            tool_calls: [
+              { id: 'ok', type: 'function', function: { name: 'spy', arguments: '{}' } },
+              { type: 'function', function: { name: 'no-id', arguments: '{}' } },
+              { id: 'no-name', type: 'function' },
+            ],
+          },
+        },
+      ],
+    });
+    expect(result.toolCalls).toEqual([
+      { id: 'ok', type: 'function', function: { name: 'spy', arguments: '{}' } },
+    ]);
+  });
+
+  it('drops a partial usage block', () => {
+    // Same discipline as the streaming parser: TokenUsage is treated
+    // as a total record downstream. A row missing any of the three
+    // counters drops to null rather than yielding NaN-prone defaults.
+    const result = parseChatCompletion({
+      choices: [{ message: { content: 'x' } }],
+      usage: { prompt_tokens: 5 },
+    });
+    expect(result.usage).toBeNull();
+  });
+
+  it('throws a parse-kind VeniceError on a non-object payload', () => {
+    expect(() => parseChatCompletion(null)).toThrow(VeniceError);
+    expect(() => parseChatCompletion('nope')).toThrow(VeniceError);
+  });
+
+  it('returns reasoning_content as the reasoning field', () => {
+    const result = parseChatCompletion({
+      choices: [
+        {
+          message: {
+            content: 'visible',
+            reasoning_content: 'hidden chain-of-thought',
+          },
+        },
+      ],
+    });
+    expect(result.text).toBe('visible');
+    expect(result.reasoning).toBe('hidden chain-of-thought');
   });
 });
 

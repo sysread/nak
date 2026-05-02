@@ -1,6 +1,6 @@
 /**
  * Coverage for the intuition pipeline assembly. Mocks Venice's
- * streamChat so the test stays offline and deterministic; verifies
+ * completeChat so the test stays offline and deterministic; verifies
  * the perception -> 5 drives -> synthesis fan-out, the
  * Classification: prefix normalisation, and the partial-failure
  * tolerance (a single-drive failure does not abort the pipeline).
@@ -12,24 +12,29 @@ import {
   INTUITION_THINK_MARKER,
 } from '../src/lib/intuition/ephemeral';
 import { coerceIntuitionPayload } from '../src/lib/intuition/types';
-import type { VeniceClient, VeniceMessage, StreamEvent } from '../src/lib/venice';
+import type { VeniceClient, VeniceMessage, ChatCompletion } from '../src/lib/venice';
 
 /**
- * Build a fake VeniceClient whose streamChat returns a canned
+ * Build a fake VeniceClient whose completeChat returns a canned
  * response keyed off the system prompt. Tests pass a map of "system
  * prompt substring -> response text" so a single mock can serve
  * perception, every drive, and synthesis.
  */
 function fakeVenice(responseFor: (systemPrompt: string) => string | Error): VeniceClient {
   const client = {
-    streamChat: async function* (req: {
-      messages: VeniceMessage[];
-    }): AsyncGenerator<StreamEvent> {
+    completeChat: async (req: { messages: VeniceMessage[] }): Promise<ChatCompletion> => {
       const sys = req.messages.find((m) => m.role === 'system');
       const sysText = typeof sys?.content === 'string' ? sys.content : '';
       const result = responseFor(sysText);
       if (result instanceof Error) throw result;
-      yield { type: 'text', delta: result };
+      return {
+        text: result,
+        reasoning: '',
+        toolCalls: [],
+        usage: null,
+        citations: [],
+        finishReason: 'stop',
+      };
     },
   } as unknown as VeniceClient;
   return client;

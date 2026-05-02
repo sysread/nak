@@ -16,7 +16,12 @@ import { ReflectionAgent } from '../src/lib/agents/reflection/agent';
 import { REFLECTION_PROMPT } from '../src/lib/agents/reflection/prompt';
 import { memoryToolbox } from '../src/lib/tools';
 import type { SupabaseService, Message } from '../src/lib/supabase';
-import type { VeniceClient, VeniceMessage, StreamEvent } from '../src/lib/venice';
+import type {
+  ChatCompletion,
+  OpenAIToolCall,
+  VeniceClient,
+  VeniceMessage,
+} from '../src/lib/venice';
 
 function makeMessage(overrides: Partial<Message>): Message {
   return {
@@ -69,28 +74,40 @@ function makeSupabase(messages: Message[]): {
 }
 
 /**
- * Scripted venice whose `streamChat` yields a canned StreamEvent[]
- * per round. `streamCalls` captures every call's messages so tests
- * can inspect what the agent composed.
+ * Scripted venice whose `completeChat` returns a canned response per
+ * round. `streamCalls` captures every call's messages so tests can
+ * inspect what the agent composed.
  */
-function makeVenice(rounds: StreamEvent[][]): {
+interface RoundScript {
+  text?: string;
+  toolCalls?: OpenAIToolCall[];
+}
+
+function makeVenice(rounds: RoundScript[]): {
   venice: VeniceClient;
   streamCalls: VeniceMessage[][];
 } {
   const remaining = rounds.slice();
   const streamCalls: VeniceMessage[][] = [];
-  const streamChat = vi.fn(
-    (req: { messages: VeniceMessage[] }): AsyncGenerator<StreamEvent, void, void> => {
+  const completeChat = vi.fn(
+    async (req: { messages: VeniceMessage[] }): Promise<ChatCompletion> => {
       streamCalls.push(req.messages.map((m) => ({ ...m })));
-      const events = remaining.shift() ?? [];
-      async function* gen(): AsyncGenerator<StreamEvent, void, void> {
-        for (const ev of events) yield ev;
-      }
-      return gen();
+      const script = remaining.shift() ?? {};
+      return {
+        text: script.text ?? '',
+        reasoning: '',
+        toolCalls: script.toolCalls ?? [],
+        usage: null,
+        citations: [],
+        finishReason: (script.toolCalls ?? []).length > 0 ? 'tool_calls' : 'stop',
+      };
     }
   );
   return {
-    venice: { streamChat, embed: vi.fn(async () => ({ data: [] })) } as unknown as VeniceClient,
+    venice: {
+      completeChat,
+      embed: vi.fn(async () => ({ data: [] })),
+    } as unknown as VeniceClient,
     streamCalls,
   };
 }
@@ -124,7 +141,7 @@ describe('ReflectionAgent — run() happy path', () => {
       makeMessage({ id: 'u2', role: 'user', content: 'and also dogs', created_at: '2024-01-01T00:00:02Z' }),
     ];
     const { svc } = makeSupabase(messages);
-    const { venice, streamCalls } = makeVenice([[{ type: 'text', delta: 'done' }]]);
+    const { venice, streamCalls } = makeVenice([{ text: 'done' }]);
     const agent = new ReflectionAgent(venice, svc, 'test-model');
 
     const result = await agent.run({
@@ -158,10 +175,9 @@ describe('ReflectionAgent — run() happy path', () => {
       makeMessage({ id: 'a1', role: 'assistant', content: 'Got it.' }),
     ]);
     const { venice } = makeVenice([
-      [
-        {
-          type: 'tool_call',
-          toolCall: {
+      {
+        toolCalls: [
+          {
             id: 'c1',
             type: 'function',
             function: {
@@ -169,9 +185,9 @@ describe('ReflectionAgent — run() happy path', () => {
               arguments: JSON.stringify({ label: 'birthday', data: 'June' }),
             },
           },
-        },
-      ],
-      [{ type: 'text', delta: 'ok' }],
+        ],
+      },
+      { text: 'ok' },
     ]);
     const agent = new ReflectionAgent(venice, svc, 'test-model');
 
@@ -199,7 +215,7 @@ describe('ReflectionAgent — edge cases', () => {
       makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
     ];
     const { svc } = makeSupabase(messages);
-    const { venice } = makeVenice([[{ type: 'text', delta: 'x' }]]);
+    const { venice } = makeVenice([{ text: 'x' }]);
     const agent = new ReflectionAgent(venice, svc, 'test-model');
 
     const result = await agent.run({
@@ -223,7 +239,7 @@ describe('ReflectionAgent — edge cases', () => {
 
     expect(result.stoppedReason).toBe('done');
     expect(result.output.inputMessageCount).toBe(0);
-    expect(venice.streamChat).not.toHaveBeenCalled();
+    expect(venice.completeChat).not.toHaveBeenCalled();
   });
 
   it('short-circuits on a pre-aborted signal without calling Supabase or Venice', async () => {
@@ -241,7 +257,7 @@ describe('ReflectionAgent — edge cases', () => {
 
     expect(result.stoppedReason).toBe('aborted');
     expect(svc.listMessages).not.toHaveBeenCalled();
-    expect(venice.streamChat).not.toHaveBeenCalled();
+    expect(venice.completeChat).not.toHaveBeenCalled();
   });
 
   it('captures a thrown error and returns stoppedReason=error with a message', async () => {
@@ -293,7 +309,7 @@ describe('ReflectionAgent — edge cases', () => {
       makeMessage({ id: 'a2', role: 'assistant', content: 'here you go' }),
     ];
     const { svc } = makeSupabase(messages);
-    const { venice, streamCalls } = makeVenice([[{ type: 'text', delta: 'ok' }]]);
+    const { venice, streamCalls } = makeVenice([{ text: 'ok' }]);
     const agent = new ReflectionAgent(venice, svc, 'test-model');
 
     await agent.run({

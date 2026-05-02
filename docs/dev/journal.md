@@ -369,10 +369,10 @@ and `journalTimezone?: string` (IANA zone).
   `source`, and `ham_marked_at` alone). Cancel discards
   the proposal; Try again re-runs the agent against the
   ORIGINAL entry (not the prior proposal) so each retry
-  takes an independent fresh angle. The in-flight
-  `streamChat` call is held by an `AbortController` on the
-  modal so closing the modal or starting a new regenerate
-  tears the SSE socket down promptly.
+  takes an independent fresh angle. The in-flight Venice
+  request is held by an `AbortController` on the modal so
+  closing the modal or starting a new regenerate tears the
+  HTTP socket down promptly.
 
   Re-journaling interaction: if the conversation gets new
   turns later, the worker picks the thread up via the

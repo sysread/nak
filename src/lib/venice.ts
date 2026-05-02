@@ -16,15 +16,43 @@
  * the VeniceClient instance) and never touches storage except as part
  * of the encrypted config blob.
  *
- * Streaming shape: streamChat yields a discriminated union of
- * StreamEvent values. Text deltas appear as they arrive; tool_call
- * events appear *once* per call, after the accumulator has assembled
- * a complete `arguments` JSON string from the fragments OpenAI
- * streams across many deltas.
+ * Two entry points for chat completions:
+ *
+ *   - {@link VeniceClient.streamChat} - SSE-streaming. Yields a
+ *     discriminated union of StreamEvent values; text deltas appear
+ *     as they arrive, tool_call events appear *once* per call after
+ *     the accumulator has assembled a complete `arguments` JSON
+ *     string from the fragments OpenAI streams across many deltas.
+ *     Used ONLY by the main user-facing chat (`chat-loop.ts`) where
+ *     incremental rendering is what makes the app feel alive.
+ *
+ *   - {@link VeniceClient.completeChat} - one-shot non-streaming
+ *     POST. Returns a fully-assembled {@link ChatCompletion} record
+ *     once the response lands. Used by every background path -
+ *     auto-titling, summary, samskara, intuition, the recall and
+ *     reflection agents, the web_search / research_docs /
+ *     analyze_image tools, and the headless tool loop. Background
+ *     callers don't have a UI surface to render token-by-token, and
+ *     long-lived SSE connections are noticeably slower end-to-end
+ *     than the equivalent non-streaming POST (the provider has to
+ *     flush after every chunk, which serializes cross-region latency
+ *     into the per-token path). They also fail in transient ways
+ *     specific to streaming - the silent "stream completed with no
+ *     text" error mode the web_search tool kept hitting was a Venice
+ *     SSE quirk that simply doesn't exist for the non-streaming
+ *     completion endpoint.
+ *
+ * Body building is shared via {@link buildChatBody}; the two methods
+ * differ only in the `stream` / `stream_options` flags they layer on
+ * and how they consume the wire response.
  */
 
 import type { ReasoningEffort, Verbosity } from './models';
 import type { OpenAIToolDef, OpenAIToolCall } from './tools/types';
+// Re-export so callers consuming a ChatCompletion (ChatCompletion.toolCalls
+// is OpenAIToolCall[]) can pull the type from the same module without
+// reaching into ./tools/types.
+export type { OpenAIToolCall };
 import { createLogger } from './logger.svelte';
 
 const log = createLogger('venice');
@@ -232,6 +260,42 @@ export type StreamEvent =
   | { type: 'usage'; usage: TokenUsage }
   | { type: 'citations'; citations: Citation[] };
 
+/**
+ * Result returned by {@link VeniceClient.completeChat}. The
+ * non-streaming POST gives us everything in one shot, so the shape
+ * is a flat record rather than a stream of events. Mirrors
+ * {@link StreamEvent} field-for-field so callers that don't need
+ * incremental rendering can use either path with no behavioural
+ * difference.
+ *
+ *   - `text`: the assistant message body (`choices[0].message.content`),
+ *     trimmed of the empty-string default. Safe to read directly without
+ *     any nullable checks.
+ *   - `reasoning`: chain-of-thought string from
+ *     `choices[0].message.reasoning_content`, or '' when the provider
+ *     didn't surface any (non-reasoning models, or reasoning gated
+ *     behind a flag the caller didn't set).
+ *   - `toolCalls`: assembled tool calls from `choices[0].message.tool_calls`.
+ *     Each entry is OpenAI's `{id, type, function: {name, arguments}}` shape;
+ *     `arguments` is a JSON string the caller is expected to JSON.parse.
+ *   - `usage`: top-level `usage` object on the completion. Always
+ *     populated by the non-streaming path (no `include_usage` opt-in
+ *     required) but kept nullable for symmetry with StreamEvent and
+ *     to tolerate a provider that drops the field.
+ *   - `citations`: Venice's `web_search_citations` array. Empty when
+ *     no search ran or no sources came back.
+ *   - `finishReason`: `choices[0].finish_reason`. Informational; used
+ *     by the headless tool loop to decide nothing-yet-vs-stop.
+ */
+export interface ChatCompletion {
+  text: string;
+  reasoning: string;
+  toolCalls: OpenAIToolCall[];
+  usage: TokenUsage | null;
+  citations: Citation[];
+  finishReason: string | null;
+}
+
 export interface EmbeddingRequest {
   model: string;
   input: string | string[];
@@ -430,26 +494,34 @@ export class VeniceClient {
   }
 
   /**
-   * Streaming chat completion. Yields a mix of text deltas (as they
-   * arrive) and tool_call events (each emitted once, after its
-   * arguments string has been fully assembled).
+   * Build the JSON body shared by streamChat and completeChat. The
+   * `streaming` arg toggles the `stream` / `stream_options` fields
+   * and the `include_search_results_in_stream` venice_parameter -
+   * everything else (tools, reasoning, verbosity, response_format,
+   * web search, scraping, the system-prompt opt-out) lands on both
+   * paths identically. Centralising the build means a wire-shape
+   * change can't accidentally land on one path and not the other.
    */
-  async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+  private buildChatBody(req: ChatRequest, streaming: boolean): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: req.model,
       messages: req.messages,
       temperature: req.temperature,
       max_tokens: req.maxTokens,
-      stream: true,
+    };
+    if (streaming) {
+      body.stream = true;
       // Ask for a token-usage epilogue frame on the SSE stream. Without
       // this flag Venice (and OpenAI-compatible providers generally)
       // only emit usage on non-streaming responses; with it, a final
       // frame carries `{choices:[], usage:{...}}` after [DONE] logic
       // would otherwise fire. Drives the per-message context-window
       // indicator — a silently-unsupported provider just yields no
-      // usage event and the indicator stays hidden.
-      stream_options: { include_usage: true },
-    };
+      // usage event and the indicator stays hidden. Non-streaming
+      // responses always carry `usage` at the top level so this flag
+      // is meaningless on the completeChat path.
+      body.stream_options = { include_usage: true };
+    }
     if (req.tools && req.tools.length > 0) {
       body.tools = req.tools;
     }
@@ -485,14 +557,17 @@ export class VeniceClient {
     // separate server-side tool and the user hasn't opted in.)
     //
     // `include_search_results_in_stream` is the opt-in for receiving
-    // the `web_search_citations` array during a streaming response —
+    // the `web_search_citations` array during a streaming response -
     // it defaults to `false` server-side, meaning citations would
     // otherwise only appear in non-streaming responses. Without this
     // flag the model still adds `^N^` superscripts to the content
     // (that's what `enable_web_citations` gates), but the matching
     // list never arrives and the superscripts become orphaned.
     // Flagged experimental in the Venice docs but it's the only way
-    // to surface citations in our streaming pipeline.
+    // to surface citations in our streaming pipeline. Non-streaming
+    // responses always include the citations list at the top level
+    // so the flag is unnecessary there.
+    //
     // Disable Venice's platform-level system prompt. By default
     // Venice prepends its own generic "you are a helpful assistant"
     // framing to every request, which stacks on top of our
@@ -505,10 +580,12 @@ export class VeniceClient {
     // `include_venice_system_prompt`; it defaults to true server-
     // side, so we have to explicitly opt out.
     //
-    // Applies to every streamChat call (main chat + all sub-agents
-    // — recall, conversation_recall, reflection, summary,
-    // auto-title). Each of those prompts is self-sufficient; none
-    // of them benefit from a Venice generic preamble landing on top.
+    // Applies to every chat-completion call (main chat + all sub-
+    // agents - recall, conversation_recall, reflection, summary,
+    // auto-title, samskara, intuition, the web_search /
+    // research_docs / analyze_image tools). Each of those prompts is
+    // self-sufficient; none of them benefit from a Venice generic
+    // preamble landing on top.
     //
     // `enable_web_scraping` (also always on): tells Venice to fetch
     // the full content of any URL the user pastes into their latest
@@ -536,10 +613,26 @@ export class VeniceClient {
         // search are sourceless - no `enable_web_search=off` request
         // should ever carry a citations flag.
         veniceParams.enable_web_citations = req.webCitations ?? true;
-        veniceParams.include_search_results_in_stream = true;
+        if (streaming) {
+          veniceParams.include_search_results_in_stream = true;
+        }
       }
     }
     body.venice_parameters = veniceParams;
+    return body;
+  }
+
+  /**
+   * Streaming chat completion. Yields a mix of text deltas (as they
+   * arrive) and tool_call events (each emitted once, after its
+   * arguments string has been fully assembled).
+   *
+   * Used only by the main user-facing chat loop. Background callers
+   * should use {@link completeChat}; see the file header for the
+   * rationale.
+   */
+  async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+    const body = this.buildChatBody(req, true);
     let res: Response;
     try {
       res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
@@ -697,6 +790,45 @@ export class VeniceClient {
     // The `finished` flag is a debugging aid more than a contract —
     // callers only care that the generator returned.
     void finished;
+  }
+
+  /**
+   * Non-streaming chat completion. POSTs the same body shape
+   * streamChat builds (minus the `stream` / `stream_options` flags
+   * and the streaming-only `include_search_results_in_stream` venice
+   * parameter), parses the single JSON response, and returns a flat
+   * {@link ChatCompletion} record.
+   *
+   * Used by every background path - sub-agents, headless tool loops,
+   * and the auto-running pipelines (intuition, samskara, summary,
+   * recall). See the file header for why background callers
+   * shouldn't use streamChat: SSE adds latency the user can't see
+   * and exposes us to provider-specific stream-only failure modes.
+   */
+  async completeChat(req: ChatRequest): Promise<ChatCompletion> {
+    const body = this.buildChatBody(req, false);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(body),
+        signal: req.signal,
+      });
+    } catch (err) {
+      throw new VeniceError(
+        `Network error contacting Venice: ${(err as Error).message}`,
+        'network'
+      );
+    }
+    if (!res.ok) throw await this.classifyError(res);
+    let payload: unknown;
+    try {
+      payload = await res.json();
+    } catch {
+      throw new VeniceError('Failed to parse Venice completion response.', 'parse');
+    }
+    return parseChatCompletion(payload);
   }
 
   /**
@@ -1039,4 +1171,118 @@ export function parseSseFrame(frame: string): SseDelta | '[DONE]' | null {
     out.finishReason = choice.finish_reason;
   }
   return Object.keys(out).length === 0 ? null : out;
+}
+
+/**
+ * Coerce the JSON body of a non-streaming `/chat/completions`
+ * response into a {@link ChatCompletion}. Defensive about each field:
+ *
+ *   - `choices[0].message.content` may be null when the model
+ *     produced only tool calls; render as ''.
+ *   - `tool_calls` rides on `message.tool_calls` (not in fragments
+ *     keyed by `index` like the streaming path) - each entry is
+ *     already a complete OpenAI tool-call record.
+ *   - Citations live on the same `venice_parameters.web_search_citations`
+ *     path as the streaming first-frame; reuse the same coercion.
+ *   - `usage` is always at the top level on non-streaming responses;
+ *     no `include_usage` opt-in is needed.
+ *
+ * Exported for direct test coverage and so a future migration to a
+ * different transport (websocket, gRPC, etc.) can reuse the
+ * shape-translation logic without duplicating it.
+ */
+export function parseChatCompletion(payload: unknown): ChatCompletion {
+  if (typeof payload !== 'object' || payload === null) {
+    throw new VeniceError('Venice completion response was not an object.', 'parse');
+  }
+  interface RawMessage {
+    role?: string;
+    content?: string | null;
+    reasoning_content?: string | null;
+    tool_calls?: Array<{
+      id?: string;
+      type?: string;
+      function?: { name?: string; arguments?: string };
+    }>;
+  }
+  interface RawChoice {
+    message?: RawMessage;
+    finish_reason?: string | null;
+  }
+  interface RawUsage {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  }
+  interface RawCitation {
+    title?: unknown;
+    url?: unknown;
+    content?: unknown;
+    date?: unknown;
+  }
+  interface RawVeniceParams {
+    web_search_citations?: RawCitation[];
+  }
+  const obj = payload as {
+    choices?: RawChoice[];
+    usage?: RawUsage;
+    venice_parameters?: RawVeniceParams;
+  };
+
+  const choice = obj.choices?.[0];
+  const message = choice?.message;
+  const text =
+    typeof message?.content === 'string' ? message.content : '';
+  const reasoning =
+    typeof message?.reasoning_content === 'string' ? message.reasoning_content : '';
+
+  const toolCalls: OpenAIToolCall[] = [];
+  if (Array.isArray(message?.tool_calls)) {
+    for (const c of message.tool_calls) {
+      if (typeof c.id !== 'string') continue;
+      const fname = c.function?.name;
+      if (typeof fname !== 'string') continue;
+      const fargs = typeof c.function?.arguments === 'string' ? c.function.arguments : '';
+      toolCalls.push({
+        id: c.id,
+        type: 'function',
+        function: { name: fname, arguments: fargs },
+      });
+    }
+  }
+
+  let usage: TokenUsage | null = null;
+  const rawUsage = obj.usage;
+  if (
+    rawUsage &&
+    typeof rawUsage.prompt_tokens === 'number' &&
+    typeof rawUsage.completion_tokens === 'number' &&
+    typeof rawUsage.total_tokens === 'number'
+  ) {
+    usage = {
+      prompt_tokens: rawUsage.prompt_tokens,
+      completion_tokens: rawUsage.completion_tokens,
+      total_tokens: rawUsage.total_tokens,
+    };
+  }
+
+  const citations: Citation[] = [];
+  const rawCitations = obj.venice_parameters?.web_search_citations;
+  if (Array.isArray(rawCitations)) {
+    rawCitations.forEach((c, i) => {
+      if (typeof c !== 'object' || c === null) return;
+      const url = typeof c.url === 'string' ? c.url : null;
+      if (!url) return;
+      const cite: Citation = { index: i + 1, url };
+      if (typeof c.title === 'string') cite.title = c.title;
+      if (typeof c.content === 'string') cite.content = c.content;
+      if (typeof c.date === 'string') cite.date = c.date;
+      citations.push(cite);
+    });
+  }
+
+  const finishReason =
+    typeof choice?.finish_reason === 'string' ? choice.finish_reason : null;
+
+  return { text, reasoning, toolCalls, usage, citations, finishReason };
 }

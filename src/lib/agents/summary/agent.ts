@@ -175,23 +175,20 @@ export class SummaryAgent implements Agent<SummaryInput, SummaryOutput> {
       const convo: VeniceMessage[] = condensed.map(messageToVenice);
       convo.push({ role: 'user', content: SUMMARY_PROMPT });
 
-      // Non-streaming call: we only want the final text, no need to
-      // process deltas. maxTokens caps the response at ~150 tokens,
-      // which is plenty for 2–3 sentences and a safety net against a
-      // model that ignores the length instruction.
-      let raw = '';
-      for await (const ev of this.venice.streamChat({
+      // Non-streaming call: we only want the final text. maxTokens
+      // caps the response at ~150 tokens, which is plenty for 2-3
+      // sentences and a safety net against a model that ignores the
+      // length instruction.
+      const result = await this.venice.completeChat({
         model: this.model,
         messages: convo,
         maxTokens: 180,
         signal,
-      })) {
-        if (ev.type === 'text') raw += ev.delta;
-      }
+      });
 
       return {
         output: {
-          summary: trimSummary(raw),
+          summary: trimSummary(result.text),
           inputMessageCount: condensed.length,
         },
         toolCalls: 0,

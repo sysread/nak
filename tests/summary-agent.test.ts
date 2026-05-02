@@ -23,13 +23,14 @@ function msg(id: string, role: Message['role'], content: string): Message {
 
 function mockVeniceWithText(text: string) {
   return {
-    async *streamChat() {
-      // Emit the text in two fragments so the test exercises the
-      // delta-accumulation path rather than a single-chunk shortcut.
-      const half = Math.ceil(text.length / 2);
-      yield { type: 'text' as const, delta: text.slice(0, half) };
-      yield { type: 'text' as const, delta: text.slice(half) };
-    },
+    completeChat: vi.fn(async () => ({
+      text,
+      reasoning: '',
+      toolCalls: [],
+      usage: null,
+      citations: [],
+      finishReason: 'stop',
+    })),
   } as unknown as VeniceClient;
 }
 
@@ -58,7 +59,7 @@ describe('SummaryAgent', () => {
   it('returns done with an empty summary for an empty thread (no Venice call)', async () => {
     const supabase = mockSupabaseWithMessages([]);
     const venice = mockVeniceWithText('should not fire');
-    const spy = vi.spyOn(venice, 'streamChat');
+    const spy = vi.spyOn(venice, 'completeChat');
     const agent = new SummaryAgent(venice, supabase, 'fast-model');
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'm-1' },
@@ -121,15 +122,15 @@ describe('SummaryAgent', () => {
     expect(result.output.summary).toBe('');
   });
 
-  it('surfaces errors thrown inside the Venice stream as stoppedReason=error', async () => {
+  it('surfaces errors thrown by completeChat as stoppedReason=error', async () => {
     const supabase = mockSupabaseWithMessages([
       msg('m-1', 'user', 'hi'),
       msg('m-2', 'assistant', 'hello'),
     ]);
     const venice = {
-      async *streamChat() {
+      completeChat: vi.fn(async () => {
         throw new Error('venice exploded');
-      },
+      }),
     } as unknown as VeniceClient;
     const agent = new SummaryAgent(venice, supabase, 'fast-model');
     const result = await agent.run({
