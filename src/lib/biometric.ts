@@ -338,7 +338,10 @@ export async function enrollBiometric(password: string): Promise<void> {
       residentKey: 'required',
     },
     timeout: 60_000,
-    attestation: 'none',
+    // No `attestation` field. The passkey-prf-playground reference
+    // omits it (defaults to 'none' per spec). Setting it explicitly
+    // shouldn't change behavior, but we match the playground exactly
+    // to rule it out.
     // PRF on create() is just `{}` - enable the extension, do not
     // ask for an inline eval. Passing `{ eval: { first: salt } }`
     // here is spec-legal but Chrome on Android (and some other
@@ -365,6 +368,15 @@ export async function enrollBiometric(password: string): Promise<void> {
     summary: summarizePrf(cred),
   });
 
+  // Brief delay before the follow-up get(). The playground does this
+  // with a 500ms setTimeout and the comment "Give a small delay to
+  // ensure the credential is fully registered." On some Android +
+  // Credential Manager + provider stacks, calling get() immediately
+  // after create() races the credential's storage write on the
+  // provider side and the get() lookup misses (or returns a
+  // degenerate response with stripped extensions). Cheap insurance.
+  await new Promise<void>((resolve) => setTimeout(resolve, 500));
+
   // Always do a follow-up get() to harvest the PRF output. Per the
   // WebAuthn PRF spec the create() call only signals support
   // (`prf.enabled`); the actual hmac-secret evaluation happens
@@ -376,9 +388,13 @@ export async function enrollBiometric(password: string): Promise<void> {
     publicKey: {
       challenge: getChallenge,
       // rp.id is implicit on get() - we look up by credential id.
+      // Wrap in Uint8Array even though rawId is already an
+      // ArrayBuffer; some implementations narrow `id: BufferSource`
+      // and the Uint8Array path is the well-trodden one (the
+      // playground decodes from base64 to Uint8Array and works).
       allowCredentials: [
         {
-          id: cred.rawId,
+          id: new Uint8Array(cred.rawId),
           type: 'public-key',
         },
       ],
