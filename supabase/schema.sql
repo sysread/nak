@@ -1542,7 +1542,7 @@ create or replace function public.recipe_attach_photos(
   p_recipe_id uuid,
   p_image_ids uuid[],
   p_change_message text
-) returns table (image_id uuid, position int)
+) returns table (image_id uuid, "position" int)
 language plpgsql security invoker as $$
 declare
   v_uid uuid := auth.uid();
@@ -1620,7 +1620,7 @@ create or replace function public.recipe_remove_photos(
   p_recipe_id uuid,
   p_image_ids uuid[],
   p_change_message text
-) returns table (image_id uuid, position int)
+) returns table (image_id uuid, "position" int)
 language plpgsql security invoker as $$
 declare
   v_uid uuid := auth.uid();
@@ -1690,7 +1690,7 @@ create or replace function public.recipe_reorder_photos(
   p_recipe_id uuid,
   p_image_ids uuid[],
   p_change_message text
-) returns table (image_id uuid, position int)
+) returns table (image_id uuid, "position" int)
 language plpgsql security invoker as $$
 declare
   v_uid uuid := auth.uid();
