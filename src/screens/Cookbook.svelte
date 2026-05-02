@@ -25,6 +25,7 @@
   import {
     cookbook,
     loadRecipes,
+    loadRecipePhotos,
     COOKBOOK_CHANGE_EVENT,
   } from '$lib/cookbook-store.svelte';
   import {
@@ -35,7 +36,23 @@
     MAX_RECIPE_TITLE_CHARS,
   } from '$lib/cooklang';
   import type { RecipeVersion } from '$lib/supabase';
+  import {
+    arrayBufferToBase64,
+    dataUrlFor,
+    formatBytes,
+    maybeDownscaleImage,
+    sha256Hex,
+    validateFile,
+    MAX_ATTACHMENT_BYTES,
+  } from '$lib/attachments';
   import RecipeRating from '../components/RecipeRating.svelte';
+
+  // Cap on photos per recipe. Belt-and-suspenders with the editor's
+  // file picker - the input is `multiple` but we reject inserts that
+  // would push the draft over this. Tens of photos per recipe is more
+  // than anyone reasonably wants on a single dish; the cap exists to
+  // keep the version-snapshot link rows bounded.
+  const MAX_RECIPE_PHOTOS = 12;
 
   interface Props {
     // When Chat.svelte's top-bar "new recipe" button flips this to true,
@@ -72,6 +89,34 @@
   let editError = $state<string | null>(null);
   let saving = $state(false);
   let copyFeedback = $state<string | null>(null);
+
+  // Working photo set for the edit pane. Each entry carries the
+  // server-side `image_id` (already created via `upsertRecipeImage`
+  // before being added to the draft) plus the bytes for inline
+  // preview. The save path passes `imageIds.map(p => p.imageId)` as
+  // `image_ids` on the update RPC, so the photo set lives or dies
+  // with the rest of the form submission.
+  interface DraftPhoto {
+    imageId: string;
+    mimeType: string;
+    sizeBytes: number;
+    dataBase64: string;
+  }
+  let draftPhotos = $state<DraftPhoto[]>([]);
+  // True while a photo upload (downscale + sha256 + upsert) is in
+  // flight. Save is disabled while this is true so the user can't
+  // submit a stale draft that's missing the in-flight photo.
+  let photosUploading = $state(false);
+  // Per-photo error messages from the file-picker path (size cap,
+  // unreadable image, RPC failure). Surfaced under the photo grid;
+  // cleared on the next add or on save.
+  let photoErrors = $state<string[]>([]);
+
+  // Lightbox state for the detail-pane strip. `null` = closed; an
+  // index = the photo at that position is being viewed full-size.
+  // Click a thumb to open; Escape, click outside, or click the close
+  // button to dismiss.
+  let lightboxIndex = $state<number | null>(null);
 
   // --- history state (lazy per detail pane) ---
   // null until the first listRecipeVersions resolves; an empty array
@@ -144,15 +189,33 @@
       activeId = null;
       editError = null;
       copyFeedback = null;
+      lightboxIndex = null;
       clearVersionState();
     } else {
       activeId = id;
       pane = 'detail';
       copyFeedback = null;
+      lightboxIndex = null;
       clearVersionState();
       void loadVersions(id);
+      void loadPhotosForActive(id);
     }
   });
+
+  async function loadPhotosForActive(recipeId: string): Promise<void> {
+    if (!app.supabase) return;
+    await loadRecipePhotos(app.supabase, recipeId);
+  }
+
+  // Photos linked to the recipe currently shown in the detail pane.
+  // `undefined` = the cache slot has never been touched (we render an
+  // empty strip placeholder until the load resolves). `null` = a load
+  // is in flight. An empty array = loaded with no photos. The strip
+  // hides itself entirely when the array is empty so a recipe with
+  // no photos doesn't reserve dead space above the metadata.
+  const activePhotos = $derived.by(() =>
+    activeId ? cookbook.photos[activeId] ?? undefined : undefined
+  );
 
   // --- pane transitions ---
   function openList(): void {
@@ -160,6 +223,7 @@
     activeId = null;
     editError = null;
     copyFeedback = null;
+    lightboxIndex = null;
     clearVersionState();
     navigate({ recipe: null });
   }
@@ -181,10 +245,12 @@
     // it but doesn't have to invent something on the very first save.
     draftChangeMessage = 'Created recipe.';
     editError = null;
+    draftPhotos = [];
+    photoErrors = [];
     pane = 'edit';
   }
 
-  function openEdit(): void {
+  async function openEdit(): Promise<void> {
     const r = activeRecipe;
     if (!r) return;
     draftTitle = r.title;
@@ -198,6 +264,23 @@
     // state.
     draftChangeMessage = '';
     editError = null;
+    photoErrors = [];
+
+    // Seed draftPhotos from the loaded photo cache. If the cache hasn't
+    // resolved yet (rare - the detail pane fired the load on open and
+    // edit usually opens after the user has been on detail for a beat),
+    // wait for it before seeding so the draft doesn't start empty and
+    // accidentally clear the photo set on save.
+    if (cookbook.photos[r.id] === undefined && app.supabase) {
+      await loadRecipePhotos(app.supabase, r.id);
+    }
+    const loaded = cookbook.photos[r.id] ?? [];
+    draftPhotos = loaded.map((p) => ({
+      imageId: p.id,
+      mimeType: p.mime_type,
+      sizeBytes: p.size_bytes,
+      dataBase64: p.data_base64,
+    }));
     pane = 'edit';
   }
 
@@ -227,12 +310,23 @@
       editError = 'Describe what changed before saving.';
       return;
     }
+    if (photosUploading) {
+      editError = 'Wait for photo uploads to finish before saving.';
+      return;
+    }
     saving = true;
     editError = null;
     try {
       const source = draftSource.trim().length > 0 ? draftSource.trim() : null;
       const sourceUrl =
         draftSourceUrl.trim().length > 0 ? draftSourceUrl.trim() : null;
+      // Always pass the current draft photo set to the save - the
+      // version snapshot needs to capture photos alongside the rest of
+      // the editable state. The RPC's `p_set_image_ids=true` mode
+      // handles both unchanged sets (re-link the same image_ids) and
+      // mutated sets (add/remove/reorder) the same way, so we don't
+      // need to diff against the prior state in the client.
+      const imageIds = draftPhotos.map((p) => p.imageId);
       if (activeId) {
         await app.supabase.updateRecipe(
           activeId,
@@ -242,6 +336,7 @@
             source,
             source_url: sourceUrl,
             rating: draftRating,
+            image_ids: imageIds,
           },
           changeMessage
         );
@@ -252,7 +347,8 @@
           source,
           sourceUrl,
           draftRating,
-          changeMessage
+          changeMessage,
+          imageIds
         );
         activeId = row.id;
       }
@@ -261,7 +357,12 @@
       // new version is the latest entry, and we want it visible the
       // moment the user lands back on the detail pane.
       if (activeId) await loadVersions(activeId);
+      // Re-fetch photos so the strip on the detail pane reflects what
+      // we just saved (positions renumbered, deletions applied, new
+      // uploads appended).
+      if (activeId) await loadRecipePhotos(app.supabase, activeId);
       pane = 'detail';
+      photoErrors = [];
       // Create flow lands us on a recipe id that wasn't in the URL;
       // update flow keeps the same id. Either way we reconcile the
       // router so refresh-from-here lands on this recipe's detail.
@@ -270,6 +371,120 @@
       editError = err instanceof Error ? err.message : String(err);
     } finally {
       saving = false;
+    }
+  }
+
+  // --- photo edit-pane handlers ---
+
+  // Add user-picked files to the draft. For each:
+  //   1. validate against the per-file size cap
+  //   2. downscale via the same canvas helper the message-attachment
+  //      composer uses (max 2048px on the long edge)
+  //   3. base64-encode + sha256 the bytes
+  //   4. upsert the image into the user's recipe-image library so we
+  //      have a stable image_id to link
+  //   5. append to draftPhotos
+  // Errors per file land in `photoErrors` so a partial batch still
+  // lets the good ones through. Sets `photosUploading` while the
+  // batch is in flight so save is gated on completion.
+  async function onPickPhotos(e: Event): Promise<void> {
+    if (!app.supabase) return;
+    const input = e.target as HTMLInputElement;
+    const files = input.files;
+    if (!files || files.length === 0) return;
+    photoErrors = [];
+    photosUploading = true;
+    try {
+      for (const file of Array.from(files)) {
+        if (draftPhotos.length >= MAX_RECIPE_PHOTOS) {
+          photoErrors = [
+            ...photoErrors,
+            `Cannot add more than ${MAX_RECIPE_PHOTOS} photos to a recipe.`,
+          ];
+          break;
+        }
+        if (!file.type.startsWith('image/')) {
+          photoErrors = [...photoErrors, `${file.name}: not an image.`];
+          continue;
+        }
+        const sizeError = validateFile(file);
+        if (sizeError) {
+          photoErrors = [...photoErrors, `${file.name}: ${sizeError}`];
+          continue;
+        }
+        try {
+          const downscaled = await maybeDownscaleImage(file);
+          if (!downscaled) {
+            photoErrors = [
+              ...photoErrors,
+              `${file.name}: could not decode image.`,
+            ];
+            continue;
+          }
+          const buffer = await downscaled.arrayBuffer();
+          const base64 = arrayBufferToBase64(buffer);
+          const sha = await sha256Hex(buffer);
+          const imageId = await app.supabase.upsertRecipeImage(
+            sha,
+            downscaled.type,
+            downscaled.size,
+            base64
+          );
+          draftPhotos = [
+            ...draftPhotos,
+            {
+              imageId,
+              mimeType: downscaled.type,
+              sizeBytes: downscaled.size,
+              dataBase64: base64,
+            },
+          ];
+        } catch (err) {
+          photoErrors = [
+            ...photoErrors,
+            `${file.name}: ${err instanceof Error ? err.message : String(err)}`,
+          ];
+        }
+      }
+    } finally {
+      photosUploading = false;
+      // Clear the input value so picking the same file twice (e.g.
+      // user removed it then changed their mind) re-fires `change`.
+      input.value = '';
+    }
+  }
+
+  function onRemoveDraftPhoto(index: number): void {
+    draftPhotos = draftPhotos.filter((_, i) => i !== index);
+  }
+
+  function onMoveDraftPhoto(index: number, dir: -1 | 1): void {
+    const target = index + dir;
+    if (target < 0 || target >= draftPhotos.length) return;
+    const next = [...draftPhotos];
+    const [moved] = next.splice(index, 1);
+    next.splice(target, 0, moved!);
+    draftPhotos = next;
+  }
+
+  // --- lightbox ---
+
+  function openLightbox(index: number): void {
+    lightboxIndex = index;
+  }
+
+  function closeLightbox(): void {
+    lightboxIndex = null;
+  }
+
+  function onLightboxKey(e: KeyboardEvent): void {
+    if (lightboxIndex === null) return;
+    const photos = activePhotos;
+    if (!Array.isArray(photos) || photos.length === 0) return;
+    if (e.key === 'ArrowLeft') {
+      lightboxIndex = (lightboxIndex - 1 + photos.length) % photos.length;
+    } else if (e.key === 'ArrowRight') {
+      lightboxIndex = (lightboxIndex + 1) % photos.length;
     }
   }
 
@@ -359,6 +574,13 @@
 
   function onCookbookChange(): void {
     void refresh();
+    // Photos may have changed too - a tool-driven
+    // recipe_photos_attach mid-conversation should refresh the strip
+    // without the user navigating away. Best-effort; failures fall
+    // back to "what's already cached."
+    if (activeId && app.supabase) {
+      void loadRecipePhotos(app.supabase, activeId);
+    }
   }
 
   onMount(() => {
@@ -379,10 +601,28 @@
     }
   });
 
+  // Combined window key handler. Escape ladders the panes back; arrow
+  // keys page through the lightbox when open. Split into two
+  // single-purpose helpers so each branch reads as intent.
+  function onWindowKey(e: KeyboardEvent): void {
+    if (e.key === 'Escape') {
+      onEscape(e);
+      return;
+    }
+    if (lightboxIndex !== null && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      onLightboxKey(e);
+    }
+  }
+
   function onEscape(e: KeyboardEvent): void {
     if (e.key !== 'Escape') return;
-    // Escape ladders back: edit → detail-or-empty, detail → empty.
-    // On the empty/list pane there is no modal to dismiss.
+    // Escape ladders back: lightbox → strip, edit → detail-or-empty,
+    // detail → empty. On the empty/list pane there is no modal to
+    // dismiss.
+    if (lightboxIndex !== null) {
+      closeLightbox();
+      return;
+    }
     if (pane === 'edit') {
       pane = activeId ? 'detail' : 'list';
     } else if (pane === 'detail') {
@@ -481,7 +721,7 @@
   }
 </script>
 
-<svelte:window onkeydown={onEscape} />
+<svelte:window onkeydown={onWindowKey} />
 
 <div class="cookbook-panel">
   <!-- Panel toolbar: only shown when a recipe is open (detail or edit),
@@ -644,6 +884,32 @@
                 {copyFeedback ?? ''}
               </span>
             </div>
+            <!-- Photo strip. Sits ABOVE the cooklang render so the
+                 thumbnails appear just above the metadata block (where
+                 servings lives) without the strip having to live inside
+                 the cooklang HTML. The cooklang module stays the source
+                 of truth for recipe text; photos live alongside it.
+                 The strip hides itself when the recipe has no photos
+                 so it doesn't reserve dead space. -->
+            {#if Array.isArray(activePhotos) && activePhotos.length > 0}
+              <div class="recipe-photos-strip" role="list">
+                {#each activePhotos as p, i (p.id)}
+                  <button
+                    type="button"
+                    class="photo-thumb"
+                    onclick={() => openLightbox(i)}
+                    title="Open photo"
+                    aria-label="Open photo {i + 1} of {activePhotos.length}"
+                  >
+                    <img
+                      src={dataUrlFor(p.mime_type, p.data_base64)}
+                      alt=""
+                      loading="lazy"
+                    />
+                  </button>
+                {/each}
+              </div>
+            {/if}
             <!-- The parsed HTML is produced from trusted source (the
                  user's own Cooklang text, escaped in cooklangToHtml via
                  `esc()`), so rendering with `{@html}` is safe. We still
@@ -769,6 +1035,82 @@
               A one-line note for this recipe's history. Required.
             </p>
           </div>
+          <div class="form-row">
+            <!-- Stand-in label, same reasoning as the rating row above:
+                 the file input is the only focusable target, but the
+                 grid below it is the more meaningful "field" the user
+                 sees, so we use a div instead of a <label> attached to
+                 the bare input. -->
+            <div class="form-label">
+              Photos <span class="subtle">(optional, up to {MAX_RECIPE_PHOTOS})</span>
+            </div>
+            <div class="recipe-photos-edit">
+              {#each draftPhotos as p, i (p.imageId + ':' + i)}
+                <div class="recipe-photo-edit-cell">
+                  <img
+                    src={dataUrlFor(p.mimeType, p.dataBase64)}
+                    alt=""
+                    loading="lazy"
+                  />
+                  <div class="recipe-photo-edit-cell-actions">
+                    <button
+                      type="button"
+                      class="secondary icon-btn"
+                      onclick={() => onMoveDraftPhoto(i, -1)}
+                      disabled={i === 0}
+                      title="Move left"
+                      aria-label="Move photo left"
+                    >‹</button>
+                    <button
+                      type="button"
+                      class="secondary icon-btn"
+                      onclick={() => onMoveDraftPhoto(i, 1)}
+                      disabled={i === draftPhotos.length - 1}
+                      title="Move right"
+                      aria-label="Move photo right"
+                    >›</button>
+                    <button
+                      type="button"
+                      class="secondary icon-btn cookbook-action-danger"
+                      onclick={() => onRemoveDraftPhoto(i)}
+                      title="Remove photo"
+                      aria-label="Remove photo"
+                    >×</button>
+                  </div>
+                  <span class="subtle recipe-photo-edit-meta">
+                    {formatBytes(p.sizeBytes)}
+                  </span>
+                </div>
+              {/each}
+              {#if draftPhotos.length < MAX_RECIPE_PHOTOS}
+                <label class="recipe-photo-edit-add">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onchange={onPickPhotos}
+                    disabled={photosUploading}
+                  />
+                  <span aria-hidden="true">+</span>
+                  <span class="subtle">
+                    {photosUploading ? 'Uploading…' : 'Add photo'}
+                  </span>
+                </label>
+              {/if}
+            </div>
+            {#if photoErrors.length > 0}
+              <ul class="error recipe-photo-errors">
+                {#each photoErrors as msg}
+                  <li>{msg}</li>
+                {/each}
+              </ul>
+            {/if}
+            <p class="subtle cookbook-change-message-hint">
+              Images are downscaled to {Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)}MB max
+              and stored alongside the recipe. Photo edits land in the
+              History panel like any other change.
+            </p>
+          </div>
           <div class="cookbook-edit-panes">
             <div class="form-row cookbook-edit-source-col">
               <label for="cb-cooklang">Cooklang source</label>
@@ -809,6 +1151,50 @@
       {/if}
     </section>
 </div>
+
+<!-- Lightbox. Mounted only while open so the DOM stays clean.
+     Click the dim backdrop to dismiss; click the image stops the
+     event so a misclick on the image doesn't drop the modal. The
+     close button is the redundant escape hatch for users who
+     don't realise the backdrop is clickable. -->
+{#if lightboxIndex !== null && Array.isArray(activePhotos) && activePhotos.length > 0}
+  {@const p = activePhotos[lightboxIndex]}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div
+    class="recipe-lightbox-backdrop"
+    onclick={(e) => {
+      // Only the backdrop dismisses; clicks bubbled up from the
+      // image or the close button leave it open. Equivalent to the
+      // image-stops-propagation trick but keeps the click handler
+      // off the non-interactive <img>.
+      if (e.target === e.currentTarget) closeLightbox();
+    }}
+    role="dialog"
+    aria-modal="true"
+    aria-label="Photo viewer"
+    tabindex="-1"
+  >
+    <button
+      type="button"
+      class="recipe-lightbox-close"
+      onclick={closeLightbox}
+      title="Close"
+      aria-label="Close photo viewer"
+    >×</button>
+    {#if p}
+      <img
+        class="recipe-lightbox-img"
+        src={dataUrlFor(p.mime_type, p.data_base64)}
+        alt=""
+      />
+    {/if}
+    {#if activePhotos.length > 1}
+      <span class="subtle recipe-lightbox-counter" aria-live="polite">
+        {lightboxIndex + 1} / {activePhotos.length}
+      </span>
+    {/if}
+  </div>
+{/if}
 
 <style>
   /* Inline recipe panel. Fills the main content area as a flex column;
@@ -1247,5 +1633,177 @@
   }
   .cookbook-history-message {
     color: var(--text);
+  }
+
+  /* Photo strip on the detail pane. Sits as a sibling above the
+     cooklang-render div so the thumbnails appear over the metadata
+     block (where servings is) without the strip having to live
+     inside the {@html} output. Wraps to multiple rows on narrow
+     panels - we deliberately don't horizontal-scroll so every photo
+     is reachable without a swipe gesture, which mobile users miss. */
+  .recipe-photos-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0.25rem 0 1rem;
+  }
+  .photo-thumb {
+    width: 96px;
+    height: 96px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-2);
+    cursor: pointer;
+    overflow: hidden;
+    /* Reset the surrounding button reset so focus rings still land
+       cleanly on the tile and not on its inner image. */
+    display: block;
+  }
+  .photo-thumb:hover,
+  .photo-thumb:focus-visible {
+    border-color: var(--accent);
+  }
+  .photo-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  /* Edit pane photo grid. Shares the thumb visual with the detail
+     strip but adds a per-cell action toolbar (move left / right /
+     remove) and a size hint underneath. The "+ Add photo" tile is a
+     <label> wrapping a hidden file input so the whole tile is the
+     click target. */
+  .recipe-photos-edit {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0.25rem 0 0.25rem;
+  }
+  .recipe-photo-edit-cell {
+    width: 110px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .recipe-photo-edit-cell img {
+    width: 110px;
+    height: 110px;
+    object-fit: cover;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-2);
+    display: block;
+  }
+  .recipe-photo-edit-cell-actions {
+    display: flex;
+    gap: 0.15rem;
+    justify-content: center;
+  }
+  /* Tighter icon-button styling for the per-cell actions - the cell
+     is small and four chunky buttons would crowd the tile. */
+  .recipe-photo-edit-cell-actions :global(button.icon-btn) {
+    background: var(--bg-2);
+    padding: 0.1rem 0.4rem;
+    font-size: 1rem;
+    line-height: 1;
+    min-width: 1.6rem;
+  }
+  .recipe-photo-edit-cell-actions :global(button.icon-btn:disabled) {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .recipe-photo-edit-meta {
+    text-align: center;
+    font-size: 0.7rem;
+  }
+  .recipe-photo-edit-add {
+    width: 110px;
+    height: 110px;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    background: var(--bg-2);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 1.5rem;
+    line-height: 1;
+  }
+  .recipe-photo-edit-add:hover,
+  .recipe-photo-edit-add:focus-within {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+  /* Hide the file input itself - the surrounding <label> is the
+     visible target. Width/height 0 + opacity 0 instead of
+     `display:none` so keyboard focus still lands on it. */
+  .recipe-photo-edit-add input[type='file'] {
+    width: 0;
+    height: 0;
+    opacity: 0;
+    position: absolute;
+  }
+  .recipe-photo-errors {
+    margin: 0.5rem 0;
+    padding-left: 1.25rem;
+    font-size: 0.85rem;
+  }
+
+  /* Lightbox. Full-viewport dim backdrop with the photo centered.
+     The image caps at 95vw/85vh so a portrait photo doesn't push
+     the close button or counter off the screen on small viewports. */
+  .recipe-lightbox-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+  .recipe-lightbox-img {
+    max-width: 95vw;
+    max-height: 85vh;
+    object-fit: contain;
+    border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    cursor: default;
+  }
+  .recipe-lightbox-close {
+    position: absolute;
+    top: 0.75rem;
+    right: 1rem;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    background: rgba(0, 0, 0, 0.4);
+    color: white;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .recipe-lightbox-close:hover,
+  .recipe-lightbox-close:focus-visible {
+    background: rgba(0, 0, 0, 0.7);
+    border-color: white;
+  }
+  .recipe-lightbox-counter {
+    position: absolute;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 0.85rem;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
   }
 </style>

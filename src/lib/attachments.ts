@@ -190,6 +190,44 @@ export function base64ToBlob(base64: string, mimeType: string): Blob {
 }
 
 /**
+ * Hex-encoded SHA-256 of an arbitrary byte buffer. Used by the
+ * recipe-photos path on both the editor side (file picked by the
+ * user) and the tools side (image copied out of a conversation
+ * attachment) to compute the dedup key the `recipe_image_upsert`
+ * RPC expects on `(user_id, sha256)`. The 64-char hex shape is
+ * what the schema enforces; lower-case hex matches the convention
+ * used elsewhere in the codebase.
+ *
+ * Web Crypto's SubtleCrypto is available in modern browsers and in
+ * Web Worker contexts (the reflection worker bundles tools via this
+ * file's exports), so this is safe to call from either.
+ */
+export async function sha256Hex(buffer: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  const bytes = new Uint8Array(digest);
+  let hex = '';
+  for (const b of bytes) {
+    hex += b.toString(16).padStart(2, '0');
+  }
+  return hex;
+}
+
+/**
+ * SHA-256 of a base64 string's decoded bytes. Convenience wrapper
+ * around `sha256Hex` for callers (the LLM tool path) that already
+ * hold the bytes as base64 - decoding to an ArrayBuffer in one place
+ * keeps the call site terse.
+ */
+export async function sha256HexFromBase64(base64: string): Promise<string> {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return sha256Hex(bytes.buffer);
+}
+
+/**
  * Downscale an image File to fit within IMAGE_MAX_EDGE_PX on its
  * longest edge, re-encoding as JPEG (for photographic images) or PNG
  * (for images with transparency — detected by a presence of an alpha

@@ -48,13 +48,16 @@ function ctxFor(svc: Partial<SupabaseService>): ToolContext {
 }
 
 describe('recipe tools — registry', () => {
-  it('all five recipe tools are in the main TOOLS list', () => {
+  it('all eight recipe tools are in the main TOOLS list', () => {
     const names = TOOLS.map((t: ToolDef) => t.name);
     expect(names).toContain('recipe_save');
     expect(names).toContain('recipe_list');
     expect(names).toContain('recipe_get');
     expect(names).toContain('recipe_update');
     expect(names).toContain('recipe_delete');
+    expect(names).toContain('recipe_photos_attach');
+    expect(names).toContain('recipe_photos_remove');
+    expect(names).toContain('recipe_photos_reorder');
   });
 });
 
@@ -84,6 +87,7 @@ describe('recipe_save', () => {
       id: 'r-1',
       title: 'Test Recipe',
       updated_at: '2024-01-01T00:00:00Z',
+      photos: [],
     });
   });
 
@@ -211,11 +215,45 @@ describe('recipe_list', () => {
 describe('recipe_get', () => {
   it('returns {found: true, recipe} on hit', async () => {
     const getRecipe = vi.fn().mockResolvedValue(sampleRecipe());
+    const listRecipePhotoMeta = vi.fn().mockResolvedValue([]);
     const out = await recipeGet.execute(
       { id: 'r-1' },
-      ctxFor({ getRecipe } as unknown as Partial<SupabaseService>)
+      ctxFor({
+        getRecipe,
+        listRecipePhotoMeta,
+      } as unknown as Partial<SupabaseService>)
     );
-    expect(out).toEqual({ found: true, recipe: sampleRecipe() });
+    expect(out).toEqual({
+      found: true,
+      recipe: { ...sampleRecipe(), photos: [] },
+    });
+  });
+
+  it('returns the recipe with attached photo meta when there are photos', async () => {
+    const getRecipe = vi.fn().mockResolvedValue(sampleRecipe());
+    const listRecipePhotoMeta = vi
+      .fn()
+      .mockResolvedValue([
+        { id: 'img-a', position: 0 },
+        { id: 'img-b', position: 1 },
+      ]);
+    const out = await recipeGet.execute(
+      { id: 'r-1' },
+      ctxFor({
+        getRecipe,
+        listRecipePhotoMeta,
+      } as unknown as Partial<SupabaseService>)
+    );
+    expect(out).toEqual({
+      found: true,
+      recipe: {
+        ...sampleRecipe(),
+        photos: [
+          { id: 'img-a', position: 0 },
+          { id: 'img-b', position: 1 },
+        ],
+      },
+    });
   });
 
   it('returns {found: false} when the id is unknown', async () => {
@@ -231,9 +269,13 @@ describe('recipe_get', () => {
 describe('recipe_update', () => {
   it('calls updateRecipe with patch fields and trimmed change_message', async () => {
     const updateRecipe = vi.fn().mockResolvedValue(sampleRecipe());
+    const listRecipePhotoMeta = vi.fn().mockResolvedValue([]);
     await recipeUpdate.execute(
       { id: 'r-1', title: 'New', change_message: '  Renamed.  ' },
-      ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
+      ctxFor({
+        updateRecipe,
+        listRecipePhotoMeta,
+      } as unknown as Partial<SupabaseService>)
     );
     const [id, patch, changeMessage] = updateRecipe.mock.calls[0]!;
     expect(id).toBe('r-1');
@@ -243,9 +285,13 @@ describe('recipe_update', () => {
 
   it('passes explicit null for source to clear it', async () => {
     const updateRecipe = vi.fn().mockResolvedValue(sampleRecipe());
+    const listRecipePhotoMeta = vi.fn().mockResolvedValue([]);
     await recipeUpdate.execute(
       { id: 'r-1', source: null, change_message: 'cleared source' },
-      ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
+      ctxFor({
+        updateRecipe,
+        listRecipePhotoMeta,
+      } as unknown as Partial<SupabaseService>)
     );
     const [, patch, changeMessage] = updateRecipe.mock.calls[0]!;
     expect(patch).toEqual({ source: null });
@@ -254,9 +300,13 @@ describe('recipe_update', () => {
 
   it('threads a numeric rating into the patch', async () => {
     const updateRecipe = vi.fn().mockResolvedValue(sampleRecipe());
+    const listRecipePhotoMeta = vi.fn().mockResolvedValue([]);
     await recipeUpdate.execute(
       { id: 'r-1', rating: 5, change_message: 'loved it' },
-      ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
+      ctxFor({
+        updateRecipe,
+        listRecipePhotoMeta,
+      } as unknown as Partial<SupabaseService>)
     );
     const [, patch] = updateRecipe.mock.calls[0]!;
     expect(patch).toEqual({ rating: 5 });
@@ -264,9 +314,13 @@ describe('recipe_update', () => {
 
   it('passes explicit null for rating to clear it', async () => {
     const updateRecipe = vi.fn().mockResolvedValue(sampleRecipe());
+    const listRecipePhotoMeta = vi.fn().mockResolvedValue([]);
     await recipeUpdate.execute(
       { id: 'r-1', rating: null, change_message: 'undecided' },
-      ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
+      ctxFor({
+        updateRecipe,
+        listRecipePhotoMeta,
+      } as unknown as Partial<SupabaseService>)
     );
     const [, patch] = updateRecipe.mock.calls[0]!;
     expect(patch).toEqual({ rating: null });
@@ -410,8 +464,25 @@ describe('SupabaseService.createRecipe', () => {
       p_source: 'NYT',
       p_source_url: null,
       p_rating: 4,
+      // Default to no photos when the create-flow caller doesn't
+      // pass an explicit list. The RPC is happy with an empty array;
+      // the link-write loop simply does nothing.
+      p_image_ids: [],
       p_change_message: 'init',
     });
+  });
+
+  it('forwards a non-empty image_ids list when one is provided', async () => {
+    const rpc = vi
+      .fn()
+      .mockResolvedValue({ data: [sampleRecipe()], error: null });
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await svc.createRecipe('T', 'X', null, null, null, 'init', [
+      'img-a',
+      'img-b',
+    ]);
+    const [, args] = rpc.mock.calls[0]!;
+    expect(args.p_image_ids).toEqual(['img-a', 'img-b']);
   });
 
   it('passes p_rating: null when the recipe is unrated', async () => {
@@ -468,8 +539,27 @@ describe('SupabaseService.updateRecipe', () => {
       p_source_url: null,
       p_set_rating: false,
       p_rating: null,
+      // Photos absent from the patch -> p_set_image_ids: false, so
+      // the new version inherits the previous version's link set.
+      p_set_image_ids: false,
+      p_image_ids: null,
       p_change_message: 'edit',
     });
+  });
+
+  it('passes image_ids through with p_set_image_ids: true when present', async () => {
+    const rpc = vi
+      .fn()
+      .mockResolvedValue({ data: [sampleRecipe()], error: null });
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await svc.updateRecipe(
+      'r-1',
+      { image_ids: ['img-a', 'img-b'] },
+      'reordered photos'
+    );
+    const [, args] = rpc.mock.calls[0]!;
+    expect(args.p_set_image_ids).toBe(true);
+    expect(args.p_image_ids).toEqual(['img-a', 'img-b']);
   });
 
   it('threads rating through with the same set-flag pattern', async () => {
@@ -519,18 +609,41 @@ describe('SupabaseService.updateRecipe', () => {
 });
 
 describe('SupabaseService.revertRecipe', () => {
-  // revertRecipe is two calls: getRecipeVersion (a `from` chain) then
-  // updateRecipe (an `rpc` call). We stub both via a custom client so we
-  // can assert the patch fed into the RPC matches the version's content.
-  function makeRevertClient(version: RecipeVersion | null) {
+  // revertRecipe is three calls now: getRecipeVersion (a `from` chain
+  // ending in maybeSingle), listRecipeVersionPhotoIds (a `from` chain
+  // ending in order), then updateRecipe (an `rpc` call). The stub
+  // dispatches by table name so both `from` chains resolve to the
+  // shape their caller expects.
+  function makeRevertClient(
+    version: RecipeVersion | null,
+    photoLinks: Array<{ image_id: string; position: number }> = []
+  ) {
     const rpc = vi
       .fn()
       .mockResolvedValue({ data: [sampleRecipe()], error: null });
-    const eq = vi.fn().mockReturnValue({
-      maybeSingle: vi.fn().mockResolvedValue({ data: version, error: null }),
+    const versionsChain = {
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          maybeSingle: vi
+            .fn()
+            .mockResolvedValue({ data: version, error: null }),
+        }),
+      }),
+    };
+    const linksChain = {
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          order: vi
+            .fn()
+            .mockResolvedValue({ data: photoLinks, error: null }),
+        }),
+      }),
+    };
+    const from = vi.fn((table: string) => {
+      if (table === 'recipe_versions') return versionsChain;
+      if (table === 'recipe_version_images') return linksChain;
+      throw new Error(`unexpected from(${table})`);
     });
-    const select = vi.fn().mockReturnValue({ eq });
-    const from = vi.fn().mockReturnValue({ select });
     return {
       rpc,
       client: { from, rpc } as unknown as SupabaseClient,
@@ -539,7 +652,10 @@ describe('SupabaseService.revertRecipe', () => {
 
   it('looks up the version, then calls updateRecipe with its content + change message', async () => {
     const v = sampleVersion();
-    const { rpc, client } = makeRevertClient(v);
+    const { rpc, client } = makeRevertClient(v, [
+      { image_id: 'img-a', position: 0 },
+      { image_id: 'img-b', position: 1 },
+    ]);
     const svc = makeService(client);
     await svc.revertRecipe('r-1', 'v-1', 'Reverted to v-1');
     expect(rpc).toHaveBeenCalledTimes(1);
@@ -557,6 +673,9 @@ describe('SupabaseService.revertRecipe', () => {
       p_source_url: v.source_url,
       p_set_rating: true,
       p_rating: v.rating,
+      // Revert restores the photo set the version held, in order.
+      p_set_image_ids: true,
+      p_image_ids: ['img-a', 'img-b'],
       p_change_message: 'Reverted to v-1',
     });
   });

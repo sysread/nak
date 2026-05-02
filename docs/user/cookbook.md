@@ -169,6 +169,34 @@ Cookbook list pane. Highest-rated recipes appear first, ties broken
 by most-recent edit; unrated recipes sink to the bottom so the
 sort is honest about which recipes you've actually tried.
 
+## Photos
+
+Each recipe can carry up to 12 photos that show as thumbnails at the
+top of the detail pane, just above the servings line. Click any
+thumbnail to open it full-size; arrow keys page between photos in the
+viewer; Escape (or a click outside the image) dismisses it.
+
+- **In the edit form**, the **Photos** field sits between the change
+  message and the Cooklang source. Click **+ Add photo** to pick one or
+  more files; the per-cell controls move a photo left or right or
+  remove it. Images are downscaled to 2048 pixels on the long edge
+  before upload, so a 12-megapixel phone photo doesn't bloat the
+  recipe row. The save button saves the photo set with the rest of
+  the form - photo edits land in the History panel under the same
+  change message as everything else in the save.
+- **Asking the model**: tell Nak which photos to add and it will call
+  `recipe_photos_attach`. The photos must be live in this conversation
+  (not yet expired - see the conversation drawer for the per-thread
+  attachment list). Nak can also remove photos (`recipe_photos_remove`)
+  or reorder them (`recipe_photos_reorder`) when you ask. Each tool
+  call lands its own row in the History panel with the message Nak
+  wrote.
+
+Photos round-trip through the History panel like every other field:
+revert restores the exact photo set that was on the recipe at the
+moment that version was saved, even if you've added or removed
+photos since.
+
 ## Editing and deleting
 
 - **Edit** from the detail pane. Changes save in place; the list

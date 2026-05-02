@@ -27,7 +27,7 @@
  * both here so existing UI imports from `$lib/cookbook-store.svelte`
  * keep resolving.
  */
-import type { Recipe, SupabaseService } from './supabase';
+import type { Recipe, RecipePhoto, SupabaseService } from './supabase';
 export {
   COOKBOOK_CHANGE_EVENT,
   notifyCookbookChanged,
@@ -38,12 +38,22 @@ interface CookbookState {
   loading: boolean;
   /** Last error from a load attempt. Cleared on the next successful load. */
   error: string | null;
+  /**
+   * Photo cache, keyed by recipe id. `undefined` = never fetched;
+   * `null` = fetch in flight; `RecipePhoto[]` = loaded (possibly
+   * empty). Lazy by design — the bytes live as base64 on the row, so
+   * eagerly loading every recipe's photos at list-fetch time would
+   * blow the wire payload on a cookbook with many photo'd recipes.
+   * Detail open is the only path that needs them.
+   */
+  photos: Record<string, RecipePhoto[] | null | undefined>;
 }
 
 export const cookbook = $state<CookbookState>({
   recipes: [],
   loading: false,
   error: null,
+  photos: {},
 });
 
 /**
@@ -64,5 +74,32 @@ export async function loadRecipes(supabase: SupabaseService): Promise<void> {
     cookbook.error = err instanceof Error ? err.message : String(err);
   } finally {
     cookbook.loading = false;
+  }
+}
+
+/**
+ * Load (or reload) the photos linked to a single recipe. Writes the
+ * result into `cookbook.photos[recipeId]`. Marks the slot as `null`
+ * during the fetch so detail-pane render code can show a placeholder
+ * for the strip; resolves to `[]` for recipes with no photos.
+ *
+ * Called from the Cookbook detail-pane $effect on recipe-id change,
+ * and again from the COOKBOOK_CHANGE_EVENT handler so a tool-driven
+ * `recipe_photos_attach` mid-conversation refreshes the strip without
+ * the user navigating away.
+ */
+export async function loadRecipePhotos(
+  supabase: SupabaseService,
+  recipeId: string
+): Promise<void> {
+  cookbook.photos[recipeId] = null;
+  try {
+    cookbook.photos[recipeId] = await supabase.listRecipePhotos(recipeId);
+  } catch {
+    // Surface as an empty strip rather than an error banner - a photo
+    // load failure is non-fatal for the recipe view, and the user can
+    // re-open to retry. Keeping the slot truthy (empty array) prevents
+    // a permanent "loading..." state on transient failures.
+    cookbook.photos[recipeId] = [];
   }
 }

@@ -131,6 +131,13 @@ export const recipeUpdate: ToolDef = {
     }
     const row = await ctx.supabase.updateRecipe(id, patch, changeMessage);
     notifyCookbookChanged();
-    return row;
+    // Tack the current photo set onto the return so the LLM sees the
+    // photos didn't move - parallel shape with recipe_get and the
+    // recipe_photos_* tools. The scalar update path leaves photos
+    // alone (the RPC inherits the previous version's link set), so
+    // this just echoes the existing set rather than reflecting any
+    // change.
+    const photos = await ctx.supabase.listRecipePhotoMeta(id);
+    return { ...row, photos };
   },
 };

@@ -51,6 +51,9 @@ import { recipeList } from './recipe_list';
 import { recipeGet } from './recipe_get';
 import { recipeUpdate } from './recipe_update';
 import { recipeDelete } from './recipe_delete';
+import { recipePhotosAttach } from './recipe_photos_attach';
+import { recipePhotosRemove } from './recipe_photos_remove';
+import { recipePhotosReorder } from './recipe_photos_reorder';
 import { updateTitle } from './update_title';
 import { analyzeImage } from './analyze_image';
 import { researchDocs } from './research_docs';
@@ -110,8 +113,20 @@ export const alwaysOnToolbox: Toolbox = {
 /** Save-and-read recipes against the cookbook CRUD. */
 export const cookingToolbox: Toolbox = {
   name: 'cooking',
-  description: 'Save, read, update, and delete recipes in the cookbook.',
-  tools: [recipeList, recipeGet, recipeSave, recipeUpdate, recipeDelete],
+  description:
+    'Save, read, update, and delete recipes in the cookbook, plus ' +
+    'attach photos from the current conversation to a recipe and ' +
+    'remove or reorder them.',
+  tools: [
+    recipeList,
+    recipeGet,
+    recipeSave,
+    recipeUpdate,
+    recipeDelete,
+    recipePhotosAttach,
+    recipePhotosRemove,
+    recipePhotosReorder,
+  ],
 };
 
 /**

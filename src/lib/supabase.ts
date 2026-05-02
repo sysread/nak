@@ -287,6 +287,35 @@ export interface RecipeVersion {
 }
 
 /**
+ * One photo on a recipe, with full bytes. Loaded by the detail pane and
+ * the edit form for thumbnail rendering and lightbox open. The bytes
+ * are base64 (`data:` URI ready); `mime_type` and `size_bytes` come
+ * from the source `recipe_images` row.
+ *
+ * `position` is the link table's `position` field on the recipe's
+ * latest version - lower numbers render first in the strip.
+ */
+export interface RecipePhoto {
+  id: string;
+  position: number;
+  mime_type: string;
+  size_bytes: number;
+  data_base64: string;
+}
+
+/**
+ * Lightweight projection of the same photo without the bytes. Returned
+ * by the photo-mutation RPCs and embedded in tool returns the LLM sees,
+ * so the LLM can chain attach/remove/reorder operations against
+ * specific photo IDs without paying the base64 cost on every tool
+ * round-trip.
+ */
+export interface RecipePhotoMeta {
+  id: string;
+  position: number;
+}
+
+/**
  * One journal-entry row. The Journal feature lets a date have any
  * number of entries; the UI groups them by `entry_date` and assembles
  * a compound day view per click.
@@ -1496,7 +1525,9 @@ export class SupabaseService {
    * `recipe_create_with_version` RPC. `changeMessage` is required —
    * it appears in the History panel as the description of the
    * initial save (e.g. "Imported from NYT Cooking", "Created by
-   * hand").
+   * hand"). `imageIds` is the ordered list of `recipe_images` rows
+   * to link to the new version (empty by default for a recipe with
+   * no photos).
    */
   async createRecipe(
     title: string,
@@ -1504,7 +1535,8 @@ export class SupabaseService {
     source: string | null,
     sourceUrl: string | null,
     rating: number | null,
-    changeMessage: string
+    changeMessage: string,
+    imageIds: string[] = []
   ): Promise<Recipe> {
     if (!changeMessage || changeMessage.trim().length === 0) {
       throw new SupabaseError('changeMessage is required');
@@ -1520,6 +1552,7 @@ export class SupabaseService {
         p_source: source,
         p_source_url: sourceUrl,
         p_rating: rating,
+        p_image_ids: imageIds,
         p_change_message: changeMessage.trim(),
       }
     );
@@ -1543,6 +1576,11 @@ export class SupabaseService {
    * "absent leaves field unchanged; explicit null clears" semantics
    * across the wire: TypeScript's `'field' in patch` distinguishes
    * the two cases, but the Postgres parameter list cannot.
+   *
+   * `image_ids` follows the same pattern: omit to inherit the
+   * previous version's photo set unchanged; pass an array (possibly
+   * empty) to set the new version's photo set explicitly. Bulk
+   * editor saves include it; tool-driven scalar edits omit it.
    */
   async updateRecipe(
     id: string,
@@ -1552,6 +1590,7 @@ export class SupabaseService {
       source?: string | null;
       source_url?: string | null;
       rating?: number | null;
+      image_ids?: string[];
     },
     changeMessage: string
   ): Promise<Recipe> {
@@ -1580,6 +1619,8 @@ export class SupabaseService {
         p_source_url: patch.source_url ?? null,
         p_set_rating: 'rating' in patch,
         p_rating: patch.rating ?? null,
+        p_set_image_ids: 'image_ids' in patch,
+        p_image_ids: patch.image_ids ?? null,
         p_change_message: changeMessage.trim(),
       }
     );
@@ -1631,6 +1672,11 @@ export class SupabaseService {
    * the revert itself becomes a new version row, so a misclick is
    * recoverable too. Throws if the version belongs to a different
    * recipe (defense against stale UI state passing the wrong id).
+   *
+   * Photos round-trip through the snapshot too: we read the version's
+   * link rows and pass the ordered image_ids into `image_ids` on the
+   * update patch. Revert restores the exact photo set that was on the
+   * recipe at the moment that version was saved.
    */
   async revertRecipe(
     recipeId: string,
@@ -1642,6 +1688,7 @@ export class SupabaseService {
     if (v.recipe_id !== recipeId) {
       throw new SupabaseError('version belongs to a different recipe');
     }
+    const imageIds = await this.listRecipeVersionPhotoIds(versionId);
     return this.updateRecipe(
       recipeId,
       {
@@ -1650,8 +1697,220 @@ export class SupabaseService {
         source: v.source,
         source_url: v.source_url,
         rating: v.rating,
+        image_ids: imageIds,
       },
       changeMessage
+    );
+  }
+
+  // recipe photos --------------------------------------------------------
+  //
+  // Photos live in two tables: `recipe_images` holds the deduped bytes
+  // (one row per (user_id, sha256)), `recipe_version_images` links them
+  // to recipe versions. The "current" photo set for a recipe is the
+  // links on the recipe's most-recent version. See `supabase/schema.sql`
+  // for the full design rationale.
+
+  /**
+   * Insert an image into the user's photo library, or return the id of
+   * an existing row when the bytes hash matches one already present.
+   * Server-side dedup is per-user via the `(user_id, sha256)` unique
+   * constraint, so two users uploading the same image each get their
+   * own row; the same user uploading the same image twice gets the
+   * existing id.
+   *
+   * Both upload paths converge on this method: the editor's file picker
+   * runs after `maybeDownscaleImage`, and the LLM's
+   * `recipe_photos_attach` tool runs after copying bytes out of a
+   * conversation attachment. Two callers, one dedup contract.
+   */
+  async upsertRecipeImage(
+    sha256: string,
+    mimeType: string,
+    sizeBytes: number,
+    dataBase64: string
+  ): Promise<string> {
+    const { data, error } = await this.client.rpc('recipe_image_upsert', {
+      p_sha256: sha256,
+      p_mime_type: mimeType,
+      p_size_bytes: sizeBytes,
+      p_data: dataBase64,
+    });
+    if (error) throw new SupabaseError(error.message);
+    if (typeof data !== 'string') {
+      throw new SupabaseError('image upsert returned no id');
+    }
+    return data;
+  }
+
+  /**
+   * Fetch the photos currently linked to a recipe, with bytes, in
+   * display order. "Currently linked" = on the latest version row.
+   * Used by the detail pane and the edit form for thumb rendering.
+   *
+   * Implemented as a single embedded-select query: pull the latest
+   * version row and dive into its link table and the image table in
+   * one round-trip. Returns an empty array when the recipe has no
+   * photos (or when the recipe has no version row, which shouldn't
+   * happen post-versioning rollout but degrades gracefully).
+   */
+  async listRecipePhotos(recipeId: string): Promise<RecipePhoto[]> {
+    const { data, error } = await this.client
+      .from('recipe_versions')
+      .select(
+        'id, recipe_version_images(position, recipe_images(id, mime_type, size_bytes, data))'
+      )
+      .eq('recipe_id', recipeId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    if (!data) return [];
+    // PostgREST returns embedded relations as arrays at the type
+    // level, even for many-to-one FKs that are guaranteed-single at
+    // runtime. The cast through `unknown` is the documented escape
+    // hatch for "we know the shape better than the generic types
+    // do." Runtime branches below cope with both shapes (single
+    // object or single-element array) so we're not making a
+    // brittle bet on PostgREST's serialisation mode.
+    type ImageEmbed = {
+      id: string;
+      mime_type: string;
+      size_bytes: number;
+      data: string;
+    };
+    type LinkRow = {
+      position: number;
+      recipe_images: ImageEmbed | ImageEmbed[] | null;
+    };
+    const links = (data as unknown as { recipe_version_images?: LinkRow[] | null })
+      .recipe_version_images;
+    if (!Array.isArray(links)) return [];
+    const photos: RecipePhoto[] = [];
+    for (const l of links) {
+      const img = Array.isArray(l.recipe_images)
+        ? l.recipe_images[0]
+        : l.recipe_images;
+      if (!img) continue;
+      photos.push({
+        id: img.id,
+        position: l.position,
+        mime_type: img.mime_type,
+        size_bytes: img.size_bytes,
+        data_base64: img.data,
+      });
+    }
+    photos.sort((a, b) => a.position - b.position);
+    return photos;
+  }
+
+  /**
+   * Fetch just the image IDs (in order) on a given version. Used by
+   * `revertRecipe` to round-trip the photo set without paying for the
+   * bytes - the bytes already exist in `recipe_images`, all we need
+   * for the revert is the ordered list of which to link.
+   */
+  async listRecipeVersionPhotoIds(versionId: string): Promise<string[]> {
+    const { data, error } = await this.client
+      .from('recipe_version_images')
+      .select('image_id, position')
+      .eq('recipe_version_id', versionId)
+      .order('position', { ascending: true });
+    if (error) throw new SupabaseError(error.message);
+    return ((data ?? []) as Array<{ image_id: string }>).map((r) => r.image_id);
+  }
+
+  /**
+   * Lightweight (no bytes) projection of the current photo set for a
+   * recipe. Used in tool returns so the LLM sees `photos: [{id,
+   * position}]` it can chain into a follow-up attach/remove/reorder
+   * call. Calls the same embedded-select shape as `listRecipePhotos`
+   * but skips the `data` column to keep the wire payload small.
+   */
+  async listRecipePhotoMeta(recipeId: string): Promise<RecipePhotoMeta[]> {
+    const { data, error } = await this.client
+      .from('recipe_versions')
+      .select('id, recipe_version_images(position, image_id)')
+      .eq('recipe_id', recipeId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    if (!data) return [];
+    type LinkRow = { position: number; image_id: string };
+    const links = (data as { recipe_version_images?: LinkRow[] | null })
+      .recipe_version_images;
+    if (!Array.isArray(links)) return [];
+    return links
+      .map((l) => ({ id: l.image_id, position: l.position }))
+      .sort((a, b) => a.position - b.position);
+  }
+
+  /**
+   * Append photos to a recipe's current set. Creates a new version row
+   * with the post-mutation link list. Returns the new full ordered
+   * link list as `[{id, position}]` so callers (especially LLM tools)
+   * can echo it back to the model without a follow-up read.
+   *
+   * Duplicate IDs (an image already on the recipe) are silently
+   * skipped server-side - attaching the same photo twice is a no-op,
+   * not an error, so the LLM doesn't have to dedupe before calling.
+   */
+  async attachRecipePhotos(
+    recipeId: string,
+    imageIds: string[],
+    changeMessage: string
+  ): Promise<RecipePhotoMeta[]> {
+    const { data, error } = await this.client.rpc('recipe_attach_photos', {
+      p_recipe_id: recipeId,
+      p_image_ids: imageIds,
+      p_change_message: changeMessage.trim(),
+    });
+    if (error) throw new SupabaseError(error.message);
+    return ((data ?? []) as Array<{ image_id: string; position: number }>).map(
+      (r) => ({ id: r.image_id, position: r.position })
+    );
+  }
+
+  /**
+   * Remove photos from a recipe's current set by id. Throws when an
+   * id isn't currently linked, naming the offenders so the caller
+   * can re-issue with the right set.
+   */
+  async removeRecipePhotos(
+    recipeId: string,
+    imageIds: string[],
+    changeMessage: string
+  ): Promise<RecipePhotoMeta[]> {
+    const { data, error } = await this.client.rpc('recipe_remove_photos', {
+      p_recipe_id: recipeId,
+      p_image_ids: imageIds,
+      p_change_message: changeMessage.trim(),
+    });
+    if (error) throw new SupabaseError(error.message);
+    return ((data ?? []) as Array<{ image_id: string; position: number }>).map(
+      (r) => ({ id: r.image_id, position: r.position })
+    );
+  }
+
+  /**
+   * Set a recipe's photo order to exactly the given id sequence. The
+   * array must be a permutation of the current set - missing or
+   * extra ids fail loudly server-side.
+   */
+  async reorderRecipePhotos(
+    recipeId: string,
+    imageIds: string[],
+    changeMessage: string
+  ): Promise<RecipePhotoMeta[]> {
+    const { data, error } = await this.client.rpc('recipe_reorder_photos', {
+      p_recipe_id: recipeId,
+      p_image_ids: imageIds,
+      p_change_message: changeMessage.trim(),
+    });
+    if (error) throw new SupabaseError(error.message);
+    return ((data ?? []) as Array<{ image_id: string; position: number }>).map(
+      (r) => ({ id: r.image_id, position: r.position })
     );
   }
 

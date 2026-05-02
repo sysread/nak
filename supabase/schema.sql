@@ -1009,6 +1009,197 @@ select r.id, r.user_id, r.title, r.source, r.source_url, r.cooklang,
    select 1 from public.recipe_versions v where v.recipe_id = r.id
  );
 
+-- recipe_images / recipe_version_images ----------------------------------
+--
+-- Photo support for the cookbook. Two tables: `recipe_images` holds the
+-- raw image bytes once per user-deduped image; `recipe_version_images`
+-- links images to recipe versions (many-to-many, ordered by `position`).
+--
+-- Why split: a single image can be referenced by many version snapshots
+-- (the user adds a photo, makes ten edits unrelated to photos, the same
+-- bytes are still on the recipe at every version). Snapshotting bytes
+-- per version would explode storage; snapshotting links is cheap. The
+-- bytes-table-plus-link-table shape lets revert restore the exact set
+-- a past version held without paying for byte duplication.
+--
+-- "Current photos for recipe X" is derived: photos linked to the most
+-- recent `recipe_versions` row for X. The hot read path is "open detail
+-- pane", which already needs to know the latest version (cheap probe via
+-- the existing `recipe_versions_recipe_created_idx`). No
+-- `current_version_id` denormalisation on `recipes` is needed.
+--
+-- Dedup: `unique (user_id, sha256)` on `recipe_images` collapses the
+-- "user uploads the same photo twice" and "LLM re-attaches the same
+-- conversation image" cases to one row. Scope is per-user so two
+-- different users uploading the same image each get their own row -
+-- RLS-clean, no cross-user data path through the lookup index.
+--
+-- Bytes shape: `data text` is base64, mirroring `message_attachments`
+-- for the same PostgREST round-trip reasons (see the long comment on
+-- that table for the bytea-vs-text history). `mime_type` and
+-- `size_bytes` are stored alongside so the client can render thumbnails
+-- without inspecting the base64 payload.
+--
+-- Lifecycle: a `recipe_images` row is orphaned only when no
+-- `recipe_version_images` row references it. The AFTER DELETE trigger
+-- on the link table reclaims the orphan row in the same transaction
+-- that removed the last reference. Recipe delete cascades through
+-- versions to link rows, which fires the trigger per-row and drops the
+-- now-unreferenced image bytes. Insert-side orphans (an image was
+-- created but the save that would have linked it failed) are not
+-- reclaimed automatically; they're rare and cheap, and a separate GC
+-- job can be added if it ever matters.
+
+create table if not exists public.recipe_images (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- Hex-encoded SHA-256 of the raw image bytes (pre-base64). The
+  -- client computes this via Web Crypto API before upload so the
+  -- upsert RPC can dedup against existing rows. Hex (not base64) so
+  -- the column is human-readable in the dashboard.
+  sha256 text not null,
+  mime_type text not null,
+  size_bytes int not null,
+  -- Base64 of the image bytes. Same encoding choice as
+  -- `message_attachments.data` - PostgREST round-trips this as a
+  -- plain string with no encoding ambiguity, the client feeds it
+  -- straight into `data:` URIs without intermediate decoding.
+  data text not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, sha256)
+);
+
+alter table public.recipe_images enable row level security;
+
+drop policy if exists "recipe_images are self-selectable" on public.recipe_images;
+create policy "recipe_images are self-selectable" on public.recipe_images
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "recipe_images are self-insertable" on public.recipe_images;
+create policy "recipe_images are self-insertable" on public.recipe_images
+  for insert with check (auth.uid() = user_id);
+
+-- No update policy - rows are immutable once written. Bytes change ->
+-- new sha256 -> new row.
+drop policy if exists "recipe_images are self-deletable" on public.recipe_images;
+create policy "recipe_images are self-deletable" on public.recipe_images
+  for delete using (auth.uid() = user_id);
+
+create table if not exists public.recipe_version_images (
+  recipe_version_id uuid not null
+    references public.recipe_versions(id) on delete cascade,
+  image_id uuid not null references public.recipe_images(id),
+  -- Denormalised user_id matches the convention on `recipes` and
+  -- `recipe_versions`: every cookbook table is user-scoped via a
+  -- direct column rather than a via-parent join, so RLS predicates
+  -- are single-column index probes. The application sets this from
+  -- `auth.uid()` on every insert; both parents (the version row and
+  -- the image row) carry the same user_id by construction, so the
+  -- denormalisation can't drift.
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- Display order within the version. Lower numbers render first.
+  -- The link-write code assigns sequentially from 0; reorder
+  -- operations renumber.
+  position int not null,
+  created_at timestamptz not null default now(),
+  primary key (recipe_version_id, image_id)
+);
+
+create index if not exists recipe_version_images_image_idx
+  on public.recipe_version_images (image_id);
+
+create index if not exists recipe_version_images_user_idx
+  on public.recipe_version_images (user_id);
+
+alter table public.recipe_version_images enable row level security;
+
+drop policy if exists "recipe_version_images are self-selectable"
+  on public.recipe_version_images;
+create policy "recipe_version_images are self-selectable"
+  on public.recipe_version_images
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "recipe_version_images are self-insertable"
+  on public.recipe_version_images;
+create policy "recipe_version_images are self-insertable"
+  on public.recipe_version_images
+  for insert with check (auth.uid() = user_id);
+
+-- No update / delete policies for application code: links are
+-- immutable once written. Cascades from `recipe_versions` (and from
+-- `recipe_images` when an image row goes away) are the only paths
+-- that remove rows. The orphan-GC trigger below runs as
+-- `security definer` so it can reach across to delete the image row
+-- when the last link to it is removed by a cascade.
+
+-- Orphan reclamation. After the last link to an image is deleted
+-- (typically as part of a recipe-delete cascade through versions),
+-- delete the image row itself. `security definer` because the
+-- triggering DELETE may be a cascade that the original caller's
+-- role can't follow into recipe_images directly; the function still
+-- only ever deletes images the same user owns, since the joined
+-- recipe_images row carries the same user_id.
+create or replace function public.gc_orphan_recipe_image()
+  returns trigger
+  language plpgsql
+  security definer
+  set search_path = public
+as $$
+begin
+  if not exists (
+    select 1 from public.recipe_version_images
+     where image_id = old.image_id
+  ) then
+    delete from public.recipe_images where id = old.image_id;
+  end if;
+  return null;
+end $$;
+
+drop trigger if exists gc_orphan_recipe_image on public.recipe_version_images;
+create trigger gc_orphan_recipe_image
+  after delete on public.recipe_version_images
+  for each row execute function public.gc_orphan_recipe_image();
+
+-- Image upsert RPC. Returns the existing row's id if `(user_id,
+-- sha256)` already maps to one, otherwise inserts and returns the
+-- new id. Used by the client editor (user uploads) and by the
+-- `recipe_photos_attach` LLM tool (copies a conversation
+-- attachment into the recipe library). Two callers need the same
+-- dedup semantics, so it lives in the database rather than in
+-- application code.
+drop function if exists public.recipe_image_upsert(text, text, int, text);
+create or replace function public.recipe_image_upsert(
+  p_sha256 text,
+  p_mime_type text,
+  p_size_bytes int,
+  p_data text
+) returns uuid
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_id uuid;
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  if p_sha256 is null or length(p_sha256) <> 64 then
+    raise exception 'sha256 must be a 64-char hex digest';
+  end if;
+  if p_data is null or length(p_data) = 0 then
+    raise exception 'data is required';
+  end if;
+  -- ON CONFLICT ... DO UPDATE ... RETURNING is the pattern that gives
+  -- a returned id on both fresh insert and existing-row hit. The
+  -- DO UPDATE body is a no-op (sets sha256 to itself) because we
+  -- only need the side effect of forcing RETURNING to fire on
+  -- conflict; the row's contents don't change.
+  insert into public.recipe_images
+    (user_id, sha256, mime_type, size_bytes, data)
+    values (v_uid, p_sha256, p_mime_type, p_size_bytes, p_data)
+    on conflict (user_id, sha256) do update
+      set sha256 = excluded.sha256
+    returning id into v_id;
+  return v_id;
+end $$;
+
 -- Recipe versioning RPCs -------------------------------------------------
 --
 -- `security invoker` so RLS still applies; the function bodies also
@@ -1024,19 +1215,23 @@ select r.id, r.user_id, r.title, r.source, r.source_url, r.cooklang,
 
 -- Older signatures must be dropped explicitly because Postgres treats
 -- a parameter-list change as a different overload, not a replacement.
--- Drop both the pre-rating signature and the new one before recreate
--- so a re-sync from any prior schema lands on a single canonical
--- function with no overload ambiguity.
+-- Drop every prior signature - the pre-rating one, the rating-only one,
+-- and any leftover post-image variant - before recreate so a re-sync
+-- from any prior schema lands on a single canonical function with no
+-- overload ambiguity.
 drop function if exists public.recipe_create_with_version(
   text, text, text, text, text);
 drop function if exists public.recipe_create_with_version(
   text, text, text, text, smallint, text);
+drop function if exists public.recipe_create_with_version(
+  text, text, text, text, smallint, uuid[], text);
 create or replace function public.recipe_create_with_version(
   p_title text,
   p_cooklang text,
   p_source text,
   p_source_url text,
   p_rating smallint,
+  p_image_ids uuid[],
   p_change_message text
 ) returns table (
   id uuid,
@@ -1052,7 +1247,10 @@ language plpgsql security invoker as $$
 declare
   v_uid uuid := auth.uid();
   v_recipe_id uuid;
+  v_version_id uuid;
   v_now timestamptz := now();
+  v_image_id uuid;
+  v_pos int := 0;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
   if p_title is null or length(trim(p_title)) = 0 then
@@ -1081,7 +1279,27 @@ begin
     (recipe_id, user_id, title, source, source_url, cooklang, rating,
      change_message, created_at)
     values (v_recipe_id, v_uid, p_title, p_source, p_source_url, p_cooklang,
-            p_rating, p_change_message, v_now);
+            p_rating, p_change_message, v_now)
+    returning recipe_versions.id into v_version_id;
+
+  -- Link any provided images to the new version in array order. We
+  -- verify each image_id belongs to the calling user via the SELECT
+  -- check - RLS would also block a foreign image, but failing fast
+  -- here gives a readable error instead of an opaque RLS denial.
+  if p_image_ids is not null and array_length(p_image_ids, 1) is not null then
+    foreach v_image_id in array p_image_ids loop
+      if not exists (
+        select 1 from public.recipe_images
+         where id = v_image_id and user_id = v_uid
+      ) then
+        raise exception 'image % not found', v_image_id;
+      end if;
+      insert into public.recipe_version_images
+        (recipe_version_id, image_id, user_id, position)
+        values (v_version_id, v_image_id, v_uid, v_pos);
+      v_pos := v_pos + 1;
+    end loop;
+  end if;
 
   return query
     select r.id, r.title, r.source, r.source_url, r.cooklang, r.rating,
@@ -1089,14 +1307,18 @@ begin
       from public.recipes r where r.id = v_recipe_id;
 end $$;
 
--- Same overload-cleanup pattern as the create RPC: drop both the
--- pre-rating and post-rating signatures so a re-sync from any prior
--- schema converges on a single function.
+-- Same overload-cleanup pattern as the create RPC: drop every prior
+-- signature - the pre-rating shape, the rating-only shape, and any
+-- earlier image-bearing variant - so a re-sync from any prior schema
+-- converges on a single function.
 drop function if exists public.recipe_update_with_version(
   uuid, boolean, text, boolean, text, boolean, text, boolean, text, text);
 drop function if exists public.recipe_update_with_version(
   uuid, boolean, text, boolean, text, boolean, text, boolean, text,
   boolean, smallint, text);
+drop function if exists public.recipe_update_with_version(
+  uuid, boolean, text, boolean, text, boolean, text, boolean, text,
+  boolean, smallint, boolean, uuid[], text);
 create or replace function public.recipe_update_with_version(
   p_id uuid,
   p_set_title boolean,
@@ -1109,6 +1331,8 @@ create or replace function public.recipe_update_with_version(
   p_source_url text,
   p_set_rating boolean,
   p_rating smallint,
+  p_set_image_ids boolean,
+  p_image_ids uuid[],
   p_change_message text
 ) returns table (
   id uuid,
@@ -1129,6 +1353,10 @@ declare
   v_source text;
   v_source_url text;
   v_rating smallint;
+  v_prev_version_id uuid;
+  v_new_version_id uuid;
+  v_image_id uuid;
+  v_pos int := 0;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
   if p_change_message is null or length(trim(p_change_message)) = 0 then
@@ -1181,12 +1409,356 @@ begin
     (recipe_id, user_id, title, source, source_url, cooklang, rating,
      change_message, created_at)
     values (p_id, v_uid, v_title, v_source, v_source_url, v_cooklang,
-            v_rating, p_change_message, v_now);
+            v_rating, p_change_message, v_now)
+    returning recipe_versions.id into v_new_version_id;
+
+  -- Photo links on the new version. Two modes, distinguished by
+  -- p_set_image_ids:
+  --   true  -> the new version's link set is exactly p_image_ids in
+  --            the given order. Empty array means "this version has
+  --            no photos."
+  --   false -> inherit from the previous-latest version (the row we
+  --            just superseded). This mirrors the "absent leaves
+  --            field alone" semantics of the scalar fields above:
+  --            an edit that touches only title/cooklang carries the
+  --            existing photo set forward without the caller having
+  --            to enumerate it.
+  if p_set_image_ids then
+    if p_image_ids is not null
+       and array_length(p_image_ids, 1) is not null then
+      foreach v_image_id in array p_image_ids loop
+        if not exists (
+          select 1 from public.recipe_images
+           where id = v_image_id and user_id = v_uid
+        ) then
+          raise exception 'image % not found', v_image_id;
+        end if;
+        insert into public.recipe_version_images
+          (recipe_version_id, image_id, user_id, position)
+          values (v_new_version_id, v_image_id, v_uid, v_pos);
+        v_pos := v_pos + 1;
+      end loop;
+    end if;
+  else
+    -- Find the previous-latest version (the row immediately before
+    -- the one we just inserted). Same recipe, earlier created_at,
+    -- newest first. Null when this is the very first version of a
+    -- recipe (shouldn't happen on the update path, but defensive).
+    select v.id
+      into v_prev_version_id
+      from public.recipe_versions v
+     where v.recipe_id = p_id
+       and v.id <> v_new_version_id
+     order by v.created_at desc
+     limit 1;
+    if v_prev_version_id is not null then
+      insert into public.recipe_version_images
+        (recipe_version_id, image_id, user_id, position)
+      select v_new_version_id, l.image_id, v_uid, l.position
+        from public.recipe_version_images l
+       where l.recipe_version_id = v_prev_version_id
+       order by l.position;
+    end if;
+  end if;
 
   return query
     select r.id, r.title, r.source, r.source_url, r.cooklang, r.rating,
            r.created_at, r.updated_at
       from public.recipes r where r.id = p_id;
+end $$;
+
+-- Recipe-photo RPCs ------------------------------------------------------
+--
+-- Three operations: append photos, remove photos, reorder photos. Each
+-- creates a new `recipe_versions` row with the post-mutation link set,
+-- so a photo edit shows in the History panel like any other edit. The
+-- `change_message` is required for the same reason scalar updates
+-- require it.
+--
+-- Atomic by virtue of being plpgsql functions: the version insert and
+-- the link inserts either all land or none do. The "find latest
+-- version" probe is cheap (covered by `recipe_versions_recipe_created_idx`).
+--
+-- Why three RPCs instead of one with a mode flag: the verb is the
+-- contract. attach is append-only and cannot reorder; remove names IDs
+-- to drop and cannot rename; reorder takes the full new ordering and
+-- cannot add or remove. Each one's failure mode is closed: an attach
+-- can't accidentally clear the existing set, a reorder can't silently
+-- add a stray ID. The LLM tool surface mirrors this 1:1.
+
+-- Helper: insert a fresh `recipe_versions` row mirroring the parent
+-- recipe's current state, then return the new version's id. The link
+-- inserts that follow vary per RPC, but the "snapshot the recipe
+-- columns under a new version id" boilerplate is shared.
+drop function if exists public.recipe_new_photo_version(uuid, text);
+create or replace function public.recipe_new_photo_version(
+  p_id uuid,
+  p_change_message text
+) returns uuid
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_now timestamptz := now();
+  v_title text;
+  v_cooklang text;
+  v_source text;
+  v_source_url text;
+  v_rating smallint;
+  v_version_id uuid;
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  if p_change_message is null or length(trim(p_change_message)) = 0 then
+    raise exception 'change_message is required';
+  end if;
+  -- Lock the parent so a concurrent recipe_update can't slip a snapshot
+  -- in between our read and our insert. Same pattern as
+  -- recipe_update_with_version.
+  select r.title, r.cooklang, r.source, r.source_url, r.rating
+    into v_title, v_cooklang, v_source, v_source_url, v_rating
+    from public.recipes r
+   where r.id = p_id and r.user_id = v_uid
+   for update;
+  if not found then raise exception 'recipe % not found', p_id; end if;
+
+  -- Bump updated_at so the recipe sorts to the top of the list after a
+  -- photo edit, the same as any other content edit.
+  update public.recipes set updated_at = v_now where recipes.id = p_id;
+
+  insert into public.recipe_versions
+    (recipe_id, user_id, title, source, source_url, cooklang, rating,
+     change_message, created_at)
+    values (p_id, v_uid, v_title, v_source, v_source_url, v_cooklang,
+            v_rating, p_change_message, v_now)
+    returning recipe_versions.id into v_version_id;
+
+  return v_version_id;
+end $$;
+
+-- recipe_attach_photos. Append the given image_ids onto the recipe's
+-- current photo set, in array order, and write a new version. Returns
+-- the post-mutation link list as `(image_id, position)` rows.
+drop function if exists public.recipe_attach_photos(uuid, uuid[], text);
+create or replace function public.recipe_attach_photos(
+  p_recipe_id uuid,
+  p_image_ids uuid[],
+  p_change_message text
+) returns table (image_id uuid, position int)
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_new_version_id uuid;
+  v_prev_version_id uuid;
+  v_image_id uuid;
+  v_pos int := 0;
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  if p_image_ids is null or array_length(p_image_ids, 1) is null then
+    raise exception 'photos is required and must be non-empty';
+  end if;
+
+  v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message);
+
+  -- Carry forward the previous version's links so this version reads
+  -- as "previous + appended". Find the previous version (anything but
+  -- the row we just inserted, ordered newest first).
+  select v.id
+    into v_prev_version_id
+    from public.recipe_versions v
+   where v.recipe_id = p_recipe_id
+     and v.id <> v_new_version_id
+   order by v.created_at desc
+   limit 1;
+  if v_prev_version_id is not null then
+    insert into public.recipe_version_images
+      (recipe_version_id, image_id, user_id, position)
+    select v_new_version_id, l.image_id, v_uid, l.position
+      from public.recipe_version_images l
+     where l.recipe_version_id = v_prev_version_id
+     order by l.position;
+    select coalesce(max(l.position) + 1, 0)
+      into v_pos
+      from public.recipe_version_images l
+     where l.recipe_version_id = v_new_version_id;
+  end if;
+
+  foreach v_image_id in array p_image_ids loop
+    if not exists (
+      select 1 from public.recipe_images
+       where id = v_image_id and user_id = v_uid
+    ) then
+      raise exception 'image % not found', v_image_id;
+    end if;
+    -- Skip duplicates - if the same image is already on this recipe,
+    -- attaching it again is a no-op rather than a primary-key violation
+    -- on (recipe_version_id, image_id). Keeps the LLM-side path simple
+    -- when the model isn't sure whether a photo it wants to add is
+    -- already there.
+    if not exists (
+      select 1 from public.recipe_version_images
+       where recipe_version_id = v_new_version_id and image_id = v_image_id
+    ) then
+      insert into public.recipe_version_images
+        (recipe_version_id, image_id, user_id, position)
+        values (v_new_version_id, v_image_id, v_uid, v_pos);
+      v_pos := v_pos + 1;
+    end if;
+  end loop;
+
+  return query
+    select l.image_id, l.position
+      from public.recipe_version_images l
+     where l.recipe_version_id = v_new_version_id
+     order by l.position;
+end $$;
+
+-- recipe_remove_photos. Remove the given image_ids from the recipe's
+-- current photo set and write a new version with the survivors. Throws
+-- when an id isn't currently linked, so the LLM can see "I asked for
+-- something stale" rather than a silent no-op.
+drop function if exists public.recipe_remove_photos(uuid, uuid[], text);
+create or replace function public.recipe_remove_photos(
+  p_recipe_id uuid,
+  p_image_ids uuid[],
+  p_change_message text
+) returns table (image_id uuid, position int)
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_new_version_id uuid;
+  v_prev_version_id uuid;
+  v_pos int := 0;
+  v_missing uuid[];
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  if p_image_ids is null or array_length(p_image_ids, 1) is null then
+    raise exception 'photos is required and must be non-empty';
+  end if;
+
+  -- Find the current latest version BEFORE creating the new one, so
+  -- "currently linked" reflects the state the caller saw.
+  select v.id
+    into v_prev_version_id
+    from public.recipe_versions v
+    join public.recipes r on r.id = v.recipe_id
+   where v.recipe_id = p_recipe_id and r.user_id = v_uid
+   order by v.created_at desc
+   limit 1;
+  if v_prev_version_id is null then
+    raise exception 'recipe % not found', p_recipe_id;
+  end if;
+
+  -- Verify every requested id is actually currently linked. Names
+  -- the offending IDs in the error so the LLM can re-issue the call
+  -- with the right set rather than guessing.
+  select array_agg(x)
+    into v_missing
+    from unnest(p_image_ids) x
+   where not exists (
+     select 1 from public.recipe_version_images l
+      where l.recipe_version_id = v_prev_version_id and l.image_id = x
+   );
+  if v_missing is not null then
+    raise exception 'photos not on recipe: %', v_missing;
+  end if;
+
+  v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message);
+
+  -- Insert survivors in their original relative order, renumbered
+  -- from 0 so positions stay dense.
+  insert into public.recipe_version_images
+    (recipe_version_id, image_id, user_id, position)
+  select v_new_version_id, l.image_id, v_uid,
+         row_number() over (order by l.position) - 1
+    from public.recipe_version_images l
+   where l.recipe_version_id = v_prev_version_id
+     and l.image_id <> all (p_image_ids)
+   order by l.position;
+
+  return query
+    select l.image_id, l.position
+      from public.recipe_version_images l
+     where l.recipe_version_id = v_new_version_id
+     order by l.position;
+end $$;
+
+-- recipe_reorder_photos. Set the photo order to exactly p_image_ids.
+-- The array MUST be a permutation of the recipe's current photo set -
+-- any ID missing or any extra ID is a hard error. This forecloses the
+-- "I forgot to enumerate" footgun the LLM would otherwise fall into.
+drop function if exists public.recipe_reorder_photos(uuid, uuid[], text);
+create or replace function public.recipe_reorder_photos(
+  p_recipe_id uuid,
+  p_image_ids uuid[],
+  p_change_message text
+) returns table (image_id uuid, position int)
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_new_version_id uuid;
+  v_prev_version_id uuid;
+  v_current uuid[];
+  v_image_id uuid;
+  v_pos int := 0;
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  if p_image_ids is null or array_length(p_image_ids, 1) is null then
+    raise exception 'photos is required and must be non-empty';
+  end if;
+
+  select v.id
+    into v_prev_version_id
+    from public.recipe_versions v
+    join public.recipes r on r.id = v.recipe_id
+   where v.recipe_id = p_recipe_id and r.user_id = v_uid
+   order by v.created_at desc
+   limit 1;
+  if v_prev_version_id is null then
+    raise exception 'recipe % not found', p_recipe_id;
+  end if;
+
+  select array_agg(l.image_id)
+    into v_current
+    from public.recipe_version_images l
+   where l.recipe_version_id = v_prev_version_id;
+  if v_current is null then v_current := array[]::uuid[]; end if;
+
+  -- Permutation check: array_length must match, and every id in
+  -- p_image_ids must appear in the current set (and vice versa,
+  -- captured by the length match plus uniqueness from the primary
+  -- key on the link table).
+  if coalesce(array_length(p_image_ids, 1), 0)
+     <> coalesce(array_length(v_current, 1), 0) then
+    raise exception 'photos must list the recipe''s exact current set (got % ids, recipe has %)',
+      coalesce(array_length(p_image_ids, 1), 0),
+      coalesce(array_length(v_current, 1), 0);
+  end if;
+  if exists (
+    select 1 from unnest(p_image_ids) x
+     where x <> all (v_current)
+  ) then
+    raise exception 'photos contains an id not currently on the recipe';
+  end if;
+  -- Catch duplicate ids in p_image_ids - the earlier length check
+  -- only proves count parity, not uniqueness.
+  if (select count(*) from unnest(p_image_ids))
+     <> (select count(distinct x) from unnest(p_image_ids) x) then
+    raise exception 'photos contains duplicate ids';
+  end if;
+
+  v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message);
+
+  foreach v_image_id in array p_image_ids loop
+    insert into public.recipe_version_images
+      (recipe_version_id, image_id, user_id, position)
+      values (v_new_version_id, v_image_id, v_uid, v_pos);
+    v_pos := v_pos + 1;
+  end loop;
+
+  return query
+    select l.image_id, l.position
+      from public.recipe_version_images l
+     where l.recipe_version_id = v_new_version_id
+     order by l.position;
 end $$;
 
 -- worker_leases ----------------------------------------------------------

@@ -30,16 +30,23 @@ at cookbook scale (tens to low hundreds of rows per user).
   bridge between the tool layer and the UI is a window `CustomEvent`
   (`nak:recipes:changed`) so tools stay UI-unaware.
 - `src/lib/tools/recipe_save.ts`, `recipe_list.ts`, `recipe_get.ts`,
-  `recipe_update.ts`, `recipe_delete.ts` — the five LLM tools.
-  Mutating tools fire `notifyCookbookChanged` on success.
-- `src/lib/supabase.ts` — `Recipe` and `RecipeVersion` types +
-  `createRecipe / updateRecipe / deleteRecipe / getRecipe /
-  listRecipes / listRecipeVersions / getRecipeVersion / revertRecipe`
-  methods. Lives between the memory methods and the
-  background-worker pipeline block. `createRecipe` / `updateRecipe`
-  go through the `recipe_create_with_version` /
-  `recipe_update_with_version` RPCs so the parent row and the
-  history snapshot land in one transaction.
+  `recipe_update.ts`, `recipe_delete.ts`, `recipe_photos_attach.ts`,
+  `recipe_photos_remove.ts`, `recipe_photos_reorder.ts` — the eight
+  LLM tools. Mutating tools fire `notifyCookbookChanged` on success.
+- `src/lib/supabase.ts` — `Recipe`, `RecipeVersion`, `RecipePhoto`,
+  and `RecipePhotoMeta` types + `createRecipe / updateRecipe /
+  deleteRecipe / getRecipe / listRecipes / listRecipeVersions /
+  getRecipeVersion / revertRecipe / upsertRecipeImage /
+  listRecipePhotos / listRecipePhotoMeta /
+  listRecipeVersionPhotoIds / attachRecipePhotos /
+  removeRecipePhotos / reorderRecipePhotos` methods. Lives between
+  the memory methods and the background-worker pipeline block.
+  `createRecipe` / `updateRecipe` go through the
+  `recipe_create_with_version` / `recipe_update_with_version` RPCs
+  so the parent row, the history snapshot, and any photo links land
+  in one transaction. The photo-only mutations
+  (`attachRecipePhotos` etc.) call dedicated single-purpose RPCs
+  that wrap "snapshot a new version + write its links" atomically.
 - `src/screens/Cookbook.svelte` — three-pane modal (list, detail,
   edit). Mirrors `Settings.svelte`'s shell / escape / click-outside-
   to-close conventions; styles scoped locally rather than added to
@@ -86,6 +93,31 @@ at cookbook scale (tens to low hundreds of rows per user).
   - RLS: select + insert self-* policies only. Versions are
     immutable - no update or delete policy. A cascade delete from
     `recipes` is the only way a version row leaves the table.
+- `public.recipe_images` table (see `supabase/schema.sql`):
+  - `id uuid`, `user_id uuid`, `sha256 text` (64-char hex),
+    `mime_type text`, `size_bytes int`, `data text` (base64),
+    `created_at`. Unique on `(user_id, sha256)` for per-user dedup.
+  - RLS: self-* select / insert / delete; no update (rows are
+    immutable - byte changes mean a different sha256, which means a
+    different row).
+- `public.recipe_version_images` table (see `supabase/schema.sql`):
+  - `recipe_version_id uuid` (FK cascade to `recipe_versions`),
+    `image_id uuid` (FK to `recipe_images`), `user_id uuid`,
+    `position int`, `created_at`. Composite PK on
+    `(recipe_version_id, image_id)`.
+  - Indexes: `recipe_version_images_image_idx (image_id)` for the
+    orphan-GC trigger's reverse lookup;
+    `recipe_version_images_user_idx (user_id)` for RLS.
+  - RLS: select + insert self-* policies only; deletes flow through
+    the cascade from `recipe_versions`.
+  - `gc_orphan_recipe_image` trigger (AFTER DELETE, security
+    definer): when the last link to a `recipe_images` row is
+    removed, the trigger deletes the image row in the same
+    transaction. Recipe delete cascades through versions to link
+    rows, which fires the trigger per-row and reclaims the now-
+    orphan image bytes. Insert-side orphans (an image upserted but
+    no save followed) are not reclaimed automatically; they're rare
+    and cheap.
 - Parsed shape (`src/lib/cooklang.ts::Recipe`): `{ metadata, steps,
   ingredients, cookware, timers }`. The DB stores raw source; the
   parsed shape is re-derived at read time.
@@ -140,9 +172,11 @@ the second sees the post-first-commit state and snapshots that. No
 gaps in the history chain, no surprise overwrites.
 
 **No revert RPC**: revert is a normal update whose patch happens to
-come from a past version row. `revertRecipe` reads the snapshot,
-then calls `updateRecipe` with that content. The revert itself
-becomes a new version row, so a misclick is recoverable.
+come from a past version row. `revertRecipe` reads the snapshot
+plus the version's photo link list, then calls `updateRecipe` with
+that content (including `image_ids`). The revert itself becomes a
+new version row carrying the restored photo set, so a misclick is
+recoverable.
 
 **No history LLM tools** (deliberately): the model has no
 `recipe_versions_list` or `recipe_revert` tool, only the existing
@@ -210,6 +244,26 @@ as a complete diary.
   ingredients list you see in the render is derived, not stored.
   This means a future parser bug is a pure read-path issue —
   nothing persisted needs migrating.
+- **Photos live alongside cooklang, not inside it.** The detail
+  pane renders the photo strip as a sibling above the
+  `.cookbook-render` div, not by injecting into the parsed cooklang
+  HTML. Cooklang stays unaware of photos so the parser/renderer
+  doesn't grow a new concern. Edit-pane photo controls live in
+  their own form-row between the change-message field and the
+  cooklang+preview panes.
+- **Photo IDs are stable across versions.** A photo upserted into
+  `recipe_images` keeps the same id forever for that user;
+  reordering or appending changes the link rows, not the image
+  rows. The LLM tools surface these ids in `recipe_get`'s
+  `photos: [{id, position}, ...]` projection so the model can
+  chain a `recipe_photos_remove` call against the same id it just
+  saw.
+- **Photo lifecycle is link-driven.** Recipe delete cascades
+  through `recipe_versions` to `recipe_version_images`; the
+  AFTER-DELETE trigger on the link table reclaims the image row
+  when its last link goes away. Conversation-attachment expiry has
+  no effect on recipe photos - the bytes are copied into
+  `recipe_images` at attach time, so the recipe owns its own copy.
 - **Section model layers on top of the flat AST.** `== Name ==` and
   `# Name` (line-start + space) introduce a section. The parser
   records a per-step `section: string | null` plus a top-level

@@ -138,6 +138,15 @@ export const recipeSave: ToolDef = {
       changeMessage
     );
     notifyCookbookChanged();
-    return { id: row.id, title: row.title, updated_at: row.updated_at };
+    // Echo the (always-empty for a brand-new recipe) photo set so the
+    // return shape stays parallel with recipe_update / recipe_get -
+    // the LLM doesn't have to special-case "did this tool give me
+    // photos or not?".
+    return {
+      id: row.id,
+      title: row.title,
+      updated_at: row.updated_at,
+      photos: [] as Array<{ id: string; position: number }>,
+    };
   },
 };
