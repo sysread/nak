@@ -155,13 +155,33 @@ export const webSearch: ToolDef = {
     // text" failure mode this tool used to hit was a Venice SSE quirk
     // - the non-streaming endpoint returns the answer + citations in
     // one shot or surfaces an HTTP error, no in-between.
+    //
+    // Reasoning + maxTokens budget: VENICE_WEB_SEARCH_MODEL tracks the
+    // fast tier, which currently routes to GLM-4.7 - a reasoning
+    // model that emits its chain-of-thought through
+    // `reasoning_content` BEFORE writing any answer text into
+    // `content`. The earlier 400-token cap was sized for a non-
+    // reasoning model where the entire budget went to the answer; on
+    // a reasoning model the budget gets eaten by the CoT preamble
+    // and the model hits `finish_reason: 'length'` before emitting
+    // a single character of `content`. The empty-text throw below
+    // was firing every call.
+    //
+    // Two-pronged fix: pin reasoning effort to 'low' (we don't need
+    // deep deliberation for "synthesize 2-4 sentences from search
+    // results"), and lift the cap to 1500 so the answer always lands
+    // even if the model still spends a few hundred tokens on the
+    // shortened CoT. Both belt and suspenders - dropping either by
+    // itself reproduces the empty-text failure on long reasoning
+    // tangents (e.g. queries the model second-guesses itself on).
     const result = await ctx.venice.completeChat({
       model: VENICE_WEB_SEARCH_MODEL,
       messages,
       signal: ctx.signal,
       webSearch: 'on',
       webCitations: true,
-      maxTokens: 400,
+      reasoningEffort: 'low',
+      maxTokens: 1500,
     });
 
     const trimmed = result.text.trim();

@@ -156,5 +156,10 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
     include: ['tests/**/*.test.ts'],
+    // Integration tests hit live external services (Venice) and are
+    // gated on a real API key in the env. They get their own opt-in
+    // run path; the default `pnpm test` stays hermetic so CI never
+    // depends on outbound network or a keyed credential.
+    exclude: ['node_modules/**', 'tests/**/*.integration.test.ts'],
   },
 });

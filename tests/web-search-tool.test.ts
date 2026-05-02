@@ -126,10 +126,18 @@ describe('web_search — execute() shape', () => {
     expect(req.model).toBe(VENICE_WEB_SEARCH_MODEL);
     expect(req.webSearch).toBe('on');
     expect(req.webCitations).toBe(true);
-    // The tool caps its sub-call — a runaway multi-round synthesis is
-    // a tool bug. The exact number is a soft contract; just ensure we
-    // set some cap rather than handing the model unbounded completion.
-    expect(typeof req.maxTokens).toBe('number');
+    // Reasoning is pinned to 'low' and maxTokens is sized for the
+    // headroom a reasoning-model preamble eats - both load-bearing.
+    // The fast tier is currently a reasoning model that emits its
+    // chain-of-thought through `reasoning_content` BEFORE writing
+    // answer text into `content`. With the previous 400-token cap
+    // and default effort, the budget got consumed by the CoT and
+    // the model hit `finish_reason: 'length'` with zero `content`,
+    // surfacing as the "no answer text" error every call. Lock both
+    // the effort and the cap so a future revert to 400 / 'medium'
+    // re-introduces the regression visibly.
+    expect(req.reasoningEffort).toBe('low');
+    expect(req.maxTokens).toBeGreaterThanOrEqual(1000);
   });
 
   it('returns { answer, citations } from the completion result', async () => {
