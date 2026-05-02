@@ -1599,10 +1599,13 @@ begin
     -- attaching it again is a no-op rather than a primary-key violation
     -- on (recipe_version_id, image_id). Keeps the LLM-side path simple
     -- when the model isn't sure whether a photo it wants to add is
-    -- already there.
+    -- already there. The table alias `vi` qualifies `image_id` away
+    -- from the same-named OUT parameter declared in this function's
+    -- RETURNS TABLE clause - bare `image_id = v_image_id` is
+    -- ambiguous to the planner.
     if not exists (
-      select 1 from public.recipe_version_images
-       where recipe_version_id = v_new_version_id and image_id = v_image_id
+      select 1 from public.recipe_version_images vi
+       where vi.recipe_version_id = v_new_version_id and vi.image_id = v_image_id
     ) then
       insert into public.recipe_version_images
         (recipe_version_id, image_id, user_id, position)
