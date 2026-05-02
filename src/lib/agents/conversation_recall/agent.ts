@@ -26,7 +26,7 @@ import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
 // the full explanation.
 import { conversationRecallToolbox } from '../../tools/conversation_recall_toolbox';
 import { runHeadlessToolLoop } from '../../tools/run';
-import { sanitizeToolCallsForWire } from '../../tools/wire';
+import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
 import { VENICE_CONVERSATION_RECALL_MODEL } from '../../models';
 import {
   trimToLastUserTurn,
@@ -76,7 +76,10 @@ function messageToVenice(m: Message): VeniceMessage {
     return {
       role: 'tool',
       content: m.content,
-      tool_call_id: m.tool_call_id ?? undefined,
+      tool_call_id:
+        m.tool_call_id != null
+          ? sanitizeToolCallIdForWire(m.tool_call_id)
+          : undefined,
       name: m.name ?? undefined,
     };
   }

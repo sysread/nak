@@ -21,7 +21,7 @@ import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
 import type { VeniceClient, VeniceMessage } from '../../venice';
 import type { Toolbox } from '../../tools/types';
-import { sanitizeToolCallsForWire } from '../../tools/wire';
+import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
 import { VENICE_SUMMARY_MODEL } from '../../models';
 import { SUMMARY_PROMPT } from './prompt';
 
@@ -78,7 +78,10 @@ function messageToVenice(m: Message): VeniceMessage {
     return {
       role: 'tool',
       content: m.content,
-      tool_call_id: m.tool_call_id ?? undefined,
+      tool_call_id:
+        m.tool_call_id != null
+          ? sanitizeToolCallIdForWire(m.tool_call_id)
+          : undefined,
       name: m.name ?? undefined,
     };
   }

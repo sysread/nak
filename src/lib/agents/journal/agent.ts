@@ -61,7 +61,7 @@ import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
 import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
 import { createLogger } from '../../logger.svelte';
-import { sanitizeToolCallsForWire } from '../../tools/wire';
+import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
 import { runHeadlessToolLoop } from '../../tools/run';
 import { journalAgentToolbox } from '../../tools/journal_agent_toolbox';
 import type { ReasoningEffort } from '../../models';
@@ -121,7 +121,10 @@ function messageToVenice(m: Message): VeniceMessage {
     return {
       role: 'tool',
       content: m.content,
-      tool_call_id: m.tool_call_id ?? undefined,
+      tool_call_id:
+        m.tool_call_id != null
+          ? sanitizeToolCallIdForWire(m.tool_call_id)
+          : undefined,
       name: m.name ?? undefined,
     };
   }

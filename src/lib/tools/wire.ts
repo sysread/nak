@@ -14,6 +14,72 @@
 import type { OpenAIToolCall } from './types';
 
 /**
+ * Pattern Venice's strict tool_call_id validator accepts: alphanumeric
+ * only, exactly 9 chars. Some Venice-routed model backends 400 the
+ * whole request with the message "Tool call id was X but must be a-z,
+ * A-Z, 0-9, with a length of 9" when an id violates this - including
+ * ids of the shape `call_a031` that those same backends generate. The
+ * mismatch shows up most often on the headless agent loops (reflection,
+ * journal, summary) and on the main chat-loop's multi-round tool
+ * dispatch, where a sanitised id has to be paired across the assistant
+ * `tool_calls[].id` slot and the matching tool message's
+ * `tool_call_id` slot.
+ */
+const WIRE_ID_PATTERN = /^[a-zA-Z0-9]{9}$/;
+
+const WIRE_ID_ALPHABET =
+  'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+
+/**
+ * Map an arbitrary tool-call id to a stable 9-char alphanumeric string
+ * for the Venice wire. Idempotent: an id that already matches
+ * {@link WIRE_ID_PATTERN} passes through unchanged, so applying the
+ * sanitiser twice produces the same output.
+ *
+ * Determinism is the load-bearing property here. The assistant turn's
+ * `tool_calls[].id` and the matching tool-result row's `tool_call_id`
+ * MUST land at the same value after sanitisation - OpenAI-compatible
+ * providers reject a message list where a tool result doesn't pair
+ * with a preceding assistant call by id. Hashing the original id lets
+ * both sides produce the same output without any shared state.
+ *
+ * The hash is FNV-1a 32-bit with a per-output-digit mixing step that
+ * spreads the 32 bits across 9 base62 positions. 32 bits gives a
+ * collision space of ~4.3e9 - vastly more headroom than the <10 tool
+ * calls in any single conversation turn ever needs. We don't try to
+ * preserve any of the original id's characters even when they happen
+ * to be alphanumeric, because a partial-preserve strategy
+ * ("strip then pad") collides on similar prefixes (`call_a` and
+ * `call_b` both stripping to a 5-char string and getting padded the
+ * same way).
+ */
+export function sanitizeToolCallIdForWire(id: string): string {
+  if (WIRE_ID_PATTERN.test(id)) return id;
+  let h = 0x811c9dc5 >>> 0;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  let out = '';
+  for (let i = 0; i < 9; i++) {
+    out += WIRE_ID_ALPHABET[h % 62];
+    // Re-mix between digits. A single FNV-1a output is only 32 bits
+    // (~5.3 base62 chars of entropy) but we need 9 positions; the
+    // xor-shift + multiply step here is the same finalizer xxHash and
+    // murmur use, and it spreads the available bits across the output
+    // uniformly enough that distinct inputs yield distinct strings in
+    // practice. Each step coerces back to an unsigned 32-bit int via
+    // `>>> 0`; without that, the JS XOR operator would re-introduce a
+    // signed top bit and the next `% 62` would yield a negative
+    // index, producing an `undefined` character in the output.
+    h = (h ^ (h >>> 16)) >>> 0;
+    h = Math.imul(h, 0x85ebca6b) >>> 0;
+    h = (h ^ (h >>> 13)) >>> 0;
+  }
+  return out;
+}
+
+/**
  * Normalise a tool-call's `arguments` JSON string for the wire. Venice
  * (and OpenAI-compatible providers generally) parse the arguments string
  * on their side to validate the request body, so a malformed JSON blob
@@ -59,9 +125,11 @@ export function sanitizeToolCallsForWire(
         safe = '{}';
       }
     }
-    if (safe === raw) return call;
+    const safeId = sanitizeToolCallIdForWire(call.id);
+    if (safe === raw && safeId === call.id) return call;
     return {
       ...call,
+      id: safeId,
       function: { ...call.function, arguments: safe },
     };
   });

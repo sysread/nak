@@ -32,7 +32,7 @@ import type { Toolbox, ToolContext, OpenAIToolCall } from './types';
 // `runHeadlessToolLoop` from inside a Web Worker, so this import has
 // to stay on the IIFE-safe side of the graph.
 import { buildToolboxWireList, executeToolboxCall } from './dispatch';
-import { sanitizeToolCallsForWire } from './wire';
+import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from './wire';
 import type { VeniceClient, VeniceMessage, ResponseFormat } from '../venice';
 import type { ReasoningEffort } from '../models';
 
@@ -307,10 +307,15 @@ export async function runHeadlessToolLoop(
       const content = r.ok
         ? encodeToolContent({ ok: true, value: r.value })
         : encodeToolContent({ ok: false, error: r.error });
+      // Mirror the id rewrite that sanitizeToolCallsForWire just
+      // applied to the assistant row's tool_calls above. The two have
+      // to agree by id - OpenAI-compatible providers reject a message
+      // list where a tool result doesn't pair with a preceding
+      // assistant call.
       messages.push({
         role: 'tool',
         content,
-        tool_call_id: r.call.id,
+        tool_call_id: sanitizeToolCallIdForWire(r.call.id),
         name: r.call.function.name,
       });
     }

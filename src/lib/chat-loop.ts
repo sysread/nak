@@ -48,7 +48,7 @@ import {
   type OpenAIToolCall,
   type ToolContext,
 } from './tools';
-import { sanitizeToolCallsForWire } from './tools/wire';
+import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from './tools/wire';
 import {
   fireSamskaras,
   formatPriming,
@@ -737,7 +737,10 @@ export function toVeniceMessage(
     return {
       role: 'tool',
       content: m.content,
-      tool_call_id: m.tool_call_id ?? undefined,
+      tool_call_id:
+        m.tool_call_id != null
+          ? sanitizeToolCallIdForWire(m.tool_call_id)
+          : undefined,
       name: m.name ?? undefined,
     };
   }
@@ -1416,10 +1419,16 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         name: r.call.function.name,
       });
       handlers?.onToolResultPersisted?.(msg);
+      // Pair the in-loop tool result with its assistant call by id.
+      // The assistant row's tool_calls just above were rewritten through
+      // sanitizeToolCallsForWire, which mutates the id when it doesn't
+      // satisfy Venice's strict tool_call_id pattern; mirror that here
+      // so the next streamChat round sees a matching pair instead of
+      // an orphan result row.
       history.push({
         role: 'tool',
         content,
-        tool_call_id: r.call.id,
+        tool_call_id: sanitizeToolCallIdForWire(r.call.id),
         name: r.call.function.name,
       });
       // Harvest citations from any tool that returned them (web_search

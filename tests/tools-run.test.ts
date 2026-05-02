@@ -147,12 +147,15 @@ describe('runHeadlessToolLoop — terminal paths', () => {
     expect(spy).toHaveBeenCalledOnce();
     // Round 2's message list must carry the assistant-with-tool-calls
     // row AND the tool-result row — OpenAI rejects a list where a
-    // tool_call lacks a matching subsequent role='tool'.
+    // tool_call lacks a matching subsequent role='tool'. The pair must
+    // share an id even after the wire-id sanitiser rewrites
+    // non-conforming ids ('call-1' has a hyphen and is shorter than 9
+    // chars, so both sides land at the same hashed string).
     const r2 = streamCalls[1];
     const assistantRow = r2.find((m) => m.role === 'assistant');
-    expect(assistantRow?.tool_calls?.[0].id).toBe('call-1');
     const toolRow = r2.find((m) => m.role === 'tool');
-    expect(toolRow?.tool_call_id).toBe('call-1');
+    expect(assistantRow?.tool_calls?.[0].id).toMatch(/^[a-zA-Z0-9]{9}$/);
+    expect(toolRow?.tool_call_id).toBe(assistantRow?.tool_calls?.[0].id);
     expect(toolRow?.name).toBe('spy');
     // Result content is JSON-encoded so the model sees structured data.
     expect(toolRow?.content).toBe(JSON.stringify({ echoed: true }));

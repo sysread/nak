@@ -318,21 +318,45 @@ describe('toVeniceMessage', () => {
   });
 
   it('projects a tool-result row with id and name', () => {
+    // Use an already-conforming id so this test stays focused on the
+    // shape projection. The id-rewrite path that handles non-conforming
+    // ids has its own coverage in tests/wire.test.ts.
     const m: Message = {
       id: 'a',
       thread_id: 't',
       role: 'tool',
       content: '{"ok":true}',
       created_at: 't',
-      tool_call_id: 'call_x',
+      tool_call_id: 'abcdefghi',
       name: 'memory_search',
     };
     expect(toVeniceMessage(m)).toEqual({
       role: 'tool',
       content: '{"ok":true}',
-      tool_call_id: 'call_x',
+      tool_call_id: 'abcdefghi',
       name: 'memory_search',
     });
+  });
+
+  // Guards the Venice 400 ("Tool call id was call_a031 but must be a-z,
+  // A-Z, 0-9, with a length of 9") that some Venice-routed model
+  // backends throw on tool_call_ids they generated themselves. The
+  // sanitiser rewrites the id to a stable 9-char alphanumeric string
+  // so the assistant tool_calls[].id and the tool result's
+  // tool_call_id can be paired without tripping the validator.
+  it('rewrites a non-conforming tool_call_id on a tool-result row', () => {
+    const m: Message = {
+      id: 'a',
+      thread_id: 't',
+      role: 'tool',
+      content: '{"ok":true}',
+      created_at: 't',
+      tool_call_id: 'call_a031',
+      name: 'memory_search',
+    };
+    const out = toVeniceMessage(m);
+    expect(out.tool_call_id).toMatch(/^[a-zA-Z0-9]{9}$/);
+    expect(out.tool_call_id).not.toBe('call_a031');
   });
 
   // Guards the Venice 400 ("Expecting ',' delimiter: line 1 column N") we

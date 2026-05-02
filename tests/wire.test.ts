@@ -12,10 +12,17 @@
  * sites.
  */
 import { describe, it, expect } from 'vitest';
-import { sanitizeToolCallsForWire } from '../src/lib/tools/wire';
+import {
+  sanitizeToolCallIdForWire,
+  sanitizeToolCallsForWire,
+} from '../src/lib/tools/wire';
 import type { OpenAIToolCall } from '../src/lib/tools/types';
 
-function mkCall(args: string, id = 'call_x', name = 'memory_search'): OpenAIToolCall {
+function mkCall(
+  args: string,
+  id = 'abcdefghi',
+  name = 'memory_search'
+): OpenAIToolCall {
   return { id, type: 'function', function: { name, arguments: args } };
 }
 
@@ -63,9 +70,9 @@ describe('sanitizeToolCallsForWire', () => {
 
   it('processes each call in a multi-call array independently', () => {
     const calls: OpenAIToolCall[] = [
-      mkCall('{"query":"a"}', 'call_a'),
-      mkCall('{"activity": "broken "string", "q": 1}', 'call_b'),
-      mkCall('', 'call_c'),
+      mkCall('{"query":"a"}', 'aaaaaaaaa'),
+      mkCall('{"activity": "broken "string", "q": 1}', 'bbbbbbbbb'),
+      mkCall('', 'ccccccccc'),
     ];
     const out = sanitizeToolCallsForWire(calls);
     expect(out[0].function.arguments).toBe('{"query":"a"}');
@@ -73,12 +80,77 @@ describe('sanitizeToolCallsForWire', () => {
     expect(out[2].function.arguments).toBe('{}');
   });
 
-  it('preserves id, type and function.name when rewriting arguments', () => {
-    const bad = mkCall('{not json', 'call_keep_id', 'memory_create');
+  it('preserves type and function.name when rewriting arguments', () => {
+    // Use an already-conforming id so this test stays focused on the
+    // arguments-string sanitiser - the id sanitiser has its own block
+    // below.
+    const bad = mkCall('{not json', 'abcdefghi', 'memory_create');
     const out = sanitizeToolCallsForWire([bad]);
-    expect(out[0].id).toBe('call_keep_id');
+    expect(out[0].id).toBe('abcdefghi');
     expect(out[0].type).toBe('function');
     expect(out[0].function.name).toBe('memory_create');
     expect(out[0].function.arguments).toBe('{}');
+  });
+
+  // The Venice 400 we are guarding against here:
+  //   "Tool call id was call_a031 but must be a-z, A-Z, 0-9, with a
+  //    length of 9."
+  // Some Venice-routed model backends generate ids of that shape
+  // themselves and then 400 the next request that echoes them back. The
+  // sanitiser rewrites the id to a stable 9-char alphanumeric string so
+  // the assistant tool_calls[].id and the matching tool message's
+  // tool_call_id can be paired without tripping the validator.
+  it('rewrites a tool-call id that violates the wire pattern', () => {
+    const call = mkCall('{}', 'call_a031');
+    const out = sanitizeToolCallsForWire([call]);
+    expect(out[0].id).not.toBe('call_a031');
+    expect(out[0].id).toMatch(/^[a-zA-Z0-9]{9}$/);
+  });
+});
+
+describe('sanitizeToolCallIdForWire', () => {
+  it('passes already-conforming ids through unchanged', () => {
+    expect(sanitizeToolCallIdForWire('abcdefghi')).toBe('abcdefghi');
+    expect(sanitizeToolCallIdForWire('Z9aB7cD2e')).toBe('Z9aB7cD2e');
+  });
+
+  it('rewrites ids with non-alphanumeric chars', () => {
+    const out = sanitizeToolCallIdForWire('call_a031');
+    expect(out).toMatch(/^[a-zA-Z0-9]{9}$/);
+    expect(out).not.toBe('call_a031');
+  });
+
+  it('rewrites ids that are not exactly 9 chars long', () => {
+    expect(sanitizeToolCallIdForWire('abc')).toMatch(/^[a-zA-Z0-9]{9}$/);
+    expect(sanitizeToolCallIdForWire('abcdefghij')).toMatch(/^[a-zA-Z0-9]{9}$/);
+    expect(sanitizeToolCallIdForWire('call_abc123def456')).toMatch(
+      /^[a-zA-Z0-9]{9}$/
+    );
+  });
+
+  it('is deterministic - the same input always maps to the same output', () => {
+    // Load-bearing property: the assistant tool_calls[].id and the
+    // matching tool result row's tool_call_id MUST land at the same
+    // string after sanitisation, or OpenAI-compatible providers reject
+    // the message list.
+    const a = sanitizeToolCallIdForWire('call_a031');
+    const b = sanitizeToolCallIdForWire('call_a031');
+    expect(a).toBe(b);
+  });
+
+  it('is idempotent - sanitising twice gives the same result', () => {
+    const once = sanitizeToolCallIdForWire('call_a031');
+    const twice = sanitizeToolCallIdForWire(once);
+    expect(twice).toBe(once);
+  });
+
+  it('maps distinct nearby ids to distinct outputs', () => {
+    // Within a single conversation turn we see at most a handful of
+    // tool calls; their ids from Venice differ by a digit or two. The
+    // sanitiser has to keep them distinct after rewriting or two tool
+    // results will collapse onto one assistant call.
+    const ids = ['call_a031', 'call_a032', 'call_a033', 'call_b031'];
+    const outs = ids.map(sanitizeToolCallIdForWire);
+    expect(new Set(outs).size).toBe(ids.length);
   });
 });

@@ -320,11 +320,13 @@ describe('ReflectionAgent — edge cases', () => {
     const round1 = streamCalls[0];
     // Find the assistant-with-tool-calls row and verify tool_calls
     // landed on the wire (round-trip invariant: history → API is
-    // direct projection).
+    // direct projection). The wire-id sanitiser rewrites 'tc1' (only
+    // 3 chars, fails the 9-char alphanumeric check) into a stable
+    // 9-char string; both sides of the pair must agree.
     const toolRow = round1.find((m) => m.role === 'tool');
-    expect(toolRow?.tool_call_id).toBe('tc1');
-    expect(toolRow?.name).toBe('memory_search');
     const asstRow = round1.find((m) => m.role === 'assistant' && m.tool_calls);
-    expect(asstRow?.tool_calls?.[0].id).toBe('tc1');
+    expect(toolRow?.tool_call_id).toMatch(/^[a-zA-Z0-9]{9}$/);
+    expect(asstRow?.tool_calls?.[0].id).toBe(toolRow?.tool_call_id);
+    expect(toolRow?.name).toBe('memory_search');
   });
 });
