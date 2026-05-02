@@ -12,6 +12,15 @@
   import { cookbook } from '$lib/cookbook-store.svelte';
   import RecipeRating from './RecipeRating.svelte';
 
+  // Parent (Chat shell) passes a callback that dismisses the mobile
+  // drawer once the main panel has navigated to the chosen recipe.
+  // Optional so the component is still usable in contexts that don't
+  // own a drawer.
+  interface Props {
+    onSelect?: () => void;
+  }
+  const { onSelect }: Props = $props();
+
   type SortMode = 'updated' | 'rating';
   let query = $state('');
   // 'updated' keeps the most-recently-edited recipe at the top;
@@ -75,7 +84,10 @@
       <div class="row thread-row" data-recipe-id={r.id}>
         <button
           class="thread grow recipe-list-row"
-          onclick={() => navigate({ recipe: r.id })}
+          onclick={() => {
+            navigate({ recipe: r.id });
+            onSelect?.();
+          }}
           title={r.title}
         >
           <span class="recipe-list-title">{r.title}</span>

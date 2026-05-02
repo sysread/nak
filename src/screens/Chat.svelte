@@ -1269,13 +1269,7 @@
     toolTimings = {};
     // On mobile the drawer is modal, so dismiss it once a thread is chosen.
     // On desktop the sidebar is a persistent column - leave it open.
-    if (
-      id !== null &&
-      typeof window !== 'undefined' &&
-      window.matchMedia('(max-width: 720px)').matches
-    ) {
-      drawerOpen = false;
-    }
+    if (id !== null) closeDrawerOnMobile();
     if (id === null) return;
     if (!app.supabase) return;
     // Drafts aren't in Supabase yet - no messages to fetch.
@@ -2526,6 +2520,16 @@
   function toggleDrawer(): void {
     drawerOpen = !drawerOpen;
   }
+  // On mobile the drawer is a modal overlay, so picking a row from it
+  // (thread, recipe, or journal day) should dismiss it once the main
+  // panel has navigated. On desktop the sidebar is a persistent column,
+  // so leave it alone. Idempotent on desktop too - drawerOpen stays
+  // true when the viewport is wide.
+  function closeDrawerOnMobile(): void {
+    if (typeof window === 'undefined') return;
+    if (!window.matchMedia('(max-width: 720px)').matches) return;
+    drawerOpen = false;
+  }
 
   // Composer expand toggle. When true, the textarea grows to 40vh so the
   // The composer textarea resizes naturally up to max-height and is
@@ -3565,12 +3569,14 @@
       {:else if drawerTab === 'recipes'}
         <!-- Recipes tab. RecipeList owns the search, sort, and item
              rows. Clicking a recipe navigates to it inline in the main
-             panel (no modal). -->
-        <RecipeList />
+             panel (no modal). onSelect closes the mobile drawer so the
+             newly-navigated panel is visible without a second tap. -->
+        <RecipeList onSelect={closeDrawerOnMobile} />
       {:else}
         <!-- Journal tab. JournalList owns the search and date rows.
-             Clicking a date navigates to that day in the main panel. -->
-        <JournalList />
+             Clicking a date navigates to that day in the main panel.
+             onSelect mirrors the recipe + thread flow on mobile. -->
+        <JournalList onSelect={closeDrawerOnMobile} />
       {/if}
       <footer>
         <div class="subtle" style="margin-bottom:0.4rem;font-size:0.8rem">

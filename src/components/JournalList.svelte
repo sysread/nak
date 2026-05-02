@@ -11,6 +11,15 @@
   import { navigate } from '$lib/routing.svelte';
   import { journal } from '$lib/journal-store.svelte';
 
+  // Parent (Chat shell) passes a callback that dismisses the mobile
+  // drawer once the main panel has navigated to the chosen day.
+  // Optional so the component is still usable in contexts that don't
+  // own a drawer.
+  interface Props {
+    onSelect?: () => void;
+  }
+  const { onSelect }: Props = $props();
+
   let query = $state('');
 
   // Filters entries by content / topics / mood substring match, then
@@ -71,7 +80,10 @@
       <div class="row thread-row" data-journal-day={day.entry_date}>
         <button
           class="thread grow"
-          onclick={() => navigate({ journal_date: day.entry_date })}
+          onclick={() => {
+            navigate({ journal_date: day.entry_date });
+            onSelect?.();
+          }}
           title={`${day.entry_date} (${day.count} ${day.count === 1 ? 'entry' : 'entries'})`}
         >
           <span>{day.entry_date}</span>
