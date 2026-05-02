@@ -126,18 +126,18 @@ describe('web_search — execute() shape', () => {
     expect(req.model).toBe(VENICE_WEB_SEARCH_MODEL);
     expect(req.webSearch).toBe('on');
     expect(req.webCitations).toBe(true);
-    // Reasoning is pinned to 'low' and maxTokens is sized for the
-    // headroom a reasoning-model preamble eats - both load-bearing.
-    // The fast tier is currently a reasoning model that emits its
-    // chain-of-thought through `reasoning_content` BEFORE writing
-    // answer text into `content`. With the previous 400-token cap
-    // and default effort, the budget got consumed by the CoT and
-    // the model hit `finish_reason: 'length'` with zero `content`,
-    // surfacing as the "no answer text" error every call. Lock both
-    // the effort and the cap so a future revert to 400 / 'medium'
-    // re-introduces the regression visibly.
-    expect(req.reasoningEffort).toBe('low');
-    expect(req.maxTokens).toBeGreaterThanOrEqual(1000);
+    // disableThinking is load-bearing: VENICE_WEB_SEARCH_MODEL
+    // tracks the fast tier, which currently routes to a reasoning
+    // model (GLM-4.7) that emits its chain-of-thought through
+    // `reasoning_content` BEFORE writing any answer text into
+    // `content`. Without disable_thinking, the CoT preamble
+    // consumes the entire `maxTokens` budget and the model hits
+    // `finish_reason: 'length'` with zero `content`, surfacing as
+    // the "no answer text" error on every call. Lock the flag so a
+    // future revert (or a new caller copying this shape) doesn't
+    // re-introduce the regression silently.
+    expect(req.disableThinking).toBe(true);
+    expect(typeof req.maxTokens).toBe('number');
   });
 
   it('returns { answer, citations } from the completion result', async () => {

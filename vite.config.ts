@@ -157,9 +157,16 @@ export default defineConfig({
     setupFiles: ['./tests/setup.ts'],
     include: ['tests/**/*.test.ts'],
     // Integration tests hit live external services (Venice) and are
-    // gated on a real API key in the env. They get their own opt-in
-    // run path; the default `pnpm test` stays hermetic so CI never
-    // depends on outbound network or a keyed credential.
-    exclude: ['node_modules/**', 'tests/**/*.integration.test.ts'],
+    // gated on a real API key in the env. The default `pnpm test`
+    // stays hermetic - CI never depends on outbound network or a
+    // keyed credential. The integration suite opts itself in when
+    // the developer wires an API key into the shell:
+    //   VENICE_INFERENCE_KEY=<key> pnpm test tests/web-search.integration.test.ts
+    // Gating via the env var means the developer doesn't need to
+    // remember a separate command flag - presence of the key IS the
+    // opt-in.
+    exclude: process.env.VENICE_INFERENCE_KEY
+      ? ['node_modules/**']
+      : ['node_modules/**', 'tests/**/*.integration.test.ts'],
   },
 });

@@ -220,6 +220,26 @@ export interface ChatRequest {
    * free-form markdown, not JSON.
    */
   responseFormat?: ResponseFormat;
+  /**
+   * Venice-specific `venice_parameters.disable_thinking` knob. When
+   * true, the model skips its reasoning pass entirely - no
+   * `reasoning_content` tokens, no chain-of-thought eating into the
+   * response budget. Useful for sub-completions where the task is
+   * bounded synthesis and the upstream model is a reasoning model
+   * (e.g. GLM-4.7) whose default behavior is to spend its first few
+   * hundred tokens on CoT before writing any user-visible text.
+   * Concretely, the `web_search` tool sets this so its 2-4 sentence
+   * answer always lands inside the `maxTokens` cap rather than
+   * getting truncated by an internal deliberation tangent.
+   *
+   * Only forwarded when set, same discipline as `reasoningEffort` -
+   * Venice's own default is "thinking enabled when the model
+   * supports it", and providers that don't recognise the parameter
+   * never see it. Distinct from `reasoningEffort: 'low'`, which
+   * shrinks the CoT but doesn't disable it; `disableThinking` is the
+   * full off switch.
+   */
+  disableThinking?: boolean;
 }
 
 /**
@@ -603,6 +623,16 @@ export class VeniceClient {
       include_venice_system_prompt: false,
       enable_web_scraping: true,
     };
+    // Venice-specific reasoning kill switch. Only forwarded when the
+    // caller explicitly opted in; an unset field leaves Venice's
+    // server-side default ("thinking on" for reasoning models) in
+    // place. The web_search tool flips this on because the fast
+    // tier currently routes to a reasoning model whose CoT preamble
+    // would otherwise eat the entire `maxTokens` cap before the
+    // model emits a single character of answer text.
+    if (req.disableThinking) {
+      veniceParams.disable_thinking = true;
+    }
     if (req.webSearch) {
       veniceParams.enable_web_search = req.webSearch;
       if (req.webSearch !== 'off') {

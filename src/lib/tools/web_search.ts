@@ -156,33 +156,49 @@ export const webSearch: ToolDef = {
     // - the non-streaming endpoint returns the answer + citations in
     // one shot or surfaces an HTTP error, no in-between.
     //
-    // Reasoning + maxTokens budget: VENICE_WEB_SEARCH_MODEL tracks the
-    // fast tier, which currently routes to GLM-4.7 - a reasoning
-    // model that emits its chain-of-thought through
-    // `reasoning_content` BEFORE writing any answer text into
-    // `content`. The earlier 400-token cap was sized for a non-
-    // reasoning model where the entire budget went to the answer; on
-    // a reasoning model the budget gets eaten by the CoT preamble
-    // and the model hits `finish_reason: 'length'` before emitting
-    // a single character of `content`. The empty-text throw below
-    // was firing every call.
+    // disableThinking + maxTokens budget: VENICE_WEB_SEARCH_MODEL
+    // tracks the fast tier, which currently routes to GLM-4.7 - a
+    // reasoning model that, by default, emits its chain-of-thought
+    // through `reasoning_content` BEFORE writing any answer text
+    // into `content`. The previous 400-token cap was sized for a
+    // non-reasoning model where the entire budget went to the
+    // answer; on a reasoning model the budget got eaten by the CoT
+    // preamble and the model hit `finish_reason: 'length'` with
+    // empty `content`, surfacing as the "no answer text" error
+    // every call. Lowering reasoning_effort to 'low' shrunk the CoT
+    // but didn't eliminate it - long-reasoning queries still ate
+    // through the cap.
     //
-    // Two-pronged fix: pin reasoning effort to 'low' (we don't need
-    // deep deliberation for "synthesize 2-4 sentences from search
-    // results"), and lift the cap to 1500 so the answer always lands
-    // even if the model still spends a few hundred tokens on the
-    // shortened CoT. Both belt and suspenders - dropping either by
-    // itself reproduces the empty-text failure on long reasoning
-    // tangents (e.g. queries the model second-guesses itself on).
-    const result = await ctx.venice.completeChat({
-      model: VENICE_WEB_SEARCH_MODEL,
-      messages,
-      signal: ctx.signal,
-      webSearch: 'on',
-      webCitations: true,
-      reasoningEffort: 'low',
-      maxTokens: 1500,
-    });
+    // disable_thinking is Venice's full off switch: the model skips
+    // the reasoning pass entirely, so the entire token budget goes
+    // to the user-visible answer. With CoT off, maxTokens=600 is
+    // ample headroom for the prompt's 2-4 sentence target (~150
+    // tokens) and any inline ^N^ citation markup.
+    let result;
+    try {
+      result = await ctx.venice.completeChat({
+        model: VENICE_WEB_SEARCH_MODEL,
+        messages,
+        signal: ctx.signal,
+        webSearch: 'on',
+        webCitations: true,
+        disableThinking: true,
+        maxTokens: 600,
+      });
+    } catch (err) {
+      // Surface the underlying Venice error into the log drawer
+      // verbatim before it propagates out. The chat-loop's
+      // encodeToolContent wraps the thrown message into
+      // `{error: "..."}` on the tool-result row, which is what the
+      // model reads on the next round - but the log drawer is the
+      // only surface where a developer / power user can see the
+      // actual Venice response (HTTP code, kind, body detail).
+      // Without this log line, "web_search failed" arrives at the
+      // drawer with no context.
+      const detail = err instanceof Error ? err.message : String(err);
+      log.error(`Venice completeChat failed: ${detail}`);
+      throw err;
+    }
 
     const trimmed = result.text.trim();
 
@@ -197,9 +213,26 @@ export const webSearch: ToolDef = {
     // whether to retry, rephrase, or surface the failure to the user.
     // The throw routes through chat-loop's encodeToolContent into
     // `{error: "..."}` on the tool-result row.
+    //
+    // The log drawer entry carries the full diagnostic shape -
+    // `finish_reason`, token usage, citation count, and a short
+    // reasoning preview if any. That's what tells the developer
+    // WHY text was empty: `'length'` means we hit the maxTokens cap
+    // (CoT regression - check disable_thinking is set),
+    // `'content_filter'` means Venice's safety layer trimmed the
+    // synthesis, an empty `usage` block alongside zero text usually
+    // means a transient fast-tier hiccup, etc. Without this detail,
+    // the drawer just shows "no answer text" and the user has no
+    // way to tell the cases apart.
     if (trimmed.length === 0) {
       log.warn(
-        `sub-agent completion produced no text content (${result.citations.length} citation(s) seen)`
+        `sub-agent completion produced no text content (${result.citations.length} citation(s) seen)`,
+        {
+          finishReason: result.finishReason,
+          usage: result.usage,
+          reasoningLength: result.reasoning.length,
+          reasoningPreview: result.reasoning.slice(0, 300),
+        }
       );
       throw new Error(
         'web_search: sub-agent completion produced no answer text. ' +
