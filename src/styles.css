@@ -2309,34 +2309,6 @@ h1 {
     max-width: 100%;
   }
 
-  /* Float the send button over the shell's bottom-right corner so
-     the composer-bar's left-hand pickers (tools, citations, attach,
-     prompts, model, reasoning, verbosity - up to seven buttons)
-     don't push it off-screen on narrow viewports. The shell is
-     already `position: relative` (see the drop-overlay block below)
-     so absolute positioning anchors to the shell, not the page.
-     Bottom-right matches the mobile-messaging convention users
-     expect (iMessage, WhatsApp, Slack, Claude.ai) - the send affordance
-     lives where the thumb ends up after tapping the keyboard's
-     right-side keys. */
-  .composer-send {
-    position: absolute;
-    right: 0.6rem;
-    bottom: 0.55rem;
-    z-index: 2;
-  }
-
-  /* With .composer-send removed from the flex flow, reserve
-     right-side room on the bar so the wharf trigger doesn't run
-     under the floating send button. Desktop's `justify-content:
-     space-between` still applies - that's intentional: with the
-     wharf trigger as the first in-flow child and the (0-width,
-     children-hidden) .composer-bar-left as the last, space-between
-     parks the trigger at the left edge. */
-  .composer-bar {
-    padding-right: 2.8rem;
-  }
-
   /* Wharf trigger: the only composer-bar control visible on mobile
      when the wharf is closed. Tapping it toggles `.wharf-open` on
      the sibling button row, which CSS below restyles as a vertical

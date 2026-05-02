@@ -4441,7 +4441,7 @@
                  must always be clickable once a response is in flight,
                  regardless of what the user has typed next. -->
             <button
-              class="send-btn composer-send"
+              class="send-btn"
               class:is-stopping={sending}
               onclick={sending ? stopStreaming : send}
               disabled={sending
