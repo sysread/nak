@@ -80,6 +80,13 @@ changing a contract that other features depend on.
 - [Build & deploy](./build-deploy.md) — Vite, PWA,
   GitHub Pages, the sync-on-deploy schema workflow.
 
+### Future work
+
+- [Planned changes](./planned-changes.md) — deferred features
+  that we tried and reverted (or scoped out and haven't
+  started). Lessons learned and the "correct way" captured so
+  the next attempt doesn't redo the dead-end investigation.
+
 ## Writing conventions
 
 - **Column-wrap prose around 65 chars**, breaking at

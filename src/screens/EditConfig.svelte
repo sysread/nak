@@ -12,7 +12,6 @@
    * hold the password in memory, intentionally.
    */
   import { saveConfig, clearStoredConfig, type AppConfig } from '$lib/config';
-  import { clearBiometric } from '$lib/biometric';
   import { activate, app } from '$lib/state.svelte';
   import SecretInput from '../components/SecretInput.svelte';
 
@@ -56,9 +55,6 @@
     );
     if (!ok) return;
     clearStoredConfig();
-    // Wrapped biometric password is meaningless once the config it
-    // protects is gone. Clear both together.
-    clearBiometric();
     app.phase = 'setup';
   }
 </script>

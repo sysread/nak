@@ -63,9 +63,7 @@ Covered in detail on [Export & import](./export-import.md).
 
 ### Security
 
-Rotate the master password and toggle biometric unlock for this
-device. Both are covered in detail on [Security
-model](./security.md).
+Covered in detail on [Security model](./security.md).
 
 ### About
 

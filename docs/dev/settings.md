@@ -38,13 +38,7 @@ destination:
 - **Export** — downloads the three keys as a plaintext JSON
   file. No persistence change.
 - **Security** — rotates the master password. Re-encrypts the
-  config blob; doesn't touch Supabase. Also hosts the per-device
-  **Biometric unlock** toggle (WebAuthn PRF wrapping of the
-  master password); see `./auth-session.md` for the crypto and
-  storage layout. Rotating the password clears any existing
-  biometric enrollment (the wrapped password is bound to the old
-  one) - the user is told and can re-enroll under the new
-  password.
+  config blob; doesn't touch Supabase.
 - **About** — build fingerprint (commit SHA + build time) and the
   "Check for updates" / "Reload to update" action. Read-only; the
   values come from `$lib/update.svelte` which Vite populates at
@@ -134,21 +128,6 @@ every update) so it's covered here rather than in its own file.
   subsequent unlock with a different config.
 - **Security pane submit** — `changePassword(old, new)` in
   config.ts. Settings catches errors and displays them inline.
-  On success the handler also calls `clearBiometric()` if the
-  user had biometric unlock enabled, since the wrapped password
-  no longer matches the rotated config.
-- **Biometric enable** — verifies the typed master password against
-  the stored config (via `loadConfig`) so we never wrap a typo,
-  then calls `enrollBiometric(password)` from
-  `$lib/biometric.ts`. The browser prompts for a biometric / PIN
-  gesture; on success the wrapped envelope lands in
-  `localStorage['nak:biometric:v1']`. The toggle only renders when
-  `isBiometricSupported()` resolves true (platform user-verifying
-  authenticator present); enrollment additionally feature-detects
-  the WebAuthn PRF extension and aborts if it is not available.
-- **Biometric disable** — `clearBiometric()` removes the wrapped
-  envelope. The encrypted config blob is untouched; the user can
-  keep using the typed-password path.
 
 ## Data model
 

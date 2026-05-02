@@ -36,10 +36,6 @@ project.
 - `src/lib/crypto.ts` — AES-256-GCM envelope with a versioned
   ciphertext layout, key derived via PBKDF2-SHA256 (600k
   iterations). Web Crypto primitives only.
-- `src/lib/biometric.ts` — optional WebAuthn PRF wrapper that
-  re-produces the master password after a platform biometric /
-  PIN gesture. Stores its own envelope in localStorage
-  (`nak:biometric:v1`), independent of the config blob.
 - `src/lib/session.ts` — sessionStorage bridge
   (`nak:session:v1`) holding the decrypted config + TTL + last
   active thread id.
@@ -59,18 +55,6 @@ project.
   → either `activate(config)` (flips to `unlocked`) or
   `enterEditConfig(config)` (flips to `edit-config` so the user
   can fix a mistyped key).
-- **Biometric unlock** — `Unlock.svelte` auto-triggers
-  `unlockWithBiometric()` on mount when both
-  `isBiometricEnrolled()` and `isBiometricSupported()` are true,
-  so the user lands directly on the system biometric prompt
-  without an extra tap. On success the recovered password is fed
-  into `loadConfig()` and `activate(config)` runs as usual. On
-  cancellation (`DOMException: NotAllowedError`) the screen
-  silently falls back to the typed-password input with focus on
-  the password field; the "Unlock with biometric" button stays
-  visible for a manual retry. Other errors render inline as
-  before. The auto-trigger is one-shot per mount (`arbiterFired`
-  flag) so re-renders don't re-prompt.
 - **Setup submit** — `Setup.svelte` calls `saveConfig(config,
   password)` then `activate(config)`.
 - **Password rotation** — `Settings.svelte` Security pane calls
@@ -91,15 +75,6 @@ project.
   Layout: `[4 bytes version][16 bytes salt][12 bytes iv][body+tag]`.
   Version is u32 big-endian; bump when the PBKDF2 iteration count
   or cipher choice changes.
-- **`localStorage['nak:biometric:v1']`** — JSON envelope, only
-  present when the user has opted into biometric unlock on this
-  device. Shape: `{ v: 1, credentialId, salt, iv, ciphertext }` —
-  credentialId is the WebAuthn passkey ID (base64url), salt is
-  the PRF input, iv + ciphertext are the AES-GCM wrap of the
-  master password under a key derived from the PRF output. Cleared
-  on Reset, on `clearStoredConfig`, and after a successful master-
-  password rotation; the user is prompted to re-enroll if they
-  want biometric unlock under the new password.
 - **`sessionStorage['nak:session:v1']`** — JSON
   `{ config: AppConfig, expiresAt: number, activeThreadId?: string }`.
   Clears on tab close (sessionStorage semantics). TTL defaults to
@@ -139,22 +114,6 @@ localStorage key (`v2`) rather than a migration.
 - `encrypt` / `decrypt` from `crypto.ts` — the only envelope
   layer. If something else needs to be encrypted, route it through
   here rather than duplicating the AES-GCM / PBKDF2 scaffolding.
-- `isBiometricSupported()` from `biometric.ts` — async probe for
-  a user-verifying platform authenticator. Drives whether the
-  Settings toggle and the Unlock button render at all.
-- `enrollBiometric(password)` — registers a platform passkey,
-  evaluates the PRF extension, and AES-GCM-wraps the password
-  under the PRF output. Throws if the platform refuses
-  registration or does not honor PRF. Caller should have just
-  verified that `password` decrypts the config.
-- `unlockWithBiometric(): Promise<string>` — runs the assertion
-  and returns the unwrapped master password. Self-clears the
-  envelope on a tag mismatch (wrapped blob no longer decryptable
-  under the device's current credential).
-- `clearBiometric()` — wipes the wrapped envelope. Must be called
-  on every path that invalidates the password it wraps:
-  `changePassword` (Settings -> Security), `clearStoredConfig`
-  (Reset on Unlock and EditConfig).
 
 ## Refresh-token rotation across workers
 
@@ -211,93 +170,6 @@ worker reference.
   refresh-token rotation to their workers (see above). Those
   docs cover the worker lifecycle from the worker side; this
   page owns the activate/lock pivot and the auth bridge.
-
-## Biometric unlock (WebAuthn PRF)
-
-Optional convenience layer over the typed-password path. Exposed
-under Settings -> Security; surfaces an extra "Unlock with
-biometric" button on `Unlock.svelte` when enrolled.
-
-The threat model is "I trust this device's secure hardware to gate
-unwrap of my master password." We cannot use plain WebAuthn-as-a-
-gate (call `credentials.get`, then read a plaintext password from
-storage) because that's window dressing - an attacker who can read
-localStorage can read the password directly. The PRF (Pseudorandom
-Function) extension to WebAuthn is the right primitive:
-
-1. At enrollment, `navigator.credentials.create()` registers a
-   discoverable platform passkey with `extensions.prf: {}` -
-   empty input, just enables the extension. The credential-bound
-   HMAC key is provisioned inside the secure element; nothing
-   leaves it.
-2. A follow-up `navigator.credentials.get()` against the
-   just-created credential evaluates PRF with `extensions.prf:
-   { eval: { first: salt } }` over a freshly generated 32-byte
-   salt. The PRF output is HMAC over (the credential-bound key,
-   the salt) - only computed after a successful
-   `userVerification: 'required'` gesture.
-3. The PRF output is imported as a 256-bit AES-GCM key and used
-   to wrap the master password. The wrap (plus credential ID and
-   salt) goes into `localStorage['nak:biometric:v1']`.
-4. At unlock, `navigator.credentials.get()` re-evaluates PRF over
-   the same salt with the same credential, deriving the same AES
-   key, which unwraps the password. The unwrapped string is fed
-   into the unchanged `loadConfig(password)` -> `activate(config)`
-   flow.
-
-Why two prompts on enrollment instead of one: passing
-`extensions.prf: { eval: { first: salt } }` on `create()` is
-spec-legal but breaks on Chrome / Android (as of Chrome 147).
-The Credential Manager + provider stack silently drops the
-entire `prf` extension when it can't perform inline evaluation,
-returning an empty `clientExtensionResults` instead of
-`{ prf: { enabled: true } }`. The
-[passkey-prf-playground](https://www.passkeyprf.com/) reference
-does empty-on-create + eval-on-get, and it's the only pattern
-that works reliably across Chrome desktop, Edge, Safari 18+,
-**and** Chrome / Android with Bitwarden / Google Password
-Manager. The extra prompt only costs the user one tap during
-the one-time enrollment; subsequent unlocks are still
-single-prompt.
-
-Four other configuration knobs are load-bearing for the
-Android Chrome path:
-
-- `user.id` must be a fresh random buffer per registration (we
-  use 64 random bytes). A deterministic / stable `user.id`
-  collides with prior entries in the credential provider's
-  account index - Bitwarden's Android provider in particular
-  responds to a colliding user.id by saving the form-typed
-  password as a regular password entry, skipping the actual
-  passkey creation, and returning an empty
-  `clientExtensionResults`. This was the root cause of the early
-  enrollment failures. Cost: re-enrolling leaves orphaned
-  passkey entries in the user's provider that they clean up
-  manually.
-- `rp.id: window.location.hostname` must be set explicitly. Chrome
-  desktop derives it from the origin if omitted; Chrome / Android
-  via Credential Manager refuses to register without an explicit
-  id and may drop extensions.
-- `authenticatorSelection.residentKey: 'required'` (discoverable).
-  `'discouraged'` produces wildly inconsistent behavior on Android
-  Credential Manager - including the empty-extensions failure
-  mode. Cost: one resident-key slot on the authenticator, which
-  every modern platform authenticator has plenty of.
-- No `requireResidentKey` field. It's deprecated; pass only
-  `residentKey` instead.
-
-The wrapped password is invalidated by anything that changes the
-password it wraps:
-
-- `changePassword` rotates the password; the Settings handler
-  calls `clearBiometric()` on success and surfaces a hint to
-  re-enroll.
-- `clearStoredConfig` wipes the config blob; both Unlock's Reset
-  button and EditConfig's Reset clear biometric alongside.
-
-A re-encrypt of the config under the same password (Keys pane,
-EditConfig) leaves biometric valid - the wrapped password is
-unchanged and still unwraps the new blob.
 
 ## Gotchas
 
