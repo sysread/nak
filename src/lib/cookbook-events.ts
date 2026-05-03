@@ -28,3 +28,18 @@ export function notifyCookbookChanged(): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent(COOKBOOK_CHANGE_EVENT));
 }
+
+/**
+ * Subscribe to COOKBOOK_CHANGE_EVENT. Returns an `off` callback that
+ * removes the listener; intended for use inside `$effect` blocks that
+ * want a single returned cleanup. Mirrors `onJournalChange` in
+ * `journal-events.ts`. No-op + no-op cleanup when `window` is
+ * undefined so SSR / worker contexts compile without guarding the
+ * call site.
+ */
+export function onCookbookChange(handler: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  const listener = (): void => handler();
+  window.addEventListener(COOKBOOK_CHANGE_EVENT, listener);
+  return () => window.removeEventListener(COOKBOOK_CHANGE_EVENT, listener);
+}

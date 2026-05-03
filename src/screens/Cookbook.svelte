@@ -27,15 +27,14 @@
    * for `COOKBOOK_CHANGE_EVENT` so an LLM `recipe_save` call mid-
    * session refreshes the detail automatically.
    */
-  import { onMount, onDestroy } from 'svelte';
   import { app } from '$lib/state.svelte';
   import { route, navigate } from '$lib/routing.svelte';
   import {
     cookbook,
     loadRecipes,
     loadRecipePhotos,
-    COOKBOOK_CHANGE_EVENT,
   } from '$lib/cookbook-store.svelte';
+  import { onCookbookChange } from '$lib/cookbook-events';
   import {
     cooklangToHtml,
     parseCooklang,
@@ -201,10 +200,10 @@
     });
   }
 
-  // URL-driven sync. When `route.recipe` changes externally (browser
-  // back / forward, sidebar click), mirror the change into the panel's
-  // local pane+activeId. openList below also calls navigate so clicks
-  // walk in lockstep. Edit / new panes are intentionally not routed -
+  // URL-driven sync. Single source of truth for landing the local
+  // pane+activeId on whatever route.recipe says: a sidebar click, a
+  // browser back / forward, openList() after a delete, all flow
+  // through here. Edit / new panes are intentionally not routed -
   // they're transient form states, not bookmarkable.
   $effect(() => {
     const id = route.recipe;
@@ -216,9 +215,10 @@
       copyFeedback = null;
       lightboxIndex = null;
       clearVersionState();
-      // Browser back / forward / external nav into the empty state -
-      // same shell-side handling as openList(): on mobile, surface
-      // the drawer so the list is reachable.
+      // Recipe was deselected. On mobile the list lives in the
+      // drawer rather than a persistent column, so the shell auto-
+      // opens the drawer here - otherwise the empty pane dead-ends
+      // until the user swipes or taps the menu.
       onDeselect?.();
     } else {
       activeId = id;
@@ -242,19 +242,13 @@
   );
 
   // --- pane transitions ---
+  // Just clears the routed key; the URL-sync effect above runs the
+  // pane-reset and onDeselect notification once route.recipe lands as
+  // null. Keeping the cleanup in one place means a delete (the only
+  // caller today) and a browser-back deselect both go through the
+  // same code path.
   function openList(): void {
-    pane = 'list';
-    activeId = null;
-    editError = null;
-    copyFeedback = null;
-    lightboxIndex = null;
-    clearVersionState();
     navigate({ recipe: null });
-    // Tell the shell the recipe was deselected. On mobile, the list
-    // lives in the drawer rather than a persistent column, so the
-    // shell auto-opens the drawer here - otherwise the empty pane
-    // dead-ends until the user swipes or taps the menu.
-    onDeselect?.();
   }
 
   function openNew(): void {
@@ -614,24 +608,21 @@
 
   // --- effects ---
 
-  function onCookbookChange(): void {
+  // Initial load + refetch on COOKBOOK_CHANGE_EVENT (fires on tool-path
+  // recipe_* writes too, so the panel stays in sync without a manual
+  // refresh). Photos refetch on every event because a tool-driven
+  // recipe_photos_attach mid-conversation should refresh the strip
+  // without the user navigating away. Best-effort; failures fall
+  // back to "what's already cached."
+  $effect(() => {
     void refresh();
-    // Photos may have changed too - a tool-driven
-    // recipe_photos_attach mid-conversation should refresh the strip
-    // without the user navigating away. Best-effort; failures fall
-    // back to "what's already cached."
-    if (activeId && app.supabase) {
-      void loadRecipePhotos(app.supabase, activeId);
-    }
-  }
-
-  onMount(() => {
-    void refresh();
-    window.addEventListener(COOKBOOK_CHANGE_EVENT, onCookbookChange);
-  });
-
-  onDestroy(() => {
-    window.removeEventListener(COOKBOOK_CHANGE_EVENT, onCookbookChange);
+    const off = onCookbookChange(() => {
+      void refresh();
+      if (activeId && app.supabase) {
+        void loadRecipePhotos(app.supabase, activeId);
+      }
+    });
+    return () => off();
   });
 
   // Chat.svelte's top-bar "new recipe" button sets triggerNew = true.

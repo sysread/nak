@@ -119,13 +119,13 @@
   import {
     cookbook,
     loadRecipes,
-    COOKBOOK_CHANGE_EVENT,
   } from '$lib/cookbook-store.svelte';
+  import { onCookbookChange } from '$lib/cookbook-events';
   import {
     journal,
     loadJournalEntries,
   } from '$lib/journal-store.svelte';
-  import { JOURNAL_CHANGE_EVENT } from '$lib/journal-events';
+  import { onJournalChange } from '$lib/journal-events';
   import { todayInZone, shiftDay } from '$lib/journal-day';
   import { moodState } from '$lib/samskara/mood.svelte';
   import { bandIndexFor, columnFor } from '$lib/samskara/events';
@@ -1077,17 +1077,17 @@
       await tick();
       composerEl?.focus();
     });
-    // Cookbook change listener. Fires when a recipe_* tool call
-    // succeeds, so the drawer tab's list reflects a model-driven
-    // save without the user having to reopen the tab. We only
-    // reload when we've already loaded at least once — a fresh
-    // unlock that never opened the Recipes tab stays lazy.
-    window.addEventListener(COOKBOOK_CHANGE_EVENT, onCookbookStoreChanged);
-    window.addEventListener(JOURNAL_CHANGE_EVENT, onJournalStoreChanged);
+    // Cookbook + journal change listeners. Fire when a recipe_* /
+    // journal_* tool call succeeds, so the drawer tab's list reflects
+    // a model-driven save without the user having to reopen the tab.
+    // We only reload when we've already loaded at least once - a
+    // fresh unlock that never opened those tabs stays lazy.
+    const offCookbook = onCookbookChange(onCookbookStoreChanged);
+    const offJournal = onJournalChange(onJournalStoreChanged);
     return () => {
       unsubscribe();
-      window.removeEventListener(COOKBOOK_CHANGE_EVENT, onCookbookStoreChanged);
-      window.removeEventListener(JOURNAL_CHANGE_EVENT, onJournalStoreChanged);
+      offCookbook();
+      offJournal();
     };
   });
 

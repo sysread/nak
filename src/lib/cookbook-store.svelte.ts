@@ -20,18 +20,14 @@
  * way.
  *
  * The event name and dispatcher live in the plain-`.ts` sibling
- * `cookbook-events.ts` — the `recipe_*` tools need to signal
+ * `cookbook-events.ts` - the `recipe_*` tools need to signal
  * changes, and the tool registry gets bundled into the reflection
  * Web Worker, which crashes with `$state is not defined` if it
- * pulls a rune-using module into the worker bundle. We re-export
- * both here so existing UI imports from `$lib/cookbook-store.svelte`
- * keep resolving.
+ * pulls a rune-using module into the worker bundle. UI imports
+ * `onCookbookChange` / `notifyCookbookChanged` from the events
+ * module directly.
  */
 import type { Recipe, RecipePhoto, SupabaseService } from './supabase';
-export {
-  COOKBOOK_CHANGE_EVENT,
-  notifyCookbookChanged,
-} from './cookbook-events';
 
 interface CookbookState {
   recipes: Recipe[];
