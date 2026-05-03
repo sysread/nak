@@ -1336,11 +1336,16 @@ begin
   -- verify each image_id belongs to the calling user via the SELECT
   -- check - RLS would also block a foreign image, but failing fast
   -- here gives a readable error instead of an opaque RLS denial.
+  -- The `ri` alias on recipe_images qualifies `id` away from the
+  -- same-named OUT parameter declared in this function's RETURNS
+  -- TABLE clause - bare `id = v_image_id` is ambiguous to the
+  -- planner once the function is recreated against a session that
+  -- treats the OUT name as a candidate column reference.
   if p_image_ids is not null and array_length(p_image_ids, 1) is not null then
     foreach v_image_id in array p_image_ids loop
       if not exists (
-        select 1 from public.recipe_images
-         where id = v_image_id and user_id = v_uid
+        select 1 from public.recipe_images ri
+         where ri.id = v_image_id and ri.user_id = v_uid
       ) then
         raise exception 'image % not found', v_image_id;
       end if;
@@ -1495,9 +1500,13 @@ begin
     if p_image_ids is not null
        and array_length(p_image_ids, 1) is not null then
       foreach v_image_id in array p_image_ids loop
+        -- `ri` qualifies `id` away from the same-named OUT parameter
+        -- declared in this function's RETURNS TABLE clause. The
+        -- planner otherwise reads bare `id` as ambiguous and fails
+        -- the call with "column reference 'id' is ambiguous".
         if not exists (
-          select 1 from public.recipe_images
-           where id = v_image_id and user_id = v_uid
+          select 1 from public.recipe_images ri
+           where ri.id = v_image_id and ri.user_id = v_uid
         ) then
           raise exception 'image % not found', v_image_id;
         end if;
