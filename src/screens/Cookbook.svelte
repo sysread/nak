@@ -158,6 +158,13 @@
     await loadRecipes(app.supabase);
   }
 
+  // Catch-block helper: surface the message from any thrown value
+  // (Error or otherwise). Same shape repeats throughout the codebase;
+  // local for now until a $lib home is justified.
+  function errMsg(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+  }
+
   // Lazy: only load history when the user actually opens a detail
   // pane. `cookbook.recipes[]` deliberately stays free of versions so
   // the bulk recipe-list fetch keeps its slim shape.
@@ -168,7 +175,7 @@
     try {
       versions = await app.supabase.listRecipeVersions(recipeId);
     } catch (err) {
-      versionsError = err instanceof Error ? err.message : String(err);
+      versionsError = errMsg(err);
     } finally {
       versionsLoading = false;
     }
@@ -196,9 +203,9 @@
 
   // URL-driven sync. When `route.recipe` changes externally (browser
   // back / forward, sidebar click), mirror the change into the panel's
-  // local pane+activeId. openList / openDetail below also call navigate
-  // so clicks walk in lockstep. Edit / new panes are intentionally not
-  // routed - they're transient form states, not bookmarkable.
+  // local pane+activeId. openList below also calls navigate so clicks
+  // walk in lockstep. Edit / new panes are intentionally not routed -
+  // they're transient form states, not bookmarkable.
   $effect(() => {
     const id = route.recipe;
     if (id === activeId) return;
@@ -220,14 +227,9 @@
       lightboxIndex = null;
       clearVersionState();
       void loadVersions(id);
-      void loadPhotosForActive(id);
+      if (app.supabase) void loadRecipePhotos(app.supabase, id);
     }
   });
-
-  async function loadPhotosForActive(recipeId: string): Promise<void> {
-    if (!app.supabase) return;
-    await loadRecipePhotos(app.supabase, recipeId);
-  }
 
   // Photos linked to the recipe currently shown in the detail pane.
   // `undefined` = the cache slot has never been touched (we render an
@@ -389,15 +391,20 @@
         );
         activeId = row.id;
       }
-      await refresh();
-      // Reload the History panel for the recipe we just touched - the
-      // new version is the latest entry, and we want it visible the
-      // moment the user lands back on the detail pane.
-      if (activeId) await loadVersions(activeId);
-      // Re-fetch photos so the strip on the detail pane reflects what
-      // we just saved (positions renumbered, deletions applied, new
-      // uploads appended).
-      if (activeId) await loadRecipePhotos(app.supabase, activeId);
+      // Three independent post-save reads: refresh the recipe list,
+      // reload the History panel (the new version is the latest entry,
+      // and we want it visible the moment the user lands back on
+      // detail), and re-fetch photos so the strip reflects what we
+      // just saved (positions renumbered, deletions applied, new
+      // uploads appended). Run in parallel - they don't depend on
+      // each other.
+      const id = activeId;
+      const supabase = app.supabase;
+      await Promise.all([
+        refresh(),
+        id ? loadVersions(id) : Promise.resolve(),
+        id ? loadRecipePhotos(supabase, id) : Promise.resolve(),
+      ]);
       pane = 'detail';
       photoErrors = [];
       // Create flow lands us on a recipe id that wasn't in the URL;
@@ -405,7 +412,7 @@
       // router so refresh-from-here lands on this recipe's detail.
       if (activeId) navigate({ recipe: activeId });
     } catch (err) {
-      editError = err instanceof Error ? err.message : String(err);
+      editError = errMsg(err);
     } finally {
       saving = false;
     }
@@ -482,7 +489,7 @@
         } catch (err) {
           photoErrors = [
             ...photoErrors,
-            `${file.name}: ${err instanceof Error ? err.message : String(err)}`,
+            `${file.name}: ${errMsg(err)}`,
           ];
         }
       }
@@ -545,8 +552,7 @@
         : `Rated ${next} ${next === 1 ? 'star' : 'stars'}.`;
     try {
       await app.supabase.updateRecipe(activeId, { rating: next }, msg);
-      await refresh();
-      if (activeId) await loadVersions(activeId);
+      await Promise.all([refresh(), loadVersions(activeId)]);
     } catch (err) {
       // Surface failures in the same banner the edit pane uses; we're
       // on the detail pane and don't have a dedicated rating-error
@@ -555,7 +561,7 @@
       // also fall through silently rather than rolling back the
       // optimistic stars - the next refresh will reconcile from the
       // store.
-      editError = err instanceof Error ? err.message : String(err);
+      editError = errMsg(err);
     }
   }
 
@@ -570,7 +576,26 @@
       await refresh();
       openList();
     } catch (err) {
-      editError = err instanceof Error ? err.message : String(err);
+      editError = errMsg(err);
+    }
+  }
+
+  // Shared clipboard write + 1500ms flash. The setTimeout's pane
+  // guard is a tighter no-op for the case where the user navigates
+  // away mid-timer; setting state on a torn-down component is
+  // harmless in Svelte but the guard keeps dev tools clean.
+  // clipboard.writeText can fail when the page isn't focused (Safari
+  // quirk) or on permissioned browsers - the catch surfaces a clear
+  // fallback rather than silently dropping.
+  async function copyWithFeedback(text: string, successMsg: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(text);
+      copyFeedback = successMsg;
+      setTimeout(() => {
+        if (pane === 'detail') copyFeedback = null;
+      }, 1500);
+    } catch {
+      copyFeedback = 'Could not copy — check browser permissions.';
     }
   }
 
@@ -578,36 +603,13 @@
     const r = activeRecipe;
     if (!r) return;
     const parsed = parseCooklang(r.cooklang);
-    const plain = recipeToPlainText(r.title, parsed);
-    try {
-      await navigator.clipboard.writeText(plain);
-      copyFeedback = 'Copied.';
-      setTimeout(() => {
-        // Guard in case the user navigates away while the timer is
-        // pending — setting state on a torn-down component is harmless
-        // in Svelte but a tighter no-op keeps dev tools clean.
-        if (pane === 'detail') copyFeedback = null;
-      }, 1500);
-    } catch {
-      // clipboard write can fail when the page isn't focused (Safari
-      // quirk) or on permissioned browsers — give the user a clear
-      // fallback signal rather than a silent drop.
-      copyFeedback = 'Could not copy — check browser permissions.';
-    }
+    await copyWithFeedback(recipeToPlainText(r.title, parsed), 'Copied.');
   }
 
   async function onCopyCooklang(): Promise<void> {
     const r = activeRecipe;
     if (!r) return;
-    try {
-      await navigator.clipboard.writeText(r.cooklang);
-      copyFeedback = 'Cooklang source copied.';
-      setTimeout(() => {
-        if (pane === 'detail') copyFeedback = null;
-      }, 1500);
-    } catch {
-      copyFeedback = 'Could not copy — check browser permissions.';
-    }
+    await copyWithFeedback(r.cooklang, 'Cooklang source copied.');
   }
 
   // --- effects ---
@@ -641,14 +643,21 @@
     }
   });
 
-  // Combined window key handler. Escape dismisses the lightbox or
-  // cancels an in-progress edit; arrow keys page through the lightbox
-  // when open. Detail no longer ladders out on Escape - the panel
-  // matches chats / journal in that there's no explicit "deselect"
-  // gesture, you switch by picking another recipe from the sidebar.
+  // Combined window key handler.
+  //   Escape ladders: lightbox -> strip, edit -> detail-or-empty.
+  //     Detail intentionally does nothing on Escape - the panel
+  //     matches chats / journal in that there's no explicit "deselect"
+  //     gesture, you switch by picking another recipe from the sidebar.
+  //   ArrowLeft / ArrowRight page through the lightbox when open.
   function onWindowKey(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
-      onEscape(e);
+      if (lightboxIndex !== null) {
+        closeLightbox();
+        return;
+      }
+      if (pane === 'edit') {
+        pane = activeId ? 'detail' : 'list';
+      }
       return;
     }
     if (lightboxIndex !== null && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
@@ -656,20 +665,6 @@
     }
   }
 
-  function onEscape(e: KeyboardEvent): void {
-    if (e.key !== 'Escape') return;
-    // Escape ladders: lightbox -> strip, edit -> detail-or-empty.
-    // Detail intentionally does nothing - see onWindowKey above.
-    if (lightboxIndex !== null) {
-      closeLightbox();
-      return;
-    }
-    if (pane === 'edit') {
-      pane = activeId ? 'detail' : 'list';
-    }
-  }
-
-  // Derived preview for detail pane.
   const detailHtml = $derived.by(() => {
     const r = activeRecipe;
     return r ? cooklangToHtml(r.cooklang) : '';
@@ -724,7 +719,7 @@
       await refresh();
       await loadVersions(activeId);
     } catch (err) {
-      versionsError = err instanceof Error ? err.message : String(err);
+      versionsError = errMsg(err);
     }
   }
 
@@ -1187,7 +1182,7 @@
               </p>
             </div>
             <div class="cookbook-edit-preview-col">
-              <div class="cookbook-preview-label">Preview</div>
+              <div class="form-label">Preview</div>
               <div class="cookbook-render cookbook-edit-preview">
                 {@html editPreviewHtml}
               </div>
@@ -1309,10 +1304,11 @@
   .cookbook-detail-rating {
     margin: 0.1rem 0 0.5rem;
   }
-  /* Stand-in for a <label> on the rating row in the edit form (the
-     widget isn't a single focusable input, so a real <label> would
-     trip a11y_label_has_associated_control). Matches sibling label
-     typography so the form stays visually balanced. */
+  /* Stand-in for a <label> on rows where the labelled element isn't
+     a single focusable input (the rating widget; the rendered preview
+     div) - a real <label> would trip a11y_label_has_associated_control.
+     Matches sibling label typography so the form stays visually
+     balanced. */
   .form-label {
     display: block;
     font-size: 0.85rem;
@@ -1578,15 +1574,6 @@
     padding: 0 0.25rem;
     border-radius: 3px;
     font-size: 0.75rem;
-  }
-  /* Stand-in for the edit-preview "label" that isn't tied to an input —
-     styled to match <label> siblings so the two-column layout looks
-     balanced. Divs don't require an associated control, avoiding the
-     a11y_label_has_associated_control warning. */
-  .cookbook-preview-label {
-    font-size: 0.85rem;
-    font-weight: 600;
-    margin-bottom: 0.25rem;
   }
   .cookbook-edit-preview {
     border: 1px solid var(--border);

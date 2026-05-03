@@ -57,7 +57,7 @@
     <!-- Sort selector. 'Most recent' is the default to match the
          backing-store order; 'Rating' bubbles favourites up. -->
     <label class="recipe-sort-label" for="rl-sort">
-      <span class="visually-hidden">Sort recipes</span>
+      <span class="sr-only">Sort recipes</span>
       <select
         id="rl-sort"
         class="recipe-sort"
@@ -70,9 +70,9 @@
     </label>
   </div>
   {#if cookbook.loading && cookbook.recipes.length === 0}
-    <p class="subtle" style="padding:0.75rem">Loading recipes…</p>
+    <p class="subtle recipe-list-empty">Loading recipes…</p>
   {:else if visibleRecipes.length === 0}
-    <p class="subtle" style="padding:0.75rem">
+    <p class="subtle recipe-list-empty">
       {#if cookbook.recipes.length === 0}
         No recipes yet. Use the panel to add one.
       {:else}
@@ -128,16 +128,8 @@
     font: inherit;
     font-size: 0.8rem;
   }
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
+  .recipe-list-empty {
+    padding: 0.75rem;
   }
   /* Two-line recipe row: title on top, rating inline below. */
   .recipe-list-row {
