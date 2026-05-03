@@ -108,6 +108,36 @@ table has RLS enabled, and every policy is `auth.uid() = user_id`
 service-role key never reaches the browser. The same file comments
 this at the top — the comment is load-bearing.
 
+### Conversation-recovery synthesis on read
+
+`listMessages` runs every result through
+`synthesizeRecoveryMessages` (`src/lib/conversation-recovery.ts`)
+before returning. This appends in-memory recovery rows when the
+persisted tail is wire-format-invalid - a trailing `tool` row with
+no follow-up assistant, or an `assistant`-with-tool_calls whose
+results never landed. Without the synthesis, the next prompt-append
+to the slice (every background agent does this; so does the chat
+loop's projection) trips the provider's "Unexpected role 'user'
+after role 'tool'" 400.
+
+Synthesized rows carry `synthetic: true` (TS-only - never written
+to the DB) and a `RECOVERY_MARKER` HTML comment in their content.
+Idempotency relies on the marker: a prior session may have
+persisted the recovery rows on a user-send; on a fresh read the
+synthesizer sees the marker on the trailing row and short-circuits.
+
+The chat-loop's send path (in `Chat.svelte`) calls
+`persistSyntheticRecovery` ahead of the next user-message insert,
+which writes the in-memory recovery rows to the DB so the
+conversation heals permanently. Background workers don't write -
+they regenerate the synthesis each cycle until the user revisits.
+
+The `summary` agent's `condenseHistory` additionally trims its
+head/tail seam via `trimToCompleteTurn` /
+`trimToFirstUserOrSystem` from the same module: a long-thread
+split can otherwise leave a `tool -> user` boundary mid-array
+even on a healthy thread.
+
 ## Schema conventions
 
 `supabase/schema.sql` is the single source of truth. It's applied

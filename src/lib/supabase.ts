@@ -30,6 +30,7 @@ import { isLogLevel, createLogger, type LogLevel } from './logger.svelte';
 const log = createLogger('supabase');
 import type { OpenAIToolCall } from './tools/types';
 import type { Citation, TokenUsage } from './venice';
+import { synthesizeRecoveryMessages } from './conversation-recovery';
 
 // Re-exported so consumers that already pull Message from this module
 // don't also need to import from venice.ts just to type a row.
@@ -552,6 +553,16 @@ export interface Message {
    * web-search augmentation.
    */
   citations?: Citation[] | null;
+  /**
+   * Set to true on rows that `listMessages` synthesized in memory to
+   * repair an interrupted-exchange shape (see
+   * `lib/conversation-recovery.ts`). Synthetic rows ride through the
+   * wire projection like any other row but have no DB id yet — the
+   * chat-loop's send path persists them ahead of the next user turn,
+   * after which subsequent reads see the healed shape and the
+   * synthesizer no-ops. Never written to the DB.
+   */
+  synthetic?: boolean;
 }
 
 export class SupabaseError extends Error {
@@ -3096,7 +3107,14 @@ export class SupabaseService {
         if (m.role === 'user') m.attachments = [];
       }
     }
-    return messages;
+    // Repair an interrupted-exchange tail in memory so every reader -
+    // chat UI, summary worker, journal worker, reflection worker,
+    // recall agents, samskara worker - sees a wire-format-valid
+    // sequence. The synthesized rows ride through the wire projection
+    // like normal rows; the chat-loop's send path persists them ahead
+    // of the next user turn so the DB heals on revisit. See
+    // lib/conversation-recovery.ts for the cases handled.
+    return synthesizeRecoveryMessages(messages);
   }
 
   /**

@@ -22,6 +22,10 @@ import type { SupabaseService, Message } from '../../supabase';
 import type { VeniceClient, VeniceMessage } from '../../venice';
 import type { Toolbox } from '../../tools/types';
 import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
+import {
+  trimToCompleteTurn,
+  trimToFirstUserOrSystem,
+} from '../../conversation-recovery';
 import { VENICE_SUMMARY_MODEL } from '../../models';
 import { SUMMARY_PROMPT } from './prompt';
 
@@ -121,8 +125,17 @@ function condenseHistory(all: Message[]): Message[] {
   if (all.length <= MAX_INPUT_MESSAGES) return all;
   // Take the first 40 and the last 80 — outcomes carry more summary
   // weight than origins, and the middle is dominated by iteration.
-  const head = all.slice(0, 40);
-  const tail = all.slice(-80);
+  //
+  // The naive split lands the seam wherever index 40 / length-80 fall,
+  // which on a tool-using thread can put a `tool` row at the end of
+  // head and a `user` row at the start of tail - the wire then
+  // serialises as `tool -> user`, which providers reject with
+  // "Unexpected role 'user' after role 'tool'". Trim each half to a
+  // safe boundary before concatenating: head ends at a complete turn
+  // (no trailing tool / orphan-tool_calls assistant), tail starts at
+  // a fresh user (or system) row.
+  const head = trimToCompleteTurn(all.slice(0, 40));
+  const tail = trimToFirstUserOrSystem(all.slice(-80));
   return [...head, ...tail];
 }
 

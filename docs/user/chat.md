@@ -161,6 +161,27 @@ turn stay saved. You can continue the conversation as usual; the
 partial reply and any tool results are part of the history the
 next turn sees.
 
+## Recovering an interrupted response
+
+If a response is cut off in a way Nak can't predict (a tab close
+mid-stream, a power loss, or any interruption that left a tool
+result without its follow-up) you'll see one or more **recovery
+messages** when you re-open the conversation:
+
+- A short note like *(The previous response was interrupted before
+  I finished. Picking up from here.)* appears in place of the
+  missing reply.
+- If a tool was mid-run, its row reads *(tool execution was
+  interrupted - no result available)* so the conversation history
+  stays consistent.
+
+These messages stand in for what should have been there. Your
+next message proceeds normally - the model sees the recovery
+notes, knows what happened, and usually acknowledges or re-runs
+the missing tool calls in its reply. The recovery messages are
+saved into the thread on your next send so the conversation reads
+the same way next time you open it.
+
 ## The log drawer
 
 The document-shaped button at the right end of the chat top bar

@@ -67,6 +67,7 @@
     type NewAttachment,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
+  import { isRecoveryMessage } from '$lib/conversation-recovery';
   import {
     saveDraft,
     updateDraftText,
@@ -910,6 +911,50 @@
       updated[existingIdx] = msg;
       messages = updated;
     }
+  }
+
+  /**
+   * Persist any in-memory recovery rows (added by listMessages when
+   * the thread tail was wire-format-invalid) to the DB ahead of the
+   * next user turn. After this runs, the DB tail is healed and
+   * subsequent reads no longer need synthesis - the synthesizer's
+   * idempotency check sees the persisted recovery row and no-ops.
+   *
+   * Race guard: another device may have already healed the same
+   * thread between our read and this send. listMessages always runs
+   * the synthesizer, so we look for a non-synthetic recovery row at
+   * the tail (synthetic=false means it's actually in the DB). When
+   * one exists, adopt the DB view wholesale rather than stacking a
+   * second copy of the recovery rows on top.
+   *
+   * After persisting, we re-fetch and assign messages from scratch
+   * rather than swapping in the persisted rows by id. The realtime
+   * subscriber races our addMessage calls - it fires its own
+   * appendMessage on the INSERT echo, which doesn't see the
+   * synthetic rows (different ids) and would leave duplicates.
+   * A single refetch-and-replace bypasses the race.
+   */
+  async function persistSyntheticRecovery(threadId: string): Promise<void> {
+    if (!app.supabase) return;
+    const synthetics = messages.filter((m) => m.synthetic);
+    if (synthetics.length === 0) return;
+    const beforeWrite = await app.supabase.listMessages(threadId);
+    const persistedRecoveryAtTail = beforeWrite
+      .slice()
+      .reverse()
+      .find((m) => !m.synthetic && isRecoveryMessage(m));
+    if (persistedRecoveryAtTail) {
+      messages = beforeWrite;
+      return;
+    }
+    for (const synth of synthetics) {
+      await app.supabase.addMessage(threadId, synth.role, synth.content, {
+        tool_call_id: synth.tool_call_id ?? undefined,
+        name: synth.name ?? undefined,
+      });
+    }
+    if (activeThreadId !== threadId) return;
+    messages = await app.supabase.listMessages(threadId);
   }
 
   // Insertion ordering across the three buckets is "updated_at desc,
@@ -1784,6 +1829,19 @@
     const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
       .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
       .map((p) => ({ role: 'system' as const, content: p.body }));
+
+    // Heal an interrupted-exchange tail before the new user turn lands.
+    // listMessages added these synthetic rows in memory so the wire
+    // shape was already valid for the prior reads; here we make them
+    // real DB rows so the thread stays valid on every future read.
+    // Best-effort: a persist failure logs and falls through - the
+    // synthetic rows remain in memory for this session and will retry
+    // on the next user send.
+    try {
+      await persistSyntheticRecovery(threadId);
+    } catch (err) {
+      log.warn('persistSyntheticRecovery failed', err);
+    }
 
     let userMessageId: string;
     try {
