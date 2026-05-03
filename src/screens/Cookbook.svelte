@@ -58,8 +58,13 @@
     // When Chat.svelte's top-bar "new recipe" button flips this to true,
     // the panel opens the edit form for a new recipe and resets it.
     triggerNew?: boolean;
+    // Fired when the user closes a recipe and the panel returns to the
+    // empty/list state. The shell uses this to auto-open the sidebar
+    // drawer on mobile so the recipe list (which lives in the drawer
+    // on narrow viewports) is reachable without a swipe gesture.
+    onDeselect?: () => void;
   }
-  let { triggerNew = $bindable(false) }: Props = $props();
+  let { triggerNew = $bindable(false), onDeselect }: Props = $props();
 
   type Pane = 'list' | 'detail' | 'edit';
   // 'list' is the empty/unselected state shown when route.recipe is null.
@@ -191,6 +196,10 @@
       copyFeedback = null;
       lightboxIndex = null;
       clearVersionState();
+      // Browser back / forward / external nav into the empty state -
+      // same shell-side handling as openList(): on mobile, surface
+      // the drawer so the list is reachable.
+      onDeselect?.();
     } else {
       activeId = id;
       pane = 'detail';
@@ -226,6 +235,11 @@
     lightboxIndex = null;
     clearVersionState();
     navigate({ recipe: null });
+    // Tell the shell the recipe was deselected. On mobile, the list
+    // lives in the drawer rather than a persistent column, so the
+    // shell auto-opens the drawer here - otherwise the empty pane
+    // dead-ends until the user swipes or taps the menu.
+    onDeselect?.();
   }
 
   function openNew(): void {
@@ -739,9 +753,13 @@
         <!-- Empty/unselected state. The sidebar RecipeList is the browse
              surface; clicking a recipe there selects it and switches this
              panel to the detail pane. The "+ New recipe" button in the
-             toolbar above is the create entry point. -->
+             toolbar above is the create entry point. On mobile the list
+             lives in a drawer rather than a persistent left column, so
+             the shell auto-opens that drawer when this pane appears
+             (see Cookbook's onDeselect prop) - the wording still works
+             because an open drawer also reads as "the list on the left." -->
         <p class="subtle cookbook-empty-hint">
-          Select a recipe from the sidebar, or click <strong>+ New recipe</strong> above.
+          Select a recipe from the list on the left, or click <strong>+ New recipe</strong> above.
         </p>
       {:else if pane === 'detail'}
         {#if activeRecipe}

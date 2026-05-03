@@ -2730,6 +2730,17 @@
     if (!window.matchMedia('(max-width: 720px)').matches) return;
     drawerOpen = false;
   }
+  // Inverse of the above: the Cookbook panel calls this when the user
+  // closes a recipe and lands on the empty/list pane. On mobile the
+  // recipe list lives in the drawer, so without this the empty pane
+  // dead-ends with no obvious way back to the listing. Desktop keeps
+  // its existing drawerOpen value (the user may have collapsed it on
+  // purpose, and the list is still reachable via the toggle).
+  function openDrawerOnMobile(): void {
+    if (typeof window === 'undefined') return;
+    if (!window.matchMedia('(max-width: 720px)').matches) return;
+    drawerOpen = true;
+  }
 
   // Composer expand toggle. When true, the textarea grows to 40vh so the
   // The composer textarea resizes naturally up to max-height and is
@@ -4844,8 +4855,15 @@
         <!-- Recipe panel. Cookbook.svelte now renders inline - no modal
              wrapper, no list pane. Selecting a recipe is done from the
              sidebar RecipeList. The triggerNew prop wires the top-bar
-             "+ New recipe" button to the panel's openNew() flow. -->
-        <Cookbook bind:triggerNew={cookbookTriggerNew} />
+             "+ New recipe" button to the panel's openNew() flow. The
+             onDeselect callback fires when the panel returns to its
+             empty state (Back, Delete, Escape, browser back) so the
+             shell can auto-expose the recipe list on mobile, where it
+             lives in the drawer rather than a persistent column. -->
+        <Cookbook
+          bind:triggerNew={cookbookTriggerNew}
+          onDeselect={openDrawerOnMobile}
+        />
       {:else}
         <!-- Journal panel. Journal.svelte now renders inline - no modal
              wrapper, no header. Date navigation in the top-bar drives
