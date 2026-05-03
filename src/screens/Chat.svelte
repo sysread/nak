@@ -115,6 +115,7 @@
   import Cookbook from './Cookbook.svelte';
   import RecipeList from '../components/RecipeList.svelte';
   import JournalList from '../components/JournalList.svelte';
+  import MemoryList from '../components/MemoryList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
   import IntuitionCard from '../components/IntuitionCard.svelte';
   import {
@@ -127,6 +128,10 @@
     loadJournalEntries,
   } from '$lib/journal-store.svelte';
   import { onJournalChange } from '$lib/journal-events';
+  import {
+    memoriesStore,
+    runMemoriesSearch,
+  } from '$lib/memories-store.svelte';
   import { todayInZone, shiftDay } from '$lib/journal-day';
   import { moodState } from '$lib/samskara/mood.svelte';
   import { bandIndexFor, columnFor } from '$lib/samskara/events';
@@ -160,7 +165,6 @@
   // explicit per call site.
   const showSettings = $derived(route.modal === 'settings');
   const showHelp = $derived(route.modal === 'help');
-  const showMemories = $derived(route.modal === 'memories');
   const showSamskara = $derived(route.modal === 'samskara');
   const showIntuition = $derived(route.modal === 'intuition');
   // Trigger flags for the recipe and journal "new" top-bar buttons.
@@ -174,16 +178,16 @@
   const journalFocusedDate = $derived(route.journal_date ?? journalToday);
   /**
    * Sidebar drawer tab. Backed by `route.drawer` - absent in the URL
-   * means "chats" (the default). 'recipes' and 'journal' render
-   * their own list in place of the thread list. Tab switches use
-   * replaceState so a tab flip doesn't fill history with UI-chrome
-   * entries.
+   * means "chats" (the default). 'recipes', 'journal', and 'memories'
+   * render their own list in place of the thread list. Tab switches
+   * use replaceState so a tab flip doesn't fill history with
+   * UI-chrome entries.
    */
-  const drawerTab = $derived<'chats' | 'recipes' | 'journal'>(
+  const drawerTab = $derived<'chats' | 'recipes' | 'journal' | 'memories'>(
     route.drawer ?? 'chats'
   );
-  // Recipe and journal search/listing state has moved to the
-  // RecipeList and JournalList sidebar components respectively.
+  // Recipe, journal, and memory search/listing state has moved to the
+  // RecipeList / JournalList / MemoryList sidebar components.
 
   function onPickRecipesTab(): void {
     navigate({ drawer: 'recipes' }, { replace: true });
@@ -198,13 +202,22 @@
 
   // Journal drawer tab. Same shape as onPickRecipesTab - the list
   // is lazy-loaded the first time the tab is opened, and the store
-  // keeps itself fresh via JOURNAL_CHANGE_EVENT. The modal opens
-  // separately (drawer row -> day-focused modal, footer button ->
-  // list-focused modal).
+  // keeps itself fresh via JOURNAL_CHANGE_EVENT.
   function onPickJournalTab(): void {
     navigate({ drawer: 'journal' }, { replace: true });
     if (app.supabase && !journal.loaded && !journal.loading) {
       void loadJournalEntries(app.supabase, { limit: 200 });
+    }
+  }
+
+  // Memories drawer tab. Same lazy-load shape - MemoryList's $effect
+  // fires the first search via the shared `memoriesStore`, but kicking
+  // it on tab-pick lets the panel land on a non-empty list even if the
+  // sidebar is hidden (mobile-first user opens the panel via deep link).
+  function onPickMemoriesTab(): void {
+    navigate({ drawer: 'memories' }, { replace: true });
+    if (app.supabase && !memoriesStore.loaded && !memoriesStore.loading) {
+      void runMemoriesSearch(app.supabase, app.venice);
     }
   }
 
@@ -229,6 +242,16 @@
     if (!app.supabase) return;
     if (journal.loaded || journal.loading) return;
     void loadJournalEntries(app.supabase, { limit: 200 });
+  });
+
+  // Parallel for the memories tab. Same `loaded`-gate rationale as
+  // journal: an account with zero memories would re-fire the load
+  // forever otherwise.
+  $effect(() => {
+    if (route.drawer !== 'memories') return;
+    if (!app.supabase) return;
+    if (memoriesStore.loaded || memoriesStore.loading) return;
+    void runMemoriesSearch(app.supabase, app.venice);
   });
 
   function onJournalStoreChanged(): void {
@@ -3673,13 +3696,28 @@
               onclick={() => onPickJournalTab()}
             >Journal</button>
           </div>
+          <div class="row thread-row">
+            <button
+              type="button"
+              role="tab"
+              class="thread grow"
+              class:active={drawerTab === 'memories'}
+              aria-selected={drawerTab === 'memories'}
+              onclick={() => onPickMemoriesTab()}
+            >Memories</button>
+          </div>
         </div>
-        {#if drawerTab === 'chats'}
-          <!-- Search replaces the old "+ New thread" button — the
-               topbar's `.new-thread-mini` icon (now visible on every
-               viewport, not just mobile) is the primary new-thread
-               affordance. Recipe and journal search live inside their
-               respective listing components below. -->
+      </header>
+      {#if drawerTab === 'chats'}
+      <div class="thread-list">
+        <!-- Conversation search lives below the tab nav and above the
+             thread list, mirroring the search position inside
+             RecipeList / JournalList / MemoryList. The wrapper carries
+             the divider border so the four tabs all read the same:
+             tabs, hr, search, list. The topbar's `.new-thread-mini`
+             icon (visible on every viewport, not just mobile) is the
+             primary new-thread affordance. -->
+        <div class="thread-list-controls">
           <input
             type="search"
             class="sidebar-search-input"
@@ -3688,10 +3726,7 @@
             bind:value={searchQuery}
             onkeydown={onSearchKey}
           />
-        {/if}
-      </header>
-      {#if drawerTab === 'chats'}
-      <div class="thread-list">
+        </div>
         {#snippet threadRow(t: Thread)}
           <div class="row thread-row" data-thread-id={t.id}>
             <button
@@ -3875,11 +3910,16 @@
              panel (no modal). onSelect closes the mobile drawer so the
              newly-navigated panel is visible without a second tap. -->
         <RecipeList onSelect={closeDrawerOnMobile} />
-      {:else}
+      {:else if drawerTab === 'journal'}
         <!-- Journal tab. JournalList owns the search and date rows.
              Clicking a date navigates to that day in the main panel.
              onSelect mirrors the recipe + thread flow on mobile. -->
         <JournalList onSelect={closeDrawerOnMobile} />
+      {:else}
+        <!-- Memories tab. MemoryList owns the search and label rows.
+             Clicking a label scrolls the panel-side card into view.
+             onSelect mirrors the other tabs on mobile. -->
+        <MemoryList onSelect={closeDrawerOnMobile} />
       {/if}
       <footer>
         <div class="subtle" style="margin-bottom:0.4rem;font-size:0.8rem">
@@ -3903,25 +3943,13 @@
               <line x1="12" y1="17" x2="12.01" y2="17" />
             </svg>
           </button>
-          <!-- Memories modal — the human-facing browser for the
-               memory table the reflection/recall agents read and
-               write behind the scenes. See src/screens/Memories.svelte.
-               Uses the Feather "bookmark" glyph so it doesn't collide
-               with the adjacent Cookbook button (which owns the
-               "book" glyph). Semantically a bookmark — a thing
-               you flagged to remember — is closer to a memory than
-               a closed book anyway. -->
-          <button
-            class="secondary icon-btn"
-            onclick={() => navigate({ modal: 'memories' })}
-            title="Memories"
-            aria-label="Memories"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-            </svg>
-          </button>
+          <!-- Memories used to live behind a footer bookmark icon
+               (and a Settings button). Both went away when memories
+               graduated to a sibling drawer tab next to chats /
+               recipes / journal - the Memories tab IS the entry
+               point now. The Cookbook icon below stays because it's
+               a one-tap affordance to the Recipes tab from any
+               panel; the Memories tab covers that role itself. -->
           <button
             class="secondary icon-btn"
             onclick={() => onPickRecipesTab()}
@@ -4084,7 +4112,7 @@
             <span class="title-btn panel-section-label">Recipes</span>
           </div>
 
-        {:else}
+        {:else if drawerTab === 'journal'}
           <!-- Journal top-bar: new-entry + day navigation. Nav order is
                [<] [Today] [>] so the primary forward/back symmetry is
                unbroken with Today nestled in between as the "home" action.
@@ -4128,6 +4156,17 @@
             >›</button>
           </div>
           <div class="title-wrap"></div>
+        {:else}
+          <!-- Memories top-bar. No new-row affordance (memories are
+               written by the reflection agent and the assistant's
+               volitional memory tools, not by direct human compose),
+               and no per-row navigation - editing happens inline on
+               the panel. The label keeps the top-bar visually
+               consistent with Recipes, where a static label sits in
+               the title slot. -->
+          <div class="title-wrap">
+            <span class="title-btn panel-section-label">Memories</span>
+          </div>
         {/if}
       </div>
 
@@ -4922,12 +4961,18 @@
           bind:triggerNew={cookbookTriggerNew}
           onDeselect={openDrawerOnMobile}
         />
-      {:else}
+      {:else if drawerTab === 'journal'}
         <!-- Journal panel. Journal.svelte now renders inline - no modal
              wrapper, no header. Date navigation in the top-bar drives
              route.journal_date, which the panel reads. The triggerNewEntry
              prop wires the top-bar book button to the compose flow. -->
         <Journal bind:triggerNewEntry={journalTriggerNew} />
+      {:else}
+        <!-- Memories panel. Same shape as Cookbook / Journal: inline,
+             no modal chrome. The sidebar MemoryList shares the same
+             `memoriesStore` so a search keystroke filters this list
+             too. Editing happens inline on the cards. -->
+        <Memories />
       {/if}
     </main>
     <!-- Right-edge logs panel. On desktop it's the third grid column
@@ -4966,16 +5011,10 @@
     modal is active so the modal owns the viewport.
   -->
   {#if showSettings}
-    <Settings
-      onClose={() => navigate({ modal: null })}
-      onOpenMemories={() => navigate({ modal: 'memories' })}
-    />
+    <Settings onClose={() => navigate({ modal: null })} />
   {/if}
   {#if showHelp}
     <Help onClose={() => navigate({ modal: null, doc: null })} />
-  {/if}
-  {#if showMemories}
-    <Memories onClose={() => navigate({ modal: null })} />
   {/if}
   {#if showSamskara}
     <Samskara onClose={() => navigate({ modal: null })} />
@@ -4986,6 +5025,7 @@
       threads={loadedThreads}
     />
   {/if}
-  <!-- Cookbook and Journal now render inline in the main panel
-       (drawerTab === 'recipes' / 'journal') rather than as modals. -->
+  <!-- Cookbook, Journal, and Memories now render inline in the main
+       panel (drawerTab === 'recipes' / 'journal' / 'memories') rather
+       than as modals. -->
 {/if}

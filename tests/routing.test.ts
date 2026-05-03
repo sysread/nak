@@ -40,6 +40,17 @@ describe('routing: parseUrl', () => {
     expect(r.drawer).toBeNull();
   });
 
+  it('accepts memories as a drawer tab, not a modal', () => {
+    // Memories used to live behind ?modal=memories. It graduated to a
+    // sibling drawer tab (chats / recipes / journal / memories), so
+    // the URL key flipped and any stale ?modal=memories link parses
+    // back as null rather than re-opening the long-gone modal.
+    const drawer = parseUrl('?drawer=memories');
+    expect(drawer.drawer).toBe('memories');
+    const stale = parseUrl('?modal=memories');
+    expect(stale.modal).toBeNull();
+  });
+
   it('ignores unknown keys (share=pending etc.)', () => {
     const r = parseUrl('?share=pending&cid=abc');
     expect(r.cid).toBe('abc');

@@ -70,19 +70,23 @@ per invocation, at most.
 
 ## Browsing memories directly
 
-Two entry points open the Memories browser:
+The **Memories** tab in the left drawer is the entry point - same
+row of tabs as Chats, Recipes, and Journal. Pick it and the panel
+fills with every memory on your account, most recent first.
 
-- the bookmark icon in the drawer footer, between Help and the
-  Cookbook's book icon
-- the **Browse memories** link in Settings → AI
+The search box at the top of the sidebar runs a semantic match -
+paraphrases and synonyms count, not just substrings - and falls
+back to plain substring search when the embedding service is
+unreachable. Typing into the sidebar filters both the sidebar
+list (label + confidence chip per row) and the panel-side cards
+in lock-step. Click a row in the sidebar to scroll the matching
+card into view on the panel; editing happens inline on the panel
+itself.
 
-The browser lists every memory on your account, most recent first.
-The search box runs a semantic match — paraphrases and synonyms
-count, not just substrings — and falls back to plain substring
-search when the embedding service is unreachable. Each row shows
-the label, the full body, and when it was last touched.
+Each panel-side card shows the label, the full body, the
+confidence tag, and when the memory was last touched.
 
-From the list you can:
+From the panel you can:
 
 - **Edit a memory in place.** Clicking *Edit* swaps the row into
   label + body fields with character counters and an explicit

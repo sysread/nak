@@ -21,9 +21,11 @@ destination:
   (`userName` / `userLocation`, free-form strings injected into
   the per-turn appendix's "User profile" block - opt-in, both
   blank skips the block), system-prompt library, web-search
-  toggle, and a "Browse memories" link to the Memories modal.
-  All preferences persist to `profiles.settings`; the Memories
-  link is pure navigation.
+  toggle, and a prose pointer to the Memories drawer tab.
+  All preferences persist to `profiles.settings`. The Memories
+  pane used to carry a "Browse memories" button that opened the
+  modal; the button went away when memories graduated to a
+  sibling drawer tab (the tab itself is the entry point).
 - **Appearance** — color mode + accent. Live-applies on click
   (no Save button); mirrors to `profiles.settings` (and
   localStorage for the boot script).
@@ -87,21 +89,21 @@ every update) so it's covered here rather than in its own file.
 
 - **Gear button in `Chat.svelte`** — flips `showSettings` to
   true. `Chat.svelte` renders `<Settings onClose={() =>
-  showSettings = false} onOpenMemories={…} />` as a
-  mutually-exclusive phase branch.
+  navigate({ modal: null })} />` as a mutually-exclusive phase
+  branch.
 - **Backdrop click / Escape** — both dismiss. Backdrop
   discriminates by `e.target === e.currentTarget` so clicks
   inside the shell don't trigger close.
 - **AI pane save** — per-pane form submission. Each pane
   calls its own Supabase writer via `app.supabase.updateSettings`.
-- **AI pane → Memories browser** — the "Browse memories" button
-  in the AI pane calls the `onOpenMemories` prop, which Chat
-  wires to `() => { showSettings = false; showMemories = true; }`.
-  This is the only cross-modal handoff in the app — the modals
-  are otherwise mutually exclusive phase branches, so we can't
-  render Memories alongside Settings. The prop is optional so
-  Settings stays independently renderable from tests; when
-  absent the button is hidden.
+- **AI pane → Memories browser** — the AI pane describes the
+  Memories drawer tab in prose and stops there. The pane used
+  to carry a "Browse memories" button that handed off via an
+  `onOpenMemories` prop; both went away when memories
+  graduated to a sibling drawer tab. There is no longer any
+  cross-modal handoff between Settings and Memories - they're
+  on completely separate URL keys (`?modal=settings` vs
+  `?drawer=memories`).
 - **Appearance live-apply** — `onPickMode` /
   `onPickAccent` call `setTheme(mode, accent)` from the state
   store, which updates DOM attributes + cache + reactive

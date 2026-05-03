@@ -3,15 +3,23 @@
  * state that survives a refresh lives in the query string:
  *
  *   cid     = active thread id
- *   drawer  = 'chats' | 'recipes' | 'journal'  (sidebar tab; absent = 'chats')
- *   modal   = 'settings' | 'help' | 'memories' | 'samskara' | 'intuition'  (utility overlays)
+ *   drawer  = 'chats' | 'recipes' | 'journal' | 'memories'  (sidebar tab; absent = 'chats')
+ *   modal   = 'settings' | 'help' | 'samskara' | 'intuition'  (utility overlays)
  *   recipe  = recipe id; selecting one switches the main panel to the recipe detail
  *   doc     = docs/user/ path when modal=help
  *   journal_date = YYYY-MM-DD; selecting one switches the main panel to that day
  *
  * recipe and journal_date are primary content selectors, not sub-params of modal.
- * Recipes and journal entries open inline in the main panel (not as modal overlays).
- * Settings, Help, Memories, and Samskara remain as modal overlays.
+ * Recipes, journal entries, and memories open inline in the main panel (not as
+ * modal overlays). Settings, Help, and Samskara remain as modal overlays.
+ *
+ * Memories used to be a modal. It moved to a drawer tab so the four
+ * primary content surfaces (chats, recipes, journal, memories) all
+ * read as siblings - same tab nav, same sidebar layout, same inline
+ * panel pattern. The Memories tab has no per-row routing key (no
+ * equivalent of `recipe` / `journal_date`); editing happens inline on
+ * the panel-side list, so there is nothing to bookmark beyond the tab
+ * itself.
  *
  * The deploy target is GitHub Pages with no SPA fallback, so path-style
  * routes (/settings, /recipes/<id>) would 404 on refresh. Every routed
@@ -37,8 +45,8 @@
  * owns.
  */
 
-export type Modal = 'settings' | 'help' | 'memories' | 'samskara' | 'intuition';
-export type DrawerTab = 'chats' | 'recipes' | 'journal';
+export type Modal = 'settings' | 'help' | 'samskara' | 'intuition';
+export type DrawerTab = 'chats' | 'recipes' | 'journal' | 'memories';
 
 export interface Route {
   cid: string | null;
@@ -64,11 +72,15 @@ const ROUTED_KEYS = [
 const MODAL_VALUES: readonly Modal[] = [
   'settings',
   'help',
-  'memories',
   'samskara',
   'intuition',
 ];
-const DRAWER_VALUES: readonly DrawerTab[] = ['chats', 'recipes', 'journal'];
+const DRAWER_VALUES: readonly DrawerTab[] = [
+  'chats',
+  'recipes',
+  'journal',
+  'memories',
+];
 
 export const route = $state<Route>({
   cid: null,

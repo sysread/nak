@@ -50,11 +50,25 @@ in `docs/user/memory.md`. The dev side has four moving parts:
 3. **The reader** — the recall agent runs inline during a chat
    turn when the main model invokes the `memory_recall` tool.
    Read-only.
-4. **The browser** — `src/screens/Memories.svelte`, a modal reached
-   from the drawer footer or from the AI settings pane. Wraps the
-   shared `searchMemoriesSemantic` helper plus the `updateMemory` /
-   `deleteMemory` Supabase methods. Human-only; offers hard delete
-   but no invalidate (that stays an agent/assistant affordance).
+4. **The browser** — `src/screens/Memories.svelte` (panel) plus
+   `src/components/MemoryList.svelte` (sidebar) plus
+   `src/lib/memories-store.svelte.ts` (shared rune). Reached as a
+   sibling drawer tab next to chats / recipes / journal; the URL
+   key is `?drawer=memories`. The sidebar owns the search input
+   and a label-only row list; the panel renders the same rows
+   with full inline edit / save / delete / reaffirm / doubt /
+   relate UX. Both surfaces read from the shared store, so
+   sidebar keystrokes filter the panel and panel-side mutations
+   are reflected on the sidebar without a refetch. Wraps the
+   shared `searchMemoriesSemantic` helper plus the `updateMemory`
+   / `deleteMemory` Supabase methods. Human-only; offers hard
+   delete but no invalidate (that stays an agent/assistant
+   affordance).
+
+   History note: this used to be a modal opened from a footer
+   bookmark icon and from a Settings → AI button. Both went
+   away when memories graduated to a sibling tab; the URL key
+   flipped from `?modal=memories` to `?drawer=memories`.
 
 ## Files
 
@@ -88,11 +102,30 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   value (side effects = memory tool calls).
 - `src/lib/tools/recall_toolbox.ts` — the read-only toolbox the
   recall agent uses. Standalone file to break an import cycle.
-- `src/screens/Memories.svelte` — human-facing browser. Calls
-  `searchMemoriesSemantic` for search and
-  `SupabaseService.updateMemory` / `deleteMemory` for edits.
-  Rendered from `Chat.svelte` as a mutually-exclusive phase
-  branch alongside Help/Settings.
+- `src/screens/Memories.svelte` — human-facing browser, panel
+  side. Mounted in the chat shell's main column when the
+  `memories` drawer tab is active; sibling of `Cookbook.svelte`
+  / `Journal.svelte`. Owns the inline edit / save / delete /
+  reaffirm / doubt / relate UX, plus the `+ Relate` candidate
+  picker (debounced semantic search of its own). Reads results
+  and relations from `memoriesStore`; mutations call the
+  store-level helpers (`patchMemoryRow`, `removeMemoryRow`,
+  `addRelationEdge`, `removeRelationEdge`) so the sidebar
+  re-renders without a refetch.
+- `src/components/MemoryList.svelte` — human-facing browser,
+  sidebar side. Search input bound to `memoriesStore.query`
+  with a 200ms debounce around `runMemoriesSearch`. Each row
+  shows `label + classifyMemoryConfidence` chip; clicking a row
+  scrolls the panel-side card into view via
+  `data-memory-id="<id>"` and adds a `.flash` class for one
+  cycle of a CSS keyframe so the jump target is unambiguous.
+- `src/lib/memories-store.svelte.ts` — shared reactive state
+  (`results`, `relations`, `loading`, `loaded`, `error`,
+  `query`) plus `runMemoriesSearch`, `patchMemoryRow`,
+  `removeMemoryRow`, `addRelationEdge`, `removeRelationEdge`.
+  Owns the AbortController for the in-flight semantic search
+  so rapid typing doesn't fire one embedding request per
+  character.
 - `supabase/schema.sql` (memory section + reflection section) —
   table shape, triggers, RLS policies, reflection claim columns
   on `threads`.
@@ -115,13 +148,17 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   do you remember about me?" or "forget that I liked X"; the
   main model calls `memory_search` / `memory_update` /
   `memory_delete` through the normal tool flow.
-- **Memories browser** — drawer-footer bookmark icon or Settings →
-  AI → "Browse memories" flips `showMemories` in `Chat.svelte`.
-  The modal searches via `searchMemoriesSemantic` (same helper
-  the tool uses) and edits via `SupabaseService.updateMemory` /
-  `deleteMemory`. No tool harness involved — the user has their
-  own session-scoped supabase client, so RLS is already in
-  force.
+- **Memories browser** — the **Memories** drawer tab next to
+  chats / recipes / journal. Tab pick navigates to
+  `?drawer=memories` and lazy-loads via `runMemoriesSearch` if
+  the store hasn't fetched yet. Sidebar (`MemoryList.svelte`)
+  owns the search input; panel (`Memories.svelte`) owns the
+  inline edit / delete / reaffirm / doubt / relate UX. Both read
+  the same `memoriesStore`. The store searches via
+  `searchMemoriesSemantic` (same helper the tool uses) and edits
+  via `SupabaseService.updateMemory` / `deleteMemory`. No tool
+  harness involved - the user has their own session-scoped
+  supabase client, so RLS is already in force.
 
 ## Data model
 
@@ -229,13 +266,13 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   inline on the fast tier, the structured output becomes a
   `role='tool'` message, and the main model folds the returned
   note into its reply. The chat screen also owns the
-  `showMemories` phase state and the drawer-footer entry point
-  to the browser. See `./chat.md`.
-- **Settings** — the AI pane carries a "Browse memories" link
-  that hands off via an `onOpenMemories` prop. See
-  `./settings.md`. The link is the only cross-modal handoff in
-  the app today; everything else treats the mutually-exclusive
-  `{:else if}` branches as independent phases.
+  `memories` drawer tab and the `MemoryList` / `Memories` panel
+  pair that render against the shared `memoriesStore`. See
+  `./chat.md`.
+- **Settings** — the AI pane describes the Memories tab in
+  prose so the user knows where to find the browser; there is
+  no longer a button there (the tab is the entry point). See
+  `./settings.md`.
 - **Tools** — the five memory tools live in the registry
   (`tools/index.ts`). Reflection uses `memoryToolbox` (a
   write-scoped subset: search + create + update + invalidate,

@@ -1240,6 +1240,29 @@ h1 {
   flex: 1;
   overflow: auto;
   padding: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Search row for the chats tab. Mirrors `.recipe-list-controls` and
+   `.memory-list-controls` so all four drawer tabs read the same:
+   tabs in the header, hr-line via this border, search input, list
+   rows below. The negative margins cancel out `.thread-list`'s
+   0.25rem padding so the divider runs edge-to-edge with the tab nav
+   above and the search bar below. */
+.thread-list-controls {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  padding: 0.4rem 0.6rem;
+  margin: -0.25rem -0.25rem 0.25rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.thread-list-controls .sidebar-search-input {
+  flex: 1;
+  min-width: 0;
 }
 
 .thread {
@@ -1412,10 +1435,14 @@ h1 {
   color: var(--muted);
 }
 
-/* Drawer header owns the search input instead of the old
-   "+ New thread" button. No bottom border — the search field's own
-   background gives enough visual separation from the thread list,
-   and the divider read as noisy chrome. */
+/* Drawer header. Holds only the tab nav now; the per-tab search
+   input lives in the listing area below (.thread-list-controls /
+   .recipe-list-controls / .memory-list-controls / JournalList's
+   .journal-list-search) so all four tabs read consistently:
+   tabs at top, hr-line, search, list. Each *-controls wrapper
+   carries the divider via its own `border-bottom`, which is why the
+   header itself doesn't draw one - doubling the line read as noisy
+   chrome. */
 .sidebar-header {
   padding: 0.55rem 0.6rem;
 }
