@@ -415,7 +415,7 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
     sample_situations: recent.slice(0, 5).map((r) => r.situation),
     reinforcement: recent.length,
   };
-  log.debug('mint-tier1: asking agent', { substrateCount: recent.length });
+  log.trace('mint-tier1: asking agent', { substrateCount: recent.length });
   const minted = await ctx.agent.mint(cluster, ctx.signal);
   if (!minted) {
     log.trace('mint-tier1: agent declined');
@@ -456,7 +456,7 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
         substrateIds,
         MINT_DEDUP_HEALTH_BUMP
       );
-      log.info('mint-tier1: dedup-reinforced existing', {
+      log.debug('mint-tier1: dedup-reinforced existing', {
         id: nearest[0].id,
         cosine: nearest[0].cosine,
         candidate: shorten(minted.prediction),
@@ -785,7 +785,7 @@ async function runDedupPhase(ctx: CycleContext): Promise<CycleResult> {
     log.trace('dedup: nothing to collapse');
     return 'empty-phase';
   }
-  log.info('dedup: collapsed samskaras', { collapsed });
+  log.debug('dedup: collapsed samskaras', { collapsed });
   return 'progress';
 }
 
