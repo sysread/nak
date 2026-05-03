@@ -1596,22 +1596,31 @@ describe('runChatLoop', () => {
   });
 
   // ---------------------------------------------------------------
-  // Title-rename appendix.
+  // Title-rename directives.
   //
-  // The chat loop injects a per-turn note into the system-prompt
-  // appendix telling the model when to call the `update_title` tool.
-  // Observed failure: on placeholder-title threads the model would
-  // often skip the rename for several turns in a row, leaving the
-  // drawer labelled "New conversation" despite clear topics being
-  // introduced. The tests below pin the behaviour that addresses it:
+  // The chat loop nags the model to call `update_title` in two shapes,
+  // weighted very differently and delivered through different
+  // channels:
   //
-  //   - Placeholder state fires an imperative "required this turn"
-  //     block so the model treats the rename as mandatory.
-  //   - A manually-set title suppresses the block entirely (once the
-  //     user commits to a title, the model must not clobber it).
-  //   - A real, model-set title fires the terse topic-shift note.
-  //   - The appendix ends with the title block (closest to the user
-  //     turn), where instruction-following is strongest.
+  //   - Placeholder ("New conversation"): a `role: 'system'` message
+  //     appended at the END of `requestMessages`, after the user turn
+  //     and any tool-result rows on later rounds. Position chosen for
+  //     maximum instruction-following weight; the earlier system-
+  //     prompt-appendix placement still let the model skip the rename
+  //     across several turns when the directive sat in front of (often
+  //     a long) `history`.
+  //   - Real model-set title: a terse "rename if the topic shifted"
+  //     one-liner in the system-prompt appendix. Low urgency, low
+  //     positional weight - fires every non-placeholder turn and is
+  //     almost always a no-op.
+  //   - Manually-set title: nothing on either channel. Once the user
+  //     commits to a title, the model must not clobber their choice.
+  //
+  // Observed failure that motivated splitting the channels: on
+  // placeholder-title threads the model would often answer the user
+  // directly without renaming, leaving the drawer labelled "New
+  // conversation" despite clear topics being introduced. Moving the
+  // directive past the user turn closes the gap.
   // ---------------------------------------------------------------
 
   function firstSystemPrompt(seen: ChatRequest[]): string {
@@ -1622,7 +1631,28 @@ describe('runChatLoop', () => {
     return sys.content;
   }
 
-  it('injects a required-this-turn title block when the thread is still the placeholder', async () => {
+  /**
+   * Pull the trailing post-user-turn system reminder out of the first
+   * captured request, or null when no such message was appended. The
+   * placeholder reminder is delivered as the final `role: 'system'`
+   * message AFTER the user turn, so finding it means walking from the
+   * end - the first/baseline system prompt is also `role: 'system'`
+   * but lives at index 0.
+   */
+  function trailingTitleReminder(seen: ChatRequest[]): string | null {
+    const msgs = seen[0].messages;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role !== 'system') break;
+      if (typeof m.content !== 'string') continue;
+      if (m.content.includes('Required this turn: title this conversation')) {
+        return m.content;
+      }
+    }
+    return null;
+  }
+
+  it('appends a required-this-turn title reminder system message after the user turn when the thread is still the placeholder', async () => {
     const seen: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1640,25 +1670,53 @@ describe('runChatLoop', () => {
       history: [{ role: 'user', content: 'help me with python decorators' }],
       signal: new AbortController().signal,
     });
+    // The reminder must NOT live in the baseline system prompt - that
+    // was the prior placement and the position the new design moves
+    // away from. Putting it anywhere ahead of `history` lets the model
+    // skip the rename on long threads where the directive ends up
+    // buried above many user/assistant turns.
     const prompt = firstSystemPrompt(seen);
-    expect(prompt).toContain('## Required this turn: title this conversation');
-    expect(prompt).toContain('`update_title`');
-    expect(prompt).toContain('New conversation');
-    // The instruction has to land as mandatory, not as a suggestion -
+    expect(prompt).not.toContain('Required this turn: title this conversation');
+
+    // The reminder lands as a trailing `role: 'system'` message so the
+    // model reads it after the user's actual words, where instruction-
+    // following is strongest.
+    const reminder = trailingTitleReminder(seen);
+    expect(reminder).not.toBeNull();
+    expect(reminder).toContain('## Required this turn: title this conversation');
+    expect(reminder).toContain('`update_title`');
+    expect(reminder).toContain('New conversation');
+    // The instruction has to land as mandatory, not a suggestion -
     // the earlier "before responding, call the tool..." phrasing
     // produced a skip rate high enough that threads routinely stayed
     // on the placeholder for several turns.
-    expect(prompt).toContain('This is not optional');
+    expect(reminder).toContain('This is not optional');
+
+    // Position check: the reminder is the final message in the
+    // request. Anything between the user turn and the reminder
+    // weakens the signal.
+    const msgs = seen[0].messages;
+    expect(msgs[msgs.length - 1].role).toBe('system');
+    expect(msgs[msgs.length - 1].content).toBe(reminder);
+    // And the user turn comes before it - i.e. the reminder really
+    // does sit "after the user prompt" rather than at index 0.
+    const lastUserIdx = msgs
+      .map((m, i) => ({ role: m.role, i }))
+      .filter((x) => x.role === 'user')
+      .at(-1)?.i;
+    expect(lastUserIdx).toBeDefined();
+    expect(lastUserIdx!).toBeLessThan(msgs.length - 1);
   });
 
-  it('omits the title block entirely when the user has manually named the thread', async () => {
+  it('omits the title directives entirely when the user has manually named the thread', async () => {
     // title_manually_set=true is the sticky flag commitRename flips
     // in Chat.svelte. Once the user has committed to a title, the
     // chat loop must stop asking the model to rename it - otherwise
     // the model could clobber the user's choice. The `update_title`
     // tool stays in the always-on catalog (no harm; model won't call
-    // it without the instruction), but the prompt-level suppression
-    // is the real gate.
+    // it without the instruction), but suppressing both prompt
+    // channels (the appendix one-liner AND the trailing reminder) is
+    // the real gate.
     const seen: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1680,24 +1738,29 @@ describe('runChatLoop', () => {
     // The per-turn rename directives must be gone - neither the
     // placeholder-case "required this turn" block nor the non-
     // placeholder "call update_title if the topic shifted" line
-    // should reach the model on a manually-named thread.
+    // should reach the model on a manually-named thread, on either
+    // channel.
     expect(prompt).not.toContain('Required this turn');
     expect(prompt).not.toContain('meaningfully shifted');
     expect(prompt).not.toContain('Current conversation title');
     // The current title itself must not appear - the model has no
     // business even knowing what it is for the purpose of renaming.
     expect(prompt).not.toContain('Python decorators');
+    // The trailing reminder channel must also stay silent.
+    expect(trailingTitleReminder(seen)).toBeNull();
     // The `update_title` tool name still appears in the always-on
     // catalog listing (we leave the tool available; cheap no-op if
     // the model calls it), so don't assert on the bare tool name.
   });
 
-  it('injects the short topic-shift note when the thread already has a model-set title', async () => {
+  it('injects the short topic-shift note in the system-prompt appendix when the thread already has a model-set title', async () => {
     // Non-placeholder + not-manually-set: a title the model already
     // picked. The appendix keeps a terse one-liner so the model can
     // rename on a real topic shift, but deliberately low-weight - it
     // fires on every turn and we don't want to pay tokens or prompt
-    // pressure for what is almost always a no-op.
+    // pressure for what is almost always a no-op. This case does NOT
+    // get a trailing post-user reminder; only the placeholder case
+    // earns that.
     const seen: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1720,49 +1783,10 @@ describe('runChatLoop', () => {
     expect(prompt).toContain('update_title');
     expect(prompt).toContain('meaningfully shifted');
     // The "required this turn" block is only for the placeholder
-    // case; non-placeholder turns must not carry it.
+    // case; non-placeholder turns must not carry it - on either
+    // channel.
     expect(prompt).not.toContain('Required this turn');
-  });
-
-  it('places the title block at the end of the system prompt so it sits closest to the user turn', async () => {
-    // Ordering matters for instruction-following: when the title
-    // directive was buried above the samskara Calibration/Fire
-    // sections, the model would often gloss over it and answer the
-    // user directly. The appendix now ends with the title block so
-    // the "required this turn" directive is the last thing the model
-    // reads before the user message.
-    const seen: ChatRequest[] = [];
-    const venice = {
-      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
-        seen.push(req);
-        yield { type: 'text', delta: 'ok' };
-      },
-    } as unknown as VeniceClient;
-    const { svc } = mockSupabase({
-      // Return non-empty samskara priming so we can check that the
-      // title block comes after it rather than before. The cached
-      // row shape is {summary, lastRegenAt}; a recent lastRegenAt
-      // keeps getCompoundSummary from filtering the row as stale.
-      samskaraGetCompoundSummary: vi.fn(async () => ({
-        summary: 'Calibrated prose about the user.',
-        lastRegenAt: new Date().toISOString(),
-      })),
-    });
-    await runChatLoop({
-      venice,
-      supabase: svc,
-      thread: mkThread({ title: 'New conversation', title_manually_set: false }),
-      userId: 'u-1',
-      modelId: 'm',
-      history: [{ role: 'user', content: 'hello' }],
-      signal: new AbortController().signal,
-    });
-    const prompt = firstSystemPrompt(seen);
-    const samskaraIdx = prompt.indexOf('Calibrated prose about the user');
-    const titleIdx = prompt.indexOf('## Required this turn');
-    expect(samskaraIdx).toBeGreaterThan(-1);
-    expect(titleIdx).toBeGreaterThan(-1);
-    expect(titleIdx).toBeGreaterThan(samskaraIdx);
+    expect(trailingTitleReminder(seen)).toBeNull();
   });
 
   describe('intuition wiring', () => {

@@ -119,67 +119,80 @@ const USER_MSG_CLOSE = '</user_message>';
 const DEFAULT_THREAD_TITLE = 'New conversation';
 
 /**
- * Per-turn note fed to the model via the system-prompt appendix so it
- * can decide whether to call the `update_title` tool. Two shapes,
- * weighted very differently:
+ * Low-urgency topic-drift nudge fed to the model via the system-prompt
+ * appendix. Fires only on threads that already have a real,
+ * model-picked title and where the user has not manually committed to
+ * one - i.e. the case where renaming is a maybe rather than a must.
+ * Kept terse because it rides every non-placeholder, non-manual turn
+ * and is almost always a no-op; we don't want to pay tokens or prompt
+ * weight for what amounts to a passive reminder that the tool exists.
  *
- *   - Placeholder title ("New conversation"): the model MUST call
- *     update_title this turn. Earlier phrasing ("before responding,
- *     call the update_title tool...") was too soft and the model
- *     routinely skipped the rename in favour of just answering the
- *     user, leaving threads stuck on the placeholder across several
- *     turns even after clear topics had been introduced. The
- *     placeholder shape uses an imperative markdown header, labels
- *     the action "required this turn", and spells out the observable
- *     failure mode so the model treats it as a hard requirement
- *     rather than a nudge it can skip. The block is also placed last
- *     in the appendix (see appendixParts in runChatLoop) so it sits
- *     closest to the user turn - the position where instruction-
- *     following is strongest.
- *   - Real title: a terse one-liner telling the model to rename only
- *     on a meaningful topic shift. Kept short because it fires on
- *     every non-placeholder turn and we don't want to pay tokens or
- *     prompt weight for what is almost always a no-op.
+ * The placeholder case is NOT handled here - it lands as a separate
+ * post-user system message via `buildTitleReminderMessage` below.
+ * Putting an imperative "you must do X this turn" directive into the
+ * baseline system prompt buries it above every later message in
+ * `history`, and the model's instruction-following weakens with
+ * distance from the generation point. A trailing system message lands
+ * after the user's actual turn (and after any tool-result rows on
+ * later rounds), which is the strongest position available.
  *
- * The placeholder block uses a markdown `##` header rather than
- * `<note>` tags. The tag form was considered and rejected: a user
- * typing `</note>` in their own message could escape the block and
- * inject instructions. A header is imperfect too (a user could paste
- * a matching `##` line) but the exploit requires more intent, and
- * the worst case is a bad title rather than arbitrary prompt
- * injection.
- *
- * Returns null when the user has manually renamed the thread - once
- * they've committed to a title, we stop asking the model to touch it.
- * The `update_title` tool stays in the always-on catalog either way
- * (cheap to leave available; model won't call it without the
- * instruction), but the prompt-level suppression is the real gate.
+ * Returns null when the user has manually renamed the thread (so the
+ * model never gets prompted to clobber a deliberate user choice) and
+ * also when the title is still the placeholder (the post-user
+ * reminder covers that case instead).
  */
-function buildTitleNote(thread: Thread): string | null {
+function buildTitleAppendixNote(thread: Thread): string | null {
   if (thread.title_manually_set) return null;
-  const isPlaceholder = thread.title === DEFAULT_THREAD_TITLE;
-  if (isPlaceholder) {
-    return [
-      '## Required this turn: title this conversation',
-      '',
-      `The thread title is still the "${DEFAULT_THREAD_TITLE}"`,
-      'placeholder. Before generating any reply to the user, call the',
-      '`update_title` tool with a concise 3-6 word title describing',
-      'what the user is actually asking about. If the opening message',
-      'is a greeting or pleasantry, look past it to the real topic of',
-      'the conversation - infer it from their message and from the',
-      'reply you are about to write.',
-      '',
-      'This is not optional. Until you call `update_title`, the thread',
-      "stays labelled as the placeholder in the user's conversation",
-      'drawer - which is a visible bug. No trailing punctuation, no',
-      'quotes, plain text.',
-    ].join('\n');
-  }
+  if (thread.title === DEFAULT_THREAD_TITLE) return null;
   return [
     `Current conversation title: "${thread.title}". If the topic has`,
     'meaningfully shifted, call `update_title` with a better 3-6 word',
     'title. Cosmetic drift is not a reason to rename.',
+  ].join('\n');
+}
+
+/**
+ * Build the post-user-turn system message that nags the model into
+ * calling `update_title` when the thread still carries the
+ * "New conversation" placeholder. Returns null on placeholder-free
+ * threads (nothing to nag about) and on manually-named threads (user
+ * already committed; the model must not clobber their choice).
+ *
+ * Why a separate system message instead of a system-prompt appendix
+ * block: the earlier appendix-based placement still let the model
+ * skip the rename for several turns in a row when the directive sat
+ * in front of (often a long) `history`. Appending a `role: 'system'`
+ * message at the END of the request payload puts the directive after
+ * the user's actual words this turn (and after any tool-result rows
+ * on later rounds), where instruction-following is strongest.
+ *
+ * The block uses a markdown `##` header rather than `<note>` tags. The
+ * tag form was considered and rejected: a user typing `</note>` in
+ * their own message could escape the block and inject instructions. A
+ * header is imperfect too (a user could paste a matching `##` line),
+ * but the exploit requires more intent, and the worst case is a bad
+ * title rather than arbitrary prompt injection. The reminder is
+ * delivered with `role: 'system'`, so a user-typed `##` in the prior
+ * turn lives inside `role: 'user'` and won't merge into this block.
+ */
+function buildTitleReminderMessage(thread: Thread): string | null {
+  if (thread.title_manually_set) return null;
+  if (thread.title !== DEFAULT_THREAD_TITLE) return null;
+  return [
+    '## Required this turn: title this conversation',
+    '',
+    `The thread title is still the "${DEFAULT_THREAD_TITLE}"`,
+    'placeholder. Before generating any reply to the user, call the',
+    '`update_title` tool with a concise 3-6 word title describing',
+    'what the user is actually asking about. If the opening message',
+    'is a greeting or pleasantry, look past it to the real topic of',
+    'the conversation - infer it from their message and from the',
+    'reply you are about to write.',
+    '',
+    'This is not optional. Until you call `update_title`, the thread',
+    "stays labelled as the placeholder in the user's conversation",
+    'drawer - which is a visible bug. No trailing punctuation, no',
+    'quotes, plain text.',
   ].join('\n');
 }
 
@@ -996,34 +1009,28 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       )
     ),
   ]);
-  // The title note and the samskara block are both per-turn appendices
-  // to the baseline system prompt. Concatenate with a blank-line spacer
-  // when both are present so the model sees them as distinct sections
-  // rather than one run-on block. Either can be empty - the note is
-  // null when the user has manually renamed (no instruction to inject),
-  // samskara is empty on cold-start or timeout - and the filter+join
-  // handles any combination cleanly.
-  //
-  // Order: samskara priming first, title note last. The title note's
-  // placeholder shape is a "you must act this turn" directive that
-  // benefits from being the closest block to the user turn, where the
-  // model's instruction-following is strongest. Burying it above the
-  // samskara Calibration/Fire sections (as the previous order did)
-  // made the model gloss over the rename and answer the user directly,
-  // leaving threads parked on "New conversation" across several turns.
-  const titleNote = buildTitleNote(thread);
+  // The title appendix note is the soft "rename if the topic shifted"
+  // one-liner for threads that already carry a real title. It sits in
+  // the system prompt as the lowest-priority block. The placeholder
+  // case (loud "required this turn" directive) is handled separately
+  // as a `role: 'system'` message appended after the user turn in the
+  // round loop below - that position is closer to the generation point
+  // than anything in the appendix can be. Null on placeholder + on
+  // manually-named threads.
+  const titleNote = buildTitleAppendixNote(thread);
+  // Pre-compute the placeholder reminder once. It rides every round
+  // until the chat loop returns - including rounds after the model
+  // already called `update_title` - matching the same persist-across-
+  // rounds behaviour the appendix-based directive had before.
+  const titleReminder = buildTitleReminderMessage(thread);
   // Emphasis blurb slots between samskara priming and the title
-  // note: it's ambient voice tuning (less urgent than the title
-  // directive, which needs to sit closest to the user turn) but
-  // not per-user context (samskara priming carries the user
-  // profile and belongs at the top of the appendix). Null when the
-  // setting is off so the filter below skips it cleanly.
+  // note: ambient voice tuning, less urgent than the title nag.
+  // Null when the setting is off so the filter below skips it cleanly.
   const emphasisNote = emphasisMarkdown ? buildEmphasisNote() : null;
-  // Today's Journal block sits between the samskara priming and
-  // the emphasis/title nudges: it's user-specific context (belongs
-  // with samskara) but not urgent (title note stays closest to the
-  // user turn). Null on mid-thread turns or when no automatic entry
-  // exists yet.
+  // Today's Journal block sits between the samskara priming and the
+  // emphasis/title nudges: user-specific context (belongs with
+  // samskara) but not urgent. Null on mid-thread turns or when no
+  // automatic entry exists yet.
   const journalNote = buildJournalNote(priming.journalEntry);
   // User profile block: rendered first in the appendix so the model
   // sees who it's talking to before any of the ambient priming
@@ -1172,18 +1179,31 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           // model will actually see on the wire this round.
           enabledToolboxes: toolboxesEnabled,
           // Per-turn appendix - pre-computed before the round loop so
-          // every round sees the same block. Concatenates (in order):
-          // the samskara compound + fire block, and the title note
-          // (buildTitleNote above, guiding `update_title` tool calls).
-          // Title goes last so its "required this turn" directive is
-          // the closest block to the user turn. Empty string when
-          // both are absent (manually-named thread with no samskaras,
-          // cold start, or priming timeout).
+          // every round sees the same block. Carries low-urgency
+          // ambient context (user profile, samskara priming, today's
+          // journal, attachments, emphasis nudge, topic-drift title
+          // hint). Empty string when none apply (cold-start manually-
+          // named thread, priming timeout). The placeholder title
+          // directive is NOT here - it lands as a trailing
+          // `role: 'system'` message below so the model reads it after
+          // the user turn rather than buried in the system prompt.
           promptAppendix: promptAppendix,
         }),
       },
       ...projectedHistory,
     ];
+    // Trailing system reminder for placeholder-titled threads. The
+    // earlier appendix-based placement still let the model skip the
+    // rename when the directive sat in front of (often a long)
+    // `history`; appending here puts it past the user's words this
+    // turn (and past any tool-result rows on later rounds), where the
+    // model's instruction-following is strongest. Null on manually-
+    // named threads and on threads that already have a model-set
+    // title - both cases are covered upstream by buildTitleReminder
+    // returning null.
+    if (titleReminder) {
+      requestMessages.push({ role: 'system', content: titleReminder });
+    }
 
     const stream = venice.streamChat({
       model: modelId,
