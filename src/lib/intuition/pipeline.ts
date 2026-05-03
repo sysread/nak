@@ -191,7 +191,11 @@ export async function runIntuitionPipeline(
     return null;
   }
 
-  // Stage 1: perception.
+  // Stage 1: perception. The cap is generous for a 2-3 sentence
+  // ask plus the classification prefix line; a routine turn lands
+  // around 80-150 tokens. The headroom exists so a model hitting
+  // an unusual situation can write a longer paragraph without
+  // truncating mid-thought.
   let perceptionRaw: string;
   try {
     perceptionRaw = await callOnce(
@@ -200,7 +204,7 @@ export async function runIntuitionPipeline(
       PERCEPTION_PROMPT,
       transcript,
       signal,
-      500
+      300
     );
   } catch (err) {
     if (err instanceof VeniceError && err.kind === 'rate_limit') {
@@ -224,13 +228,18 @@ export async function runIntuitionPipeline(
     async (name): Promise<[DriveName, string | null]> => {
       const systemPrompt = `${DRIVE_BASE_PROMPT}\n\n${DRIVE_PROMPTS[name]}`;
       try {
+        // 250 tokens fits the 2-3 sentence default with a buffer for
+        // the alarmed-drive case where it earns the air to push
+        // harder. Lower than perception/synthesis because each drive
+        // speaks in one voice; only the synthesis stage needs to
+        // weave multiple threads together.
         const text = await callOnce(
           venice,
           model,
           systemPrompt,
           `# My perception of the discussion:\n${perception}`,
           signal,
-          400
+          250
         );
         if (text.length === 0) return [name, null];
         log.debug(`drive:${name}`, { reaction: text });
@@ -275,7 +284,12 @@ export async function runIntuitionPipeline(
         { role: 'user', content: `# Perception\n${perception}` },
         { role: 'assistant', content: drivesText },
       ],
-      maxTokens: 500,
+      // 300 tokens fits the 2-3 sentence target with headroom for
+      // the strong-convergence case where the synthesis legitimately
+      // needs to push harder. Anything tighter risks clipping a
+      // genuinely-loud aggregate; anything looser invites the model
+      // to ramble even though the prompt asks it not to.
+      maxTokens: 300,
       // Same rationale as callOnce above - the fast tier is a
       // reasoning model and we cannot afford to spend the maxTokens
       // budget on a CoT preamble that never reaches the content

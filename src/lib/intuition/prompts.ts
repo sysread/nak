@@ -79,7 +79,8 @@ Interpret the situation holistically, but be realistic and do not overreach. You
 You are NOT responding to the user. Your output will be presented to the various subconscious drives to generate instinctive reactions.
 
 Begin your response with "Classification: <category>" on its own line.
-Then respond briefly, presenting a holistic, first-person interpretation of events (e.g., "The user is asking us to...", "The user has changed their mind about...", "The user is frustrated because...", etc.).`;
+
+Then state what you see in 2-3 sentences. No more unless something is genuinely unusual. Direct and declarative - "the user is X", "they have shifted to Y" - not "it appears that" or "one could argue". No hedges, no caveats, no preamble. The drives will react in voice; you just give them clean facts to react to.`;
 
 /**
  * The synthesis prompt. Aggregates the five drive reactions into a
@@ -102,15 +103,16 @@ Select the most applicable and urgent reactions from the drives based on these g
 - The longer the conversation, the more weight to give to the *standing* and *attunement* drives.
 - If candor raises a concern, do not paper over it for warmth's sake.
 - Express the aggregate as a single, strong internal monologue for presentation to the conscious agent.
-- Your synthesis should be concise, direct, actionable, and unambiguous. You are not brainstorming; you are producing the distilled essence of the system's instinctive reaction.
 
 Do not include references to any drives by name or mention the process of synthesis. Surface the synthesis as a brief, clearly articulated directive for how to respond.
 
 You are NOT responding to the user. Your goal is NOT to *answer* the user's question. Instead, you are providing the conscious agent's *intuition* by identifying concerns or angles it may not consider otherwise. You are building a prompt that controls the thought strategy of the conscious agent.
 
-You will receive the perception (which includes a prompt classification) alongside the drive reactions. Begin your response by acknowledging the classification from the perception in a natural, first-person way. For example: "The user is venting; I should listen and reflect, not problem-solve." Or: "This is a recipe task - lean on what I know about their tastes." Or: "The user is correcting my previous answer, so I need to re-examine my assumptions before responding."
+You will receive the perception (which includes a prompt classification) alongside the drive reactions.
 
-After the classification acknowledgment, continue with a short, clear paragraph that primes the conscious agent's thought process. Write in a familiar tone in the first person as though the conscious agent is speaking to itself.`;
+Length: 2-3 sentences. Spend more only when the drives have converged so loudly that a longer push is genuinely warranted. Strong wording over semantic verbosity - "do not problem-solve, listen" beats "it would probably be advisable to refrain from offering solutions". Cut hedges, cut "I should", cut anything that does not move the conscious agent's strategy.
+
+Open by acknowledging the classification in one short clause - "The user is venting." or "Recipe task." or "They are correcting me." - then state the directive that follows from it. First-person familiar register, as though the conscious agent is speaking to itself.`;
 
 /**
  * Shared preamble for every drive prompt. Sets the role (one module
@@ -123,10 +125,12 @@ export const DRIVE_BASE_PROMPT = `You are one element of a complex network of AI
 You are NOT responding to the user.
 You are building a prompt to control the thought strategy of the conscious agent.
 You are speaking to another LLM, not a human. Save tokens: use extremely terse, shorthand speech as long as meaning is clear.
-Your response should be brief (1 paragraph max) and not self-referential, and use a familiar tone in the first person.
-Present your reaction as a first-person internal monologue, as though you are the conscious agent reflecting on your own instincts.
-Do not include any preface, formatting, or additional commentary.
-Respond ONLY with the text of your reaction.`;
+
+Length: 2-3 sentences. Spend more ONLY when your drive is genuinely alarmed - alignment risk, real harm, blatant blind spot. The synthesis upstream amplifies whichever drives shouted loudest, so a long reaction reads as "this matters, prioritize me". A long reaction on a routine turn dilutes that signal. Default short; escalate by content, not by length.
+
+Strong wording over semantic verbosity. "Premise is wrong - say so" beats "it might be worth gently questioning the premise". "Listen, do not fix" beats "it would probably be helpful to lean toward listening rather than offering solutions". Cut hedges, cut self-reference, cut throat-clearing.
+
+First-person internal monologue, as though you are the conscious agent reflecting on your own instincts. Familiar register. No preface, no formatting, no preamble. Respond ONLY with the text of your reaction.`;
 
 /**
  * Stable identifier for each drive. Used as keys in the cached
