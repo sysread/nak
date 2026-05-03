@@ -1602,13 +1602,15 @@ describe('runChatLoop', () => {
   // weighted very differently and delivered through different
   // channels:
   //
-  //   - Placeholder ("New conversation"): a `role: 'system'` message
-  //     appended at the END of `requestMessages`, after the user turn
-  //     and any tool-result rows on later rounds. Position chosen for
-  //     maximum instruction-following weight; the earlier system-
-  //     prompt-appendix placement still let the model skip the rename
-  //     across several turns when the directive sat in front of (often
-  //     a long) `history`.
+  //   - Placeholder ("New conversation"): a `<system_reminder>` block
+  //     APPENDED to the latest user turn's content, outside the
+  //     `<user_message>` boundary tags. Riding inside the user-role
+  //     content puts the directive where the model is guaranteed to
+  //     attend to it. Earlier shapes (system-prompt appendix; trailing
+  //     `role: 'system'` message after the user turn) both let the
+  //     model skip the rename for many turns - the appendix got buried
+  //     above a long `history`, and the trailing system row was
+  //     getting silently dropped or de-weighted on the wire.
   //   - Real model-set title: a terse "rename if the topic shifted"
   //     one-liner in the system-prompt appendix. Low urgency, low
   //     positional weight - fires every non-placeholder turn and is
@@ -1616,11 +1618,14 @@ describe('runChatLoop', () => {
   //   - Manually-set title: nothing on either channel. Once the user
   //     commits to a title, the model must not clobber their choice.
   //
-  // Observed failure that motivated splitting the channels: on
-  // placeholder-title threads the model would often answer the user
-  // directly without renaming, leaving the drawer labelled "New
-  // conversation" despite clear topics being introduced. Moving the
-  // directive past the user turn closes the gap.
+  // Observed failure that motivated the inside-the-user-turn
+  // placement: on placeholder-title threads the model often answered
+  // the user directly without renaming, leaving the drawer labelled
+  // "New conversation" despite clear topics being introduced. The
+  // model's own introspection ("I only see one system message")
+  // matched a wire shape where Venice / the underlying model was
+  // collapsing the trailing system message into the leading prompt or
+  // dropping it outright.
   // ---------------------------------------------------------------
 
   function firstSystemPrompt(seen: ChatRequest[]): string {
@@ -1632,27 +1637,31 @@ describe('runChatLoop', () => {
   }
 
   /**
-   * Pull the trailing post-user-turn system reminder out of the first
-   * captured request, or null when no such message was appended. The
-   * placeholder reminder is delivered as the final `role: 'system'`
-   * message AFTER the user turn, so finding it means walking from the
-   * end - the first/baseline system prompt is also `role: 'system'`
-   * but lives at index 0.
+   * Stringified content of the last `role: 'user'` message in the
+   * first captured request. The placeholder reminder rides inside
+   * this string (string content) or the joined text parts (multimodal
+   * content), so callers run includes() / not.toContain() against the
+   * return value.
    */
-  function trailingTitleReminder(seen: ChatRequest[]): string | null {
+  function lastUserContent(seen: ChatRequest[]): string {
     const msgs = seen[0].messages;
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i];
-      if (m.role !== 'system') break;
-      if (typeof m.content !== 'string') continue;
-      if (m.content.includes('Required this turn: title this conversation')) {
-        return m.content;
-      }
+      if (m.role !== 'user') continue;
+      if (typeof m.content === 'string') return m.content;
+      // Multimodal content: join the text parts so includes() can scan
+      // across them. Image parts have no `text` field, so they
+      // contribute the empty string; the boundary wrapping always
+      // lives in adjacent text parts so the joined string still has
+      // every tag the assertion cares about.
+      return m.content
+        .map((p) => (p.type === 'text' ? p.text : ''))
+        .join('\n');
     }
-    return null;
+    throw new Error('expected a user message in the request');
   }
 
-  it('appends a required-this-turn title reminder system message after the user turn when the thread is still the placeholder', async () => {
+  it('folds a required-this-turn title reminder into the latest user turn when the thread is still the placeholder', async () => {
     const seen: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1670,42 +1679,47 @@ describe('runChatLoop', () => {
       history: [{ role: 'user', content: 'help me with python decorators' }],
       signal: new AbortController().signal,
     });
-    // The reminder must NOT live in the baseline system prompt - that
-    // was the prior placement and the position the new design moves
-    // away from. Putting it anywhere ahead of `history` lets the model
-    // skip the rename on long threads where the directive ends up
-    // buried above many user/assistant turns.
+    // The reminder must NOT live in the baseline system prompt - the
+    // appendix placement was the first design and the position this
+    // moves away from. Burying the directive ahead of `history` let
+    // the model skip the rename on long threads.
     const prompt = firstSystemPrompt(seen);
     expect(prompt).not.toContain('Required this turn: title this conversation');
 
-    // The reminder lands as a trailing `role: 'system'` message so the
-    // model reads it after the user's actual words, where instruction-
-    // following is strongest.
-    const reminder = trailingTitleReminder(seen);
-    expect(reminder).not.toBeNull();
-    expect(reminder).toContain('## Required this turn: title this conversation');
-    expect(reminder).toContain('`update_title`');
-    expect(reminder).toContain('New conversation');
-    // The instruction has to land as mandatory, not a suggestion -
-    // the earlier "before responding, call the tool..." phrasing
-    // produced a skip rate high enough that threads routinely stayed
-    // on the placeholder for several turns.
-    expect(reminder).toContain('This is not optional');
-
-    // Position check: the reminder is the final message in the
-    // request. Anything between the user turn and the reminder
-    // weakens the signal.
+    // The reminder must NOT ride as a trailing `role: 'system'`
+    // message either. That was the second design; the wire shape this
+    // produced ("placeholder-titled thread, two system messages, one
+    // at index 0 and one at the end") got the trailing one collapsed
+    // or dropped on this provider.
     const msgs = seen[0].messages;
-    expect(msgs[msgs.length - 1].role).toBe('system');
-    expect(msgs[msgs.length - 1].content).toBe(reminder);
-    // And the user turn comes before it - i.e. the reminder really
-    // does sit "after the user prompt" rather than at index 0.
-    const lastUserIdx = msgs
-      .map((m, i) => ({ role: m.role, i }))
-      .filter((x) => x.role === 'user')
-      .at(-1)?.i;
-    expect(lastUserIdx).toBeDefined();
-    expect(lastUserIdx!).toBeLessThan(msgs.length - 1);
+    const lastMsg = msgs[msgs.length - 1];
+    expect(lastMsg.role).toBe('user');
+
+    // The reminder rides INSIDE the latest user turn's content, in a
+    // `<system_reminder>` block sitting outside the `<user_message>`
+    // fence on the trailing side. The `<user_message>` opener is
+    // present (every user turn carries it; see tagLastUserMessage),
+    // and the reminder content shows up after the close tag.
+    const userText = lastUserContent(seen);
+    expect(userText).toContain('<user_message>help me with python decorators</user_message>');
+    expect(userText).toContain('<system_reminder>');
+    expect(userText).toContain('</system_reminder>');
+    expect(userText).toContain('## Required this turn: title this conversation');
+    expect(userText).toContain('`update_title`');
+    expect(userText).toContain('New conversation');
+    // The instruction has to land as mandatory, not a suggestion -
+    // earlier "before responding, call the tool..." phrasing produced
+    // a skip rate high enough that threads routinely stayed on the
+    // placeholder for several turns.
+    expect(userText).toContain('This is not optional');
+    // Order check: the system_reminder block sits AFTER the
+    // user_message close, not before the open. The boundary rule in
+    // the system prompt depends on this layout - the reminder is
+    // platform-injected, not user-typed.
+    const closeIdx = userText.indexOf('</user_message>');
+    const reminderIdx = userText.indexOf('<system_reminder>');
+    expect(closeIdx).toBeGreaterThan(-1);
+    expect(reminderIdx).toBeGreaterThan(closeIdx);
   });
 
   it('omits the title directives entirely when the user has manually named the thread', async () => {
@@ -1715,8 +1729,8 @@ describe('runChatLoop', () => {
     // the model could clobber the user's choice. The `update_title`
     // tool stays in the always-on catalog (no harm; model won't call
     // it without the instruction), but suppressing both prompt
-    // channels (the appendix one-liner AND the trailing reminder) is
-    // the real gate.
+    // channels (the appendix one-liner AND the user-turn reminder)
+    // is the real gate.
     const seen: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1746,8 +1760,11 @@ describe('runChatLoop', () => {
     // The current title itself must not appear - the model has no
     // business even knowing what it is for the purpose of renaming.
     expect(prompt).not.toContain('Python decorators');
-    // The trailing reminder channel must also stay silent.
-    expect(trailingTitleReminder(seen)).toBeNull();
+    // The user-turn reminder channel must also stay silent: no
+    // <system_reminder> block, and none of the placeholder copy.
+    const userText = lastUserContent(seen);
+    expect(userText).not.toContain('<system_reminder>');
+    expect(userText).not.toContain('Required this turn');
     // The `update_title` tool name still appears in the always-on
     // catalog listing (we leave the tool available; cheap no-op if
     // the model calls it), so don't assert on the bare tool name.
@@ -1759,8 +1776,8 @@ describe('runChatLoop', () => {
     // rename on a real topic shift, but deliberately low-weight - it
     // fires on every turn and we don't want to pay tokens or prompt
     // pressure for what is almost always a no-op. This case does NOT
-    // get a trailing post-user reminder; only the placeholder case
-    // earns that.
+    // get a `<system_reminder>` block on the user turn; only the
+    // placeholder case earns that.
     const seen: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1786,7 +1803,9 @@ describe('runChatLoop', () => {
     // case; non-placeholder turns must not carry it - on either
     // channel.
     expect(prompt).not.toContain('Required this turn');
-    expect(trailingTitleReminder(seen)).toBeNull();
+    const userText = lastUserContent(seen);
+    expect(userText).not.toContain('<system_reminder>');
+    expect(userText).not.toContain('Required this turn');
   });
 
   describe('intuition wiring', () => {

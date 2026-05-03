@@ -152,28 +152,33 @@ function buildTitleAppendixNote(thread: Thread): string | null {
 }
 
 /**
- * Build the post-user-turn system message that nags the model into
- * calling `update_title` when the thread still carries the
- * "New conversation" placeholder. Returns null on placeholder-free
- * threads (nothing to nag about) and on manually-named threads (user
- * already committed; the model must not clobber their choice).
+ * Build the per-turn placeholder-title nag. Returns the inner
+ * directive content; the wrapping `<system_reminder>...</system_reminder>`
+ * tags are added by `tagLastUserMessage` when it folds this string
+ * into the latest user turn's content (outside the `<user_message>`
+ * boundary). Returns null on placeholder-free threads (nothing to nag
+ * about) and on manually-named threads (user already committed; the
+ * model must not clobber their choice).
  *
- * Why a separate system message instead of a system-prompt appendix
- * block: the earlier appendix-based placement still let the model
- * skip the rename for several turns in a row when the directive sat
- * in front of (often a long) `history`. Appending a `role: 'system'`
- * message at the END of the request payload puts the directive after
- * the user's actual words this turn (and after any tool-result rows
- * on later rounds), where instruction-following is strongest.
+ * Why fold this into the user turn rather than send it as a trailing
+ * `role: 'system'` message: the trailing-system placement was the
+ * design before this, and the model still missed it. Two plausible
+ * causes - Venice / the underlying model collapsing consecutive
+ * `role: 'system'` rows into the leading prompt, and "system goes at
+ * index 0" being a strong enough training prior that a trailing system
+ * row gets weighted poorly. Both are fixed by riding inside the user
+ * turn: the user-role content is the position the model is guaranteed
+ * to attend to, and the `<system_reminder>` tag combined with the
+ * boundary rule in the system prompt keeps the directive distinct
+ * from user-authored text.
  *
- * The block uses a markdown `##` header rather than `<note>` tags. The
- * tag form was considered and rejected: a user typing `</note>` in
- * their own message could escape the block and inject instructions. A
- * header is imperfect too (a user could paste a matching `##` line),
- * but the exploit requires more intent, and the worst case is a bad
- * title rather than arbitrary prompt injection. The reminder is
- * delivered with `role: 'system'`, so a user-typed `##` in the prior
- * turn lives inside `role: 'user'` and won't merge into this block.
+ * The inner block uses a markdown `##` header. The tag form was
+ * considered and rejected for the inner content: a user typing
+ * `</system_reminder>` would escape early and inject instructions. The
+ * outer `<system_reminder>` wrapper has the same theoretical
+ * vulnerability, but a user would have to type both `</user_message>`
+ * AND a fake `<system_reminder>` block to inject - the same
+ * pre-existing escape vector that already exists for `<datetime>`.
  */
 function buildTitleReminderMessage(thread: Thread): string | null {
   if (thread.title_manually_set) return null;
@@ -461,11 +466,13 @@ function buildDatetimeTag(tz: string | null | undefined): string {
 
 /**
  * Return a shallow copy of `messages` with the last role='user'
- * message's content wrapped in the <user_message> boundary tags and
- * a `<datetime>` tag prepended outside that boundary. The input
- * messages are not mutated - we allocate a fresh message object
- * (and fresh content array, when the content is multimodal) so that
- * the caller's history stays untouched across the chat loop's rounds.
+ * message's content wrapped in the <user_message> boundary tags, a
+ * `<datetime>` tag prepended outside that boundary, and an optional
+ * `<system_reminder>` block appended outside the boundary on the
+ * trailing side. The input messages are not mutated - we allocate a
+ * fresh message object (and fresh content array, when the content is
+ * multimodal) so that the caller's history stays untouched across the
+ * chat loop's rounds.
  *
  * Scope is deliberately "last user turn only": that's the one Venice
  * augments on the current round, and that's where the freshest
@@ -477,15 +484,30 @@ function buildDatetimeTag(tz: string | null | undefined): string {
  * thinking the boundary tags carry per-turn semantics beyond "this
  * is where the human's words are."
  *
- * The `<datetime>` tag sits OUTSIDE the `<user_message>` fence on
- * purpose: the system prompt's boundary block tells the model that
- * anything outside the fence is platform-injected reference, which
- * is exactly the role the datetime plays. Putting it inside would
- * make the model treat the tag text as user-typed input.
+ * The `<datetime>` and `<system_reminder>` tags both sit OUTSIDE the
+ * `<user_message>` fence on purpose: the system prompt's boundary
+ * block tells the model that anything outside the fence is
+ * platform-injected, which is exactly the role both tags play
+ * (datetime is reference material; system_reminder is an actionable
+ * platform directive - the system prompt teaches the distinction).
+ * Putting either inside would make the model treat the tag text as
+ * user-typed input.
+ *
+ * `trailingReminder` is the `buildTitleReminderMessage` output (or
+ * any future per-turn directive that needs to land where the model
+ * actually attends to it). Null on turns with nothing to nag about
+ * (real model-set title, manually-named thread); the function then
+ * skips the trailing tag entirely so non-placeholder turns don't pay
+ * the token cost. Folding this into the user turn replaced an earlier
+ * design that pushed it as a trailing `role: 'system'` message - that
+ * placement was getting silently dropped or de-weighted on the wire,
+ * leaving placeholder threads parked on "New conversation" across
+ * many turns despite the directive being marked "not optional".
  */
 function tagLastUserMessage(
   messages: VeniceMessage[],
   datetimeTag: string,
+  trailingReminder: string | null,
 ): VeniceMessage[] {
   // Walk from the end so we find the most recent user message even
   // when tool-result rows follow it on a mid-loop round.
@@ -499,25 +521,35 @@ function tagLastUserMessage(
   if (lastUserIdx === -1) return messages;
   const out = messages.slice();
   const orig = out[lastUserIdx];
+  // Empty string when the caller passed null so the template
+  // concatenations stay simple. The leading newline only lands when
+  // the reminder is non-null, so non-placeholder turns don't pay a
+  // stray blank line at the end of their user content.
+  const reminderTrailer = trailingReminder
+    ? `\n<system_reminder>\n${trailingReminder}\n</system_reminder>`
+    : '';
   if (typeof orig.content === 'string') {
     out[lastUserIdx] = {
       ...orig,
-      content: `${datetimeTag}\n${USER_MSG_OPEN}${orig.content}${USER_MSG_CLOSE}`,
+      content: `${datetimeTag}\n${USER_MSG_OPEN}${orig.content}${USER_MSG_CLOSE}${reminderTrailer}`,
     };
   } else {
     // Vision/multimodal: prepend the datetime tag + opening-tag text
     // part and append a closing-tag text part so images and
     // extracted-text prelude blocks all sit *inside* the user-message
     // boundary while the datetime sits outside. Allocating a fresh
-    // array so we don't mutate the caller's content.
-    out[lastUserIdx] = {
-      ...orig,
-      content: [
-        { type: 'text', text: `${datetimeTag}\n${USER_MSG_OPEN}` },
-        ...orig.content,
-        { type: 'text', text: USER_MSG_CLOSE },
-      ],
-    };
+    // array so we don't mutate the caller's content. The trailing
+    // reminder rides as another text part after the close tag, again
+    // outside the boundary.
+    const parts: typeof orig.content = [
+      { type: 'text', text: `${datetimeTag}\n${USER_MSG_OPEN}` },
+      ...orig.content,
+      { type: 'text', text: USER_MSG_CLOSE },
+    ];
+    if (trailingReminder) {
+      parts.push({ type: 'text', text: reminderTrailer });
+    }
+    out[lastUserIdx] = { ...orig, content: parts };
   }
   return out;
 }
@@ -1168,8 +1200,19 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // when asked "what time is it?". Recomputed every round so a
     // long multi-tool loop reflects actual elapsed time rather than
     // a stale send-time snapshot.
+    //
+    // The placeholder-title directive (when present) rides as a
+    // `<system_reminder>` block APPENDED to the user turn, outside
+    // the user_message fence. Earlier shapes - putting the directive
+    // in the system-prompt appendix, then pushing it as a trailing
+    // `role: 'system'` message - both let the model skip the rename
+    // for many turns; the wire ends up dropping or de-weighting
+    // trailing system rows on this provider, and a system-prompt
+    // appendix gets buried above a long `history`. Riding inside the
+    // user-role content is the position the model is guaranteed to
+    // attend to.
     const datetimeTag = buildDatetimeTag(journalTimezone);
-    const projectedHistory = tagLastUserMessage(history, datetimeTag);
+    const projectedHistory = tagLastUserMessage(history, datetimeTag, titleReminder);
     const requestMessages: VeniceMessage[] = [
       {
         role: 'system',
@@ -1184,26 +1227,14 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           // journal, attachments, emphasis nudge, topic-drift title
           // hint). Empty string when none apply (cold-start manually-
           // named thread, priming timeout). The placeholder title
-          // directive is NOT here - it lands as a trailing
-          // `role: 'system'` message below so the model reads it after
-          // the user turn rather than buried in the system prompt.
+          // directive is NOT here - it rides inside the latest user
+          // turn as a `<system_reminder>` block, outside the
+          // user_message fence (see tagLastUserMessage above).
           promptAppendix: promptAppendix,
         }),
       },
       ...projectedHistory,
     ];
-    // Trailing system reminder for placeholder-titled threads. The
-    // earlier appendix-based placement still let the model skip the
-    // rename when the directive sat in front of (often a long)
-    // `history`; appending here puts it past the user's words this
-    // turn (and past any tool-result rows on later rounds), where the
-    // model's instruction-following is strongest. Null on manually-
-    // named threads and on threads that already have a model-set
-    // title - both cases are covered upstream by buildTitleReminder
-    // returning null.
-    if (titleReminder) {
-      requestMessages.push({ role: 'system', content: titleReminder });
-    }
 
     const stream = venice.streamChat({
       model: modelId,

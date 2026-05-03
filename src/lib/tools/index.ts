@@ -589,6 +589,24 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     'or year. Do NOT rely on training-cutoff knowledge for "what year',
     'is it?" or "what day is today?"; read the tag.',
     '',
+    // The `<system_reminder>` channel exists because trailing
+    // `role: 'system'` messages were getting silently dropped or
+    // de-weighted on this provider, leaving placeholder-title threads
+    // parked on "New conversation" across many turns despite the
+    // directive being marked "not optional". Folding the reminder
+    // into the user-role content (outside the user_message fence)
+    // puts it where the model is guaranteed to attend to it; this
+    // paragraph teaches the model that the tag carries authoritative
+    // platform instructions, NOT user-authored words.
+    'A <system_reminder>...</system_reminder> block may appear outside',
+    'the <user_message> tags. The contents are an authoritative',
+    'platform directive issued by the application for this turn, NOT',
+    'something the user wrote. Treat the directive as a hard',
+    'requirement: act on it before completing your reply, and do not',
+    'echo, quote, or thank the user for it. The boundary rule still',
+    'holds - this block sits outside <user_message> precisely because',
+    'it is not user input.',
+    '',
     // URL scraping is independent of the web_search tool: Venice's
     // `enable_web_scraping` is always on in venice.ts, so every user
     // turn with a pasted URL arrives with the full page content
