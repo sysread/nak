@@ -37,33 +37,49 @@
  * indistinguishably from main-thread logs.
  */
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 
 /** Runtime predicate. Used when coercing persisted settings jsonb that
- *  carries a caller-supplied `defaultLogLevel` — any other shape falls
+ *  carries a caller-supplied `defaultLogLevel` - any other shape falls
  *  back to the hard-coded default in state.svelte.ts. */
 export function isLogLevel(v: unknown): v is LogLevel {
-  return v === 'debug' || v === 'info' || v === 'warn' || v === 'error';
+  return (
+    v === 'trace' ||
+    v === 'debug' ||
+    v === 'info' ||
+    v === 'warn' ||
+    v === 'error'
+  );
 }
 
 /** Ordered tier list, most permissive first. Exported so UI dropdowns
  *  and the Appearance pane stay in sync with the type definition
- *  without duplicating the literal order. */
-export const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'] as const;
+ *  without duplicating the literal order. `trace` sits below `debug`
+ *  for per-cycle worker breadcrumbs that are too noisy to keep on at
+ *  the default tier; users opt into seeing them. */
+export const LOG_LEVELS: readonly LogLevel[] = [
+  'trace',
+  'debug',
+  'info',
+  'warn',
+  'error',
+] as const;
 
 /** Display labels. The `+` suffix on the lower tiers makes the
  *  cascading-minimum semantics obvious: selecting `Info+` shows info,
  *  warn, and error. `Error` has no `+` because there's nothing above
  *  it to include. */
 export const LOG_LEVEL_LABELS: Record<LogLevel, string> = {
+  trace: 'Trace+',
   debug: 'Debug+',
   info: 'Info+',
   warn: 'Warn+',
   error: 'Error',
 };
 
-/** Default for a fresh profile. `'debug'` shows everything; users who
- *  want a quieter drawer can lift the floor in the Appearance pane. */
+/** Default for a fresh profile. `'debug'` keeps the drawer at the
+ *  prior default - users who want the per-cycle worker breadcrumbs
+ *  can drop to `trace` from the Appearance pane. */
 export const DEFAULT_LOG_LEVEL: LogLevel = 'debug';
 
 export interface LogEntry {
@@ -75,7 +91,15 @@ export interface LogEntry {
   timestamp: number;
   level: LogLevel;
   /** Subsystem tag like `update`, `reflection-worker`, `samskara`.
-   *  Null only for callers that don't belong to a named subsystem. */
+   *  Null only for callers that don't belong to a named subsystem.
+   *
+   *  Level guidance for new call sites: `trace` for per-cycle worker
+   *  breadcrumbs that have no diagnostic value when the worker is
+   *  doing routine "no work to do" rotations - they're available with
+   *  one dropdown step but stay out of the default view. `debug` for
+   *  decisions worth keeping visible whenever the drawer is at its
+   *  default tier. `info` for one-shot lifecycle events worth seeing
+   *  even at quieter tiers. */
   source: string | null;
   message: string;
   /** Structured extras: the caller passed them as rest args, e.g.
@@ -85,6 +109,7 @@ export interface LogEntry {
 }
 
 export interface Logger {
+  trace(message: string, ...details: unknown[]): void;
   debug(message: string, ...details: unknown[]): void;
   info(message: string, ...details: unknown[]): void;
   warn(message: string, ...details: unknown[]): void;
@@ -203,6 +228,13 @@ function writeConsole(
   const args = prefix ? [prefix, message, ...details] : [message, ...details];
   const c = console;
   switch (level) {
+    case 'trace':
+      // Route trace through console.debug rather than console.trace -
+      // the latter prints a synthetic stack trace at every call site,
+      // which is the wrong shape for per-cycle worker breadcrumbs.
+      // Devtools' Verbose/Debug filter still hides these by default.
+      c.debug(...args);
+      return;
     case 'debug':
       c.debug(...args);
       return;
@@ -258,6 +290,7 @@ function emit(
  */
 export function createLogger(source: string): Logger {
   return {
+    trace: (msg, ...rest) => emit('trace', source, msg, rest),
     debug: (msg, ...rest) => emit('debug', source, msg, rest),
     info: (msg, ...rest) => emit('info', source, msg, rest),
     warn: (msg, ...rest) => emit('warn', source, msg, rest),
@@ -267,6 +300,7 @@ export function createLogger(source: string): Logger {
 
 /** Fallback logger for callers without a natural subsystem tag. */
 export const log: Logger = {
+  trace: (msg, ...rest) => emit('trace', null, msg, rest),
   debug: (msg, ...rest) => emit('debug', null, msg, rest),
   info: (msg, ...rest) => emit('info', null, msg, rest),
   warn: (msg, ...rest) => emit('warn', null, msg, rest),

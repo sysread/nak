@@ -180,13 +180,17 @@ Useful when:
 
 Controls inside the drawer:
 
-- **Level dropdown** - choose the minimum severity to show (Debug+
-  / Info+ / Warn+ / Error). The `+` means "this level and
+- **Level dropdown** - choose the minimum severity to show (Trace+
+  / Debug+ / Info+ / Warn+ / Error). The `+` means "this level and
   everything more severe", matching the filter behaviour of the
-  browser devtools console. The drawer opens at whatever you've
-  set as your **Default log level** in Settings > Appearance;
-  changing the dropdown here is a within-session override that
-  resets on the next open.
+  browser devtools console. `Trace+` is the most permissive setting
+  and surfaces the per-cycle breadcrumbs background workers emit
+  even when they have nothing to do; `Debug+` is the default and
+  hides those routine pings while still showing every decision worth
+  keeping visible. The drawer opens at whatever you've set as your
+  **Default log level** in Settings > Appearance; changing the
+  dropdown here is a within-session override that resets on the
+  next open.
 - **Search box** - case-insensitive substring match against the
   source tag, the message, and any structured details attached to
   the entry. Whitespace splits the input into independent tokens, so

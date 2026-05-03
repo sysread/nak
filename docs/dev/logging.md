@@ -2,11 +2,31 @@
 
 The logger is the app's single entry point for diagnostic output.
 Every subsystem calls into `createLogger('<source>')` and gets a
-four-method surface (`debug` / `info` / `warn` / `error`) that both
-writes to the browser console and feeds an in-app log drawer. No
-call site in `src/` talks to `console.*` directly - the one
-exception is `logger.svelte.ts` itself, which is allowlisted in
+five-method surface (`trace` / `debug` / `info` / `warn` / `error`)
+that both writes to the browser console and feeds an in-app log
+drawer. No call site in `src/` talks to `console.*` directly - the
+one exception is `logger.svelte.ts` itself, which is allowlisted in
 `eslint.config.js`.
+
+## Level guidance
+
+- `trace` - per-cycle worker breadcrumbs that fire whether or not
+  the worker found work to do. The samskara worker's phase rotation
+  produces several of these per cycle; embeddings/reflection/summary
+  workers add their own. They sit below `debug` and the drawer
+  filters them out at the default tier.
+- `debug` - decisions worth keeping visible whenever the drawer is
+  at its default tier. Phase actually claimed a row, agent returned a
+  result, save was rejected.
+- `info` - one-shot lifecycle events worth seeing at a quieter tier:
+  worker startup, a new samskara minted, a compound summary saved.
+- `warn` / `error` - actionable problems. Routed through
+  `console.warn` / `console.error`.
+
+Console mirroring: `trace` rides on `console.debug` rather than
+`console.trace` - the latter prints a synthetic stack trace at every
+call site, which is the wrong shape for high-volume worker
+breadcrumbs.
 
 ## Role
 
@@ -67,7 +87,7 @@ a pretty-printed stack or JSON body.
 interface LogEntry {
   id: number;              // monotonic, buffer-local
   timestamp: number;       // Date.now()
-  level: 'debug' | 'info' | 'warn' | 'error';
+  level: 'trace' | 'debug' | 'info' | 'warn' | 'error';
   source: string | null;   // from createLogger(source)
   message: string;
   details: unknown[];      // rest args, with Error/JSON preserved

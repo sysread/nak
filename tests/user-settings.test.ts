@@ -133,7 +133,7 @@ describe('coerceSettings', () => {
   });
 
   it('passes through a valid defaultLogLevel', () => {
-    for (const level of ['debug', 'info', 'warn', 'error']) {
+    for (const level of ['trace', 'debug', 'info', 'warn', 'error']) {
       expect(coerceSettings({ defaultLogLevel: level })).toEqual({
         defaultLogLevel: level,
       });
@@ -141,7 +141,7 @@ describe('coerceSettings', () => {
   });
 
   it('drops an unknown defaultLogLevel value', () => {
-    expect(coerceSettings({ defaultLogLevel: 'trace' })).toEqual({});
+    expect(coerceSettings({ defaultLogLevel: 'verbose' })).toEqual({});
     expect(coerceSettings({ defaultLogLevel: '' })).toEqual({});
     expect(coerceSettings({ defaultLogLevel: null })).toEqual({});
     expect(coerceSettings({ defaultLogLevel: 0 })).toEqual({});

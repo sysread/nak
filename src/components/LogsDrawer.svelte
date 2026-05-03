@@ -81,7 +81,10 @@
 
   // Rank levels so the filter can do a numeric >= check. Kept local
   // to the component because no other site needs this ordering.
+  // `trace` sits below `debug` so picking the Trace+ tier widens the
+  // filter to include the per-cycle worker breadcrumbs.
   const LEVEL_RANK: Record<LogLevel, number> = {
+    trace: -1,
     debug: 0,
     info: 1,
     warn: 2,
@@ -729,6 +732,19 @@
     text-align: center;
   }
 
+  /* Trace lines outnumber every other tier when the user opts into
+     them, so they get the dimmest treatment - lower opacity than
+     debug so the eye filters them as background chatter and only
+     stops on the higher-tier rows. */
+  .level-trace .log-level-badge {
+    background: color-mix(in srgb, var(--muted) 10%, transparent);
+    color: color-mix(in srgb, var(--muted) 70%, transparent);
+  }
+  .level-trace .log-message,
+  .level-trace .log-source,
+  .level-trace .log-time {
+    color: color-mix(in srgb, var(--muted) 80%, transparent);
+  }
   .level-debug .log-level-badge {
     background: color-mix(in srgb, var(--muted) 18%, transparent);
     color: var(--muted);

@@ -141,11 +141,12 @@ export class SamskaraManager {
         typeof data.phase === 'string' &&
         typeof data.result === 'string'
       ) {
-        // Per-cycle heartbeat. One debug line per phase advance so the
-        // user can watch the worker round-robin in the Logs drawer;
-        // detailed per-phase decisions are emitted from loop.ts under
-        // the same source tag.
-        workerLog.debug(`cycle: ${data.phase} -> ${data.result}`);
+        // Per-cycle heartbeat. Fires on every phase advance, so it
+        // would dominate the drawer at the default tier - kept at
+        // trace so users have to opt in via the Trace+ filter to see
+        // it. Detailed per-phase decisions are emitted from loop.ts
+        // under the same source tag.
+        workerLog.trace(`cycle: ${data.phase} -> ${data.result}`);
       } else if (
         data.type === 'mint' &&
         (data.tier === 1 || data.tier === 2) &&

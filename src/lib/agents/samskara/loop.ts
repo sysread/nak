@@ -28,11 +28,18 @@ import type { LeaseCoordinator } from '../../embeddings/lease';
 import type { SamskaraAgent } from './agent';
 import { createLogger } from '../../logger.svelte';
 
-// Per-phase decision breadcrumbs. Kept at debug level so the feed is
-// cheap to tail while the feature is new and gets filtered out with a
-// single dropdown step once the pipeline is trusted. Shared source
-// tag with the manager so the Logs drawer groups worker output
-// regardless of which file emitted it.
+// Per-phase decision breadcrumbs. Two tiers in use here:
+//   - `trace` for routine "phase had nothing to do" lines that fire
+//     every rotation when the worker is idle. They'd drown the drawer
+//     at the default tier and carry no diagnostic value when there's
+//     no work, so they're behind the Trace+ filter.
+//   - `debug` for breadcrumbs that fire only when a phase actually
+//     claimed a row, called the agent, or wrote something. These
+//     remain visible at the default Debug+ tier so a developer
+//     watching the drawer sees the shape of real work without lifting
+//     the filter.
+// Shared source tag with the manager so the Logs drawer groups worker
+// output regardless of which file emitted it.
 const log = createLogger('samskara-worker');
 
 /**
@@ -307,7 +314,7 @@ async function runPairRelatePhase(ctx: CycleContext): Promise<CycleResult> {
     }
   }
   if (bestIdx < 0 || bestSim < 0.3) {
-    log.debug('pair-relate: no viable pair', {
+    log.trace('pair-relate: no viable pair', {
       candidates: recent.length,
       bestSim: bestSim === -Infinity ? null : bestSim,
     });
@@ -399,7 +406,7 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
   if (recent.length < 4) {
-    log.debug('mint-tier1: insufficient substrate', { have: recent.length, need: 4 });
+    log.trace('mint-tier1: insufficient substrate', { have: recent.length, need: 4 });
     return 'empty-phase';
   }
 
@@ -411,7 +418,7 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
   log.debug('mint-tier1: asking agent', { substrateCount: recent.length });
   const minted = await ctx.agent.mint(cluster, ctx.signal);
   if (!minted) {
-    log.debug('mint-tier1: agent declined');
+    log.trace('mint-tier1: agent declined');
     return 'empty-phase';
   }
 
@@ -742,7 +749,10 @@ async function runDecayPhase(ctx: CycleContext): Promise<CycleResult> {
     log.debug('decay: RPC failed', err);
     return 'error';
   }
-  log.debug('decay: applied');
+  // Fires every rotation - the RPC is a single SQL update with no
+  // useful diagnostic surface unless it failed. Trace so it stays out
+  // of the default drawer view.
+  log.trace('decay: applied');
   return 'progress';
 }
 
@@ -772,7 +782,7 @@ async function runDedupPhase(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
   if (collapsed === 0) {
-    log.debug('dedup: nothing to collapse');
+    log.trace('dedup: nothing to collapse');
     return 'empty-phase';
   }
   log.info('dedup: collapsed samskaras', { collapsed });
@@ -793,7 +803,7 @@ async function runCompoundRegenPhase(ctx: CycleContext): Promise<CycleResult> {
     log.debug('compound-regen: shouldRegen RPC failed', err);
     return 'error';
   }
-  log.debug('compound-regen: decision', {
+  log.trace('compound-regen: decision', {
     shouldRegen: decision.shouldRegen,
     samskaraCount: decision.samskaraCount,
   });
@@ -810,7 +820,7 @@ async function runCompoundRegenPhase(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
   if (!claimed) {
-    log.debug('compound-regen: another holder has the claim');
+    log.trace('compound-regen: another holder has the claim');
     return 'empty-phase';
   }
 
