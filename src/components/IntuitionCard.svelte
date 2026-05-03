@@ -1,9 +1,12 @@
 <script lang="ts">
   /**
    * Inline rendering of an intuition payload, anchored to the user
-   * round it was computed for. Collapsed by default - click to
-   * expand the full perception / drives / synthesis. Same content
-   * as the diagnostics modal, scoped to one cached payload.
+   * round it was computed for. Header-only by default - just the
+   * brain icon, "Intuition" label, classification badge, and
+   * timestamp - so the card sits in the transcript as a thin
+   * marker rather than a wall of text. Click the toggle to reveal
+   * the full perception / drives / synthesis; click the modal-link
+   * arrow to open the diagnostics modal scoped to the same payload.
    *
    * Rendered between message blocks in the Chat transcript by the
    * messageBlocks builder when the cache's `computed_at_round`
@@ -96,9 +99,7 @@
     </button>
   </header>
 
-  {#if !expanded}
-    <p class="synth-preview">{payload.synthesis}</p>
-  {:else}
+  {#if expanded}
     <section class="block">
       <h3 class="block-title">Synthesis</h3>
       <p class="prose">{payload.synthesis}</p>
@@ -201,14 +202,6 @@
   .toggle:hover,
   .modal-link:hover {
     background: var(--bg-2);
-  }
-
-  .synth-preview {
-    margin: 0.4rem 0 0;
-    font-style: italic;
-    line-height: 1.4;
-    /* One-paragraph preview that wraps cleanly. The full text is
-       available via the expand toggle or the modal. */
   }
 
   .block {
