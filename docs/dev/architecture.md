@@ -112,19 +112,44 @@ this at the top — the comment is load-bearing.
 
 `listMessages` runs every result through
 `synthesizeRecoveryMessages` (`src/lib/conversation-recovery.ts`)
-before returning. This appends in-memory recovery rows when the
-persisted tail is wire-format-invalid - a trailing `tool` row with
-no follow-up assistant, or an `assistant`-with-tool_calls whose
-results never landed. Without the synthesis, the next prompt-append
-to the slice (every background agent does this; so does the chat
-loop's projection) trips the provider's "Unexpected role 'user'
-after role 'tool'" 400.
+before returning. This walks the message list and inserts in-memory
+recovery rows wherever the wire shape is invalid. Three failure
+modes covered:
+
+- Trailing `tool` row with no follow-up assistant, which trips
+  "Unexpected role 'user' after role 'tool'" the moment the next
+  prompt is appended.
+- Trailing `assistant`-with-tool_calls whose results never landed,
+  which trips "Not the same number of function calls and responses".
+- Mid-conversation partial fan-in - an `asst_with_tool_calls` whose
+  tool block is short by one or more results, followed eventually
+  by another user/assistant turn. Same fan-in error as above, just
+  buried in the transcript instead of at the end. Arises when the
+  chat-loop crashed (or the device went offline) between persisting
+  some-but-not-all tool rows and persisting the assistant follow-up.
+
+The walk visits every `asst_with_tool_calls`, reads the consecutive
+tool block that follows, fills in synthetic rows for any
+unanswered `tool_calls[].id`, and inserts a recovery assistant
+whenever the resulting tool block runs into a non-assistant message
+(or end of conversation). It's naturally idempotent - a previously-
+healed conversation walks to fully-resolved tool blocks on every
+pass, so no new rows fire.
 
 Synthesized rows carry `synthetic: true` (TS-only - never written
 to the DB) and a `RECOVERY_MARKER` HTML comment in their content.
-Idempotency relies on the marker: a prior session may have
-persisted the recovery rows on a user-send; on a fresh read the
-synthesizer sees the marker on the trailing row and short-circuits.
+The marker lets the chat-loop's persistence path tell synthetic
+rows from real ones; the model treats the comment as scratch
+(same trick the intuition-think and opening-recall blocks use).
+
+False-positive posture: the walk only synthesizes when an
+`asst_with_tool_calls` has tool_call_ids missing from its
+following tool block, OR when a complete tool block runs into a
+user turn (which is itself a wire violation). Tool results
+matched by id - the walk doesn't care about positional ordering -
+so parallel tool fan-outs that complete out-of-order pass through
+untouched. The full `tests/conversation-recovery.test.ts` file
+pins the false-positive guards as load-bearing.
 
 The chat-loop's send path (in `Chat.svelte`) calls
 `persistSyntheticRecovery` ahead of the next user-message insert,

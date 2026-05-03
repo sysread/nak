@@ -1,43 +1,62 @@
 /**
  * Conversation-recovery synthesis. When a thread's persisted history
- * ends in a wire-format-invalid shape — typically because a tool-using
+ * lands in a wire-format-invalid shape — typically because a tool-using
  * exchange was interrupted before the assistant could reply to the
  * tool result — readers (the chat UI, the summary worker, the journal
  * worker, the reflection worker, the recall agents) would otherwise
- * hand the broken sequence to the provider and get a 400 back. The
- * specific failure mode that drove this module:
+ * hand the broken sequence to the provider and get a 400 back. Two
+ * provider errors drove this module:
  *
  *   Venice HTTP 400: Unexpected role 'user' after role 'tool'
+ *   Venice HTTP 400: Not the same number of function calls and responses
  *
- * Two broken end-shapes show up in practice:
+ * Three broken shapes show up in practice:
  *
  *   1. Trailing tool-result row(s) with no follow-up assistant. The
  *      provider expects an assistant turn after a tool-result fan-in.
- *      Adding the user's next prompt directly produces the
- *      role='user' after role='tool' error above.
+ *      Adding the user's next prompt produces "user after tool".
  *
  *   2. Trailing assistant-with-tool_calls whose tool results never
  *      landed (one or more, or all). The provider's stricter rule
  *      here is "every tool_calls[].id MUST be answered by a matching
- *      tool row before any non-tool message follows" — so the fix
- *      needs to synthesize tool-result rows for the missing ids
- *      AND a follow-up assistant.
+ *      tool row before any non-tool message follows" - the fan-in
+ *      count must match.
  *
- * Both cases are repaired by appending synthesized rows that read
- * naturally to the model and tell the user what happened. The
- * synthesized rows carry a `synthetic: true` flag so the chat-loop's
- * persistence path can write them to the DB on the next user send,
- * healing the thread permanently. Background workers see the same
- * coherent shape but don't write — they just regenerate the synthesis
- * each cycle until the user revisits and sends again.
+ *   3. Mid-conversation partial fan-in - an `asst_with_tool_calls`
+ *      whose tool block is short by one or more results, followed
+ *      eventually by another user/assistant turn. Same fan-in
+ *      mismatch error as (2), just buried in the middle of the
+ *      transcript instead of at the end. This shape arises when the
+ *      chat-loop crashed (or the device went offline) between
+ *      persisting some-but-not-all tool rows and persisting the
+ *      assistant follow-up; the next user send creates a turn that
+ *      hangs off a still-broken history.
+ *
+ * Every broken shape is repaired by walking the message list,
+ * filling in synthetic tool-result rows for unanswered tool_call_ids,
+ * and inserting a recovery assistant turn wherever the resulting tool
+ * block would otherwise be followed by a non-assistant message (or
+ * end of conversation). The synthesized rows carry a `synthetic: true`
+ * flag so the chat-loop's persistence path can write them to the DB
+ * on the next user send, healing the thread permanently.
  *
  * Idempotency: every synthesized row carries the `RECOVERY_MARKER`
  * inside its content (HTML-comment shape so the model treats it as
  * scratch — same trick the intuition-think and opening-recall blocks
- * use). When `synthesizeRecoveryMessages` sees the trailing row is
- * already a recovery row, it skips synthesis. That covers the case
- * where a previous session persisted recovery rows and a fresh read
- * rolls past them.
+ * use). The walking algorithm is naturally idempotent: a previously-
+ * healed conversation walks to a fully-resolved tool block on every
+ * pass, so no new rows get appended. Re-running synthesize on its own
+ * output returns the same array by reference.
+ *
+ * False-positive posture: the walk only synthesizes when an
+ * `asst_with_tool_calls` has tool_call_ids that do NOT appear in the
+ * immediately-following consecutive tool block. A complete fan-in -
+ * including a complete fan-in followed by a user turn (which IS
+ * unusual but technically wire-valid as long as a recovery assistant
+ * goes between the tool block and the user) - never gets phantom
+ * tool rows added. The trickier case "complete fan-in followed by
+ * user, no assistant in between" DOES get a recovery assistant
+ * inserted, because `tool -> user` is itself a wire violation.
  */
 
 import type { Message } from './supabase';
@@ -81,8 +100,8 @@ function recoveryToolContent(): string {
 
 /**
  * Detect whether a stored or synthesized row is a recovery row. Used
- * by `synthesizeRecoveryMessages` for idempotency, and available to
- * other readers that want to render or filter recovery rows
+ * by `synthesizeRecoveryMessages` for fast-path no-ops, and available
+ * to other readers that want to render or filter recovery rows
  * specially.
  */
 export function isRecoveryMessage(m: Pick<Message, 'content'>): boolean {
@@ -131,91 +150,113 @@ function makeRecoveryTool(
 }
 
 /**
- * Inspect the tail of a message list and append recovery rows when
- * the trailing shape would be rejected by the provider. Pure: takes
- * an array, returns an array (the original array when no recovery is
- * needed - reference equality preserved so callers can short-circuit
- * on identity).
+ * Walk the message list and append recovery rows wherever the wire
+ * shape would be rejected by the provider. Pure: takes an array,
+ * returns an array (the original array when no recovery is needed -
+ * reference equality preserved so callers can short-circuit on
+ * identity).
  *
- * The two trailing shapes that get repaired:
+ * Algorithm:
  *
- *   - Last row is `tool`. Walk back through trailing tool rows to
- *     find their `assistant`-with-tool_calls parent; synthesize
- *     tool-result rows for any of the parent's `tool_calls[]` whose
- *     id wasn't answered, then append a recovery assistant row.
+ *   For each `assistant` row whose `tool_calls` array is non-empty:
+ *     - Read the immediately-following consecutive `tool` rows and
+ *       collect their `tool_call_id`s as the "answered" set.
+ *     - For each `tool_calls[].id` not in the answered set, append a
+ *       synthetic tool-result row right after the existing tool
+ *       block.
+ *     - Inspect the next non-tool row (or EOF). If the tool block
+ *       has any content AND the next row isn't an assistant, append
+ *       a synthetic recovery assistant. This handles:
+ *         * EOF after the tool block (no follow-up assistant landed).
+ *         * `tool -> user` mid-conversation (the next user turn
+ *           hanging off a still-incomplete tool block).
  *
- *   - Last row is `assistant` with non-empty `tool_calls`. None of
- *     the calls are answered (no tool rows after); synthesize a
- *     tool-result row per call_id, then a recovery assistant.
+ *   For each `tool` row not anchored to an `assistant` parent (an
+ *   orphan run that the chat-loop wouldn't normally write but might
+ *   appear from corrupted state):
+ *     - Walk past consecutive orphan tool rows.
+ *     - If the next row isn't an assistant, append a recovery
+ *       assistant. This preserves the previous module's
+ *       end-of-conversation behaviour for the trailing-tool case.
  *
- * Anything else (last row is `user`, `assistant` without tool_calls,
- * `system`, or already a recovery row) is returned untouched.
+ * Idempotency: a previously-healed conversation walks to fully-
+ * resolved tool blocks on every pass, so the missing-set is empty
+ * and the next non-tool row is the existing recovery assistant - no
+ * synthesis fires. Reference equality is preserved on the no-op
+ * pass.
  */
 export function synthesizeRecoveryMessages(messages: Message[]): Message[] {
   if (messages.length === 0) return messages;
-  const last = messages[messages.length - 1];
 
-  // Idempotency: if the prior session already wrote a recovery row to
-  // the DB and we're now reading it back, the shape is healed — don't
-  // double-stack synthetic rows on top.
-  if (isRecoveryMessage(last)) return messages;
+  const threadId = messages[0].thread_id;
+  const result: Message[] = [];
+  let synthIdx = 0;
+  let modified = false;
 
-  const threadId = last.thread_id;
+  let i = 0;
+  while (i < messages.length) {
+    const m = messages[i];
 
-  if (last.role === 'tool') {
-    // Walk back across trailing tool rows to find which tool_call_ids
-    // are already answered, and where the assistant-with-tool_calls
-    // parent sits.
-    let i = messages.length - 1;
-    const answeredIds = new Set<string>();
-    while (i >= 0 && messages[i].role === 'tool') {
-      const tc = messages[i].tool_call_id;
-      if (tc) answeredIds.add(tc);
-      i--;
-    }
-    // i is now the first non-tool row scanning backward — the parent
-    // assistant turn if the data is well-formed. If we ran off the
-    // start of the array (no parent) just append the recovery
-    // assistant; the provider tolerates a tool row without a paired
-    // assistant if no further turns reference it.
-    const recovery: Message[] = [];
-    let synthIdx = 0;
-    if (i >= 0) {
-      const parent = messages[i];
-      if (
-        parent.role === 'assistant' &&
-        parent.tool_calls &&
-        parent.tool_calls.length > 0
-      ) {
-        for (const call of parent.tool_calls) {
-          if (!answeredIds.has(call.id)) {
-            recovery.push(makeRecoveryTool(threadId, call, synthIdx++));
-          }
-        }
+    if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
+      // Asst-with-tool_calls: process the tool block that follows it.
+      result.push(m);
+      const answered = new Set<string>();
+      let j = i + 1;
+      while (j < messages.length && messages[j].role === 'tool') {
+        const tcid = messages[j].tool_call_id;
+        if (tcid) answered.add(tcid);
+        result.push(messages[j]);
+        j++;
       }
+      const missing = m.tool_calls.filter((c) => !answered.has(c.id));
+      for (const call of missing) {
+        result.push(makeRecoveryTool(threadId, call, synthIdx++));
+        modified = true;
+      }
+      const toolBlockLength = j - i - 1 + missing.length;
+      const next = j < messages.length ? messages[j] : null;
+      // Only inject a recovery assistant when the tool block has any
+      // content. An asst with empty tool_calls (length-zero array)
+      // never reaches this branch, but a tool_calls list whose every
+      // id was already answered AND that's followed by an assistant
+      // is a complete normal turn and gets nothing added.
+      if (
+        toolBlockLength > 0 &&
+        (next === null || next.role !== 'assistant')
+      ) {
+        result.push(makeRecoveryAssistant(threadId, synthIdx++));
+        modified = true;
+      }
+      i = j;
+      continue;
     }
-    recovery.push(makeRecoveryAssistant(threadId, synthIdx));
-    return [...messages, ...recovery];
+
+    if (m.role === 'tool') {
+      // Orphan tool run (no asst_with_tool_calls anchor before it).
+      // Chat-loop wouldn't normally write this; treat it
+      // conservatively - keep the rows, but make sure the wire
+      // shape after the run is valid. Specifically: a `tool -> user`
+      // or a `tool -> EOF` transition needs a recovery assistant in
+      // between.
+      let j = i;
+      while (j < messages.length && messages[j].role === 'tool') {
+        result.push(messages[j]);
+        j++;
+      }
+      const next = j < messages.length ? messages[j] : null;
+      if (next === null || next.role !== 'assistant') {
+        result.push(makeRecoveryAssistant(threadId, synthIdx++));
+        modified = true;
+      }
+      i = j;
+      continue;
+    }
+
+    result.push(m);
+    i++;
   }
 
-  if (
-    last.role === 'assistant' &&
-    last.tool_calls &&
-    last.tool_calls.length > 0
-  ) {
-    // Trailing assistant-with-tool_calls; nothing answered any of the
-    // calls. Synthesize one tool row per call, then the recovery
-    // assistant.
-    const recovery: Message[] = [];
-    let synthIdx = 0;
-    for (const call of last.tool_calls) {
-      recovery.push(makeRecoveryTool(threadId, call, synthIdx++));
-    }
-    recovery.push(makeRecoveryAssistant(threadId, synthIdx));
-    return [...messages, ...recovery];
-  }
-
-  return messages;
+  return modified ? result : messages;
 }
 
 /**
@@ -270,3 +311,4 @@ export function trimToFirstUserOrSystem(messages: Message[]): Message[] {
   if (start === 0) return messages;
   return messages.slice(start);
 }
+

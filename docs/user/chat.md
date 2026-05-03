@@ -182,6 +182,12 @@ the missing tool calls in its reply. The recovery messages are
 saved into the thread on your next send so the conversation reads
 the same way next time you open it.
 
+Recovery messages can land mid-thread, not just at the end. If
+you've ever sent a follow-up question on top of a conversation
+where the prior tool turn didn't quite finish, the recovery rows
+slot in between the broken turn and your follow-up so the rest of
+the conversation reads coherently from there.
+
 ## The log drawer
 
 The document-shaped button at the right end of the chat top bar
