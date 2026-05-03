@@ -10,13 +10,14 @@
  * force the LLM to guard every call with a try/catch; a structured
  * "not found" lets it handle the case in prose.
  *
- * The `photos` field carries ids and positions only - no image bytes.
- * That keeps the response small while giving the LLM the handles it
- * needs to chain into `recipe_photos_remove` or
- * `recipe_photos_reorder`. To see what's in a photo, the model can
- * call `analyze_image` against the original conversation attachment
- * filename it remembers attaching, or just describe to the user
- * which photo position is which.
+ * The `photos` field carries ids, positions, and labels - no image
+ * bytes. That keeps the response small while giving the LLM the
+ * handles it needs to chain into `recipe_photos_remove`,
+ * `recipe_photos_reorder`, or `recipe_photo_label_set`. `label` is
+ * the photo's caption (null when there isn't one). To see what's
+ * in a photo, the model can call `analyze_image` against the
+ * original conversation attachment filename it remembers attaching,
+ * or just describe to the user which photo position is which.
  */
 import type { ToolDef } from './types';
 
@@ -25,10 +26,12 @@ export const recipeGet: ToolDef = {
   description:
     'Fetch a recipe by id. Returns {found: true, recipe: {id, title, ' +
     'source, source_url, cooklang, rating, created_at, updated_at, ' +
-    'photos: [{id, position}, ...]}} on hit, or {found: false} when ' +
-    'the id is unknown. Photos are listed in display order; pass ' +
-    'their ids to recipe_photos_remove / recipe_photos_reorder. Use ' +
-    'recipe_list first to discover recipe ids.',
+    'photos: [{id, position, label}, ...]}} on hit, or {found: false} ' +
+    'when the id is unknown. Photos are listed in display order; ' +
+    '`label` is the optional caption (null when none). Pass photo ' +
+    'ids to recipe_photos_remove / recipe_photos_reorder, and use ' +
+    'recipe_photo_label_set to add or change captions on existing ' +
+    'photos. Use recipe_list first to discover recipe ids.',
   shortDescription: 'fetch a recipe by id',
   parameters: {
     type: 'object',

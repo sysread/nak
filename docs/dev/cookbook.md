@@ -31,22 +31,27 @@ at cookbook scale (tens to low hundreds of rows per user).
   (`nak:recipes:changed`) so tools stay UI-unaware.
 - `src/lib/tools/recipe_save.ts`, `recipe_list.ts`, `recipe_get.ts`,
   `recipe_update.ts`, `recipe_delete.ts`, `recipe_photos_attach.ts`,
-  `recipe_photos_remove.ts`, `recipe_photos_reorder.ts` — the eight
-  LLM tools. Mutating tools fire `notifyCookbookChanged` on success.
+  `recipe_photos_remove.ts`, `recipe_photos_reorder.ts`,
+  `recipe_photo_label_set.ts` — the nine LLM tools. Mutating tools
+  fire `notifyCookbookChanged` on success.
 - `src/lib/supabase.ts` — `Recipe`, `RecipeVersion`, `RecipePhoto`,
-  and `RecipePhotoMeta` types + `createRecipe / updateRecipe /
-  deleteRecipe / getRecipe / listRecipes / listRecipeVersions /
-  getRecipeVersion / revertRecipe / upsertRecipeImage /
-  listRecipePhotos / listRecipePhotoMeta /
-  listRecipeVersionPhotoIds / attachRecipePhotos /
-  removeRecipePhotos / reorderRecipePhotos` methods. Lives between
-  the memory methods and the background-worker pipeline block.
+  `RecipePhotoMeta`, and `RecipePhotoInput` types + `createRecipe /
+  updateRecipe / deleteRecipe / getRecipe / listRecipes /
+  listRecipeVersions / getRecipeVersion / revertRecipe /
+  upsertRecipeImage / listRecipePhotos / listRecipePhotoMeta /
+  listRecipeVersionPhotoInputs / attachRecipePhotos /
+  removeRecipePhotos / reorderRecipePhotos / setRecipePhotoLabels`
+  methods. Lives between the memory methods and the background-worker
+  pipeline block.
   `createRecipe` / `updateRecipe` go through the
   `recipe_create_with_version` / `recipe_update_with_version` RPCs
   so the parent row, the history snapshot, and any photo links land
-  in one transaction. The photo-only mutations
-  (`attachRecipePhotos` etc.) call dedicated single-purpose RPCs
-  that wrap "snapshot a new version + write its links" atomically.
+  in one transaction. Both versioned RPCs accept a parallel-indexed
+  `p_image_labels text[]` alongside `p_image_ids` so a save lands
+  the photo set, ordering, AND captions atomically. The photo-only
+  mutations (`attachRecipePhotos` etc.) call dedicated single-
+  purpose RPCs that wrap "snapshot a new version + write its links"
+  atomically; `setRecipePhotoLabels` is the caption-edit verb.
 - `src/screens/Cookbook.svelte` — three-pane modal (list, detail,
   edit). Mirrors `Settings.svelte`'s shell / escape / click-outside-
   to-close conventions; styles scoped locally rather than added to
@@ -103,13 +108,20 @@ at cookbook scale (tens to low hundreds of rows per user).
 - `public.recipe_version_images` table (see `supabase/schema.sql`):
   - `recipe_version_id uuid` (FK cascade to `recipe_versions`),
     `image_id uuid` (FK to `recipe_images`), `user_id uuid`,
-    `position int`, `created_at`. Composite PK on
-    `(recipe_version_id, image_id)`.
+    `position int`, `label text` (nullable), `created_at`. Composite
+    PK on `(recipe_version_id, image_id)`.
   - Indexes: `recipe_version_images_image_idx (image_id)` for the
     orphan-GC trigger's reverse lookup;
     `recipe_version_images_user_idx (user_id)` for RLS.
   - RLS: select + insert self-* policies only; deletes flow through
     the cascade from `recipe_versions`.
+  - `label` is the optional photo caption, scoped to this version's
+    link. Per-version (link-level) so a label change creates a new
+    version like any other photo edit, and revert restores the
+    captions a snapshot held. Empty / whitespace-only labels
+    normalise to NULL on the wire so "no caption" reads
+    consistently across the read path. Labels are not unique - two
+    photos on a recipe can share a caption, or have none.
   - `gc_orphan_recipe_image` trigger (AFTER DELETE, security
     definer): when the last link to a `recipe_images` row is
     removed, the trigger deletes the image row in the same
@@ -264,6 +276,19 @@ as a complete diary.
   when its last link goes away. Conversation-attachment expiry has
   no effect on recipe photos - the bytes are copied into
   `recipe_images` at attach time, so the recipe owns its own copy.
+- **Photo labels live on the link, not the image.** The `label`
+  column is on `recipe_version_images`, not `recipe_images`, so a
+  caption is part of the version's link state and gets snapshotted
+  / inherited / reverted alongside positions. The same image
+  appearing on two recipes (or on different versions of the same
+  recipe) can carry different captions on each link without the
+  underlying bytes row changing. The edit form keeps draft
+  captions in component state until Save - one save per overall
+  edit, not one per keystroke - while the LLM-side
+  `recipe_photo_label_set` tool is the single-photo / batch-photo
+  caption update path. Empty strings normalise to NULL server-side
+  (and on the wire helper `splitPhotoInputs`) so "no caption"
+  reads as one shape everywhere.
 - **Section model layers on top of the flat AST.** `== Name ==` and
   `# Name` (line-start + space) introduce a section. The parser
   records a per-step `section: string | null` plus a top-level

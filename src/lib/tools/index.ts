@@ -54,6 +54,7 @@ import { recipeDelete } from './recipe_delete';
 import { recipePhotosAttach } from './recipe_photos_attach';
 import { recipePhotosRemove } from './recipe_photos_remove';
 import { recipePhotosReorder } from './recipe_photos_reorder';
+import { recipePhotoLabelSet } from './recipe_photo_label_set';
 import { updateTitle } from './update_title';
 import { analyzeImage } from './analyze_image';
 import { researchDocs } from './research_docs';
@@ -115,8 +116,8 @@ export const cookingToolbox: Toolbox = {
   name: 'cooking',
   description:
     'Save, read, update, and delete recipes in the cookbook, plus ' +
-    'attach photos from the current conversation to a recipe and ' +
-    'remove or reorder them.',
+    'attach photos from the current conversation to a recipe, ' +
+    'remove or reorder them, and set or clear photo captions.',
   tools: [
     recipeList,
     recipeGet,
@@ -126,6 +127,7 @@ export const cookingToolbox: Toolbox = {
     recipePhotosAttach,
     recipePhotosRemove,
     recipePhotosReorder,
+    recipePhotoLabelSet,
   ],
 };
 

@@ -313,7 +313,11 @@ export interface RecipeVersion {
  * from the source `recipe_images` row.
  *
  * `position` is the link table's `position` field on the recipe's
- * latest version - lower numbers render first in the strip.
+ * latest version - lower numbers render first in the strip. `label`
+ * is the optional caption rendered below the thumbnail and beside
+ * the lightbox image; null means "no caption", and empty strings
+ * round-trip as null (the DB normalises whitespace-only labels to
+ * null on write).
  */
 export interface RecipePhoto {
   id: string;
@@ -321,6 +325,7 @@ export interface RecipePhoto {
   mime_type: string;
   size_bytes: number;
   data_base64: string;
+  label: string | null;
 }
 
 /**
@@ -333,6 +338,42 @@ export interface RecipePhoto {
 export interface RecipePhotoMeta {
   id: string;
   position: number;
+  label: string | null;
+}
+
+/**
+ * One ordered (image_id, label) pair as sent on the wire to the
+ * versioned create/update/attach RPCs. Used so callers express photo
+ * sets as a single ordered list rather than two parallel arrays they
+ * have to keep in sync.
+ */
+export interface RecipePhotoInput {
+  id: string;
+  label: string | null;
+}
+
+/**
+ * Flatten `RecipePhotoInput[]` into the parallel arrays the
+ * versioned recipe RPCs accept on the wire. Empty/whitespace labels
+ * round-trip as null (the DB also normalises them server-side; we
+ * mirror the rule here so the wire payload is honest about which
+ * photos have a caption and which don't). Returns `null` for the
+ * label array when no photo carries a label - lets the RPC skip the
+ * label parameter path entirely on the common "no captions yet"
+ * shape rather than threading a vector of nulls.
+ */
+function splitPhotoInputs(photos: RecipePhotoInput[]): {
+  imageIds: string[];
+  imageLabels: (string | null)[] | null;
+} {
+  const imageIds = photos.map((p) => p.id);
+  const labels = photos.map((p) => {
+    if (p.label === null || p.label === undefined) return null;
+    const trimmed = p.label.trim();
+    return trimmed.length === 0 ? null : trimmed;
+  });
+  const imageLabels = labels.some((l) => l !== null) ? labels : null;
+  return { imageIds, imageLabels };
 }
 
 /**
@@ -1570,9 +1611,9 @@ export class SupabaseService {
    * `recipe_create_with_version` RPC. `changeMessage` is required —
    * it appears in the History panel as the description of the
    * initial save (e.g. "Imported from NYT Cooking", "Created by
-   * hand"). `imageIds` is the ordered list of `recipe_images` rows
-   * to link to the new version (empty by default for a recipe with
-   * no photos).
+   * hand"). `photos` is the ordered list of `(image_id, label)`
+   * pairs to link to the new version (empty by default for a
+   * recipe with no photos). A null/blank label means "no caption".
    */
   async createRecipe(
     title: string,
@@ -1581,7 +1622,7 @@ export class SupabaseService {
     sourceUrl: string | null,
     rating: number | null,
     changeMessage: string,
-    imageIds: string[] = []
+    photos: RecipePhotoInput[] = []
   ): Promise<Recipe> {
     if (!changeMessage || changeMessage.trim().length === 0) {
       throw new SupabaseError('changeMessage is required');
@@ -1589,6 +1630,7 @@ export class SupabaseService {
     if (rating !== null && (rating < 1 || rating > 5 || !Number.isInteger(rating))) {
       throw new SupabaseError('rating must be an integer between 1 and 5');
     }
+    const { imageIds, imageLabels } = splitPhotoInputs(photos);
     const { data, error } = await this.client.rpc(
       'recipe_create_with_version',
       {
@@ -1598,6 +1640,7 @@ export class SupabaseService {
         p_source_url: sourceUrl,
         p_rating: rating,
         p_image_ids: imageIds,
+        p_image_labels: imageLabels,
         p_change_message: changeMessage.trim(),
       }
     );
@@ -1622,10 +1665,11 @@ export class SupabaseService {
    * across the wire: TypeScript's `'field' in patch` distinguishes
    * the two cases, but the Postgres parameter list cannot.
    *
-   * `image_ids` follows the same pattern: omit to inherit the
-   * previous version's photo set unchanged; pass an array (possibly
-   * empty) to set the new version's photo set explicitly. Bulk
-   * editor saves include it; tool-driven scalar edits omit it.
+   * `photos` follows the same pattern: omit to inherit the previous
+   * version's photo set (and labels) unchanged; pass an array
+   * (possibly empty) to set the new version's photo set explicitly.
+   * Each entry is `{id, label}`; a null/blank label is "no caption".
+   * Bulk editor saves include it; tool-driven scalar edits omit it.
    */
   async updateRecipe(
     id: string,
@@ -1635,7 +1679,7 @@ export class SupabaseService {
       source?: string | null;
       source_url?: string | null;
       rating?: number | null;
-      image_ids?: string[];
+      photos?: RecipePhotoInput[];
     },
     changeMessage: string
   ): Promise<Recipe> {
@@ -1650,6 +1694,8 @@ export class SupabaseService {
     ) {
       throw new SupabaseError('rating must be an integer between 1 and 5');
     }
+    const photoSplit =
+      'photos' in patch ? splitPhotoInputs(patch.photos ?? []) : null;
     const { data, error } = await this.client.rpc(
       'recipe_update_with_version',
       {
@@ -1664,8 +1710,9 @@ export class SupabaseService {
         p_source_url: patch.source_url ?? null,
         p_set_rating: 'rating' in patch,
         p_rating: patch.rating ?? null,
-        p_set_image_ids: 'image_ids' in patch,
-        p_image_ids: patch.image_ids ?? null,
+        p_set_image_ids: photoSplit !== null,
+        p_image_ids: photoSplit?.imageIds ?? null,
+        p_image_labels: photoSplit?.imageLabels ?? null,
         p_change_message: changeMessage.trim(),
       }
     );
@@ -1719,9 +1766,10 @@ export class SupabaseService {
    * recipe (defense against stale UI state passing the wrong id).
    *
    * Photos round-trip through the snapshot too: we read the version's
-   * link rows and pass the ordered image_ids into `image_ids` on the
-   * update patch. Revert restores the exact photo set that was on the
-   * recipe at the moment that version was saved.
+   * link rows (image ids + labels in display order) and pass them
+   * into `photos` on the update patch. Revert restores the exact
+   * photo set, order, and captions that were on the recipe at the
+   * moment that version was saved.
    */
   async revertRecipe(
     recipeId: string,
@@ -1733,7 +1781,7 @@ export class SupabaseService {
     if (v.recipe_id !== recipeId) {
       throw new SupabaseError('version belongs to a different recipe');
     }
-    const imageIds = await this.listRecipeVersionPhotoIds(versionId);
+    const photos = await this.listRecipeVersionPhotoInputs(versionId);
     return this.updateRecipe(
       recipeId,
       {
@@ -1742,7 +1790,7 @@ export class SupabaseService {
         source: v.source,
         source_url: v.source_url,
         rating: v.rating,
-        image_ids: imageIds,
+        photos,
       },
       changeMessage
     );
@@ -1803,7 +1851,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('recipe_versions')
       .select(
-        'id, recipe_version_images(position, recipe_images(id, mime_type, size_bytes, data))'
+        'id, recipe_version_images(position, label, recipe_images(id, mime_type, size_bytes, data))'
       )
       .eq('recipe_id', recipeId)
       .order('created_at', { ascending: false })
@@ -1826,6 +1874,7 @@ export class SupabaseService {
     };
     type LinkRow = {
       position: number;
+      label: string | null;
       recipe_images: ImageEmbed | ImageEmbed[] | null;
     };
     const links = (data as unknown as { recipe_version_images?: LinkRow[] | null })
@@ -1843,6 +1892,7 @@ export class SupabaseService {
         mime_type: img.mime_type,
         size_bytes: img.size_bytes,
         data_base64: img.data,
+        label: l.label ?? null,
       });
     }
     photos.sort((a, b) => a.position - b.position);
@@ -1850,19 +1900,24 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch just the image IDs (in order) on a given version. Used by
-   * `revertRecipe` to round-trip the photo set without paying for the
-   * bytes - the bytes already exist in `recipe_images`, all we need
-   * for the revert is the ordered list of which to link.
+   * Fetch just the image IDs and labels (in order) on a given
+   * version. Used by `revertRecipe` to round-trip the photo set
+   * without paying for the bytes - the bytes already exist in
+   * `recipe_images`, all we need for the revert is the ordered list
+   * of `(id, label)` pairs to link onto the new version.
    */
-  async listRecipeVersionPhotoIds(versionId: string): Promise<string[]> {
+  async listRecipeVersionPhotoInputs(
+    versionId: string
+  ): Promise<RecipePhotoInput[]> {
     const { data, error } = await this.client
       .from('recipe_version_images')
-      .select('image_id, position')
+      .select('image_id, position, label')
       .eq('recipe_version_id', versionId)
       .order('position', { ascending: true });
     if (error) throw new SupabaseError(error.message);
-    return ((data ?? []) as Array<{ image_id: string }>).map((r) => r.image_id);
+    return (
+      (data ?? []) as Array<{ image_id: string; label: string | null }>
+    ).map((r) => ({ id: r.image_id, label: r.label ?? null }));
   }
 
   /**
@@ -1875,19 +1930,27 @@ export class SupabaseService {
   async listRecipePhotoMeta(recipeId: string): Promise<RecipePhotoMeta[]> {
     const { data, error } = await this.client
       .from('recipe_versions')
-      .select('id, recipe_version_images(position, image_id)')
+      .select('id, recipe_version_images(position, image_id, label)')
       .eq('recipe_id', recipeId)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
     if (error) throw new SupabaseError(error.message);
     if (!data) return [];
-    type LinkRow = { position: number; image_id: string };
+    type LinkRow = {
+      position: number;
+      image_id: string;
+      label: string | null;
+    };
     const links = (data as { recipe_version_images?: LinkRow[] | null })
       .recipe_version_images;
     if (!Array.isArray(links)) return [];
     return links
-      .map((l) => ({ id: l.image_id, position: l.position }))
+      .map((l) => ({
+        id: l.image_id,
+        position: l.position,
+        label: l.label ?? null,
+      }))
       .sort((a, b) => a.position - b.position);
   }
 
@@ -1903,18 +1966,28 @@ export class SupabaseService {
    */
   async attachRecipePhotos(
     recipeId: string,
-    imageIds: string[],
+    photos: RecipePhotoInput[],
     changeMessage: string
   ): Promise<RecipePhotoMeta[]> {
+    const { imageIds, imageLabels } = splitPhotoInputs(photos);
     const { data, error } = await this.client.rpc('recipe_attach_photos', {
       p_recipe_id: recipeId,
       p_image_ids: imageIds,
+      p_image_labels: imageLabels,
       p_change_message: changeMessage.trim(),
     });
     if (error) throw new SupabaseError(error.message);
-    return ((data ?? []) as Array<{ image_id: string; position: number }>).map(
-      (r) => ({ id: r.image_id, position: r.position })
-    );
+    return (
+      (data ?? []) as Array<{
+        image_id: string;
+        position: number;
+        label: string | null;
+      }>
+    ).map((r) => ({
+      id: r.image_id,
+      position: r.position,
+      label: r.label ?? null,
+    }));
   }
 
   /**
@@ -1933,9 +2006,17 @@ export class SupabaseService {
       p_change_message: changeMessage.trim(),
     });
     if (error) throw new SupabaseError(error.message);
-    return ((data ?? []) as Array<{ image_id: string; position: number }>).map(
-      (r) => ({ id: r.image_id, position: r.position })
-    );
+    return (
+      (data ?? []) as Array<{
+        image_id: string;
+        position: number;
+        label: string | null;
+      }>
+    ).map((r) => ({
+      id: r.image_id,
+      position: r.position,
+      label: r.label ?? null,
+    }));
   }
 
   /**
@@ -1954,9 +2035,63 @@ export class SupabaseService {
       p_change_message: changeMessage.trim(),
     });
     if (error) throw new SupabaseError(error.message);
-    return ((data ?? []) as Array<{ image_id: string; position: number }>).map(
-      (r) => ({ id: r.image_id, position: r.position })
-    );
+    return (
+      (data ?? []) as Array<{
+        image_id: string;
+        position: number;
+        label: string | null;
+      }>
+    ).map((r) => ({
+      id: r.image_id,
+      position: r.position,
+      label: r.label ?? null,
+    }));
+  }
+
+  /**
+   * Update the labels (captions) on photos that are already linked
+   * to a recipe. `photos` is the list of `(id, label)` pairs to
+   * change; photos not named keep their existing labels. A null /
+   * blank label clears the caption. Creates a new version row so a
+   * label edit shows in the History panel like every other change.
+   */
+  async setRecipePhotoLabels(
+    recipeId: string,
+    photos: RecipePhotoInput[],
+    changeMessage: string
+  ): Promise<RecipePhotoMeta[]> {
+    if (photos.length === 0) {
+      throw new SupabaseError('photos must contain at least one entry');
+    }
+    // Force the parallel arrays - the RPC requires both. Empty/blank
+    // labels survive as nulls in the wire payload (not the elided
+    // path splitPhotoInputs takes for "no labels at all"), since the
+    // contract here is "set this photo's label to whatever I sent,
+    // even if that's null."
+    const imageIds = photos.map((p) => p.id);
+    const imageLabels = photos.map((p) => {
+      if (p.label === null || p.label === undefined) return null;
+      const trimmed = p.label.trim();
+      return trimmed.length === 0 ? null : trimmed;
+    });
+    const { data, error } = await this.client.rpc('recipe_set_photo_labels', {
+      p_recipe_id: recipeId,
+      p_image_ids: imageIds,
+      p_image_labels: imageLabels,
+      p_change_message: changeMessage.trim(),
+    });
+    if (error) throw new SupabaseError(error.message);
+    return (
+      (data ?? []) as Array<{
+        image_id: string;
+        position: number;
+        label: string | null;
+      }>
+    ).map((r) => ({
+      id: r.image_id,
+      position: r.position,
+      label: r.label ?? null,
+    }));
   }
 
   // journal_entries (Journal) ---------------------------------------

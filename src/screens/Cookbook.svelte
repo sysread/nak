@@ -106,14 +106,19 @@
   // Working photo set for the edit pane. Each entry carries the
   // server-side `image_id` (already created via `upsertRecipeImage`
   // before being added to the draft) plus the bytes for inline
-  // preview. The save path passes `imageIds.map(p => p.imageId)` as
-  // `image_ids` on the update RPC, so the photo set lives or dies
-  // with the rest of the form submission.
+  // preview, plus an in-memory `label` that the user is editing.
+  // Label changes do NOT save until the user clicks Save - they
+  // ride along on the same versioned write as title/cooklang/etc.
+  // so the History panel shows one row per overall save, not a row
+  // per keystroke. The save path forwards `{id, label}` pairs to
+  // the update RPC as `photos`, so adds, removes, reorders, AND
+  // label edits land in the version snapshot together.
   interface DraftPhoto {
     imageId: string;
     mimeType: string;
     sizeBytes: number;
     dataBase64: string;
+    label: string;
   }
   let draftPhotos = $state<DraftPhoto[]>([]);
   // True while a photo upload (downscale + sha256 + upsert) is in
@@ -302,6 +307,10 @@
       mimeType: p.mime_type,
       sizeBytes: p.size_bytes,
       dataBase64: p.data_base64,
+      // Seed the input with the saved label (or empty when there
+      // isn't one). Empty string is the "no caption" sentinel in
+      // the form; the wire mapper trims it back to null on save.
+      label: p.label ?? '',
     }));
     pane = 'edit';
   }
@@ -342,13 +351,19 @@
       const source = draftSource.trim().length > 0 ? draftSource.trim() : null;
       const sourceUrl =
         draftSourceUrl.trim().length > 0 ? draftSourceUrl.trim() : null;
-      // Always pass the current draft photo set to the save - the
-      // version snapshot needs to capture photos alongside the rest of
-      // the editable state. The RPC's `p_set_image_ids=true` mode
-      // handles both unchanged sets (re-link the same image_ids) and
-      // mutated sets (add/remove/reorder) the same way, so we don't
-      // need to diff against the prior state in the client.
-      const imageIds = draftPhotos.map((p) => p.imageId);
+      // Always pass the current draft photo set (with labels) to the
+      // save - the version snapshot needs to capture photos alongside
+      // the rest of the editable state. The RPC's
+      // `p_set_image_ids=true` mode handles unchanged sets (re-link
+      // the same ids), mutated sets (add/remove/reorder), AND label
+      // edits the same way, so we don't diff against the prior state
+      // in the client. Labels are kept in memory on `draftPhotos`
+      // until this save fires so the user can type without each
+      // keystroke landing a version row.
+      const photos = draftPhotos.map((p) => ({
+        id: p.imageId,
+        label: p.label,
+      }));
       if (activeId) {
         await app.supabase.updateRecipe(
           activeId,
@@ -358,7 +373,7 @@
             source,
             source_url: sourceUrl,
             rating: draftRating,
-            image_ids: imageIds,
+            photos,
           },
           changeMessage
         );
@@ -370,7 +385,7 @@
           sourceUrl,
           draftRating,
           changeMessage,
-          imageIds
+          photos
         );
         activeId = row.id;
       }
@@ -459,6 +474,9 @@
               mimeType: downscaled.type,
               sizeBytes: downscaled.size,
               dataBase64: base64,
+              // New uploads start without a label; the user fills
+              // the input below the thumb if they want a caption.
+              label: '',
             },
           ];
         } catch (err) {
@@ -910,19 +928,29 @@
             {#if Array.isArray(activePhotos) && activePhotos.length > 0}
               <div class="recipe-photos-strip" role="list">
                 {#each activePhotos as p, i (p.id)}
-                  <button
-                    type="button"
-                    class="photo-thumb"
-                    onclick={() => openLightbox(i)}
-                    title="Open photo"
-                    aria-label="Open photo {i + 1} of {activePhotos.length}"
-                  >
-                    <img
-                      src={dataUrlFor(p.mime_type, p.data_base64)}
-                      alt=""
-                      loading="lazy"
-                    />
-                  </button>
+                  <figure class="photo-thumb-figure">
+                    <button
+                      type="button"
+                      class="photo-thumb"
+                      onclick={() => openLightbox(i)}
+                      title={p.label ?? 'Open photo'}
+                      aria-label={p.label
+                        ? `Open photo ${i + 1} of ${activePhotos.length}: ${p.label}`
+                        : `Open photo ${i + 1} of ${activePhotos.length}`}
+                    >
+                      <img
+                        src={dataUrlFor(p.mime_type, p.data_base64)}
+                        alt={p.label ?? ''}
+                        title={p.label ?? ''}
+                        loading="lazy"
+                      />
+                    </button>
+                    {#if p.label}
+                      <figcaption class="photo-thumb-caption">
+                        <em>{p.label}</em>
+                      </figcaption>
+                    {/if}
+                  </figure>
                 {/each}
               </div>
             {/if}
@@ -1065,7 +1093,7 @@
                 <div class="recipe-photo-edit-cell">
                   <img
                     src={dataUrlFor(p.mimeType, p.dataBase64)}
-                    alt=""
+                    alt={p.label}
                     loading="lazy"
                   />
                   <div class="recipe-photo-edit-cell-actions">
@@ -1093,6 +1121,19 @@
                       aria-label="Remove photo"
                     >×</button>
                   </div>
+                  <!-- Optional caption. Edits stay in memory until
+                       the user clicks Save - then the whole photo
+                       set (with labels) lands in one version row.
+                       maxlength matches the schema cap below in
+                       the dev docs (200 chars). -->
+                  <input
+                    type="text"
+                    class="recipe-photo-edit-label"
+                    bind:value={draftPhotos[i]!.label}
+                    maxlength={200}
+                    placeholder="Caption (optional)"
+                    aria-label="Photo {i + 1} caption"
+                  />
                   <span class="subtle recipe-photo-edit-meta">
                     {formatBytes(p.sizeBytes)}
                   </span>
@@ -1201,8 +1242,19 @@
       <img
         class="recipe-lightbox-img"
         src={dataUrlFor(p.mime_type, p.data_base64)}
-        alt=""
+        alt={p.label ?? ''}
+        title={p.label ?? ''}
       />
+      {#if p.label}
+        <!-- Caption pinned above the counter so the two pieces of
+             chrome don't overlap on narrow viewports. The italic
+             treatment matches the thumb-strip caption so the same
+             text reads consistently across the strip and the
+             lightbox. -->
+        <span class="recipe-lightbox-caption" aria-live="polite">
+          <em>{p.label}</em>
+        </span>
+      {/if}
     {/if}
     {#if activePhotos.length > 1}
       <span class="subtle recipe-lightbox-counter" aria-live="polite">
@@ -1651,6 +1703,18 @@
     gap: 0.5rem;
     margin: 0.25rem 0 1rem;
   }
+  /* Wrapper so the optional caption sits directly under the thumb
+     and the strip wraps as a unit (thumb + caption together) rather
+     than splitting a caption away from its image at a wrap point.
+     Reset the default <figure> margin so the wrapper doesn't push
+     the strip's own gap. */
+  .photo-thumb-figure {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 96px;
+    margin: 0;
+  }
   .photo-thumb {
     width: 96px;
     height: 96px;
@@ -1673,6 +1737,23 @@
     height: 100%;
     object-fit: cover;
     display: block;
+  }
+  /* Caption under the thumbnail. Italic per the spec; muted colour
+     so the recipe text below stays the focal point. The two-line
+     clamp keeps a long caption from pushing the strip's row height
+     past what the thumbnail establishes - the full text is still
+     visible on hover (img title) and in the lightbox. */
+  .photo-thumb-caption {
+    margin: 0.25rem 0 0;
+    font-size: 0.75rem;
+    color: var(--muted);
+    text-align: center;
+    line-height: 1.25;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
   }
 
   /* Edit pane photo grid. Shares the thumb visual with the detail
@@ -1722,6 +1803,25 @@
   .recipe-photo-edit-meta {
     text-align: center;
     font-size: 0.7rem;
+  }
+  /* In-memory caption input. Slim styling so two adjacent cells fit
+     side-by-side on narrow viewports the same way they did before
+     the input arrived. The text typed here doesn't save until the
+     user clicks Save - matches the form's "everything moves on
+     submit" model. */
+  .recipe-photo-edit-label {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.2rem 0.35rem;
+    font-size: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .recipe-photo-edit-label:focus-visible {
+    outline: none;
+    border-color: var(--accent);
   }
   .recipe-photo-edit-add {
     width: 110px;
@@ -1809,5 +1909,26 @@
     background: rgba(0, 0, 0, 0.4);
     padding: 0.2rem 0.6rem;
     border-radius: 999px;
+  }
+  /* Lightbox caption. Sits above the counter so the two pieces of
+     chrome don't overlap on narrow viewports. max-width caps the
+     line length on a wide-screen so a long caption doesn't extend
+     off-image; max-height plus overflow lets the caption scroll
+     if the user wrote a paragraph rather than a phrase. */
+  .recipe-lightbox-caption {
+    position: absolute;
+    bottom: 3rem;
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 0.95rem;
+    background: rgba(0, 0, 0, 0.5);
+    padding: 0.35rem 0.75rem;
+    border-radius: 6px;
+    max-width: min(80ch, 90vw);
+    max-height: 6rem;
+    overflow: auto;
+    text-align: center;
+    line-height: 1.35;
   }
 </style>

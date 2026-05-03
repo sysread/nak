@@ -277,6 +277,7 @@ describe('tool registry', () => {
       'recipe_photos_attach',
       'recipe_photos_remove',
       'recipe_photos_reorder',
+      'recipe_photo_label_set',
     ]);
     expect(memoriesToolbox.tools.map((t) => t.name)).toEqual([
       'memory_search',

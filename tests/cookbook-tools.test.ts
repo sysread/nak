@@ -48,7 +48,7 @@ function ctxFor(svc: Partial<SupabaseService>): ToolContext {
 }
 
 describe('recipe tools — registry', () => {
-  it('all eight recipe tools are in the main TOOLS list', () => {
+  it('all nine recipe tools are in the main TOOLS list', () => {
     const names = TOOLS.map((t: ToolDef) => t.name);
     expect(names).toContain('recipe_save');
     expect(names).toContain('recipe_list');
@@ -58,6 +58,7 @@ describe('recipe tools — registry', () => {
     expect(names).toContain('recipe_photos_attach');
     expect(names).toContain('recipe_photos_remove');
     expect(names).toContain('recipe_photos_reorder');
+    expect(names).toContain('recipe_photo_label_set');
   });
 });
 
@@ -234,8 +235,8 @@ describe('recipe_get', () => {
     const listRecipePhotoMeta = vi
       .fn()
       .mockResolvedValue([
-        { id: 'img-a', position: 0 },
-        { id: 'img-b', position: 1 },
+        { id: 'img-a', position: 0, label: 'finished plate' },
+        { id: 'img-b', position: 1, label: null },
       ]);
     const out = await recipeGet.execute(
       { id: 'r-1' },
@@ -249,8 +250,8 @@ describe('recipe_get', () => {
       recipe: {
         ...sampleRecipe(),
         photos: [
-          { id: 'img-a', position: 0 },
-          { id: 'img-b', position: 1 },
+          { id: 'img-a', position: 0, label: 'finished plate' },
+          { id: 'img-b', position: 1, label: null },
         ],
       },
     });
@@ -468,21 +469,43 @@ describe('SupabaseService.createRecipe', () => {
       // pass an explicit list. The RPC is happy with an empty array;
       // the link-write loop simply does nothing.
       p_image_ids: [],
+      // Labels travel parallel to image_ids; the helper elides the
+      // labels array entirely when no caption is set so the RPC
+      // skips the label-assignment branch.
+      p_image_labels: null,
       p_change_message: 'init',
     });
   });
 
-  it('forwards a non-empty image_ids list when one is provided', async () => {
+  it('forwards a non-empty photos list when one is provided', async () => {
     const rpc = vi
       .fn()
       .mockResolvedValue({ data: [sampleRecipe()], error: null });
     const svc = makeService(makeRpcOnlyClient(rpc));
     await svc.createRecipe('T', 'X', null, null, null, 'init', [
-      'img-a',
-      'img-b',
+      { id: 'img-a', label: null },
+      { id: 'img-b', label: null },
     ]);
     const [, args] = rpc.mock.calls[0]!;
     expect(args.p_image_ids).toEqual(['img-a', 'img-b']);
+    expect(args.p_image_labels).toBe(null);
+  });
+
+  it('forwards labels parallel to image_ids when at least one photo has a caption', async () => {
+    const rpc = vi
+      .fn()
+      .mockResolvedValue({ data: [sampleRecipe()], error: null });
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await svc.createRecipe('T', 'X', null, null, null, 'init', [
+      { id: 'img-a', label: 'finished plate' },
+      { id: 'img-b', label: '' },
+      { id: 'img-c', label: null },
+    ]);
+    const [, args] = rpc.mock.calls[0]!;
+    expect(args.p_image_ids).toEqual(['img-a', 'img-b', 'img-c']);
+    // Empty / whitespace strings normalise to null so the wire
+    // payload is honest about which photos have a caption.
+    expect(args.p_image_labels).toEqual(['finished plate', null, null]);
   });
 
   it('passes p_rating: null when the recipe is unrated', async () => {
@@ -540,26 +563,56 @@ describe('SupabaseService.updateRecipe', () => {
       p_set_rating: false,
       p_rating: null,
       // Photos absent from the patch -> p_set_image_ids: false, so
-      // the new version inherits the previous version's link set.
+      // the new version inherits the previous version's link set
+      // (and labels). Labels ride along with the inherit path; the
+      // wire still threads p_image_labels: null when nothing is set.
       p_set_image_ids: false,
       p_image_ids: null,
+      p_image_labels: null,
       p_change_message: 'edit',
     });
   });
 
-  it('passes image_ids through with p_set_image_ids: true when present', async () => {
+  it('passes photos through with p_set_image_ids: true when present', async () => {
     const rpc = vi
       .fn()
       .mockResolvedValue({ data: [sampleRecipe()], error: null });
     const svc = makeService(makeRpcOnlyClient(rpc));
     await svc.updateRecipe(
       'r-1',
-      { image_ids: ['img-a', 'img-b'] },
+      {
+        photos: [
+          { id: 'img-a', label: null },
+          { id: 'img-b', label: null },
+        ],
+      },
       'reordered photos'
     );
     const [, args] = rpc.mock.calls[0]!;
     expect(args.p_set_image_ids).toBe(true);
     expect(args.p_image_ids).toEqual(['img-a', 'img-b']);
+    expect(args.p_image_labels).toBe(null);
+  });
+
+  it('threads photo labels parallel with image_ids when at least one is set', async () => {
+    const rpc = vi
+      .fn()
+      .mockResolvedValue({ data: [sampleRecipe()], error: null });
+    const svc = makeService(makeRpcOnlyClient(rpc));
+    await svc.updateRecipe(
+      'r-1',
+      {
+        photos: [
+          { id: 'img-a', label: 'finished plate' },
+          { id: 'img-b', label: null },
+        ],
+      },
+      'captioned plate'
+    );
+    const [, args] = rpc.mock.calls[0]!;
+    expect(args.p_set_image_ids).toBe(true);
+    expect(args.p_image_ids).toEqual(['img-a', 'img-b']);
+    expect(args.p_image_labels).toEqual(['finished plate', null]);
   });
 
   it('threads rating through with the same set-flag pattern', async () => {
@@ -610,13 +663,17 @@ describe('SupabaseService.updateRecipe', () => {
 
 describe('SupabaseService.revertRecipe', () => {
   // revertRecipe is three calls now: getRecipeVersion (a `from` chain
-  // ending in maybeSingle), listRecipeVersionPhotoIds (a `from` chain
-  // ending in order), then updateRecipe (an `rpc` call). The stub
-  // dispatches by table name so both `from` chains resolve to the
-  // shape their caller expects.
+  // ending in maybeSingle), listRecipeVersionPhotoInputs (a `from`
+  // chain ending in order), then updateRecipe (an `rpc` call). The
+  // stub dispatches by table name so both `from` chains resolve to
+  // the shape their caller expects.
   function makeRevertClient(
     version: RecipeVersion | null,
-    photoLinks: Array<{ image_id: string; position: number }> = []
+    photoLinks: Array<{
+      image_id: string;
+      position: number;
+      label: string | null;
+    }> = []
   ) {
     const rpc = vi
       .fn()
@@ -653,8 +710,8 @@ describe('SupabaseService.revertRecipe', () => {
   it('looks up the version, then calls updateRecipe with its content + change message', async () => {
     const v = sampleVersion();
     const { rpc, client } = makeRevertClient(v, [
-      { image_id: 'img-a', position: 0 },
-      { image_id: 'img-b', position: 1 },
+      { image_id: 'img-a', position: 0, label: 'finished plate' },
+      { image_id: 'img-b', position: 1, label: null },
     ]);
     const svc = makeService(client);
     await svc.revertRecipe('r-1', 'v-1', 'Reverted to v-1');
@@ -673,9 +730,12 @@ describe('SupabaseService.revertRecipe', () => {
       p_source_url: v.source_url,
       p_set_rating: true,
       p_rating: v.rating,
-      // Revert restores the photo set the version held, in order.
+      // Revert restores the photo set the version held, in order,
+      // with labels intact - a revert that dropped captions wouldn't
+      // honestly recreate the snapshot.
       p_set_image_ids: true,
       p_image_ids: ['img-a', 'img-b'],
+      p_image_labels: ['finished plate', null],
       p_change_message: 'Reverted to v-1',
     });
   });

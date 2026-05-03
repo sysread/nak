@@ -22,7 +22,8 @@ export const recipePhotosRemove: ToolDef = {
     'on the recipe; an unknown id fails the whole call rather than ' +
     'silently skipping. `change_message` is REQUIRED and lands in ' +
     'the recipe history. Returns {recipe_id, photos: [{id, ' +
-    'position}, ...]} - the post-removal full ordered set.',
+    'position, label}, ...]} - the post-removal full ordered set, ' +
+    'with the surviving photos\' captions preserved.',
   shortDescription: "remove photos from a recipe by id",
   parameters: {
     type: 'object',

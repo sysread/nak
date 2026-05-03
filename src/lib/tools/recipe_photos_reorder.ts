@@ -21,10 +21,12 @@ export const recipePhotosReorder: ToolDef = {
     'Call `recipe_get` first to read the current `photos` array, ' +
     'then pass the same ids back in the desired order. To add or ' +
     'remove photos, use `recipe_photos_attach` or ' +
-    '`recipe_photos_remove` - this tool only reorders. ' +
+    '`recipe_photos_remove`; to change captions, use ' +
+    '`recipe_photo_label_set`. This tool only reorders - existing ' +
+    'captions travel with their photos automatically. ' +
     '`change_message` is REQUIRED and lands in the recipe history. ' +
-    'Returns {recipe_id, photos: [{id, position}, ...]} - the new ' +
-    'ordering with positions renumbered from 0.',
+    'Returns {recipe_id, photos: [{id, position, label}, ...]} - ' +
+    'the new ordering with positions renumbered from 0.',
   shortDescription: 'reorder a recipe’s photos',
   parameters: {
     type: 'object',

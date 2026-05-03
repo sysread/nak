@@ -37,12 +37,20 @@ export const recipePhotosAttach: ToolDef = {
     '<thread_attachments> system block, case-sensitive). Each must be ' +
     'live (not expired). Photos already on the recipe are not ' +
     'duplicated; the array appends to the end of the existing photo ' +
-    'set. Use `recipe_photos_remove` to drop photos and ' +
-    '`recipe_photos_reorder` to change their order. `change_message` ' +
-    'is REQUIRED and lands in the recipe history. Returns ' +
-    '{recipe_id, photos: [{id, position}, ...]} - the post-attach ' +
-    'full ordered set so you can chain into a follow-up call without ' +
-    'a separate read.',
+    'set. `labels` is OPTIONAL and parallel-indexed with `filenames` ' +
+    '(labels[i] is the caption for filenames[i]); pass empty string ' +
+    'or null for photos that should have no caption, and omit the ' +
+    'array entirely when no photo gets a caption. Captions are ' +
+    'rendered below the thumbnail and beside the lightbox image. ' +
+    'When attaching a filename whose image is already on the recipe ' +
+    "and `labels[i]` is non-empty, the existing photo's caption is " +
+    'updated. Use `recipe_photos_remove` to drop photos, ' +
+    '`recipe_photos_reorder` to change their order, and ' +
+    '`recipe_photo_label_set` to change captions on photos already ' +
+    'on the recipe. `change_message` is REQUIRED and lands in the ' +
+    'recipe history. Returns {recipe_id, photos: [{id, position, ' +
+    'label}, ...]} - the post-attach full ordered set so you can ' +
+    'chain into a follow-up call without a separate read.',
   shortDescription: 'attach conversation images to a recipe',
   parameters: {
     type: 'object',
@@ -59,6 +67,17 @@ export const recipePhotosAttach: ToolDef = {
           'Conversation-attachment filenames to copy onto the recipe, ' +
           'in display order. Must match the names in ' +
           '<thread_attachments> exactly (case-sensitive).',
+      },
+      labels: {
+        type: 'array',
+        items: { type: ['string', 'null'], maxLength: 200 },
+        description:
+          'Optional captions for the photos, parallel-indexed with ' +
+          '`filenames`. labels[i] is the caption for filenames[i]; ' +
+          'pass empty string or null when a photo should have no ' +
+          'caption. Length MUST match `filenames` when provided. ' +
+          'Omit the field entirely (do not pass an empty array) ' +
+          'when none of the photos being attached get a caption.',
       },
       change_message: {
         type: 'string',
@@ -82,6 +101,29 @@ export const recipePhotosAttach: ToolDef = {
       : [];
     if (filenames.length === 0) {
       throw new Error('filenames must contain at least one entry');
+    }
+    // Labels are optional and parallel-indexed. If the model passes
+    // a length-mismatch, fail loud rather than silently using the
+    // wrong caption for the wrong photo - that's worse than no
+    // caption.
+    let labels: (string | null)[] | null = null;
+    if (args.labels !== undefined && args.labels !== null) {
+      if (!Array.isArray(args.labels)) {
+        throw new Error('labels must be an array when provided');
+      }
+      if (args.labels.length !== filenames.length) {
+        throw new Error(
+          `labels length (${args.labels.length}) must match filenames length (${filenames.length})`
+        );
+      }
+      labels = args.labels.map((l) => {
+        if (l === null || l === undefined) return null;
+        if (typeof l !== 'string') {
+          throw new Error('labels must contain strings or null');
+        }
+        const trimmed = l.trim();
+        return trimmed.length === 0 ? null : trimmed;
+      });
     }
     const changeMessage =
       typeof args.change_message === 'string' ? args.change_message.trim() : '';
@@ -138,21 +180,24 @@ export const recipePhotosAttach: ToolDef = {
     }
 
     // Bytes are good. Upsert each into the recipe-image library
-    // (dedup by sha256) and collect the resulting image_ids.
-    const imageIds: string[] = [];
-    for (const r of resolved) {
+    // (dedup by sha256) and collect the resulting (id, label) pairs
+    // in input order so the attach call sees them parallel to the
+    // filenames the model passed.
+    const photoInputs: Array<{ id: string; label: string | null }> = [];
+    for (let i = 0; i < resolved.length; i++) {
+      const r = resolved[i]!;
       const id = await ctx.supabase.upsertRecipeImage(
         r.sha256,
         r.mime,
         r.size,
         r.data
       );
-      imageIds.push(id);
+      photoInputs.push({ id, label: labels ? (labels[i] ?? null) : null });
     }
 
     const photos = await ctx.supabase.attachRecipePhotos(
       recipeId,
-      imageIds,
+      photoInputs,
       changeMessage
     );
     notifyCookbookChanged();

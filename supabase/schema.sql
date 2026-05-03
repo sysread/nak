@@ -1115,9 +1115,24 @@ create table if not exists public.recipe_version_images (
   -- The link-write code assigns sequentially from 0; reorder
   -- operations renumber.
   position int not null,
+  -- Optional caption for the photo, scoped to this version's link.
+  -- Renders below the thumbnail and above the lightbox image when
+  -- present; also feeds the img alt/title for accessibility. Labels
+  -- are not unique - two photos on the same recipe can share the
+  -- same caption. NULL means "no label". Per-version (link-level)
+  -- so a label change creates a new version like every other photo
+  -- edit, and reverting restores the labels that were on the recipe
+  -- when the snapshot was saved.
+  label text,
   created_at timestamptz not null default now(),
   primary key (recipe_version_id, image_id)
 );
+
+-- Idempotent on a database synced before labels existed. The column
+-- is added nullable; existing link rows get NULL labels and render
+-- without a caption, matching the pre-label behaviour.
+alter table public.recipe_version_images
+  add column if not exists label text;
 
 create index if not exists recipe_version_images_image_idx
   on public.recipe_version_images (image_id);
@@ -1246,6 +1261,8 @@ drop function if exists public.recipe_create_with_version(
   text, text, text, text, smallint, text);
 drop function if exists public.recipe_create_with_version(
   text, text, text, text, smallint, uuid[], text);
+drop function if exists public.recipe_create_with_version(
+  text, text, text, text, smallint, uuid[], text[], text);
 create or replace function public.recipe_create_with_version(
   p_title text,
   p_cooklang text,
@@ -1253,6 +1270,7 @@ create or replace function public.recipe_create_with_version(
   p_source_url text,
   p_rating smallint,
   p_image_ids uuid[],
+  p_image_labels text[],
   p_change_message text
 ) returns table (
   id uuid,
@@ -1272,6 +1290,7 @@ declare
   v_now timestamptz := now();
   v_image_id uuid;
   v_pos int := 0;
+  v_label text;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
   if p_title is null or length(trim(p_title)) = 0 then
@@ -1288,6 +1307,16 @@ begin
   -- this just produces a nicer message at the API surface.
   if p_rating is not null and (p_rating < 1 or p_rating > 5) then
     raise exception 'rating must be between 1 and 5';
+  end if;
+  -- Labels are optional and parallel-indexed with image_ids. A null
+  -- array means "no labels for any photo"; a non-null array must have
+  -- the same length as p_image_ids so position i in one corresponds
+  -- to position i in the other. Anything else is a programming error
+  -- on the caller side and we fail loud.
+  if p_image_labels is not null
+     and coalesce(array_length(p_image_labels, 1), 0)
+       <> coalesce(array_length(p_image_ids, 1), 0) then
+    raise exception 'image_labels length must match image_ids length';
   end if;
 
   insert into public.recipes (user_id, title, source, source_url, cooklang,
@@ -1315,9 +1344,13 @@ begin
       ) then
         raise exception 'image % not found', v_image_id;
       end if;
+      v_label := null;
+      if p_image_labels is not null then
+        v_label := p_image_labels[v_pos + 1];
+      end if;
       insert into public.recipe_version_images
-        (recipe_version_id, image_id, user_id, position)
-        values (v_version_id, v_image_id, v_uid, v_pos);
+        (recipe_version_id, image_id, user_id, position, label)
+        values (v_version_id, v_image_id, v_uid, v_pos, v_label);
       v_pos := v_pos + 1;
     end loop;
   end if;
@@ -1340,6 +1373,9 @@ drop function if exists public.recipe_update_with_version(
 drop function if exists public.recipe_update_with_version(
   uuid, boolean, text, boolean, text, boolean, text, boolean, text,
   boolean, smallint, boolean, uuid[], text);
+drop function if exists public.recipe_update_with_version(
+  uuid, boolean, text, boolean, text, boolean, text, boolean, text,
+  boolean, smallint, boolean, uuid[], text[], text);
 create or replace function public.recipe_update_with_version(
   p_id uuid,
   p_set_title boolean,
@@ -1354,6 +1390,7 @@ create or replace function public.recipe_update_with_version(
   p_rating smallint,
   p_set_image_ids boolean,
   p_image_ids uuid[],
+  p_image_labels text[],
   p_change_message text
 ) returns table (
   id uuid,
@@ -1378,6 +1415,7 @@ declare
   v_new_version_id uuid;
   v_image_id uuid;
   v_pos int := 0;
+  v_label text;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
   if p_change_message is null or length(trim(p_change_message)) = 0 then
@@ -1386,6 +1424,15 @@ begin
   if p_set_rating and p_rating is not null
      and (p_rating < 1 or p_rating > 5) then
     raise exception 'rating must be between 1 and 5';
+  end if;
+  -- Label parallelism check, same shape as recipe_create_with_version.
+  -- Only meaningful when the caller is also setting image_ids; if
+  -- image_ids is being inherited from the previous version, labels
+  -- ride along with the inheritance and p_image_labels is ignored.
+  if p_set_image_ids and p_image_labels is not null
+     and coalesce(array_length(p_image_labels, 1), 0)
+       <> coalesce(array_length(p_image_ids, 1), 0) then
+    raise exception 'image_labels length must match image_ids length';
   end if;
 
   -- Lock the row and read current state. `for update` prevents the
@@ -1454,9 +1501,13 @@ begin
         ) then
           raise exception 'image % not found', v_image_id;
         end if;
+        v_label := null;
+        if p_image_labels is not null then
+          v_label := p_image_labels[v_pos + 1];
+        end if;
         insert into public.recipe_version_images
-          (recipe_version_id, image_id, user_id, position)
-          values (v_new_version_id, v_image_id, v_uid, v_pos);
+          (recipe_version_id, image_id, user_id, position, label)
+          values (v_new_version_id, v_image_id, v_uid, v_pos, v_label);
         v_pos := v_pos + 1;
       end loop;
     end if;
@@ -1473,9 +1524,12 @@ begin
      order by v.created_at desc
      limit 1;
     if v_prev_version_id is not null then
+      -- Carry forward labels alongside positions; an inherit path
+      -- that dropped them would silently clear captions on every
+      -- non-photo edit.
       insert into public.recipe_version_images
-        (recipe_version_id, image_id, user_id, position)
-      select v_new_version_id, l.image_id, v_uid, l.position
+        (recipe_version_id, image_id, user_id, position, label)
+      select v_new_version_id, l.image_id, v_uid, l.position, l.label
         from public.recipe_version_images l
        where l.recipe_version_id = v_prev_version_id
        order by l.position;
@@ -1559,11 +1613,13 @@ end $$;
 -- current photo set, in array order, and write a new version. Returns
 -- the post-mutation link list as `(image_id, position)` rows.
 drop function if exists public.recipe_attach_photos(uuid, uuid[], text);
+drop function if exists public.recipe_attach_photos(uuid, uuid[], text[], text);
 create or replace function public.recipe_attach_photos(
   p_recipe_id uuid,
   p_image_ids uuid[],
+  p_image_labels text[],
   p_change_message text
-) returns table (image_id uuid, "position" int)
+) returns table (image_id uuid, "position" int, label text)
 language plpgsql security invoker as $$
 declare
   v_uid uuid := auth.uid();
@@ -1571,17 +1627,25 @@ declare
   v_prev_version_id uuid;
   v_image_id uuid;
   v_pos int := 0;
+  v_idx int := 0;
+  v_attach_label text;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
   if p_image_ids is null or array_length(p_image_ids, 1) is null then
     raise exception 'photos is required and must be non-empty';
   end if;
+  if p_image_labels is not null
+     and coalesce(array_length(p_image_labels, 1), 0)
+       <> coalesce(array_length(p_image_ids, 1), 0) then
+    raise exception 'image_labels length must match image_ids length';
+  end if;
 
   v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message);
 
-  -- Carry forward the previous version's links so this version reads
-  -- as "previous + appended". Find the previous version (anything but
-  -- the row we just inserted, ordered newest first).
+  -- Carry forward the previous version's links (and their labels)
+  -- so this version reads as "previous + appended". Dropping labels
+  -- on append would silently strip every existing caption on the
+  -- recipe, which would be a surprising side-effect of "add a photo".
   select v.id
     into v_prev_version_id
     from public.recipe_versions v
@@ -1591,8 +1655,8 @@ begin
    limit 1;
   if v_prev_version_id is not null then
     insert into public.recipe_version_images
-      (recipe_version_id, image_id, user_id, position)
-    select v_new_version_id, l.image_id, v_uid, l.position
+      (recipe_version_id, image_id, user_id, position, label)
+    select v_new_version_id, l.image_id, v_uid, l.position, l.label
       from public.recipe_version_images l
      where l.recipe_version_id = v_prev_version_id
      order by l.position;
@@ -1603,11 +1667,16 @@ begin
   end if;
 
   foreach v_image_id in array p_image_ids loop
+    v_idx := v_idx + 1;
     if not exists (
       select 1 from public.recipe_images
        where id = v_image_id and user_id = v_uid
     ) then
       raise exception 'image % not found', v_image_id;
+    end if;
+    v_attach_label := null;
+    if p_image_labels is not null then
+      v_attach_label := p_image_labels[v_idx];
     end if;
     -- Skip duplicates - if the same image is already on this recipe,
     -- attaching it again is a no-op rather than a primary-key violation
@@ -1617,19 +1686,33 @@ begin
     -- from the same-named OUT parameter declared in this function's
     -- RETURNS TABLE clause - bare `image_id = v_image_id` is
     -- ambiguous to the planner.
+    --
+    -- When a duplicate's incoming label is non-null, update the
+    -- inherited label so the caller can use attach as a "set or
+    -- update label" affordance for an existing photo. A null label
+    -- on a duplicate is treated as "no preference" and leaves the
+    -- existing label alone. Empty / whitespace-only strings reach
+    -- this branch as null (normalised in the TS service helper) so
+    -- attach is additive-only for captions; recipe_photo_label_set
+    -- is the verb for clearing or overwriting existing captions.
     if not exists (
       select 1 from public.recipe_version_images vi
        where vi.recipe_version_id = v_new_version_id and vi.image_id = v_image_id
     ) then
       insert into public.recipe_version_images
-        (recipe_version_id, image_id, user_id, position)
-        values (v_new_version_id, v_image_id, v_uid, v_pos);
+        (recipe_version_id, image_id, user_id, position, label)
+        values (v_new_version_id, v_image_id, v_uid, v_pos, v_attach_label);
       v_pos := v_pos + 1;
+    elsif v_attach_label is not null then
+      update public.recipe_version_images vi
+         set label = v_attach_label
+       where vi.recipe_version_id = v_new_version_id
+         and vi.image_id = v_image_id;
     end if;
   end loop;
 
   return query
-    select l.image_id, l.position
+    select l.image_id, l.position, l.label
       from public.recipe_version_images l
      where l.recipe_version_id = v_new_version_id
      order by l.position;
@@ -1644,7 +1727,7 @@ create or replace function public.recipe_remove_photos(
   p_recipe_id uuid,
   p_image_ids uuid[],
   p_change_message text
-) returns table (image_id uuid, "position" int)
+) returns table (image_id uuid, "position" int, label text)
 language plpgsql security invoker as $$
 declare
   v_uid uuid := auth.uid();
@@ -1688,18 +1771,20 @@ begin
   v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message);
 
   -- Insert survivors in their original relative order, renumbered
-  -- from 0 so positions stay dense.
+  -- from 0 so positions stay dense. Labels travel with the link so
+  -- "remove photo X" doesn't strip captions off the surviving photos.
   insert into public.recipe_version_images
-    (recipe_version_id, image_id, user_id, position)
+    (recipe_version_id, image_id, user_id, position, label)
   select v_new_version_id, l.image_id, v_uid,
-         row_number() over (order by l.position) - 1
+         row_number() over (order by l.position) - 1,
+         l.label
     from public.recipe_version_images l
    where l.recipe_version_id = v_prev_version_id
      and l.image_id <> all (p_image_ids)
    order by l.position;
 
   return query
-    select l.image_id, l.position
+    select l.image_id, l.position, l.label
       from public.recipe_version_images l
      where l.recipe_version_id = v_new_version_id
      order by l.position;
@@ -1714,7 +1799,7 @@ create or replace function public.recipe_reorder_photos(
   p_recipe_id uuid,
   p_image_ids uuid[],
   p_change_message text
-) returns table (image_id uuid, "position" int)
+) returns table (image_id uuid, "position" int, label text)
 language plpgsql security invoker as $$
 declare
   v_uid uuid := auth.uid();
@@ -1771,15 +1856,120 @@ begin
 
   v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message);
 
+  -- Pull each photo's label from the previous version's link so the
+  -- reorder preserves captions. Reorder is "change order, nothing
+  -- else" by contract; if it stripped labels, the LLM would have to
+  -- re-set every caption after every reorder - a footgun the API
+  -- shouldn't hand out.
   foreach v_image_id in array p_image_ids loop
     insert into public.recipe_version_images
-      (recipe_version_id, image_id, user_id, position)
-      values (v_new_version_id, v_image_id, v_uid, v_pos);
+      (recipe_version_id, image_id, user_id, position, label)
+    select v_new_version_id, v_image_id, v_uid, v_pos, l.label
+      from public.recipe_version_images l
+     where l.recipe_version_id = v_prev_version_id
+       and l.image_id = v_image_id;
     v_pos := v_pos + 1;
   end loop;
 
   return query
-    select l.image_id, l.position
+    select l.image_id, l.position, l.label
+      from public.recipe_version_images l
+     where l.recipe_version_id = v_new_version_id
+     order by l.position;
+end $$;
+
+-- recipe_set_photo_labels. Update labels on photos that are already
+-- linked to a recipe. The two arrays are parallel-indexed: image_ids[i]
+-- gets label image_labels[i]. NULL in image_labels clears that photo's
+-- label; an empty string is also treated as a clear (the UI sends "" as
+-- the "no caption" sentinel from a blank input). Photos not named in
+-- p_image_ids inherit their existing labels unchanged.
+--
+-- Like the other photo RPCs, this creates a new recipe_versions row so
+-- a label change shows in the History panel like any other edit.
+drop function if exists public.recipe_set_photo_labels(uuid, uuid[], text[], text);
+create or replace function public.recipe_set_photo_labels(
+  p_recipe_id uuid,
+  p_image_ids uuid[],
+  p_image_labels text[],
+  p_change_message text
+) returns table (image_id uuid, "position" int, label text)
+language plpgsql security invoker as $$
+declare
+  v_uid uuid := auth.uid();
+  v_new_version_id uuid;
+  v_prev_version_id uuid;
+  v_image_id uuid;
+  v_idx int := 0;
+  v_label text;
+  v_missing uuid[];
+begin
+  if v_uid is null then raise exception 'not authenticated'; end if;
+  if p_image_ids is null or array_length(p_image_ids, 1) is null then
+    raise exception 'photos is required and must be non-empty';
+  end if;
+  if p_image_labels is null
+     or coalesce(array_length(p_image_labels, 1), 0)
+       <> coalesce(array_length(p_image_ids, 1), 0) then
+    raise exception 'image_labels length must match image_ids length';
+  end if;
+
+  -- Resolve "currently linked" against the previous version, before
+  -- creating the new one - same pattern as recipe_remove_photos.
+  select v.id
+    into v_prev_version_id
+    from public.recipe_versions v
+    join public.recipes r on r.id = v.recipe_id
+   where v.recipe_id = p_recipe_id and r.user_id = v_uid
+   order by v.created_at desc
+   limit 1;
+  if v_prev_version_id is null then
+    raise exception 'recipe % not found', p_recipe_id;
+  end if;
+
+  -- Verify every requested id is currently on the recipe. Names the
+  -- offenders in the error so the LLM can re-issue against fresh
+  -- state rather than guessing.
+  select array_agg(x)
+    into v_missing
+    from unnest(p_image_ids) x
+   where not exists (
+     select 1 from public.recipe_version_images l
+      where l.recipe_version_id = v_prev_version_id and l.image_id = x
+   );
+  if v_missing is not null then
+    raise exception 'photos not on recipe: %', v_missing;
+  end if;
+
+  v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message);
+
+  -- Carry forward all of the previous version's links (positions and
+  -- labels) verbatim. Photos whose labels we're not changing inherit
+  -- as-is; photos we are changing get UPDATEd below.
+  insert into public.recipe_version_images
+    (recipe_version_id, image_id, user_id, position, label)
+  select v_new_version_id, l.image_id, v_uid, l.position, l.label
+    from public.recipe_version_images l
+   where l.recipe_version_id = v_prev_version_id
+   order by l.position;
+
+  -- Apply the new labels. An empty string normalises to NULL - the
+  -- UI's "blank input means clear" convention - so the DB doesn't
+  -- accumulate "" rows that read as captions of zero width.
+  foreach v_image_id in array p_image_ids loop
+    v_idx := v_idx + 1;
+    v_label := p_image_labels[v_idx];
+    if v_label is not null and length(trim(v_label)) = 0 then
+      v_label := null;
+    end if;
+    update public.recipe_version_images vi
+       set label = v_label
+     where vi.recipe_version_id = v_new_version_id
+       and vi.image_id = v_image_id;
+  end loop;
+
+  return query
+    select l.image_id, l.position, l.label
       from public.recipe_version_images l
      where l.recipe_version_id = v_new_version_id
      order by l.position;

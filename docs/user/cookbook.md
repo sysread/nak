@@ -176,26 +176,40 @@ top of the detail pane, just above the servings line. Click any
 thumbnail to open it full-size; arrow keys page between photos in the
 viewer; Escape (or a click outside the image) dismisses it.
 
+Photos can also carry an optional **caption** (or label) - a short
+note that renders in italics below the thumbnail in the strip and as
+a caption beside the full-size image in the viewer. Captions also
+become the photo's alt text and hover title, so screen readers and
+mouse-hover tooltips pick them up. Captions are optional and don't
+have to be unique - two photos on the same recipe can share the
+same caption, or none at all.
+
 - **In the edit form**, the **Photos** field sits between the change
   message and the Cooklang source. Click **+ Add photo** to pick one or
   more files; the per-cell controls move a photo left or right or
-  remove it. Images are downscaled to 2048 pixels on the long edge
-  before upload, so a 12-megapixel phone photo doesn't bloat the
-  recipe row. The save button saves the photo set with the rest of
-  the form - photo edits land in the History panel under the same
-  change message as everything else in the save.
+  remove it, and the **Caption** input under each photo lets you
+  add or change the label. Images are downscaled to 2048 pixels on
+  the long edge before upload, so a 12-megapixel phone photo doesn't
+  bloat the recipe row. Caption edits stay in memory until you click
+  **Save** - the entire photo set (additions, removals, reorders,
+  and caption changes) lands in one save with one change message,
+  not one save per keystroke. Photo edits land in the History panel
+  under the same change message as everything else in the save.
 - **Asking the model**: tell Nak which photos to add and it will call
-  `recipe_photos_attach`. The photos must be live in this conversation
-  (not yet expired - see the conversation drawer for the per-thread
-  attachment list). Nak can also remove photos (`recipe_photos_remove`)
-  or reorder them (`recipe_photos_reorder`) when you ask. Each tool
+  `recipe_photos_attach`, optionally with a caption per photo
+  ("attach the cookies photo with the caption 'finished plate'").
+  The photos must be live in this conversation (not yet expired -
+  see the conversation drawer for the per-thread attachment list).
+  Nak can also remove photos (`recipe_photos_remove`), reorder them
+  (`recipe_photos_reorder`), or set captions on photos already on
+  the recipe (`recipe_photo_label_set`) when you ask. Each tool
   call lands its own row in the History panel with the message Nak
   wrote.
 
-Photos round-trip through the History panel like every other field:
-revert restores the exact photo set that was on the recipe at the
-moment that version was saved, even if you've added or removed
-photos since.
+Captions and photos round-trip through the History panel like every
+other field: revert restores the exact photo set, order, and
+captions that were on the recipe at the moment that version was
+saved, even if you've added, removed, or relabelled photos since.
 
 ## Editing and deleting
 
