@@ -161,13 +161,18 @@ export async function runIntuitionPipeline(
   inputs: RunIntuitionInputs
 ): Promise<IntuitionPayload | null> {
   const { venice, model, history, signal, round, mood, trigger } = inputs;
+  const startedAt = Date.now();
+  // Log at info so a user troubleshooting "the brain icon never
+  // showed" can see whether the pipeline ever started. The matching
+  // success/failure lines below close the round.
+  log.info('pipeline starting', { trigger, round });
 
   const transcript = buildTranscript(history);
   if (transcript.length === 0) {
     // Empty transcript = nothing to perceive. Caller's debounce
     // should normally avoid this, but we'd rather degrade gracefully
     // than throw on a freshly-minted thread.
-    log.debug('skipped pipeline: empty transcript');
+    log.warn('skipped pipeline: empty transcript');
     return null;
   }
 
@@ -273,7 +278,7 @@ export async function runIntuitionPipeline(
   }
   log.debug('synthesis', { synthesis: synthesisRaw });
 
-  return {
+  const payload: IntuitionPayload = {
     v: 1,
     perception,
     drives,
@@ -284,4 +289,17 @@ export async function runIntuitionPipeline(
     computed_at_at: Date.now(),
     trigger,
   };
+  // Companion to the "pipeline starting" log above. The drive count
+  // matters: less than five means at least one drive call failed (rate
+  // limit, parse error) and the synthesis ran on a partial set. Less
+  // than three is a signal the run is starved enough to be worth
+  // investigating - the synthesis prompt holds up but the texture
+  // drops off.
+  log.info('pipeline complete', {
+    trigger,
+    round,
+    drivesAvailable: Object.keys(drives).length,
+    elapsedMs: Date.now() - startedAt,
+  });
+  return payload;
 }

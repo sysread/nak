@@ -64,14 +64,30 @@ describe('countUserRounds', () => {
 });
 
 describe('evaluatePreRoundTrigger', () => {
-  it('returns null on cold start (no cache) - turn 1 lets title trigger handle it', () => {
+  it('returns "cold" on cold start (no cache) so turn 1 always fires', () => {
+    // Earlier behaviour returned null here, deferring to the title
+    // trigger to populate the cache. That left the feature invisible
+    // on any thread where the model didn't call update_title (manually-
+    // titled threads, threads created before the feature shipped, or
+    // a model that simply skipped the rename) - so the trigger now
+    // fires unconditionally on cold cache.
     expect(
       evaluatePreRoundTrigger({
         cache: null,
         round: 1,
         mood: { band: 2, column: 'confident' },
       })
-    ).toBeNull();
+    ).toBe('cold');
+  });
+
+  it('returns "cold" on cold start even when mood is null', () => {
+    expect(
+      evaluatePreRoundTrigger({
+        cache: null,
+        round: 1,
+        mood: null,
+      })
+    ).toBe('cold');
   });
 
   it('debounces when cache was written this round already', () => {

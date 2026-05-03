@@ -50,19 +50,29 @@ export interface TriggerContext {
  * call. Returns the trigger reason if a refresh is warranted, or
  * null to skip.
  *
- * Order of checks matters: same-round debounce first (cheapest
- * skip), then mood comparison, then stale fuse. The stale fuse is
- * deliberately last - if mood already triggered we don't also need
- * to count it as a stale-fuse run.
+ * Order of checks matters: cold-start first (always fire on a
+ * thread with no cache yet), then same-round debounce, then mood
+ * comparison, then stale fuse. The stale fuse is deliberately last -
+ * if mood already triggered we don't also need to count it as a
+ * stale-fuse run.
+ *
+ * Why cold-start fires here rather than waiting for the title
+ * trigger: a fresh thread CAN go through turn 1 without the model
+ * calling `update_title` (a manually-titled thread, a turn that
+ * doesn't trip the rename heuristic, or just a model that decided
+ * not to comply). Without an unconditional cold-start fire, those
+ * threads never accumulate a payload at all - the feature stays
+ * invisible. The cost is ~3 fast-model roundtrips of latency on
+ * turn 1; the benefit is the user reliably sees an intuition land
+ * by the time the response arrives.
  */
 export function evaluatePreRoundTrigger(ctx: TriggerContext): IntuitionTrigger | null {
   const { cache, round, mood } = ctx;
 
-  // Cold-start: no cache, no pre-round refresh. Wait for the title
-  // trigger (or future stale-fuse runs) to populate. Running cold
-  // adds latency to turn 1 in exchange for an intuition the model
-  // has very little context to compute against.
-  if (!cache) return null;
+  // Cold-start: no cache yet. Fire so the first response is
+  // informed by an intuition rather than waiting on the title
+  // tool to maybe-or-maybe-not be called this turn.
+  if (!cache) return 'cold';
 
   // Same-round debounce: if we already wrote a payload this round,
   // anything that fires after must be a no-op until the next round.

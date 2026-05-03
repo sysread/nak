@@ -66,10 +66,12 @@ If none of those triggers fires, the cached intuition is reused as-is
 and the next response runs without the seven extra calls. That's how
 the layer stays cheap on chitchat and short factual turns.
 
-The very first turn on a new thread runs without intuition - there's
-no prior context for it to read, and a cold-start refresh would just
-add latency. The first refresh typically lands during turn 1 via the
-title trigger and is in place by turn 2.
+The first turn on a new thread always runs the pipeline once before
+the response begins - that's the cold-start fire, and it's what
+makes the brain icon appear by the time the first reply lands. You
+will notice a slightly longer pause before the response starts
+streaming on that very first turn; subsequent turns reuse the cached
+read until something shifts.
 
 ## What it isn't
 

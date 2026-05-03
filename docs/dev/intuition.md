@@ -30,28 +30,34 @@ thought.
 
 Two trigger sites:
 
-1. **Pre-round** (start of `runChatLoop`). Compares the cached
-   payload's mood snapshot against the current mood; refreshes if
-   the valence band index or the confidence column changed. Also
-   the staleness fuse: refreshes after `STALE_FUSE_ROUNDS` user
-   rounds without one.
+1. **Pre-round** (start of `runChatLoop`). On cold cache (no
+   payload yet on this thread) fires unconditionally with reason
+   `cold`. Otherwise compares the cached payload's mood snapshot
+   against the current mood; refreshes if the valence band index
+   or the confidence column changed. Also the staleness fuse:
+   refreshes after `STALE_FUSE_ROUNDS` user rounds without one.
 2. **Mid-turn** (after a successful `update_title` tool result is
    appended to the history). A title rename means the topic
    shifted; the pipeline runs and the new payload replaces the
    pre-round ephemeral message in-place so the model never sees
-   two competing `<think>` blocks.
+   two competing `<think>` blocks. The mid-turn trigger no-ops
+   when the pre-round trigger already wrote a payload this round
+   (the `computed_at_round` debounce primitive).
 
 A round id is the count of user messages in `history`. Tool-using
 turns inflate the chat-loop's own `round` counter but do not
 change the user-round id - one user message, one round id,
 regardless of how many tool calls fire during the response.
 
-Cold start: a thread with no cached payload skips the pre-round
-trigger entirely (running the pipeline cold adds latency without
-context to perceive against). The first refresh typically lands
-during turn 1 via the title trigger - a fresh thread starts on
-the placeholder title, the model is prompted to call `update_title`
-on the first turn, and the mid-turn trigger picks up there.
+Cold start: an earlier revision skipped the pre-round trigger on
+cold cache and waited for `update_title` mid-turn to populate.
+That was brittle - any thread where the model didn't rename
+(manually-titled threads, threads from before the feature
+shipped, or a turn that didn't trip the rename heuristic) stayed
+invisible to the user forever. Pre-round now fires on cold
+cache; the cost is ~3 fast-model roundtrips of latency on turn
+1, paid in exchange for the feature reliably landing on every
+thread by the first response.
 
 ## Files
 
