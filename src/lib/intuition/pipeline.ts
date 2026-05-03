@@ -56,6 +56,20 @@ const log = createLogger('intuition');
  * Drive a single non-streaming Venice completion. Same pattern the
  * samskara and summary agents use; reasoning content on the response
  * is ignored, only the body text contributes.
+ *
+ * disableThinking is non-negotiable: the fast tier currently routes
+ * to GLM-4.7, a reasoning model that by default emits chain-of-
+ * thought through `reasoning_content` BEFORE writing any text into
+ * `content`. With our small maxTokens cap (~400-500), the budget
+ * gets eaten by the CoT preamble and `content` comes back empty
+ * with `finish_reason: 'length'`. Perception then sees an empty
+ * string and aborts the whole pipeline; the cache stays null
+ * forever, the brain icon never appears, and the user reads it as
+ * "the feature is broken." Web_search hit the same trap and fixed
+ * it the same way (see src/lib/tools/web_search.ts for the long-
+ * form rationale). Bypassing reasoning gives every token to the
+ * answer; for an internal-monologue prompt the reasoning pass
+ * wouldn't have added much anyway.
  */
 async function callOnce(
   venice: VeniceClient,
@@ -72,6 +86,7 @@ async function callOnce(
       { role: 'user', content: userContent },
     ],
     maxTokens,
+    disableThinking: true,
     signal,
   });
   return result.text.trim();
@@ -261,6 +276,11 @@ export async function runIntuitionPipeline(
         { role: 'assistant', content: drivesText },
       ],
       maxTokens: 500,
+      // Same rationale as callOnce above - the fast tier is a
+      // reasoning model and we cannot afford to spend the maxTokens
+      // budget on a CoT preamble that never reaches the content
+      // field.
+      disableThinking: true,
       signal,
     });
     synthesisRaw = result.text.trim();

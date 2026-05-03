@@ -92,6 +92,10 @@ interface MockSupabase {
   // `<thread_attachments>` block. Default to empty so legacy tests
   // skip the block entirely.
   listAttachmentSummariesForThread: ReturnType<typeof vi.fn>;
+  // Intuition - runChatLoop persists the cached payload here when the
+  // pipeline runs successfully. Default returns undefined; tests that
+  // exercise the intuition path assert the call shape.
+  setThreadIntuitionPayload: ReturnType<typeof vi.fn>;
 }
 
 function mockSupabase(overrides: Partial<MockSupabase> = {}): {
@@ -143,6 +147,7 @@ function mockSupabase(overrides: Partial<MockSupabase> = {}): {
     samskaraRecordSubstrate: vi.fn(async () => 'sub-stub'),
     getJournalEntriesForDate: vi.fn(async () => []),
     listAttachmentSummariesForThread: vi.fn(async () => []),
+    setThreadIntuitionPayload: vi.fn(async () => undefined),
     ...overrides,
   };
   return { svc: mocks as unknown as SupabaseService, mocks, messagesOut };
@@ -1758,5 +1763,120 @@ describe('runChatLoop', () => {
     expect(samskaraIdx).toBeGreaterThan(-1);
     expect(titleIdx).toBeGreaterThan(-1);
     expect(titleIdx).toBeGreaterThan(samskaraIdx);
+  });
+
+  describe('intuition wiring', () => {
+    /**
+     * Build a Venice mock that handles BOTH the conscious chat-loop
+     * stream (one terminal text round) and the intuition pipeline's
+     * 7 completeChat calls (perception, 5 drives, synthesis). The
+     * intuition pipeline keys off the system prompt to know which
+     * stage it's serving; we mirror the same disambiguation here.
+     *
+     * Captured ChatRequests on `intuitionCalls` so tests can assert
+     * disableThinking landed on every stage and the count matches
+     * the expected fan-out.
+     */
+    function intuitionVenice(intuitionCalls: ChatRequest[]): VeniceClient {
+      return {
+        async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
+          // One terminal round so the chat loop exits cleanly.
+          yield { type: 'text', delta: 'ok' };
+        },
+        async completeChat(req: ChatRequest): Promise<ChatCompletion> {
+          intuitionCalls.push(req);
+          const sys = req.messages.find((m) => m.role === 'system');
+          const sysText = typeof sys?.content === 'string' ? sys.content : '';
+          let text = '';
+          if (sysText.includes('objective *perception*')) {
+            text = 'Classification: chitchat\n\nThe user is saying hi.';
+          } else if (sysText.includes('# Your Drive:')) {
+            text = 'a drive reaction';
+          } else if (sysText.includes('synthesize')) {
+            text = 'be warm and brief';
+          }
+          return {
+            text,
+            reasoning: '',
+            toolCalls: [],
+            usage: null,
+            citations: [],
+            finishReason: 'stop',
+          };
+        },
+      } as unknown as VeniceClient;
+    }
+
+    it('fires the pipeline on a cold thread and persists the payload', async () => {
+      const intuitionCalls: ChatRequest[] = [];
+      const venice = intuitionVenice(intuitionCalls);
+      const { svc, mocks } = mockSupabase();
+      const updates: unknown[] = [];
+      await runChatLoop({
+        venice,
+        supabase: svc,
+        thread: mkThread(),
+        userId: 'u-1',
+        modelId: 'm',
+        history: [{ role: 'user', content: 'hi' }],
+        signal: new AbortController().signal,
+        intuitionModelId: 'fake-fast',
+        intuitionMood: { band: 2, column: 'confident' },
+        handlers: {
+          onIntuitionUpdate: (payload) => updates.push(payload),
+        },
+      });
+      // 7 calls = perception + 5 drives + synthesis. Below 7 means
+      // the pipeline silently dropped a stage; above 7 means a
+      // duplicate fired (the same-round debounce regressed).
+      expect(intuitionCalls).toHaveLength(7);
+      // disableThinking is the load-bearing knob for GLM-4.7 - see
+      // the long-form rationale in src/lib/intuition/pipeline.ts.
+      // Locking it in here means any future refactor that strips
+      // the flag fails this test instead of silently regressing
+      // the live feature into "the icon never shows up".
+      for (const req of intuitionCalls) {
+        expect(req.disableThinking).toBe(true);
+      }
+      // The chat-loop fires onIntuitionUpdate exactly once per
+      // refresh, with the freshly-computed payload. The handler is
+      // how Chat.svelte patches the in-memory thread row so the
+      // brain pill and inline card see the new payload without
+      // waiting for a Supabase round-trip.
+      expect(updates).toHaveLength(1);
+      // And the cache write is fire-and-forget but must have been
+      // attempted - that's what makes the payload survive a reload.
+      // The mock resolves immediately so the call has already
+      // landed by the time runChatLoop returns.
+      expect(mocks.setThreadIntuitionPayload).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips the pipeline entirely when intuitionModelId is omitted', async () => {
+      // Older callers / tests that don't pass intuitionModelId run
+      // the chat loop without the intuition layer. The cache must
+      // be left untouched, no completeChat calls fire, and
+      // onIntuitionUpdate never invokes - identical pre-feature
+      // behaviour.
+      const intuitionCalls: ChatRequest[] = [];
+      const venice = intuitionVenice(intuitionCalls);
+      const { svc, mocks } = mockSupabase();
+      const updates: unknown[] = [];
+      await runChatLoop({
+        venice,
+        supabase: svc,
+        thread: mkThread(),
+        userId: 'u-1',
+        modelId: 'm',
+        history: [{ role: 'user', content: 'hi' }],
+        signal: new AbortController().signal,
+        // intuitionModelId deliberately omitted.
+        handlers: {
+          onIntuitionUpdate: (payload) => updates.push(payload),
+        },
+      });
+      expect(intuitionCalls).toHaveLength(0);
+      expect(updates).toHaveLength(0);
+      expect(mocks.setThreadIntuitionPayload).not.toHaveBeenCalled();
+    });
   });
 });

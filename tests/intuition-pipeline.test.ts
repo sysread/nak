@@ -12,7 +12,12 @@ import {
   INTUITION_THINK_MARKER,
 } from '../src/lib/intuition/ephemeral';
 import { coerceIntuitionPayload } from '../src/lib/intuition/types';
-import type { VeniceClient, VeniceMessage, ChatCompletion } from '../src/lib/venice';
+import type {
+  ChatRequest,
+  ChatCompletion,
+  VeniceClient,
+  VeniceMessage,
+} from '../src/lib/venice';
 
 /**
  * Build a fake VeniceClient whose completeChat returns a canned
@@ -20,9 +25,17 @@ import type { VeniceClient, VeniceMessage, ChatCompletion } from '../src/lib/ven
  * prompt substring -> response text" so a single mock can serve
  * perception, every drive, and synthesis.
  */
-function fakeVenice(responseFor: (systemPrompt: string) => string | Error): VeniceClient {
+function fakeVenice(
+  responseFor: (systemPrompt: string) => string | Error,
+  opts: { calls?: ChatRequest[] } = {}
+): VeniceClient {
   const client = {
-    completeChat: async (req: { messages: VeniceMessage[] }): Promise<ChatCompletion> => {
+    completeChat: async (req: ChatRequest): Promise<ChatCompletion> => {
+      // Capture the full request so per-call assertions (e.g. that
+      // disableThinking was set) can run after the pipeline returns.
+      // Tests pass an external array; the mock pushes into it in
+      // call order.
+      opts.calls?.push(req);
       const sys = req.messages.find((m) => m.role === 'system');
       const sysText = typeof sys?.content === 'string' ? sys.content : '';
       const result = responseFor(sysText);
@@ -199,6 +212,65 @@ describe('runIntuitionPipeline', () => {
       history: [],
       signal: new AbortController().signal,
       round: 0,
+      mood: null,
+      trigger: 'cold',
+    });
+    expect(payload).toBeNull();
+  });
+
+  it('passes disableThinking=true on every completeChat call', async () => {
+    // Regression for the silent failure mode where GLM-4.7 (the fast
+    // tier) burned the maxTokens budget on internal reasoning and
+    // returned an empty `content`, aborting perception and leaving
+    // the cache null forever. disableThinking is the Venice off
+    // switch that gives the entire budget to the answer; without it
+    // the pipeline silently never lands a payload on a reasoning
+    // model, the brain icon never appears, and the user reads it as
+    // broken. Every stage call must carry the flag - perception,
+    // five drives, synthesis: 7 calls in total on a successful run.
+    const calls: ChatRequest[] = [];
+    const venice = fakeVenice((sys) => {
+      if (sys.includes('objective *perception*')) {
+        return 'Classification: chitchat\n\nThe user said hi.';
+      }
+      if (sys.includes('# Your Drive:')) return 'a reaction';
+      if (sys.includes('synthesize')) return 'be warm and brief';
+      throw new Error(`unexpected: ${sys.slice(0, 60)}`);
+    }, { calls });
+    const payload = await runIntuitionPipeline({
+      venice,
+      model: 'fake-fast',
+      history: HISTORY,
+      signal: new AbortController().signal,
+      round: 1,
+      mood: null,
+      trigger: 'cold',
+    });
+    expect(payload).not.toBeNull();
+    expect(calls).toHaveLength(7); // perception + 5 drives + synthesis
+    for (const req of calls) {
+      expect(req.disableThinking).toBe(true);
+    }
+  });
+
+  it('returns null when the model emits empty content (length-cap regression)', async () => {
+    // Mirrors the live failure shape: completeChat returns successfully
+    // but the perception text is empty (because reasoning ate the
+    // budget). The pipeline must abort with a logged warning rather
+    // than write a payload with empty perception text. Disabling
+    // thinking is the actual fix; this test pins the failure-mode
+    // contract so a future regression on the budget side surfaces
+    // here instead of as "the icon never shows up" in the field.
+    const venice = fakeVenice((sys) => {
+      if (sys.includes('objective *perception*')) return ''; // empty content
+      return 'unreached';
+    });
+    const payload = await runIntuitionPipeline({
+      venice,
+      model: 'fake-fast',
+      history: HISTORY,
+      signal: new AbortController().signal,
+      round: 1,
       mood: null,
       trigger: 'cold',
     });
