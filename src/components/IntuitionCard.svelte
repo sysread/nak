@@ -5,8 +5,12 @@
    * brain icon, "Intuition" label, classification badge, and
    * timestamp - so the card sits in the transcript as a thin
    * marker rather than a wall of text. Click the toggle to reveal
-   * the full perception / drives / synthesis; click the modal-link
-   * arrow to open the diagnostics modal scoped to the same payload.
+   * the full perception / drives / synthesis. The diagnostics
+   * modal is reached from the brain pill in the top-right; we do
+   * NOT carry a "open in modal" affordance on the card itself,
+   * because the modal always renders the *current* cached payload,
+   * which may not be the same one this card was built from after a
+   * later refresh.
    *
    * Rendered between message blocks in the Chat transcript by the
    * messageBlocks builder when the cache's `computed_at_round`
@@ -26,7 +30,6 @@
     type DriveName,
     type IntuitionPayload,
   } from '$lib/intuition';
-  import { navigate } from '$lib/routing.svelte';
 
   interface Props {
     payload: IntuitionPayload;
@@ -87,15 +90,6 @@
       onclick={() => (expanded = !expanded)}
     >
       {expanded ? '−' : '+'}
-    </button>
-    <button
-      type="button"
-      class="modal-link"
-      title="Open full diagnostics"
-      aria-label="Open intuition diagnostics modal"
-      onclick={() => navigate({ modal: 'intuition' })}
-    >
-      &#x2197;
     </button>
   </header>
 
@@ -175,9 +169,8 @@
     font-size: 0.75rem;
   }
 
-  /* Push toggle/modal-link buttons to the right end of the row. */
-  .toggle,
-  .modal-link {
+  /* Push the toggle button to the right end of the row. */
+  .toggle {
     margin-left: auto;
     width: 1.5rem;
     height: 1.5rem;
@@ -193,14 +186,8 @@
     font-size: 0.85rem;
     line-height: 1;
   }
-  /* Only the first margin-left:auto pushes; the second sits flush
-     against the toggle. */
-  .modal-link {
-    margin-left: 0.25rem;
-  }
 
-  .toggle:hover,
-  .modal-link:hover {
+  .toggle:hover {
     background: var(--bg-2);
   }
 
