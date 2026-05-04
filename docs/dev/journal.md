@@ -39,8 +39,10 @@ Unlike memories, entries are not linked into a graph.
     on the right day.
   - `agent.ts` — `JournalAgent implements
     Agent<JournalInput, JournalOutput>`. Model:
-    `minimax-m25` (literal id, not a tier - insulated from
-    user-facing tier swaps). Thinking is
+    `qwen3-235b-a22b-instruct-2507` (literal id, not a
+    tier - insulated from user-facing tier swaps; whatever
+    id is pinned must accept `response_format`, see
+    Gotchas). Thinking is
     disabled outright via
     `venice_parameters.disable_thinking=true`; no
     `reasoning_effort` is sent. The agent does NOT call
@@ -448,6 +450,19 @@ and `journalTimezone?: string` (IANA zone).
   flow), expose a NEW tool rather than restoring
   `journal_upsert`; the always-on JSON-output path stays
   the only writer.
+- **`response_format` is load-bearing for the model
+  pin.** The wire-level `response_format: {type:
+  'json_object'}` field is the only thing that prevents
+  "model returned a paragraph of prose instead of JSON"
+  as a failure mode; the prompt's prose schema only
+  covers "valid JSON of the wrong shape." Plenty of
+  non-user-tier Venice models 4xx on the field
+  (`minimax-m25` is one of them), and a 4xx jams the
+  whole worker because the same thread re-claims every
+  cycle. Whenever you swap the journal model, verify the
+  new id accepts `response_format` before merging - and
+  watch the `journal-worker` source in the Logs drawer
+  for Venice errors right after deploy.
 - **Cross-context comes from context-recall, not from
   tools.** The agent used to call `memory_search` and
   `conversation_search` during input-gathering rounds.
