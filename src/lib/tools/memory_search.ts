@@ -25,6 +25,9 @@ import {
   classifyMemoryConfidence,
   type MemoryConfidenceTag,
 } from '../memories';
+import { createLogger } from '../logger.svelte';
+
+const log = createLogger('memory-search');
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -76,6 +79,16 @@ export const memorySearch: ToolDef = {
       venice: ctx.venice,
       signal: ctx.signal,
     });
+    // Debug breadcrumb: every call logs the query (or "(list-all)" for
+    // the empty-query browse path) and the resulting match count.
+    // Surfaces in the log drawer regardless of caller (main chat,
+    // reflection agent, recall agent), so a "recall returned nothing"
+    // investigation can see exactly which paraphrases the recall model
+    // tried and how each one scored.
+    const queryLabel = query.length > 0 ? `"${query}"` : '(list-all)';
+    log.debug(
+      `search ${queryLabel} (limit=${limit}) -> ${memories.length} matches`
+    );
     // Hydrate outbound edges in one batched RPC. Failures degrade
     // silently to "no relations" - the search result is still useful
     // without the graph layer, and the model can follow up with

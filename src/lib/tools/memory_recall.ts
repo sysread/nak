@@ -88,6 +88,20 @@ export const memoryRecall: ToolDef = {
           `thread ${ctx.threadId} note`,
           result.output.note.note
         );
+      } else {
+        // Mirror the `kind === 'note'` debug above for the empty
+        // signal: surface the raw text the recall model emitted so a
+        // "why did recall return nothing?" investigation can tell the
+        // five collapse-to-none branches apart at a glance. An empty
+        // string means the model emitted nothing (or there was no
+        // user turn — the info line's "over 0 messages" disambiguates
+        // that case); a `{"kind":"none"}` literal means the model
+        // explicitly declined; anything else is a parse failure or
+        // malformed-note shape (see parseRecallOutput in agent.ts).
+        log.debug(
+          `thread ${ctx.threadId} raw`,
+          result.output.rawText
+        );
       }
     }
 
