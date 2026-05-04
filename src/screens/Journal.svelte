@@ -601,12 +601,21 @@
           >{regenerateAccepting ? 'Saving…' : 'Accept'}</button>
         {/if}
       {:else}
+        <!--
+          Download glyph: U+2B07 DOWNWARDS BLACK ARROW + U+FE0F
+          variation selector forces emoji-style presentation so the
+          arrow reads as a colored glyph alongside the 👍 🔄 👎
+          buttons in this row, rather than a thin text-style arrow
+          that would visually disappear next to them. aria-label +
+          title carry the verb for keyboard / screen-reader users.
+        -->
         <button
           type="button"
-          class="secondary"
+          class="secondary journal-vote-btn"
+          aria-label="Download as Markdown"
           onclick={() => downloadEntryMarkdown(entry)}
           title="Download this entry as Markdown"
-        >Export .md</button>
+        >⬇️</button>
         <!--
           Spam-filter votes. Thumbs-up trains the source conversation's
           tokens as ham; thumbs-down (Delete) trains them as spam AND
@@ -717,10 +726,11 @@
       >Edit</button>
       <button
         type="button"
-        class="secondary"
+        class="secondary journal-vote-btn"
+        aria-label="Download as Markdown"
         onclick={() => downloadEntryMarkdown(entry)}
         title="Download this entry as Markdown"
-      >Export .md</button>
+      >⬇️</button>
       {#if deleteTargetId === entry.id}
         <span class="subtle journal-delete-prompt">Really delete?</span>
         <button

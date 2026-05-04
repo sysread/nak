@@ -67,7 +67,7 @@ day unfolded.
 
 Navigate days with **‹** / **›** or jump back to **Today**.
 
-Each entry has an **Export .md** button for a single-entry
+Each entry has a **download** button (⬇️) for a single-entry
 Markdown download.
 
 ### Writing your own entry
