@@ -54,13 +54,15 @@
 </script>
 
 <div class="recipe-drawer-list">
-  <input
-    type="search"
-    class="sidebar-search-input journal-list-search"
-    placeholder="Search journal"
-    aria-label="Search journal"
-    bind:value={query}
-  />
+  <div class="journal-list-controls">
+    <input
+      type="search"
+      class="sidebar-search-input"
+      placeholder="Search journal"
+      aria-label="Search journal"
+      bind:value={query}
+    />
+  </div>
   {#if journal.loading && !journal.loaded}
     <p class="subtle" style="padding:0.75rem">Loading journal…</p>
   {:else if journal.error}
@@ -97,9 +99,19 @@
 </div>
 
 <style>
-  .journal-list-search {
-    display: block;
-    margin: 0.4rem 0.6rem;
-    width: calc(100% - 1.2rem);
+  /* Mirrors `.recipe-list-controls` / `.memory-list-controls` so the
+     search row reads as the same visual element across the drawer
+     tabs. The bottom border IS the divider between the search row
+     and the listing rows below. */
+  .journal-list-controls {
+    display: flex;
+    gap: 0.35rem;
+    align-items: center;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .journal-list-controls .sidebar-search-input {
+    flex: 1;
+    min-width: 0;
   }
 </style>
