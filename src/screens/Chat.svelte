@@ -966,6 +966,25 @@
     el.style.height = `${el.scrollHeight}px`;
   });
 
+  // Sibling to the focus-on-selectThread call: when the user flips the
+  // drawer tab from recipes/journal/memories back to chats, the composer
+  // remounts but selectThread doesn't fire (the active thread didn't
+  // change), so we'd otherwise leave the user staring at an unfocused
+  // textarea. Track the previous tab and focus on the chats edge.
+  // Mobile is skipped for the same reason as in selectThread.
+  let prevDrawerTab: typeof drawerTab | null = null;
+  $effect(() => {
+    const tab = drawerTab;
+    const prev = prevDrawerTab;
+    prevDrawerTab = tab;
+    if (prev === null) return;
+    if (tab !== 'chats' || prev === 'chats') return;
+    if (composerIsMobile) return;
+    void tick().then(() => {
+      if (drawerTab === 'chats') composerEl?.focus();
+    });
+  });
+
   // Append a message if we don't already have a row with that id.
   // Dedupe is load-bearing: the device that writes a message also
   // receives the realtime echo of its own insert, and the echo can
