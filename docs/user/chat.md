@@ -190,12 +190,14 @@ the conversation reads coherently from there.
 
 ## The log drawer
 
-The document-shaped button at the right end of the chat top bar
-opens the **log drawer** on the right side of the screen. The
-drawer is a live feed of everything Nak writes to its internal
-logs - service-worker updates, reflection / summary / embedding
-worker progress, recall-agent breadcrumbs, and anything else a
-background subsystem wants to tell you about.
+The document-shaped button at the right end of the top bar opens
+the **log drawer** on the right side of the screen. The button is
+present on every section - Chats, Recipes, Journal, and Memories -
+so you can pop the drawer open without first switching back to a
+chat. The drawer is a live feed of everything Nak writes to its
+internal logs - service-worker updates, reflection / summary /
+embedding worker progress, recall-agent breadcrumbs, and anything
+else a background subsystem wants to tell you about.
 
 Useful when:
 

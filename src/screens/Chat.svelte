@@ -4156,8 +4156,9 @@
           </svg>
         </button>
         {#if drawerTab === 'chats'}
-          <!-- Chats top-bar: new-thread + title (inline-renameable) +
-               logs-toggle. Unchanged from the single-panel design. -->
+          <!-- Chats top-bar: new-thread + title (inline-renameable). The
+               logs-toggle that used to live here moved out of the per-tab
+               branches so it appears on every section. -->
           <button
             class="secondary icon-btn new-thread-mini"
             onclick={newThread}
@@ -4190,26 +4191,6 @@
               {/if}
             {/if}
           </div>
-          <!-- Logs drawer toggle. Document-glyph icon so the button reads
-               as "open the reading panel" rather than "new document".
-               Wired to the logsDrawer rune singleton; the LogsDrawer
-               component mounted at Chat root watches the same state. -->
-          <button
-            class="secondary icon-btn logs-toggle"
-            onclick={() => logsDrawer.toggle()}
-            title={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
-            aria-label={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
-            aria-expanded={logsDrawer.state.open}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="16" y1="13" x2="8" y2="13" />
-              <line x1="16" y1="17" x2="8" y2="17" />
-              <line x1="10" y1="9" x2="8" y2="9" />
-            </svg>
-          </button>
 
         {:else if drawerTab === 'recipes'}
           <!-- Recipes top-bar: new-recipe button mirrors the new-thread
@@ -4293,6 +4274,29 @@
             <span class="title-btn panel-section-label">Memories</span>
           </div>
         {/if}
+        <!-- Logs drawer toggle. Lives outside the per-tab branches so it
+             appears as the trailing top-bar action on chats, recipes,
+             journal, and memories alike - the in-app log viewer is a
+             cross-cutting tool, not chat-specific. Document-glyph icon
+             reads as "open the reading panel" rather than "new document".
+             Wired to the logsDrawer rune singleton; the LogsDrawer
+             component mounted at Chat root watches the same state. -->
+        <button
+          class="secondary icon-btn logs-toggle"
+          onclick={() => logsDrawer.toggle()}
+          title={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
+          aria-label={logsDrawer.state.open ? 'Hide logs' : 'Show logs'}
+          aria-expanded={logsDrawer.state.open}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+            <line x1="10" y1="9" x2="8" y2="9" />
+          </svg>
+        </button>
       </div>
 
       {#if drawerTab === 'chats'}
