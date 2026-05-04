@@ -360,6 +360,8 @@
         app.supabase,
         app.venice,
         entry,
+        app.userName,
+        app.userLocation,
         controller.signal
       );
       // Stale-result guard: if the user cancelled or moved to another

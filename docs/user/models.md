@@ -32,6 +32,11 @@ asking back.
 - The model is told to *use* the values, not recite them. You
   shouldn't see the assistant parroting your name back unprompted;
   it just has the context when it would otherwise have to ask.
+- The Journal's automatic entries pick the same fields up, so new
+  entries refer to you by name rather than as a generic "user" -
+  see [Journal](./journal.md). Existing entries don't get rewritten
+  retroactively; the change applies to entries the agent writes
+  from here on.
 
 ## Model tiers
 

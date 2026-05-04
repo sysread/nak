@@ -65,7 +65,11 @@ import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools
 import { runHeadlessToolLoop } from '../../tools/run';
 import { journalAgentToolbox } from '../../tools/journal_agent_toolbox';
 import type { ReasoningEffort } from '../../models';
-import { buildJournalPrompt, buildJournalRegeneratePrompt } from './prompt';
+import {
+  buildJournalPrompt,
+  buildJournalRegeneratePrompt,
+  type JournalUserProfile,
+} from './prompt';
 import {
   renderSpamHint,
   scoreSpamFilter,
@@ -260,6 +264,14 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
   // the multi-layer JSON-escaping problem the original tool-call write
   // shape suffered from doesn't apply here.
   readonly toolbox = journalAgentToolbox;
+  /**
+   * Mutable user profile (Settings -> AI -> About you). Read on every
+   * `run()` / `regenerate()` so the worker can live-update it via
+   * `setUserProfile` without a restart - mirrors the worker's tzHolder
+   * pattern. Both fields default to null and are updated by the worker
+   * from its StartMessage and any subsequent profile postMessages.
+   */
+  private userProfile: JournalUserProfile | null = null;
 
   constructor(
     private venice: VeniceClient,
@@ -270,9 +282,26 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
      * future A/B where two journaling models run against historical
      * threads.
      */
-    modelId?: string
+    modelId?: string,
+    /**
+     * Initial user profile. The worker passes this from its
+     * StartMessage; the regenerate caller passes the values it just
+     * read off `app.userName` / `app.userLocation`. Null (or both
+     * fields empty) keeps the prompt's "About the user" block off.
+     */
+    userProfile?: JournalUserProfile | null
   ) {
     this.model = modelId ?? VENICE_JOURNAL_MODEL;
+    this.userProfile = userProfile ?? null;
+  }
+
+  /**
+   * Live-update the profile fields. Called by the worker on a
+   * `{type:'profile'}` postMessage so the user editing their name or
+   * location in Settings reaches the next cycle without a restart.
+   */
+  setUserProfile(profile: JournalUserProfile | null): void {
+    this.userProfile = profile;
   }
 
   async run(
@@ -373,6 +402,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
           existingEntry,
           threadId: req.input.threadId,
           spamHint,
+          userProfile: this.userProfile,
         }),
       });
 
@@ -577,6 +607,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
       content: buildJournalRegeneratePrompt({
         entryDate: args.entryDate,
         existingEntry: args.existingEntry,
+        userProfile: this.userProfile,
       }),
     });
 

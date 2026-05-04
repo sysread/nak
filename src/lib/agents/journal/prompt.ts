@@ -56,6 +56,22 @@
  * distinguishable in the daily view.
  */
 
+/**
+ * Profile fields the user supplied in Settings -> AI -> About you.
+ * Both fields are optional and may be null / empty independently.
+ * When at least one is non-empty the prompt builders inject a short
+ * "About the user" block so the agent can refer to the user by name
+ * (rather than the generic "User") and ground location-specific
+ * references precisely. When both are empty, the block is omitted -
+ * a fresh account that hasn't filled the form pays zero tokens for
+ * it. Mirrors the chat-loop's `buildUserProfileNote` shape so the
+ * voice stays consistent across surfaces.
+ */
+export interface JournalUserProfile {
+  name: string | null;
+  location: string | null;
+}
+
 export interface BuildPromptArgs {
   entryDate: string;
   /** Existing automatic entry for this day, or null if first run. */
@@ -78,6 +94,11 @@ export interface BuildPromptArgs {
    * and the prior as a tiebreaker rather than a gate.
    */
   spamHint: string | null;
+  /**
+   * Name + location the user supplied in Settings. Null (or both
+   * fields empty) suppresses the "About the user" block entirely.
+   */
+  userProfile: JournalUserProfile | null;
 }
 
 /**
@@ -102,6 +123,55 @@ export interface BuildRegeneratePromptArgs {
     mood: string | null;
     people: readonly string[];
   };
+  /**
+   * Same shape as BuildPromptArgs.userProfile. Null suppresses the
+   * "About the user" block.
+   */
+  userProfile: JournalUserProfile | null;
+}
+
+/**
+ * Render the "About the user" block injected near the top of both
+ * journal prompts when the user has filled at least one of the
+ * Settings -> About you fields. Returns null when both are empty so
+ * callers can drop the section entirely (zero tokens for a fresh
+ * account). The block tells the model to prefer the user's name
+ * over the generic "User" the voice section's worked examples lean
+ * on - which is the user-visible bug this fixes - and to ground
+ * location-specific references precisely without reciting the
+ * location as filler.
+ */
+function renderUserProfileBlock(
+  profile: JournalUserProfile | null
+): string | null {
+  if (profile === null) return null;
+  const name = (profile.name ?? '').trim();
+  const location = (profile.location ?? '').trim();
+  if (name.length === 0 && location.length === 0) return null;
+  const lines: string[] = ['## About the user', ''];
+  if (name.length > 0) lines.push(`Name: ${name}`);
+  if (location.length > 0) lines.push(`Location: ${location}`);
+  lines.push(
+    '',
+    'The user supplied this in Settings so the journal can refer to',
+    'them naturally rather than as the generic "user".'
+  );
+  if (name.length > 0) {
+    lines.push(
+      '',
+      `Prefer their name over "User" in the entry: "${name} came in`,
+      `tired" reads more like a diary entry than "User came in tired".`
+    );
+  }
+  if (location.length > 0) {
+    lines.push(
+      '',
+      'Use the location only when it grounds something specific in',
+      "the conversation (local time, weather, regional context); don't",
+      'recite it back as filler.'
+    );
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -124,6 +194,12 @@ export function buildJournalPrompt(args: BuildPromptArgs): string {
     'entry belongs to the day the conversation happened on, NOT the',
     'day you are processing it on.',
     '',
+  ];
+  const profileBlock = renderUserProfileBlock(args.userProfile);
+  if (profileBlock !== null) {
+    lines.push(profileBlock, '');
+  }
+  lines.push(
     '## Output format',
     '',
     'Return one JSON object. No prose around it, no markdown fences,',
@@ -224,8 +300,8 @@ export function buildJournalPrompt(args: BuildPromptArgs): string {
     'work is strictly worse than a clean skip - the user can find the',
     'conversation in the chat history if they want it; the journal is',
     "for what they couldn't.",
-    '',
-  ];
+    ''
+  );
   if (args.spamHint !== null && args.spamHint.length > 0) {
     lines.push(
       '## Prior signal',
@@ -362,6 +438,12 @@ export function buildJournalRegeneratePrompt(
     'entry belongs to the day the conversation happened on, NOT the',
     'day you are processing it on.',
     '',
+  ];
+  const regenProfileBlock = renderUserProfileBlock(args.userProfile);
+  if (regenProfileBlock !== null) {
+    lines.push(regenProfileBlock, '');
+  }
+  lines.push(
     '## Output format',
     '',
     'Return one JSON object. No prose around it, no markdown fences,',
@@ -431,8 +513,8 @@ export function buildJournalRegeneratePrompt(
     '```markdown',
     args.existingEntry.content,
     '```',
-    '',
-  ];
+    ''
+  );
   if (args.existingEntry.topics.length > 0) {
     lines.push(`Previous topics: ${args.existingEntry.topics.join(', ')}`);
   }

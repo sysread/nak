@@ -136,11 +136,15 @@ every update) so it's covered here rather than in its own file.
   - `systemPrompts`: `SystemPrompt[]` with `{id, name, body,
     enabledByDefault}`
   - `userName`: free-form string (1..200 chars). Absent / empty =
-    "not set" - chat-loop omits the User profile block.
+    "not set" - chat-loop omits the User profile block, and the
+    journal agent's "About the user" block is suppressed too.
   - `userLocation`: free-form string (1..200 chars). Same opt-in
     semantics as `userName`. Both fields are passed verbatim into
     the per-turn appendix; the 200-char ceiling lives in
-    `USER_PROFILE_FIELD_MAX` in `supabase.ts`.
+    `USER_PROFILE_FIELD_MAX` in `supabase.ts`. The journaling
+    worker also receives them through its StartMessage and a
+    `setProfile()` live-update path so background entries refer to
+    the user by name rather than as the generic "User".
 
   Removed 2026-04: `webSearchEnabled` and `webCitationsEnabled`
   moved to the `web_search` tool (see `./tools.md`). The main

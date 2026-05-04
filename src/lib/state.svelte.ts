@@ -207,18 +207,29 @@ export function setNotifyOnComplete(enabled: boolean): void {
  * Supabase persist side (Settings.svelte calls
  * `updateSettings({ userName })`). Empty string is "not set" - the
  * chat-loop's per-turn appendix builder treats it the same as absent.
+ *
+ * Also live-updates the journal worker so the next background entry
+ * uses the new name without a worker restart. The worker's prompt
+ * builder injects an "About the user" block when at least one field
+ * is set; setting either side here is what makes new automatic
+ * entries refer to the user by name rather than as the generic
+ * "User".
  */
 export function setUserName(name: string): void {
   app.userName = name;
+  journalManager.setProfile(name, app.userLocation);
 }
 
 /**
  * Update the in-memory location. Caller is responsible for the
  * Supabase persist side (Settings.svelte calls
  * `updateSettings({ userLocation })`). Empty string is "not set".
+ * Same live-update path as `setUserName` so the journal worker
+ * picks up the change on its next cycle.
  */
 export function setUserLocation(location: string): void {
   app.userLocation = location;
+  journalManager.setProfile(app.userName, location);
 }
 
 /**
@@ -236,6 +247,8 @@ export function setJournalAutomaticEnabled(enabled: boolean): void {
       supabase: app.supabase,
       config: app.config,
       timezone: app.journalTimezone || null,
+      userName: app.userName,
+      userLocation: app.userLocation,
     });
   } else {
     journalManager.stop();
@@ -327,6 +340,8 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
       supabase: app.supabase,
       config,
       timezone: app.journalTimezone || null,
+      userName: app.userName,
+      userLocation: app.userLocation,
     });
   }
   // Warm the Usage pane cache in the background so Settings -> Usage

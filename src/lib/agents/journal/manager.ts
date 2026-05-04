@@ -32,6 +32,15 @@ export interface StartOpts {
   config: AppConfig;
   /** IANA timezone; worker falls back to its runtime default if null. */
   timezone: string | null;
+  /**
+   * Free-form display name from Settings -> AI -> About you. Empty
+   * string is the "not set" sentinel; both this and `userLocation`
+   * are forwarded to the worker at spawn time, then live-updated via
+   * `setProfile()` when the user edits either field in Settings.
+   */
+  userName: string;
+  /** Same opt-in semantics as `userName`. */
+  userLocation: string;
 }
 
 /**
@@ -131,6 +140,8 @@ export class JournalManager {
       veniceApiKey: opts.config.veniceApiKey,
       journalModel: VENICE_JOURNAL_MODEL,
       timezone: opts.timezone,
+      userName: opts.userName,
+      userLocation: opts.userLocation,
       holderId: makeHolderId(),
       ...WORKER_DEFAULTS,
     });
@@ -152,6 +163,19 @@ export class JournalManager {
   setTimezone(timezone: string | null): void {
     if (!this.worker) return;
     this.worker.postMessage({ type: 'timezone', timezone });
+  }
+
+  /**
+   * Live-update the worker's user-profile fields without a restart.
+   * state.svelte.ts calls this from `setUserName` / `setUserLocation`
+   * so a Settings edit reaches the journal worker on the next cycle
+   * - matches the timezone live-update path. No-op when the worker
+   * isn't running; the next `start()` will pick the new values up
+   * from `app.userName` / `app.userLocation` via StartOpts.
+   */
+  setProfile(userName: string, userLocation: string): void {
+    if (!this.worker) return;
+    this.worker.postMessage({ type: 'profile', userName, userLocation });
   }
 
   stop(): void {

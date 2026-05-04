@@ -13,6 +13,11 @@ entries:
   Q&A. The journaler waits until the day after a conversation's
   most recent message before writing or updating its entry, so
   an in-progress chat has room to finish before it gets a page.
+  If you've filled in **Name** and / or **Location** under
+  Settings -> AI -> *About you*, the journaler picks those up so
+  new entries refer to you by name and ground location-specific
+  context. Leaving the fields blank keeps entries written in the
+  generic third-person "User" voice.
 
 Both are exportable as Markdown and deletable on demand.
 

@@ -52,16 +52,22 @@ Unlike memories, entries are not linked into a graph.
     entry without writing it. See "Regenerate path" under
     Contracts below.
   - `prompt.ts` — `buildJournalPrompt({entryDate,
-    existingEntry, threadId})` for the worker path, plus
-    `buildJournalRegeneratePrompt({entryDate,
-    existingEntry})` for the user-initiated regenerate.
-    Both use the third-person observational voice and the
-    same `{worthy, reasoning, entry}` JSON output shape -
+    existingEntry, threadId, spamHint, userProfile})` for
+    the worker path, plus `buildJournalRegeneratePrompt(
+    {entryDate, existingEntry, userProfile})` for the
+    user-initiated regenerate. Both use the third-person
+    observational voice and the same
+    `{worthy, reasoning, entry}` JSON output shape -
     `parseJournalDecision` reads both. The regenerate
     prompt forces `worthy=true` and tells the model to
     take a different angle on the same conversation rather
-    than extending or rephrasing the existing entry. The
-    worker-side prompt parses the response and writes
+    than extending or rephrasing the existing entry. Both
+    builders inject an "About the user" block with the
+    Settings -> AI -> About you fields when at least one
+    is set, so entries refer to the user by name rather
+    than the generic "User" - the block is suppressed
+    entirely when both fields are empty (zero tokens).
+    The worker-side prompt parses the response and writes
     through `supabase.upsertJournalAutomaticEntry`
     directly - no tool call - to avoid the
     double-JSON-escape failure mode that ate writes when
@@ -408,7 +414,12 @@ and `journalTimezone?: string` (IANA zone).
   direct `supabase.upsertJournalAutomaticEntry`. See
   [tools.md](./tools.md).
 - **Settings.** The Journal pane owns the toggle +
-  timezone + export buttons. See [settings.md](./settings.md).
+  timezone + export buttons. The AI pane's **About you**
+  fields (`userName` / `userLocation`) feed the journal
+  agent through the manager's `setProfile()` live-update
+  path so the worker refers to the user by name in new
+  automatic entries without a restart. See
+  [settings.md](./settings.md).
 - **Chat.** The drawer gains a Journal tab between
   Recipes and (before) the other footer icons; the modal
   reads `route.modal === 'journal'` and

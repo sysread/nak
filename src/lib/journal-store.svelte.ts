@@ -175,6 +175,16 @@ export async function regenerateAutomaticEntry(
   supabase: SupabaseService,
   venice: VeniceClient,
   entry: JournalEntry,
+  /**
+   * Settings -> AI -> About you. Empty strings are "not set"; the
+   * agent's prompt builder suppresses the "About the user" block
+   * when both are empty. Caller passes `app.userName` /
+   * `app.userLocation` so the regenerated entry refers to the user
+   * by name (rather than the generic "User") on the same terms as
+   * the background worker.
+   */
+  userName: string,
+  userLocation: string,
   signal?: AbortSignal
 ): Promise<{
   content: string;
@@ -190,7 +200,16 @@ export async function regenerateAutomaticEntry(
       'Source conversation no longer exists; cannot regenerate.'
     );
   }
-  const agent = new JournalAgent(venice, supabase);
+  const trimmedName = userName.trim();
+  const trimmedLocation = userLocation.trim();
+  const profile =
+    trimmedName.length === 0 && trimmedLocation.length === 0
+      ? null
+      : {
+          name: trimmedName.length > 0 ? trimmedName : null,
+          location: trimmedLocation.length > 0 ? trimmedLocation : null,
+        };
+  const agent = new JournalAgent(venice, supabase, undefined, profile);
   return agent.regenerate({
     threadId: entry.thread_id,
     entryDate: entry.entry_date,
