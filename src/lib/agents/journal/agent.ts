@@ -15,16 +15,20 @@
  * Mirrors `../reflection/agent.ts` in the thread-fetch / slice / model
  * pinning pieces but diverges in three ways:
  *
- *   - Model + reasoning: runs on `nvidia-nemotron-cascade-2-30b-a3b`
- *     with reasoning_effort='medium'. Cheap, fast, 256k context, and
- *     it supports function calling + reasoning, which is the slot
- *     this background agent actually needs (no vision, no streaming
- *     UX). Pinned to a literal id rather than tracking a tier so a
- *     swap of the user-facing `balanced` profile doesn't perturb the
- *     journaler. Earlier the task was on the balanced profile (GLM-5)
- *     and overload errors started showing up in the journal logs,
- *     and a low-traffic-tier model is a better fit for "every settled
- *     thread, in order, in the background" anyway.
+ *   - Model + reasoning: runs on `zai-org-glm-4.7-flash` with
+ *     reasoning_effort='medium'. Supports function calling + reasoning,
+ *     which is the slot this background agent actually needs (no vision,
+ *     no streaming UX). Pinned to a literal id rather than tracking a
+ *     tier so a swap of the user-facing tiers doesn't perturb the
+ *     journaler. History: the task started on the balanced profile
+ *     (GLM-5) and hit overload errors, then moved to
+ *     `nvidia-nemotron-cascade-2-30b-a3b` for the low-traffic-slot
+ *     property, which produced visibly weak entries. The `-flash`
+ *     variant of GLM-4.7 is roughly a third the price of the plain
+ *     `zai-org-glm-4.7` that fronts the user-facing Fast tier, so
+ *     it's plausibly a separate slot; if overload errors return,
+ *     the next move is back to a non-user-fronted id, not back to
+ *     the Fast tier proper.
  *
  *   - Output: structured JSON via response_format, not a tool call.
  *     The earlier "write the entry through tool_call.arguments" shape
@@ -89,19 +93,28 @@ const log = createLogger('journal-worker');
 /**
  * Model the journaling agent runs against. Literal id rather than a
  * tier reference: the journal worker is a "every settled thread, in
- * order, in the background" load and wants its own low-traffic slot
- * so foreground turns on the user-facing `balanced` profile don't
- * compete with the background queue for capacity. Nemotron Cascade
- * 2 30b-a3b is cheap, has a 256k context (comfortable headroom for
- * long threads + the existing-entry priming block), and supports
- * function calling + reasoning - everything the journaler exercises.
- * No vision, which is fine; threads are text-only at this layer.
+ * order, in the background" load and wants insulation from user-facing
+ * tier swaps. `zai-org-glm-4.7-flash` is the current pick - supports
+ * function calling + reasoning, and at roughly a third the price of
+ * the plain `zai-org-glm-4.7` (which fronts the Fast tier) it's
+ * plausibly served from a different capacity pool, which matters
+ * because the journaler walks every settled thread in order in the
+ * background and shouldn't fight foreground turns for capacity. No
+ * vision, which is fine; threads are text-only at this layer.
+ *
+ * Predecessors and why they were dropped: the balanced profile (GLM-5)
+ * hit overload errors under the background load; `nvidia-nemotron-
+ * cascade-2-30b-a3b` had the low-traffic property but produced visibly
+ * weak entries. If `-flash` also overloads, the next move is to find
+ * another non-user-fronted id rather than retarget to the Fast tier
+ * proper - that would put the journaler in direct contention with
+ * foreground Fast-tier traffic.
  *
  * Pin to a string. If a future swap is wanted, change it here; the
  * worker reads the value through the start-message plumbing in
  * `manager.ts`.
  */
-export const VENICE_JOURNAL_MODEL = 'nvidia-nemotron-cascade-2-30b-a3b';
+export const VENICE_JOURNAL_MODEL = 'zai-org-glm-4.7-flash';
 
 /**
  * Reasoning effort sent alongside the balanced-tier model. `medium` is
@@ -278,9 +291,8 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
     private supabase: SupabaseService,
     /**
      * Optional override. Defaults to `VENICE_JOURNAL_MODEL`
-     * (nvidia-nemotron-cascade-2-30b-a3b). Useful for tests and for a
-     * future A/B where two journaling models run against historical
-     * threads.
+     * (`zai-org-glm-4.7-flash`). Useful for tests and for a future
+     * A/B where two journaling models run against historical threads.
      */
     modelId?: string,
     /**

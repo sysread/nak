@@ -39,9 +39,9 @@ Unlike memories, entries are not linked into a graph.
     on the right day.
   - `agent.ts` — `JournalAgent implements
     Agent<JournalInput, JournalOutput>`. Model:
-    `nvidia-nemotron-cascade-2-30b-a3b` (literal id, not a
-    tier - low-traffic slot for the background queue,
-    256k context, supports function calling + reasoning).
+    `zai-org-glm-4.7-flash` (literal id, not a tier -
+    insulated from user-facing tier swaps, supports
+    function calling + reasoning).
     `reasoning_effort: 'medium'`. Reads today's existing
     automatic entry and injects it into the prompt so the
     LLM extends rather than duplicates. Also exposes a
