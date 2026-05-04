@@ -135,7 +135,11 @@
   import { todayInZone, shiftDay } from '$lib/journal-day';
   import { moodState } from '$lib/samskara/mood.svelte';
   import { bandIndexFor, columnFor } from '$lib/samskara/events';
-  import { coerceIntuitionPayload, type IntuitionPayload } from '$lib/intuition';
+  import {
+    coerceIntuitionPayload,
+    pickFresherIntuitionPayload,
+    type IntuitionPayload,
+  } from '$lib/intuition';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -413,6 +417,28 @@
   }
 
   /**
+   * Replace a server-fetched thread list while preserving each row's
+   * fresher in-memory `intuition_payload`. Used by `refreshThreads`
+   * when the server snapshot may not have caught up with a recent
+   * patchThread / pipeline write yet - same hazard rebucketThread
+   * defends against, applied across every row of a list refresh.
+   * Threads not present in memory pass through unchanged.
+   */
+  function mergeServerThreadList(rows: readonly Thread[]): Thread[] {
+    return rows.map((row) => {
+      const existing = findThread(row.id);
+      if (!existing) return row;
+      return {
+        ...row,
+        intuition_payload: pickFresherIntuitionPayload(
+          existing.intuition_payload,
+          row.intuition_payload
+        ),
+      };
+    });
+  }
+
+  /**
    * Apply a partial update to whichever bucket currently holds `id`.
    * No-op if the thread isn't loaded (e.g. a realtime update for a
    * thread buried deep in Older that the user hasn't paginated to
@@ -450,8 +476,30 @@
    * the thread out of every other bucket first — a cross-bucket
    * migration (archive toggle; an `updated_at` bump that crosses the
    * 3-day cutoff) is exactly "remove from old, insert into new."
+   *
+   * The intuition_payload column gets an explicit merge: a realtime
+   * UPDATE event triggered by an unrelated thread mutation (rename,
+   * archive, samskara worker, another tab) carries the FULL row,
+   * including whatever `intuition_payload` was at the moment of that
+   * UPDATE. If a fresher payload was patched into memory after the
+   * server snapshot was taken (or if the cache write failed and the
+   * DB still shows null), the realtime echo would silently wipe the
+   * brain icon. Keeping whichever side has the higher `computed_at_at`
+   * preserves the local patch when it's ahead of the server, and
+   * accepts the server payload when it's ahead (e.g. another tab
+   * just refreshed).
    */
   function rebucketThread(t: Thread): void {
+    const existing = findThread(t.id);
+    if (existing) {
+      t = {
+        ...t,
+        intuition_payload: pickFresherIntuitionPayload(
+          existing.intuition_payload,
+          t.intuition_payload
+        ),
+      };
+    }
     // Strip from every bucket so a cross-bucket migration doesn't
     // leave a stale copy behind.
     recentThreads = recentThreads.filter((x) => x.id !== t.id);
@@ -1226,12 +1274,22 @@
         app.supabase.listOlderThreads({ cutoff, cursor: null, pageSize: DEFAULT_THREAD_PAGE_SIZE }),
         app.supabase.listArchivedThreads({ cursor: null, pageSize: DEFAULT_THREAD_PAGE_SIZE }),
       ]);
-      recentThreads = recent;
-      olderThreads = older.rows;
+      // Preserve a fresher in-memory intuition_payload over the
+      // server snapshot. The chat-loop awaits writeIntuitionCache
+      // before returning, so on a healthy network the fetched row
+      // already carries the latest payload - but the same race that
+      // motivates the merge in rebucketThread (cache-write failure,
+      // a cross-tab snapshot in flight) applies here too. End-of-
+      // turn refreshThreads() running while the in-memory patch is
+      // ahead of the server would otherwise wipe the brain icon and
+      // the inline card; the merge keeps both visible until the
+      // server actually has a payload at least as fresh.
+      recentThreads = mergeServerThreadList(recent);
+      olderThreads = mergeServerThreadList(older.rows);
       olderCursor = older.nextCursor;
       olderHasMore = older.nextCursor !== null;
       olderLoading = false;
-      archivedPage = archived.rows;
+      archivedPage = mergeServerThreadList(archived.rows);
       archivedCursor = archived.nextCursor;
       archivedHasMore = archived.nextCursor !== null;
       archivedLoading = false;

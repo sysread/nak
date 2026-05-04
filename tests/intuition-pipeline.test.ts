@@ -11,7 +11,10 @@ import {
   buildIntuitionThinkMessage,
   INTUITION_THINK_MARKER,
 } from '../src/lib/intuition/ephemeral';
-import { coerceIntuitionPayload } from '../src/lib/intuition/types';
+import {
+  coerceIntuitionPayload,
+  pickFresherIntuitionPayload,
+} from '../src/lib/intuition/types';
 import type {
   ChatRequest,
   ChatCompletion,
@@ -355,5 +358,85 @@ describe('coerceIntuitionPayload', () => {
   it('returns null on null/undefined', () => {
     expect(coerceIntuitionPayload(null)).toBeNull();
     expect(coerceIntuitionPayload(undefined)).toBeNull();
+  });
+});
+
+describe('pickFresherIntuitionPayload', () => {
+  // The realtime echo / refreshThreads merge gate. Each test pins a
+  // race the live UI was hitting before the merge landed: the brain
+  // icon would vanish when a thread UPDATE event from an unrelated
+  // mutation echoed back with a stale or null intuition_payload and
+  // overwrote the freshly-patched one.
+  function payload(at: number): unknown {
+    return {
+      v: 1,
+      perception: 'Classification: chitchat\n\nhi',
+      drives: { curiosity: 'go deeper' },
+      synthesis: 'short and warm',
+      computed_at_round: 1,
+      computed_at_band: 2,
+      computed_at_column: 'confident',
+      computed_at_at: at,
+      trigger: 'cold',
+    };
+  }
+
+  it('keeps the existing payload when the incoming row is null', () => {
+    // Realtime echo from an UPDATE on an unrelated column (e.g. a
+    // rename) before the cache write has landed. The echo carries
+    // intuition_payload=null because the DB hasn't been written
+    // yet; the in-memory patch must survive.
+    const existing = payload(1000);
+    expect(pickFresherIntuitionPayload(existing, null)).toBe(existing);
+  });
+
+  it('takes the incoming payload when the existing row is null', () => {
+    // Other tab just computed an intuition; this tab learns about
+    // it via realtime. We had nothing locally - take the server
+    // version.
+    const incoming = payload(2000);
+    expect(pickFresherIntuitionPayload(null, incoming)).toBe(incoming);
+  });
+
+  it('keeps the existing payload when its computed_at_at is newer', () => {
+    // Local tab just patched a fresh payload (T2). A server fetch in
+    // flight returns the older payload (T1). Local wins.
+    const existing = payload(2000);
+    const incoming = payload(1000);
+    expect(pickFresherIntuitionPayload(existing, incoming)).toBe(existing);
+  });
+
+  it('takes the incoming payload when its computed_at_at is newer', () => {
+    // Other tab just minted a newer payload. Realtime echo carries
+    // it. Server wins.
+    const existing = payload(1000);
+    const incoming = payload(2000);
+    expect(pickFresherIntuitionPayload(existing, incoming)).toBe(incoming);
+  });
+
+  it('takes the incoming payload when timestamps tie (idempotent on identical rows)', () => {
+    // Same payload arriving twice (the local patch we wrote, then
+    // the realtime echo of our own write) should not flicker. The
+    // tie goes to the incoming side so a server-confirmed write
+    // formally lands - either choice would render identically.
+    const existing = payload(1000);
+    const incoming = payload(1000);
+    expect(pickFresherIntuitionPayload(existing, incoming)).toBe(incoming);
+  });
+
+  it('treats malformed existing as null (clean payload always wins)', () => {
+    const incoming = payload(1000);
+    expect(pickFresherIntuitionPayload({ broken: true }, incoming)).toBe(incoming);
+  });
+
+  it('treats malformed incoming as null (clean payload always wins)', () => {
+    const existing = payload(1000);
+    expect(pickFresherIntuitionPayload(existing, { broken: true })).toBe(existing);
+  });
+
+  it('returns the incoming when both are null/malformed', () => {
+    // No information either way - take the incoming so the row
+    // stays in the same shape the server returned.
+    expect(pickFresherIntuitionPayload(null, null)).toBeNull();
   });
 });

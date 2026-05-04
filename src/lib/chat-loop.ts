@@ -1146,10 +1146,26 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       );
       if (fresh) {
         intuitionCache = fresh;
-        // Persist fire-and-forget. A write failure logs inside
-        // writeIntuitionCache but the in-memory cache still drives this
-        // turn's response - we don't block on Supabase.
-        void writeIntuitionCache(supabase, thread.id, fresh);
+        // Await the persist before continuing the loop. Earlier the
+        // write was fire-and-forget but two races could clobber the
+        // in-memory patch:
+        //
+        //   - The chat-loop calls update_title (or any tool that
+        //     bumps threads.updated_at) mid-turn. Supabase realtime
+        //     echoes that UPDATE event with the FULL row; if the
+        //     intuition write hadn't landed yet, the echo's
+        //     intuition_payload is null and Chat.svelte's
+        //     rebucketThread overwrites the in-memory patch with it.
+        //   - End-of-turn refreshThreads() fetches recent rows. If
+        //     the write hadn't landed, the fetch returns the stale
+        //     row and the patch is gone.
+        //
+        // Awaiting the write here forces both subsequent paths to
+        // see a row that already carries the new payload. Cost is
+        // ~50-200ms of one Supabase UPDATE before the next round
+        // starts; the user sees that as part of the "thinking" pause
+        // they already paid for the pipeline itself.
+        await writeIntuitionCache(supabase, thread.id, fresh);
         handlers?.onIntuitionUpdate?.(fresh);
       }
     }
@@ -1570,7 +1586,11 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           );
           if (fresh) {
             intuitionCache = fresh;
-            void writeIntuitionCache(supabase, thread.id, fresh);
+            // Awaited - same rationale as the pre-round trigger
+            // site above. The realtime echo from the update_title
+            // call that just landed will arrive any moment now;
+            // it must carry the new payload, not null.
+            await writeIntuitionCache(supabase, thread.id, fresh);
             handlers?.onIntuitionUpdate?.(fresh);
             const refreshedMsg = buildIntuitionThinkMessage(fresh);
             if (intuitionMessageIdx !== null) {

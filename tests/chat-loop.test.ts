@@ -1887,11 +1887,71 @@ describe('runChatLoop', () => {
       // brain pill and inline card see the new payload without
       // waiting for a Supabase round-trip.
       expect(updates).toHaveLength(1);
-      // And the cache write is fire-and-forget but must have been
-      // attempted - that's what makes the payload survive a reload.
-      // The mock resolves immediately so the call has already
-      // landed by the time runChatLoop returns.
+      // And the cache write must have been attempted - that's what
+      // makes the payload survive a reload.
       expect(mocks.setThreadIntuitionPayload).toHaveBeenCalledTimes(1);
+    });
+
+    it('awaits the cache write before notifying the UI handler', async () => {
+      // Regression for the "brain icon vanishes mid-modal" bug. The
+      // cache write was fire-and-forget; while in flight, any other
+      // thread UPDATE (the chat-loop's own update_title call, an
+      // unrelated samskara-worker bump, a cross-tab edit) fires a
+      // realtime echo whose row.intuition_payload is null. The
+      // Chat.svelte rebucketThread handler then overwrites the
+      // freshly-patched in-memory payload with that null row, and
+      // the icon disappears even though the UI just showed it.
+      //
+      // Awaiting the write before calling onIntuitionUpdate (and
+      // before runChatLoop returns) means by the time any
+      // subsequent thread UPDATE fires, the DB row already carries
+      // the new payload - so the realtime echo can't strand it.
+      // Pinning the order here surfaces a regression to fire-and-
+      // forget without depending on a flaky timer-based assertion.
+      const completionOrder: string[] = [];
+      let resolveWrite!: () => void;
+      const writePromise = new Promise<void>((r) => {
+        resolveWrite = r;
+      });
+      const intuitionCalls: ChatRequest[] = [];
+      const venice = intuitionVenice(intuitionCalls);
+      const { svc } = mockSupabase({
+        setThreadIntuitionPayload: vi.fn(async () => {
+          await writePromise;
+          completionOrder.push('write');
+        }),
+      });
+      const updates: unknown[] = [];
+      const runPromise = runChatLoop({
+        venice,
+        supabase: svc,
+        thread: mkThread(),
+        userId: 'u-1',
+        modelId: 'm',
+        history: [{ role: 'user', content: 'hi' }],
+        signal: new AbortController().signal,
+        intuitionModelId: 'fake-fast',
+        intuitionMood: { band: 2, column: 'confident' },
+        handlers: {
+          onIntuitionUpdate: () => {
+            completionOrder.push('handler');
+            updates.push(null);
+          },
+        },
+      });
+      // Yield several microtasks so the pipeline reaches the awaited
+      // write and parks there. Without the await, the handler would
+      // already have been called and 'handler' would be ahead of
+      // 'write' in completionOrder.
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(completionOrder).toEqual([]);
+      expect(updates).toHaveLength(0);
+      // Release the write. Now the handler should fire, and only
+      // then runChatLoop should resolve.
+      resolveWrite();
+      await runPromise;
+      expect(completionOrder).toEqual(['write', 'handler']);
+      expect(updates).toHaveLength(1);
     });
 
     it('skips the pipeline entirely when intuitionModelId is omitted', async () => {

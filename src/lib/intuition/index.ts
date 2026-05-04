@@ -18,6 +18,7 @@ export {
   STALE_FUSE_ROUNDS,
   coerceIntuitionPayload,
   countUserRounds,
+  pickFresherIntuitionPayload,
   type IntuitionPayload,
   type IntuitionTrigger,
 } from './types';

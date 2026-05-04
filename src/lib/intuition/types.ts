@@ -99,6 +99,45 @@ export function countUserRounds(
 }
 
 /**
+ * Pick the fresher of two persisted-payload values. Used at every
+ * thread-replacement site (refreshThreads, the realtime onUpdate
+ * handler, etc.) to keep a fresher in-memory payload from being
+ * clobbered by a server snapshot that hasn't caught up yet.
+ *
+ * Two races motivate this:
+ *
+ *   - The chat-loop patches the in-memory thread the instant a fresh
+ *     payload arrives, then awaits writeIntuitionCache. Even with
+ *     the await, a second tab on the same account can have a stale
+ *     snapshot in flight when our patch lands - we want to keep our
+ *     freshly-computed payload over the stale row.
+ *   - A persistence failure (network blip, RLS hiccup) leaves the
+ *     in-memory payload set but the DB row null. Any later thread
+ *     UPDATE (samskara worker, archive flip, manual rename) fires a
+ *     realtime echo whose row.intuition_payload is null. Without
+ *     this merge, the echo silently wipes the icon.
+ *
+ * Comparison is by computed_at_at - the wall-clock timestamp at the
+ * pipeline's success. A null incoming or existing value behaves as
+ * computed_at_at = -Infinity, so a real payload always beats null.
+ * Drift / unknown-version rows coerce to null and lose to anything
+ * valid, which is the right default - we never want to "preserve" a
+ * malformed payload over a clean one.
+ */
+export function pickFresherIntuitionPayload(
+  existing: unknown,
+  incoming: unknown
+): unknown {
+  const existingP = coerceIntuitionPayload(existing);
+  const incomingP = coerceIntuitionPayload(incoming);
+  if (!existingP) return incoming;
+  if (!incomingP) return existing;
+  return incomingP.computed_at_at >= existingP.computed_at_at
+    ? incoming
+    : existing;
+}
+
+/**
  * Coerce an unknown jsonb value into an IntuitionPayload, or null if
  * the shape doesn't match. The cache module's read path runs
  * everything through this so a drifting / older-version row is
