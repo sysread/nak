@@ -3775,12 +3775,13 @@
              param (absent = default) and Recipes goes through the
              lazy-load wrapper; both use replaceState so a chats
              <-> recipes flip doesn't fill the back stack with UI
-             chrome. The Chats button also kicks off newThread()
-             so the tab doubles as a "start a new conversation"
-             affordance matching the topbar's .new-thread-mini icon;
-             newThread() is a no-op when the current thread is
-             already empty, so repeat clicks don't spawn duplicate
-             drafts. -->
+             chrome. The Chats button only kicks off newThread() when
+             no conversation is currently selected - the user is
+             returning to the Chats tab and would otherwise hit an
+             empty pane. When a thread IS selected, the tab is just a
+             "go back to chats" affordance and the existing selection
+             rides along. The explicit "start a new conversation"
+             gesture lives on the topbar's .new-thread-mini icon. -->
         <div class="sidebar-nav" role="tablist" aria-label="Drawer section">
           <div class="row thread-row">
             <button
@@ -3791,7 +3792,12 @@
               aria-selected={drawerTab === 'chats'}
               onclick={() => {
                 navigate({ drawer: null }, { replace: true });
-                void newThread();
+                // Retain the active conversation when the user is
+                // just navigating back to the Chats tab. Only spin up
+                // a fresh draft when there's nothing to land on -
+                // newThread() would otherwise overwrite route.cid
+                // with a new draft id every time the tab is clicked.
+                if (!route.cid) void newThread();
               }}
             >Chats</button>
           </div>

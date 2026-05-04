@@ -6,16 +6,17 @@
    * plus a small confidence badge so the user can scan the list at a
    * glance without opening anything.
    *
-   * Click on a row scrolls the corresponding card on the main panel
-   * into view via `data-memory-id="<id>"`. Editing happens on the panel
-   * (memories don't have a heavyweight detail surface like recipes do),
-   * so the sidebar's job is just "browse + jump-to".
+   * Click on a row sets `route.memory` so the main panel shows that
+   * one memory's full card (label + data + relations + edit / delete /
+   * reaffirm controls). The sidebar's job is "browse + select"; the
+   * panel's job is "show the picked one in detail".
    *
    * Search is the same debounced semantic-search pipeline the assistant
    * uses for `memory_search` - see `searchMemoriesSemantic` in
    * `$lib/memories`. Drives `runMemoriesSearch` on the store.
    */
   import { app } from '$lib/state.svelte';
+  import { route, navigate } from '$lib/routing.svelte';
   import {
     memoriesStore,
     runMemoriesSearch,
@@ -23,8 +24,9 @@
   import { classifyMemoryConfidence } from '$lib/memories';
 
   // Parent (Chat shell) passes a callback that dismisses the mobile
-  // drawer once the panel scrolls to the chosen memory. Optional so
-  // the component is still usable in contexts that don't own a drawer.
+  // drawer once the panel has navigated to the chosen memory. Optional
+  // so the component is still usable in contexts that don't own a
+  // drawer.
   interface Props {
     onSelect?: () => void;
   }
@@ -60,25 +62,9 @@
     };
   });
 
-  function jumpTo(id: string): void {
+  function pickMemory(id: string): void {
+    navigate({ memory: id });
     onSelect?.();
-    // Defer one frame so the panel has rendered the row even if the
-    // mobile drawer transition is just starting.
-    requestAnimationFrame(() => {
-      const el = document.querySelector(
-        `[data-memory-id="${CSS.escape(id)}"]`,
-      ) as HTMLElement | null;
-      if (!el) return;
-      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      // Brief flash so the click target is unambiguous after the jump.
-      // The class is removed by the panel's animationend handler (see
-      // .memory-card.flash in Memories.svelte).
-      el.classList.remove('flash');
-      // Force a reflow so re-adding the class restarts the animation
-      // even if the user clicks the same row twice in a row.
-      void el.offsetWidth;
-      el.classList.add('flash');
-    });
   }
 </script>
 
@@ -113,7 +99,9 @@
       <div class="row thread-row" data-memory-id-link={m.id}>
         <button
           class="thread grow"
-          onclick={() => jumpTo(m.id)}
+          class:active={route.memory === m.id}
+          aria-current={route.memory === m.id ? 'true' : undefined}
+          onclick={() => pickMemory(m.id)}
           title={m.label}
         >
           <span class="memory-list-label">{m.label}</span>

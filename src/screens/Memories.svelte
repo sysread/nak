@@ -1,24 +1,28 @@
 <script lang="ts">
   /*
-   * Memories panel - inline browser. Mounted in the chat shell's main
-   * panel when `drawerTab === 'memories'`. Sibling of Cookbook.svelte
-   * and Journal.svelte; the sidebar `MemoryList` is the browse surface
-   * (search + label rows), this panel renders the same list with full
-   * inline edit / save / delete / relate behaviour the old modal
-   * carried.
+   * Memories panel - inline detail view. Mounted in the chat shell's
+   * main panel when `drawerTab === 'memories'`. Sibling of
+   * Cookbook.svelte and Journal.svelte; the sidebar `MemoryList` is
+   * the browse surface (search + label rows), and this panel renders
+   * exactly one card at a time - the memory whose id is in
+   * `route.memory`. With no selection the panel shows an empty-state
+   * hint pointing at the sidebar.
    *
    * Both surfaces read from `memoriesStore` (see
    * `$lib/memories-store.svelte.ts`), so a sidebar keystroke filters
-   * this list and a panel-side mutation is reflected on the sidebar
+   * the listing and a panel-side mutation is reflected on the sidebar
    * without a refetch. The store also owns the debounced semantic-
    * search pipeline; this panel does NOT debounce on its own.
    *
    * History note: this used to be a modal reached from a footer icon
-   * and a Settings button. Both entry points went away when memories
-   * graduated to a sibling tab (chats / recipes / journal / memories);
-   * the URL now reads `?drawer=memories` instead of `?modal=memories`.
+   * and a Settings button, then briefly a list-of-cards panel. Both
+   * earlier shapes traded readability for breadth - a wide viewport
+   * full of dense cards is hostile to actually reading any one
+   * memory. The single-card detail shape parallels Cookbook (one
+   * recipe at a time) and uses the sidebar list for navigation.
    */
   import { app } from '$lib/state.svelte';
+  import { route, navigate } from '$lib/routing.svelte';
   import {
     classifyMemoryConfidence,
     type MemoryConfidenceTag,
@@ -45,6 +49,18 @@
   // doesn't fire one embedding request per character. Same window the
   // store uses for its main search.
   const SEARCH_DEBOUNCE_MS = 200;
+
+  // The single memory currently displayed. Selection lives on
+  // `route.memory` so it survives a refresh / back / forward and can
+  // be set from the sidebar `MemoryList`. The card resolves against
+  // `memoriesStore.results`, which is the active search result set;
+  // a memory the current query filtered out reads as "not found in
+  // this view" (the user can clear the search to surface it again).
+  const selectedMemory = $derived<Memory | null>(
+    route.memory
+      ? memoriesStore.results.find((m) => m.id === route.memory) ?? null
+      : null,
+  );
 
   // Which row (if any) is currently in edit mode. Only one row edits
   // at a time - simplifies the "unsaved changes" semantics and stops
@@ -402,6 +418,11 @@
       if (relatingFromId === id) cancelRelate();
       deletingId = null;
       deleteError = null;
+      // Drop the routed selection too. Without this the panel would
+      // render the "not in current results" empty state pointing at a
+      // memory that no longer exists, which reads as a bug rather
+      // than as the deletion the user just confirmed.
+      if (route.memory === id) navigate({ memory: null });
     } catch (err) {
       deleteError = err instanceof Error ? err.message : String(err);
     }
@@ -450,10 +471,27 @@
           Help modal's Memory page for details.
         </p>
       {/if}
+    {:else if !route.memory}
+      <!-- Drawer tab is open but the user hasn't picked a row yet.
+           Point them at the sidebar list rather than dumping every
+           card into the panel - see the History note in the file
+           preamble for why this shape replaced the all-cards view. -->
+      <p class="subtle memories-empty">
+        Pick a memory from the list on the left to view it.
+      </p>
+    {:else if !selectedMemory}
+      <!-- route.memory points at a memory that isn't in the current
+           search results. Most likely the user followed a sidebar
+           link and then narrowed the search; clearing the search
+           surfaces the row again. -->
+      <p class="subtle memories-empty">
+        That memory isn't in the current results. Clear the search to
+        find it again.
+      </p>
     {:else}
+      {@const m = selectedMemory}
       <ul class="memory-list">
-        {#each memoriesStore.results as m (m.id)}
-          <li class="memory-card" data-memory-id={m.id}>
+        <li class="memory-card" data-memory-id={m.id}>
             {#if editingId === m.id}
               <div class="memory-edit">
                 <div class="form-row">
@@ -684,8 +722,7 @@
                 {/if}
               </div>
             {/if}
-          </li>
-        {/each}
+        </li>
       </ul>
     {/if}
   </div>
@@ -734,18 +771,6 @@
     border-radius: var(--radius);
     background: var(--surface);
     padding: 0.75rem 0.9rem;
-  }
-
-  /* Brief flash when the sidebar's "jump to" lands on a card. Removed
-     by the animationend handler on Chat.svelte (the parent owns the
-     listener so the panel stays presentational). */
-  :global(.memory-card.flash) {
-    animation: memory-flash 1.2s ease-out;
-  }
-
-  @keyframes memory-flash {
-    0% { box-shadow: 0 0 0 2px var(--accent, var(--border)); }
-    100% { box-shadow: 0 0 0 0 transparent; }
   }
 
   .memory-header-row {

@@ -16,10 +16,12 @@
  * Memories used to be a modal. It moved to a drawer tab so the four
  * primary content surfaces (chats, recipes, journal, memories) all
  * read as siblings - same tab nav, same sidebar layout, same inline
- * panel pattern. The Memories tab has no per-row routing key (no
- * equivalent of `recipe` / `journal_date`); editing happens inline on
- * the panel-side list, so there is nothing to bookmark beyond the tab
- * itself.
+ * panel pattern. The Memories tab carries `memory` as its per-row
+ * routing key (parallel to `recipe` for cookbook): the panel renders
+ * the single selected memory's full card, and the sidebar list is the
+ * browse surface that picks one. Absent `memory` means "nothing
+ * selected" and the panel shows an empty-state hint pointing at the
+ * sidebar.
  *
  * The deploy target is GitHub Pages with no SPA fallback, so path-style
  * routes (/settings, /recipes/<id>) would 404 on refresh. Every routed
@@ -59,6 +61,12 @@ export interface Route {
    * the main panel to that day's view. Absent defaults to today.
    */
   journal_date: string | null;
+  /**
+   * Memory id for the focused memory card. Absent means the panel
+   * shows an empty-state hint and the sidebar list is the only surface
+   * with content.
+   */
+  memory: string | null;
 }
 
 const ROUTED_KEYS = [
@@ -68,6 +76,7 @@ const ROUTED_KEYS = [
   'recipe',
   'doc',
   'journal_date',
+  'memory',
 ] as const;
 const MODAL_VALUES: readonly Modal[] = [
   'settings',
@@ -89,6 +98,7 @@ export const route = $state<Route>({
   recipe: null,
   doc: null,
   journal_date: null,
+  memory: null,
 });
 
 function readEnum<T extends string>(
@@ -115,6 +125,7 @@ export function parseUrl(search: string = typeof location !== 'undefined' ? loca
     recipe: readString(params, 'recipe'),
     doc: readString(params, 'doc'),
     journal_date: readString(params, 'journal_date'),
+    memory: readString(params, 'memory'),
   };
 }
 
@@ -136,6 +147,7 @@ export function buildSearch(
   if (r.recipe) params.set('recipe', r.recipe);
   if (r.doc) params.set('doc', r.doc);
   if (r.journal_date) params.set('journal_date', r.journal_date);
+  if (r.memory) params.set('memory', r.memory);
   const s = params.toString();
   return s ? `?${s}` : '';
 }
@@ -177,6 +189,10 @@ function applyPatch(patch: Partial<Route>): boolean {
     patch.journal_date !== route.journal_date
   ) {
     route.journal_date = patch.journal_date;
+    changed = true;
+  }
+  if (patch.memory !== undefined && patch.memory !== route.memory) {
+    route.memory = patch.memory;
     changed = true;
   }
   return changed;
@@ -243,6 +259,7 @@ export const __test = {
     route.recipe = null;
     route.doc = null;
     route.journal_date = null;
+    route.memory = null;
   },
   syncFromUrl,
 };

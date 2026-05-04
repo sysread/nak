@@ -54,21 +54,27 @@ in `docs/user/memory.md`. The dev side has four moving parts:
    `src/components/MemoryList.svelte` (sidebar) plus
    `src/lib/memories-store.svelte.ts` (shared rune). Reached as a
    sibling drawer tab next to chats / recipes / journal; the URL
-   key is `?drawer=memories`. The sidebar owns the search input
-   and a label-only row list; the panel renders the same rows
-   with full inline edit / save / delete / reaffirm / doubt /
-   relate UX. Both surfaces read from the shared store, so
-   sidebar keystrokes filter the panel and panel-side mutations
-   are reflected on the sidebar without a refetch. Wraps the
-   shared `searchMemoriesSemantic` helper plus the `updateMemory`
-   / `deleteMemory` Supabase methods. Human-only; offers hard
+   keys are `?drawer=memories` for the tab and `?memory=<id>` for
+   the focused memory. The sidebar owns the search input and a
+   label-only row list; clicking a row sets `route.memory` and
+   the panel renders that one card in detail with full inline
+   edit / save / delete / reaffirm / doubt / relate UX. Both
+   surfaces read from the shared store, so sidebar keystrokes
+   filter the listing and panel-side mutations are reflected on
+   the sidebar without a refetch. Wraps the shared
+   `searchMemoriesSemantic` helper plus the `updateMemory` /
+   `deleteMemory` Supabase methods. Human-only; offers hard
    delete but no invalidate (that stays an agent/assistant
    affordance).
 
-   History note: this used to be a modal opened from a footer
-   bookmark icon and from a Settings → AI button. Both went
+   History note: the browser started as a modal opened from a
+   footer bookmark icon and a Settings → AI button. Both went
    away when memories graduated to a sibling tab; the URL key
-   flipped from `?modal=memories` to `?drawer=memories`.
+   flipped from `?modal=memories` to `?drawer=memories`. The
+   panel briefly rendered every memory as a list of cards before
+   switching to the current single-card detail view (parallel to
+   Cookbook); a panel full of cards on a wide viewport buried
+   the row the user actually came to read.
 
 ## Files
 
@@ -105,20 +111,26 @@ in `docs/user/memory.md`. The dev side has four moving parts:
 - `src/screens/Memories.svelte` — human-facing browser, panel
   side. Mounted in the chat shell's main column when the
   `memories` drawer tab is active; sibling of `Cookbook.svelte`
-  / `Journal.svelte`. Owns the inline edit / save / delete /
-  reaffirm / doubt / relate UX, plus the `+ Relate` candidate
-  picker (debounced semantic search of its own). Reads results
-  and relations from `memoriesStore`; mutations call the
-  store-level helpers (`patchMemoryRow`, `removeMemoryRow`,
-  `addRelationEdge`, `removeRelationEdge`) so the sidebar
-  re-renders without a refetch.
+  / `Journal.svelte`. Renders exactly one memory at a time -
+  the row whose id is in `route.memory`. With no selection
+  shows an empty-state hint pointing at the sidebar list; with
+  a selection that's not in the active search results shows a
+  "clear the search to find it" hint. Owns the inline edit /
+  save / delete / reaffirm / doubt / relate UX, plus the `+
+  Relate` candidate picker (debounced semantic search of its
+  own). Reads results and relations from `memoriesStore`;
+  mutations call the store-level helpers (`patchMemoryRow`,
+  `removeMemoryRow`, `addRelationEdge`, `removeRelationEdge`)
+  so the sidebar re-renders without a refetch. Confirmed
+  delete also clears `route.memory` so the panel doesn't dwell
+  on a row that no longer exists.
 - `src/components/MemoryList.svelte` — human-facing browser,
   sidebar side. Search input bound to `memoriesStore.query`
   with a 200ms debounce around `runMemoriesSearch`. Each row
-  shows `label + classifyMemoryConfidence` chip; clicking a row
-  scrolls the panel-side card into view via
-  `data-memory-id="<id>"` and adds a `.flash` class for one
-  cycle of a CSS keyframe so the jump target is unambiguous.
+  shows `label + classifyMemoryConfidence` chip and an
+  `.active` marker when its id matches `route.memory`. Clicking
+  a row calls `navigate({ memory: id })` and (on mobile) closes
+  the drawer.
 - `src/lib/memories-store.svelte.ts` — shared reactive state
   (`results`, `relations`, `loading`, `loaded`, `error`,
   `query`) plus `runMemoriesSearch`, `patchMemoryRow`,
