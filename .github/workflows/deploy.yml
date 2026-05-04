@@ -1,4 +1,11 @@
 name: Deploy
+# `workflow_run` triggers default the run title to the workflow name
+# ("Deploy"), unlike `push` which uses the head commit subject. Borrow
+# the upstream Tests run's display_title so the Deploy entry in the
+# Actions list reads as the same commit subject the Tests entry shows.
+# workflow_dispatch has no upstream run, so fall back to a static label.
+run-name: >-
+  ${{ github.event.workflow_run.display_title || 'Deploy (manual)' }}
 
 on:
   # Triggered automatically after the Tests workflow finishes on main.
