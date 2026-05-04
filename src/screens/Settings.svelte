@@ -1398,15 +1398,6 @@
           </div>
         </div>
         {#if promptsError}<p class="error">{promptsError}</p>{/if}
-
-        <h3 class="pane-section">Memories</h3>
-        <p class="subtle">
-          Nak builds up long-term notes about you as you chat - facts,
-          preferences, coaching notes the model writes to its future
-          self. The Memories tab in the drawer (next to Chats / Recipes
-          / Journal) is the place to search, edit, or delete any of
-          them.
-        </p>
       {:else if group === 'journal'}
         <h2>Journal</h2>
         <p class="subtle">

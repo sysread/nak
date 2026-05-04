@@ -269,10 +269,11 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   `memories` drawer tab and the `MemoryList` / `Memories` panel
   pair that render against the shared `memoriesStore`. See
   `./chat.md`.
-- **Settings** — the AI pane describes the Memories tab in
-  prose so the user knows where to find the browser; there is
-  no longer a button there (the tab is the entry point). See
-  `./settings.md`.
+- **Settings** — no interaction. There used to be a "Browse
+  memories" button in the AI pane (and a prose pointer after
+  that); both went away once the Memories drawer tab landed
+  as a prominent affordance of its own. The settings module
+  now has no awareness of memories at all.
 - **Tools** — the five memory tools live in the registry
   (`tools/index.ts`). Reflection uses `memoryToolbox` (a
   write-scoped subset: search + create + update + invalidate,
