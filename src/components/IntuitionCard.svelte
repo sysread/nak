@@ -136,16 +136,24 @@
     color: color-mix(in srgb, var(--text) 80%, transparent);
   }
 
+  /* Single row at every viewport. Without nowrap, narrow phones
+     pushed the toggle to a second line because `margin-left: auto`
+     forced wrap before the row ran out of room - the result was a
+     ragged two-line header on mobile and a clean one-line header
+     on desktop. Keeping the row intact and giving the badge the
+     only `min-width: 0` slot means the row shrinks predictably
+     (badge ellipses) instead of breaking layout. */
   .card-header {
     display: flex;
     gap: 0.45rem;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
 
   .icon {
     font-size: 1rem;
     line-height: 1;
+    flex-shrink: 0;
     font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
   }
 
@@ -153,6 +161,7 @@
     font-weight: 600;
     font-size: 0.85rem;
     color: var(--text);
+    flex-shrink: 0;
   }
 
   .badge {
@@ -163,15 +172,26 @@
     padding: 0.02rem 0.45rem;
     font-size: 0.72rem;
     text-transform: lowercase;
+    /* The only shrinkable element. "recommendation" / "continuation"
+       are the longest categories; on very narrow viewports the
+       badge ellipses rather than forcing the toggle to wrap. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .time {
     font-size: 0.75rem;
+    flex-shrink: 0;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
 
   /* Push the toggle button to the right end of the row. */
   .toggle {
     margin-left: auto;
+    flex-shrink: 0;
     width: 1.5rem;
     height: 1.5rem;
     padding: 0;
