@@ -41,8 +41,9 @@ Unlike memories, entries are not linked into a graph.
     Agent<JournalInput, JournalOutput>`. Model:
     `zai-org-glm-4.7-flash` (literal id, not a tier -
     insulated from user-facing tier swaps, supports
-    function calling + reasoning).
-    `reasoning_effort: 'medium'`. Reads today's existing
+    function calling). Thinking is disabled outright via
+    `venice_parameters.disable_thinking=true`; no
+    `reasoning_effort` is sent. Reads today's existing
     automatic entry and injects it into the prompt so the
     LLM extends rather than duplicates. Also exposes a
     `regenerate({threadId, entryDate, existingEntry})`

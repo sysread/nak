@@ -16,19 +16,24 @@
  * pinning pieces but diverges in three ways:
  *
  *   - Model + reasoning: runs on `zai-org-glm-4.7-flash` with
- *     reasoning_effort='medium'. Supports function calling + reasoning,
- *     which is the slot this background agent actually needs (no vision,
- *     no streaming UX). Pinned to a literal id rather than tracking a
- *     tier so a swap of the user-facing tiers doesn't perturb the
- *     journaler. History: the task started on the balanced profile
- *     (GLM-5) and hit overload errors, then moved to
- *     `nvidia-nemotron-cascade-2-30b-a3b` for the low-traffic-slot
- *     property, which produced visibly weak entries. The `-flash`
- *     variant of GLM-4.7 is roughly a third the price of the plain
- *     `zai-org-glm-4.7` that fronts the user-facing Fast tier, so
- *     it's plausibly a separate slot; if overload errors return,
- *     the next move is back to a non-user-fronted id, not back to
- *     the Fast tier proper.
+ *     `disable_thinking=true` and no `reasoning_effort`. Supports
+ *     function calling, which is the slot this background agent
+ *     actually needs (no vision, no streaming UX). Pinned to a
+ *     literal id rather than tracking a tier so a swap of the user-
+ *     facing tiers doesn't perturb the journaler. History: the task
+ *     started on the balanced profile (GLM-5) and hit overload
+ *     errors, then moved to `nvidia-nemotron-cascade-2-30b-a3b` for
+ *     the low-traffic-slot property, which produced visibly weak
+ *     entries. The `-flash` variant of GLM-4.7 is roughly a third
+ *     the price of the plain `zai-org-glm-4.7` that fronts the
+ *     user-facing Fast tier, so it's plausibly a separate slot.
+ *     Thinking is disabled outright via Venice's
+ *     `venice_parameters.disable_thinking` kill switch: the task is
+ *     "read the conversation, emit a structured JSON entry," and
+ *     CoT preambles on a reasoning-capable model just burned the
+ *     output budget without changing the entry quality. If overload
+ *     errors return, the next move is back to a non-user-fronted
+ *     id, not back to the Fast tier proper.
  *
  *   - Output: structured JSON via response_format, not a tool call.
  *     The earlier "write the entry through tool_call.arguments" shape
@@ -68,7 +73,6 @@ import { createLogger } from '../../logger.svelte';
 import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
 import { runHeadlessToolLoop } from '../../tools/run';
 import { journalAgentToolbox } from '../../tools/journal_agent_toolbox';
-import type { ReasoningEffort } from '../../models';
 import {
   buildJournalPrompt,
   buildJournalRegeneratePrompt,
@@ -115,14 +119,6 @@ const log = createLogger('journal-worker');
  * `manager.ts`.
  */
 export const VENICE_JOURNAL_MODEL = 'zai-org-glm-4.7-flash';
-
-/**
- * Reasoning effort sent alongside the balanced-tier model. `medium` is
- * the intended band for this task - `low` produced flattened entries
- * that missed the user's reframings mid-conversation; `high` added
- * latency without a visible quality gain.
- */
-export const JOURNAL_REASONING_EFFORT: ReasoningEffort = 'medium';
 
 /**
  * Pin response_format=json_object on every run. The prompt also re-
@@ -450,7 +446,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
         },
         signal,
         responseFormat: JOURNAL_RESPONSE_FORMAT,
-        reasoningEffort: JOURNAL_REASONING_EFFORT,
+        disableThinking: true,
       });
       const finalText = loopResult.finalText;
 
@@ -656,7 +652,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
       },
       signal,
       responseFormat: JOURNAL_RESPONSE_FORMAT,
-      reasoningEffort: JOURNAL_REASONING_EFFORT,
+      disableThinking: true,
     });
     const finalText = loopResult.finalText;
 

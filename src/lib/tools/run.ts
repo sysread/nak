@@ -157,6 +157,20 @@ export interface HeadlessToolLoopOptions {
    * tier default.
    */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Optional Venice-specific `disable_thinking` kill switch. When
+   * true, forwarded on every round so the model's reasoning pass is
+   * skipped entirely - no `reasoning_content` tokens, no chain-of-
+   * thought eating into the response budget. Distinct from
+   * `reasoningEffort: 'low'`, which shrinks the CoT but doesn't
+   * disable it. Used by background agents whose task is bounded
+   * synthesis on a reasoning-capable model where the default CoT
+   * preamble would just add latency without changing the answer
+   * quality. The journaling agent sets this so a Venice GLM-4.7
+   * variant doesn't burn its first few hundred tokens on internal
+   * deliberation before emitting the structured JSON entry.
+   */
+  disableThinking?: boolean;
 }
 
 export interface HeadlessToolLoopResult {
@@ -227,6 +241,7 @@ export async function runHeadlessToolLoop(
       tools: buildToolboxWireList(toolbox),
       responseFormat: opts.responseFormat,
       reasoningEffort: opts.reasoningEffort,
+      disableThinking: opts.disableThinking,
     });
 
     const roundText = completion.text;
