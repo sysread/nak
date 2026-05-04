@@ -16,20 +16,28 @@
  * Mirrors `../reflection/agent.ts` in the thread-fetch / slice / model
  * pinning pieces but diverges in three ways:
  *
- *   - Model + thinking: runs on `zai-org-glm-4.7-flash` with
- *     `disable_thinking=true` and no `reasoning_effort`. The agent
- *     does NOT call function tools (see "Context" below), so a
- *     non-function-calling model would also be a candidate; the
- *     current pin is held for the low-traffic-slot reason. Pinned
- *     to a literal id rather than tracking a tier so a swap of the
- *     user-facing tiers doesn't perturb the journaler. History:
- *     the task started on the balanced profile (GLM-5) and hit
- *     overload errors, moved to `nvidia-nemotron-cascade-2-30b-a3b`
- *     for the low-traffic-slot property which produced visibly weak
- *     entries, then moved to `zai-org-glm-4.7-flash` (roughly a
- *     third the price of the plain `zai-org-glm-4.7` that fronts
- *     the user-facing Fast tier, so plausibly a separate capacity
- *     pool). Thinking is disabled outright via Venice's
+ *   - Model + thinking: runs on `nvidia-nemotron-cascade-2-30b-a3b`
+ *     with `disable_thinking=true` and no `reasoning_effort`. The
+ *     agent does NOT call function tools (see "Context" below), so
+ *     a non-function-calling model is fine. Pinned to a literal id
+ *     rather than tracking a tier so a swap of the user-facing
+ *     tiers doesn't perturb the journaler. History:
+ *       (1) Started on the balanced profile (GLM-5) and hit
+ *           overload errors - foreground tier sharing capacity.
+ *       (2) Moved to nemotron for the low-traffic-slot property;
+ *           entries came out weak, but the agent at the time was
+ *           running a tool loop with `reasoning_effort: 'medium'`
+ *           and the failure mode was likely the small model
+ *           fumbling tool dispatch / burning CoT budget rather
+ *           than a baseline writing-quality issue.
+ *       (3) Moved to `zai-org-glm-4.7-flash` (a presumed-separate
+ *           capacity-pool variant of the Fast tier id at ~1/3 the
+ *           price); also overloaded, suggesting it shares capacity
+ *           with the Fast tier in practice.
+ *       (4) Back to nemotron, this time without tools and without
+ *           thinking - the conditions that made it look weak are
+ *           gone, and the low-traffic-slot property still holds.
+ *     Thinking is disabled outright via Venice's
  *     `venice_parameters.disable_thinking` kill switch: the task
  *     is "read the conversation, emit a structured JSON entry,"
  *     and CoT preambles on a reasoning-capable model just burned
@@ -113,27 +121,34 @@ const log = createLogger('journal-worker');
  * Model the journaling agent runs against. Literal id rather than a
  * tier reference: the journal worker is a "every settled thread, in
  * order, in the background" load and wants insulation from user-facing
- * tier swaps. `zai-org-glm-4.7-flash` is the current pick - supports
- * function calling + reasoning, and at roughly a third the price of
- * the plain `zai-org-glm-4.7` (which fronts the Fast tier) it's
- * plausibly served from a different capacity pool, which matters
- * because the journaler walks every settled thread in order in the
- * background and shouldn't fight foreground turns for capacity. No
- * vision, which is fine; threads are text-only at this layer.
+ * tier swaps. `nvidia-nemotron-cascade-2-30b-a3b` is the current pick:
+ * it had the low-traffic-slot property we want for background work
+ * and 256k of context headroom. The "weak entries" complaint that
+ * earlier knocked it off the slot landed when the agent was carrying
+ * a tool loop with `reasoning_effort: 'medium'` - small models tend
+ * to fumble tool dispatch and waste their CoT budget on it. Now that
+ * the agent doesn't call tools (context-recall is prepended as a
+ * synthetic <think> message instead) and thinking is disabled
+ * outright, the same model only has to read prose and emit JSON; the
+ * earlier failure mode shouldn't apply.
  *
- * Predecessors and why they were dropped: the balanced profile (GLM-5)
- * hit overload errors under the background load; `nvidia-nemotron-
- * cascade-2-30b-a3b` had the low-traffic property but produced visibly
- * weak entries. If `-flash` also overloads, the next move is to find
- * another non-user-fronted id rather than retarget to the Fast tier
- * proper - that would put the journaler in direct contention with
- * foreground Fast-tier traffic.
+ * Predecessors and why they were dropped:
+ *   - The balanced profile (GLM-5) hit overload errors under the
+ *     background load - foreground tier sharing capacity.
+ *   - `zai-org-glm-4.7-flash` was tried as a presumed-separate-pool
+ *     variant of the Fast tier id; cheaper, but also overloaded,
+ *     suggesting it shares capacity with the Fast tier in practice.
+ *
+ * If overload errors return on nemotron, the next move is another
+ * non-user-fronted id, not back to a Fast-tier model - the journaler
+ * walking every settled thread in order in the background should
+ * never fight foreground turns for capacity.
  *
  * Pin to a string. If a future swap is wanted, change it here; the
  * worker reads the value through the start-message plumbing in
  * `manager.ts`.
  */
-export const VENICE_JOURNAL_MODEL = 'zai-org-glm-4.7-flash';
+export const VENICE_JOURNAL_MODEL = 'nvidia-nemotron-cascade-2-30b-a3b';
 
 /**
  * Pin response_format=json_object on every run. The prompt also re-
@@ -311,8 +326,9 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
     private supabase: SupabaseService,
     /**
      * Optional override. Defaults to `VENICE_JOURNAL_MODEL`
-     * (`zai-org-glm-4.7-flash`). Useful for tests and for a future
-     * A/B where two journaling models run against historical threads.
+     * (`nvidia-nemotron-cascade-2-30b-a3b`). Useful for tests and for
+     * a future A/B where two journaling models run against historical
+     * threads.
      */
     modelId?: string,
     /**

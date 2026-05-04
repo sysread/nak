@@ -39,8 +39,9 @@ Unlike memories, entries are not linked into a graph.
     on the right day.
   - `agent.ts` — `JournalAgent implements
     Agent<JournalInput, JournalOutput>`. Model:
-    `zai-org-glm-4.7-flash` (literal id, not a tier -
-    insulated from user-facing tier swaps). Thinking is
+    `nvidia-nemotron-cascade-2-30b-a3b` (literal id, not a
+    tier - low-traffic slot, insulated from user-facing
+    tier swaps). Thinking is
     disabled outright via
     `venice_parameters.disable_thinking=true`; no
     `reasoning_effort` is sent. The agent does NOT call
