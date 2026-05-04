@@ -125,7 +125,11 @@ export function initUpdateWatcher(): void {
       updateState.available = true;
     },
     onRegisteredSW(swUrl, registration) {
-      log.info('onRegisteredSW', {
+      // Routine SW-registered confirmation - fires on every load; the
+      // interesting cases (need-refresh, poll, applyUpdate) have their
+      // own info-tier entries. Kept at debug so the default Info+ view
+      // isn't dominated by one-per-pageload registration noise.
+      log.debug('onRegisteredSW', {
         swUrl,
         hasRegistration: !!registration,
         waiting: !!registration?.waiting,
@@ -138,7 +142,11 @@ export function initUpdateWatcher(): void {
       // no-op when the cached SW script matches the server's copy, so
       // the cost is one HEAD-ish request per tick.
       const poll = (reason: string): void => {
-        log.info('poll', reason);
+        // Per-tick heartbeat - fires every UPDATE_POLL_MS plus on every
+        // visibilitychange-back-to-visible. Kept at debug so the
+        // default Info+ view isn't dominated by routine update probes;
+        // failures still surface at warn.
+        log.debug('poll', reason);
         registration.update().catch((err) => {
           log.warn('poll failed', err);
         });

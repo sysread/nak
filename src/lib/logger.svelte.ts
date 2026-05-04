@@ -77,10 +77,11 @@ export const LOG_LEVEL_LABELS: Record<LogLevel, string> = {
   error: 'Error',
 };
 
-/** Default for a fresh profile. `'debug'` keeps the drawer at the
- *  prior default - users who want the per-cycle worker breadcrumbs
- *  can drop to `trace` from the Appearance pane. */
-export const DEFAULT_LOG_LEVEL: LogLevel = 'debug';
+/** Default for a fresh profile. `'info'` keeps the drawer focused on
+ *  one-shot lifecycle events worth seeing without prompting; routine
+ *  per-load and per-cycle breadcrumbs sit at `debug` / `trace` and
+ *  surface when the user drops the filter from the Appearance pane. */
+export const DEFAULT_LOG_LEVEL: LogLevel = 'info';
 
 export interface LogEntry {
   /** Monotonic, buffer-local. Used as the `{#each}` key so re-renders

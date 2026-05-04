@@ -66,7 +66,7 @@ type InboundMessage = StartMessage | StopMessage | SessionMessage;
 
 interface LogOutbound {
   type: 'log';
-  level: 'info' | 'warn' | 'error';
+  level: 'debug' | 'info' | 'warn' | 'error';
   message: string;
 }
 
@@ -131,7 +131,10 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     return;
   }
   currentClient = client;
-  post({ type: 'log', level: 'info', message: 'worker: setSession ok, entering main loop' });
+  // Routine lifecycle breadcrumb - emitted on every worker start, so it
+  // would clutter the default Info+ view without telling the user
+  // anything actionable. Kept at debug for the Debug+ tier.
+  post({ type: 'log', level: 'debug', message: 'worker: setSession ok, entering main loop' });
 
   const supabase = new SupabaseService(
     { supabaseUrl: msg.supabaseUrl, supabaseAnonKey: msg.supabaseAnonKey },

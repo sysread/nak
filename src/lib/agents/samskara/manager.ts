@@ -133,8 +133,14 @@ export class SamskaraManager {
       };
       if (!data || typeof data !== 'object') return;
       if (data.type === 'log' && typeof data.message === 'string') {
-        const level: 'info' | 'warn' | 'error' =
-          data.level === 'error' ? 'error' : data.level === 'warn' ? 'warn' : 'info';
+        const level: 'debug' | 'info' | 'warn' | 'error' =
+          data.level === 'error'
+            ? 'error'
+            : data.level === 'warn'
+              ? 'warn'
+              : data.level === 'debug'
+                ? 'debug'
+                : 'info';
         workerLog[level](data.message);
       } else if (
         data.type === 'progress' &&
