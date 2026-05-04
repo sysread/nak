@@ -16,27 +16,33 @@
  * Mirrors `../reflection/agent.ts` in the thread-fetch / slice / model
  * pinning pieces but diverges in three ways:
  *
- *   - Model + thinking: runs on `nvidia-nemotron-cascade-2-30b-a3b`
- *     with `disable_thinking=true` and no `reasoning_effort`. The
- *     agent does NOT call function tools (see "Context" below), so
- *     a non-function-calling model is fine. Pinned to a literal id
+ *   - Model + thinking: runs on `minimax-m25` with
+ *     `disable_thinking=true` and no `reasoning_effort`. The agent
+ *     does NOT call function tools (see "Context" below), so a
+ *     non-function-calling model is fine. Pinned to a literal id
  *     rather than tracking a tier so a swap of the user-facing
  *     tiers doesn't perturb the journaler. History:
  *       (1) Started on the balanced profile (GLM-5) and hit
  *           overload errors - foreground tier sharing capacity.
- *       (2) Moved to nemotron for the low-traffic-slot property;
- *           entries came out weak, but the agent at the time was
- *           running a tool loop with `reasoning_effort: 'medium'`
- *           and the failure mode was likely the small model
- *           fumbling tool dispatch / burning CoT budget rather
- *           than a baseline writing-quality issue.
+ *       (2) Moved to `nvidia-nemotron-cascade-2-30b-a3b` for the
+ *           low-traffic-slot property; entries came out weak, but
+ *           the agent at the time was running a tool loop with
+ *           `reasoning_effort: 'medium'` so the failure mode could
+ *           plausibly have been small-model tool fumbling rather
+ *           than baseline writing quality.
  *       (3) Moved to `zai-org-glm-4.7-flash` (a presumed-separate
  *           capacity-pool variant of the Fast tier id at ~1/3 the
  *           price); also overloaded, suggesting it shares capacity
  *           with the Fast tier in practice.
- *       (4) Back to nemotron, this time without tools and without
- *           thinking - the conditions that made it look weak are
- *           gone, and the low-traffic-slot property still holds.
+ *       (4) Briefly re-pinned nemotron under the no-tools,
+ *           no-thinking shape, then jumped to minimax without
+ *           letting the second nemotron run gather data - the
+ *           upside of "maybe weak entries were a tool-loop
+ *           artifact" wasn't worth the downside if the model is
+ *           just baseline weak.
+ *       (5) Trying `minimax-m25`. Same family as `minimax-m27`
+ *           that previously fronted the Balanced tier, but a
+ *           different id - plausibly a different capacity pool.
  *     Thinking is disabled outright via Venice's
  *     `venice_parameters.disable_thinking` kill switch: the task
  *     is "read the conversation, emit a structured JSON entry,"
@@ -121,34 +127,40 @@ const log = createLogger('journal-worker');
  * Model the journaling agent runs against. Literal id rather than a
  * tier reference: the journal worker is a "every settled thread, in
  * order, in the background" load and wants insulation from user-facing
- * tier swaps. `nvidia-nemotron-cascade-2-30b-a3b` is the current pick:
- * it had the low-traffic-slot property we want for background work
- * and 256k of context headroom. The "weak entries" complaint that
- * earlier knocked it off the slot landed when the agent was carrying
- * a tool loop with `reasoning_effort: 'medium'` - small models tend
- * to fumble tool dispatch and waste their CoT budget on it. Now that
- * the agent doesn't call tools (context-recall is prepended as a
- * synthetic <think> message instead) and thinking is disabled
- * outright, the same model only has to read prose and emit JSON; the
- * earlier failure mode shouldn't apply.
+ * tier swaps. `minimax-m25` is the current pick - a non-Z.ai, non-
+ * NVIDIA family the journaler hasn't tried yet, sized for prose +
+ * structured-JSON output without function-calling. minimax-m27
+ * fronted the Balanced tier earlier (now in
+ * RETIRED_MODEL_CONTEXT_WINDOWS in src/lib/models.ts), so the family
+ * is on Venice; m25 is an older / cheaper variant from the same
+ * lineage and it's plausibly served from yet another capacity pool
+ * given how aggressively Venice rotates the foreground tier ids.
  *
  * Predecessors and why they were dropped:
- *   - The balanced profile (GLM-5) hit overload errors under the
- *     background load - foreground tier sharing capacity.
- *   - `zai-org-glm-4.7-flash` was tried as a presumed-separate-pool
- *     variant of the Fast tier id; cheaper, but also overloaded,
- *     suggesting it shares capacity with the Fast tier in practice.
+ *   - The balanced profile (GLM-5) hit overload errors - foreground
+ *     tier sharing capacity.
+ *   - `nvidia-nemotron-cascade-2-30b-a3b` was tried twice. First
+ *     pass produced visibly weak entries, but the agent at the time
+ *     was carrying a tool loop with `reasoning_effort: 'medium'`,
+ *     so the failure mode could plausibly have been the small model
+ *     fumbling tool dispatch. We pinned it again under the
+ *     no-tools, no-thinking shape and didn't get to test it -
+ *     putting back a model whose only known data point is "weak"
+ *     wasn't worth the cycle.
+ *   - `zai-org-glm-4.7-flash` overloaded under the background load,
+ *     suggesting it shares capacity with the Fast tier in practice
+ *     despite the lower price.
  *
- * If overload errors return on nemotron, the next move is another
- * non-user-fronted id, not back to a Fast-tier model - the journaler
- * walking every settled thread in order in the background should
- * never fight foreground turns for capacity.
+ * If overload returns on minimax, the next move is yet another
+ * non-user-fronted id - the journaler walking every settled thread
+ * in order in the background should never fight foreground turns for
+ * capacity. Don't fall back to Smart / Balanced / Fast tier ids.
  *
  * Pin to a string. If a future swap is wanted, change it here; the
  * worker reads the value through the start-message plumbing in
  * `manager.ts`.
  */
-export const VENICE_JOURNAL_MODEL = 'nvidia-nemotron-cascade-2-30b-a3b';
+export const VENICE_JOURNAL_MODEL = 'minimax-m25';
 
 /**
  * Pin response_format=json_object on every run. The prompt also re-
@@ -326,9 +338,8 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
     private supabase: SupabaseService,
     /**
      * Optional override. Defaults to `VENICE_JOURNAL_MODEL`
-     * (`nvidia-nemotron-cascade-2-30b-a3b`). Useful for tests and for
-     * a future A/B where two journaling models run against historical
-     * threads.
+     * (`minimax-m25`). Useful for tests and for a future A/B where
+     * two journaling models run against historical threads.
      */
     modelId?: string,
     /**
