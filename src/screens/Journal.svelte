@@ -617,19 +617,34 @@
           title="Download this entry as Markdown"
         >⬇️</button>
         <!--
-          Spam-filter votes. Thumbs-up trains the source conversation's
-          tokens as ham; thumbs-down (Delete) trains them as spam AND
-          deletes the entry + adds the thread to journal_thread_excludes.
-          Both buttons stay visible once the entry has a thread; the
-          thumbs-up gets a green border (.is-voted) once ham_marked_at
-          flips so the durable vote state lives on the button itself
-          rather than being replaced by a separate "you voted" tag.
-          Re-clicking an already-hammed thumbs-up is a no-op (the click
-          handler short-circuits when ham_marked_at is set) - the visual
-          state is the indicator. aria-label + title carry the verb for
-          keyboard / screen-reader users.
+          Regenerate sits immediately after the download button and
+          before the spam-filter votes so the row reads as "save /
+          rewrite / approve / reject" - the two passive actions
+          (download, vote) bracket the one that mutates the entry.
+          Only available when the source thread still exists - the
+          agent needs the messages to feed the model.
+
+          Spam-filter votes follow. Thumbs-up trains the source
+          conversation's tokens as ham; thumbs-down (Delete) trains
+          them as spam AND deletes the entry + adds the thread to
+          journal_thread_excludes. Both buttons stay visible once the
+          entry has a thread; the thumbs-up gets a green border
+          (.is-voted) once ham_marked_at flips so the durable vote
+          state lives on the button itself rather than being replaced
+          by a separate "you voted" tag. Re-clicking an already-hammed
+          thumbs-up is a no-op (the click handler short-circuits when
+          ham_marked_at is set) - the visual state is the indicator.
+          aria-label + title carry the verb for keyboard /
+          screen-reader users.
         -->
         {#if entry.thread_id}
+          <button
+            type="button"
+            class="secondary journal-vote-btn"
+            aria-label="Regenerate this entry"
+            onclick={() => startRegenerate(entry)}
+            title="Regenerate - have the journaler write a different take on this conversation"
+          >🔄</button>
           <button
             type="button"
             class="secondary journal-vote-btn"
@@ -642,19 +657,6 @@
               ? 'You marked this entry as appropriate.'
               : 'Looks good - tell the spam filter this kind of conversation IS journal-worthy'}
           >{hamBusyId === entry.id ? '…' : '👍'}</button>
-          <!--
-            Regenerate. Sits between thumbs-up and thumbs-down so the
-            row reads as "approve / rewrite / reject". Only available
-            when the source thread still exists - the agent needs the
-            messages to feed the model.
-          -->
-          <button
-            type="button"
-            class="secondary journal-vote-btn"
-            aria-label="Regenerate this entry"
-            onclick={() => startRegenerate(entry)}
-            title="Regenerate - have the journaler write a different take on this conversation"
-          >🔄</button>
         {/if}
         {#if deleteTargetId === entry.id}
           <span class="subtle journal-delete-prompt">

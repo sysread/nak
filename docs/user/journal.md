@@ -50,9 +50,13 @@ day unfolded.
   updates the same thread, so your manual edits to an automatic
   entry would be overwritten - delete instead, then write your own
   user entry if you want a different framing.
-- **Thumbs up / regenerate / thumbs down** — on automatic
-  entries, three emoji-labeled buttons in the action row.
-  Thumbs-up (Looks good) tells the journaler "this kind of
+- **Regenerate / thumbs up / thumbs down** — on automatic
+  entries, three emoji-labeled buttons in the action row, sitting
+  to the right of the download button. The regenerate button (🔄)
+  asks the journaler to write a different take on the same
+  conversation - see
+  [Regenerating an automatic entry](#regenerating-an-automatic-entry)
+  below. Thumbs-up (Looks good) tells the journaler "this kind of
   conversation IS worth journaling"; thumbs-down (Delete) removes
   the entry, marks the source conversation as excluded from
   future journaling, AND tells the journaler "this kind is NOT
@@ -60,10 +64,6 @@ day unfolded.
   [Teaching the journaler what to keep](#teaching-the-journaler-what-to-keep)
   below. Thumbs-up stays visible after a click and picks up a
   green border to show the vote took; re-clicking is a no-op.
-  The regenerate button (🔄) sits between the two and asks the
-  journaler to write a different take on the same conversation -
-  see [Regenerating an automatic entry](#regenerating-an-automatic-entry)
-  below.
 
 Navigate days with **‹** / **›** or jump back to **Today**.
 
