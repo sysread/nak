@@ -52,16 +52,25 @@ No toggle.
 ## Memory reflection and recall
 
 Two background loops — **reflection** (writes long-term memories
-after a thread settles) and **recall** (reads them back at the start
-of a new conversation or after a topic shift) — are the mechanics
-behind the [Memory](./memory.md) feature. That page is the primary
-source; everything here is just the plumbing view.
+after a thread settles) and **recall** (reads them back at topic
+boundaries) — are the mechanics behind the [Memory](./memory.md)
+feature. That page is the primary source; everything here is just
+the plumbing view.
 
 Reflection runs on the fast model tier, one cycle per settled thread,
-and uses the memory tools to write or update memory rows. Recall is
-triggered by the main model on its own judgment (not by you) and
-runs a dedicated fast-tier agent that searches memories and prior
-threads, then hands the main model a short digest.
+and uses the memory tools to write or update memory rows.
+
+Recall fires automatically at topic boundaries: at the start of a
+fresh thread, after the model renames the conversation (the strongest
+"topic shift" signal), after your mood band shifts, and after a long
+stretch without a refresh. Each fire runs two parallel passes — one
+over your stored memories, one over the topical summaries of your
+prior conversations — and stitches the findings into a short
+recollection the assistant reads as its own prior thought before
+the next reply. The main model can also call `memory_recall` and
+`conversation_recall` directly when you ask it to look something
+specific up; those are the explicit-lookup escape hatches alongside
+the automatic topic-boundary path.
 
 No toggle for either. If you want recall to skip a specific turn,
 tell the model directly ("don't look up prior context for this

@@ -140,6 +140,7 @@
     pickFresherIntuitionPayload,
     type IntuitionPayload,
   } from '$lib/intuition';
+  import { pickFresherContextRecallPayload } from '$lib/context-recall';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -434,6 +435,13 @@
           existing.intuition_payload,
           row.intuition_payload
         ),
+        // Same race / same merge as intuition_payload above. The
+        // two subconscious-priming caches ride parallel paths and
+        // each one can land in memory ahead of a server snapshot.
+        context_recall_payload: pickFresherContextRecallPayload(
+          existing.context_recall_payload,
+          row.context_recall_payload
+        ),
       };
     });
   }
@@ -497,6 +505,12 @@
         intuition_payload: pickFresherIntuitionPayload(
           existing.intuition_payload,
           t.intuition_payload
+        ),
+        // Parallel merge for the context-recall cache - same race
+        // (realtime echo carrying a stale null) handled the same way.
+        context_recall_payload: pickFresherContextRecallPayload(
+          existing.context_recall_payload,
+          t.context_recall_payload
         ),
       };
     }
@@ -1697,6 +1711,7 @@
       archived: false,
       title_manually_set: false,
       intuition_payload: null,
+      context_recall_payload: null,
       created_at: now,
       updated_at: now,
       isDraft: true,
@@ -2194,6 +2209,13 @@
           journalTimezone: app.journalTimezone || null,
           intuitionModelId: MODELS.fast.id,
           intuitionMood: intuitionMoodArg,
+          // Topic-boundary recall rides the same trigger machinery as
+          // intuition (cold-start, mid-turn title shift, mood shift,
+          // stale fuse). Enabled by default in production - the
+          // chat-loop's parallel fan-out keeps the wall-clock cost
+          // bounded by max(intuition, context-recall) and the cache
+          // turns later turns into no-ops on the same trigger fire.
+          contextRecallEnabled: true,
           handlers: {
             onTextUpdate: (t) => {
               pending = t;
@@ -2309,6 +2331,16 @@
               // the new payload visible immediately.
               patchThread(ctx.threadId, {
                 intuition_payload: payload,
+              });
+            },
+            onContextRecallUpdate: (payload) => {
+              // Same optimistic-patch posture as onIntuitionUpdate.
+              // Currently no UI consumer renders the cache directly,
+              // but the patch keeps the in-memory row consistent with
+              // the persisted row so a later tab/refresh doesn't see
+              // a stale null from a delayed realtime echo.
+              patchThread(ctx.threadId, {
+                context_recall_payload: payload,
               });
             },
           },

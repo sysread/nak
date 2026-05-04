@@ -165,6 +165,20 @@ alter table public.threads
 alter table public.threads
   add column if not exists intuition_payload jsonb;
 
+-- Cached context-recall payload. Sibling of intuition_payload, fired on
+-- the same trigger machinery (cold-start, mood shift, stale fuse, mid-
+-- turn title change) and keyed by the same computed_at_round / debounce
+-- semantics. Holds {note, computed_at_round, computed_at_band,
+-- computed_at_column, computed_at_at, trigger} - see
+-- src/lib/context-recall/types.ts for the canonical shape. Stitches the
+-- memory-recall and conversation-recall agents' first-person notes into
+-- one short paragraph that the chat-loop injects as a synthetic
+-- <think> assistant turn alongside the intuition block. Null on cold-
+-- start threads; the first refresh typically lands during turn 1 via
+-- the cold-start trigger.
+alter table public.threads
+  add column if not exists context_recall_payload jsonb;
+
 create index if not exists threads_user_updated_idx
   on public.threads (user_id, updated_at desc);
 

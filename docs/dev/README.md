@@ -59,6 +59,11 @@ changing a contract that other features depend on.
   drawer tab.
 - [Conversation recall](./conversation-recall.md) — recall
   over thread summaries.
+- [Context recall](./context-recall.md) — topic-boundary
+  recall pipeline. Fires on the same triggers as intuition,
+  fans out to the memory-recall and conversation-recall
+  agents in parallel, stitches their notes into one
+  `<think>`-tagged priming block.
 - [Summaries](./summaries.md) — background thread-summary
   worker.
 - [Embeddings](./embeddings.md) — the Web-Worker embedding

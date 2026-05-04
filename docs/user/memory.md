@@ -54,18 +54,43 @@ reflection loop itself.
 
 ## How the assistant uses it
 
-When a new conversation starts or shifts to a new topic, the model
-can call the `memory_recall` or `conversation_recall` tool on its
-own initiative. Those tools run a semantic search across your stored
-memories (and, for conversation recall, your prior threads) and
-return a short digest the model folds into its next reply.
+Topic-boundary recall is automatic. At the start of a new thread,
+when the topic shifts (the assistant renames the conversation),
+when your mood band shifts, or after a long stretch without a
+refresh, Nak quietly fans out two parallel recall passes — one over
+your stored memories, one over the topical summaries of your prior
+conversations — and stitches their findings into a short
+recollection the assistant reads as its own prior thought before
+replying. The result is the same as if the assistant had explicitly
+called `memory_recall` and `conversation_recall` on every topic
+boundary, without you having to wait through the tool-call strip
+for them.
+
+Two channels show up in the recall the assistant sees:
+
+- **Facts and prior threads.** Standing memories that touch the
+  current topic but weren't already mentioned, plus details from
+  past threads ("we landed on approach X last time this came up").
+- **Calibration.** Background context about what you've already
+  worked through on this topic, so the assistant pitches its answer
+  at the right depth and doesn't re-explain things you've mastered.
+
+Calibration is NOT preference-bending: Nak doesn't shade facts to
+match your tastes. It tells the assistant where you are on a topic
+so the answer lands at your level, not under it.
 
 You'll usually just notice the side effect: the assistant knows
-you're working on project X without being re-told, or it picks up a
-style preference you corrected it on weeks ago. If you watch the
-tool-call strip on a reply, you'll see the recall calls fire.
+you're working on project X without being re-told, picks up a
+style preference you corrected it on weeks ago, or skips the basics
+on a topic you've been deep in for weeks.
 
-Recall runs on the fast tier too — the cost is a few cents of tokens
+The assistant can still call `memory_recall` and `conversation_recall`
+directly when you ask it to look something specific up ("what was
+that thread about X?", "remind me what we decided about Y"). These
+are the explicit-lookup escape hatches; the topic-boundary recall
+above handles the ambient case.
+
+Recall runs on the fast tier — the cost is a few cents of tokens
 per invocation, at most.
 
 ## Browsing memories directly

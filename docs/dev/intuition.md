@@ -212,6 +212,14 @@ the most recent fire.
   wants to participate in the trigger surface would add a
   similar check (e.g. a "topic_shift" tool the model can call
   explicitly).
+- **Context recall ([./context-recall.md](./context-recall.md))** -
+  parallel pipeline that rides the SAME trigger evaluator and
+  fires alongside intuition on every cold-start / title / mood /
+  stale fire. The two pipelines run in `Promise.all` so wall-clock
+  cost is bounded by the slower of the two; their caches and
+  inflight registries are sibling-but-separate. The shared
+  `RoundCacheSnapshot` type in `triggers.ts` is what lets the
+  evaluator read either cache without a cast.
 - **Logging ([./logging.md](./logging.md))** - the pipeline
   uses `createLogger('intuition')`. The `FNORD_DEBUG_INTUITION`
   env var from the source module is intentionally NOT carried

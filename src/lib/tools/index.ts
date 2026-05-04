@@ -420,10 +420,15 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     '',
     'You have persistent long-term memory about this user — facts,',
     'preferences, and short notes you’ve written to your future self',
-    'during prior conversations. When something you previously learned',
-    "would help answer the current turn, reach for `memory_recall` so",
-    'you can weave that context back in without making the user repeat',
-    'themselves.',
+    'during prior conversations. The system pre-loads relevant',
+    'memories and prior-conversation context as `<think>` priming',
+    'blocks at topic boundaries (start of a thread, after a topic',
+    'shift, after a mood shift, after several rounds without a',
+    'refresh) - you can read those as your own recollection. The',
+    '`memory_recall` and `conversation_recall` tools remain available',
+    'for explicit "let me look something up specifically" moments;',
+    "you generally don't need to reach for them just to remember",
+    'context, because the priming above already has you covered.',
     '',
     // --- Voice -----------------------------------------------------
     // Post-training pushes models toward diplomatic smoothing and
@@ -452,24 +457,30 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     'baseline, not cold or robotic; the user sets the emotional',
     'register when they want one.',
     '',
-    // --- Recall cadence -------------------------------------------
-    // Rules the model should fire on. Keep this block terse; the
-    // model reads every turn and extra prose here is tokens paid
-    // forever.
+    // --- Recall escape hatch --------------------------------------
+    // Topic-boundary recall is now handled by the chat-loop's
+    // context-recall pipeline (see src/lib/context-recall/) - it
+    // fires on cold-start, mid-turn title shift, mood-band shift,
+    // and the staleness fuse, runs memory and conversation recall in
+    // parallel, and injects a stitched first-person <think> note
+    // alongside the intuition block. The model does NOT need a
+    // per-turn reflex to fire those.
     //
-    // The "conversation opens" case is NOT in this list - the chat
-    // loop pre-recalls relevant memories for the first user message
-    // and injects them as a <think> block the model sees in history.
-    // See src/lib/opening-recall.ts. The rules below cover the mid-
-    // conversation triggers that pre-injection can't catch.
-    'Call `memory_recall` when the user lands on a clear topic, when',
-    'they introduce new information about themselves mid-conversation,',
-    'or when they open a new topic - in each case, relevant memories',
-    "may exist that weren't pulled in by the opening-turn pre-recall.",
-    'When the user opens a new topic, also call `conversation_recall`',
-    '(optionally passing `topic`) so you can pull details from prior',
-    "conversations where you discussed something similar. Don't make",
-    'the user repeat themselves if the answer is already in your history.',
+    // The block below scopes the surviving cases for the LLM-callable
+    // recall tools: explicit user lookups ("what was that thread...")
+    // and unusually deep dives where the topic-boundary cache is
+    // already too stale to be useful. Keep the cadence guidance
+    // terse - the priming layer above handles the common case.
+    'Topic-boundary recall is handled for you automatically: at the',
+    'start of a thread, after a topic shift, or after a long stretch',
+    'without a refresh, the system pre-injects relevant memories and',
+    'prior-conversation context as a `<think>` block above. You can',
+    'use `memory_recall` or `conversation_recall` directly when the',
+    'user explicitly asks you to look something up ("what was that',
+    'thread about X", "what do you remember about Y"), or when',
+    "you've been deep in one topic for so long that the pre-injected",
+    'context is clearly stale. Otherwise, trust the priming above and',
+    "don't make the user repeat themselves.",
     '',
     // Journal framing. Most conversations don't touch
     // the journal; the hint is short on purpose so it stays cheap on

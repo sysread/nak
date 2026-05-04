@@ -70,6 +70,14 @@ import {
   writeIntuitionCache,
   type IntuitionPayload,
 } from './intuition';
+import {
+  buildContextRecallThinkMessage,
+  readContextRecallCache,
+  runContextRecallPipeline,
+  withContextRecallInflight,
+  writeContextRecallCache,
+  type ContextRecallPayload,
+} from './context-recall';
 
 /**
  * Upper bound on rounds to prevent a runaway tool-call loop. Acts as
@@ -634,6 +642,16 @@ export interface ChatLoopHandlers {
    * reused as-is - we only signal *changes*.
    */
   onIntuitionUpdate?(payload: IntuitionPayload): void;
+  /**
+   * A fresh context-recall payload was computed for this thread (the
+   * pre-round trigger, title trigger, or stale fuse fired and the
+   * pipeline produced a payload). Sibling of onIntuitionUpdate -
+   * fires once per refresh, with the freshly-computed payload, so the
+   * UI can patch the in-memory thread row without waiting for the
+   * next thread re-fetch. Skipped on rounds where the cache is reused
+   * as-is.
+   */
+  onContextRecallUpdate?(payload: ContextRecallPayload): void;
 }
 
 export interface ChatLoopOptions {
@@ -731,6 +749,24 @@ export interface ChatLoopOptions {
    * src/lib/samskara/events.ts).
    */
   intuitionMood?: { band: number; column: 'confident' | 'tentative' } | null;
+  /**
+   * Whether to run the context-recall pipeline alongside intuition.
+   * When true, the same trigger evaluator that schedules an intuition
+   * refresh ALSO schedules a context-recall refresh (cold-start, mid-
+   * turn title shift, mood-band shift, stale fuse) - the two pipelines
+   * run in parallel, both write their own cache columns, and both
+   * inject their own synthetic <think> block into the priming chain.
+   *
+   * Independent of `intuitionModelId`: a caller can run only intuition,
+   * only context-recall, both, or neither. The trigger evaluator is
+   * shared; the cache + pipeline machinery is sibling-but-separate.
+   *
+   * Omitted / false: the context-recall pipeline does not fire, the
+   * cache is left untouched, and `onContextRecallUpdate` never invokes -
+   * identical pre-feature behaviour, so older tests / callers stay
+   * green without knowing the field exists.
+   */
+  contextRecallEnabled?: boolean;
 }
 
 /** Non-error completion shape returned to the caller. */
@@ -916,6 +952,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     userLocation,
     intuitionModelId,
     intuitionMood,
+    contextRecallEnabled,
   } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
@@ -1109,14 +1146,25 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     });
   }
 
-  // Intuition layer: subconscious read of the conversation, injected as
-  // a synthetic <think> turn so the conscious response factors in the
-  // five-drive synthesis. Skipped entirely when intuitionModelId is
-  // absent (older callers / tests), so a turn without an intuition
-  // model just runs as before. The cache lives on threads.intuition_payload;
-  // we read once at turn entry, optionally refresh, and replace
-  // (not append) on a mid-turn title trigger so the model never sees
-  // two competing <think> blocks.
+  // Subconscious-priming layer: two parallel pipelines, fired on the
+  // same trigger machinery (cold-start, mid-turn title shift, mood
+  // shift, stale fuse) but writing to independent caches and producing
+  // independent synthetic <think> blocks.
+  //
+  //   1. Intuition (perception + 5 drives + synthesis). Cache lives on
+  //      threads.intuition_payload. Skipped entirely when
+  //      `intuitionModelId` is absent.
+  //   2. Context recall (memory_recall + conversation_recall stitched
+  //      into one note). Cache lives on threads.context_recall_payload.
+  //      Skipped entirely when `contextRecallEnabled` is false/absent.
+  //
+  // Both pipelines read the trigger evaluator independently: each
+  // payload carries its own `computed_at_round`, so the same-round
+  // debounce works per-cache and a turn that already refreshed one
+  // pipeline can still fire the other. When both fire on the same
+  // trigger evaluation we run them in parallel via Promise.all - the
+  // wall-clock cost is max(intuition, context-recall) plus one
+  // Promise.all on the persist writes, not additive.
   //
   // The round id is the user-message count in history INCLUDING the
   // just-sent user turn. Tool-using rounds inflate the chat-loop's
@@ -1126,48 +1174,110 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   const currentUserRound = countUserRounds(history);
   let intuitionCache: IntuitionPayload | null = readIntuitionCache(thread);
   let intuitionMessageIdx: number | null = null;
-  if (intuitionModelId) {
-    const preTrigger = evaluatePreRoundTrigger({
-      cache: intuitionCache,
-      round: currentUserRound,
-      mood: intuitionMood ?? null,
-    });
-    if (preTrigger) {
-      const fresh = await withIntuitionInflight(thread.id, () =>
-        runIntuitionPipeline({
-          venice,
-          model: intuitionModelId,
-          history,
-          signal,
+  let contextRecallCache: ContextRecallPayload | null =
+    readContextRecallCache(thread);
+  let contextRecallMessageIdx: number | null = null;
+
+  const intuitionPreTrigger =
+    intuitionModelId !== undefined
+      ? evaluatePreRoundTrigger({
+          cache: intuitionCache,
           round: currentUserRound,
           mood: intuitionMood ?? null,
-          trigger: preTrigger,
         })
+      : null;
+  const contextRecallPreTrigger = contextRecallEnabled
+    ? evaluatePreRoundTrigger({
+        // ContextRecallPayload satisfies RoundCacheSnapshot
+        // structurally - the trigger evaluator only reads the round
+        // and mood-snapshot fields, both shared between payloads.
+        cache: contextRecallCache,
+        round: currentUserRound,
+        mood: intuitionMood ?? null,
+      })
+    : null;
+
+  if (intuitionPreTrigger || contextRecallPreTrigger) {
+    // Fire both pipelines in parallel. Each side resolves to either a
+    // fresh payload or null (the agent failed, OR its trigger was
+    // null and we short-circuited). Promise.all preserves the parallel
+    // latency win even when one side short-circuits.
+    const [freshIntuition, freshContextRecall] = await Promise.all([
+      intuitionPreTrigger && intuitionModelId
+        ? withIntuitionInflight(thread.id, () =>
+            runIntuitionPipeline({
+              venice,
+              model: intuitionModelId,
+              history,
+              signal,
+              round: currentUserRound,
+              mood: intuitionMood ?? null,
+              trigger: intuitionPreTrigger,
+            })
+          )
+        : Promise.resolve<IntuitionPayload | null>(null),
+      contextRecallPreTrigger
+        ? withContextRecallInflight(thread.id, () =>
+            runContextRecallPipeline({
+              venice,
+              supabase,
+              threadId: thread.id,
+              userId,
+              signal,
+              round: currentUserRound,
+              mood: intuitionMood ?? null,
+              trigger: contextRecallPreTrigger,
+            })
+          )
+        : Promise.resolve<ContextRecallPayload | null>(null),
+    ]);
+
+    // Persist both writes in parallel. The await-before-continuing
+    // rationale on the existing intuition write applies symmetrically
+    // to context-recall: a race against an unrelated thread UPDATE
+    // (an update_title call mid-turn, a samskara-worker bump, a
+    // cross-tab edit) could otherwise strand a fresh payload behind a
+    // stale realtime echo. Cost is ~50-200ms of one Supabase UPDATE
+    // each, parallel-merged into one wait.
+    const persistOps: Promise<void>[] = [];
+    if (freshIntuition) {
+      intuitionCache = freshIntuition;
+      persistOps.push(
+        writeIntuitionCache(supabase, thread.id, freshIntuition)
       );
-      if (fresh) {
-        intuitionCache = fresh;
-        // Await the persist before continuing the loop. Earlier the
-        // write was fire-and-forget but two races could clobber the
-        // in-memory patch:
-        //
-        //   - The chat-loop calls update_title (or any tool that
-        //     bumps threads.updated_at) mid-turn. Supabase realtime
-        //     echoes that UPDATE event with the FULL row; if the
-        //     intuition write hadn't landed yet, the echo's
-        //     intuition_payload is null and Chat.svelte's
-        //     rebucketThread overwrites the in-memory patch with it.
-        //   - End-of-turn refreshThreads() fetches recent rows. If
-        //     the write hadn't landed, the fetch returns the stale
-        //     row and the patch is gone.
-        //
-        // Awaiting the write here forces both subsequent paths to
-        // see a row that already carries the new payload. Cost is
-        // ~50-200ms of one Supabase UPDATE before the next round
-        // starts; the user sees that as part of the "thinking" pause
-        // they already paid for the pipeline itself.
-        await writeIntuitionCache(supabase, thread.id, fresh);
-        handlers?.onIntuitionUpdate?.(fresh);
-      }
+    }
+    if (freshContextRecall) {
+      contextRecallCache = freshContextRecall;
+      persistOps.push(
+        writeContextRecallCache(supabase, thread.id, freshContextRecall)
+      );
+    }
+    if (persistOps.length > 0) await Promise.all(persistOps);
+
+    // UI handlers fire AFTER the writes settle - same ordering the
+    // prior intuition-only path enforced, for the same reason: a
+    // realtime echo that arrives between the patch and the write must
+    // see the persisted payload, not a transient null.
+    if (freshIntuition) handlers?.onIntuitionUpdate?.(freshIntuition);
+    if (freshContextRecall)
+      handlers?.onContextRecallUpdate?.(freshContextRecall);
+  }
+
+  // Inject synthetic <think> blocks. Order matters for how the model
+  // reads its own priming chain: opening-recall (raw memory hits) was
+  // already pushed above; context-recall (assimilated note - facts
+  // not already in-thread plus calibration about what the user knows)
+  // goes next; intuition (synthesised drive read on top of all of it)
+  // goes last so the conscious response factors in the most-processed
+  // layer most recently. A context-recall payload with empty `note`
+  // resolves to null from buildContextRecallThinkMessage and is
+  // skipped - we cache the negative result for debounce but don't
+  // burn tokens on an empty <think> block.
+  if (contextRecallCache) {
+    const msg = buildContextRecallThinkMessage(contextRecallCache);
+    if (msg !== null) {
+      history.push(msg);
+      contextRecallMessageIdx = history.length - 1;
     }
   }
   if (intuitionCache) {
@@ -1552,53 +1662,123 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       }
     }
 
-    // Mid-turn intuition trigger: if any update_title call succeeded
-    // this round, the topic has meaningfully shifted - run the
-    // pipeline before the next streamChat round so the model's next
-    // response factors in the fresh subconscious read. Skipped when
-    // the cache is already current for this user-round (the pre-round
-    // trigger already fired earlier this same turn, or a prior in-turn
-    // title call already covered it - rare). Replaces the prior
-    // ephemeral message rather than appending so the model never sees
-    // two competing <think> blocks; the first <think> would have been
-    // computed against the pre-rename perception and is now obsolete.
-    if (intuitionModelId) {
-      const titleSucceeded = settled.some(
-        (r) => r.ok && r.call.function.name === updateTitle.name
-      );
-      if (titleSucceeded) {
-        const titleTrigger = evaluateTitleTrigger({
-          cache: intuitionCache,
-          round: currentUserRound,
-          mood: intuitionMood ?? null,
-        });
-        if (titleTrigger) {
-          const fresh = await withIntuitionInflight(thread.id, () =>
-            runIntuitionPipeline({
-              venice,
-              model: intuitionModelId,
-              history,
-              signal,
+    // Mid-turn title trigger: if any update_title call succeeded this
+    // round, the topic has meaningfully shifted - re-fire whichever
+    // subconscious-priming pipelines are enabled, in parallel, so the
+    // model's next streamChat round sees fresh subconscious priming
+    // computed against the post-rename topic. Each pipeline's same-
+    // round debounce prevents a duplicate fire when the pre-round
+    // trigger already covered this user-round (rare, but possible if
+    // the model called update_title twice in one turn).
+    //
+    // The replace-on-refresh discipline matters: the previous synthetic
+    // <think> block was computed against the pre-rename perception and
+    // is now obsolete. Replacing the slot keeps the model from seeing
+    // two competing <think> blocks for the same surface.
+    const titleSucceeded = settled.some(
+      (r) => r.ok && r.call.function.name === updateTitle.name
+    );
+    if (titleSucceeded && (intuitionModelId || contextRecallEnabled)) {
+      const intuitionTitleTrigger =
+        intuitionModelId !== undefined
+          ? evaluateTitleTrigger({
+              cache: intuitionCache,
               round: currentUserRound,
               mood: intuitionMood ?? null,
-              trigger: titleTrigger,
             })
+          : null;
+      const contextRecallTitleTrigger = contextRecallEnabled
+        ? evaluateTitleTrigger({
+            cache: contextRecallCache,
+            round: currentUserRound,
+            mood: intuitionMood ?? null,
+          })
+        : null;
+
+      if (intuitionTitleTrigger || contextRecallTitleTrigger) {
+        const [freshIntuition, freshContextRecall] = await Promise.all([
+          intuitionTitleTrigger && intuitionModelId
+            ? withIntuitionInflight(thread.id, () =>
+                runIntuitionPipeline({
+                  venice,
+                  model: intuitionModelId,
+                  history,
+                  signal,
+                  round: currentUserRound,
+                  mood: intuitionMood ?? null,
+                  trigger: intuitionTitleTrigger,
+                })
+              )
+            : Promise.resolve<IntuitionPayload | null>(null),
+          contextRecallTitleTrigger
+            ? withContextRecallInflight(thread.id, () =>
+                runContextRecallPipeline({
+                  venice,
+                  supabase,
+                  threadId: thread.id,
+                  userId,
+                  signal,
+                  round: currentUserRound,
+                  mood: intuitionMood ?? null,
+                  trigger: contextRecallTitleTrigger,
+                })
+              )
+            : Promise.resolve<ContextRecallPayload | null>(null),
+        ]);
+
+        const persistOps: Promise<void>[] = [];
+        if (freshIntuition) {
+          intuitionCache = freshIntuition;
+          persistOps.push(
+            writeIntuitionCache(supabase, thread.id, freshIntuition)
           );
-          if (fresh) {
-            intuitionCache = fresh;
-            // Awaited - same rationale as the pre-round trigger
-            // site above. The realtime echo from the update_title
-            // call that just landed will arrive any moment now;
-            // it must carry the new payload, not null.
-            await writeIntuitionCache(supabase, thread.id, fresh);
-            handlers?.onIntuitionUpdate?.(fresh);
-            const refreshedMsg = buildIntuitionThinkMessage(fresh);
-            if (intuitionMessageIdx !== null) {
-              history[intuitionMessageIdx] = refreshedMsg;
+        }
+        if (freshContextRecall) {
+          contextRecallCache = freshContextRecall;
+          persistOps.push(
+            writeContextRecallCache(supabase, thread.id, freshContextRecall)
+          );
+        }
+        if (persistOps.length > 0) await Promise.all(persistOps);
+
+        if (freshIntuition) handlers?.onIntuitionUpdate?.(freshIntuition);
+        if (freshContextRecall)
+          handlers?.onContextRecallUpdate?.(freshContextRecall);
+
+        // Replace-on-refresh for the synthetic <think> blocks. Each
+        // surface owns its own slot; if the slot was empty before
+        // (the pre-round trigger short-circuited), append instead.
+        if (freshIntuition) {
+          const refreshedMsg = buildIntuitionThinkMessage(freshIntuition);
+          if (intuitionMessageIdx !== null) {
+            history[intuitionMessageIdx] = refreshedMsg;
+          } else {
+            history.push(refreshedMsg);
+            intuitionMessageIdx = history.length - 1;
+          }
+        }
+        if (freshContextRecall) {
+          const refreshedMsg = buildContextRecallThinkMessage(
+            freshContextRecall
+          );
+          if (refreshedMsg !== null) {
+            if (contextRecallMessageIdx !== null) {
+              history[contextRecallMessageIdx] = refreshedMsg;
             } else {
               history.push(refreshedMsg);
-              intuitionMessageIdx = history.length - 1;
+              contextRecallMessageIdx = history.length - 1;
             }
+          } else if (contextRecallMessageIdx !== null) {
+            // Refreshed payload has an empty note. Replace the
+            // previous block with a still-non-empty marker turn
+            // would re-inject a stale recollection; instead we
+            // overwrite with an empty `<think></think>` placeholder
+            // so the slot index stays valid for any subsequent
+            // refresh. Empty-tag content is a no-op on the wire.
+            history[contextRecallMessageIdx] = {
+              role: 'assistant',
+              content: '<think></think>',
+            };
           }
         }
       }

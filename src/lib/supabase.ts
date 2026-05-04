@@ -102,6 +102,20 @@ export interface Thread {
    */
   intuition_payload: unknown;
   /**
+   * Cached context-recall payload for this thread. Holds the stitched
+   * first-person note assembled from the memory-recall and conversation-
+   * recall agents, plus the round/mood snapshot the cache was written
+   * against. Refreshed by the chat-loop on the same triggers as
+   * intuition (cold-start, mid-turn title shift, mood-band shift,
+   * stale fuse) and reused as-is between fires. Null on cold-start
+   * threads.
+   *
+   * The payload shape is defined in src/lib/context-recall/types.ts and
+   * coerced from jsonb on read; the column is `unknown` here so the
+   * context-recall module owns the parse, same posture as intuition.
+   */
+  context_recall_payload: unknown;
+  /**
    * App-local flag: true when this thread exists only in memory (the user
    * clicked "new thread" but hasn't sent a message or renamed it yet).
    * Drafts are never sent to Supabase — they materialize on first save.
@@ -141,6 +155,12 @@ function coerceThread(row: Record<string, unknown>): Thread {
     // that doesn't match the expected shape is treated as "no cache"
     // there and a fresh refresh runs on the next trigger.
     intuition_payload: row.intuition_payload ?? null,
+    // Same posture as intuition_payload: pass jsonb through unchanged.
+    // The context-recall module owns the parse/coerce - see
+    // src/lib/context-recall/cache.ts. A drifting row that doesn't match
+    // the expected shape is treated as "no cache" there and a fresh
+    // refresh runs on the next trigger.
+    context_recall_payload: row.context_recall_payload ?? null,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
@@ -1239,6 +1259,7 @@ export class SupabaseService {
           archived: row.archived,
           title_manually_set: false,
           intuition_payload: null,
+          context_recall_payload: null,
           created_at: row.updated_at,
           updated_at: row.updated_at,
         },
@@ -1421,6 +1442,24 @@ export class SupabaseService {
     const { error } = await this.client
       .from('threads')
       .update({ intuition_payload: payload })
+      .eq('id', threadId);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Persist the cached context-recall payload. Sibling of
+   * setThreadIntuitionPayload and shares its discipline: no
+   * updated_at bump (subconscious priming shouldn't promote the
+   * thread in the sidebar), loose typing because the canonical
+   * shape lives in src/lib/context-recall/types.ts.
+   */
+  async setThreadContextRecallPayload(
+    threadId: string,
+    payload: unknown
+  ): Promise<void> {
+    const { error } = await this.client
+      .from('threads')
+      .update({ context_recall_payload: payload })
       .eq('id', threadId);
     if (error) throw new SupabaseError(error.message);
   }

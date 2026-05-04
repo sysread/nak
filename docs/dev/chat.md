@@ -41,9 +41,9 @@ A chat turn goes:
   chat loop) returns an async generator of `StreamEvent`;
   `completeChat` (one-shot non-streaming POST, used by every
   background path - sub-agents, headless tool loop, web_search /
-  research_docs / analyze_image, the intuition / samskara / summary
-  pipelines) returns a flat `ChatCompletion` record. `embed` is a
-  synchronous fetch.
+  research_docs / analyze_image, the intuition / context-recall /
+  samskara / summary pipelines) returns a flat `ChatCompletion`
+  record. `embed` is a synchronous fetch.
 - `src/lib/supabase.ts` — thread CRUD, `addMessage`, message and
   thread realtime subscriptions.
 

@@ -461,21 +461,25 @@ describe('tool registry', () => {
     expect(prompt).toMatch(/\[x\] research : /);
   });
 
-  it('buildSystemPrompt carries recall cadence rules', () => {
-    // The conversation-opens case is covered by the chat loop's
-    // opening-recall pre-injection (see src/lib/opening-recall.ts),
-    // NOT by the prompt - so the cadence block intentionally starts
-    // at "topic clarifies / new info / new topic." The three
-    // mid-conversation triggers here are what move the model from
-    // "recall exists" to "recall gets used on every turn it should."
-    // Grep-style assertions rather than exact-string so phrasing
-    // tweaks don't break the test - but the semantics must survive.
+  it('buildSystemPrompt carries the recall escape-hatch framing', () => {
+    // Topic-boundary recall now rides the chat-loop's context-recall
+    // pipeline (see src/lib/context-recall/), fired on the same
+    // triggers as intuition. The system prompt no longer instructs the
+    // model to fire `memory_recall` / `conversation_recall` per-turn
+    // at topic boundaries - it tells the model the priming is handled
+    // automatically and frames the LLM-callable recall tools as
+    // escape hatches for explicit lookups. The semantics asserted
+    // here are: both tools are still mentioned (so the model knows
+    // they exist), the priming-is-automatic message is present, and
+    // the "don't make the user repeat themselves" anchor survives.
     const prompt = buildSystemPrompt();
     expect(prompt).toMatch(/memory_recall/i);
-    expect(prompt).toMatch(/land(s|ed)?\s+on\s+a\s+clear\s+topic/i);
-    expect(prompt).toMatch(/new\s+information/i);
-    expect(prompt).toMatch(/opens?\s+a\s+new\s+topic/i);
     expect(prompt).toMatch(/conversation_recall/);
+    expect(prompt).toMatch(/handled.*automatically/i);
+    expect(prompt).toMatch(/<think>/);
+    expect(prompt).toMatch(
+      /(explicit(ly)?\s+ask(s)?)|(explicit\s+(user\s+)?lookups?)/i
+    );
     expect(prompt).toMatch(/(don\u2019t|don't)\s+make\s+the\s+user\s+repeat/i);
   });
 

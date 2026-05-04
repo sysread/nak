@@ -35,6 +35,7 @@ export {
 export {
   evaluatePreRoundTrigger,
   evaluateTitleTrigger,
+  type RoundCacheSnapshot,
   type TriggerContext,
 } from './triggers';
 

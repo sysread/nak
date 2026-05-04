@@ -31,12 +31,29 @@
  * lands. The fall-through stale fuse picks up any thread that
  * somehow misses both triggers.
  */
-import type { IntuitionPayload, IntuitionTrigger } from './types';
+import type { IntuitionTrigger } from './types';
 import { STALE_FUSE_ROUNDS } from './types';
 
+/**
+ * The minimal cache shape the trigger evaluator reads. Both
+ * IntuitionPayload and ContextRecallPayload satisfy this shape - the
+ * evaluator only needs the round id and mood snapshot to decide
+ * whether to fire, not the payload-specific fields (synthesis vs.
+ * note). Keeping this interface structural lets a single evaluator
+ * schedule both subconscious-priming pipelines on the same triggers
+ * without a cast at the call site.
+ */
+export interface RoundCacheSnapshot {
+  computed_at_round: number;
+  computed_at_band: number | null;
+  computed_at_column: 'confident' | 'tentative' | null;
+}
+
 export interface TriggerContext {
-  /** Current cache, or null on cold start. */
-  cache: IntuitionPayload | null;
+  /** Current cache, or null on cold start. Structural shape so the
+   *  evaluator works for any payload that carries the round/mood
+   *  snapshot fields - see RoundCacheSnapshot above. */
+  cache: RoundCacheSnapshot | null;
   /** Round id (= count of user messages in history) at evaluation
    *  time. Same value across all chat-loop iterations of one user
    *  turn. */

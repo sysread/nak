@@ -46,6 +46,7 @@ function mkThread(overrides: Partial<Thread> = {}): Thread {
     archived: false,
     title_manually_set: false,
     intuition_payload: null,
+    context_recall_payload: null,
     created_at: 'now',
     updated_at: 'now',
     ...overrides,
@@ -96,6 +97,20 @@ interface MockSupabase {
   // pipeline runs successfully. Default returns undefined; tests that
   // exercise the intuition path assert the call shape.
   setThreadIntuitionPayload: ReturnType<typeof vi.fn>;
+  // Context-recall - sibling of setThreadIntuitionPayload. Same default
+  // (returns undefined); tests that exercise the context-recall path
+  // assert the call shape.
+  setThreadContextRecallPayload: ReturnType<typeof vi.fn>;
+  // Recall agents - both RecallAgent and ConversationRecallAgent call
+  // supabase.listMessages(threadId) at the start of their run. Default
+  // returns an empty array, which makes both agents short-circuit to
+  // `{kind: 'none'}` without a Venice round-trip - matching the
+  // pre-feature behaviour of every test that doesn't exercise the
+  // context-recall path.
+  listMessages: ReturnType<typeof vi.fn>;
+  // Required by the update_title tool. Default no-op so tests that
+  // exercise the mid-turn title trigger succeed.
+  renameThread: ReturnType<typeof vi.fn>;
 }
 
 function mockSupabase(overrides: Partial<MockSupabase> = {}): {
@@ -148,6 +163,13 @@ function mockSupabase(overrides: Partial<MockSupabase> = {}): {
     getJournalEntriesForDate: vi.fn(async () => []),
     listAttachmentSummariesForThread: vi.fn(async () => []),
     setThreadIntuitionPayload: vi.fn(async () => undefined),
+    setThreadContextRecallPayload: vi.fn(async () => undefined),
+    listMessages: vi.fn(async () => []),
+    // Lets `update_title` tool calls succeed in tests that exercise the
+    // mid-turn title trigger. The tool's execute path calls renameThread
+    // (see src/lib/tools/update_title.ts); without this mock the tool
+    // throws and the title trigger never fires.
+    renameThread: vi.fn(async () => undefined),
     ...overrides,
   };
   return { svc: mocks as unknown as SupabaseService, mocks, messagesOut };
@@ -1980,6 +2002,552 @@ describe('runChatLoop', () => {
       expect(intuitionCalls).toHaveLength(0);
       expect(updates).toHaveLength(0);
       expect(mocks.setThreadIntuitionPayload).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('context-recall wiring', () => {
+    /**
+     * Build a Venice that handles BOTH the conscious chat-loop's
+     * streamChat (one terminal text round, optionally with a tool call
+     * the test asks for) and the recall agents' completeChat calls.
+     * The intuition pipeline is NOT exercised here - these tests
+     * deliberately leave intuitionModelId unset so we can assert the
+     * context-recall path in isolation. The intuition + context-recall
+     * parallel test below uses a richer mock that handles both.
+     *
+     * Disambiguation by message content: each recall agent appends its
+     * own prompt as the final user turn. Memory-recall mentions
+     * `memory_search`; conversation-recall mentions `conversation_search`.
+     * The mock keys off those tokens to know which agent is asking.
+     */
+    function recallVenice(
+      recallCalls: ChatRequest[],
+      memoryNote: string | null,
+      conversationNote: string | null,
+      streamRound: StreamEvent[] = [{ type: 'text', delta: 'ok' }]
+    ): VeniceClient {
+      return {
+        async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
+          for (const ev of streamRound) yield ev;
+        },
+        async completeChat(req: ChatRequest): Promise<ChatCompletion> {
+          recallCalls.push(req);
+          const lastUser = [...req.messages]
+            .reverse()
+            .find((m) => m.role === 'user');
+          const content =
+            typeof lastUser?.content === 'string' ? lastUser.content : '';
+          let text = '';
+          if (content.includes('memory_search')) {
+            text =
+              memoryNote === null
+                ? '{"kind":"none"}'
+                : `{"kind":"note","note":${JSON.stringify(memoryNote)}}`;
+          } else if (content.includes('conversation_search')) {
+            text =
+              conversationNote === null
+                ? '{"kind":"none"}'
+                : `{"kind":"note","note":${JSON.stringify(conversationNote)}}`;
+          }
+          return {
+            text,
+            reasoning: '',
+            toolCalls: [],
+            usage: null,
+            citations: [],
+            finishReason: 'stop',
+          };
+        },
+      } as unknown as VeniceClient;
+    }
+
+    function userRow(content: string): Message {
+      return {
+        id: 'm-1',
+        thread_id: 't-1',
+        role: 'user',
+        content,
+        created_at: 'now',
+      };
+    }
+
+    it('fires the pipeline on a cold thread, persists, calls handler, injects <think>', async () => {
+      const recallCalls: ChatRequest[] = [];
+      const venice = recallVenice(
+        recallCalls,
+        'I remember the user is past the basics on Haskell.',
+        'we landed on monad transformers last time.'
+      );
+      const { svc, mocks } = mockSupabase({
+        // Both recall agents call listMessages; return one user turn so
+        // they reach the Venice round rather than short-circuiting.
+        listMessages: vi.fn(async () => [userRow('hi')]),
+      });
+      const updates: unknown[] = [];
+      const seenStreamRequests: ChatRequest[] = [];
+      // Capture the final streamChat request shape to assert the
+      // synthetic <think> block landed in history before the round.
+      const wrappedVenice: VeniceClient = {
+        ...venice,
+        async *streamChat(req: ChatRequest) {
+          seenStreamRequests.push(req);
+          yield { type: 'text', delta: 'ok' } as StreamEvent;
+        },
+      } as unknown as VeniceClient;
+      await runChatLoop({
+        venice: wrappedVenice,
+        supabase: svc,
+        thread: mkThread(),
+        userId: 'u-1',
+        modelId: 'm',
+        history: [{ role: 'user', content: 'hi' }],
+        signal: new AbortController().signal,
+        contextRecallEnabled: true,
+        intuitionMood: { band: 2, column: 'confident' },
+        handlers: {
+          onContextRecallUpdate: (payload) => updates.push(payload),
+        },
+      });
+      // Two completeChat calls = one per child agent (both single-round
+      // settle since the agents don't issue tool calls in this test).
+      expect(recallCalls).toHaveLength(2);
+      // The chat-loop fires onContextRecallUpdate exactly once per
+      // refresh, with the freshly-computed payload.
+      expect(updates).toHaveLength(1);
+      // And the cache write must have been attempted - that's what
+      // makes the payload survive a reload.
+      expect(mocks.setThreadContextRecallPayload).toHaveBeenCalledTimes(1);
+      const persistedArg = mocks.setThreadContextRecallPayload.mock.calls[0][1];
+      expect(persistedArg).toMatchObject({
+        v: 1,
+        trigger: 'cold',
+        computed_at_round: 1,
+        // Stitched note: memory-side, hinge phrase, conversation-side.
+        note: 'I remember the user is past the basics on Haskell. From earlier conversations, we landed on monad transformers last time.',
+      });
+      // The synthetic <think> block must have landed in the streamChat
+      // history. Find an assistant message whose content contains the
+      // marker.
+      const streamReq = seenStreamRequests[0];
+      const synthetic = streamReq.messages.find(
+        (m) =>
+          m.role === 'assistant' &&
+          typeof m.content === 'string' &&
+          m.content.includes('<!-- context-recall-think -->')
+      );
+      expect(synthetic).toBeDefined();
+      expect(synthetic?.content).toContain(
+        'we landed on monad transformers last time.'
+      );
+    });
+
+    it('skips the pipeline entirely when contextRecallEnabled is omitted', async () => {
+      // Older callers / tests that don't pass contextRecallEnabled run
+      // the chat loop without the context-recall layer. The cache must
+      // be left untouched, no completeChat calls fire, and
+      // onContextRecallUpdate never invokes - identical pre-feature
+      // behaviour.
+      const recallCalls: ChatRequest[] = [];
+      const venice = recallVenice(recallCalls, 'A', 'B');
+      const { svc, mocks } = mockSupabase({
+        listMessages: vi.fn(async () => [userRow('hi')]),
+      });
+      const updates: unknown[] = [];
+      await runChatLoop({
+        venice,
+        supabase: svc,
+        thread: mkThread(),
+        userId: 'u-1',
+        modelId: 'm',
+        history: [{ role: 'user', content: 'hi' }],
+        signal: new AbortController().signal,
+        // contextRecallEnabled deliberately omitted.
+        handlers: {
+          onContextRecallUpdate: (payload) => updates.push(payload),
+        },
+      });
+      expect(recallCalls).toHaveLength(0);
+      expect(updates).toHaveLength(0);
+      expect(mocks.setThreadContextRecallPayload).not.toHaveBeenCalled();
+    });
+
+    it('caches the empty-note negative result without injecting a <think> block', async () => {
+      // When both children return the empty signal, the pipeline still
+      // writes the cache (with note: '') so the same-round debounce
+      // can hold on subsequent triggers - but it must NOT push an
+      // empty <think> block onto history. Empty injection would just
+      // burn tokens.
+      const recallCalls: ChatRequest[] = [];
+      const venice = recallVenice(recallCalls, null, null);
+      const { svc, mocks } = mockSupabase({
+        listMessages: vi.fn(async () => [userRow('hi')]),
+      });
+      const seenStreamRequests: ChatRequest[] = [];
+      const wrappedVenice: VeniceClient = {
+        ...venice,
+        async *streamChat(req: ChatRequest) {
+          seenStreamRequests.push(req);
+          yield { type: 'text', delta: 'ok' } as StreamEvent;
+        },
+      } as unknown as VeniceClient;
+      await runChatLoop({
+        venice: wrappedVenice,
+        supabase: svc,
+        thread: mkThread(),
+        userId: 'u-1',
+        modelId: 'm',
+        history: [{ role: 'user', content: 'hi' }],
+        signal: new AbortController().signal,
+        contextRecallEnabled: true,
+      });
+      expect(recallCalls).toHaveLength(2); // both children ran
+      expect(mocks.setThreadContextRecallPayload).toHaveBeenCalledTimes(1);
+      const persistedArg = mocks.setThreadContextRecallPayload.mock.calls[0][1];
+      expect(persistedArg).toMatchObject({ v: 1, note: '' });
+      // No synthetic <think> block in history.
+      const streamReq = seenStreamRequests[0];
+      const synthetic = streamReq.messages.find(
+        (m) =>
+          m.role === 'assistant' &&
+          typeof m.content === 'string' &&
+          m.content.includes('<!-- context-recall-think -->')
+      );
+      expect(synthetic).toBeUndefined();
+    });
+
+    it('runs both subconscious-priming pipelines in parallel on cold start', async () => {
+      // The latency win of the parallel design only earns its keep when
+      // both pipelines are active and the chat-loop fires them with
+      // Promise.all. A serial implementation would still pass the
+      // call-count assertion below; we add a per-call timestamp record
+      // so the test fails if intuition's 7 calls all land before any
+      // recall call (or vice versa).
+      const allCalls: { sys: string; lastUser: string; at: number }[] = [];
+      // Gate the LAST recall call so the recall side resolves last.
+      // If the chat-loop runs the two pipelines serially, the slow
+      // gate would block the fast one too and the test would deadlock
+      // (the gate is released by an intuition call that only fires
+      // when intuition starts, which a serial impl wouldn't do until
+      // recall finished).
+      let resolveRecallGate!: () => void;
+      const recallGate = new Promise<void>((r) => {
+        resolveRecallGate = r;
+      });
+      const venice: VeniceClient = {
+        async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
+          yield { type: 'text', delta: 'ok' };
+        },
+        async completeChat(req: ChatRequest): Promise<ChatCompletion> {
+          const sys = req.messages.find((m) => m.role === 'system');
+          const sysText = typeof sys?.content === 'string' ? sys.content : '';
+          const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
+          const lastUserText =
+            typeof lastUser?.content === 'string' ? lastUser.content : '';
+          allCalls.push({ sys: sysText, lastUser: lastUserText, at: Date.now() });
+          // Intuition perception fires very early in its pipeline -
+          // use it as the gate-release signal so recall can proceed.
+          // A serial impl would never reach this point because recall
+          // would still be waiting on its own gate.
+          if (sysText.includes('objective *perception*')) {
+            queueMicrotask(() => resolveRecallGate());
+            return {
+              text: 'Classification: chitchat\n\nThe user is saying hi.',
+              reasoning: '',
+              toolCalls: [],
+              usage: null,
+              citations: [],
+              finishReason: 'stop',
+            };
+          }
+          if (sysText.includes('# Your Drive:')) {
+            return {
+              text: 'a drive reaction',
+              reasoning: '',
+              toolCalls: [],
+              usage: null,
+              citations: [],
+              finishReason: 'stop',
+            };
+          }
+          if (sysText.includes('synthesize')) {
+            return {
+              text: 'be warm and brief',
+              reasoning: '',
+              toolCalls: [],
+              usage: null,
+              citations: [],
+              finishReason: 'stop',
+            };
+          }
+          if (lastUserText.includes('memory_search')) {
+            await recallGate;
+            return {
+              text: '{"kind":"note","note":"recall fact."}',
+              reasoning: '',
+              toolCalls: [],
+              usage: null,
+              citations: [],
+              finishReason: 'stop',
+            };
+          }
+          if (lastUserText.includes('conversation_search')) {
+            await recallGate;
+            return {
+              text: '{"kind":"note","note":"recall convo."}',
+              reasoning: '',
+              toolCalls: [],
+              usage: null,
+              citations: [],
+              finishReason: 'stop',
+            };
+          }
+          return {
+            text: '',
+            reasoning: '',
+            toolCalls: [],
+            usage: null,
+            citations: [],
+            finishReason: 'stop',
+          };
+        },
+      } as unknown as VeniceClient;
+      const { svc, mocks } = mockSupabase({
+        listMessages: vi.fn(async () => [userRow('hi')]),
+      });
+      await runChatLoop({
+        venice,
+        supabase: svc,
+        thread: mkThread(),
+        userId: 'u-1',
+        modelId: 'm',
+        history: [{ role: 'user', content: 'hi' }],
+        signal: new AbortController().signal,
+        intuitionModelId: 'fake-fast',
+        intuitionMood: { band: 2, column: 'confident' },
+        contextRecallEnabled: true,
+      });
+      // Both caches written.
+      expect(mocks.setThreadIntuitionPayload).toHaveBeenCalledTimes(1);
+      expect(mocks.setThreadContextRecallPayload).toHaveBeenCalledTimes(1);
+      // Total calls = 7 intuition + 2 recall agents.
+      expect(allCalls.length).toBe(9);
+      // Both recall calls were gated on an intuition-side event - if
+      // the chat-loop had run intuition first and recall second
+      // (serial), the gate-release would have happened during the
+      // intuition phase, AFTER recall would have already settled.
+      // The recall calls landing AFTER perception (the gate releaser)
+      // started is what proves they were running concurrently.
+      const perceptionAt = allCalls.find((c) =>
+        c.sys.includes('objective *perception*')
+      )?.at;
+      const recallTimes = allCalls
+        .filter((c) =>
+          c.lastUser.includes('memory_search') ||
+          c.lastUser.includes('conversation_search')
+        )
+        .map((c) => c.at);
+      expect(perceptionAt).toBeDefined();
+      expect(recallTimes.length).toBe(2);
+      for (const t of recallTimes) {
+        expect(t).toBeGreaterThanOrEqual(perceptionAt!);
+      }
+    });
+
+    it('replaces both <think> blocks on a mid-turn title trigger', async () => {
+      // Setup: a WARM thread with both caches populated from a prior
+      // round (computed_at_round = 1), and history carrying enough
+      // user turns that currentUserRound = 2. With matching mood and
+      // a non-tripped stale fuse, the pre-round trigger debounces
+      // (the cache exists, mood unchanged, fuse not tripped) but the
+      // title trigger fires after update_title lands. The mid-turn
+      // refresh writes round-2 payloads and replaces the prior
+      // synthetic <think> blocks rather than appending.
+      const allCalls: ChatRequest[] = [];
+      const seenStreamRequests: ChatRequest[] = [];
+      let recallCallCount = 0;
+      const venice: VeniceClient = {
+        async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+          seenStreamRequests.push(req);
+          // Round 1 fires update_title, round 2 settles.
+          if (seenStreamRequests.length === 1) {
+            yield {
+              type: 'tool_call',
+              toolCall: mkCall('update_title', { title: 'New topic', activity: 'renaming' }),
+            } as StreamEvent;
+          } else {
+            yield { type: 'text', delta: 'final' } as StreamEvent;
+          }
+        },
+        async completeChat(req: ChatRequest): Promise<ChatCompletion> {
+          allCalls.push(req);
+          const sys = req.messages.find((m) => m.role === 'system');
+          const sysText = typeof sys?.content === 'string' ? sys.content : '';
+          const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
+          const lastUserText =
+            typeof lastUser?.content === 'string' ? lastUser.content : '';
+          if (sysText.includes('objective *perception*')) {
+            return {
+              text: 'Classification: chitchat\n\nA topic.',
+              reasoning: '',
+              toolCalls: [],
+              usage: null,
+              citations: [],
+              finishReason: 'stop',
+            };
+          }
+          if (sysText.includes('# Your Drive:')) {
+            return {
+              text: 'react',
+              reasoning: '',
+              toolCalls: [],
+              usage: null,
+              citations: [],
+              finishReason: 'stop',
+            };
+          }
+          if (sysText.includes('synthesize')) {
+            return {
+              text: 'be brief',
+              reasoning: '',
+              toolCalls: [],
+              usage: null,
+              citations: [],
+              finishReason: 'stop',
+            };
+          }
+          if (lastUserText.includes('memory_search')) {
+            recallCallCount++;
+            return {
+              text: `{"kind":"note","note":"memory-${recallCallCount}"}`,
+              reasoning: '',
+              toolCalls: [],
+              usage: null,
+              citations: [],
+              finishReason: 'stop',
+            };
+          }
+          if (lastUserText.includes('conversation_search')) {
+            recallCallCount++;
+            return {
+              text: `{"kind":"note","note":"convo-${recallCallCount}"}`,
+              reasoning: '',
+              toolCalls: [],
+              usage: null,
+              citations: [],
+              finishReason: 'stop',
+            };
+          }
+          return {
+            text: '',
+            reasoning: '',
+            toolCalls: [],
+            usage: null,
+            citations: [],
+            finishReason: 'stop',
+          };
+        },
+      } as unknown as VeniceClient;
+      const { svc, mocks } = mockSupabase({
+        listMessages: vi.fn(async () => [userRow('hi')]),
+      });
+      const intuitionUpdates: unknown[] = [];
+      const recallUpdates: unknown[] = [];
+      const warmIntuition = {
+        v: 1 as const,
+        perception:
+          'Classification: chitchat\n\nThe user is making small talk.',
+        drives: {},
+        synthesis: 'WARM SYNTHESIS',
+        computed_at_round: 1,
+        computed_at_band: 2,
+        computed_at_column: 'confident' as const,
+        computed_at_at: 1_700_000_000_000,
+        trigger: 'cold' as const,
+      };
+      const warmRecall = {
+        v: 1 as const,
+        note: 'WARM RECALL NOTE',
+        computed_at_round: 1,
+        computed_at_band: 2,
+        computed_at_column: 'confident' as const,
+        computed_at_at: 1_700_000_000_000,
+        trigger: 'cold' as const,
+      };
+      await runChatLoop({
+        venice,
+        supabase: svc,
+        thread: mkThread({
+          intuition_payload: warmIntuition,
+          context_recall_payload: warmRecall,
+        }),
+        userId: 'u-1',
+        modelId: 'm',
+        // Two user turns -> currentUserRound = 2. The cached payloads
+        // were written at round 1 with matching mood, so the pre-round
+        // trigger debounces (mood unchanged, stale fuse not tripped).
+        history: [
+          { role: 'user', content: 'first turn' },
+          { role: 'assistant', content: 'a reply' },
+          { role: 'user', content: 'now a topic shift' },
+        ],
+        signal: new AbortController().signal,
+        intuitionModelId: 'fake-fast',
+        intuitionMood: { band: 2, column: 'confident' },
+        contextRecallEnabled: true,
+        handlers: {
+          onIntuitionUpdate: (p) => intuitionUpdates.push(p),
+          onContextRecallUpdate: (p) => recallUpdates.push(p),
+        },
+      });
+      // Pre-round debounced; only the title trigger fires. Each
+      // pipeline emits exactly one update for the title-triggered
+      // refresh.
+      expect(intuitionUpdates).toHaveLength(1);
+      expect(recallUpdates).toHaveLength(1);
+      expect(mocks.setThreadIntuitionPayload).toHaveBeenCalledTimes(1);
+      expect(mocks.setThreadContextRecallPayload).toHaveBeenCalledTimes(1);
+      // The persisted intuition payload's trigger must be 'title' -
+      // proves the refresh came from the mid-turn site, not a stale-
+      // fuse fall-through.
+      expect(mocks.setThreadIntuitionPayload.mock.calls[0][1]).toMatchObject({
+        trigger: 'title',
+        computed_at_round: 2,
+      });
+      expect(
+        mocks.setThreadContextRecallPayload.mock.calls[0][1]
+      ).toMatchObject({
+        trigger: 'title',
+        computed_at_round: 2,
+      });
+      // The second streamChat round must see EXACTLY ONE synthetic
+      // intuition <think> block (replaced, not appended) and EXACTLY
+      // ONE context-recall <think> block. Anything more means the
+      // refresh appended instead of replacing.
+      expect(seenStreamRequests).toHaveLength(2);
+      const round2Messages = seenStreamRequests[1].messages;
+      const intuitionThinkBlocks = round2Messages.filter(
+        (m) =>
+          m.role === 'assistant' &&
+          typeof m.content === 'string' &&
+          m.content.includes('<!-- intuition-think -->')
+      );
+      const recallThinkBlocks = round2Messages.filter(
+        (m) =>
+          m.role === 'assistant' &&
+          typeof m.content === 'string' &&
+          m.content.includes('<!-- context-recall-think -->')
+      );
+      expect(intuitionThinkBlocks).toHaveLength(1);
+      expect(recallThinkBlocks).toHaveLength(1);
+      // The blocks in round 2 must carry the FRESH content, not the
+      // warm-cache content from before the title trigger.
+      const intuitionContent = intuitionThinkBlocks[0].content as string;
+      const recallContent = recallThinkBlocks[0].content as string;
+      expect(intuitionContent).not.toContain('WARM SYNTHESIS');
+      expect(recallContent).not.toContain('WARM RECALL NOTE');
+      // Refreshed recall content matches one of the new memory-N /
+      // convo-N tokens the mock minted on call 1 and 2.
+      expect(recallContent).toMatch(/(memory|convo)-[12]/);
     });
   });
 });
