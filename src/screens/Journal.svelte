@@ -29,6 +29,7 @@
   import { todayInZone, formatDateFull } from '$lib/journal-day';
   import { onJournalChange } from '$lib/journal-events';
   import Markdown from '../components/Markdown.svelte';
+  import Scanner from '../components/Scanner.svelte';
   import type { JournalEntry } from '$lib/supabase';
 
   // Cap parallels MAX_JOURNAL_CONTENT_CHARS in
@@ -516,8 +517,15 @@
     -->
     {#if isRegenerating}
       {#if regenerateBusy && !regeneratePreview}
-        <div class="journal-card-body">
-          <p class="subtle">Regenerating this entry…</p>
+        <!--
+          KITT-style Scanner stands in for the regenerating entry until
+          the proposed replacement arrives. Same component the chat
+          composer uses pre-first-token. Wrapper flex-centers it so the
+          dots sit in the middle of the card body rather than reading as
+          a stranded artifact in the top-left.
+        -->
+        <div class="journal-card-body journal-card-body-loading">
+          <Scanner label="Regenerating entry" />
         </div>
       {:else if regeneratePreview}
         <div class="journal-card-chips">
@@ -985,6 +993,18 @@
     overflow-wrap: anywhere;
     word-break: break-word;
     min-width: 0;
+  }
+
+  /* Regenerate placeholder. Flex-centers the inline-flex Scanner
+     horizontally so the dots sit in the middle of the card width
+     rather than reading as a stranded artifact in the top-left.
+     Vertical padding gives the card body presence while we wait, so
+     the surrounding header/footer don't collapse into the spinner. */
+  .journal-card-body-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem 0;
   }
 
   .journal-card-actions {
