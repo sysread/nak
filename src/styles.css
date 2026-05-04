@@ -2244,6 +2244,15 @@ h1 {
   text-align: left;
 }
 
+/* Secondary "Received <timestamp>" line below the context-window
+   summary. Muted + slightly smaller so the headline (usage) stays the
+   visual anchor and the timestamp reads as supporting metadata. */
+.ring-detail-received {
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 /* `.copy-code-btn` is the in-fence variant — same styling, just a
    slightly tighter inset so it doesn't overhang the code content. */
 .md .code-block .copy-code-btn {

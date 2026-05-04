@@ -21,31 +21,48 @@
   ring reads the same across themes.
 
   Reveal: the ring itself is a toggle. Clicking it slides a detail row
-  open right below the action bar with the exact summary; clicking
-  again (or hitting Escape) slides it closed. The action bar uses
-  `flex-wrap: wrap` and the detail row takes `flex-basis: 100%`, so
-  it naturally drops to its own line inside the bubble rather than
-  floating on top of the message. The `.ring-detail` rule in
-  styles.css also pins `order: 1` on the row so it always lands
-  below every action button, not between the ring and any sibling
-  button (e.g. regenerate) that comes after it in DOM order — without
-  that, wrapping splits the bar across three lines instead of two.
-  Desktop hover still shows a native `title` tooltip for a quick peek
-  without a click, and screen readers read the same summary via
-  `aria-label`.
+  open right below the action bar with the exact summary plus the
+  wall-clock time the assistant row was persisted (the closest signal
+  we keep to "when the response was received" - see Message.created_at
+  in supabase.ts). Clicking again (or hitting Escape) slides it
+  closed. The action bar uses `flex-wrap: wrap` and the detail row
+  takes `flex-basis: 100%`, so it naturally drops to its own line
+  inside the bubble rather than floating on top of the message. The
+  `.ring-detail` rule in styles.css also pins `order: 1` on the row
+  so it always lands below every action button, not between the ring
+  and any sibling button (e.g. regenerate) that comes after it in DOM
+  order — without that, wrapping splits the bar across three lines
+  instead of two. Desktop hover still shows a native `title` tooltip
+  for a quick peek without a click, and screen readers read the same
+  summary via `aria-label`.
+
+  Timezone: timestamps render in `app.journalTimezone`, which is the
+  user's setting from Supabase profiles when present and the
+  browser-detected zone otherwise (state.svelte.ts seeds it via
+  detectTimezone() on activate, before any unlock). Either way the
+  field is always populated, so we don't need a fallback chain here.
 -->
 <script lang="ts">
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
+  import { app } from '$lib/state.svelte';
 
   interface Props {
     /** Total tokens spent on this turn (prompt + completion). */
     totalTokens: number;
     /** The model's context window, in tokens. */
     contextWindow: number;
+    /**
+     * ISO-8601 timestamp from `messages.created_at` for the row this
+     * ring annotates. Rendered in the slide-down detail row so the
+     * user can see when the response landed without leaving the
+     * thread. Optional because non-message callers (none today, but
+     * possible) can still display the ring without a row.
+     */
+    createdAt?: string | null;
   }
 
-  const { totalTokens, contextWindow }: Props = $props();
+  const { totalTokens, contextWindow, createdAt = null }: Props = $props();
 
   // Clamp to [0, 1] so a provider that overshoots (shouldn't happen,
   // but defensive) doesn't produce a ring that goes around twice or
@@ -80,6 +97,42 @@
   const fmt = new Intl.NumberFormat();
   const summary = $derived(
     `Context window: ${Math.round(pct * 100)}% used (${fmt.format(totalTokens)} / ${fmt.format(contextWindow)} tokens)`
+  );
+
+  // Render the row's wall-clock timestamp in the user's preferred
+  // zone. `medium` + `short` reads as e.g. "May 4, 2026, 3:42 PM" -
+  // unambiguous across years without going full ISO. Re-built inside
+  // the derived so a mid-session timezone change in Settings is
+  // reflected the next time Svelte re-runs the dependency graph; the
+  // formatter is cheap to construct and only fires when the row is
+  // actually mounted. Wrap in a try/catch since `Intl.DateTimeFormat`
+  // throws on an invalid timeZone; falling back to the browser zone
+  // keeps a stale or hand-edited setting from blanking the row.
+  const receivedAt = $derived.by(() => {
+    if (!createdAt) return null;
+    const ts = new Date(createdAt);
+    if (Number.isNaN(ts.getTime())) return null;
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+        timeZone: app.journalTimezone,
+      }).format(ts);
+    } catch {
+      // Bad zone string - fall back to the browser default rather
+      // than rendering nothing.
+      return new Intl.DateTimeFormat(undefined, {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }).format(ts);
+    }
+  });
+
+  // The hover tooltip and aria-label fold the timestamp in with a
+  // bullet so a quick peek surfaces both the usage and the
+  // received-at time without expanding the row.
+  const tooltip = $derived(
+    receivedAt ? `${summary} • Received ${receivedAt}` : summary
   );
 
   let open = $state(false);
@@ -117,9 +170,9 @@
 <button
   type="button"
   class="context-ring"
-  aria-label={summary}
+  aria-label={tooltip}
   aria-expanded={open}
-  title={summary}
+  title={tooltip}
   onclick={toggle}
 >
   <svg
@@ -176,6 +229,14 @@
     transition:slide={{ duration: 220, easing: cubicOut }}
     onintroend={onIntroEnd}
   >
-    {summary}
+    <div>{summary}</div>
+    {#if receivedAt}
+      <!-- "Received" rather than "Sent" because the timestamp is the
+           moment the assistant row landed in the messages table, not
+           when the user submitted. Closest signal we keep to "the LLM
+           response was received at X" - we don't separately record
+           the SSE-completion instant. -->
+      <div class="ring-detail-received">Received {receivedAt}</div>
+    {/if}
   </div>
 {/if}

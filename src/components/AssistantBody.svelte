@@ -44,6 +44,12 @@
     citations?: Message['citations'];
     model?: string | null;
     usage?: Message['usage'];
+    /**
+     * ISO timestamp from `messages.created_at`. Forwarded to
+     * ContextRing so the context-window expansion can show when the
+     * response was received in the user's local zone.
+     */
+    createdAt?: string | null;
     /** Tool-group card (ToolCalls component). Rendered between body and actions. */
     children?: Snippet;
     /**
@@ -70,6 +76,7 @@
     citations = null,
     model = null,
     usage = null,
+    createdAt = null,
     children,
     disabled = false,
     onRegenerate,
@@ -232,7 +239,11 @@
       </button>
     {/if}
     {#if usage && contextWindow}
-      <ContextRing totalTokens={usage.total_tokens} contextWindow={contextWindow} />
+      <ContextRing
+        totalTokens={usage.total_tokens}
+        contextWindow={contextWindow}
+        createdAt={createdAt}
+      />
     {/if}
     {#if onRegenerate}
       <!-- Regenerate-from-here. Sits at the right edge of the action

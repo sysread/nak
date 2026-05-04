@@ -70,22 +70,32 @@ Per-message context-window indicator. A 14px SVG ring that fills
 proportional to `totalTokens / contextWindow`, with a hue ramp from
 green (0%) through yellow (50%) to red (100%). Clicking the ring
 slides a detail row open beneath the message's action bar showing a
-summary of context-window usage; clicking again (or Escape) slides it
-closed. Desktop hover also exposes the same summary as a native `title`
-tooltip.
+summary of context-window usage and the wall-clock time the row was
+received; clicking again (or Escape) slides it closed. Desktop hover
+also exposes the same summary as a native `title` tooltip.
 
 ```ts
 interface Props {
   totalTokens: number;
   contextWindow: number;
+  createdAt?: string | null;
 }
 ```
 
-- Renders nothing when either prop is missing. The data comes from
-  the `messages.usage` JSONB column (sourced from Venice's `usage`
-  epilogue frame) and the model's `contextWindow` in
+- Renders nothing when either token prop is missing. The data comes
+  from the `messages.usage` JSONB column (sourced from Venice's
+  `usage` epilogue frame) and the model's `contextWindow` in
   `src/lib/models.ts`; both are missing for very old assistant
   rows and for turns where usage wasn't reported.
+- `createdAt` is the assistant row's `messages.created_at`. Formatted
+  via `Intl.DateTimeFormat` with `dateStyle: 'medium'` + `timeStyle:
+  'short'` and the user's `app.journalTimezone` (seeded from
+  `detectTimezone()` so it always has a value, then overwritten from
+  `profiles.settings.journalTimezone` on unlock). Rendered as a muted
+  "Received <timestamp>" line beneath the usage headline, and folded
+  into the hover/aria summary so the timestamp is also reachable
+  without expanding. A bad zone string falls back to the browser
+  default rather than blanking the line.
 - The reveal mechanism is a Svelte `{#if open}` block with a
   `slide` transition from `svelte/transition`. Parent message-card
   layout uses `flex-wrap: wrap` and the detail row is

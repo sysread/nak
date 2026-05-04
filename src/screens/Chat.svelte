@@ -4294,6 +4294,7 @@
                   citations={block.assistant.citations}
                   model={block.assistant.model}
                   usage={block.assistant.usage}
+                  createdAt={block.assistant.created_at}
                   disabled={pendingDeleteSet.has(block.assistant.id) || sending}
                   onRegenerate={() => { void regenerateFrom(block.assistant.id); }}
                 >
@@ -4341,6 +4342,7 @@
                   citations={block.message.citations}
                   model={block.message.model}
                   usage={block.message.usage}
+                  createdAt={block.message.created_at}
                   disabled={pendingDeleteSet.has(block.message.id) || sending}
                   onRegenerate={() => { void regenerateFrom(block.message.id); }}
                 />
