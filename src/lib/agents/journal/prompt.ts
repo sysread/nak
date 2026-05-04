@@ -18,11 +18,13 @@
  * filter.
  *
  * Output shape: pinned via `response_format: {type: 'json_object'}`
- * on the tool loop, then re-asserted in this prompt as a worked
- * example. The agent CAN call read-only tools (`memory_search`,
- * `conversation_search`) during input-gathering rounds, but the entry
- * itself is emitted as the structured JSON in the model's final text.
- * The worker parses that JSON and writes the entry through
+ * on the completion call, then re-asserted in this prompt as a
+ * worked example. The agent does NOT call function tools - cross-
+ * context lookups happen via the context-recall pipeline at the
+ * worker level, not via mid-call function rounds; see
+ * `agent.ts:resolveContextRecallMessage`. The entry is emitted as
+ * the structured JSON in the model's final text. The worker parses
+ * that JSON and writes the entry through
  * `supabase.upsertJournalEntryAndMarkThread` when `worthy=true` - no
  * tool call ever carries the entry's Markdown body.
  *
@@ -329,29 +331,18 @@ export function buildJournalPrompt(args: BuildPromptArgs): string {
     'short paragraphs is the right shape. Capture the arc, not just a',
     'list of facts.',
     '',
-    '## Optional context lookups',
+    '## Adjacent context (when present)',
     '',
-    'You have two read-only tools available before you commit to your',
-    'JSON output:',
-    '',
-    '- `memory_search`: search the user\'s saved memories (people,',
-    '  recurring themes, ongoing situations). Useful when the',
-    '  conversation references someone or something whose context you',
-    "  don't have - a name dropped without explanation, a project the",
-    '  user has talked about across many days, an emotional pattern',
-    '  that might be a recurring thread.',
-    '- `conversation_search`: search the user\'s prior conversations.',
-    '  Useful when the user implicitly refers back to an earlier thread',
-    '  ("the thing I was telling you about last week") and the entry',
-    '  would benefit from naming what that was. The current thread is',
-    "  excluded automatically - you already have its full text above.",
-    '',
-    'Use these SPARINGLY and ONLY when context would meaningfully',
-    'change the entry. Most worthy conversations stand on their own;',
-    'a journal entry built solely from the conversation in front of',
-    'you is the default, not the exception. Do not search for every',
-    "name, every theme, every prior topic - that's tedium, not",
-    'enrichment. Skip the searches entirely when worthy=false.',
+    'A prior `<think>` block above this prompt may contain a short',
+    'first-person recollection stitched from the user\'s saved',
+    'memories and prior conversations - things the current thread',
+    "implicitly references but didn't restate. When that block is",
+    'present, treat it as your own background knowledge and weave',
+    'relevant bits into the entry naturally; do not name the',
+    'mechanism ("according to memories...") - that breaks the',
+    'observational voice. When the block is absent or empty, the',
+    'conversation in front of you stands on its own; do not invent',
+    'cross-context that you can\'t see.',
     '',
     '## Building on what already exists',
     ''
@@ -486,16 +477,14 @@ export function buildJournalRegeneratePrompt(
     'headers if helpful. Keep it tight; this is a daily arc, not an',
     'essay. 2-6 short paragraphs is the right shape.',
     '',
-    '## Optional context lookups',
+    '## Adjacent context (when present)',
     '',
-    'Two read-only tools are available before you commit to your JSON',
-    'output: `memory_search` (saved memories about people, themes,',
-    'ongoing situations) and `conversation_search` (other prior',
-    'threads; the source conversation is excluded automatically).',
-    'Use them sparingly and only when context the previous entry',
-    "missed would meaningfully change your fresh take. The user is",
-    'asking for a different angle on THIS conversation, not for an',
-    "essay that pulls in everything tangentially related.",
+    'A prior `<think>` block above this prompt may contain a short',
+    'first-person recollection stitched from the user\'s saved',
+    'memories and prior conversations. When present, weave relevant',
+    'bits into the entry naturally without naming the mechanism. The',
+    'user is asking for a different angle on THIS conversation, not',
+    'for an essay that pulls in everything tangentially related.',
     '',
     '## How to differ from the previous entry',
     '',

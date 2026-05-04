@@ -40,6 +40,16 @@ export interface JournalInput {
    * worker happens to be processing it.
    */
   entryDate: string;
+  /**
+   * Cached context-recall payload at claim time (jsonb verbatim from
+   * the threads row). The agent runs `coerceContextRecallPayload`
+   * against it to decide between reusing the cached note vs. firing
+   * the recall pipeline fresh. Always present on the field because
+   * the claim RPC returns null when the chat-loop has never run a
+   * recall on the thread; the agent treats null and a malformed-
+   * shape payload identically (= cold cache, run fresh).
+   */
+  contextRecallPayload: unknown;
 }
 
 export interface JournalOutput {

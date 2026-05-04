@@ -40,12 +40,21 @@ Unlike memories, entries are not linked into a graph.
   - `agent.ts` — `JournalAgent implements
     Agent<JournalInput, JournalOutput>`. Model:
     `zai-org-glm-4.7-flash` (literal id, not a tier -
-    insulated from user-facing tier swaps, supports
-    function calling). Thinking is disabled outright via
+    insulated from user-facing tier swaps). Thinking is
+    disabled outright via
     `venice_parameters.disable_thinking=true`; no
-    `reasoning_effort` is sent. Reads today's existing
-    automatic entry and injects it into the prompt so the
-    LLM extends rather than duplicates. Also exposes a
+    `reasoning_effort` is sent. The agent does NOT call
+    function tools - cross-thread / cross-memory context
+    arrives via the context-recall pipeline (same one the
+    chat-loop uses), prepended as a synthetic `<think>`
+    assistant message between the conversation slice and
+    the journal prompt. The cache is projected on the
+    claim row by `claim_next_thread_for_journal`; on a
+    cold cache the agent fans out the recall pipeline
+    fresh and writes the result back so the next chat
+    turn benefits. Reads today's existing automatic entry
+    and injects it into the prompt so the LLM extends
+    rather than duplicates. Also exposes a
     `regenerate({threadId, entryDate, existingEntry})`
     method used by the modal's Regenerate button - bypasses
     the worker queue and the worthy/not-worthy gate, runs
@@ -95,18 +104,9 @@ Unlike memories, entries are not linked into a graph.
 - `src/lib/tools/journal_{list,read,search,delete}.ts` —
   user-facing tools; registered in `journalToolbox`, gated
   (user-toggleable in the chat composer's tool picker).
-  Distinct from the agent's own toolbox below.
-- `src/lib/tools/journal_agent_toolbox.ts` —
-  `journalAgentToolbox`, the read-only set the background
-  agent calls during input-gathering rounds:
-  `memory_search` and `conversation_search`. No write
-  tools - the entry itself is still emitted through
-  `response_format=json_object`, never as
-  `tool_calls.arguments` (see Gotchas). The agent's
-  `toolCtx.threadId` is the thread BEING JOURNALED, so
-  `conversation_search`'s default current-thread
-  exclusion keeps the agent from pulling its own source
-  conversation back in via search.
+  The journal agent itself does not call tools; cross-
+  thread / cross-memory context arrives via the context-
+  recall pipeline (see `src/lib/context-recall/`).
 - `src/lib/embeddings/sources/journal.ts` —
   `createJournalSource(supabase)`. Text =
   `${entry_date}\n${topics}\nmood: ${mood}\n\n${content}`.
@@ -402,17 +402,18 @@ and `journalTimezone?: string` (IANA zone).
   substrate, via the source adapter at
   `src/lib/embeddings/sources/journal.ts`. See
   [embeddings.md](./embeddings.md).
-- **Tools.** Two separate toolboxes. `journalToolbox`
-  (user-facing CRUD + search) is gated and toggleable in
-  the composer's tool picker - what the main chat model
-  reaches for when the user wants to query their journal.
-  `journalAgentToolbox` (read-only `memory_search` +
-  `conversation_search`) is what the background agent
-  itself calls during input-gathering rounds, so it can
-  pull in adjacent context when writing the entry. The
-  agent never writes through a tool call - the upsert
-  still goes through `response_format=json_object` and a
-  direct `supabase.upsertJournalAutomaticEntry`. See
+- **Tools.** `journalToolbox` (user-facing CRUD + search)
+  is gated and toggleable in the composer's tool picker -
+  what the main chat model reaches for when the user
+  wants to query their journal. The background journal
+  agent itself does NOT call tools; it consumes the
+  context-recall pipeline's stitched first-person note
+  (the same one the chat-loop uses for subconscious
+  priming) prepended as a synthetic `<think>` message
+  ahead of the journal prompt. The agent never writes
+  through a tool call either - the upsert still goes
+  through `response_format=json_object` and a direct
+  `supabase.upsertJournalAutomaticEntry`. See
   [tools.md](./tools.md).
 - **Settings.** The Journal pane owns the toggle +
   timezone + export buttons. The AI pane's **About you**
@@ -432,26 +433,38 @@ and `journalTimezone?: string` (IANA zone).
   `src/lib/agents/journal/`, NOT `.../reflection/` - the
   reflection folder is the memory-extraction agent. When
   grepping, use `journal` for this feature.
-- **Structured output for the WRITE, tools for the
-  READ.** The agent talks to Venice through the headless
-  tool loop now (`runHeadlessToolLoop` with
-  `journalAgentToolbox`), so it can call
-  `memory_search` and `conversation_search` during
-  input-gathering rounds. But the entry itself is still
-  emitted through `response_format: {type: 'json_object'}`
-  in the model's final text - never as
+- **Structured output for the WRITE, no tools at all.**
+  The agent makes a single non-streaming
+  `venice.completeChat` call - no headless tool loop. The
+  entry is emitted through `response_format: {type:
+  'json_object'}` in the model's final text - never as
   `tool_calls.arguments`. An earlier write-via-tool-call
   shape (`journal_upsert`) ate too many writes to
   long-Markdown threads because the entry body had to
   survive two layers of JSON escaping (the streamed
   `tool_calls.arguments` string on the wire, then the
-  inner `content` field). The read tools the agent calls
-  now don't have that problem - their arguments are
-  short query strings. If you ever need a write tool
+  inner `content` field). If you ever need a write tool
   path back (e.g. for a future agent-driven delete
   flow), expose a NEW tool rather than restoring
   `journal_upsert`; the always-on JSON-output path stays
   the only writer.
+- **Cross-context comes from context-recall, not from
+  tools.** The agent used to call `memory_search` and
+  `conversation_search` during input-gathering rounds.
+  It now consumes the context-recall pipeline's stitched
+  first-person note instead - same pipeline the chat-loop
+  uses (`src/lib/context-recall/`). The cache is
+  projected on the claim row by
+  `claim_next_thread_for_journal` so we don't pay an
+  extra round trip; on a cold cache (a thread the user
+  opened briefly without triggering a recall refresh, or
+  one that pre-dates the pipeline) the agent fans out
+  the recall pipeline fresh and writes the result back.
+  The recall sub-agents themselves still call
+  `memory_search` and `conversation_search` - we've
+  moved function calling down a layer, not eliminated it
+  from the system. Practical consequence: the journal
+  agent's model can be non-function-calling.
 - **Timezone recomputation per cycle.** `loop.ts`
   recomputes `entryDate` every iteration so an idle
   worker that straddles midnight still writes to the

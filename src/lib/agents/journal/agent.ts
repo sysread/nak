@@ -3,9 +3,10 @@
  * a completed conversation: fetch the thread's messages up to the
  * claimed terminal assistant message, read today's existing automatic
  * entry (so the prompt can tell the agent to extend rather than
- * duplicate), drive a tool-call loop with read-only memory and
- * conversation searches, parse the model's structured decision, and -
- * when `worthy=true` - write the entry AND advance the thread's
+ * duplicate), prepend the cached context-recall note (or run the
+ * recall pipeline fresh on a cold cache), make a single completion
+ * call, parse the model's structured decision, and - when
+ * `worthy=true` - write the entry AND advance the thread's
  * `last_journaled_msg_id` pointer in a single atomic Postgres
  * transaction via `supabase.upsertJournalEntryAndMarkThread`. The
  * atomicity matters: a successful entry write that fails to advance
@@ -15,25 +16,24 @@
  * Mirrors `../reflection/agent.ts` in the thread-fetch / slice / model
  * pinning pieces but diverges in three ways:
  *
- *   - Model + reasoning: runs on `zai-org-glm-4.7-flash` with
- *     `disable_thinking=true` and no `reasoning_effort`. Supports
- *     function calling, which is the slot this background agent
- *     actually needs (no vision, no streaming UX). Pinned to a
- *     literal id rather than tracking a tier so a swap of the user-
- *     facing tiers doesn't perturb the journaler. History: the task
- *     started on the balanced profile (GLM-5) and hit overload
- *     errors, then moved to `nvidia-nemotron-cascade-2-30b-a3b` for
- *     the low-traffic-slot property, which produced visibly weak
- *     entries. The `-flash` variant of GLM-4.7 is roughly a third
- *     the price of the plain `zai-org-glm-4.7` that fronts the
- *     user-facing Fast tier, so it's plausibly a separate slot.
- *     Thinking is disabled outright via Venice's
- *     `venice_parameters.disable_thinking` kill switch: the task is
- *     "read the conversation, emit a structured JSON entry," and
- *     CoT preambles on a reasoning-capable model just burned the
- *     output budget without changing the entry quality. If overload
- *     errors return, the next move is back to a non-user-fronted
- *     id, not back to the Fast tier proper.
+ *   - Model + thinking: runs on `zai-org-glm-4.7-flash` with
+ *     `disable_thinking=true` and no `reasoning_effort`. The agent
+ *     does NOT call function tools (see "Context" below), so a
+ *     non-function-calling model would also be a candidate; the
+ *     current pin is held for the low-traffic-slot reason. Pinned
+ *     to a literal id rather than tracking a tier so a swap of the
+ *     user-facing tiers doesn't perturb the journaler. History:
+ *     the task started on the balanced profile (GLM-5) and hit
+ *     overload errors, moved to `nvidia-nemotron-cascade-2-30b-a3b`
+ *     for the low-traffic-slot property which produced visibly weak
+ *     entries, then moved to `zai-org-glm-4.7-flash` (roughly a
+ *     third the price of the plain `zai-org-glm-4.7` that fronts
+ *     the user-facing Fast tier, so plausibly a separate capacity
+ *     pool). Thinking is disabled outright via Venice's
+ *     `venice_parameters.disable_thinking` kill switch: the task
+ *     is "read the conversation, emit a structured JSON entry,"
+ *     and CoT preambles on a reasoning-capable model just burned
+ *     the output budget without changing the entry quality.
  *
  *   - Output: structured JSON via response_format, not a tool call.
  *     The earlier "write the entry through tool_call.arguments" shape
@@ -46,22 +46,29 @@
  *     worker would log "wrote=false" anyway because
  *     successfulToolCalls stayed at zero, and the user got an empty
  *     journal. response_format only produces one layer of JSON, which
- *     is the failure mode the model is actually trained on. The
- *     tool-call rounds the agent now uses for INPUT (memory_search /
- *     conversation_search) don't suffer from this - their arguments
- *     are short query strings, not multi-paragraph Markdown.
+ *     is the failure mode the model is actually trained on.
  *
- *   - Read-only toolbox (`journalAgentToolbox`): `memory_search` and
- *     `conversation_search` only. Lets the agent pull in adjacent
- *     context (saved memories about a recurring theme, prior threads
- *     the user is implicitly referring back to) without giving it any
- *     ability to mutate user state. The toolCtx's `threadId` is set
- *     to `req.input.threadId` - the conversation BEING JOURNALED, not
- *     whatever thread the user has open in the UI - so
- *     `conversation_search`'s default current-thread exclusion keeps
- *     the agent from pulling its own source conversation back in.
- *     Reasoning the model wrote about its decision is plumbed up to
- *     the worker so the log line can show the why alongside the what.
+ *   - Context: the journal agent does NOT expose memory_search /
+ *     conversation_search as function tools. Instead it consumes the
+ *     context-recall pipeline's stitched first-person note - the same
+ *     pipeline the chat-loop uses (`src/lib/context-recall/`) - and
+ *     prepends it as a synthetic <think> assistant turn between the
+ *     conversation slice and the journal prompt. The cache lives on
+ *     the threads row's `context_recall_payload` jsonb column and is
+ *     populated by the chat-loop during the user's session; the claim
+ *     RPC projects it on the claim row so we don't pay an extra round
+ *     trip. On a cold cache (a thread the user opened briefly without
+ *     triggering a recall refresh, or one that pre-dates the
+ *     pipeline) the agent fans out the recall pipeline fresh and
+ *     writes the result back so the next chat turn benefits. Two
+ *     consequences worth noting: the journal agent's model can be
+ *     non-function-calling, but the recall sub-agents themselves
+ *     still call tools - we've moved function calling down a layer,
+ *     not eliminated it from the system. And there's no
+ *     `conversation_search`-style "exclude the current thread"
+ *     filter on the recall path, since the pipeline reads the live
+ *     thread already; the stitched note is about adjacent context,
+ *     not the source conversation.
  *
  * Does NOT touch leases, claims, or the thread-marking RPC - those
  * live in `./loop.ts` and `./worker.ts`. This class is pure logic.
@@ -69,10 +76,18 @@
 import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
 import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
+import type { Toolbox } from '../../tools/types';
 import { createLogger } from '../../logger.svelte';
 import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
-import { runHeadlessToolLoop } from '../../tools/run';
-import { journalAgentToolbox } from '../../tools/journal_agent_toolbox';
+import {
+  buildContextRecallThinkMessage,
+  coerceContextRecallPayload,
+  runContextRecallPipeline,
+  withContextRecallInflight,
+  writeContextRecallCache,
+  type ContextRecallPayload,
+} from '../../context-recall';
+import { countUserRounds } from '../../intuition/types';
 import {
   buildJournalPrompt,
   buildJournalRegeneratePrompt,
@@ -267,12 +282,21 @@ export function parseJournalDecision(text: string): JournalDecision | null {
 export class JournalAgent implements Agent<JournalInput, JournalOutput> {
   readonly name = 'journal';
   readonly model: string;
-  // Read-only memory + conversation search. The entry itself is still
-  // emitted through `response_format=json_object` in the model's final
-  // text - tool calls happen only during input-gathering rounds, so
-  // the multi-layer JSON-escaping problem the original tool-call write
-  // shape suffered from doesn't apply here.
-  readonly toolbox = journalAgentToolbox;
+  // No-op toolbox. The Agent interface requires a `toolbox` field, but
+  // the journal agent doesn't expose memory_search / conversation_search
+  // any more - cross-conversation context arrives via a context-recall
+  // <think> message synthesized from the same pipeline the chat-loop
+  // uses, prepended at the start of the run rather than fetched through
+  // mid-call tool rounds. Kept inline rather than as a separate file
+  // since there's nothing to share.
+  readonly toolbox: Toolbox = {
+    name: 'journal',
+    description:
+      'No tools. The journal agent consumes a pre-computed context-' +
+      'recall note rather than calling memory_search / conversation_' +
+      'search itself.',
+    tools: [],
+  };
   /**
    * Mutable user profile (Settings -> AI -> About you). Read on every
    * `run()` / `regenerate()` so the worker can live-update it via
@@ -402,7 +426,23 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
         spamHint = null;
       }
 
+      // Resolve the context-recall <think> message: prefer the cache
+      // projected on the claim row, fall back to a fresh pipeline run
+      // when the cache is missing or coerces to null. A best-effort
+      // write-back on a fresh run feeds the next chat-loop turn the
+      // pre-warmed note. Failures are swallowed - the journal entry
+      // itself doesn't need the recall to land.
+      const recallMessage = await this.resolveContextRecallMessage({
+        cachedPayload: req.input.contextRecallPayload,
+        threadId: req.input.threadId,
+        userId: req.userId,
+        round: countUserRounds(slice),
+        signal,
+        persist: true,
+      });
+
       const convo: VeniceMessage[] = slice.map(messageToVenice);
+      if (recallMessage) convo.push(recallMessage);
       convo.push({
         role: 'user',
         content: buildJournalPrompt({
@@ -415,40 +455,30 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
       });
 
       // Mid-cycle progress note. The Venice call below can take tens
-      // of seconds on a long thread + medium reasoning effort, and
-      // without a log line between "picked up thread X" and "finished
-      // thread X" the worker looks frozen to anyone scanning the
-      // logs. The note also surfaces "Venice itself is unreachable"
-      // separately from "agent reasoned through a skip" - if the
-      // reachable-Venice line lands but the finished-thread line
-      // never does, the tool-loop hung.
+      // of seconds on a long thread, and without a log line between
+      // "picked up thread X" and "finished thread X" the worker looks
+      // frozen to anyone scanning the logs. The note also surfaces
+      // "Venice itself is unreachable" separately from "agent reasoned
+      // through a skip" - if the reachable-Venice line lands but the
+      // finished-thread line never does, the call hung.
       log.info(
         `asking model about thread ${req.input.threadId} ` +
-          `(${slice.length} messages, ${existingEntry ? 'extending prior entry' : 'first pass'})`
+          `(${slice.length} messages, ${existingEntry ? 'extending prior entry' : 'first pass'}, ` +
+          `${recallMessage ? 'with recall note' : 'no recall'})`
       );
 
-      // Tool loop with the read-only journalAgentToolbox. The model
-      // can call memory_search and conversation_search across rounds
-      // to gather context, then settles on a JSON-formatted final
-      // text (response_format pinned on every round). toolCtx.threadId
-      // is the thread BEING JOURNALED so conversation_search's default
-      // current-thread filter excludes the agent's own source convo.
-      const loopResult = await runHeadlessToolLoop({
-        venice: this.venice,
+      // Single non-streaming completion. The agent has no tools, so
+      // there's no headless tool loop - the JSON entry is the model's
+      // first and only response, gated by response_format and the
+      // disable_thinking kill switch.
+      const completion = await this.venice.completeChat({
         model: this.model,
         messages: convo,
-        toolbox: this.toolbox,
-        toolCtx: {
-          supabase: this.supabase,
-          venice: this.venice,
-          userId: req.userId,
-          threadId: req.input.threadId,
-        },
         signal,
         responseFormat: JOURNAL_RESPONSE_FORMAT,
         disableThinking: true,
       });
-      const finalText = loopResult.finalText;
+      const finalText = completion.text;
 
       if (signal.aborted) {
         return {
@@ -458,16 +488,16 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
             entryWritten: false,
             reasoning: null,
           },
-          toolCalls: loopResult.toolCalls,
+          toolCalls: 0,
           stoppedReason: 'aborted',
         };
       }
 
       const decision = parseJournalDecision(finalText);
       if (decision === null) {
-        // Parse failure - log the raw final text via the loop's error
-        // path (it falls back to finalText when reasoning is null).
-        // Pointer still advances; a re-prompt would just re-fail.
+        // Parse failure - the loop falls back to finalText when
+        // reasoning is null. Pointer still advances; a re-prompt
+        // would just re-fail.
         return {
           output: {
             finalText,
@@ -475,7 +505,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
             entryWritten: false,
             reasoning: null,
           },
-          toolCalls: loopResult.toolCalls,
+          toolCalls: 0,
           stoppedReason: 'done',
         };
       }
@@ -488,7 +518,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
             entryWritten: false,
             reasoning: decision.reasoning,
           },
-          toolCalls: loopResult.toolCalls,
+          toolCalls: 0,
           stoppedReason: 'done',
         };
       }
@@ -534,7 +564,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
             entryWritten: false,
             reasoning: decision.reasoning,
           },
-          toolCalls: loopResult.toolCalls,
+          toolCalls: 0,
           stoppedReason: 'error',
           error: err instanceof Error ? err.message : String(err),
         };
@@ -547,7 +577,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
           entryWritten: true,
           reasoning: decision.reasoning,
         },
-        toolCalls: loopResult.toolCalls,
+        toolCalls: 0,
         stoppedReason: 'done',
       };
     } catch (err) {
@@ -609,7 +639,31 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
       throw new Error('Source conversation has no messages to journal.');
     }
 
+    // Resolve the signed-in user's id up front. The recall pipeline
+    // needs userId for its tool contexts, and surfacing a missing
+    // session here is preferable to discovering it deeper in via an
+    // RLS failure.
+    const session = await this.supabase.getSession();
+    if (!session) {
+      throw new Error('Not signed in - cannot regenerate.');
+    }
+
+    // Regenerate has no claim to ride, so we don't have a cached
+    // payload in hand. Fan out the recall pipeline fresh - cost is
+    // ~one recall round-trip per Regenerate click, which is fine for
+    // a user-initiated action. The result is cached back so the next
+    // chat-loop turn benefits.
+    const recallMessage = await this.resolveContextRecallMessage({
+      cachedPayload: null,
+      threadId: args.threadId,
+      userId: session.user.id,
+      round: countUserRounds(allMessages),
+      signal,
+      persist: true,
+    });
+
     const convo: VeniceMessage[] = allMessages.map(messageToVenice);
+    if (recallMessage) convo.push(recallMessage);
     convo.push({
       role: 'user',
       content: buildJournalRegeneratePrompt({
@@ -621,40 +675,20 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
 
     log.info(
       `regenerating entry for thread ${args.threadId} ` +
-        `(${allMessages.length} messages)`
+        `(${allMessages.length} messages, ` +
+        `${recallMessage ? 'with recall note' : 'no recall'})`
     );
 
-    // Resolve the signed-in user's id from the supabase client. The
-    // tools we hand the loop (memory_search, conversation_search) get
-    // user-scoping via the JWT on `ctx.supabase` and don't read
-    // `ctx.userId`, but the ToolContext contract requires it; surfacing
-    // the session error here is preferable to handing the loop an empty
-    // string and discovering it later through an RLS failure deeper in.
-    const session = await this.supabase.getSession();
-    if (!session) {
-      throw new Error('Not signed in - cannot regenerate.');
-    }
-
-    // Same tool loop as the worker run() path - read-only memory and
-    // conversation search, structured JSON output. ctx.threadId is the
-    // thread the entry is FOR, so conversation_search excludes the
-    // source conversation by default.
-    const loopResult = await runHeadlessToolLoop({
-      venice: this.venice,
+    // Single non-streaming completion. Same shape as run() - no tools,
+    // structured JSON output, thinking disabled.
+    const completion = await this.venice.completeChat({
       model: this.model,
       messages: convo,
-      toolbox: this.toolbox,
-      toolCtx: {
-        supabase: this.supabase,
-        venice: this.venice,
-        userId: session.user.id,
-        threadId: args.threadId,
-      },
       signal,
       responseFormat: JOURNAL_RESPONSE_FORMAT,
       disableThinking: true,
     });
-    const finalText = loopResult.finalText;
+    const finalText = completion.text;
 
     if (signal.aborted) throw new Error('Regenerate aborted mid-stream.');
 
@@ -679,5 +713,89 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
       mood: decision.entry.mood,
       people: [...decision.entry.people],
     };
+  }
+
+  /**
+   * Resolve the context-recall <think> message to prepend to the
+   * conversation, or null when neither cache nor pipeline yields a
+   * non-empty note.
+   *
+   * Cache-first when a cached payload was passed in (the worker path
+   * gets it for free off the claim row). Falls back to running the
+   * pipeline fresh when the cache coerces to null OR carries an empty
+   * note - an empty-note cache is a legitimate "both children returned
+   * the empty signal" state, but for the journal use case we'd rather
+   * pay one fresh recall than journal blind. The chat-loop's pure
+   * trigger-driven debounce doesn't apply here - we're already running
+   * a backgrounded once-per-thread pass, not a per-turn refresh.
+   *
+   * `persist: true` writes the fresh payload back via
+   * `withContextRecallInflight`, so the next chat-loop turn on the
+   * same thread sees the pre-warmed note. Best-effort: the journal
+   * entry doesn't need the recall write to land, so we swallow the
+   * write error and log it.
+   *
+   * Pipeline failure (network, abort, both children faulting at once)
+   * collapses to "no recall note" - the journal proceeds without it
+   * rather than failing the whole entry.
+   */
+  private async resolveContextRecallMessage(args: {
+    cachedPayload: unknown;
+    threadId: string;
+    userId: string;
+    round: number;
+    signal: AbortSignal;
+    persist: boolean;
+  }): Promise<VeniceMessage | null> {
+    const cached = coerceContextRecallPayload(args.cachedPayload);
+    if (cached && cached.note.length > 0) {
+      return buildContextRecallThinkMessage(cached);
+    }
+
+    let fresh: ContextRecallPayload | null = null;
+    try {
+      fresh = await withContextRecallInflight(args.threadId, () =>
+        runContextRecallPipeline({
+          venice: this.venice,
+          supabase: this.supabase,
+          threadId: args.threadId,
+          userId: args.userId,
+          signal: args.signal,
+          round: args.round,
+          // Mood is a chat-loop runtime artifact (intuition's mood-band
+          // snapshot for the live conversation). Background journaling
+          // doesn't have a live mood; null is the documented "no mood
+          // available" path on `RunContextRecallInputs`.
+          mood: null,
+          // 'cold' is the most honest IntuitionTrigger value here -
+          // there's no cache to debounce against. The trigger field
+          // rides into the persisted payload for observability only.
+          trigger: 'cold',
+        })
+      );
+    } catch (err) {
+      log.warn(
+        `context-recall pipeline failed for thread ${args.threadId}; ` +
+          'journaling without recall note',
+        err
+      );
+      return null;
+    }
+
+    if (!fresh) return null;
+
+    if (args.persist) {
+      // Best-effort write-back. The chat-loop merges fresher payloads
+      // on realtime echo, so a clobber risk against a concurrent chat
+      // turn is bounded - the chat-loop's next trigger will refresh
+      // again if our write was a step backwards.
+      writeContextRecallCache(this.supabase, args.threadId, fresh).catch(
+        () => {
+          /* logged inside writeContextRecallCache */
+        }
+      );
+    }
+
+    return buildContextRecallThinkMessage(fresh);
   }
 }

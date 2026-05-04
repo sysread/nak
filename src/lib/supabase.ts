@@ -2564,6 +2564,17 @@ export class SupabaseService {
      * happened on, not the day the worker is processing it.
      */
     threadCreatedAt: string;
+    /**
+     * Cached context-recall payload at claim time, projected straight
+     * off the thread row's `context_recall_payload` jsonb. The journal
+     * agent runs `coerceContextRecallPayload` on this to either reuse
+     * the cached note or fan out the recall pipeline fresh when the
+     * cache is missing or drifting. Unknown shape rather than the
+     * typed payload because `claim_next_thread_for_journal` returns
+     * jsonb verbatim - the journal layer owns the coerce, not this
+     * wrapper.
+     */
+    contextRecallPayload: unknown;
   } | null> {
     const { data, error } = await this.client.rpc('claim_next_thread_for_journal', {
       p_holder_id: holderId,
@@ -2583,6 +2594,7 @@ export class SupabaseService {
       terminal_msg_id: string;
       title: string | null;
       thread_created_at: string;
+      context_recall_payload: unknown;
     }[];
     if (rows.length === 0) return null;
     return {
@@ -2590,6 +2602,7 @@ export class SupabaseService {
       terminalMsgId: rows[0].terminal_msg_id,
       title: rows[0].title ?? null,
       threadCreatedAt: rows[0].thread_created_at,
+      contextRecallPayload: rows[0].context_recall_payload ?? null,
     };
   }
 

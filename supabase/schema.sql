@@ -4396,7 +4396,16 @@ create or replace function public.claim_next_thread_for_journal(
   -- midnight or processing a backlog would otherwise stamp every
   -- entry with the current run-day and clobber prior entries via the
   -- per-thread upsert.
-  thread_created_at timestamptz
+  thread_created_at timestamptz,
+  -- Cached context-recall payload (jsonb) at claim time. The journal
+  -- agent dropped its own memory_search / conversation_search tool
+  -- loop in favour of the same context-recall pipeline the chat-loop
+  -- uses; projecting the cached payload here means we can hand it to
+  -- the agent without a second round trip. Null when the chat-loop
+  -- has never run a recall on this thread (legitimate cold case);
+  -- the agent runs the pipeline fresh on null and writes the result
+  -- back so the next chat turn benefits.
+  context_recall_payload jsonb
 )
 language sql security invoker as $$
   with candidate as (
@@ -4404,7 +4413,8 @@ language sql security invoker as $$
       t.id as thread_id,
       term.msg_id as terminal_msg_id,
       t.title as title,
-      t.created_at as thread_created_at
+      t.created_at as thread_created_at,
+      t.context_recall_payload as context_recall_payload
       from public.threads t
       cross join lateral (
         select m.id as msg_id
@@ -4458,7 +4468,7 @@ language sql security invoker as $$
          journal_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
     from candidate c
    where t.id = c.thread_id
-  returning t.id as thread_id, c.terminal_msg_id, c.title, c.thread_created_at;
+  returning t.id as thread_id, c.terminal_msg_id, c.title, c.thread_created_at, c.context_recall_payload;
 $$;
 
 -- Mark the thread journaled IF our claim is still ours. Returns false

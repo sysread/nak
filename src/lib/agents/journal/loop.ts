@@ -54,6 +54,7 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     terminalMsgId: string;
     title: string | null;
     threadCreatedAt: string;
+    contextRecallPayload: unknown;
   } | null = null;
   try {
     claim = await ctx.supabase.claimNextThreadForJournal(
@@ -97,6 +98,7 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
         terminalMsgId: claim.terminalMsgId,
         holderId: ctx.holderId,
         entryDate,
+        contextRecallPayload: claim.contextRecallPayload,
       },
       userId: ctx.userId,
       threadId: claim.threadId,
