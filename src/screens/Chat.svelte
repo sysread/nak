@@ -1471,6 +1471,16 @@
     // On desktop the sidebar is a persistent column - leave it open.
     if (id !== null) closeDrawerOnMobile();
     if (id === null) return;
+    // Focus the composer so the user can start typing immediately after
+    // opening a conversation. Skipped on mobile - focusing the textarea
+    // there pops the soft keyboard and expands the composer (the
+    // .is-collapsed rule keys off composerFocused), which is intrusive
+    // when the user is just navigating in to read.
+    if (!composerIsMobile) {
+      void tick().then(() => {
+        if (activeThreadId === id) composerEl?.focus();
+      });
+    }
     if (!app.supabase) return;
     // Drafts aren't in Supabase yet - no messages to fetch.
     const t = findThread(id);
