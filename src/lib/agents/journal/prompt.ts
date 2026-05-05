@@ -132,35 +132,6 @@ export interface BuildPromptArgs {
 }
 
 /**
- * Args for the regenerate prompt - the user-initiated "rewrite this
- * entry" path. Differs from BuildPromptArgs in two ways: there's
- * always an existing entry (the one being regenerated), and there's
- * no spam-filter hint or worthy/not-worthy decision because the user
- * has already opted in by clicking the button. The model is told to
- * produce a fresh take rather than extending the prior version.
- */
-export interface BuildRegeneratePromptArgs {
-  entryDate: string;
-  /**
-   * The entry the user is currently looking at and asked to
-   * regenerate. Shown to the model as "this is what you wrote last
-   * time; the user wants something different" rather than as a base
-   * to extend, so the regenerated entry isn't just a rephrase.
-   */
-  existingEntry: {
-    content: string;
-    topics: readonly string[];
-    mood: string | null;
-    people: readonly string[];
-  };
-  /**
-   * Same shape as BuildPromptArgs.userProfile. Null suppresses the
-   * "About the user" block.
-   */
-  userProfile: JournalUserProfile | null;
-}
-
-/**
  * Render the "About the user" block injected near the top of both
  * journal prompts when the user has filled at least one of the
  * Settings -> About you fields. Returns null when both are empty so
@@ -270,6 +241,13 @@ export function buildJournalPrompt(args: BuildPromptArgs): string {
     '- DO NOT present interpretation as observation. Hedge inference',
     '  ("appears to", "reads as", "seems to"); use a question for a',
     '  genuine 50/50. See "Calibrate prose to evidence" below.',
+    "- DO NOT add context the user did not bring up. If the",
+    "  conversation didn't mention a fact, the entry doesn't",
+    '  either. Knowledge from your training (historical detail,',
+    '  domain trivia, biographical context the user did not',
+    "  supply) is not evidence about the user - importing it",
+    "  fabricates substance the journal can't ground in what",
+    'actually happened in the conversation.',
     '',
     '## Output format',
     '',
@@ -441,6 +419,12 @@ export function buildJournalPrompt(args: BuildPromptArgs): string {
     "- Speculative (open question). Only when the read is genuinely",
     '  50/50.',
     '',
+    'Most utterances are not load-bearing. A 4-paragraph entry',
+    'typically has 1-2 interpretive sentences; the rest is',
+    'observation. If you have to reach to make a detail meaningful,',
+    'leave it observational. Imposing meaning is a slip mode, not',
+    'the goal.',
+    '',
     '### Two lenses: science underneath, philosophy on the surface',
     '',
     'Read the conversation through analytical frames to UNDERSTAND',
@@ -590,238 +574,3 @@ export function buildJournalPrompt(args: BuildPromptArgs): string {
   return lines.join('\n');
 }
 
-/**
- * Construct the prompt for a user-initiated regenerate. The user
- * clicked the regenerate button on an existing automatic entry, so
- * the worthy/not-worthy gate is bypassed and the spam-filter prior
- * is suppressed - the user has explicitly asked for an entry. The
- * existing entry is shown as "what you produced last time, the
- * user wasn't satisfied" rather than as a base to extend, so the
- * model takes a fresh angle (different framing, voice, or
- * structure) instead of returning a near-duplicate.
- *
- * The output shape is the same as {@link buildJournalPrompt} so
- * {@link parseJournalDecision} can be reused on the parse side.
- * `worthy` is forced to true here - any worthy=false response is
- * treated as a regenerate failure by the caller.
- */
-export function buildJournalRegeneratePrompt(
-  args: BuildRegeneratePromptArgs
-): string {
-  const lines: string[] = [
-    "You are a journal-entry generator. You have just read the",
-    "conversation above. The user previously asked the journaler to",
-    "write an entry for this conversation, didn't like the result,",
-    "and has clicked Regenerate. Your task: write a fresh entry that",
-    "captures the growth, self-discovery, reflections, reframings,",
-    'and emotional narrative the conversation revealed - taking a',
-    'different angle than the previous entry did.',
-    '',
-    "The journal's purpose is to help the user build a realistic,",
-    'usable mental model of their own mind - a translation layer',
-    'between standard psychology and how this particular mind',
-    'actually works. Many published frameworks assume neurotypical',
-    "defaults that may not hold for this user; the journal's job is",
-    'to map this specific mind by observation, not to confirm a',
-    'framework. The audience is the user. You are an objective',
-    'observer logging what you see - NOT a friend reassuring them,',
-    'a therapist diagnosing them, or a narrator smoothing their',
-    'experience into a tidy arc.',
-    '',
-    `This conversation started on **${args.entryDate}** (the user's`,
-    'local-timezone calendar day). Use that as the entry_date - the',
-    'entry belongs to the day the conversation happened on, NOT the',
-    'day you are processing it on.',
-    '',
-  ];
-  const regenProfileBlock = renderUserProfileBlock(args.userProfile);
-  if (regenProfileBlock !== null) {
-    lines.push(regenProfileBlock, '');
-  }
-  lines.push(
-    '## Hard constraints',
-    '',
-    "- DO NOT hallucinate intent. If the user did not name a feeling",
-    "  or motivation, do not invent one. The previous entry may have",
-    "  done so - that's exactly the kind of slip a regenerate should",
-    "  correct, not repeat.",
-    '- DO NOT smooth their internal narrative. Ambivalence and',
-    '  contradiction stay in.',
-    '- DO NOT put words in their mouth. The voice (third-person',
-    '  observation) is yours; the substance is theirs.',
-    '- DO NOT assume neurotypical defaults. The frameworks named in',
-    '  the lens section are tools for seeing, not authoritative',
-    "  descriptions of this mind. Mismatches between the user's",
-    "  described experience and a framework's expected behaviour",
-    '  are themselves the high-signal data points - log them',
-    '  explicitly.',
-    '- DO NOT present interpretation as observation. Hedge inference',
-    '  ("appears to", "reads as", "seems to"); use a question for a',
-    '  genuine 50/50.',
-    '',
-    '## Output format',
-    '',
-    'Return one JSON object. No prose around it, no markdown fences,',
-    'no comments. Required keys:',
-    '',
-    '- `worthy` (boolean): always true on this path - the user has',
-    '  explicitly asked for an entry by clicking Regenerate.',
-    '- `reasoning` (string): one sentence, plain text, naming the',
-    '  angle you took (e.g. "Reframed the conversation around the',
-    '  user\'s shifting relationship with their workload" or',
-    '  "Tightened the original entry into the single arc that',
-    '  actually moved the user").',
-    '- `entry` (object): the regenerated entry. Required field',
-    '  `content` (string, Markdown body, max 16000 chars). Optional',
-    '  fields `topics` (string[]), `mood` (string), `people`',
-    '  (string[]). Omit any optional you do not need; do not pass',
-    '  empty strings or empty arrays as filler.',
-    '',
-    'Worked example:',
-    '',
-    '```',
-    '{"worthy": true,',
-    ' "reasoning": "Recentered the entry on the boundary the user',
-    ' arrived at, rather than the work conflict that opened the',
-    ' conversation.",',
-    ' "entry": {',
-    '   "content": "User came in venting about a coworker but the',
-    ' arc that mattered was naming the boundary they want to set...",',
-    '   "topics": ["work", "boundaries"],',
-    '   "mood": "resolved",',
-    '   "people": ["Alex"]',
-    ' }}',
-    '```',
-    '',
-    '## Voice and focus',
-    '',
-    'Third person, observational. "User noticed X", "User reframed Y',
-    'as Z", "User landed on...". Markdown is fine. Keep it tight;',
-    '2-6 short paragraphs.',
-    '',
-    "The SUBJECT of the entry is the user's mind as the conversation",
-    'revealed it - what they processed, where they pivoted, what they',
-    "realised about themselves. The conversation's topical content is",
-    'evidence, not the subject. A tangent into a concrete detail (a',
-    'recipe, a piece of history) is another instance of the same',
-    'inner movement, not a separate topic to summarise.',
-    '',
-    'The single most useful question to keep returning to: WHAT DID',
-    'THE USER LEARN ABOUT THEMSELVES in this conversation?',
-    '',
-    '### Calibrate prose to evidence',
-    '',
-    'Three registers, default to the first:',
-    "- Observational (declarative). What the user said, did, named.",
-    "- Inferential (hedged). Connecting dots the user didn't.",
-    '  "Appears to", "reads as", "seems to".',
-    "- Speculative (open question). Only when the read is genuinely",
-    '  50/50.',
-    '',
-    '### Two lenses: science underneath, philosophy on the surface',
-    '',
-    'Read the conversation analytically through CBT (automatic',
-    'thoughts, distortions, reframings), evolutionary psychology',
-    "(drives, status, threat detection), and modular theory of mind",
-    '(subsystems negotiating outcomes) to UNDERSTAND the mechanism.',
-    'But do NOT name the mechanism in the prose - clinical vocabulary',
-    "breaks the journal's voice.",
-    '',
-    "Frame the prose itself in philosophical idiom about the good",
-    "life: Stoicism (control vs. what isn't, the discipline of",
-    'perception), Epicureanism (necessary vs. unnecessary desires,',
-    'ataraxia), Buddhist / Yogic models (attachment, expectation,',
-    'samskara, observing a thought vs. being it), and any other',
-    'philosophy that fits. Science is the diagnostic; philosophy is',
-    'the language the user finds accessible for thinking about their',
-    'own life.',
-    '',
-    "Both lenses are TOOLS for seeing, not authoritative descriptions.",
-    "If the user's described experience contradicts a framework's",
-    "expected behaviour, log the mismatch explicitly - those gaps are",
-    'the highest-value entries for the translation-layer goal.',
-    '',
-    '### Failure modes to avoid',
-    '',
-    'The most likely reason the user hit Regenerate is one of these:',
-    "- Meeting minutes - paraphrasing what was discussed instead of",
-    "  naming the inner movement.",
-    '- Therapeutic / clinical voice. The lenses inform the diagnosis,',
-    '  not the prose.',
-    "- Smoothing or moralising. The journal logs; it doesn't lecture.",
-    '- Hallucinated intent or motive (claiming the user "felt" or',
-    '  "wanted" something they did not signal).',
-    '',
-    '### Two litmus tests',
-    '',
-    "- SWAP THE TOPIC. If you replaced the conversation's subject",
-    "  with a different one and your entry's arc still reads, focus",
-    "  is right. If swapping empties the entry, you've written",
-    '  meeting minutes.',
-    "- SWAP THE USER. If a different person could have discussed the",
-    '  same topic in the same way and your entry would read the',
-    "  same, you've written about the topic, not the user.",
-    '',
-    '## Adjacent context (when present)',
-    '',
-    'A prior `<think>` block above this prompt may contain a short',
-    'first-person recollection stitched from the user\'s saved',
-    'memories and prior conversations. When present, weave relevant',
-    'bits into the entry naturally without naming the mechanism. The',
-    'user is asking for a different angle on THIS conversation, not',
-    'for an essay that pulls in everything tangentially related.',
-    '',
-    '## How to differ from the previous entry',
-    '',
-    "The user clicked Regenerate because the previous entry didn't",
-    'land for them. Produce something different - not just a',
-    "reworded version. Concrete ways to differ: pick a different",
-    'central arc (the conversation likely had several), shift the',
-    "structure (one continuous narrative vs. a few short beats), or",
-    "find a focus the previous entry's chips below (topics / mood /",
-    'people) suggest was the prior emphasis. Match the conversation;',
-    "do not invent material that isn't there.",
-    '',
-    'The previous entry itself is NOT shown to you - only its chips,',
-    'so you can see what the prior take emphasised without being',
-    "anchored on its prose. DO NOT reference, compare, or quote the",
-    "previous entry in the new entry; the new entry should stand",
-    'alone as a fresh diary entry, as if it were the first take.',
-    '',
-    'High-value things to check for before committing to your angle:',
-    "- A moment of RELEASE - the user letting go of an attachment,",
-    "  expectation, or samskara, even momentarily. The release is",
-    '  more useful to log than the holding.',
-    '- A point where the user described something that contradicts',
-    "  a standard psychological framework's default (about attention,",
-    '  emotion-labelling, habit formation, the subconscious). Those',
-    '  mismatches are the highest-signal entries for the translation-',
-    '  layer goal.',
-    '',
-    "**Previous entry's chips** (focus signal only - the prose itself",
-    'is withheld so the new entry stays uncontaminated by the old):',
-    ''
-  );
-  if (args.existingEntry.topics.length > 0) {
-    lines.push(`Previous topics: ${args.existingEntry.topics.join(', ')}`);
-  }
-  if (args.existingEntry.mood) {
-    lines.push(`Previous mood: ${args.existingEntry.mood}`);
-  }
-  if (args.existingEntry.people.length > 0) {
-    lines.push(
-      `Previous people: ${args.existingEntry.people.join(', ')}`
-    );
-  }
-  lines.push(
-    '',
-    'Topics, mood, and people on the new entry should reflect the',
-    'angle YOU take - they need not match the previous entry. Keep',
-    'whatever still fits, drop what your fresh take leaves behind,',
-    'and add what your angle introduces.',
-    '',
-    'Reply with the JSON object only. No surrounding prose, no',
-    'markdown fence.'
-  );
-  return lines.join('\n');
-}

@@ -110,7 +110,6 @@ import {
 import { countUserRounds } from '../../intuition/types';
 import {
   buildJournalPrompt,
-  buildJournalRegeneratePrompt,
   type JournalUserProfile,
 } from './prompt';
 import {
@@ -636,11 +635,23 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
   /**
    * User-initiated regenerate of an existing automatic entry. Runs
    * outside the worker queue: no claim, no lease, no pointer
-   * advance. Bypasses the worthy/not-worthy gate and the spam-filter
-   * prior because the user has explicitly asked for an entry. Does
-   * NOT write to the database - the caller previews the result and
-   * either accepts (and persists via updateJournalEntry) or
-   * discards.
+   * advance. The spam-filter prior is suppressed (the user has
+   * explicitly asked for an entry). Does NOT write to the database -
+   * the caller previews the result and either accepts (and persists
+   * via updateJournalEntry) or discards.
+   *
+   * Prompt shape: regenerate uses the SAME prompt builder as the
+   * worker path (`buildJournalPrompt`), called with `existingEntry:
+   * null` and `spamHint: null`. There is no separate "you are
+   * regenerating, the user wasn't satisfied" framing. Earlier the
+   * regenerate path had its own prompt that fed the previous entry
+   * back to the model and asked for a different angle; the model
+   * grabbed onto the framing and produced fourth-wall meta-lines
+   * ("the previous entry treated this as X") that broke the diary
+   * voice. The right shape is "two functions, not one function in
+   * two states": regenerate is just generation re-run, and
+   * variation comes from stochasticity, not from a coupled-state
+   * prompt that tries to differ.
    *
    * Uses the full thread history rather than the slice up to the
    * original entry's terminal message - the user might be
@@ -649,9 +660,9 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
    * conversation-start day so the entry won't drift onto the wrong
    * calendar bucket.
    *
-   * Throws on any failure (parse error, model returning worthy=false
-   * despite the regenerate prompt, abort, network error). The caller
-   * surfaces the error inline so the user can retry or cancel.
+   * Throws on any failure (parse error, model returning worthy=false,
+   * abort, network error). The caller surfaces the error inline so
+   * the user can retry or cancel.
    */
   async regenerate(args: {
     threadId: string;
@@ -704,9 +715,25 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
     if (recallMessage) convo.push(recallMessage);
     convo.push({
       role: 'user',
-      content: buildJournalRegeneratePrompt({
+      // Use the same prompt builder as the worker path. Regenerate
+      // isn't a different generation task - it's the same task run
+      // again with worthy forced true (the user opted in by clicking
+      // the button) and the existing-entry merge branch suppressed
+      // (the regenerate write replaces, doesn't extend). Pass
+      // existingEntry: null so buildJournalPrompt takes the "no
+      // automatic entry exists" branch, and spamHint: null because
+      // the spam-filter prior is irrelevant on a path the user has
+      // explicitly opted into. The prompt the model sees is
+      // structurally identical to the one it sees during a worker
+      // run on a fresh thread - no "you previously wrote one" /
+      // "the user wasn't satisfied" framing for it to grab onto and
+      // produce meta-commentary like "the previous entry framed
+      // this as X".
+      content: buildJournalPrompt({
         entryDate: args.entryDate,
-        existingEntry: args.existingEntry,
+        existingEntry: null,
+        threadId: args.threadId,
+        spamHint: null,
         userProfile: this.userProfile,
       }),
     });
@@ -736,10 +763,14 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
         'The model returned a response we couldn\'t parse. Try again.'
       );
     }
-    // The regenerate prompt forces worthy=true; if the model still
-    // returned worthy=false (or downgraded for an empty entry) the
-    // payload is unusable. Surface the model's reasoning so the user
-    // sees why and can decide whether to retry.
+    // Regenerate uses the same prompt as a worker run, so the worthy
+    // gate runs normally on this path. We expect worthy=true: the
+    // user clicked Regenerate on an entry that exists, which means
+    // the original generation already passed the gate, and re-running
+    // on the same conversation should pass it again. A worthy=false
+    // here means the model went the other way - rare, but treat it
+    // as a regenerate failure so the user sees the model's reasoning
+    // and can retry. Same posture as a JSON parse failure above.
     if (!decision.worthy || decision.entry === null) {
       throw new Error(
         `The model declined to regenerate: ${decision.reasoning}`
