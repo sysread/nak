@@ -3252,6 +3252,28 @@ h1 {
   padding: 0.25rem 0;
 }
 
+/* Rate-limit wait indicator: rendered inside the streaming assistant
+   bubble (sibling of .thinking / streaming Markdown) when Venice
+   returns 429 and the chat-loop is sleeping before re-issuing. The
+   muted foreground keeps it subordinate to the Scanner above - the
+   spinner is the primary "still working" cue, this row just explains
+   why the spinner has gone quiet. The clock icon is inline so it
+   reads as part of a single status sentence rather than a stranded
+   pictogram. */
+.msg.assistant > .rate-limit-wait {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.msg.assistant > .rate-limit-wait > svg {
+  flex: 0 0 auto;
+  opacity: 0.85;
+}
+
 /* ---------- Help modal ----------
    Renders `docs/user/` markdown in-app. Structurally a sibling of the
    Settings modal — same backdrop dismiss, same Escape handler, same

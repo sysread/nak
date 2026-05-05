@@ -37,7 +37,10 @@ import type {
   VeniceMessage,
   TokenUsage,
   Citation,
+  ChatRequest,
+  StreamEvent,
 } from './venice';
+import { VeniceError } from './venice';
 import { buildUserVeniceContent } from './attachments';
 import {
   buildToolList,
@@ -596,6 +599,132 @@ function childController(parent: AbortSignal): AbortController {
   return child;
 }
 
+/**
+ * Maximum number of attempts (initial + retries) for a single round
+ * before a Venice rate-limit error propagates to the caller. Picked
+ * so a brief quota dip recovers transparently while a stuck quota
+ * still surfaces as a visible failure rather than spinning forever.
+ */
+const RATE_LIMIT_MAX_ATTEMPTS = 3;
+/**
+ * Per-attempt fallback wait, used only when Venice's response carries
+ * neither Retry-After nor x-ratelimit-reset-{requests,tokens}. Indexed
+ * by attempt number minus one. Kept short - in practice Venice always
+ * supplies a hint, and these are belt-and-braces values for a
+ * provider misbehaviour.
+ */
+const RATE_LIMIT_FALLBACK_WAIT_MS = [2_000, 4_000];
+/**
+ * Hard cap on a single rate-limit wait. Venice quotas typically reset
+ * within a minute; a Retry-After longer than this almost certainly
+ * means the user has hit a daily/monthly cap that won't clear during
+ * the session, so we surface it as an error and let the user retry
+ * manually rather than block the UI for that long.
+ */
+const RATE_LIMIT_WAIT_CAP_MS = 60_000;
+
+/**
+ * Sleep that resolves either when `ms` elapses or when `signal` aborts.
+ * Returns true if the signal interrupted the sleep, false on a clean
+ * timeout. Caller decides what to do with an interrupted return - the
+ * rate-limit retry path treats it as a cancel and aborts the round.
+ */
+function sleepCancellable(ms: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve(false);
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * Wrap venice.streamChat in a transparent rate-limit retry loop. When
+ * Venice returns 429, sleep for the duration parsed from the response
+ * headers (Retry-After, falling back to x-ratelimit-reset-*) and
+ * re-issue the request. Caps at RATE_LIMIT_MAX_ATTEMPTS attempts; a
+ * final 429 propagates as a VeniceError with kind 'rate_limit'.
+ *
+ * Retry only fires when no events have been yielded yet on the current
+ * attempt. Venice's 429 path throws before the first yield (see the
+ * !res.ok guard in venice.ts:streamChat), so in practice every retry
+ * starts from a clean slate; the emitted-events guard is a defensive
+ * invariant for future-proofing rather than a path we expect to hit.
+ *
+ * The wait is cancellable via `signal`. If the caller aborts during
+ * the sleep, this generator throws an AbortError matching the shape
+ * `fetch` raises on a normal mid-stream abort, so the caller's
+ * existing AbortError branch handles it identically - the user's
+ * cancel button works the same whether the round is mid-stream or
+ * mid-rate-limit-wait.
+ *
+ * Fires `handlers.onRateLimitWait` immediately before each sleep and
+ * `handlers.onRateLimitResolved` after the sleep ends (whether the
+ * sleep timed out cleanly or the signal aborted). The UI uses this
+ * pair to swap the streaming-bubble spinner for a "waiting on Venice"
+ * indicator with a cancel button.
+ */
+async function* streamChatWithRateLimitRetry(
+  venice: VeniceClient,
+  req: ChatRequest,
+  handlers: ChatLoopHandlers | undefined,
+): AsyncGenerator<StreamEvent, void, void> {
+  const signal = req.signal;
+  if (!signal) {
+    throw new Error('streamChatWithRateLimitRetry requires req.signal');
+  }
+  let attempt = 0;
+  while (true) {
+    let emitted = false;
+    try {
+      for await (const ev of venice.streamChat(req)) {
+        emitted = true;
+        yield ev;
+      }
+      return;
+    } catch (err) {
+      const isRateLimit =
+        err instanceof VeniceError && err.kind === 'rate_limit';
+      const retriesExhausted = attempt >= RATE_LIMIT_MAX_ATTEMPTS - 1;
+      if (!isRateLimit || emitted || retriesExhausted || signal.aborted) {
+        throw err;
+      }
+      attempt += 1;
+      const hint = (err as VeniceError).retryAfterMs;
+      const fallbackIdx = Math.min(
+        attempt - 1,
+        RATE_LIMIT_FALLBACK_WAIT_MS.length - 1
+      );
+      const baseMs = hint ?? RATE_LIMIT_FALLBACK_WAIT_MS[fallbackIdx];
+      const waitMs = Math.min(baseMs, RATE_LIMIT_WAIT_CAP_MS);
+      const until = Date.now() + waitMs;
+      handlers?.onRateLimitWait?.({ retryAfterMs: hint, attempt, until });
+      let interrupted = false;
+      try {
+        interrupted = await sleepCancellable(waitMs, signal);
+      } finally {
+        handlers?.onRateLimitResolved?.();
+      }
+      if (interrupted || signal.aborted) {
+        // Abort during the wait. Throw a spec-shaped AbortError so the
+        // caller's existing AbortError branch fires - same path the
+        // stop button takes during a mid-stream abort, so the user
+        // sees the same INTERRUPTED_MARKER outcome either way.
+        const abortErr = new Error('Aborted');
+        abortErr.name = 'AbortError';
+        throw abortErr;
+      }
+      // Loop body runs again; emitted resets to false on the next pass.
+    }
+  }
+}
+
 /** Event surface consumed by the UI. Each callback is best-effort. */
 export interface ChatLoopHandlers {
   /** Cumulative text for the current round; fires on every text delta. */
@@ -652,6 +781,37 @@ export interface ChatLoopHandlers {
    * as-is.
    */
   onContextRecallUpdate?(payload: ContextRecallPayload): void;
+  /**
+   * The current round hit a Venice 429 and the loop is going to wait
+   * before re-issuing the request. Fires once per wait, before the
+   * sleep starts; `onRateLimitResolved` fires when the next attempt
+   * begins (whether or not it succeeds). The UI uses this pair to
+   * swap the streaming-bubble spinner for a "waiting on Venice"
+   * indicator with a cancel button. The cancel path is the same
+   * abort signal the stop button uses - aborting during the wait
+   * lands in the existing AbortError branch and writes an
+   * INTERRUPTED_MARKER row, identical to a mid-stream cancel.
+   *
+   * `attempt` is 1-indexed - the first wait after the initial 429
+   * is attempt 1. `until` is a wall-clock epoch ms target, suitable
+   * for rendering a live countdown. `retryAfterMs` is the parsed
+   * hint from the Venice headers (Retry-After or
+   * x-ratelimit-reset-{requests,tokens}); null when Venice didn't
+   * supply one and the loop fell back to its own backoff.
+   */
+  onRateLimitWait?(info: {
+    retryAfterMs: number | null;
+    attempt: number;
+    until: number;
+  }): void;
+  /**
+   * A rate-limit wait period has ended - either the sleep elapsed
+   * and the next attempt is starting, or the request that followed
+   * a wait succeeded. Always fires after a matching
+   * `onRateLimitWait`. The UI uses this to swap the waiting
+   * indicator back to the normal streaming spinner.
+   */
+  onRateLimitResolved?(): void;
 }
 
 export interface ChatLoopOptions {
@@ -1362,14 +1522,23 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       ...projectedHistory,
     ];
 
-    const stream = venice.streamChat({
-      model: modelId,
-      messages: requestMessages,
-      signal,
-      tools: buildToolList(toolboxesEnabled),
-      reasoningEffort,
-      verbosity,
-    });
+    // streamChatWithRateLimitRetry transparently retries on Venice 429s,
+    // sleeping for the duration parsed from the response headers before
+    // re-issuing. A non-retryable error or a final 429 propagates here
+    // identically to a raw venice.streamChat call, so the abort and
+    // generic-error branches below need no special-casing for retries.
+    const stream = streamChatWithRateLimitRetry(
+      venice,
+      {
+        model: modelId,
+        messages: requestMessages,
+        signal,
+        tools: buildToolList(toolboxesEnabled),
+        reasoningEffort,
+        verbosity,
+      },
+      handlers
+    );
 
     let roundText = '';
     let roundReasoning = '';

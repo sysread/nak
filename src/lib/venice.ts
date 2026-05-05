@@ -384,16 +384,65 @@ export interface UsageRequestOptions {
 export class VeniceError extends Error {
   readonly status: number | null;
   readonly kind: 'rate_limit' | 'auth' | 'network' | 'http' | 'parse';
+  /**
+   * Milliseconds the caller should wait before retrying. Populated only
+   * for kind === 'rate_limit', from Venice's Retry-After header (per
+   * https://docs.venice.ai/api-reference/rate-limiting#response-headers)
+   * and falls back to the soonest x-ratelimit-reset-{requests,tokens}
+   * window. Null when no header was present or parseable - callers
+   * should pick their own backoff in that case.
+   */
+  readonly retryAfterMs: number | null;
   constructor(
     message: string,
     kind: VeniceError['kind'],
-    status: number | null = null
+    status: number | null = null,
+    retryAfterMs: number | null = null
   ) {
     super(message);
     this.name = 'VeniceError';
     this.kind = kind;
     this.status = status;
+    this.retryAfterMs = retryAfterMs;
   }
+}
+
+/**
+ * Parse Venice's rate-limit hint headers into a wait duration in
+ * milliseconds. Preference order:
+ *   1. Retry-After - the canonical 429 header. Per RFC 7231 section
+ *      7.1.3 it can be either an HTTP-date or a delta-seconds integer.
+ *      Venice currently sends seconds, but we accept both shapes so a
+ *      future switch on their end doesn't break this path.
+ *   2. x-ratelimit-reset-requests / x-ratelimit-reset-tokens - present
+ *      on every Venice response (not just 429s). When 429 fires
+ *      without a Retry-After we fall back to the soonest of these
+ *      two windows. Documented as seconds-until-reset.
+ * Returns null when none of the headers are present or parseable;
+ * callers fall back to their own backoff schedule in that case.
+ */
+function parseRetryAfterMs(headers: Headers): number | null {
+  const retryAfter = headers.get('retry-after');
+  if (retryAfter) {
+    const trimmed = retryAfter.trim();
+    const asInt = Number(trimmed);
+    if (Number.isFinite(asInt) && asInt >= 0) {
+      return Math.round(asInt * 1000);
+    }
+    const asDate = Date.parse(trimmed);
+    if (Number.isFinite(asDate)) {
+      return Math.max(0, asDate - Date.now());
+    }
+  }
+  const candidates: number[] = [];
+  for (const name of ['x-ratelimit-reset-requests', 'x-ratelimit-reset-tokens']) {
+    const raw = headers.get(name);
+    if (!raw) continue;
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) candidates.push(seconds * 1000);
+  }
+  if (candidates.length === 0) return null;
+  return Math.round(Math.min(...candidates));
 }
 
 const DEFAULT_BASE_URL = 'https://api.venice.ai/api/v1';
@@ -503,7 +552,8 @@ export class VeniceClient {
       return new VeniceError(
         `Venice rate limit hit (HTTP 429). ${detail}`,
         'rate_limit',
-        res.status
+        res.status,
+        parseRetryAfterMs(res.headers)
       );
     }
     return new VeniceError(

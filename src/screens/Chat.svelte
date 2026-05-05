@@ -338,6 +338,41 @@
   // message persists.
   let streamingReasoning = $state('');
   let streamingReasoningOpen = $state(false);
+  // Rate-limit waiting state. Populated by the chat-loop's
+  // onRateLimitWait handler when Venice returns 429 and the loop is
+  // about to sleep before retrying; cleared by onRateLimitResolved
+  // when the wait ends (whether the next attempt succeeds or fails).
+  // The streaming bubble renders a "waiting on Venice" clock-icon
+  // indicator while these are non-null. The user's existing stop
+  // button (stopStreaming -> abortCtl.abort) doubles as the cancel
+  // path; the chat-loop maps an abort-during-wait to an AbortError
+  // that lands in the same INTERRUPTED_MARKER branch as a mid-stream
+  // cancel, so no separate cancel wiring is needed here.
+  let rateLimitWaitUntil = $state<number | null>(null);
+  let rateLimitAttempt = $state(0);
+  // Tick counter that drives a 1Hz reactive re-read of Date.now() while
+  // a rate-limit wait is active, so the bubble's countdown updates each
+  // second without rebinding the assistant render. The interval is
+  // kept inside an $effect tied to rateLimitWaitUntil so it self-cleans
+  // when the wait ends.
+  let rateLimitNowTick = $state(0);
+  $effect(() => {
+    if (rateLimitWaitUntil === null) return;
+    const id = window.setInterval(() => {
+      rateLimitNowTick = rateLimitNowTick + 1;
+    }, 1000);
+    return () => window.clearInterval(id);
+  });
+  // Live countdown to the retry. Reads rateLimitNowTick so it
+  // subscribes to the 1Hz interval above; the tick value itself
+  // doesn't enter the math. Returns 0 when no wait is active so the
+  // template can guard the "resuming in Ns" suffix on a positive
+  // value rather than null-checking a separate variable.
+  const rateLimitRemainingSec = $derived.by(() => {
+    if (rateLimitWaitUntil === null) return 0;
+    void rateLimitNowTick;
+    return Math.max(0, Math.ceil((rateLimitWaitUntil - Date.now()) / 1000));
+  });
   // Inline error surface for chat exchange failures. Rendered as a
   // prominent red bubble at the bottom of the transcript - inside
   // `.messages` - so it travels with the conversation flow and
@@ -2084,17 +2119,20 @@
    * initial send path and the rate-limit refresh button share identical
    * lifecycle handling.
    *
-   * On a rate-limit failure (VeniceError kind='rate_limit') the loop
-   * auto-retries once after a short delay before surfacing anything to
-   * the user. Venice's 429 typically reads "the model is currently
-   * overloaded, try again later" and clears within a second or two, so
-   * a transparent retry covers the common case. The retry happens
-   * inside the same try block so `sending` stays asserted - the
-   * composer doesn't re-enable, and no error banner appears unless the
-   * second attempt also fails. Only when the retry also rate-limits do
-   * we park a manual retry closure on the inline banner. Other error
-   * kinds (auth, parse, http) surface immediately without a retry -
-   * re-firing them would just repeat the failure.
+   * On a rate-limit failure (VeniceError kind='rate_limit') the
+   * chat-loop sleeps for the duration parsed from Venice's
+   * Retry-After / x-ratelimit-reset-* headers and re-issues the
+   * request, up to RATE_LIMIT_MAX_ATTEMPTS times, before propagating
+   * the failure. The streaming bubble surfaces the wait via the
+   * onRateLimitWait / onRateLimitResolved handlers ("waiting on
+   * Venice... resuming in Ns") so the user can see the retry rather
+   * than wondering why the spinner has gone quiet. The user's stop
+   * button doubles as the cancel - aborting during a wait lands in
+   * the same INTERRUPTED_MARKER branch a mid-stream cancel takes.
+   * Only when every retry attempt has been rate-limited do we park
+   * a manual retry closure on the inline banner. Other error kinds
+   * (auth, parse, http) surface immediately without a retry - re-
+   * firing them would just repeat the failure.
    */
   async function runExchange(ctx: ExchangeContext): Promise<void> {
     if (!app.venice || !app.supabase) return;
@@ -2133,14 +2171,6 @@
         .filter((m) => !pendingDeleteSet.has(m.id))
         .map((m) => toVeniceMessage(m, { visionSpec: ctx.tierSpec })),
     ];
-
-    // Short pause before the auto-retry on a Venice 429. Long enough
-    // for the model's overload window to clear in the common case
-    // (the provider's 429 message says "try again later" without a
-    // standard Retry-After header), short enough that the user doesn't
-    // perceive the retry as a stall. The manual retry button on the
-    // error banner has no such delay - that's user-driven.
-    const BUSY_RETRY_DELAY_MS = 1500;
 
     // Throttle streamingText updates to ~2Hz while the response
     // arrives. Every assignment drives <Markdown> to re-run marked
@@ -2372,34 +2402,39 @@
                 context_recall_payload: payload,
               });
             },
+            onRateLimitWait: ({ attempt, until }) => {
+              // Venice returned 429 and the chat-loop is about to
+              // sleep before re-issuing the round. Surface the wait
+              // in the streaming bubble so the user sees "waiting on
+              // Venice" rather than wondering why the spinner has
+              // gone quiet for a few seconds. The stop button keeps
+              // working - it aborts the wait and lands in the same
+              // INTERRUPTED_MARKER branch a mid-stream cancel takes.
+              rateLimitWaitUntil = until;
+              rateLimitAttempt = attempt;
+            },
+            onRateLimitResolved: () => {
+              // Sleep ended (or was cancelled). Clear the indicator
+              // so the bubble swaps back to the normal streaming
+              // spinner while the next attempt fires. If the retry
+              // immediately rate-limits again, onRateLimitWait will
+              // re-populate these for the next wait window.
+              rateLimitWaitUntil = null;
+              rateLimitAttempt = 0;
+            },
           },
         });
 
       try {
-        let busyRetried = false;
-        for (;;) {
-          try {
-            loopResult = await oneAttempt();
-            break;
-          } catch (loopErr) {
-            if (
-              !busyRetried &&
-              loopErr instanceof VeniceError &&
-              loopErr.kind === 'rate_limit' &&
-              abortCtl?.signal.aborted !== true
-            ) {
-              busyRetried = true;
-              log.info(
-                'model busy (HTTP 429); auto-retrying once after short delay'
-              );
-              await new Promise<void>((r) =>
-                window.setTimeout(r, BUSY_RETRY_DELAY_MS)
-              );
-              continue;
-            }
-            throw loopErr;
-          }
-        }
+        // Rate-limit retries are handled inside the chat-loop now
+        // (see streamChatWithRateLimitRetry in chat-loop.ts), which
+        // sleeps for the duration parsed from Venice's Retry-After /
+        // x-ratelimit-reset-* headers and re-issues the request up
+        // to RATE_LIMIT_MAX_ATTEMPTS times. By the time a rate_limit
+        // error reaches this catch the inner retry has exhausted; we
+        // surface it to the user immediately rather than retrying
+        // again with a flat backoff.
+        loopResult = await oneAttempt();
       } finally {
         // Commit anything pending synchronously so post-loop code
         // sees the final state.
@@ -2474,6 +2509,14 @@
       streamingReasoning = '';
       streamingReasoningOpen = false;
       streamingContentStarted = false;
+      // Belt-and-braces: the chat-loop's onRateLimitResolved already
+      // clears the wait indicator at the end of every wait, but if a
+      // round completes without firing it (e.g. a successful first
+      // attempt) these stay at their initial values anyway. Resetting
+      // here keeps the streaming state and the wait indicator on the
+      // same lifecycle.
+      rateLimitWaitUntil = null;
+      rateLimitAttempt = 0;
       // Surface the completion to the notifications service: either
       // fires an OS notification (tab backgrounded + permission granted)
       // or sets an unread dot on the sidebar row. Skip on user-initiated
@@ -2516,6 +2559,12 @@
       streamingReasoning = '';
       streamingReasoningOpen = false;
       streamingContentStarted = false;
+      // Same belt-and-braces reset as the success branch above - if
+      // the loop blew up mid-wait the resolved handler still ran in
+      // the chat-loop's finally, but if it failed before any wait
+      // started these are already null and the assignment is a no-op.
+      rateLimitWaitUntil = null;
+      rateLimitAttempt = 0;
       // Restore any rows the user had marked for regenerate-from-here.
       // Failure means no replacement landed (or the post-loop delete
       // itself blew up, in which case the old rows are still
@@ -4572,6 +4621,35 @@
                      the top-left corner. -->
                 <div class="thinking">
                   <Scanner label="Thinking" />
+                </div>
+              {/if}
+              {#if rateLimitWaitUntil !== null}
+                <!-- Rate-limit wait indicator. Sits below the Scanner
+                     (or the streaming Markdown when text is already
+                     arriving) so the existing "still working" cue
+                     stays in place; the additional row tells the user
+                     specifically WHY the spinner is paused. The
+                     remaining-seconds value is recomputed each render
+                     against rateLimitNowTick (a 1Hz reactive bump
+                     scheduled while the wait is active) so the
+                     countdown ticks down without rebinding the bubble.
+                     The user's existing stop button serves as the
+                     cancel - aborting during the wait lands in the
+                     same INTERRUPTED_MARKER branch as a mid-stream
+                     cancel, so the orphan-draft retry banner shows up
+                     identically afterward. -->
+                <div class="rate-limit-wait" role="status" aria-live="polite">
+                  <!-- Feather "clock" icon. -->
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                       stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10" />
+                    <polyline points="12 6 12 12 16 14" />
+                  </svg>
+                  <span>
+                    Waiting on Venice (attempt {rateLimitAttempt})
+                    {#if rateLimitRemainingSec > 0}- resuming in {rateLimitRemainingSec}s{/if}
+                  </span>
                 </div>
               {/if}
               <!-- Citations are deliberately NOT rendered during
