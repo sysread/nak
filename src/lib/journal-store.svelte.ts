@@ -11,7 +11,7 @@
 import type { JournalEntry, SupabaseService } from './supabase';
 import type { VeniceClient } from './venice';
 import { emitJournalChange } from './journal-events';
-import { JournalAgent } from './agents/journal/agent';
+import { JournalAgent, type RegenerateResult } from './agents/journal/agent';
 import {
   trainSpamFilterForThread,
   trainSpamFilterForUserEntry,
@@ -160,6 +160,56 @@ export async function deleteEntry(
 }
 
 /**
+ * "Save the decline" path for the regenerate modal. Runs when the
+ * user agrees with the journaler's worthy=false decision (e.g. the
+ * source conversation turned out to be purely technical with no
+ * inner-life material) and wants to dismiss the existing entry
+ * without re-triggering it. Three steps:
+ *
+ *   1. Delete the existing journal entry. The body the user is
+ *      looking at is being abandoned - the journaler decided it
+ *      doesn't merit an entry, and the user accepted that read.
+ *   2. Advance the thread's `last_journaled_msg_id` to the current
+ *      terminal via {@link SupabaseService.markThreadJournaledForUser}.
+ *      Without this the worker would re-claim the same thread on
+ *      its next sweep, run the agent again, and most likely return
+ *      worthy=false a second time - wasted Venice call.
+ *   3. Crucially, do NOT add the thread to journal_thread_excludes
+ *      (the way deleteEntry does for thumbs-down) and do NOT train
+ *      the spam filter. The semantics are "this snapshot wasn't
+ *      worth journaling" rather than "this kind of conversation is
+ *      never journal-worthy" - if the user has more reflective
+ *      turns later in the same thread, the next claim should still
+ *      consider it.
+ *
+ * The orphan-thread case (entry.thread_id is null - thread was
+ * deleted out from under the entry) skips step 2 silently. Step 1
+ * still runs so the orphan row leaves the journal.
+ */
+export async function dismissDeclinedRegenerate(
+  supabase: SupabaseService,
+  entry: JournalEntry
+): Promise<void> {
+  // Empty excludes array: this is the "review only" delete, not
+  // the "this kind of conversation is spam" delete the thumbs-down
+  // button uses.
+  await supabase.deleteJournalEntry(entry.id, []);
+  journal.entries = journal.entries.filter((e) => e.id !== entry.id);
+  emitJournalChange();
+  if (entry.source === 'automatic' && entry.thread_id) {
+    // Best-effort. A failure here means the worker may re-process
+    // this thread on the next sweep and rediscover the
+    // worthy=false outcome itself - wasteful but not broken.
+    try {
+      await supabase.markThreadJournaledForUser(entry.thread_id);
+    } catch {
+      // Swallow - the entry is already gone from the user's view,
+      // and the worker has its own idempotent path.
+    }
+  }
+}
+
+/**
  * Run the journal agent in regenerate mode against an existing
  * automatic entry. Bypasses the worker queue (no claim, no lease,
  * no pointer advance) and the worthy/not-worthy gate - the user
@@ -186,12 +236,7 @@ export async function regenerateAutomaticEntry(
   userName: string,
   userLocation: string,
   signal?: AbortSignal
-): Promise<{
-  content: string;
-  topics: string[];
-  mood: string | null;
-  people: string[];
-}> {
+): Promise<RegenerateResult> {
   if (entry.source !== 'automatic') {
     throw new Error('Only automatic entries can be regenerated.');
   }

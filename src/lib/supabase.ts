@@ -2620,6 +2620,29 @@ export class SupabaseService {
     return data === true;
   }
 
+  /**
+   * User-driven "this snapshot was reviewed; nothing worth journaling"
+   * pointer advance. Called from the regenerate-modal's Save button
+   * when the user accepts a worthy=false decline. The RPC computes
+   * the current terminal message id internally (no holder claim, no
+   * msg id parameter) and advances `threads.last_journaled_msg_id`
+   * to it under RLS scoping. Returns the msg id it advanced to, or
+   * null when the thread has no eligible terminal (empty thread, or
+   * all assistant rows are tool-call-only). Distinct from
+   * `markThreadJournaledIfClaimed` (which is the worker-side path
+   * with claim verification) and from the thumbs-down delete path
+   * (which adds to journal_thread_excludes and trains the spam
+   * filter); this just advances the pointer for the CURRENT
+   * terminal, leaving the thread eligible again if new turns arrive.
+   */
+  async markThreadJournaledForUser(threadId: string): Promise<string | null> {
+    const { data, error } = await this.client.rpc('mark_thread_journaled_for_user', {
+      p_thread_id: threadId,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return typeof data === 'string' && data.length > 0 ? data : null;
+  }
+
   async claimNextPendingJournalEntry(
     holderId: string,
     ttlSeconds: number

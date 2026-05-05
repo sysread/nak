@@ -24,6 +24,7 @@
     markEntryHam,
     regenerateAutomaticEntry,
     acceptRegeneratedEntry,
+    dismissDeclinedRegenerate,
   } from '$lib/journal-store.svelte';
   import { downloadEntryMarkdown } from '$lib/journal-export';
   import { todayInZone, formatDateFull } from '$lib/journal-day';
@@ -107,6 +108,15 @@
   let regenerateTargetId = $state<string | null>(null);
   let regenerateBusy = $state(false);
   let regeneratePreview = $state<RegeneratePreview | null>(null);
+  // The journaler decided the source conversation isn't journal-worthy
+  // (the worthy gate runs on the regenerate path - same prompt as the
+  // worker). Distinct from `regenerateError`: this is a deliberate
+  // judgment call from the model, not a parse / network failure, and
+  // it shouldn't render in red. The reasoning is the model's one-
+  // sentence explanation; the user can Try Again or Save (= dismiss
+  // the existing entry and advance the thread's pointer without
+  // training the spam filter).
+  let regenerateDeclined = $state<{ reasoning: string } | null>(null);
   let regenerateError = $state<string | null>(null);
   let regenerateAccepting = $state(false);
   // AbortController for the in-flight regenerate. Cancel calls
@@ -377,6 +387,7 @@
     if (regenerateController) regenerateController.abort();
     regenerateTargetId = entry.id;
     regeneratePreview = null;
+    regenerateDeclined = null;
     regenerateError = null;
     regenerateBusy = true;
     // Close any other inline UI on the same card so the regenerate
@@ -385,7 +396,7 @@
     const controller = new AbortController();
     regenerateController = controller;
     try {
-      const proposed = await regenerateAutomaticEntry(
+      const result = await regenerateAutomaticEntry(
         app.supabase,
         app.venice,
         entry,
@@ -397,7 +408,20 @@
       // row while the call was in flight, drop this result.
       if (regenerateController !== controller) return;
       if (regenerateTargetId !== entry.id) return;
-      regeneratePreview = proposed;
+      // Discriminated union: 'preview' is a regenerated entry the
+      // user can accept; 'declined' is the journaler reading the
+      // worthy gate as false (legitimate, the user gets a "save to
+      // dismiss" option). Errors come through the catch.
+      if (result.kind === 'preview') {
+        regeneratePreview = {
+          content: result.content,
+          topics: result.topics,
+          mood: result.mood,
+          people: result.people,
+        };
+      } else {
+        regenerateDeclined = { reasoning: result.reasoning };
+      }
     } catch (err) {
       if (regenerateController !== controller) return;
       if (regenerateTargetId !== entry.id) return;
@@ -419,6 +443,7 @@
     regenerateTargetId = null;
     regenerateBusy = false;
     regeneratePreview = null;
+    regenerateDeclined = null;
     regenerateError = null;
   }
 
@@ -441,6 +466,34 @@
       );
       regenerateTargetId = null;
       regeneratePreview = null;
+      regenerateDeclined = null;
+      regenerateError = null;
+    } catch (err) {
+      regenerateError = err instanceof Error ? err.message : String(err);
+    } finally {
+      regenerateAccepting = false;
+    }
+  }
+
+  // "Save the decline" handler. Runs when the user agrees with the
+  // journaler's worthy=false read and clicks Save: deletes the
+  // existing entry from the day, advances the thread's
+  // last_journaled_msg_id so the worker won't immediately re-run on
+  // the same snapshot, and does NOT train the spam filter (that
+  // would conflate "this snapshot wasn't worth journaling" with
+  // "this kind of conversation is never journal-worthy" - a
+  // distinction the thumbs-down flow already owns).
+  async function saveDecline(): Promise<void> {
+    if (!app.supabase || !regenerateTargetId || !regenerateDeclined) return;
+    if (regenerateAccepting) return;
+    const target = journal.entries.find((e) => e.id === regenerateTargetId);
+    if (!target) return;
+    regenerateAccepting = true;
+    try {
+      await dismissDeclinedRegenerate(app.supabase, target);
+      regenerateTargetId = null;
+      regeneratePreview = null;
+      regenerateDeclined = null;
       regenerateError = null;
     } catch (err) {
       regenerateError = err instanceof Error ? err.message : String(err);
@@ -544,7 +597,7 @@
       two versions in one card.
     -->
     {#if isRegenerating}
-      {#if regenerateBusy && !regeneratePreview}
+      {#if regenerateBusy && !regeneratePreview && !regenerateDeclined}
         <!--
           KITT-style Scanner stands in for the regenerating entry until
           the proposed replacement arrives. Same component the chat
@@ -573,6 +626,33 @@
             People: {regeneratePreview.people.join(', ')}
           </p>
         {/if}
+      {:else if regenerateDeclined}
+        <!--
+          The journaler decided this conversation isn't journal
+          material (worthy=false on the regenerate path). Not an
+          error - render in the muted register, with the model's
+          one-sentence reasoning so the user can decide whether
+          they agree (Save = dismiss this entry) or want a different
+          take (Try again). The reasoning sometimes reads as the
+          model's voice talking about itself ("the conversation is
+          a factual lookup with no emotional content"); that's the
+          worthy gate's prose schema. Rendering verbatim rather
+          than rewriting in case the user wants to read what the
+          model literally said.
+        -->
+        <div class="journal-card-body journal-card-body-declined">
+          <p class="subtle">
+            The journaler didn't find anything noteworthy in this
+            conversation:
+          </p>
+          <p class="journal-decline-reasoning">
+            {regenerateDeclined.reasoning}
+          </p>
+          <p class="subtle">
+            Try again to see if a different angle catches something,
+            or save to dismiss this entry.
+          </p>
+        </div>
       {:else if regenerateError}
         <div class="journal-card-body">
           <p class="error">{regenerateError}</p>
@@ -605,13 +685,17 @@
           entry (no DB write). Try again re-runs the agent against
           the original (not the proposal), so each retry takes a
           fresh angle. Accept persists the proposal via
-          updateJournalEntry. Buttons are ordered Cancel / Try
-          again / Accept so the primary action sits on the right
-          where the eye lands at the end of the row.
+          updateJournalEntry. Save (declined-only) dismisses the
+          existing entry and advances the thread's pointer without
+          training the spam filter. Buttons are ordered Cancel /
+          Try again / [Accept | Save] so the primary action sits on
+          the right where the eye lands at the end of the row.
         -->
         <span class="subtle journal-delete-prompt">
           {regeneratePreview
             ? 'Replace existing entry with this version?'
+            : regenerateDeclined
+            ? 'Save to dismiss this entry without training the spam filter?'
             : regenerateError
             ? 'Regenerate failed.'
             : ''}
@@ -635,6 +719,13 @@
             onclick={acceptRegenerate}
             disabled={regenerateAccepting}
           >{regenerateAccepting ? 'Saving…' : 'Accept'}</button>
+        {:else if regenerateDeclined}
+          <button
+            type="button"
+            onclick={saveDecline}
+            disabled={regenerateAccepting || regenerateBusy}
+            title="Delete this entry and mark the conversation as processed without training the spam filter"
+          >{regenerateAccepting ? 'Saving…' : 'Save'}</button>
         {/if}
       {:else}
         <!--
@@ -1064,6 +1155,21 @@
     align-items: center;
     justify-content: center;
     padding: 1.5rem 0;
+  }
+
+  /* Declined-regenerate body. Muted register so the user reads it as
+     a judgment call from the journaler rather than as an error - the
+     red `.error` styling on the parallel error-branch is the wrong
+     visual signal here. The reasoning paragraph itself is a slightly
+     stronger emphasis (italic) so it stands out from the framing
+     prose around it. */
+  .journal-card-body-declined {
+    padding: 0.75rem 0;
+  }
+  .journal-decline-reasoning {
+    margin: 0.6rem 0;
+    font-style: italic;
+    color: var(--text);
   }
 
   .journal-card-actions {

@@ -4497,6 +4497,61 @@ begin
   return updated > 0;
 end $$;
 
+-- User-driven "this snapshot was reviewed; nothing worth journaling" pointer
+-- advance. Runs from the regenerate-modal's "Save" button when the user
+-- accepts a worthy=false decline (the journaler examined the conversation
+-- and decided no inner-life material; user agrees). Distinct from the
+-- worker-side mark above in three ways:
+--   (1) No claim / holder check - the user is in the UI and is authenticated
+--       via the session; RLS gates by user_id = auth.uid() so they can only
+--       advance pointers on their own threads.
+--   (2) Computes the current terminal message id internally (same logic as
+--       claim_next_thread_for_journal's lateral) instead of taking it as a
+--       parameter, so the caller doesn't have to round-trip to find it.
+--   (3) Distinct from journal_thread_excludes - this advances the pointer
+--       on the CURRENT terminal so the worker won't re-process this
+--       snapshot, but new turns after now make the thread eligible again.
+--       The user wants "I've decided this snapshot wasn't worth journaling,
+--       but if more conversation happens, take another look" rather than
+--       the permanent-exclude semantic the thumbs-down button has.
+-- Returns the message id we advanced to, or null when no eligible
+-- terminal exists (thread empty, or all assistant rows are tool-call-only).
+drop function if exists public.mark_thread_journaled_for_user(uuid);
+create or replace function public.mark_thread_journaled_for_user(
+  p_thread_id uuid
+) returns uuid
+language plpgsql security invoker as $$
+declare
+  v_msg_id uuid;
+  v_updated int;
+begin
+  -- Same terminal-msg-finder as the claim RPC: latest assistant row
+  -- whose tool_calls is empty/null and whose content is non-empty.
+  select m.id into v_msg_id
+    from public.messages m
+   where m.thread_id = p_thread_id
+     and m.role = 'assistant'
+     and (m.tool_calls is null
+          or jsonb_typeof(m.tool_calls) <> 'array'
+          or jsonb_array_length(m.tool_calls) = 0)
+     and m.content is not null
+     and length(m.content) > 0
+   order by m.created_at desc
+   limit 1;
+  if v_msg_id is null then
+    return null;
+  end if;
+  update public.threads
+     set last_journaled_msg_id = v_msg_id
+   where id = p_thread_id
+     and user_id = auth.uid();
+  get diagnostics v_updated = row_count;
+  if v_updated = 0 then
+    return null;
+  end if;
+  return v_msg_id;
+end $$;
+
 -- Atomic write+mark for a worthy worker run. The journaling worker
 -- needs the entry's existence and the thread's pointer-advance to
 -- happen in lockstep: a successful entry write that fails to advance

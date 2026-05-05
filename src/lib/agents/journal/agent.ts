@@ -237,6 +237,29 @@ interface JournalDecision {
 }
 
 /**
+ * Result shape for `JournalAgent.regenerate`. Discriminated union so
+ * the caller (and the UI) can tell "model produced an entry to
+ * preview" apart from "model decided the conversation isn't journal
+ * material" without sniffing error messages. Genuine errors (parse
+ * failure, abort, network) still throw - those are the unrecoverable
+ * cases. The decline path returns structured because the user is
+ * meant to see the reasoning and choose: try again, or accept the
+ * decline and mark the conversation processed.
+ */
+export type RegenerateResult =
+  | {
+      kind: 'preview';
+      content: string;
+      topics: string[];
+      mood: string | null;
+      people: string[];
+    }
+  | {
+      kind: 'declined';
+      reasoning: string;
+    };
+
+/**
  * Parse the model's final-text JSON into a structured decision, or
  * null when the payload is unrecoverable. Tolerant of a markdown
  * `json fence wrapping the body - a lot of training data has the
@@ -688,12 +711,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
       people: readonly string[];
     };
     signal?: AbortSignal;
-  }): Promise<{
-    content: string;
-    topics: string[];
-    mood: string | null;
-    people: string[];
-  }> {
+  }): Promise<RegenerateResult> {
     const signal = args.signal ?? new AbortController().signal;
     if (signal.aborted) throw new Error('Regenerate aborted before start.');
 
@@ -778,19 +796,21 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
       );
     }
     // Regenerate uses the same prompt as a worker run, so the worthy
-    // gate runs normally on this path. We expect worthy=true: the
-    // user clicked Regenerate on an entry that exists, which means
-    // the original generation already passed the gate, and re-running
-    // on the same conversation should pass it again. A worthy=false
-    // here means the model went the other way - rare, but treat it
-    // as a regenerate failure so the user sees the model's reasoning
-    // and can retry. Same posture as a JSON parse failure above.
+    // gate runs normally on this path. worthy=true => the model has
+    // produced an entry the caller can preview. worthy=false => the
+    // model decided the conversation isn't journal material; this is
+    // a legitimate outcome (sometimes the user re-clicks Regenerate
+    // on a thread that's purely technical or a quick lookup) and is
+    // returned as a structured `kind: 'declined'` result, NOT as a
+    // throw. The UI uses the kind to show a friendly "nothing
+    // noteworthy" message with the model's reasoning, and offers
+    // both Try Again and Save (= advance the thread's pointer
+    // without training the spam filter).
     if (!decision.worthy || decision.entry === null) {
-      throw new Error(
-        `The model declined to regenerate: ${decision.reasoning}`
-      );
+      return { kind: 'declined', reasoning: decision.reasoning };
     }
     return {
+      kind: 'preview',
       content: decision.entry.content,
       topics: [...decision.entry.topics],
       mood: decision.entry.mood,
