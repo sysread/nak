@@ -577,12 +577,24 @@
   <article class="journal-card card-automatic">
     <header class="journal-card-conversation-title">
       {#if entry.thread_id}
+        <!--
+          U+1F4AC SPEECH BALLOON + U+FE0F variation selector forces
+          emoji-style presentation so the bubble reads as a small
+          coloured glyph rather than a thin text-style outline that
+          would visually disappear next to the title text. Lives
+          inside the button so it's part of the click target and
+          inherits the link's hover/focus states. Acts as a "this
+          is a link to the source conversation" affordance - the
+          underline alone wasn't reading clearly when the title
+          was styled like a heading. aria-hidden on the glyph; the
+          button's accessible name is still the title text.
+        -->
         <button
           type="button"
           class="journal-thread-link"
           title={entry.thread_title ?? 'Open this conversation'}
           onclick={() => openConversation(entry.thread_id)}
-        >{formatTitle(entry.thread_title)}</button>
+        ><span class="journal-thread-link-glyph" aria-hidden="true">💬️</span> {formatTitle(entry.thread_title)}</button>
       {:else}
         <span class="subtle journal-thread-link-disabled">
           {formatTitle(entry.thread_title)}
