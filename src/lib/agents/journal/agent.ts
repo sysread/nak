@@ -16,8 +16,10 @@
  * Mirrors `../reflection/agent.ts` in the thread-fetch / slice / model
  * pinning pieces but diverges in three ways:
  *
- *   - Model + thinking: runs on `qwen3-5-35b-a3b` with
- *     `reasoning_effort: 'low'`. The agent does NOT call function
+ *   - Model + thinking: runs on `arcee-trinity-large-thinking`
+ *     with `reasoning_effort: 'low'`. Non-Qwen reasoning model;
+ *     256k context; slower per call than the prior pins, which is
+ *     fine for background work. The agent does NOT call function
  *     tools (see "Context" below), so a non-function-calling model
  *     is fine. Pinned to a literal id rather than tracking a tier
  *     so a swap of the user-facing tiers doesn't perturb the
@@ -29,15 +31,20 @@
  *     the constant's docblock for full context on each predecessor):
  *     GLM-5 -> overload; nemotron -> weak entries (with tools and
  *     reasoning_effort='medium'); GLM-4.7-flash -> overload;
- *     minimax-m25 -> 4xx on response_format; qwen3-235b-instruct
- *     held the JSON shape but couldn't hold the prose-discipline
- *     constraints (importing context, presenting interpretation as
- *     observation) when running with `disable_thinking=true`.
- *     `qwen3-5-35b-a3b` with reasoning re-enabled at 'low' gives
- *     the model a thinking budget to weigh the dense set of
- *     constraints (don't hallucinate intent, don't import context,
- *     calibrate prose to evidence, two-lens vocabulary, restraint
- *     on interpretation) instead of emitting prose front-to-back.
+ *     minimax-m25 -> 4xx on response_format; qwen3-235b-instruct ->
+ *     held JSON shape but dropped prose-discipline constraints
+ *     under disable_thinking; qwen3-5-35b-a3b with reasoning at
+ *     'low' showed the same Qwen-family failure modes (attribution
+ *     slips, context imports, over-interpretation) even after we
+ *     added Hard Constraints aimed at each. Three Qwen variants in
+ *     a row failing the same way looked like Qwen's known
+ *     constraint amnesia on long instruction stacks; the swap to
+ *     Trinity is the architecture-family diagnostic. If the new
+ *     pin holds the constraints Qwen kept dropping, the bottleneck
+ *     was the model family. If it doesn't, the prompt is too dense
+ *     for any model and the next move is the two-stage architecture
+ *     (separate clinical-analyst and narrative passes, each with a
+ *     focused subset of the constraints).
  *
  *   - Output: structured JSON via response_format, not a tool call.
  *     The earlier "write the entry through tool_call.arguments" shape
@@ -116,22 +123,26 @@ const log = createLogger('journal-worker');
  * Model the journaling agent runs against. Literal id rather than a
  * tier reference: the journal worker is a "every settled thread, in
  * order, in the background" load and wants insulation from user-facing
- * tier swaps. `qwen3-5-35b-a3b` is the current pick - a smaller Qwen3
- * variant with `reasoning_effort: 'low'` re-enabled (see the
- * completeChat call sites). The journal task carries a dense prompt
- * with multiple competing constraints (don't hallucinate intent,
- * don't import context, calibrate prose to evidence, two-lens
- * vocabulary, restraint on interpretation), and the previous pin -
- * `qwen3-235b-a22b-instruct-2507` with thinking disabled - was
- * producing entries that read as "trying really hard to push a
- * narrative without much substance": importing context the user
- * didn't supply, and stating interpretations as observations
- * despite the calibrated-prose rule. Re-enabling reasoning at
- * `'low'` gives the model a thinking budget to actually weigh those
- * constraints rather than emitting prose front-to-back. `qwen3-5-
- * 35b-a3b` is the same model the recall sub-agents use today
- * (`VENICE_RECALL_MODEL` in src/lib/models.ts); pinned literally
- * here so the journal stays insulated from a recall-tier swap.
+ * tier swaps. `arcee-trinity-large-thinking` is the current pick - a
+ * non-Qwen reasoning model with a 256k context window, kept here at
+ * `reasoning_effort: 'low'`. Slower per call than the prior pins, but
+ * the journal worker is background-only so latency is fine.
+ *
+ * Why the architecture swap. Three Qwen variants in a row
+ * (qwen3-235b-a22b-instruct-2507, qwen3-5-35b-a3b, plus the earlier
+ * brief test) all showed structurally similar failure modes on the
+ * dense journal prompt: attributing assistant turns to the user,
+ * importing context the user did not supply, presenting
+ * interpretation as observation despite explicit Hard Constraints
+ * against each. Adding more constraints didn't move the needle -
+ * the failure mode looks like Qwen's known constraint amnesia on
+ * long instruction stacks rather than something the prompt can
+ * patch around. Trying a non-Qwen architecture is the diagnostic:
+ * if Trinity holds the constraints the Qwen variants kept dropping,
+ * the bottleneck was the model family. If it doesn't, the prompt
+ * is too dense for any model and we revisit the two-stage
+ * architecture (separate clinical-analyst and narrative passes,
+ * each with a focused subset of the constraints).
  *
  * Predecessors and why they were dropped:
  *   - The balanced profile (GLM-5) hit overload errors - foreground
@@ -149,11 +160,17 @@ const log = createLogger('journal-worker');
  *   - `minimax-m25` doesn't support the `response_format` field. The
  *     wire-level JSON pin is load-bearing - any model we pin must
  *     accept response_format.
- *   - `qwen3-235b-a22b-instruct-2507` with thinking disabled was the
- *     immediate predecessor. Held the JSON shape fine but couldn't
- *     hold the prose-discipline constraints simultaneously - entries
- *     interpreted every utterance as load-bearing and padded
- *     philosophical framing with imported topical knowledge.
+ *   - `qwen3-235b-a22b-instruct-2507` with thinking disabled held
+ *     the JSON shape fine but couldn't hold the prose-discipline
+ *     constraints simultaneously - entries interpreted every
+ *     utterance as load-bearing and padded philosophical framing
+ *     with imported topical knowledge.
+ *   - `qwen3-5-35b-a3b` with reasoning at 'low' was the immediate
+ *     predecessor. Smaller and cheaper, with a thinking budget for
+ *     the dense constraint set, but the same Qwen failure modes
+ *     persisted (attribution slips, context imports, over-
+ *     interpretation). Three Qwen variants in a row failing the
+ *     same way is what motivated the family swap.
  *
  * If overload errors return, the next move is yet another non-user-
  * fronted id - the journaler walking every settled thread in order
@@ -166,7 +183,7 @@ const log = createLogger('journal-worker');
  * `response_format: {type: 'json_object'}` first - lots of
  * non-user-tier models on Venice 4xx on it.
  */
-export const VENICE_JOURNAL_MODEL = 'qwen3-5-35b-a3b';
+export const VENICE_JOURNAL_MODEL = 'arcee-trinity-large-thinking';
 
 /**
  * Pin response_format=json_object on every run. The prompt also re-
@@ -344,8 +361,9 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
     private supabase: SupabaseService,
     /**
      * Optional override. Defaults to `VENICE_JOURNAL_MODEL`
-     * (`qwen3-5-35b-a3b`). Useful for tests and for a future A/B
-     * where two journaling models run against historical threads.
+     * (`arcee-trinity-large-thinking`). Useful for tests and for a
+     * future A/B where two journaling models run against historical
+     * threads.
      */
     modelId?: string,
     /**
