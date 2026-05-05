@@ -16,44 +16,28 @@
  * Mirrors `../reflection/agent.ts` in the thread-fetch / slice / model
  * pinning pieces but diverges in three ways:
  *
- *   - Model + thinking: runs on `qwen3-235b-a22b-instruct-2507`
- *     with `disable_thinking=true` and no `reasoning_effort`. The
- *     agent does NOT call function tools (see "Context" below), so
- *     a non-function-calling model is fine. Pinned to a literal id
- *     rather than tracking a tier so a swap of the user-facing
- *     tiers doesn't perturb the journaler. The hard model
- *     constraint is that the id MUST accept the OpenAI-style
- *     `response_format: {type: 'json_object'}` field - the prompt's
- *     prose schema is real but only covers "right intent, wrong
- *     shape," not "ignored the JSON instruction entirely." History:
- *       (1) Started on the balanced profile (GLM-5) and hit
- *           overload errors - foreground tier sharing capacity.
- *       (2) Moved to `nvidia-nemotron-cascade-2-30b-a3b` for the
- *           low-traffic-slot property; entries came out weak, but
- *           the agent at the time was running a tool loop with
- *           `reasoning_effort: 'medium'` so the failure mode could
- *           plausibly have been small-model tool fumbling rather
- *           than baseline writing quality.
- *       (3) Moved to `zai-org-glm-4.7-flash` (a presumed-separate
- *           capacity-pool variant of the Fast tier id at ~1/3 the
- *           price); also overloaded, suggesting it shares capacity
- *           with the Fast tier in practice.
- *       (4) Briefly re-pinned nemotron under the no-tools,
- *           no-thinking shape, then jumped past it without letting
- *           the run gather data - the upside of "maybe weak entries
- *           were a tool-loop artifact" wasn't worth the downside
- *           if the model is just baseline weak.
- *       (5) Tried `minimax-m25`; it doesn't support
- *           `response_format` so every journal call 4xx'd at the
- *           wire - the wire-level JSON pin is load-bearing.
- *       (6) Now on `qwen3-235b-a22b-instruct-2507` - Qwen3 instruct
- *           variant, accepts response_format, not currently
- *           fronting a user-facing tier.
- *     Thinking is disabled outright via Venice's
- *     `venice_parameters.disable_thinking` kill switch: the task
- *     is "read the conversation, emit a structured JSON entry,"
- *     and CoT preambles on a reasoning-capable model just burned
- *     the output budget without changing the entry quality.
+ *   - Model + thinking: runs on `qwen3-5-35b-a3b` with
+ *     `reasoning_effort: 'low'`. The agent does NOT call function
+ *     tools (see "Context" below), so a non-function-calling model
+ *     is fine. Pinned to a literal id rather than tracking a tier
+ *     so a swap of the user-facing tiers doesn't perturb the
+ *     journaler. The hard model constraint is that the id MUST
+ *     accept the OpenAI-style `response_format: {type:
+ *     'json_object'}` field - the prompt's prose schema is real
+ *     but only covers "right intent, wrong shape," not "ignored
+ *     the JSON instruction entirely." History (abbreviated; see
+ *     the constant's docblock for full context on each predecessor):
+ *     GLM-5 -> overload; nemotron -> weak entries (with tools and
+ *     reasoning_effort='medium'); GLM-4.7-flash -> overload;
+ *     minimax-m25 -> 4xx on response_format; qwen3-235b-instruct
+ *     held the JSON shape but couldn't hold the prose-discipline
+ *     constraints (importing context, presenting interpretation as
+ *     observation) when running with `disable_thinking=true`.
+ *     `qwen3-5-35b-a3b` with reasoning re-enabled at 'low' gives
+ *     the model a thinking budget to weigh the dense set of
+ *     constraints (don't hallucinate intent, don't import context,
+ *     calibrate prose to evidence, two-lens vocabulary, restraint
+ *     on interpretation) instead of emitting prose front-to-back.
  *
  *   - Output: structured JSON via response_format, not a tool call.
  *     The earlier "write the entry through tool_call.arguments" shape
@@ -132,10 +116,22 @@ const log = createLogger('journal-worker');
  * Model the journaling agent runs against. Literal id rather than a
  * tier reference: the journal worker is a "every settled thread, in
  * order, in the background" load and wants insulation from user-facing
- * tier swaps. `qwen3-235b-a22b-instruct-2507` is the current pick - a
- * Qwen3 instruct variant that supports `response_format` (load-bearing
- * for the JSON-output pin; see JOURNAL_RESPONSE_FORMAT below) and
- * isn't fronting a user-facing tier today.
+ * tier swaps. `qwen3-5-35b-a3b` is the current pick - a smaller Qwen3
+ * variant with `reasoning_effort: 'low'` re-enabled (see the
+ * completeChat call sites). The journal task carries a dense prompt
+ * with multiple competing constraints (don't hallucinate intent,
+ * don't import context, calibrate prose to evidence, two-lens
+ * vocabulary, restraint on interpretation), and the previous pin -
+ * `qwen3-235b-a22b-instruct-2507` with thinking disabled - was
+ * producing entries that read as "trying really hard to push a
+ * narrative without much substance": importing context the user
+ * didn't supply, and stating interpretations as observations
+ * despite the calibrated-prose rule. Re-enabling reasoning at
+ * `'low'` gives the model a thinking budget to actually weigh those
+ * constraints rather than emitting prose front-to-back. `qwen3-5-
+ * 35b-a3b` is the same model the recall sub-agents use today
+ * (`VENICE_RECALL_MODEL` in src/lib/models.ts); pinned literally
+ * here so the journal stays insulated from a recall-tier swap.
  *
  * Predecessors and why they were dropped:
  *   - The balanced profile (GLM-5) hit overload errors - foreground
@@ -146,21 +142,22 @@ const log = createLogger('journal-worker');
  *     failure mode could plausibly have been small-model tool
  *     fumbling rather than baseline writing quality. The second pin
  *     under the no-tools, no-thinking shape was reverted before it
- *     gathered data - putting back a model whose only known data
- *     point was "weak" wasn't worth the cycle.
+ *     gathered data.
  *   - `zai-org-glm-4.7-flash` overloaded under the background load,
  *     suggesting it shares capacity with the Fast tier in practice
  *     despite the lower price.
  *   - `minimax-m25` doesn't support the `response_format` field. The
- *     wire-level JSON pin is load-bearing - the prompt's prose
- *     schema covers "wrong shape" but not "ignored the schema and
- *     returned prose," and parser failure on a model that 4xx's the
- *     entire request is even worse - so any model we pin must
+ *     wire-level JSON pin is load-bearing - any model we pin must
  *     accept response_format.
+ *   - `qwen3-235b-a22b-instruct-2507` with thinking disabled was the
+ *     immediate predecessor. Held the JSON shape fine but couldn't
+ *     hold the prose-discipline constraints simultaneously - entries
+ *     interpreted every utterance as load-bearing and padded
+ *     philosophical framing with imported topical knowledge.
  *
- * If overload errors return on Qwen3, the next move is yet another
- * non-user-fronted id - the journaler walking every settled thread
- * in order in the background should never fight foreground turns for
+ * If overload errors return, the next move is yet another non-user-
+ * fronted id - the journaler walking every settled thread in order
+ * in the background should never fight foreground turns for
  * capacity. Don't fall back to Smart / Balanced / Fast tier ids.
  *
  * Pin to a string. If a future swap is wanted, change it here; the
@@ -169,7 +166,7 @@ const log = createLogger('journal-worker');
  * `response_format: {type: 'json_object'}` first - lots of
  * non-user-tier models on Venice 4xx on it.
  */
-export const VENICE_JOURNAL_MODEL = 'qwen3-235b-a22b-instruct-2507';
+export const VENICE_JOURNAL_MODEL = 'qwen3-5-35b-a3b';
 
 /**
  * Pin response_format=json_object on every run. The prompt also re-
@@ -347,9 +344,8 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
     private supabase: SupabaseService,
     /**
      * Optional override. Defaults to `VENICE_JOURNAL_MODEL`
-     * (`qwen3-235b-a22b-instruct-2507`). Useful for tests and for a
-     * future A/B where two journaling models run against historical
-     * threads.
+     * (`qwen3-5-35b-a3b`). Useful for tests and for a future A/B
+     * where two journaling models run against historical threads.
      */
     modelId?: string,
     /**
@@ -506,14 +502,14 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
 
       // Single non-streaming completion. The agent has no tools, so
       // there's no headless tool loop - the JSON entry is the model's
-      // first and only response, gated by response_format and the
-      // disable_thinking kill switch.
+      // first and only response, gated by response_format and a
+      // bounded reasoning budget at effort='low'.
       const completion = await this.venice.completeChat({
         model: this.model,
         messages: convo,
         signal,
         responseFormat: JOURNAL_RESPONSE_FORMAT,
-        disableThinking: true,
+        reasoningEffort: 'low',
       });
       const finalText = completion.text;
 
@@ -745,13 +741,13 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
     );
 
     // Single non-streaming completion. Same shape as run() - no tools,
-    // structured JSON output, thinking disabled.
+    // structured JSON output, reasoning budget at effort='low'.
     const completion = await this.venice.completeChat({
       model: this.model,
       messages: convo,
       signal,
       responseFormat: JOURNAL_RESPONSE_FORMAT,
-      disableThinking: true,
+      reasoningEffort: 'low',
     });
     const finalText = completion.text;
 

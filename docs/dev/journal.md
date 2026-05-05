@@ -39,13 +39,12 @@ Unlike memories, entries are not linked into a graph.
     on the right day.
   - `agent.ts` — `JournalAgent implements
     Agent<JournalInput, JournalOutput>`. Model:
-    `qwen3-235b-a22b-instruct-2507` (literal id, not a
-    tier - insulated from user-facing tier swaps; whatever
-    id is pinned must accept `response_format`, see
-    Gotchas). Thinking is
-    disabled outright via
-    `venice_parameters.disable_thinking=true`; no
-    `reasoning_effort` is sent. The agent does NOT call
+    `qwen3-5-35b-a3b` (literal id, not a tier - insulated
+    from user-facing tier swaps; whatever id is pinned
+    must accept `response_format`, see Gotchas). Reasoning
+    is enabled at `reasoning_effort: 'low'` so the model
+    has a small thinking budget to weigh the prompt's
+    competing prose-discipline constraints. The agent does NOT call
     function tools - cross-thread / cross-memory context
     arrives via the context-recall pipeline (same one the
     chat-loop uses), prepended as a synthetic `<think>`
