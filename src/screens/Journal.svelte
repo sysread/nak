@@ -695,7 +695,7 @@
           {regeneratePreview
             ? 'Replace existing entry with this version?'
             : regenerateDeclined
-            ? 'Save to dismiss this entry without training the spam filter?'
+            ? 'Click Save to accept the decline. To train the journaler against conversations like this, click Cancel and use the thumbs-down button.'
             : regenerateError
             ? 'Regenerate failed.'
             : ''}
