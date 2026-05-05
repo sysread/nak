@@ -414,13 +414,14 @@
       </button>
     </header>
     <div class="logs-controls">
-      <!-- Two-row layout: compact controls on top, full-width search
-           below. The level dropdown was truncating to 'Det' on the
-           single-row version because flex competition with the
-           grow-1 search input left it auto-sizing against its
-           initially-measured content. Splitting the rows gives the
-           dropdown room to breathe and keeps Clear reachable on
-           narrow viewports without a horizontal scroll. -->
+      <!-- Two-row layout: both dropdowns on row 1, search input plus
+           Copy/Clear on row 2. Earlier we paired the level dropdown
+           with Copy/Clear and put Any/All next to the search input,
+           but the search was elastic enough to push Copy/Clear into
+           wrapping below it on narrow drawer widths. Grouping the
+           dropdowns on their own row lets the search be the only
+           greedy element on row 2, so Copy/Clear stay anchored at
+           the right edge regardless of viewport width. -->
       <div class="logs-controls-row">
         <label class="logs-level">
           <span class="visually-hidden">Minimum level</span>
@@ -430,6 +431,38 @@
             {/each}
           </select>
         </label>
+        <!-- Search syntax is whitespace-tokenised, case-insensitive
+             substring per token. The mode select decides whether an
+             entry has to hit any token (Any) or every token (All).
+             It sits on row 1 with the level dropdown because both
+             affect what the search input below filters - reading
+             top-to-bottom, the user picks the level threshold and
+             match mode, then types the query. -->
+        <label class="logs-mode">
+          <span class="visually-hidden">Match mode</span>
+          <select bind:value={matchMode} aria-label="Search match mode">
+            <option value="or">Any</option>
+            <option value="and">All</option>
+          </select>
+        </label>
+      </div>
+      <div class="logs-controls-row">
+        <!-- The three input attributes below stop mobile keyboards
+             (iOS Safari especially) from auto-capitalizing the first
+             letter, auto-correcting tokens like `id` -> `Id`, and
+             rendering red squiggles under code identifiers.
+             autocorrect="off" is Safari-specific but harmless
+             elsewhere. -->
+        <input
+          type="search"
+          class="logs-search"
+          placeholder="Search (space-separated)"
+          bind:value={search}
+          aria-label="Search logs"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+        />
         <div class="logs-row-actions">
           <button
             type="button"
@@ -457,34 +490,6 @@
             Clear
           </button>
         </div>
-      </div>
-      <div class="logs-controls-row">
-        <!-- Search syntax is whitespace-tokenised, case-insensitive
-             substring per token. The mode select decides whether an
-             entry has to hit any token (Any) or every token (All).
-             The three input attributes below stop mobile keyboards
-             (iOS Safari especially) from auto-capitalizing the first
-             letter, auto-correcting tokens like `id` -> `Id`, and
-             rendering red squiggles under code identifiers.
-             autocorrect="off" is Safari-specific but harmless
-             elsewhere. -->
-        <label class="logs-mode">
-          <span class="visually-hidden">Match mode</span>
-          <select bind:value={matchMode} aria-label="Search match mode">
-            <option value="or">Any</option>
-            <option value="and">All</option>
-          </select>
-        </label>
-        <input
-          type="search"
-          class="logs-search"
-          placeholder="Search (space-separated)"
-          bind:value={search}
-          aria-label="Search logs"
-          autocapitalize="off"
-          autocorrect="off"
-          spellcheck="false"
-        />
       </div>
     </div>
     <div
@@ -596,18 +601,15 @@
     background: var(--bg);
   }
 
-  /* Row 1 spaces the level dropdown and Clear button to opposite
-     ends so there's a visible separation between "filter what's
-     shown" and "destroy what's shown". Row 2 is just the search
-     input stretched to the full drawer width. */
+  /* Row 1 holds both filter dropdowns (level + match mode); row 2
+     holds the search input and the Copy/Clear actions. The search
+     is the only flex-grow item on row 2 so it absorbs all spare
+     width and Copy/Clear stay pinned to the right edge without
+     wrapping. */
   .logs-controls-row {
     display: flex;
     align-items: center;
     gap: 0.4rem;
-  }
-
-  .logs-controls-row:first-child {
-    justify-content: space-between;
   }
 
   /* Shared size for every control in the header. Native <select>
