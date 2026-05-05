@@ -8,7 +8,7 @@
    * Clicking a date calls navigate({ journal_date: 'YYYY-MM-DD' }), which
    * switches the main panel to JournalPanel showing that day's entries.
    */
-  import { navigate } from '$lib/routing.svelte';
+  import { navigate, route } from '$lib/routing.svelte';
   import { journal } from '$lib/journal-store.svelte';
 
   // Parent (Chat shell) passes a callback that dismisses the mobile
@@ -82,6 +82,8 @@
       <div class="row thread-row" data-journal-day={day.entry_date}>
         <button
           class="thread grow"
+          class:active={route.journal_date === day.entry_date}
+          aria-current={route.journal_date === day.entry_date ? 'true' : undefined}
           onclick={() => {
             navigate({ journal_date: day.entry_date });
             onSelect?.();
