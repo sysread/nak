@@ -63,6 +63,34 @@
   let hamError = $state<string | null>(null);
   let hamErrorId = $state<string | null>(null);
 
+  // Copy-markdown feedback. Matches the chat-side CopyButton's pattern:
+  // the icon flips to a checkmark and the button picks up a .is-copied
+  // class for ~1.5s after a successful clipboard write. Scoped to a
+  // single id at a time - clicking copy on another card while a prior
+  // flash is still showing replaces the target. Inline rather than
+  // reusing CopyButton.svelte because the row's emoji-button visual
+  // register (.journal-vote-btn) doesn't match CopyButton's SVG icon
+  // size, and aligning the two would cost more than it saves.
+  let copiedEntryId = $state<string | null>(null);
+  let copyTimer: ReturnType<typeof setTimeout> | null = null;
+  async function copyEntryMarkdown(entry: JournalEntry): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(entry.content);
+    } catch {
+      // Clipboard API unavailable (insecure context, permission denied,
+      // older browsers). Bail without feedback - the absence of the
+      // checkmark flash is itself a signal something went wrong, same
+      // discipline as CopyButton.svelte.
+      return;
+    }
+    copiedEntryId = entry.id;
+    if (copyTimer) clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => {
+      copiedEntryId = null;
+      copyTimer = null;
+    }, 1500);
+  }
+
   // Regenerate-button state. Only one entry can be in regenerate
   // mode at a time - the proposed replacement is shown in place of
   // the entry's body until the user picks Accept / Try again / Cancel.
@@ -610,6 +638,26 @@
         {/if}
       {:else}
         <!--
+          Copy-markdown glyph: 📋 (CLIPBOARD) by default, ✅ (WHITE
+          HEAVY CHECK MARK) for ~1.5s after a successful clipboard
+          write. Same temporary-feedback shape CopyButton.svelte
+          uses; inline here so the emoji visual register matches the
+          rest of this row. Copies entry.content (the rendered
+          Markdown body) so a paste lands the raw source the model
+          produced, not the rendered HTML.
+        -->
+        <button
+          type="button"
+          class="secondary journal-vote-btn"
+          aria-label={copiedEntryId === entry.id
+            ? 'Copied'
+            : 'Copy entry as Markdown'}
+          onclick={() => copyEntryMarkdown(entry)}
+          title={copiedEntryId === entry.id
+            ? 'Copied'
+            : 'Copy this entry as Markdown'}
+        >{copiedEntryId === entry.id ? '✅' : '📋'}</button>
+        <!--
           Download glyph: U+2B07 DOWNWARDS BLACK ARROW + U+FE0F
           variation selector forces emoji-style presentation so the
           arrow reads as a colored glyph alongside the 👍 🔄 👎
@@ -734,6 +782,17 @@
         class="secondary"
         onclick={() => startCompose(entry)}
       >Edit</button>
+      <button
+        type="button"
+        class="secondary journal-vote-btn"
+        aria-label={copiedEntryId === entry.id
+          ? 'Copied'
+          : 'Copy entry as Markdown'}
+        onclick={() => copyEntryMarkdown(entry)}
+        title={copiedEntryId === entry.id
+          ? 'Copied'
+          : 'Copy this entry as Markdown'}
+      >{copiedEntryId === entry.id ? '✅' : '📋'}</button>
       <button
         type="button"
         class="secondary journal-vote-btn"
