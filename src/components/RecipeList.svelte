@@ -8,7 +8,7 @@
    * Clicking a recipe calls navigate({ recipe: id }), which switches
    * the main panel to RecipePanel showing that recipe's detail view.
    */
-  import { navigate } from '$lib/routing.svelte';
+  import { navigate, route } from '$lib/routing.svelte';
   import { cookbook } from '$lib/cookbook-store.svelte';
   import RecipeRating from './RecipeRating.svelte';
 
@@ -84,6 +84,8 @@
       <div class="row thread-row" data-recipe-id={r.id}>
         <button
           class="thread grow recipe-list-row"
+          class:active={route.recipe === r.id}
+          aria-current={route.recipe === r.id ? 'true' : undefined}
           onclick={() => {
             navigate({ recipe: r.id });
             onSelect?.();
