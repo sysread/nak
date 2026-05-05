@@ -151,7 +151,12 @@
   // bury the 10 relevant lines under 1990 unrelated ones. Details
   // are normalized to a clone-safe shape because Error instances
   // and circular objects don't survive JSON.stringify cleanly.
-  let copyState = $state<'idle' | 'copied' | 'error'>('idle');
+  // Two-state only: 'copied' flashes the checkmark glyph, 'idle' shows
+  // the copy glyph. A clipboard failure (denied permission, insecure
+  // context, both writeText AND the textarea fallback throwing) bails
+  // without flashing - the absence of the checkmark is itself the
+  // failure signal, matching CopyButton.svelte's convention.
+  let copyState = $state<'idle' | 'copied'>('idle');
   let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   function normalizeDetail(d: unknown): unknown {
@@ -196,9 +201,10 @@
 
   async function copyLogs(): Promise<void> {
     const text = buildLogSnapshot();
+    let ok = false;
     try {
       await navigator.clipboard.writeText(text);
-      copyState = 'copied';
+      ok = true;
     } catch {
       // Fallback for browsers that reject writeText (old Safari,
       // non-secure contexts). Same shape the Samskara panel uses.
@@ -210,18 +216,21 @@
       ta.select();
       try {
         document.execCommand('copy');
-        copyState = 'copied';
+        ok = true;
       } catch {
-        copyState = 'error';
+        // Both paths failed - bail silently per the convention
+        // documented on copyState above.
       } finally {
         document.body.removeChild(ta);
       }
     }
+    if (!ok) return;
+    copyState = 'copied';
     if (copyResetTimer !== null) clearTimeout(copyResetTimer);
     copyResetTimer = setTimeout(() => {
       copyState = 'idle';
       copyResetTimer = null;
-    }, 2000);
+    }, 1500);
   }
 
   function formatTimestamp(ms: number): string {
@@ -464,30 +473,62 @@
           spellcheck="false"
         />
         <div class="logs-row-actions">
+          <!-- Copy + Clear share the message-card .copy-btn surface so
+               the panel's icon controls read as one family with the
+               assistant-bubble action row. Copy flips its glyph to
+               a checkmark on success (matches CopyButton.svelte);
+               Clear is a trash glyph - destructive but unguarded by
+               design, the in-memory log buffer is cheap to repopulate
+               and an extra confirm dialog would add friction users
+               typically resent for a debugging tool. -->
           <button
             type="button"
-            class="secondary logs-copy"
+            class="copy-btn"
+            class:copied={copyState === 'copied'}
             onclick={() => void copyLogs()}
+            aria-label={copyState === 'copied' ? 'Copied' : 'Copy logs'}
             title="Copy the currently filtered entries as a JSON blob for pasting into chat / a bug report"
           >
             {#if copyState === 'copied'}
-              Copied!
-            {:else if copyState === 'error'}
-              Copy failed
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
             {:else}
-              Copy
+              <!-- Two-overlapping-pages glyph; mirrors the icon used by
+                   CopyButton.svelte so the surfaces read identically. -->
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                   aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
             {/if}
           </button>
           <button
             type="button"
-            class="secondary logs-clear"
+            class="copy-btn logs-clear"
             onclick={() => {
               logs.clear();
               expanded = new Set();
             }}
+            aria-label="Clear logs"
             title="Clear all log entries"
           >
-            Clear
+            <!-- Trash-can glyph (lid + bin + two interior strokes).
+                 Matches the lucide trash icon used elsewhere in the
+                 ecosystem and reads as "discard" without needing a
+                 label. -->
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                 aria-hidden="true">
+              <path d="M3 6h18" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+              <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              <line x1="10" y1="11" x2="10" y2="17" />
+              <line x1="14" y1="11" x2="14" y2="17" />
+            </svg>
           </button>
         </div>
       </div>
@@ -620,9 +661,7 @@
      padding. */
   .logs-level select,
   .logs-mode select,
-  .logs-search,
-  .logs-copy,
-  .logs-clear {
+  .logs-search {
     box-sizing: border-box;
     height: 28px;
     line-height: 1.2;
@@ -630,14 +669,27 @@
     padding: 0 0.5rem;
   }
 
-  /* Group Copy + Clear so they read as a pair of row-1 actions
-     rather than independent items competing with the dropdown for
-     attention. Gap matches the controls-row's own gap so the
-     visual rhythm stays uniform across the whole header. */
+  /* Group Copy + Clear so they read as a pair of row-2 actions
+     pinned to the right of the search input. Gap matches the
+     controls-row's own gap so the visual rhythm stays uniform
+     across the whole header. */
   .logs-row-actions {
     display: flex;
     align-items: center;
     gap: 0.4rem;
+  }
+
+  /* Pin the icon buttons to the same 28px height as the search
+     input so the row reads as one continuous control strip. The
+     base .copy-btn rule (in styles.css) sizes itself from padding
+     + the 14px SVG, which lands a couple pixels short - explicit
+     height + square aspect keeps the buttons visually aligned with
+     the input regardless of theme. */
+  .logs-row-actions .copy-btn {
+    box-sizing: border-box;
+    height: 28px;
+    width: 28px;
+    padding: 0;
   }
 
   /* Reserve room for the native chevron so the selected label
