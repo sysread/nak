@@ -75,22 +75,26 @@
   aria-label="Intuition: subconscious read of this turn"
 >
   <header class="card-header">
-    <span class="icon" aria-hidden="true">&#x1F9E0;</span>
-    <span class="card-label">Intuition</span>
-    {#if split.category}
-      <span class="badge">{split.category}</span>
-    {/if}
-    <span class="time subtle">{formatTime(payload.computed_at_at)}</span>
-    <button
-      type="button"
-      class="toggle"
-      aria-expanded={expanded}
-      aria-label={expanded ? 'Collapse intuition' : 'Expand intuition'}
-      title={expanded ? 'Collapse' : 'Expand'}
-      onclick={() => (expanded = !expanded)}
-    >
-      {expanded ? '−' : '+'}
-    </button>
+    <div class="header-primary">
+      <span class="icon" aria-hidden="true">&#x1F9E0;</span>
+      <span class="card-label">Intuition</span>
+      {#if split.category}
+        <span class="badge">{split.category}</span>
+      {/if}
+    </div>
+    <div class="header-meta">
+      <span class="time subtle">{formatTime(payload.computed_at_at)}</span>
+      <button
+        type="button"
+        class="toggle"
+        aria-expanded={expanded}
+        aria-label={expanded ? 'Collapse intuition' : 'Expand intuition'}
+        title={expanded ? 'Collapse' : 'Expand'}
+        onclick={() => (expanded = !expanded)}
+      >
+        {expanded ? '−' : '+'}
+      </button>
+    </div>
   </header>
 
   {#if expanded}
@@ -134,20 +138,47 @@
     border-radius: 10px;
     font-size: 0.86rem;
     color: color-mix(in srgb, var(--text) 80%, transparent);
+    /* Same trap as `.msg` (see styles.css): the card is a flex item
+       in `.messages`, so it defaults to `min-width: auto` and is
+       sized by its min-content width. The two-row header keeps the
+       primary row's min-content small (badge ellipsizes), but the
+       expanded body's prose / drive-text can still surface a long
+       URL or hash that has no break point. min-width: 0 lets the
+       card shrink to its parent's column, and overflow-wrap +
+       word-break give those long tokens a place to break instead
+       of dragging the card past the viewport. */
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
-  /* Single row at every viewport. Without nowrap, narrow phones
-     pushed the toggle to a second line because `margin-left: auto`
-     forced wrap before the row ran out of room - the result was a
-     ragged two-line header on mobile and a clean one-line header
-     on desktop. Keeping the row intact and giving the badge the
-     only `min-width: 0` slot means the row shrinks predictably
-     (badge ellipses) instead of breaking layout. */
+  /* Two-row header. Earlier passes tried to fit icon + label +
+     badge + time + toggle on a single line; on narrow phones that
+     either wrapped raggedly (toggle dropped to its own line because
+     of `margin-left: auto`) or, with `flex-wrap: nowrap`, set the
+     card's min-content width above the messages-column width and
+     forced a viewport scrollbar. Splitting into a primary row
+     (identity: icon, label, badge) and a meta row (time left,
+     toggle right) lets each row shrink independently and keeps the
+     card narrow enough for any mobile viewport. */
   .card-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .header-primary {
     display: flex;
     gap: 0.45rem;
     align-items: center;
     flex-wrap: nowrap;
+    min-width: 0;
+  }
+
+  .header-meta {
+    display: flex;
+    gap: 0.45rem;
+    align-items: center;
   }
 
   .icon {
@@ -172,9 +203,9 @@
     padding: 0.02rem 0.45rem;
     font-size: 0.72rem;
     text-transform: lowercase;
-    /* The only shrinkable element. "recommendation" / "continuation"
-       are the longest categories; on very narrow viewports the
-       badge ellipses rather than forcing the toggle to wrap. */
+    /* Shrinkable so very long category labels ("recommendation",
+       "continuation") ellipsize on the narrowest phones rather than
+       forcing the primary row to overflow. */
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -183,12 +214,11 @@
 
   .time {
     font-size: 0.75rem;
-    flex-shrink: 0;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
 
-  /* Push the toggle button to the right end of the row. */
+  /* Flush right on the meta row, opposite the timestamp. */
   .toggle {
     margin-left: auto;
     flex-shrink: 0;
