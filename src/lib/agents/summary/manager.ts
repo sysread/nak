@@ -12,7 +12,7 @@
  */
 import type { AppConfig } from '../../config';
 import type { SupabaseService } from '../../supabase';
-import { VENICE_SUMMARY_MODEL } from '../../models';
+import { agentModel } from '../../models';
 import { makeHolderId } from '../../embeddings/manager';
 import {
   appendFromWorker,
@@ -132,7 +132,7 @@ export class SummaryManager {
       refreshToken: session.refresh_token,
       userId: session.user.id,
       veniceApiKey: opts.config.veniceApiKey,
-      summaryModel: VENICE_SUMMARY_MODEL,
+      summaryModel: agentModel('summary').id,
       holderId: makeHolderId(),
       ...WORKER_DEFAULTS,
     });

@@ -25,11 +25,10 @@ import {
 import {
   researchDocs,
   parseResearchResult,
-  VENICE_RESEARCH_DOCS_MODEL,
   RESEARCH_DOCS_SYSTEM_PROMPT_HEADER,
   RESEARCH_DOCS_DEV_SYSTEM_PROMPT_HEADER,
 } from '../src/lib/tools/research_docs';
-import { MODELS } from '../src/lib/models';
+import { AGENT_MODELS, agentModel } from '../src/lib/models';
 import type { SupabaseService } from '../src/lib/supabase';
 import type { ChatCompletion, ChatRequest, VeniceClient } from '../src/lib/venice';
 
@@ -138,10 +137,10 @@ describe('research_docs - registry scoping', () => {
     });
   });
 
-  it('pins the sub-call to the fast tier', () => {
-    // The tool advertises itself as a fast-tier research agent; if the
-    // constant drifts off MODELS.fast.id, that contract breaks.
-    expect(VENICE_RESEARCH_DOCS_MODEL).toBe(MODELS.fast.id);
+  it('pins the sub-call to the registry researchDocs slot', () => {
+    // The tool advertises itself as a bounded-synthesis agent; the
+    // registry slot is the single swap point for retargeting it.
+    expect(AGENT_MODELS.researchDocs).toBe(agentModel('researchDocs').id);
   });
 });
 
@@ -159,7 +158,7 @@ describe('research_docs - execute() shape', () => {
     ).rejects.toThrow(/non-empty.*query/i);
   });
 
-  it('fires a sub-completion with fast-tier model, bundled docs in system prompt, capped tokens', async () => {
+  it('fires a sub-completion with the researchDocs model, bundled docs in system prompt, capped tokens', async () => {
     const { venice, seen } = mkVenice(
       () => 'Nak stores memories in IndexedDB. \n\nSources: memory.md'
     );
@@ -169,7 +168,7 @@ describe('research_docs - execute() shape', () => {
     );
     expect(seen).toHaveLength(1);
     const req = seen[0];
-    expect(req.model).toBe(VENICE_RESEARCH_DOCS_MODEL);
+    expect(req.model).toBe(agentModel('researchDocs').id);
     // Docs ride in the system prompt - the tool bundles them via the
     // delimiter marker so the sub-model can cite paths back verbatim.
     const sys = req.messages.find((m) => m.role === 'system');

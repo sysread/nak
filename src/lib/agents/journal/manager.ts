@@ -16,7 +16,7 @@
  */
 import type { AppConfig } from '../../config';
 import type { SupabaseService } from '../../supabase';
-import { VENICE_JOURNAL_MODEL } from './agent';
+import { agentModel } from '../../models';
 import { makeHolderId } from '../../embeddings/manager';
 import { emitJournalChange } from '../../journal-events';
 import {
@@ -138,7 +138,7 @@ export class JournalManager {
       refreshToken: session.refresh_token,
       userId: session.user.id,
       veniceApiKey: opts.config.veniceApiKey,
-      journalModel: VENICE_JOURNAL_MODEL,
+      journalModel: agentModel('journal').id,
       timezone: opts.timezone,
       userName: opts.userName,
       userLocation: opts.userLocation,

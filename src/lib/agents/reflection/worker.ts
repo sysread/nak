@@ -27,7 +27,6 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { VeniceClient } from '../../venice';
 import { SupabaseService } from '../../supabase';
 import { LeaseCoordinator } from '../../embeddings/lease';
-import { VENICE_REFLECTION_MODEL } from '../../models';
 import { ReflectionAgent } from './agent';
 import {
   runOneCycle,
@@ -274,4 +273,3 @@ export { sleep };
 // by the Vite worker-url pattern from the manager but the module's
 // surface at type-check time doesn't need to re-export them.
 export type { StartMessage, StopMessage };
-export { VENICE_REFLECTION_MODEL };

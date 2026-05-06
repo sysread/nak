@@ -32,7 +32,7 @@
  */
 import type { ToolDef } from './types';
 import type { VeniceMessage } from '../venice';
-import { VENICE_WEB_SEARCH_MODEL } from '../models';
+import { agentModel } from '../models';
 import { createLogger } from '../logger.svelte';
 
 const log = createLogger('web-search-tool');
@@ -156,12 +156,14 @@ export const webSearch: ToolDef = {
     // - the non-streaming endpoint returns the answer + citations in
     // one shot or surfaces an HTTP error, no in-between.
     //
-    // disableThinking + maxTokens budget: VENICE_WEB_SEARCH_MODEL
-    // tracks the fast tier, which currently routes to GLM-4.7 - a
-    // reasoning model that, by default, emits its chain-of-thought
-    // through `reasoning_content` BEFORE writing any answer text
-    // into `content`. The previous 400-token cap was sized for a
-    // non-reasoning model where the entire budget went to the
+    // disableThinking + maxTokens budget: the web-search summariser
+    // resolves to whichever id `agentModel('webSearch')` is pointed
+    // at (currently deepseek-v4-flash; see AGENT_MODELS in
+    // src/lib/models). That id is a reasoning model that, by
+    // default, emits its chain-of-thought through `reasoning_content`
+    // BEFORE writing any answer text into `content`. The previous
+    // 400-token cap was sized for a non-reasoning model where the
+    // entire budget went to the
     // answer; on a reasoning model the budget got eaten by the CoT
     // preamble and the model hit `finish_reason: 'length'` with
     // empty `content`, surfacing as the "no answer text" error
@@ -177,7 +179,7 @@ export const webSearch: ToolDef = {
     let result;
     try {
       result = await ctx.venice.completeChat({
-        model: VENICE_WEB_SEARCH_MODEL,
+        model: agentModel('webSearch').id,
         messages,
         signal: ctx.signal,
         webSearch: 'on',

@@ -1,10 +1,11 @@
 /**
  * Image-analysis tool. The main model delegates visual inspection of
  * any image attached anywhere in the current thread to a dedicated
- * vision model (VISION_ANALYSIS_MODEL). Non-vision tiers rely on this
- * tool exclusively; vision tiers can still call it when they want a
- * focused query against a specific filename rather than reading the
- * inlined image_url part on the user turn.
+ * vision model (`agentModel('visionAnalysis').id`; see AGENT_MODELS
+ * in src/lib/models). Non-vision tiers rely on this tool exclusively;
+ * vision tiers can still call it when they want a focused query
+ * against a specific filename rather than reading the inlined
+ * image_url part on the user turn.
  *
  * Lookup is thread-scoped, not message-scoped. The earlier design read
  * `ctx.attachments` (the just-attached user message's images only),
@@ -30,7 +31,7 @@
 
 import type { ToolDef } from './types';
 import type { VeniceMessage } from '../venice';
-import { VISION_ANALYSIS_MODEL } from '../models';
+import { agentModel } from '../models';
 import { createLogger } from '../logger.svelte';
 
 const log = createLogger('analyze-image-tool');
@@ -142,14 +143,14 @@ export const analyzeImage: ToolDef = {
       },
     ];
 
-    // VISION_ANALYSIS_MODEL is decoupled from any user-facing tier so
-    // a tier retarget doesn't silently break image analysis. Uses the
-    // non-streaming completion endpoint - this is a background sub-
-    // call with no UI to render token-by-token into, and the one-shot
-    // path avoids the SSE-only failure modes other sub-tools used to
-    // hit.
+    // The vision sub-call uses agentModel('visionAnalysis').id, which
+    // is decoupled from any user-facing tier so a tier retarget
+    // doesn't silently break image analysis. Uses the non-streaming
+    // completion endpoint - this is a background sub-call with no UI
+    // to render token-by-token into, and the one-shot path avoids the
+    // SSE-only failure modes other sub-tools used to hit.
     const result = await ctx.venice.completeChat({
-      model: VISION_ANALYSIS_MODEL,
+      model: agentModel('visionAnalysis').id,
       messages,
       signal: ctx.signal,
       maxTokens: 1024,

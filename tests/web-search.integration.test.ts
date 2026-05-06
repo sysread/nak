@@ -14,7 +14,7 @@
  * to the chat. The string is correct - the underlying completeChat
  * call returns empty text - but the *cause* needs live traffic to
  * diagnose. This test reproduces the call against the same model
- * (`VENICE_WEB_SEARCH_MODEL`), with the same `webSearch: 'on'` +
+ * (`agentModel('webSearch').id`), with the same `webSearch: 'on'` +
  * `webCitations: true` flags the tool sets, and prints the full
  * response shape (text, reasoning, citations, finishReason, usage)
  * so we can see whether Venice is dropping text, exhausting the
@@ -26,7 +26,7 @@
 import { describe, it, expect } from 'vitest';
 import { VeniceClient } from '../src/lib/venice';
 import { webSearch, WEB_SEARCH_SYSTEM_PROMPT } from '../src/lib/tools/web_search';
-import { VENICE_WEB_SEARCH_MODEL } from '../src/lib/models';
+import { agentModel } from '../src/lib/models';
 import type { ToolContext } from '../src/lib/tools/types';
 import type { SupabaseService } from '../src/lib/supabase';
 
@@ -69,7 +69,7 @@ describe('web_search integration (live Venice)', () => {
       // through the tool) so we can see Venice's full response, not
       // just the post-trim throw the tool would do on empty text.
       const result = await venice.completeChat({
-        model: VENICE_WEB_SEARCH_MODEL,
+        model: agentModel('webSearch').id,
         messages: [
           { role: 'system', content: WEB_SEARCH_SYSTEM_PROMPT },
           { role: 'user', content: 'Query: who is the current US president' },
@@ -134,7 +134,7 @@ describe('web_search integration (live Venice)', () => {
       // path is the problem.
       const venice = new VeniceClient({ apiKey });
       const result = await venice.completeChat({
-        model: VENICE_WEB_SEARCH_MODEL,
+        model: agentModel('webSearch').id,
         messages: [
           { role: 'system', content: WEB_SEARCH_SYSTEM_PROMPT },
           { role: 'user', content: 'Query: who is the current US president' },

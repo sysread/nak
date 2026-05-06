@@ -14,7 +14,6 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { VeniceClient } from '../../venice';
 import { SupabaseService } from '../../supabase';
 import { LeaseCoordinator } from '../../embeddings/lease';
-import { VENICE_SUMMARY_MODEL } from '../../models';
 import { SummaryAgent } from './agent';
 import {
   runOneCycle,
@@ -220,4 +219,3 @@ workerGlobal.addEventListener('message', (evt: MessageEvent<InboundMessage>) => 
 
 export { sleep };
 export type { StartMessage, StopMessage };
-export { VENICE_SUMMARY_MODEL };

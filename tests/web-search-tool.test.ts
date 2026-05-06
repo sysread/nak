@@ -15,7 +15,7 @@ import {
   type ToolDef,
 } from '../src/lib/tools';
 import { webSearch } from '../src/lib/tools/web_search';
-import { VENICE_WEB_SEARCH_MODEL } from '../src/lib/models';
+import { agentModel } from '../src/lib/models';
 import type { SupabaseService } from '../src/lib/supabase';
 import type {
   ChatCompletion,
@@ -123,10 +123,10 @@ describe('web_search — execute() shape', () => {
     await webSearch.execute({ query: 'current price of bitcoin' }, ctxFor(venice));
     expect(seen).toHaveLength(1);
     const req = seen[0];
-    expect(req.model).toBe(VENICE_WEB_SEARCH_MODEL);
+    expect(req.model).toBe(agentModel('webSearch').id);
     expect(req.webSearch).toBe('on');
     expect(req.webCitations).toBe(true);
-    // disableThinking is load-bearing: VENICE_WEB_SEARCH_MODEL
+    // disableThinking is load-bearing: agentModel('webSearch').id
     // tracks the fast tier, which currently routes to a reasoning
     // model (GLM-4.7) that emits its chain-of-thought through
     // `reasoning_content` BEFORE writing any answer text into

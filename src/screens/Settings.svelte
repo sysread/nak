@@ -69,10 +69,10 @@
   import { isSupported as notificationsSupported, requestPermission } from '$lib/notifications.svelte';
   import { LOG_LEVELS, LOG_LEVEL_LABELS, type LogLevel } from '$lib/logger.svelte';
   import {
-    MODELS,
     REASONING_EFFORTS,
     REASONING_EFFORT_LABELS,
     TIERS,
+    TIER_ORDER,
     VERBOSITIES,
     VERBOSITY_LABELS,
     type ModelTier,
@@ -804,7 +804,7 @@
     setDefaultModel(next);
     try {
       await app.supabase.updateSettings({ defaultModel: next });
-      modelInfo = `Default model set to ${MODELS[next].label}.`;
+      modelInfo = `Default model set to ${TIERS[next].label}.`;
     } catch (err) {
       defaultModel = prev;
       setDefaultModel(prev);
@@ -1202,7 +1202,7 @@
           per-thread from the chat top bar.
         </p>
         <div class="form-row model-choices">
-          {#each TIERS as tier (tier)}
+          {#each TIER_ORDER as tier (tier)}
             <label class="model-choice">
               <input
                 type="radio"
@@ -1212,10 +1212,10 @@
                 onchange={() => onPickModel(tier)}
               />
               <span>
-                <strong>{MODELS[tier].label}</strong>
-                <span class="subtle" style="margin-left:0.35rem">{MODELS[tier].description}</span>
+                <strong>{TIERS[tier].label}</strong>
+                <span class="subtle" style="margin-left:0.35rem">{TIERS[tier].description}</span>
                 <span class="subtle" style="display:block;font-size:0.8rem;margin-top:0.1rem">
-                  {MODELS[tier].id} · {(MODELS[tier].contextWindow / 1000).toFixed(0)}k context
+                  {TIERS[tier].id} · {(TIERS[tier].contextWindow / 1000).toFixed(0)}k context
                 </span>
               </span>
             </label>

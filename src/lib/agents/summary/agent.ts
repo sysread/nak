@@ -26,7 +26,7 @@ import {
   trimToCompleteTurn,
   trimToFirstUserOrSystem,
 } from '../../conversation-recovery';
-import { VENICE_SUMMARY_MODEL } from '../../models';
+import { agentModel } from '../../models';
 import { SUMMARY_PROMPT } from './prompt';
 
 /**
@@ -148,14 +148,15 @@ export class SummaryAgent implements Agent<SummaryInput, SummaryOutput> {
     private venice: VeniceClient,
     private supabase: SupabaseService,
     /**
-     * Optional model override — defaults to VENICE_SUMMARY_MODEL.
-     * Same rationale as the reflection override: useful for tests,
-     * and a future A/B against a different model can pin a concrete
-     * id without a call-site change.
+     * Optional model override - defaults to the registry's
+     * `summary` slot (see AGENT_MODELS in src/lib/models). Same
+     * rationale as the reflection override: useful for tests, and a
+     * future A/B against a different model can pin a concrete id
+     * without a call-site change.
      */
     modelId?: string
   ) {
-    this.model = modelId ?? VENICE_SUMMARY_MODEL;
+    this.model = modelId ?? agentModel('summary').id;
   }
 
   async run(

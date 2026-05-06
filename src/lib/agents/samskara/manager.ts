@@ -15,7 +15,7 @@
  */
 import type { AppConfig } from '../../config';
 import type { SupabaseService } from '../../supabase';
-import { VENICE_SAMSKARA_MODEL } from '../../models';
+import { agentModel } from '../../models';
 import { makeHolderId } from '../../embeddings/manager';
 import { notifySamskaraMint } from '../../samskara/events';
 import {
@@ -202,7 +202,7 @@ export class SamskaraManager {
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       veniceApiKey: opts.config.veniceApiKey,
-      fastModel: VENICE_SAMSKARA_MODEL,
+      fastModel: agentModel('samskara').id,
       holderId: makeHolderId(),
       ...WORKER_DEFAULTS,
     });

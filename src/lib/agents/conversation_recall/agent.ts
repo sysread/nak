@@ -27,7 +27,7 @@ import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
 import { conversationRecallToolbox } from '../../tools/conversation_recall_toolbox';
 import { runHeadlessToolLoop } from '../../tools/run';
 import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
-import { VENICE_CONVERSATION_RECALL_MODEL } from '../../models';
+import { agentModel } from '../../models';
 import {
   trimToLastUserTurn,
   trimToCharBudget,
@@ -105,11 +105,12 @@ export class ConversationRecallAgent
     private supabase: SupabaseService,
     /**
      * Optional model override for tests / future A/B. Defaults to
-     * `VENICE_CONVERSATION_RECALL_MODEL` (tracks the fast tier).
+     * the registry's `conversationRecall` slot (see AGENT_MODELS
+     * in src/lib/models).
      */
     modelId?: string
   ) {
-    this.model = modelId ?? VENICE_CONVERSATION_RECALL_MODEL;
+    this.model = modelId ?? agentModel('conversationRecall').id;
   }
 
   async run(

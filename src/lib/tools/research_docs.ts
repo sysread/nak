@@ -48,21 +48,11 @@
  */
 import type { ToolDef } from './types';
 import type { VeniceMessage } from '../venice';
-import { MODELS } from '../models';
+import { agentModel } from '../models';
 import { listDocs, loadDoc, listDevDocs, loadDevDoc } from '../docs';
 import { createLogger } from '../logger.svelte';
 
 const log = createLogger('research-docs-tool');
-
-/**
- * Model the docs sub-completion runs against. Tracks the fast tier
- * because the task is "read the bundled docs, write a 2-5 sentence
- * synthesis" - bounded output on bounded input, no reasoning
- * required. Kept as a distinct constant so a future decision to pin
- * doc research to a different tier doesn't require editing this
- * file's internals.
- */
-export const VENICE_RESEARCH_DOCS_MODEL = MODELS.fast.id;
 
 /**
  * System prompt for the user-docs-only sub-call. Exported so tests
@@ -257,7 +247,7 @@ export const researchDocs: ToolDef = {
     // tokens incrementally, and the one-shot endpoint avoids the SSE
     // failure modes streaming sub-calls exhibit.
     const result = await ctx.venice.completeChat({
-      model: VENICE_RESEARCH_DOCS_MODEL,
+      model: agentModel('researchDocs').id,
       messages,
       signal: ctx.signal,
       maxTokens: includeDev ? 1500 : 600,

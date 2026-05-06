@@ -16,25 +16,16 @@
  * Mirrors `../reflection/agent.ts` in the thread-fetch / slice / model
  * pinning pieces but diverges in three ways:
  *
- *   - Model + thinking: runs on `deepseek-v4-flash` (trial; revert
- *     to `arcee-trinity-large-thinking` if quality regresses) with
- *     `reasoning_effort: 'low'`. 1M-token context window; cheap and
- *     fast. The agent does NOT call function tools (see "Context"
- *     below), so a non-function-calling model is fine. Pinned to a
- *     literal id rather than tracking a tier so a swap of the
- *     user-facing tiers doesn't perturb the journaler. The hard
- *     model constraint is that the id MUST accept the OpenAI-style
- *     `response_format: {type: 'json_object'}` field - the prompt's
- *     prose schema is real but only covers "right intent, wrong
- *     shape," not "ignored the JSON instruction entirely." History
- *     (abbreviated; see the constant's docblock for full context on
- *     each predecessor): GLM-5 -> overload; nemotron -> weak
- *     entries; GLM-4.7-flash -> overload; minimax-m25 -> 4xx on
- *     response_format; qwen3-235b-instruct + qwen3-5-35b-a3b ->
- *     attribution slips and context imports under the dense
- *     constraint stack (Qwen-family constraint amnesia); arcee-
- *     trinity-large-thinking held the constraints but is slower
- *     and more expensive than what we want for background work.
+ *   - Model + thinking: runs on whichever id `agentModel('journal')`
+ *     resolves to (currently deepseek-v4-flash, see AGENT_MODELS in
+ *     src/lib/models for the swap point and the full predecessor
+ *     list). The wire call pins `reasoning_effort: 'low'` and
+ *     `response_format: {type: 'json_object'}`. The agent does NOT
+ *     call function tools (see "Context" below), so a non-function-
+ *     calling model is fine - but the id MUST accept response_format
+ *     because the prose schema in the prompt only covers "right
+ *     intent, wrong shape," not "ignored the JSON instruction
+ *     entirely."
  *
  *   - Output: structured JSON via response_format, not a tool call.
  *     The earlier "write the entry through tool_call.arguments" shape
@@ -79,6 +70,7 @@ import type { SupabaseService, Message } from '../../supabase';
 import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
 import type { Toolbox } from '../../tools/types';
 import { createLogger } from '../../logger.svelte';
+import { agentModel } from '../../models';
 import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
 import {
   buildContextRecallThinkMessage,
@@ -108,71 +100,6 @@ import {
 // "journal-worker" picks up everything from this pipeline - the
 // loop's lifecycle lines and the agent's mid-cycle progress notes.
 const log = createLogger('journal-worker');
-
-/**
- * Model the journaling agent runs against. Literal id rather than a
- * tier reference: the journal worker is a "every settled thread, in
- * order, in the background" load and wants insulation from user-facing
- * tier swaps. `deepseek-v4-flash` is the current pick - cheap, fast,
- * 1M-token context window. Trial swap; revert to
- * `arcee-trinity-large-thinking` if entry quality regresses or the
- * speed advantage doesn't materialize. The hard constraint that gates
- * any pin is `response_format: {type: 'json_object'}` support; the
- * worker also assumes background-only capacity (foreground-shared ids
- * have overloaded under the "every settled thread in order" load
- * before - see GLM-4.7-flash below).
- *
- * Predecessors and why they were dropped:
- *   - The balanced profile (GLM-5) hit overload errors - foreground
- *     tier sharing capacity.
- *   - `nvidia-nemotron-cascade-2-30b-a3b` was tried twice. First pass
- *     produced visibly weak entries, but the agent at the time was
- *     carrying a tool loop with `reasoning_effort: 'medium'`, so the
- *     failure mode could plausibly have been small-model tool
- *     fumbling rather than baseline writing quality. The second pin
- *     under the no-tools, no-thinking shape was reverted before it
- *     gathered data.
- *   - `zai-org-glm-4.7-flash` overloaded under the background load,
- *     suggesting it shares capacity with the Fast tier in practice
- *     despite the lower price.
- *   - `minimax-m25` doesn't support the `response_format` field. The
- *     wire-level JSON pin is load-bearing - any model we pin must
- *     accept response_format.
- *   - `qwen3-235b-a22b-instruct-2507` with thinking disabled held
- *     the JSON shape fine but couldn't hold the prose-discipline
- *     constraints simultaneously - entries interpreted every
- *     utterance as load-bearing and padded philosophical framing
- *     with imported topical knowledge.
- *   - `qwen3-5-35b-a3b` with reasoning at 'low'. Smaller and cheaper,
- *     with a thinking budget for the dense constraint set, but the
- *     same Qwen failure modes persisted (attribution slips, context
- *     imports, over-interpretation). Three Qwen variants in a row
- *     failing the same way looked like Qwen's known constraint
- *     amnesia on long instruction stacks and motivated the family
- *     swap to Trinity.
- *   - `arcee-trinity-large-thinking` with `reasoning_effort: 'low'`.
- *     Non-Qwen reasoning model, 256k context. Held the prose-
- *     discipline constraints the Qwen pins kept dropping, confirming
- *     the bottleneck was the model family rather than the prompt.
- *     Slower and more expensive than the deepseek-v4-flash trial
- *     replacing it; revert here if deepseek's entry quality lags.
- *
- * If overload errors return, the next move is yet another non-user-
- * fronted id - the journaler walking every settled thread in order
- * in the background should never fight foreground turns for
- * capacity. Don't fall back to Smart / Balanced / Fast tier ids.
- *
- * Pin to a string. If a future swap is wanted, change it here; the
- * worker reads the value through the start-message plumbing in
- * `manager.ts`. Whatever id you pick, verify it accepts
- * `response_format: {type: 'json_object'}` first - lots of
- * non-user-tier models on Venice 4xx on it. If the prompt's dense
- * constraint set defeats yet another model family, the next move
- * is the two-stage architecture (separate clinical-analyst and
- * narrative passes, each with a focused subset of constraints)
- * rather than another single-model swap.
- */
-export const VENICE_JOURNAL_MODEL = 'deepseek-v4-flash';
 
 /**
  * Pin response_format=json_object on every run. The prompt also re-
@@ -372,9 +299,11 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
     private venice: VeniceClient,
     private supabase: SupabaseService,
     /**
-     * Optional override. Defaults to `VENICE_JOURNAL_MODEL`
-     * (`deepseek-v4-flash`). Useful for tests and for a future A/B
-     * where two journaling models run against historical threads.
+     * Optional override. Defaults to the registry's `journal` slot
+     * (`agentModel('journal').id`; see AGENT_MODELS in src/lib/models
+     * for the swap point and the predecessor list). Useful for tests
+     * and for a future A/B where two journaling models run against
+     * historical threads.
      */
     modelId?: string,
     /**
@@ -385,7 +314,7 @@ export class JournalAgent implements Agent<JournalInput, JournalOutput> {
      */
     userProfile?: JournalUserProfile | null
   ) {
-    this.model = modelId ?? VENICE_JOURNAL_MODEL;
+    this.model = modelId ?? agentModel('journal').id;
     this.userProfile = userProfile ?? null;
   }
 

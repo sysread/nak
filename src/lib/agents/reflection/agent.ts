@@ -35,7 +35,7 @@ import type { VeniceClient, VeniceMessage } from '../../venice';
 import { memoryToolbox } from '../../tools/memory_toolbox';
 import { runHeadlessToolLoop } from '../../tools/run';
 import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
-import { VENICE_REFLECTION_MODEL } from '../../models';
+import { agentModel } from '../../models';
 import { REFLECTION_PROMPT } from './prompt';
 
 export interface ReflectionInput {
@@ -107,15 +107,15 @@ export class ReflectionAgent implements Agent<ReflectionInput, ReflectionOutput>
     private venice: VeniceClient,
     private supabase: SupabaseService,
     /**
-     * Optional model override. Defaults to `VENICE_REFLECTION_MODEL`
-     * (tracks the fast tier). Useful for tests that want to pin a
-     * specific id, and for a future A/B where two reflection agents
-     * with different models might run side-by-side against historical
-     * threads.
+     * Optional model override. Defaults to the registry's
+     * `reflection` slot (see AGENT_MODELS in src/lib/models). Useful
+     * for tests that want to pin a specific id, and for a future A/B
+     * where two reflection agents with different models might run
+     * side-by-side against historical threads.
      */
     modelId?: string
   ) {
-    this.model = modelId ?? VENICE_REFLECTION_MODEL;
+    this.model = modelId ?? agentModel('reflection').id;
   }
 
   async run(

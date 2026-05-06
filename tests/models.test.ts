@@ -1,58 +1,118 @@
 import { describe, it, expect } from 'vitest';
 import {
+  AGENT_MODELS,
   DEFAULT_REASONING_EFFORT,
   DEFAULT_TIER,
   DEFAULT_VERBOSITY,
+  EMBEDDING_STORAGE_DIMS,
+  LEGACY_MODELS,
   MODELS,
   REASONING_EFFORTS,
   REASONING_EFFORT_LABELS,
   TIERS,
-  UTILITY_TIER,
-  VENICE_EMBEDDING_MODEL,
+  TIER_ORDER,
   VENICE_EMBEDDING_DIMS,
-  EMBEDDING_STORAGE_DIMS,
+  VENICE_EMBEDDING_MODEL,
   VERBOSITIES,
   VERBOSITY_LABELS,
+  agentModel,
   findContextWindowById,
   findModelById,
-  padEmbeddingForStorage,
   isModelTier,
   isReasoningEffort,
   isVerbosity,
+  padEmbeddingForStorage,
   resolveReasoningEffort,
   resolveTier,
   resolveVerbosity,
+  type AgentRole,
 } from '../src/lib/models';
 
-describe('MODELS', () => {
-  it('has the three tiers with the expected Venice model ids', () => {
-    expect(MODELS.smart.id).toBe('zai-org-glm-5-1');
-    expect(MODELS.balanced.id).toBe('zai-org-glm-5');
-    expect(MODELS.fast.id).toBe('zai-org-glm-4.7');
-  });
-  it('differentiates smart and balanced by reasoning effort', () => {
-    expect(MODELS.smart.defaultReasoningEffort).toBe('high');
-    expect(MODELS.balanced.defaultReasoningEffort).toBe('low');
-    // Fast intentionally has no tier default — it defers to the user.
-    expect(MODELS.fast.defaultReasoningEffort).toBeUndefined();
-  });
-  it('has matching tier/label and sensible context windows', () => {
-    for (const t of TIERS) {
-      expect(MODELS[t].tier).toBe(t);
-      expect(MODELS[t].label.length).toBeGreaterThan(0);
-      expect(MODELS[t].contextWindow).toBeGreaterThan(0);
+describe('MODELS (active registry)', () => {
+  it('keys every entry by its own id', () => {
+    for (const [key, spec] of Object.entries(MODELS)) {
+      expect(spec.id).toBe(key);
     }
-    // fast (zai-org-glm-4.7) is a 198k-context model.
-    expect(MODELS.fast.contextWindow).toBe(198_000);
+  });
+  it('declares every capability flag as a boolean on every entry', () => {
+    for (const spec of Object.values(MODELS)) {
+      expect(typeof spec.supportsReasoning).toBe('boolean');
+      expect(typeof spec.supportsVision).toBe('boolean');
+      expect(typeof spec.supportsResponseFormat).toBe('boolean');
+      expect(spec.contextWindow).toBeGreaterThan(0);
+    }
+  });
+  it('records mistral-small as non-reasoning - the docblock says Venice 4xxs on the field', () => {
+    expect(MODELS['mistral-small-3-2-24b-instruct'].supportsReasoning).toBe(false);
+  });
+  it('records the vision model as the only supportsVision=true entry', () => {
+    expect(MODELS['e2ee-qwen3-5-122b-a10b'].supportsVision).toBe(true);
+    for (const [id, spec] of Object.entries(MODELS)) {
+      if (id !== 'e2ee-qwen3-5-122b-a10b') expect(spec.supportsVision).toBe(false);
+    }
   });
 });
 
-describe('DEFAULT_TIER / UTILITY_TIER', () => {
+describe('TIERS (user-facing wrappers)', () => {
+  it('has the three tiers with the expected Venice model ids', () => {
+    expect(TIERS.smart.id).toBe('zai-org-glm-5-1');
+    expect(TIERS.balanced.id).toBe('zai-org-glm-5');
+    expect(TIERS.fast.id).toBe('zai-org-glm-4.7');
+  });
+  it('each tier wraps its corresponding MODELS entry', () => {
+    for (const t of TIER_ORDER) {
+      const spec = TIERS[t];
+      const model = MODELS[spec.id as keyof typeof MODELS];
+      expect(spec.contextWindow).toBe(model.contextWindow);
+      expect(spec.supportsReasoning).toBe(model.supportsReasoning);
+      expect(spec.supportsVision).toBe(model.supportsVision);
+      expect(spec.supportsResponseFormat).toBe(model.supportsResponseFormat);
+    }
+  });
+  it('differentiates smart and balanced by reasoning effort', () => {
+    expect(TIERS.smart.defaultReasoningEffort).toBe('high');
+    expect(TIERS.balanced.defaultReasoningEffort).toBe('low');
+    // Fast intentionally has no tier default - it defers to the user.
+    expect(TIERS.fast.defaultReasoningEffort).toBeUndefined();
+  });
+  it('has matching tier/label and sensible context windows', () => {
+    for (const t of TIER_ORDER) {
+      expect(TIERS[t].tier).toBe(t);
+      expect(TIERS[t].label.length).toBeGreaterThan(0);
+      expect(TIERS[t].contextWindow).toBeGreaterThan(0);
+    }
+    expect(TIERS.fast.contextWindow).toBe(198_000);
+  });
+});
+
+describe('AGENT_MODELS (background agents)', () => {
+  it('every agent role points at a registered model id', () => {
+    for (const [role, modelId] of Object.entries(AGENT_MODELS) as Array<[AgentRole, string]>) {
+      expect(MODELS).toHaveProperty(modelId);
+      expect(agentModel(role).id).toBe(modelId);
+    }
+  });
+  it('groups roles by model id as expected', () => {
+    // Three deepseek slots: journal, reflection, web search, research docs.
+    expect(AGENT_MODELS.journal).toBe('deepseek-v4-flash');
+    expect(AGENT_MODELS.reflection).toBe('deepseek-v4-flash');
+    expect(AGENT_MODELS.webSearch).toBe('deepseek-v4-flash');
+    expect(AGENT_MODELS.researchDocs).toBe('deepseek-v4-flash');
+    // Three mistral-small slots: intuition, summary, samskara.
+    expect(AGENT_MODELS.intuition).toBe('mistral-small-3-2-24b-instruct');
+    expect(AGENT_MODELS.summary).toBe('mistral-small-3-2-24b-instruct');
+    expect(AGENT_MODELS.samskara).toBe('mistral-small-3-2-24b-instruct');
+    // Two qwen recall slots.
+    expect(AGENT_MODELS.recall).toBe('qwen3-5-35b-a3b');
+    expect(AGENT_MODELS.conversationRecall).toBe('qwen3-5-35b-a3b');
+    // Vision sub-call.
+    expect(AGENT_MODELS.visionAnalysis).toBe('e2ee-qwen3-5-122b-a10b');
+  });
+});
+
+describe('DEFAULT_TIER', () => {
   it('default is balanced', () => {
     expect(DEFAULT_TIER).toBe('balanced');
-  });
-  it('utility is fast (used for auto-titling)', () => {
-    expect(UTILITY_TIER).toBe('fast');
   });
 });
 
@@ -102,11 +162,6 @@ describe('reasoning effort', () => {
     expect(isReasoningEffort(null)).toBe(false);
     expect(isReasoningEffort(undefined)).toBe(false);
     expect(isReasoningEffort(1)).toBe(false);
-  });
-  it('every MODELS entry declares supportsReasoning', () => {
-    for (const t of TIERS) {
-      expect(typeof MODELS[t].supportsReasoning).toBe('boolean');
-    }
   });
   it('resolveReasoningEffort prefers thread override over every default', () => {
     expect(resolveReasoningEffort('high', 'low')).toBe('high');
@@ -166,7 +221,7 @@ describe('embedding constants', () => {
   });
   it('native dim matches bge-m3 (1024)', () => {
     // If Venice ever swaps the model, this constant and the schema must
-    // move together — the test exists so the swap isn't silent.
+    // move together - the test exists so the swap isn't silent.
     expect(VENICE_EMBEDDING_DIMS).toBe(1024);
   });
   it('storage dim matches the column in supabase/schema.sql (2048)', () => {
@@ -179,12 +234,9 @@ describe('padEmbeddingForStorage', () => {
     const input = Array.from({ length: VENICE_EMBEDDING_DIMS }, (_, i) => i * 0.001);
     const padded = padEmbeddingForStorage(input);
     expect(padded).toHaveLength(EMBEDDING_STORAGE_DIMS);
-    // Prefix is preserved exactly.
     for (let i = 0; i < VENICE_EMBEDDING_DIMS; i++) {
       expect(padded[i]).toBe(input[i]);
     }
-    // Suffix is all zeros — the invariant that makes cosine similarity
-    // equal between padded and unpadded vectors.
     for (let i = VENICE_EMBEDDING_DIMS; i < EMBEDDING_STORAGE_DIMS; i++) {
       expect(padded[i]).toBe(0);
     }
@@ -211,7 +263,7 @@ describe('padEmbeddingForStorage', () => {
     expect(padded.slice(4).every((v) => v === 0)).toBe(true);
   });
 
-  it('throws when the input is longer than storage dim — this is a config bug, not silent truncation', () => {
+  it('throws when the input is longer than storage dim - this is a config bug, not silent truncation', () => {
     const tooLong = new Array<number>(EMBEDDING_STORAGE_DIMS + 1).fill(0);
     expect(() => padEmbeddingForStorage(tooLong)).toThrow(/exceeds storage dim/);
   });
@@ -219,40 +271,52 @@ describe('padEmbeddingForStorage', () => {
   it('is cosine-invariant (dot product of padded vectors equals dot product of originals)', () => {
     const a = Array.from({ length: VENICE_EMBEDDING_DIMS }, (_, i) => Math.sin(i));
     const b = Array.from({ length: VENICE_EMBEDDING_DIMS }, (_, i) => Math.cos(i));
-    const aDot = (x: number[], y: number[]) =>
+    const dot = (x: number[], y: number[]) =>
       x.reduce((sum, v, i) => sum + v * y[i], 0);
-    const original = aDot(a, b);
-    const padded = aDot(padEmbeddingForStorage(a), padEmbeddingForStorage(b));
+    const original = dot(a, b);
+    const padded = dot(padEmbeddingForStorage(a), padEmbeddingForStorage(b));
     expect(padded).toBeCloseTo(original, 10);
   });
 });
 
+describe('findModelById', () => {
+  it('returns the spec for currently-active ids', () => {
+    expect(findModelById('zai-org-glm-5-1')).toBe(MODELS['zai-org-glm-5-1']);
+    expect(findModelById('deepseek-v4-flash')).toBe(MODELS['deepseek-v4-flash']);
+    expect(findModelById('qwen3-5-35b-a3b')).toBe(MODELS['qwen3-5-35b-a3b']);
+  });
+  it('returns null for retired ids - retired specs do not carry the same shape', () => {
+    expect(findModelById('arcee-trinity-large-thinking')).toBeNull();
+    expect(findModelById('grok-41-fast')).toBeNull();
+    expect(findModelById('kimi-k2-5')).toBeNull();
+  });
+  it('returns null for unknown / empty inputs', () => {
+    expect(findModelById('never-existed')).toBeNull();
+    expect(findModelById(null)).toBeNull();
+    expect(findModelById(undefined)).toBeNull();
+    expect(findModelById('')).toBeNull();
+  });
+});
+
 describe('findContextWindowById', () => {
-  it('returns the window for a currently-fronted model id', () => {
-    expect(findContextWindowById('zai-org-glm-5-1')).toBe(MODELS.smart.contextWindow);
-    expect(findContextWindowById('zai-org-glm-5')).toBe(MODELS.balanced.contextWindow);
-    expect(findContextWindowById('zai-org-glm-4.7')).toBe(MODELS.fast.contextWindow);
+  it('returns the window for a currently-active id', () => {
+    expect(findContextWindowById('zai-org-glm-5-1')).toBe(MODELS['zai-org-glm-5-1'].contextWindow);
+    expect(findContextWindowById('zai-org-glm-5')).toBe(MODELS['zai-org-glm-5'].contextWindow);
+    expect(findContextWindowById('zai-org-glm-4.7')).toBe(MODELS['zai-org-glm-4.7'].contextWindow);
+    expect(findContextWindowById('qwen3-5-35b-a3b')).toBe(MODELS['qwen3-5-35b-a3b'].contextWindow);
   });
 
-  // Historical assistant rows carry ids that used to front a tier — if
-  // the fallback breaks, every pre-swap message silently loses its
-  // context-ring indicator. Pin every retired id so each swap
+  // Historical assistant rows carry ids that used to front a tier - if
+  // the legacy fallback breaks, every pre-swap message silently loses
+  // its context-ring indicator. Pin every retired id so each swap
   // generation stays readable.
-  it('returns the pinned window for each retired model id', () => {
-    expect(findModelById('arcee-trinity-large-thinking')).toBeNull();
+  it('falls back to LEGACY_MODELS for retired ids', () => {
     expect(findContextWindowById('arcee-trinity-large-thinking')).toBe(256_000);
-    expect(findModelById('gemma-4-uncensored')).toBeNull();
-    expect(findContextWindowById('gemma-4-uncensored')).toBe(198_000);
-    expect(findModelById('kimi-k2-5')).toBeNull();
+    expect(findContextWindowById('gemma-4-uncensored')).toBe(256_000);
     expect(findContextWindowById('kimi-k2-5')).toBe(256_000);
-    expect(findModelById('minimax-m27')).toBeNull();
-    expect(findContextWindowById('minimax-m27')).toBe(198_000);
-    expect(findModelById('kimi-k2-6')).toBeNull();
     expect(findContextWindowById('kimi-k2-6')).toBe(256_000);
-    expect(findModelById('grok-41-fast')).toBeNull();
+    expect(findContextWindowById('minimax-m27')).toBe(198_000);
     expect(findContextWindowById('grok-41-fast')).toBe(1_000_000);
-    expect(findModelById('qwen3-5-35b-a3b')).toBeNull();
-    expect(findContextWindowById('qwen3-5-35b-a3b')).toBe(256_000);
   });
 
   it('returns null for an unknown id and for null/empty input', () => {
@@ -260,5 +324,23 @@ describe('findContextWindowById', () => {
     expect(findContextWindowById(null)).toBeNull();
     expect(findContextWindowById(undefined)).toBeNull();
     expect(findContextWindowById('')).toBeNull();
+  });
+});
+
+describe('LEGACY_MODELS', () => {
+  it('keys every entry by its own id', () => {
+    for (const [key, spec] of Object.entries(LEGACY_MODELS)) {
+      expect(spec.id).toBe(key);
+    }
+  });
+  it('declares a positive context window on every entry', () => {
+    for (const spec of Object.values(LEGACY_MODELS)) {
+      expect(spec.contextWindow).toBeGreaterThan(0);
+    }
+  });
+  it('does not overlap with active MODELS', () => {
+    for (const id of Object.keys(LEGACY_MODELS)) {
+      expect(MODELS).not.toHaveProperty(id);
+    }
   });
 });

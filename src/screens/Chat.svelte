@@ -93,9 +93,10 @@
     DEFAULT_REASONING_EFFORT,
     DEFAULT_TIER,
     DEFAULT_VERBOSITY,
-    MODELS,
     TIERS,
+    TIER_ORDER,
     VENICE_EMBEDDING_MODEL,
+    agentModel,
     padEmbeddingForStorage,
     resolveReasoningEffort,
     resolveTier,
@@ -1599,16 +1600,16 @@
   );
   // Resolved reasoning for the current thread — per-thread override wins,
   // otherwise the user default. Only surfaced in the UI / sent on the wire
-  // when `MODELS[currentTier].supportsReasoning`.
+  // when `TIERS[currentTier].supportsReasoning`.
   const currentReasoning = $derived<ReasoningEffort>(
     resolveReasoningEffort(
       currentThread?.reasoning_effort ?? null,
       defaultReasoning,
-      MODELS[currentTier].defaultReasoningEffort
+      TIERS[currentTier].defaultReasoningEffort
     )
   );
   const currentSupportsReasoning = $derived<boolean>(
-    MODELS[currentTier].supportsReasoning
+    TIERS[currentTier].supportsReasoning
   );
   const defaultVerbosity = $derived<Verbosity>(
     app.defaultVerbosity ?? DEFAULT_VERBOSITY
@@ -1904,8 +1905,8 @@
     // Capture the tier BEFORE materializing, since materialize mutates
     // `threads` and could make `currentThread` briefly null.
     const tier = resolveTier(active?.model ?? null, defaultTier);
-    const modelId = MODELS[tier].id;
-    const tierSpec = MODELS[tier];
+    const modelId = TIERS[tier].id;
+    const tierSpec = TIERS[tier];
     // Only pass reasoning_effort on models that accept it; letting it
     // ride along to a non-reasoning model produces a 400 on some providers.
     const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
@@ -2266,7 +2267,7 @@
           userName: ctx.sendUserName,
           userLocation: ctx.sendUserLocation,
           journalTimezone: app.journalTimezone || null,
-          intuitionModelId: MODELS.fast.id,
+          intuitionModelId: agentModel('intuition').id,
           intuitionMood: intuitionMoodArg,
           // Topic-boundary recall rides the same trigger machinery as
           // intuition (cold-start, mid-turn title shift, mood shift,
@@ -2662,7 +2663,7 @@
     const active = findThread(draft.threadId);
     if (!active || active.isDraft || active.archived) return;
     const tier = resolveTier(active.model ?? null, defaultTier);
-    const tierSpec = MODELS[tier];
+    const tierSpec = TIERS[tier];
     const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
       ? resolveReasoningEffort(
           active.reasoning_effort ?? null,
@@ -2729,7 +2730,7 @@
     // turn again" gesture, and the user often wants to re-run with
     // a different model or a tweaked system prompt.
     const tier = resolveTier(active.model ?? null, defaultTier);
-    const tierSpec = MODELS[tier];
+    const tierSpec = TIERS[tier];
     const modelId = tierSpec.id;
     const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
       ? resolveReasoningEffort(
@@ -2802,7 +2803,7 @@
     const userMessage = messages[userIdx];
 
     const tier = resolveTier(active.model ?? null, defaultTier);
-    const tierSpec = MODELS[tier];
+    const tierSpec = TIERS[tier];
     const modelId = tierSpec.id;
     const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
       ? resolveReasoningEffort(
@@ -4966,7 +4967,7 @@
                 }}
                 aria-haspopup="true"
                 aria-expanded={modelMenuOpen}
-                title={`Model: ${MODELS[currentTier].label} (${MODELS[currentTier].id})`}
+                title={`Model: ${TIERS[currentTier].label} (${TIERS[currentTier].id})`}
               >
                 <!-- Generic "model selection" glyph for the collapsed
                      icon-only trigger. A CPU outline rather than the
@@ -4988,8 +4989,8 @@
                   <line x1="2" y1="9" x2="4" y2="9" />
                   <line x1="2" y1="14" x2="4" y2="14" />
                 </svg>
-                <span class="model-picker-icon" aria-hidden="true">{MODELS[currentTier].icon}</span>
-                <span class="model-picker-label">{MODELS[currentTier].label}</span>
+                <span class="model-picker-icon" aria-hidden="true">{TIERS[currentTier].icon}</span>
+                <span class="model-picker-label">{TIERS[currentTier].label}</span>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <polyline points="6 9 12 15 18 9" />
@@ -5131,7 +5132,7 @@
             {#if modelMenuOpen}
               <div class="composer-menu composer-menu-left" role="menu">
                 <div class="menu-header">Model for this conversation</div>
-                {#each TIERS as tier (tier)}
+                {#each TIER_ORDER as tier (tier)}
                   <button
                     type="button"
                     class="menu-item menu-item-btn"
@@ -5143,10 +5144,10 @@
                     role="menuitemradio"
                     aria-checked={currentTier === tier}
                   >
-                    <span class="menu-item-icon" aria-hidden="true">{MODELS[tier].icon}</span>
+                    <span class="menu-item-icon" aria-hidden="true">{TIERS[tier].icon}</span>
                     <span class="menu-item-label">
-                      <strong>{MODELS[tier].label}</strong>
-                      <span class="subtle" style="display:block;font-size:0.75rem">{MODELS[tier].id}</span>
+                      <strong>{TIERS[tier].label}</strong>
+                      <span class="subtle" style="display:block;font-size:0.75rem">{TIERS[tier].id}</span>
                     </span>
                     {#if tier === defaultTier}<span class="menu-item-badge">default</span>{/if}
                   </button>

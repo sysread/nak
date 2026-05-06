@@ -21,7 +21,7 @@
  */
 import type { AppConfig } from '../../config';
 import type { SupabaseService } from '../../supabase';
-import { VENICE_REFLECTION_MODEL } from '../../models';
+import { agentModel } from '../../models';
 import { makeHolderId } from '../../embeddings/manager';
 import {
   appendFromWorker,
@@ -186,7 +186,7 @@ export class ReflectionManager {
       refreshToken: session.refresh_token,
       userId: session.user.id,
       veniceApiKey: opts.config.veniceApiKey,
-      reflectionModel: VENICE_REFLECTION_MODEL,
+      reflectionModel: agentModel('reflection').id,
       holderId: makeHolderId(),
       ...WORKER_DEFAULTS,
     });

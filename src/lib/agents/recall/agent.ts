@@ -36,7 +36,7 @@ import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
 import { recallToolbox } from '../../tools/recall_toolbox';
 import { runHeadlessToolLoop } from '../../tools/run';
 import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
-import { VENICE_RECALL_MODEL } from '../../models';
+import { agentModel } from '../../models';
 import { RECALL_PROMPT } from './prompt';
 
 export interface RecallInput {
@@ -206,13 +206,13 @@ export class RecallAgent implements Agent<RecallInput, RecallOutput> {
     private supabase: SupabaseService,
     /**
      * Optional model override, mirroring ReflectionAgent. Defaults to
-     * `VENICE_RECALL_MODEL` (tracks the fast tier). Tests pin a
-     * specific id; a future A/B could run recall on two models
-     * side-by-side against the same thread.
+     * the registry's `recall` slot (see AGENT_MODELS in
+     * src/lib/models). Tests pin a specific id; a future A/B could
+     * run recall on two models side-by-side against the same thread.
      */
     modelId?: string
   ) {
-    this.model = modelId ?? VENICE_RECALL_MODEL;
+    this.model = modelId ?? agentModel('recall').id;
   }
 
   async run(
