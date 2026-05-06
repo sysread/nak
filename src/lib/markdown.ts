@@ -23,7 +23,6 @@
 
 import { marked, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
-import markedKatex from 'marked-katex-extension';
 
 // `./highlight` is not statically imported - the entire highlight.js
 // stack (engine + 26 eager language grammars + the dynamic-loader
@@ -98,6 +97,53 @@ export async function prewarmHighlight(): Promise<void> {
   if (hlPromise) await hlPromise;
 }
 
+// `marked-katex-extension` (and its KaTeX dependency) is the other
+// heavy markdown addon - the compiled font shapes plus the renderer
+// land at ~280 kB unpacked. Most chats never use math, so the
+// extension is dynamically imported on the first markdown render
+// that contains a `$` character. Until the chunk lands, `$x^2$`
+// renders as plain text (which is what marked produces without the
+// extension registered). When the chunk arrives, we register the
+// extension with marked and fire the same `onLanguageLoaded`
+// notification used for highlight - <Markdown> bumps its version
+// and re-renders, this time with the extension active.
+//
+// `prewarmKatex()` is the test-only escape hatch for synchronous
+// vitest assertions on KaTeX-rendered output, parallel to
+// `prewarmHighlight()`.
+let katexLoaded = false;
+let katexPromise: Promise<unknown> | null = null;
+
+function ensureKatexLoading(): void {
+  if (katexLoaded || katexPromise) return;
+  katexPromise = import('marked-katex-extension').then((m) => {
+    // Register exactly once. `throwOnError: false` means malformed
+    // math inline-renders an error glyph instead of bubbling up
+    // through marked's parse - protects the rest of the message.
+    // `output: 'html'` keeps the generated tree DOMPurify-friendly
+    // (no MathML ambient namespaces).
+    marked.use(m.default({ throwOnError: false, output: 'html' }));
+    katexLoaded = true;
+    // Fire the unified listener notification so anyone waiting
+    // (typically <Markdown>) re-renders the message that just had
+    // its `$x^2$` show up as plain text.
+    for (const cb of highlightListeners) cb();
+  });
+}
+
+/**
+ * Test-only: await the lazy KaTeX/marked-katex import so
+ * synchronous vitest assertions on math-rendered output can run
+ * against a fully-loaded extension. Production code never needs
+ * to call this; the lazy load fires automatically on the first
+ * render whose source contains `$`.
+ */
+export async function prewarmKatex(): Promise<void> {
+  if (katexLoaded) return;
+  ensureKatexLoading();
+  if (katexPromise) await katexPromise;
+}
+
 // ---------------------------------------------------------------------------
 // marked configuration
 // ---------------------------------------------------------------------------
@@ -154,9 +200,11 @@ renderer.code = ({ text, lang }: { text: string; lang?: string }) => {
 };
 
 marked.use({ renderer });
-// `$...$` for inline, `$$...$$` for block math. Output stays as inline HTML
-// so DOMPurify can scrub it along with the rest.
-marked.use(markedKatex({ throwOnError: false, output: 'html' }));
+// `$...$` for inline, `$$...$$` for block math. The extension is
+// registered lazily by `ensureKatexLoading` the first time
+// `renderMarkdown` sees a `$` in the source - see the lazy block
+// near the top of this file. Output stays as inline HTML so
+// DOMPurify can scrub it along with the rest.
 
 // Venice citation superscripts. The model is instructed (by Venice's
 // server-side prompt when `enable_web_citations=true`) to mark sourced
@@ -301,6 +349,13 @@ function registerLinkHardening(): void {
 export function renderMarkdown(src: string): string {
   if (typeof src !== 'string' || src.length === 0) return '';
   registerLinkHardening();
+  // Cheap source-scan: any `$` in the source COULD be math. False
+  // positives ("the cost was $5") are fine - we just kick off the
+  // chunk load, the next render uses it, and the cost is a one-
+  // time fetch per session for users who happened to use a `$`
+  // anywhere. Done before parse so the import is in flight while
+  // marked tokenises.
+  if (!katexLoaded && src.indexOf('$') !== -1) ensureKatexLoading();
   const html = marked.parse(src, { async: false }) as string;
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS,

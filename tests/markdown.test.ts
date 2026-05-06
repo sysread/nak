@@ -1,17 +1,16 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { renderMarkdown, prewarmHighlight } from '../src/lib/markdown';
+import { renderMarkdown, prewarmHighlight, prewarmKatex } from '../src/lib/markdown';
 import { canLoad, ensureLanguage, isSupported } from '../src/lib/highlight';
 
-// `markdown.ts` no longer statically imports `./highlight`; the
-// engine + 26 eager language grammars live in their own chunk that
-// loads on the first fenced render. Tests that assert on
-// highlighted output need the module loaded BEFORE the synchronous
-// renderMarkdown call, so we await the prewarm here once. Without
-// this the first call to renderMarkdown('```python ...') would
-// return plain text (highlight module not yet resolved) and the
-// hljs-keyword assertion would fail.
+// `markdown.ts` no longer statically imports `./highlight` or
+// `marked-katex-extension`; both heavy addons live in their own
+// chunks that load on first use (first fenced render / first `$`
+// in source). Tests that assert synchronously on highlighted or
+// math-rendered output need both modules loaded BEFORE the
+// renderMarkdown call, so we prewarm them once here. Production
+// code never needs this - the lazy loads fire automatically.
 beforeAll(async () => {
-  await prewarmHighlight();
+  await Promise.all([prewarmHighlight(), prewarmKatex()]);
 });
 
 describe('renderMarkdown — happy paths', () => {
