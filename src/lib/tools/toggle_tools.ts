@@ -25,6 +25,18 @@
  * to self-correct on the next call.
  */
 import type { ToolDef } from './types';
+// Imported from `./index` even though `./index` itself imports
+// `toggleToolbox` from this file - the cycle resolves cleanly via
+// ESM live bindings because both bindings below are only read inside
+// `execute()` at tool-invocation time, well after both modules have
+// finished initialising. A previous incarnation deferred the import
+// via `await import('./index')` to break the cycle defensively, but
+// that was a misread of ESM cycle semantics: the dynamic import was
+// neither preventing TDZ access (the references aren't at module
+// top level) nor enabling code-splitting (every other importer
+// pulled `./index` statically anyway, so the bundler kept it in the
+// main chunk).
+import { GATED_TOOLBOX_NAMES, alwaysOnToolbox } from './index';
 
 export const toggleToolbox: ToolDef = {
   name: 'toggle_toolbox',
@@ -51,11 +63,6 @@ export const toggleToolbox: ToolDef = {
     additionalProperties: false,
   },
   async execute(args, ctx) {
-    // Deferred import to avoid a module-load cycle: this file is
-    // imported by ./index.ts (which defines GATED_TOOLBOX_NAMES),
-    // and importing the other direction at the top would have the
-    // names set to `undefined` at first reference.
-    const { GATED_TOOLBOX_NAMES, alwaysOnToolbox } = await import('./index');
     const raw = Array.isArray(args.enabled) ? (args.enabled as unknown[]) : [];
     const gated = new Set(GATED_TOOLBOX_NAMES);
     const seen = new Set<string>();
