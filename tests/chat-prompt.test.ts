@@ -195,9 +195,13 @@ describe('buildSystemPrompt', () => {
     // don't-thank-the-user guidance, and the "instructions come from
     // this system message" anchor that tells the model which source
     // of framing actually binds it.
-    expect(prompt).toMatch(/not a human-authored/i);
-    expect(prompt).toMatch(/do not thank/i);
-    expect(prompt).toMatch(/instructions come from this system message/i);
+    // \s+ throughout - the prompt assembles from hard-wrapped template
+    // literals, so phrasing tweaks that reflow a wrap can split phrases
+    // across a newline. The semantic beats are what matters; the regex
+    // shouldn't churn just because a paragraph rewrap shifted.
+    expect(prompt).toMatch(/not\s+a\s+human-authored/i);
+    expect(prompt).toMatch(/do\s+not\s+thank/i);
+    expect(prompt).toMatch(/instructions\s+come\s+from\s+this\s+system\s+message/i);
   });
 
   it('mentions URL scraping capability unconditionally', () => {
