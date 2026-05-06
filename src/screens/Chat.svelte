@@ -91,16 +91,26 @@
     type ReasoningEffort,
     type Verbosity,
   } from '$lib/models';
-  import Auth from './Auth.svelte';
-  import Memories from './Memories.svelte';
-  import Journal from './Journal.svelte';
-  import Cookbook from './Cookbook.svelte';
-  // Settings / Help / Samskara / Intuition are modal-only screens
-  // (rendered behind a `show*` derived state, never as part of the
-  // chat critical path). They're loaded lazily via dynamic import
-  // below so Vite code-splits them out of the main chunk; the
-  // first open of each pays a chunk-fetch latency, subsequent opens
-  // are instant.
+  // Every screen rendered from this file is loaded lazily. None of
+  // them sit on the chat critical path:
+  //
+  //   - Auth: only rendered when the user is signed OUT (no
+  //     session). Most cold-starts arrive with a valid session and
+  //     never touch this component.
+  //   - Cookbook / Journal / Memories: panel screens, only render
+  //     when the corresponding drawerTab is active.
+  //   - Settings / Help / Samskara / Intuition: pure modals,
+  //     rendered behind a `show*` derived state.
+  //
+  // Each gets a lazy reference + a $effect that fires the dynamic
+  // import the first time its visibility flag flips on. The loaded
+  // constructor caches in $state so re-renders skip the round-trip.
+  // Vite code-splits each into its own chunk; the main chunk pays
+  // for none of them at boot.
+  type AuthComponent = typeof import('./Auth.svelte').default;
+  type CookbookComponent = typeof import('./Cookbook.svelte').default;
+  type JournalComponent = typeof import('./Journal.svelte').default;
+  type MemoriesComponent = typeof import('./Memories.svelte').default;
   type SettingsComponent = typeof import('./Settings.svelte').default;
   type HelpComponent = typeof import('./Help.svelte').default;
   type SamskaraComponent = typeof import('./Samskara.svelte').default;
@@ -165,18 +175,40 @@
   const showSamskara = $derived(route.modal === 'samskara');
   const showIntuition = $derived(route.modal === 'intuition');
 
-  // Lazy modal components. The dynamic import fires the first time
-  // the corresponding `show*` flag flips on; the loaded constructor
-  // is cached in $state so re-opens skip the round-trip. Until the
-  // chunk lands, the `{#if show* && Comp}` guard renders nothing -
-  // visible as a tiny open-latency on first open of each modal,
-  // invisible thereafter. The modal markup itself draws its own
-  // backdrop / content, so a render-nothing intermediate state
-  // doesn't dim the rest of the UI.
+  // Lazy components. Each holds the loaded constructor in $state
+  // (cached after first import) and an $effect that fires the
+  // dynamic import the first time the visibility flag flips on.
+  // The render-site `{#if show* && Comp}` guard renders nothing
+  // until the chunk lands - visible as a tiny first-open latency,
+  // invisible thereafter.
+  let AuthComp: AuthComponent | null = $state(null);
+  let CookbookComp: CookbookComponent | null = $state(null);
+  let JournalComp: JournalComponent | null = $state(null);
+  let MemoriesComp: MemoriesComponent | null = $state(null);
   let SettingsComp: SettingsComponent | null = $state(null);
   let HelpComp: HelpComponent | null = $state(null);
   let SamskaraComp: SamskaraComponent | null = $state(null);
   let IntuitionComp: IntuitionComponent | null = $state(null);
+  $effect(() => {
+    if (sessionLoaded && !session && !AuthComp) {
+      void import('./Auth.svelte').then((m) => (AuthComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (drawerTab === 'recipes' && !CookbookComp) {
+      void import('./Cookbook.svelte').then((m) => (CookbookComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (drawerTab === 'journal' && !JournalComp) {
+      void import('./Journal.svelte').then((m) => (JournalComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (drawerTab === 'memories' && !MemoriesComp) {
+      void import('./Memories.svelte').then((m) => (MemoriesComp = m.default));
+    }
+  });
   $effect(() => {
     if (showSettings && !SettingsComp) {
       void import('./Settings.svelte').then((m) => (SettingsComp = m.default));
@@ -3780,7 +3812,9 @@
 {#if !sessionLoaded}
   <div class="center"><p class="subtle">Connecting…</p></div>
 {:else if !session}
-  <Auth />
+  {#if AuthComp}
+    <AuthComp />
+  {/if}
 {:else}
   <!--
     Modals render as overlays ALONGSIDE the chat shell, not in place
@@ -5166,23 +5200,31 @@
              onDeselect callback fires when the panel returns to its
              empty state (Back, Delete, Escape, browser back) so the
              shell can auto-expose the recipe list on mobile, where it
-             lives in the drawer rather than a persistent column. -->
-        <Cookbook
-          bind:triggerNew={cookbookTriggerNew}
-          onDeselect={openDrawerOnMobile}
-        />
+             lives in the drawer rather than a persistent column. The
+             component itself is lazy-loaded; renders nothing while the
+             chunk is in flight. -->
+        {#if CookbookComp}
+          <CookbookComp
+            bind:triggerNew={cookbookTriggerNew}
+            onDeselect={openDrawerOnMobile}
+          />
+        {/if}
       {:else if drawerTab === 'journal'}
         <!-- Journal panel. Journal.svelte now renders inline - no modal
              wrapper, no header. Date navigation in the top-bar drives
              route.journal_date, which the panel reads. The triggerNewEntry
              prop wires the top-bar book button to the compose flow. -->
-        <Journal bind:triggerNewEntry={journalTriggerNew} />
+        {#if JournalComp}
+          <JournalComp bind:triggerNewEntry={journalTriggerNew} />
+        {/if}
       {:else}
         <!-- Memories panel. Same shape as Cookbook / Journal: inline,
              no modal chrome. The sidebar MemoryList shares the same
              `memoriesStore` so a search keystroke filters this list
              too. Editing happens inline on the cards. -->
-        <Memories />
+        {#if MemoriesComp}
+          <MemoriesComp />
+        {/if}
       {/if}
     </main>
     <!-- Right-edge logs panel. On desktop it's the third grid column
