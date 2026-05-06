@@ -63,7 +63,7 @@ describe('buildSystemPrompt', () => {
     // Push back against the post-training tendency toward diplomatic
     // smoothing, comfort-first phrasing, and unearned validation.
     // Grep-style assertions on the semantic beats rather than exact
-    // copy so phrasing tweaks don't churn the test — but the three
+    // copy so phrasing tweaks don't churn the test - but the three
     // load-bearing ideas (correctness over comfort, direct
     // corrections over rationalising, earned agreement only) must
     // survive any future edit to the block.
@@ -72,7 +72,7 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toMatch(/(rationalis|rationaliz)ing/i);
     expect(prompt).toMatch(/(unearned|earned)/i);
     // And the explicit non-goal: plain-spoken, not cold. Drop this
-    // line and the block slides toward "robotic" — which is a
+    // line and the block slides toward "robotic" - which is a
     // different failure mode than the one we're fixing.
     expect(prompt).toMatch(/not\s+cold|not\s+robotic|plain-spoken/i);
   });
@@ -180,11 +180,11 @@ describe('buildSystemPrompt', () => {
   });
 
   it('carries the user-message boundary rule and Venice-injection warning', () => {
-    // Venice can inject content into what arrives as the user turn —
+    // Venice can inject content into what arrives as the user turn -
     // URL scraping (enable_web_scraping) is always on in venice.ts,
     // so any request where the user pasted a URL gets the full
     // scraped page inlined after their text. chat-loop.ts wraps the
-    // current user turn unconditionally in <user_message>…</user_message>
+    // current user turn unconditionally in <user_message>...</user_message>
     // as the structural boundary; this prompt block is the paired
     // instruction telling the model what to do with the tags.
     const prompt = buildSystemPrompt();

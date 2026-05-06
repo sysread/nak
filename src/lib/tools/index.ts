@@ -27,12 +27,17 @@
  * composer toolbox popover. Both paths write through to the same
  * column.
  *
- * Note on the agent-only `memoryToolbox` at the bottom of this file:
- * it is a DIFFERENT set of tools (`memory_invalidate` in place of
- * `memory_delete`) than the user-facing `memoriesToolbox`. Agents
- * must not hard-delete on their own authority - they can only soft-
- * decay confidence. The user-facing surface keeps hard-delete because
- * "forget X" is user-directed and unambiguous. Don't collapse the two.
+ * Note on the agent-only `memoryToolbox` re-exported near the bottom
+ * of this file: its definition lives in `./memory_toolbox` (kept out
+ * of this barrel for reflection-worker bundling reasons - see that
+ * file's header) but the export rides through here so callers can
+ * still pull it from `$lib/tools`. It is a DIFFERENT set of tools
+ * (`memory_invalidate` in place of `memory_delete`) than the user-
+ * facing `memoriesToolbox` defined in this file. Agents must not
+ * hard-delete on their own authority - they can only soft-decay
+ * confidence. The user-facing surface keeps hard-delete because
+ * "forget X" is user-directed and unambiguous. Don't collapse the
+ * two.
  */
 import type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
 import { toggleToolbox } from './toggle_tools';
@@ -76,21 +81,30 @@ import { journalDelete } from './journal_delete';
  *
  *   - `toggle_toolbox` - the gating mechanism itself. Without it in
  *     the always-on set, the model can't enable gated toolboxes.
- *   - `memory_recall`, `conversation_recall` - reflex-level reads
- *     the system prompt tells the model to call at the top of a new
- *     topic. A prefatory toggle round-trip would undermine that
- *     framing. Both are read-only (they spawn a sub-agent and
- *     return a structured note).
- *   - `web_search` - same rationale: a search for "today's weather"
- *     or "latest release of X" is a reflex-level capability that
- *     must fire without first enabling a toolbox. Read-only (no DB
- *     writes; runs a sub-completion with Venice's server-side
- *     search on).
+ *   - `memory_recall`, `conversation_recall` - the LLM-callable
+ *     escape hatches for explicit user lookups ("what was that
+ *     thread about X?") and for cases where the chat-loop's
+ *     automatic context-recall priming has gone stale. The system
+ *     prompt frames them as escape hatches rather than per-turn
+ *     reflexes, so a prefatory toggle round-trip would add latency
+ *     to a path that needs to fire on user demand. Both are read-
+ *     only (they spawn a sub-agent and return a structured note).
+ *   - `web_search` - a search for "today's weather" or "latest
+ *     release of X" is a reflex-level capability that must fire
+ *     without first enabling a toolbox. Read-only (no DB writes;
+ *     runs a sub-completion with Venice's server-side search on).
+ *     The main chat loop never sets `enable_web_search` itself, so
+ *     this tool is the only path search results reach the model.
  *   - `update_title` - has to fire on the very first turn of a
  *     fresh thread, when no gated toolbox is on yet. Gating it
  *     would mean a toggle round-trip before the model could set
  *     the initial title, which defeats the "single-call adaptive
  *     title" design.
+ *   - `analyze_image` - a fast vision sub-completion the model
+ *     reaches for when an attached image needs to be inspected
+ *     before answering. Always-on for the same reason as recall:
+ *     the user expects the model to look at the image they just
+ *     sent without an intervening toolbox flip.
  *
  * Note on what's NOT here: `research_docs` is a research capability
  * (read-only bundled docs) that would pass the always-on criteria on
@@ -144,9 +158,11 @@ export const cookingToolbox: Toolbox = {
  * as the user-authorised hard-delete (not present in the reflection
  * toolbox).
  *
- * Contrast with `memoryToolbox` below, which swaps `memory_delete` for
- * `memory_invalidate` because agents operating on their own authority
- * only get soft-decay, not hard delete.
+ * Contrast with the agent-only `memoryToolbox` (defined in
+ * `./memory_toolbox`, re-exported near the bottom of this file),
+ * which swaps `memory_delete` for `memory_invalidate` because agents
+ * operating on their own authority only get soft-decay, not hard
+ * delete.
  */
 export const memoriesToolbox: Toolbox = {
   name: 'memories',
