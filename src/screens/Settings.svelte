@@ -51,18 +51,18 @@
   import {
     app,
     activate,
-    setDefaultModel,
-    setDefaultReasoningEffort,
-    setDefaultVerbosity,
-    setDefaultLogLevel,
-    setEmphasisMarkdown,
-    setNotifyOnComplete,
-    setJournalAutomaticEnabled,
-    setJournalTimezone,
-    setSystemPrompts,
-    setTheme,
-    setUserName,
-    setUserLocation,
+    persistDefaultModel,
+    persistDefaultReasoningEffort,
+    persistDefaultVerbosity,
+    persistDefaultLogLevel,
+    persistEmphasisMarkdown,
+    persistNotifyOnComplete,
+    persistJournalAutomaticEnabled,
+    persistJournalTimezone,
+    persistSystemPrompts,
+    persistTheme,
+    persistUserName,
+    persistUserLocation,
   } from '$lib/state.svelte';
   import { detectTimezone, normalizeTimezone } from '$lib/journal-day';
   import { downloadFullArchive } from '$lib/journal-export';
@@ -260,17 +260,9 @@
 
   async function savePrompts(): Promise<void> {
     promptsError = null;
-    if (!app.supabase) {
-      promptsError = 'Not connected to Supabase yet.';
-      promptsSaveState = 'idle';
-      return;
-    }
     promptsSaving = true;
     try {
-      const merged = await app.supabase.updateSettings({
-        systemPrompts: promptsDraft,
-      });
-      setSystemPrompts(merged.systemPrompts ?? []);
+      await persistSystemPrompts(promptsDraft);
       promptsSaveState = 'saved';
     } catch (err) {
       promptsError = err instanceof Error ? err.message : String(err);
@@ -287,49 +279,50 @@
   let appearanceError = $state<string | null>(null);
   let appearanceInfo = $state<string | null>(null);
 
-  // Apply selection live as the user clicks — no Save button needed.
+  // Apply selection live as the user clicks - no Save button needed.
+  // Theme has two axes (mode + accent), so each picker assembles the
+  // full pair and routes through the same persist helper.
   async function onPickMode(next: ColorMode): Promise<void> {
+    const prevMode = colorMode;
     colorMode = next;
-    setTheme(next, accent);
-    await persistTheme();
-  }
-  async function onPickAccent(next: Accent): Promise<void> {
-    accent = next;
-    setTheme(colorMode, next);
-    await persistTheme();
-  }
-  // Default log level lives in Appearance because it's a pure
-  // presentation preference - what the drawer starts out showing. The
-  // LogsDrawer seeds its own filter from app.defaultLogLevel each
-  // time it opens; per-session overrides via the drawer's own
-  // dropdown are deliberately not persisted.
-  async function onPickLogLevel(next: LogLevel): Promise<void> {
-    defaultLogLevel = next;
-    setDefaultLogLevel(next);
     appearanceError = null;
     appearanceInfo = null;
-    if (!app.supabase) {
-      appearanceError = 'Not connected to Supabase — log level saved locally only.';
-      return;
-    }
     try {
-      await app.supabase.updateSettings({ defaultLogLevel: next });
+      await persistTheme(next, accent);
       appearanceInfo = 'Saved.';
     } catch (err) {
+      colorMode = prevMode;
       appearanceError = err instanceof Error ? err.message : String(err);
     }
   }
-  async function persistTheme(): Promise<void> {
+  async function onPickAccent(next: Accent): Promise<void> {
+    const prevAccent = accent;
+    accent = next;
     appearanceError = null;
     appearanceInfo = null;
-    if (!app.supabase) {
-      appearanceError = 'Not connected to Supabase — theme saved locally only.';
-      return;
-    }
     try {
-      await app.supabase.updateSettings({ colorMode, accent });
+      await persistTheme(colorMode, next);
       appearanceInfo = 'Saved.';
     } catch (err) {
+      accent = prevAccent;
+      appearanceError = err instanceof Error ? err.message : String(err);
+    }
+  }
+  // Default log level lives in Appearance because it's a pure
+  // presentation preference - what the drawer starts out showing.
+  // The LogsDrawer seeds its own filter from app.defaultLogLevel
+  // each time it opens; per-session overrides via the drawer's own
+  // dropdown are deliberately not persisted.
+  async function onPickLogLevel(next: LogLevel): Promise<void> {
+    const prev = defaultLogLevel;
+    defaultLogLevel = next;
+    appearanceError = null;
+    appearanceInfo = null;
+    try {
+      await persistDefaultLogLevel(next);
+      appearanceInfo = 'Saved.';
+    } catch (err) {
+      defaultLogLevel = prev;
       appearanceError = err instanceof Error ? err.message : String(err);
     }
   }
@@ -788,49 +781,34 @@
     }
   }
 
-  // Picking a radio applies the choice immediately — no Save button.
-  // Optimistic in-memory flip so the radio reflects the new tier right
-  // away; on persistence failure we roll the UI and the global flag
-  // back to the previous value.
+  // Picking a radio applies the choice immediately - no Save button.
+  // Optimistic in-memory flip so the radio reflects the new tier
+  // right away; on persistence failure we roll the local form state
+  // back. The persistX helper handles app-state apply + rollback.
   async function onPickModel(next: ModelTier): Promise<void> {
     modelError = null;
     modelInfo = null;
-    if (!app.supabase) {
-      modelError = 'Not connected to Supabase yet.';
-      return;
-    }
     const prev = defaultModel;
     defaultModel = next;
-    setDefaultModel(next);
     try {
-      await app.supabase.updateSettings({ defaultModel: next });
+      await persistDefaultModel(next);
       modelInfo = `Default model set to ${TIERS[next].label}.`;
     } catch (err) {
       defaultModel = prev;
-      setDefaultModel(prev);
       modelError = err instanceof Error ? err.message : String(err);
     }
   }
 
-  // Same optimistic-then-persist pattern as onPickModel, for the
-  // reasoning-effort select. They share modelError/modelInfo so the
-  // most recent action is what the user sees.
   async function onPickReasoning(next: ReasoningEffort): Promise<void> {
     modelError = null;
     modelInfo = null;
-    if (!app.supabase) {
-      modelError = 'Not connected to Supabase yet.';
-      return;
-    }
     const prev = defaultReasoningEffort;
     defaultReasoningEffort = next;
-    setDefaultReasoningEffort(next);
     try {
-      await app.supabase.updateSettings({ defaultReasoningEffort: next });
+      await persistDefaultReasoningEffort(next);
       modelInfo = `Default reasoning effort set to ${REASONING_EFFORT_LABELS[next].toLowerCase()}.`;
     } catch (err) {
       defaultReasoningEffort = prev;
-      setDefaultReasoningEffort(prev);
       modelError = err instanceof Error ? err.message : String(err);
     }
   }
@@ -838,83 +816,47 @@
   async function onPickVerbosity(next: Verbosity): Promise<void> {
     modelError = null;
     modelInfo = null;
-    if (!app.supabase) {
-      modelError = 'Not connected to Supabase yet.';
-      return;
-    }
     const prev = defaultVerbosity;
     defaultVerbosity = next;
-    setDefaultVerbosity(next);
     try {
-      await app.supabase.updateSettings({ defaultVerbosity: next });
+      await persistDefaultVerbosity(next);
       modelInfo = `Default verbosity set to ${VERBOSITY_LABELS[next].toLowerCase()}.`;
     } catch (err) {
       defaultVerbosity = prev;
-      setDefaultVerbosity(prev);
       modelError = err instanceof Error ? err.message : String(err);
     }
   }
 
   /**
-   * Persist the user's display name. Trims surrounding whitespace
-   * because a trailing space in a name field is almost always a
-   * typo, and the chat-loop injects this string verbatim into the
-   * per-turn prompt - "Hi  John " reads as a bug. Empty after
-   * trimming clears the setting (the updateSettings dispatch deletes
-   * the key so the stored blob stays compact). 200-char ceiling
-   * matches the supabase.ts coercer cap; over-long values get the
-   * inline error rather than a silent truncation.
+   * Save the user's display name. Trim + 200-char cap live in
+   * `persistUserName`; this caller just reads back the canonical
+   * trimmed value to sync the local input. On failure the typed
+   * value stays in the textbox so the user can retry without
+   * losing what they had.
    */
   async function onSaveUserName(next: string): Promise<void> {
     modelError = null;
     modelInfo = null;
-    if (!app.supabase) {
-      modelError = 'Not connected to Supabase yet.';
-      return;
-    }
-    const trimmed = next.trim();
-    if (trimmed.length > 200) {
-      modelError = 'Name is too long (max 200 characters).';
-      return;
-    }
-    const prev = userName;
-    userName = trimmed;
-    setUserName(trimmed);
     try {
-      await app.supabase.updateSettings({ userName: trimmed });
+      const trimmed = await persistUserName(next);
+      userName = trimmed;
       modelInfo = trimmed.length > 0 ? 'Name saved.' : 'Name cleared.';
     } catch (err) {
-      userName = prev;
-      setUserName(prev);
       modelError = err instanceof Error ? err.message : String(err);
     }
   }
 
   /**
-   * Persist the user's location. Same trim + length-cap + clear-on-
-   * empty semantics as onSaveUserName; comments there apply.
+   * Save the user's location. Same shape as `onSaveUserName`.
    */
   async function onSaveUserLocation(next: string): Promise<void> {
     modelError = null;
     modelInfo = null;
-    if (!app.supabase) {
-      modelError = 'Not connected to Supabase yet.';
-      return;
-    }
-    const trimmed = next.trim();
-    if (trimmed.length > 200) {
-      modelError = 'Location is too long (max 200 characters).';
-      return;
-    }
-    const prev = userLocation;
-    userLocation = trimmed;
-    setUserLocation(trimmed);
     try {
-      await app.supabase.updateSettings({ userLocation: trimmed });
+      const trimmed = await persistUserLocation(next);
+      userLocation = trimmed;
       modelInfo = trimmed.length > 0 ? 'Location saved.' : 'Location cleared.';
     } catch (err) {
-      userLocation = prev;
-      setUserLocation(prev);
       modelError = err instanceof Error ? err.message : String(err);
     }
   }
@@ -922,23 +864,15 @@
   async function onToggleEmphasis(next: boolean): Promise<void> {
     modelError = null;
     modelInfo = null;
-    if (!app.supabase) {
-      modelError = 'Not connected to Supabase yet.';
-      return;
-    }
     const prev = emphasisMarkdown;
-    // Optimistic update: flip the UI + app state now, roll back on error.
-    // Same pattern as the verbosity/reasoning handlers above.
     emphasisMarkdown = next;
-    setEmphasisMarkdown(next);
     try {
-      await app.supabase.updateSettings({ emphasisMarkdown: next });
+      await persistEmphasisMarkdown(next);
       modelInfo = next
         ? 'Emphasis markdown enabled.'
         : 'Emphasis markdown disabled.';
     } catch (err) {
       emphasisMarkdown = prev;
-      setEmphasisMarkdown(prev);
       modelError = err instanceof Error ? err.message : String(err);
     }
   }
@@ -955,31 +889,28 @@
   async function onToggleNotifyOnComplete(next: boolean): Promise<void> {
     modelError = null;
     modelInfo = null;
-    if (!app.supabase) {
-      modelError = 'Not connected to Supabase yet.';
-      return;
-    }
-    const prev = notifyOnComplete;
     if (next && notificationsSupported()) {
-      // Safari + Chromium both require a user gesture to kick off the
-      // prompt; the click that toggled the checkbox counts, so we can
-      // ask immediately from this handler.
+      // Safari + Chromium both require a user gesture to kick off
+      // the prompt; the click that toggled the checkbox counts, so
+      // we can ask immediately from this handler. 'default' here
+      // means the user dismissed the prompt without choosing -
+      // treat as a soft deny, since we can't fire OS notifications
+      // without a granted state. User can re-flip the toggle to
+      // try again. Local state snaps back; app state never moved
+      // because we haven't called persist* yet, so no rollback
+      // there either.
       const result = await requestPermission();
       if (result === 'denied' || result === 'default') {
-        // 'default' here means the user dismissed the prompt without
-        // choosing - treat as a soft deny, since we can't fire OS
-        // notifications without a granted state. User can re-flip the
-        // toggle to try again.
         notifyOnComplete = false;
         modelError =
           'Browser notifications are blocked. Allow notifications for this site in your browser settings, then try again.';
         return;
       }
     }
+    const prev = notifyOnComplete;
     notifyOnComplete = next;
-    setNotifyOnComplete(next);
     try {
-      await app.supabase.updateSettings({ notifyOnComplete: next });
+      await persistNotifyOnComplete(next);
       modelInfo = next
         ? notificationsSupported()
           ? 'Reply notifications enabled.'
@@ -987,7 +918,6 @@
         : 'Reply notifications disabled.';
     } catch (err) {
       notifyOnComplete = prev;
-      setNotifyOnComplete(prev);
       modelError = err instanceof Error ? err.message : String(err);
     }
   }
@@ -995,21 +925,15 @@
   async function onToggleJournalAutomatic(next: boolean): Promise<void> {
     journalError = null;
     journalInfo = null;
-    if (!app.supabase) {
-      journalError = 'Not connected to Supabase yet.';
-      return;
-    }
     const prev = journalAutomaticEnabled;
     journalAutomaticEnabled = next;
-    setJournalAutomaticEnabled(next);
     try {
-      await app.supabase.updateSettings({ journalAutomaticEnabled: next });
+      await persistJournalAutomaticEnabled(next);
       journalInfo = next
         ? 'Automatic journal enabled.'
         : 'Automatic journal disabled. Your own entries are unaffected.';
     } catch (err) {
       journalAutomaticEnabled = prev;
-      setJournalAutomaticEnabled(prev);
       journalError = err instanceof Error ? err.message : String(err);
     }
   }
@@ -1017,10 +941,8 @@
   async function onChangeJournalTimezone(next: string): Promise<void> {
     journalError = null;
     journalInfo = null;
-    if (!app.supabase) {
-      journalError = 'Not connected to Supabase yet.';
-      return;
-    }
+    // Input parsing stays here; it's a UI concern about what the user
+    // typed rather than a property of the data being saved.
     const normalized = normalizeTimezone(next);
     if (!normalized) {
       journalError = `"${next}" is not a recognized IANA timezone.`;
@@ -1028,13 +950,11 @@
     }
     const prev = journalTimezone;
     journalTimezone = normalized;
-    setJournalTimezone(normalized);
     try {
-      await app.supabase.updateSettings({ journalTimezone: normalized });
+      await persistJournalTimezone(normalized);
       journalInfo = `Journal day boundary set to ${normalized}.`;
     } catch (err) {
       journalTimezone = prev;
-      setJournalTimezone(prev);
       journalError = err instanceof Error ? err.message : String(err);
     }
   }

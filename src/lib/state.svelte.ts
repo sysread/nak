@@ -203,17 +203,19 @@ export function setNotifyOnComplete(enabled: boolean): void {
 }
 
 /**
- * Update the in-memory display name. Caller is responsible for the
- * Supabase persist side (Settings.svelte calls
- * `updateSettings({ userName })`). Empty string is "not set" - the
- * chat-loop's per-turn appendix builder treats it the same as absent.
+ * Apply the display name in memory and live-update the journal
+ * worker so the next background entry uses the new name without a
+ * worker restart. Empty string is "not set" - the chat-loop's
+ * per-turn appendix builder treats it the same as absent. The
+ * worker's prompt builder injects an "About the user" block when
+ * at least one field is set; setting either side here is what
+ * makes new automatic entries refer to the user by name rather
+ * than as the generic "User".
  *
- * Also live-updates the journal worker so the next background entry
- * uses the new name without a worker restart. The worker's prompt
- * builder injects an "About the user" block when at least one field
- * is set; setting either side here is what makes new automatic
- * entries refer to the user by name rather than as the generic
- * "User".
+ * Does NOT persist. The settings-load path in Chat.svelte uses
+ * this directly (the value just came back from Supabase, so
+ * persisting it again would be redundant). User-driven changes
+ * from Settings.svelte route through `persistUserName` instead.
  */
 export function setUserName(name: string): void {
   app.userName = name;
@@ -221,11 +223,10 @@ export function setUserName(name: string): void {
 }
 
 /**
- * Update the in-memory location. Caller is responsible for the
- * Supabase persist side (Settings.svelte calls
- * `updateSettings({ userLocation })`). Empty string is "not set".
- * Same live-update path as `setUserName` so the journal worker
- * picks up the change on its next cycle.
+ * Apply the user's location in memory and live-update the journal
+ * worker. Empty string is "not set". Does NOT persist - same split
+ * as `setUserName`: the settings-load path uses this directly,
+ * user-driven changes route through `persistUserLocation`.
  */
 export function setUserLocation(location: string): void {
   app.userLocation = location;
@@ -235,9 +236,10 @@ export function setUserLocation(location: string): void {
 /**
  * Flip the background journaling worker on/off in the current session.
  * Starts or stops the journal manager to match - the toggle is the
- * live switch, not a passive preference. Settings.svelte also calls
- * `updateSettings({ journalAutomaticEnabled })` so the choice
- * persists across reloads.
+ * live switch, not a passive preference. Does NOT persist; the
+ * settings-load path in Chat.svelte uses this directly, user-driven
+ * changes from Settings.svelte route through
+ * `persistJournalAutomaticEnabled` so the choice survives reloads.
  */
 export function setJournalAutomaticEnabled(enabled: boolean): void {
   app.journalAutomaticEnabled = enabled;
@@ -256,10 +258,11 @@ export function setJournalAutomaticEnabled(enabled: boolean): void {
 }
 
 /**
- * Update the journal timezone in memory AND push the new zone to the
+ * Apply the journal timezone in memory and push the new zone to the
  * journaling worker so it starts bucketing entries into the right
- * days immediately. Caller is responsible for the Supabase persist
- * side (Settings.svelte calls `updateSettings({ journalTimezone })`).
+ * days immediately. Does NOT persist; user-driven changes route
+ * through `persistJournalTimezone`. Caller is responsible for
+ * normalizing user-supplied input to a valid IANA name first.
  */
 export function setJournalTimezone(tz: string): void {
   app.journalTimezone = tz;
@@ -269,14 +272,215 @@ export function setJournalTimezone(tz: string): void {
 /**
  * Update color mode / accent in memory, apply to the DOM, and cache the
  * choice so the boot script can restore it instantly next load. Does NOT
- * write to Supabase — callers that want server-side persistence should
- * call app.supabase.updateSettings separately (typically in Settings.svelte).
+ * write to Supabase. The settings-load path in Chat.svelte uses this
+ * directly (the value just came back from Supabase, no need to persist
+ * it again); user-driven changes go through `persistTheme` so the
+ * persist + rollback dance lives in one place.
  */
 export function setTheme(mode: ColorMode, accent: Accent): void {
   app.colorMode = mode;
   app.accent = accent;
   applyTheme(mode, accent);
   cacheTheme(mode, accent);
+}
+
+// --- Transactional persist helpers --------------------------------
+// Each `persistX` below pairs with a `setX` above. The `set*` functions
+// are in-memory only and used by the settings-load path in Chat.svelte
+// (where the value just came back from Supabase, so persisting it
+// again would be a no-op round-trip). User-driven changes from
+// Settings.svelte route through these `persist*` helpers, which do
+// the optimistic apply, the Supabase write, and the rollback on
+// error in one place. Throw on failure so callers can use a single
+// try/catch around success-message + error-message UI updates rather
+// than rolling back app state by hand at every site. Field-level
+// validation (length caps) lives here too because it's intrinsic to
+// the data, not the form.
+
+const NOT_CONNECTED = 'Not connected to Supabase yet.';
+
+export async function persistDefaultModel(tier: ModelTier): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.defaultModel;
+  setDefaultModel(tier);
+  try {
+    await app.supabase.updateSettings({ defaultModel: tier });
+  } catch (err) {
+    setDefaultModel(prev);
+    throw err;
+  }
+}
+
+export async function persistDefaultReasoningEffort(
+  effort: ReasoningEffort
+): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.defaultReasoningEffort;
+  setDefaultReasoningEffort(effort);
+  try {
+    await app.supabase.updateSettings({ defaultReasoningEffort: effort });
+  } catch (err) {
+    setDefaultReasoningEffort(prev);
+    throw err;
+  }
+}
+
+export async function persistDefaultVerbosity(verbosity: Verbosity): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.defaultVerbosity;
+  setDefaultVerbosity(verbosity);
+  try {
+    await app.supabase.updateSettings({ defaultVerbosity: verbosity });
+  } catch (err) {
+    setDefaultVerbosity(prev);
+    throw err;
+  }
+}
+
+export async function persistDefaultLogLevel(level: LogLevel): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.defaultLogLevel;
+  setDefaultLogLevel(level);
+  try {
+    await app.supabase.updateSettings({ defaultLogLevel: level });
+  } catch (err) {
+    setDefaultLogLevel(prev);
+    throw err;
+  }
+}
+
+export async function persistEmphasisMarkdown(enabled: boolean): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.emphasisMarkdown;
+  setEmphasisMarkdown(enabled);
+  try {
+    await app.supabase.updateSettings({ emphasisMarkdown: enabled });
+  } catch (err) {
+    setEmphasisMarkdown(prev);
+    throw err;
+  }
+}
+
+export async function persistNotifyOnComplete(enabled: boolean): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.notifyOnComplete;
+  setNotifyOnComplete(enabled);
+  try {
+    await app.supabase.updateSettings({ notifyOnComplete: enabled });
+  } catch (err) {
+    setNotifyOnComplete(prev);
+    throw err;
+  }
+}
+
+/**
+ * Save the user's display name. Trims surrounding whitespace and
+ * caps at 200 characters. Returns the canonical (trimmed) value so
+ * the caller can sync any local form-input state to it. Throws
+ * `Error('Name is too long...')` for over-long input and rethrows
+ * the underlying error after rolling back app state if Supabase
+ * rejects the write.
+ */
+export async function persistUserName(next: string): Promise<string> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const trimmed = next.trim();
+  if (trimmed.length > 200) {
+    throw new Error('Name is too long (max 200 characters).');
+  }
+  const prev = app.userName;
+  setUserName(trimmed);
+  try {
+    await app.supabase.updateSettings({ userName: trimmed });
+    return trimmed;
+  } catch (err) {
+    setUserName(prev);
+    throw err;
+  }
+}
+
+/**
+ * Save the user's location string. Same trim + 200-char cap +
+ * canonical-return semantics as `persistUserName`.
+ */
+export async function persistUserLocation(next: string): Promise<string> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const trimmed = next.trim();
+  if (trimmed.length > 200) {
+    throw new Error('Location is too long (max 200 characters).');
+  }
+  const prev = app.userLocation;
+  setUserLocation(trimmed);
+  try {
+    await app.supabase.updateSettings({ userLocation: trimmed });
+    return trimmed;
+  } catch (err) {
+    setUserLocation(prev);
+    throw err;
+  }
+}
+
+export async function persistJournalAutomaticEnabled(enabled: boolean): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.journalAutomaticEnabled;
+  setJournalAutomaticEnabled(enabled);
+  try {
+    await app.supabase.updateSettings({ journalAutomaticEnabled: enabled });
+  } catch (err) {
+    setJournalAutomaticEnabled(prev);
+    throw err;
+  }
+}
+
+/**
+ * Save the journal-day timezone. Caller is responsible for
+ * normalizing user input to a valid IANA name before calling -
+ * the helper trusts what it's given so the error surface stays
+ * focused on the persist path, not input parsing.
+ */
+export async function persistJournalTimezone(tz: string): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.journalTimezone;
+  setJournalTimezone(tz);
+  try {
+    await app.supabase.updateSettings({ journalTimezone: tz });
+  } catch (err) {
+    setJournalTimezone(prev);
+    throw err;
+  }
+}
+
+export async function persistTheme(mode: ColorMode, accent: Accent): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prevMode = app.colorMode;
+  const prevAccent = app.accent;
+  setTheme(mode, accent);
+  try {
+    await app.supabase.updateSettings({ colorMode: mode, accent });
+  } catch (err) {
+    setTheme(prevMode, prevAccent);
+    throw err;
+  }
+}
+
+/**
+ * Save the system-prompts library. The server may normalize the
+ * incoming list (e.g. trimming, deduping); we sync the in-memory
+ * state to whatever comes back rather than to the input we sent,
+ * so the UI reflects the canonical shape.
+ */
+export async function persistSystemPrompts(prompts: SystemPrompt[]): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.systemPrompts;
+  // Apply optimistically with the input. If Supabase returns a
+  // different shape (after normalization), overwrite with that.
+  setSystemPrompts(prompts);
+  try {
+    const merged = await app.supabase.updateSettings({ systemPrompts: prompts });
+    setSystemPrompts(merged.systemPrompts ?? []);
+  } catch (err) {
+    setSystemPrompts(prev);
+    throw err;
+  }
 }
 
 /**
