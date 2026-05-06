@@ -4,8 +4,12 @@
  * Two jobs, tied together because they surface the same dev-facing
  * surface area:
  *
- *   1. Mirror every call to the browser console so regular devtools
- *      still work - nothing here hides log output; we *add* a panel.
+ *   1. Mirror `info` / `warn` / `error` calls to the browser console
+ *      so regular devtools still work for the actionable tiers.
+ *      `trace` and `debug` are intentionally NOT mirrored - they go
+ *      only to the in-app drawer, because the high-volume per-cycle
+ *      worker breadcrumbs that ride those tiers were swamping the
+ *      browser console even with the Verbose filter off.
  *   2. Feed an in-app Logs drawer (left-side panel in `Chat.svelte`)
  *      backed by a capped ring buffer of structured entries. Main-
  *      thread call sites write directly into the buffer; worker call
@@ -159,13 +163,14 @@ const IS_WORKER: boolean = (() => {
 })();
 
 // Vitest sets `process.env.VITEST='true'` for every runner subprocess.
-// The console mirror in `writeConsole` exists so devtools-driven
-// debugging works in production; under vitest it just bloats test
-// output (~hundreds of "[samskara] fire embed failed..." lines per
-// run from production error-handling paths the tests deliberately
-// exercise). The in-memory ring buffer continues to receive entries
-// regardless, so any test that wants to assert on a log can read
-// `logs.entries` - none do today, but the buffer remains live.
+// The console mirror (info/warn/error) in `writeConsole` exists so
+// devtools-driven debugging works in production; under vitest it just
+// bloats test output (~hundreds of "[samskara] fire embed failed..."
+// lines per run from production error-handling paths the tests
+// deliberately exercise). The in-memory ring buffer continues to
+// receive entries regardless, so any test that wants to assert on a
+// log can read `logs.entries` - none do today, but the buffer
+// remains live.
 const IS_TEST: boolean = (() => {
   try {
     const env = (globalThis as { process?: { env?: Record<string, string | undefined> } })
@@ -248,20 +253,16 @@ function writeConsole(
   // Tests that need to assert on log output can read `logs.entries`
   // from the ring buffer, which still receives entries.
   if (IS_TEST) return;
+  // `trace` and `debug` are drawer-only on purpose. The per-cycle
+  // worker breadcrumbs that ride those tiers were drowning the
+  // browser console even with Verbose off; the in-app drawer has
+  // proper level filtering and search, so devtools doesn't need
+  // to carry them too.
+  if (level === 'trace' || level === 'debug') return;
   const prefix = source ? `[${source}]` : '';
   const args = prefix ? [prefix, message, ...details] : [message, ...details];
   const c = console;
   switch (level) {
-    case 'trace':
-      // Route trace through console.debug rather than console.trace -
-      // the latter prints a synthetic stack trace at every call site,
-      // which is the wrong shape for per-cycle worker breadcrumbs.
-      // Devtools' Verbose/Debug filter still hides these by default.
-      c.debug(...args);
-      return;
-    case 'debug':
-      c.debug(...args);
-      return;
     case 'info':
       c.log(...args);
       return;
@@ -296,9 +297,10 @@ function emit(
         entry: serialized,
       } satisfies WorkerLogMessage);
     } catch {
-      // Best-effort: the console mirror above still carried the log,
-      // so a failed postMessage (e.g. non-dedicated worker context)
-      // doesn't lose the message entirely.
+      // Best-effort. For info/warn/error the console mirror above
+      // still carried the log; for trace/debug a failed postMessage
+      // (e.g. non-dedicated worker context) drops the entry, since
+      // those tiers are drawer-only and have no console fallback.
     }
     return;
   }

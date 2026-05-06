@@ -3,10 +3,15 @@
 The logger is the app's single entry point for diagnostic output.
 Every subsystem calls into `createLogger('<source>')` and gets a
 five-method surface (`trace` / `debug` / `info` / `warn` / `error`)
-that both writes to the browser console and feeds an in-app log
-drawer. No call site in `src/` talks to `console.*` directly - the
-one exception is `logger.svelte.ts` itself, which is allowlisted in
-`eslint.config.js`.
+that feeds an in-app log drawer and, for the actionable tiers,
+also writes to the browser console. `trace` and `debug` are
+drawer-only - they don't mirror to the console at all, because
+the per-cycle worker breadcrumbs that ride those tiers were
+drowning devtools even with Verbose off. `info` / `warn` /
+`error` still mirror through `console.log` / `console.warn` /
+`console.error`. No call site in `src/` talks to `console.*`
+directly - the one exception is `logger.svelte.ts` itself, which
+is allowlisted in `eslint.config.js`.
 
 ## Level guidance
 
@@ -23,19 +28,21 @@ one exception is `logger.svelte.ts` itself, which is allowlisted in
 - `warn` / `error` - actionable problems. Routed through
   `console.warn` / `console.error`.
 
-Console mirroring: `trace` rides on `console.debug` rather than
-`console.trace` - the latter prints a synthetic stack trace at every
-call site, which is the wrong shape for high-volume worker
-breadcrumbs.
+Console mirroring: only `info` / `warn` / `error` reach the
+browser console. `trace` and `debug` are drawer-only, so the
+actionable tiers stay legible in devtools while the noisy
+per-cycle breadcrumbs are still searchable in the in-app drawer.
 
 ## Role
 
 Two jobs, one module:
 
-1. **Mirror every log call to the browser console.** The logger
-   never hides output. A user with devtools open sees the same
-   stream they always have, with the same `console.log` /
-   `console.warn` / `console.error` level mapping.
+1. **Mirror the actionable tiers to the browser console.** A user
+   with devtools open sees `info` on `console.log`, `warn` on
+   `console.warn`, and `error` on `console.error`. `trace` and
+   `debug` skip the console mirror entirely and live only in the
+   in-app drawer, where level filtering and search keep the
+   high-volume worker breadcrumbs usable.
 2. **Feed a capped in-app ring buffer.** The `logs` rune store
    exposes an `entries` array read by `LogsDrawer.svelte`. The
    drawer sits on the right edge of the Chat screen (same side
@@ -105,7 +112,9 @@ summary, attachment-expiry, samskara) import the logger from their
 loop drivers. Worker-context calls detect `WorkerGlobalScope` at
 module init and:
 
-1. Still write to the worker's own console.
+1. Mirror the actionable tiers (`info` / `warn` / `error`) to
+   the worker's own console. `trace` and `debug` skip this step,
+   matching the main-thread policy.
 2. Serialize the entry (Error -> `{name, message, stack}`,
    non-clone-safe values -> string repr) and `postMessage` it to
    the main thread as `{ type: 'nak-log', entry }`.
@@ -130,9 +139,11 @@ drawer too.
   `no-console` ESLint rule; overridden only for
   `src/lib/logger.svelte.ts`.
 - **Logger writes are synchronous and fire-and-forget.** The
-  worker postMessage path swallows failures - the console mirror
-  above it has already carried the log, so a failed post doesn't
-  lose information.
+  worker postMessage path swallows failures. For info/warn/error
+  the console mirror above it has already carried the log, so a
+  failed post doesn't lose information; for trace/debug the entry
+  is dropped, since those tiers are drawer-only and have no
+  console fallback.
 - **The ring buffer is capped.** Code that spins in a tight error
   loop can't OOM the tab through logging.
 - **`logs.clear()` is destructive.** Bound to the drawer's Clear
