@@ -92,13 +92,19 @@
     type Verbosity,
   } from '$lib/models';
   import Auth from './Auth.svelte';
-  import Help from './Help.svelte';
   import Memories from './Memories.svelte';
   import Journal from './Journal.svelte';
-  import Samskara from './Samskara.svelte';
-  import Intuition from './Intuition.svelte';
-  import Settings from './Settings.svelte';
   import Cookbook from './Cookbook.svelte';
+  // Settings / Help / Samskara / Intuition are modal-only screens
+  // (rendered behind a `show*` derived state, never as part of the
+  // chat critical path). They're loaded lazily via dynamic import
+  // below so Vite code-splits them out of the main chunk; the
+  // first open of each pays a chunk-fetch latency, subsequent opens
+  // are instant.
+  type SettingsComponent = typeof import('./Settings.svelte').default;
+  type HelpComponent = typeof import('./Help.svelte').default;
+  type SamskaraComponent = typeof import('./Samskara.svelte').default;
+  type IntuitionComponent = typeof import('./Intuition.svelte').default;
   import RecipeList from '../components/RecipeList.svelte';
   import JournalList from '../components/JournalList.svelte';
   import MemoryList from '../components/MemoryList.svelte';
@@ -158,6 +164,39 @@
   const showHelp = $derived(route.modal === 'help');
   const showSamskara = $derived(route.modal === 'samskara');
   const showIntuition = $derived(route.modal === 'intuition');
+
+  // Lazy modal components. The dynamic import fires the first time
+  // the corresponding `show*` flag flips on; the loaded constructor
+  // is cached in $state so re-opens skip the round-trip. Until the
+  // chunk lands, the `{#if show* && Comp}` guard renders nothing -
+  // visible as a tiny open-latency on first open of each modal,
+  // invisible thereafter. The modal markup itself draws its own
+  // backdrop / content, so a render-nothing intermediate state
+  // doesn't dim the rest of the UI.
+  let SettingsComp: SettingsComponent | null = $state(null);
+  let HelpComp: HelpComponent | null = $state(null);
+  let SamskaraComp: SamskaraComponent | null = $state(null);
+  let IntuitionComp: IntuitionComponent | null = $state(null);
+  $effect(() => {
+    if (showSettings && !SettingsComp) {
+      void import('./Settings.svelte').then((m) => (SettingsComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (showHelp && !HelpComp) {
+      void import('./Help.svelte').then((m) => (HelpComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (showSamskara && !SamskaraComp) {
+      void import('./Samskara.svelte').then((m) => (SamskaraComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (showIntuition && !IntuitionComp) {
+      void import('./Intuition.svelte').then((m) => (IntuitionComp = m.default));
+    }
+  });
   // Trigger flags for the recipe and journal "new" top-bar buttons.
   // Chat.svelte sets these to true; the panel component resets them
   // via the $bindable prop after handling the event.
@@ -5181,17 +5220,17 @@
     `.shell-behind-modal` class hides it via display:none when a
     modal is active so the modal owns the viewport.
   -->
-  {#if showSettings}
-    <Settings onClose={() => navigate({ modal: null })} />
+  {#if showSettings && SettingsComp}
+    <SettingsComp onClose={() => navigate({ modal: null })} />
   {/if}
-  {#if showHelp}
-    <Help onClose={() => navigate({ modal: null, doc: null })} />
+  {#if showHelp && HelpComp}
+    <HelpComp onClose={() => navigate({ modal: null, doc: null })} />
   {/if}
-  {#if showSamskara}
-    <Samskara onClose={() => navigate({ modal: null })} />
+  {#if showSamskara && SamskaraComp}
+    <SamskaraComp onClose={() => navigate({ modal: null })} />
   {/if}
-  {#if showIntuition}
-    <Intuition
+  {#if showIntuition && IntuitionComp}
+    <IntuitionComp
       onClose={() => navigate({ modal: null })}
       threads={loadedThreads}
     />
