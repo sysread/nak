@@ -1,6 +1,18 @@
-import { describe, it, expect } from 'vitest';
-import { renderMarkdown } from '../src/lib/markdown';
+import { describe, it, expect, beforeAll } from 'vitest';
+import { renderMarkdown, prewarmHighlight } from '../src/lib/markdown';
 import { canLoad, ensureLanguage, isSupported } from '../src/lib/highlight';
+
+// `markdown.ts` no longer statically imports `./highlight`; the
+// engine + 26 eager language grammars live in their own chunk that
+// loads on the first fenced render. Tests that assert on
+// highlighted output need the module loaded BEFORE the synchronous
+// renderMarkdown call, so we await the prewarm here once. Without
+// this the first call to renderMarkdown('```python ...') would
+// return plain text (highlight module not yet resolved) and the
+// hljs-keyword assertion would fail.
+beforeAll(async () => {
+  await prewarmHighlight();
+});
 
 describe('renderMarkdown — happy paths', () => {
   it('returns empty string for empty or non-string input', () => {

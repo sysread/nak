@@ -24,7 +24,79 @@
 import { marked, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
 import markedKatex from 'marked-katex-extension';
-import { canLoad, ensureLanguage, highlight, isSupported, normalizeLang } from './highlight';
+
+// `./highlight` is not statically imported - the entire highlight.js
+// stack (engine + 26 eager language grammars + the dynamic-loader
+// machinery for the rest) lives in its own chunk that lands the
+// first time a code fence shows up. Until then, fenced code
+// renders as plain escaped text. When the chunk arrives, the
+// existing per-language re-render notification fires once for the
+// module itself, the listeners in <Markdown> bump their version
+// counter, and the next render goes down the highlighted path.
+//
+// `prewarmHighlight()` is the test-only escape hatch: synchronous
+// vitest assertions on highlighted output need the module loaded
+// before the assertion fires, so test files call it in a beforeAll
+// instead of restructuring around the lazy load.
+type HighlightModule = typeof import('./highlight');
+let hl: HighlightModule | null = null;
+let hlPromise: Promise<HighlightModule> | null = null;
+const highlightListeners = new Set<() => void>();
+
+function ensureHighlightLoading(): void {
+  if (hl || hlPromise) return;
+  hlPromise = import('./highlight').then((m) => {
+    hl = m;
+    // Forward each subscriber that registered before the module
+    // landed to the loaded module's onLanguageLoaded so future
+    // per-language fetches still trigger their re-renders.
+    for (const cb of highlightListeners) m.onLanguageLoaded(cb);
+    // Fire one notification so anyone who's been waiting for the
+    // module to land re-renders now - the next render's
+    // `isSupported(lang)` will return true for any of the 26 eager
+    // languages that the previous render fell back to plain text.
+    for (const cb of highlightListeners) cb();
+    return m;
+  });
+}
+
+/**
+ * Subscribe to "a language (or the highlight module itself) just
+ * loaded." Returns an unsubscribe. Used by `<Markdown>` to bump a
+ * version counter and re-render after a fence's grammar arrives.
+ *
+ * Re-exported through this module so callers (Markdown.svelte) don't
+ * need to reach into `./highlight` directly - that would defeat the
+ * lazy split by pulling the module into the importer's chunk.
+ */
+export function onLanguageLoaded(cb: () => void): () => void {
+  highlightListeners.add(cb);
+  if (hl) {
+    // Module already loaded; forward directly so per-language
+    // events fire as before. Composed unsubscribe tears down both
+    // sides.
+    const unsub = hl.onLanguageLoaded(cb);
+    return () => {
+      highlightListeners.delete(cb);
+      unsub();
+    };
+  }
+  return () => {
+    highlightListeners.delete(cb);
+  };
+}
+
+/**
+ * Test-only: await the lazy `import('./highlight')` so synchronous
+ * vitest assertions on highlighted output can run against a fully-
+ * loaded module. Production code never needs to call this; the
+ * lazy load fires automatically on the first fenced render.
+ */
+export async function prewarmHighlight(): Promise<void> {
+  if (hl) return;
+  ensureHighlightLoading();
+  if (hlPromise) await hlPromise;
+}
 
 // ---------------------------------------------------------------------------
 // marked configuration
@@ -47,17 +119,22 @@ renderer.image = ({ text, title }: { text: string; title?: string | null }) => {
 };
 
 renderer.code = ({ text, lang }: { text: string; lang?: string }) => {
-  const normalized = normalizeLang(lang ?? '');
-  const highlighted = normalized && isSupported(normalized);
-  // If the grammar hasn't been registered yet but we know how to fetch it,
-  // kick off the import as a side effect. This render falls back to
-  // unhighlighted escaped text; once the module lands, <Markdown>'s
-  // `onLanguageLoaded` subscriber re-renders and this branch takes the
-  // highlighted path. Fire-and-forget is safe — `ensureLanguage` dedupes.
-  if (!highlighted && normalized && canLoad(normalized)) {
-    void ensureLanguage(normalized);
+  // First fence triggers the lazy load. Until the module lands,
+  // every fence renders as plain escaped text - same fallback the
+  // per-language DYNAMIC_LOADERS path uses. Fire-and-forget; the
+  // import is deduped inside ensureHighlightLoading.
+  if (lang) ensureHighlightLoading();
+  const normalized = hl ? hl.normalizeLang(lang ?? '') : '';
+  const highlighted = !!hl && !!normalized && hl.isSupported(normalized);
+  // If the grammar hasn't been registered yet but we know how to
+  // fetch it, kick off the import as a side effect. The module-
+  // level highlightListeners notification re-renders this fence
+  // once the language lands. Fire-and-forget is safe -
+  // ensureLanguage dedupes its own pending map.
+  if (hl && !highlighted && normalized && hl.canLoad(normalized)) {
+    void hl.ensureLanguage(normalized);
   }
-  const body = highlighted ? highlight(text, normalized) : escapeHtml(text);
+  const body = highlighted && hl ? hl.highlight(text, normalized) : escapeHtml(text);
   const classes: string[] = [];
   if (highlighted) classes.push('hljs', `language-${escapeAttr(normalized)}`);
   const cls = classes.length ? ` class="${classes.join(' ')}"` : '';

@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { renderMarkdown } from '$lib/markdown';
-  import { onLanguageLoaded } from '$lib/highlight';
+  import { renderMarkdown, onLanguageLoaded } from '$lib/markdown';
 
   interface Props {
     content: string;
