@@ -110,6 +110,9 @@
     gap: 0.35rem;
     align-items: center;
     padding: 0.4rem 0.6rem;
+    /* Space below the divider so the first recipe row doesn't crowd
+       the search input. Mirrors the chats / journal / memories tabs. */
+    margin-bottom: 0.5rem;
     border-bottom: 1px solid var(--border);
   }
   .recipe-list-controls .sidebar-search-input {
