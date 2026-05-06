@@ -39,15 +39,17 @@ Unlike memories, entries are not linked into a graph.
     on the right day.
   - `agent.ts` — `JournalAgent implements
     Agent<JournalInput, JournalOutput>`. Model:
-    `arcee-trinity-large-thinking` (literal id, not a
-    tier - insulated from user-facing tier swaps;
-    whatever id is pinned must accept `response_format`,
-    see Gotchas). Non-Qwen reasoning model with a 256k
-    context window, slower per call than the prior pins
-    but the worker is background-only. Reasoning is
-    enabled at `reasoning_effort: 'low'` so the model has
-    a thinking budget to weigh the prompt's competing
-    prose-discipline constraints. The agent does NOT call
+    `deepseek-v4-flash` (literal id, not a tier -
+    insulated from user-facing tier swaps; whatever id is
+    pinned must accept `response_format`, see Gotchas).
+    Trial pin; revert to `arcee-trinity-large-thinking`
+    if entry quality regresses. 1M-token context window,
+    cheap and fast - chosen on the bet that a larger,
+    cheaper model handles the dense constraint stack at
+    least as well as Trinity did. Reasoning is enabled at
+    `reasoning_effort: 'low'` so the model has a thinking
+    budget to weigh the prompt's competing prose-discipline
+    constraints. The agent does NOT call
     function tools - cross-thread / cross-memory context
     arrives via the context-recall pipeline (same one the
     chat-loop uses), prepended as a synthetic `<think>`
