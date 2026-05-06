@@ -151,8 +151,16 @@
   import Scanner from '../components/Scanner.svelte';
   import ToolCalls from '../components/ToolCalls.svelte';
   import MessageAttachments from '../components/MessageAttachments.svelte';
-  import ExtractedTextDrawer from '../components/ExtractedTextDrawer.svelte';
-  import LogsDrawer from '../components/LogsDrawer.svelte';
+  // ExtractedTextDrawer + LogsDrawer are toggled overlays - the
+  // user has to deliberately open them via a button or an
+  // attachment-text affordance, so their content only matters
+  // after that first interaction. Lazy-loaded; the chunk fetches
+  // on first open. See the lazy-component block below for the
+  // shared pattern.
+  type ExtractedTextDrawerComponent =
+    typeof import('../components/ExtractedTextDrawer.svelte').default;
+  type LogsDrawerComponent = typeof import('../components/LogsDrawer.svelte').default;
+  import { extractedTextDrawer } from '$lib/extractedTextDrawer.svelte';
   import SamskaraToasts from '../components/SamskaraToasts.svelte';
   import { logsDrawer, createLogger } from '$lib/logger.svelte';
 
@@ -181,6 +189,8 @@
   // The render-site `{#if show* && Comp}` guard renders nothing
   // until the chunk lands - visible as a tiny first-open latency,
   // invisible thereafter.
+  let ExtractedTextDrawerComp: ExtractedTextDrawerComponent | null = $state(null);
+  let LogsDrawerComp: LogsDrawerComponent | null = $state(null);
   let AuthComp: AuthComponent | null = $state(null);
   let CookbookComp: CookbookComponent | null = $state(null);
   let JournalComp: JournalComponent | null = $state(null);
@@ -192,6 +202,20 @@
   $effect(() => {
     if (sessionLoaded && !session && !AuthComp) {
       void import('./Auth.svelte').then((m) => (AuthComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (extractedTextDrawer.state.payload && !ExtractedTextDrawerComp) {
+      void import('../components/ExtractedTextDrawer.svelte').then(
+        (m) => (ExtractedTextDrawerComp = m.default)
+      );
+    }
+  });
+  $effect(() => {
+    if (logsDrawer.state.open && !LogsDrawerComp) {
+      void import('../components/LogsDrawer.svelte').then(
+        (m) => (LogsDrawerComp = m.default)
+      );
     }
   });
   $effect(() => {
@@ -5233,7 +5257,9 @@
          Visibility is driven by the `.shell.logs-open` class above,
          which is bound to the `logsDrawer` rune singleton; the
          scroll-icon button in the top bar toggles that state. -->
-    <LogsDrawer />
+    {#if LogsDrawerComp}
+      <LogsDrawerComp />
+    {/if}
   </div>
   <!-- Global right-side drawer for the extracted-text preview.
        Controlled by the `extractedTextDrawer` rune store; any
@@ -5241,7 +5267,9 @@
        Mounted at the Chat root so it can sit above the transcript
        without the transcript being a containing block for its
        fixed positioning. -->
-  <ExtractedTextDrawer />
+  {#if ExtractedTextDrawerComp}
+    <ExtractedTextDrawerComp />
+  {/if}
   <!-- Samskara mood toasts are tied to the conversation stream - only
        relevant in the chats panel. Suppress them on the recipe and
        journal panels where no conversation is running. -->
