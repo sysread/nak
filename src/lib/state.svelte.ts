@@ -27,9 +27,33 @@ import { saveSession, clearSession } from './session';
 import { embeddingManager } from './embeddings/manager';
 import { reflectionManager } from './agents/reflection/manager';
 import { summaryManager } from './agents/summary/manager';
-import { attachmentExpiryManager } from './agents/attachment_expiry/manager';
 import { samskaraManager } from './agents/samskara/manager';
 import { journalManager } from './agents/journal/manager';
+
+/**
+ * Lazy reference to the attachment-expiry manager. Loaded via
+ * `import('./agents/attachment_expiry/manager')` from
+ * `startBackgroundWorkers()`, then re-used by `lock()` for the
+ * teardown side. The static import is gone so Vite code-splits the
+ * manager + its worker out of the main chunk.
+ *
+ * Smoke-test for the dynamic-import pattern across the rest of the
+ * worker family. Picked attachment_expiry first because its worker
+ * has the smallest dependency footprint (no Venice client, no agent
+ * class), it has no custom message handlers or live-update methods,
+ * and an hour-granularity idle interval means a few hundred ms of
+ * startup latency is invisible. If the pattern works here, the
+ * other managers follow the same shape.
+ *
+ * Held as a Promise rather than a resolved value so `lock()` can
+ * fire teardown before the dynamic import has settled - the
+ * .then() runs whenever the module finally lands. If activate()
+ * was never called the variable stays null and lock()'s teardown
+ * is a no-op for this manager (correct: nothing to stop).
+ */
+let attachmentExpiryModulePromise:
+  | Promise<typeof import('./agents/attachment_expiry/manager')>
+  | null = null;
 import { startUsagePolling, stopUsagePolling } from './usage-store.svelte';
 import { detectTimezone } from './journal-day';
 import {
@@ -545,7 +569,15 @@ function startBackgroundWorkers(config: AppConfig): void {
   void embeddingManager.start({ supabase: app.supabase, config });
   void reflectionManager.start({ supabase: app.supabase, config });
   void summaryManager.start({ supabase: app.supabase, config });
-  void attachmentExpiryManager.start({ supabase: app.supabase, config });
+  // Dynamic import: see the comment on `attachmentExpiryModulePromise`
+  // above. Captured into the module-level variable so lock() can
+  // tear down whatever this resolves to, even if the user signs
+  // out before the chunk has finished loading.
+  attachmentExpiryModulePromise = import('./agents/attachment_expiry/manager');
+  void attachmentExpiryModulePromise.then((m) => {
+    if (!app.supabase) return;
+    void m.attachmentExpiryManager.start({ supabase: app.supabase, config });
+  });
   void samskaraManager.start({ supabase: app.supabase, config });
   if (app.journalAutomaticEnabled) {
     void journalManager.start({
@@ -628,7 +660,13 @@ export function lock(): void {
   embeddingManager.stop();
   reflectionManager.stop();
   summaryManager.stop();
-  attachmentExpiryManager.stop();
+  // attachment-expiry is dynamically imported. If activate() never
+  // ran (no module promise) there's nothing to stop. If the import
+  // is mid-flight, `.then()` schedules the stop after the chunk
+  // lands so we don't drop the cleanup.
+  if (attachmentExpiryModulePromise) {
+    void attachmentExpiryModulePromise.then((m) => m.attachmentExpiryManager.stop());
+  }
   samskaraManager.stop();
   journalManager.stop();
   // Tear down the usage poller and wipe the cache so rows billed
