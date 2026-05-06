@@ -158,6 +158,24 @@ const IS_WORKER: boolean = (() => {
   }
 })();
 
+// Vitest sets `process.env.VITEST='true'` for every runner subprocess.
+// The console mirror in `writeConsole` exists so devtools-driven
+// debugging works in production; under vitest it just bloats test
+// output (~hundreds of "[samskara] fire embed failed..." lines per
+// run from production error-handling paths the tests deliberately
+// exercise). The in-memory ring buffer continues to receive entries
+// regardless, so any test that wants to assert on a log can read
+// `logs.entries` - none do today, but the buffer remains live.
+const IS_TEST: boolean = (() => {
+  try {
+    const env = (globalThis as { process?: { env?: Record<string, string | undefined> } })
+      .process?.env;
+    return env?.VITEST === 'true';
+  } catch {
+    return false;
+  }
+})();
+
 interface LogsState {
   entries: LogEntry[];
 }
@@ -225,6 +243,11 @@ function writeConsole(
   message: string,
   details: unknown[]
 ): void {
+  // Under vitest, skip the console mirror so the logs production code
+  // emits during error-path tests don't pile up in the gate's stdout.
+  // Tests that need to assert on log output can read `logs.entries`
+  // from the ring buffer, which still receives entries.
+  if (IS_TEST) return;
   const prefix = source ? `[${source}]` : '';
   const args = prefix ? [prefix, message, ...details] : [message, ...details];
   const c = console;
