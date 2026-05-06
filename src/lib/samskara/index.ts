@@ -218,8 +218,9 @@ export async function recordSubstrateStub(
 
 /**
  * Cohort-id generator. Wrapper over crypto.randomUUID with the same
- * Math.random fallback EmbeddingManager.makeHolderId uses, so this
- * file is independently testable from any browser-only assumption.
+ * Math.random fallback `makeHolderId` (`src/lib/agents/holder.ts`)
+ * uses, so this file is independently testable from any browser-
+ * only assumption.
  */
 export function generateCohortId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
