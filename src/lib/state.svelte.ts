@@ -21,7 +21,7 @@
  * easier to read than a constellation of stores with the same lifetime.
  */
 import type { AppConfig } from './config';
-import { SupabaseService, type SystemPrompt } from './supabase';
+import { SupabaseService, type SystemPrompt, type UserSettings } from './supabase';
 import { VeniceClient } from './venice';
 import { saveSession, clearSession } from './session';
 import { embeddingManager } from './embeddings/manager';
@@ -484,61 +484,69 @@ export async function persistSystemPrompts(prompts: SystemPrompt[]): Promise<voi
 }
 
 /**
- * Transition to the unlocked state. By default, also persists the config
- * into sessionStorage so a subsequent refresh within the inactivity TTL
- * can skip the master-password prompt. Pass `{ persist: false }` to skip
- * that (e.g. when we're restoring from an existing session).
+ * Apply a UserSettings blob to app state via the in-memory `setX`
+ * functions. Absent keys fall through to the current seed values
+ * (set by `activate()` before this is called) - explicit absence
+ * in the blob means "setting never set" rather than "clear the
+ * field," which matches the supabase coercer's serialise behaviour
+ * (it omits keys equal to defaults so the blob stays compact).
+ *
+ * Used by `activate()` on the initial unlock and by Chat.svelte's
+ * `refreshSettings` on cross-tab auth changes. Single source of
+ * truth for the settings-load mapping so the two callers can't
+ * drift on which fields they handle.
  */
-export function activate(config: AppConfig, opts: { persist?: boolean } = {}): void {
-  app.config = config;
-  app.supabase = new SupabaseService(config);
-  app.venice = new VeniceClient({ apiKey: config.veniceApiKey });
-  // Reset to a seed value; Chat.svelte will overwrite after Supabase settles.
-  app.defaultModel = DEFAULT_TIER;
-  app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
-  app.defaultVerbosity = DEFAULT_VERBOSITY;
-  app.defaultLogLevel = DEFAULT_LOG_LEVEL;
-  app.emphasisMarkdown = false;
-  app.notifyOnComplete = false;
-  // Journal defaults: opt-in by default, zone from the browser.
-  // Chat.svelte overwrites both from Supabase `profiles.settings` on
-  // unlock; this seed keeps the app functional before that arrives.
-  app.journalAutomaticEnabled = true;
-  app.journalTimezone = detectTimezone();
-  // Profile fields seed empty: a fresh-account first turn must not
-  // ship a stale name/location from a previous unlock. Chat.svelte
-  // overwrites these from Supabase `profiles.settings` after sign-in.
-  app.userName = '';
-  app.userLocation = '';
-  app.phase = 'unlocked';
-  app.error = null;
-  if (opts.persist !== false) saveSession(config);
-  // Fire-and-forget: each manager acquires a cross-tab lock before
-  // spawning its worker, so another tab holding the lock will make
-  // this call hang — never await it. If there's no Supabase session
-  // yet the worker exits cleanly and state.svelte.ts doesn't need to
-  // retry; the next unlock / sign-in will call activate() again.
+export function applyServerSettings(s: UserSettings): void {
+  if (s.defaultModel) setDefaultModel(s.defaultModel);
+  if (s.defaultReasoningEffort) setDefaultReasoningEffort(s.defaultReasoningEffort);
+  if (s.defaultVerbosity) setDefaultVerbosity(s.defaultVerbosity);
+  if (s.defaultLogLevel) setDefaultLogLevel(s.defaultLogLevel);
+  // Boolean toggles default to false in the seed; `?? false` makes
+  // an absent key explicitly false rather than passing `undefined`
+  // through to the setter.
+  setEmphasisMarkdown(s.emphasisMarkdown ?? false);
+  setNotifyOnComplete(s.notifyOnComplete ?? false);
+  // Journal opt-in defaults to true for new accounts. Explicit
+  // false in the blob disables; absent key falls through to the
+  // seed (also true).
+  setJournalAutomaticEnabled(s.journalAutomaticEnabled ?? true);
+  if (s.journalTimezone) setJournalTimezone(s.journalTimezone);
+  // Profile: empty string is the "not set" sentinel; always
+  // assign so explicit absence in the blob clears any value
+  // carried over from a prior unlock or another tab.
+  setUserName(s.userName ?? '');
+  setUserLocation(s.userLocation ?? '');
+  if (s.colorMode || s.accent) {
+    setTheme(s.colorMode ?? app.colorMode, s.accent ?? app.accent);
+  }
+  setSystemPrompts(s.systemPrompts ?? []);
+}
+
+function startBackgroundWorkers(config: AppConfig): void {
+  if (!app.supabase) return;
+  // Each manager acquires a cross-tab lock before spawning its
+  // worker, so another tab holding the lock will make these calls
+  // hang internally - they're fire-and-forget by design, never
+  // await them. If there's no Supabase session yet the worker exits
+  // cleanly and state.svelte.ts doesn't need to retry; the next
+  // unlock / sign-in will call `activate()` again.
   //
-  // The workers run concurrently: they partition the shared
-  // `worker_leases` table on `worker_kind` ('embedding' / 'reflection'
-  // / 'summary' / 'attachment_expiry' / 'samskara') so one device can
-  // hold every lease simultaneously without contention. The summary
-  // worker feeds the drawer's search feature — it writes
-  // `threads.summary`, which the embeddings worker then picks up to
-  // build the searchable vector. The attachment-expiry worker
-  // reclaims binaries from attachments on threads quieter than 30
-  // days. The samskara worker forms the chat model's progressively-
-  // built predictive model of the user; see docs/dev/samskara.md.
+  // The workers run concurrently and partition the shared
+  // `worker_leases` table on `worker_kind` ('embedding' /
+  // 'reflection' / 'summary' / 'attachment_expiry' / 'samskara' /
+  // 'journal') so one device can hold every lease simultaneously
+  // without contention. The summary worker feeds the drawer's
+  // search feature - it writes `threads.summary`, which the
+  // embeddings worker then picks up to build the searchable
+  // vector. The attachment-expiry worker reclaims binaries from
+  // attachments on threads quieter than 30 days. The samskara
+  // worker forms the chat model's progressively-built predictive
+  // model of the user; see docs/dev/samskara.md.
   void embeddingManager.start({ supabase: app.supabase, config });
   void reflectionManager.start({ supabase: app.supabase, config });
   void summaryManager.start({ supabase: app.supabase, config });
   void attachmentExpiryManager.start({ supabase: app.supabase, config });
   void samskaraManager.start({ supabase: app.supabase, config });
-  // Journal worker is gated on the user's opt-in setting. We start it
-  // here when the seed is true (default-on for new accounts); Chat.svelte
-  // may flip this off via `setJournalAutomaticEnabled(false)` after
-  // pulling the persisted settings from Supabase if the user had
-  // disabled it previously. The start() call is idempotent.
   if (app.journalAutomaticEnabled) {
     void journalManager.start({
       supabase: app.supabase,
@@ -548,11 +556,69 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
       userLocation: app.userLocation,
     });
   }
-  // Warm the Usage pane cache in the background so Settings -> Usage
-  // opens instantly when the user goes looking. The poller fires once
-  // immediately and re-fires hourly; Settings still forces a refresh
-  // on open if the cached data is older than USAGE_STALE_MS.
+}
+
+/**
+ * Transition to the unlocked state. By default, also persists the config
+ * into sessionStorage so a subsequent refresh within the inactivity TTL
+ * can skip the master-password prompt. Pass `{ persist: false }` to skip
+ * that (e.g. when we're restoring from an existing session).
+ *
+ * Settings load + worker startup happen in a fire-and-forget chain after
+ * activate returns: settings fetch first, then workers boot with those
+ * values applied. On settings-fetch failure the workers still start, just
+ * with the seed values set synchronously below - same posture as before
+ * this race fix landed, so a degraded Supabase doesn't gate worker boot.
+ * The race that was open before: workers were started immediately with
+ * seed values (browser timezone, generic profile, default-on journal
+ * toggle), and could write a journal entry with the wrong values during
+ * the few hundred ms before Chat.svelte's settings fetch corrected them.
+ */
+export function activate(config: AppConfig, opts: { persist?: boolean } = {}): void {
+  app.config = config;
+  app.supabase = new SupabaseService(config);
+  app.venice = new VeniceClient({ apiKey: config.veniceApiKey });
+  // Seed defaults synchronously so any code reading `app.*` before the
+  // settings fetch resolves sees sane values. `applyServerSettings`
+  // overwrites these from the blob if the fetch succeeds.
+  app.defaultModel = DEFAULT_TIER;
+  app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
+  app.defaultVerbosity = DEFAULT_VERBOSITY;
+  app.defaultLogLevel = DEFAULT_LOG_LEVEL;
+  app.emphasisMarkdown = false;
+  app.notifyOnComplete = false;
+  app.journalAutomaticEnabled = true;
+  app.journalTimezone = detectTimezone();
+  app.userName = '';
+  app.userLocation = '';
+  app.phase = 'unlocked';
+  app.error = null;
+  if (opts.persist !== false) saveSession(config);
+  // Fire-and-forget settings-then-workers chain. Workers don't start
+  // until settings have either loaded successfully or failed, which
+  // closes the race where a worker would briefly run on seeds before
+  // the user's actual config arrived.
+  void loadSettingsThenStartWorkers(config);
+  // Usage polling has no settings dependency, so it can start
+  // immediately. The poller fires once now and re-fires hourly;
+  // Settings still forces a refresh on open if the cached data is
+  // older than USAGE_STALE_MS.
   startUsagePolling(app.venice);
+}
+
+async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
+  if (app.supabase) {
+    try {
+      const settings = await app.supabase.getSettings();
+      applyServerSettings(settings);
+    } catch {
+      // Best-effort: keep the seeds set in `activate()`. Workers will
+      // boot with default values in this branch - same as the legacy
+      // behaviour pre-race-fix, so a Supabase outage doesn't gate the
+      // entire bootstrap.
+    }
+  }
+  startBackgroundWorkers(config);
 }
 
 export function lock(): void {

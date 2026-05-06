@@ -38,22 +38,7 @@
    */
   import { onMount, tick } from 'svelte';
   import type { Session } from '@supabase/supabase-js';
-  import {
-    app,
-    lock,
-    setDefaultModel,
-    setDefaultReasoningEffort,
-    setDefaultVerbosity,
-    setDefaultLogLevel,
-    setEmphasisMarkdown,
-    setNotifyOnComplete,
-    setJournalAutomaticEnabled,
-    setJournalTimezone,
-    setSystemPrompts,
-    setTheme,
-    setUserName,
-    setUserLocation,
-  } from '$lib/state.svelte';
+  import { app, lock, applyServerSettings } from '$lib/state.svelte';
   import { notifications, notifyTurnComplete, markThreadRead } from '$lib/notifications.svelte';
   import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
   import { route, navigate, buildSearch } from '$lib/routing.svelte';
@@ -1280,40 +1265,16 @@
     if (!app.supabase) return;
     try {
       const s = await app.supabase.getSettings();
-      if (s.defaultModel) setDefaultModel(s.defaultModel);
-      if (s.defaultReasoningEffort) setDefaultReasoningEffort(s.defaultReasoningEffort);
-      if (s.defaultVerbosity) setDefaultVerbosity(s.defaultVerbosity);
-      if (s.defaultLogLevel) setDefaultLogLevel(s.defaultLogLevel);
-      // Absent key means "setting never set" -> stays false from
-      // activate(). Explicit `false` in the blob overrides anything
-      // set in-session (e.g. a toggle flipped in another tab).
-      setEmphasisMarkdown(s.emphasisMarkdown ?? false);
-      setNotifyOnComplete(s.notifyOnComplete ?? false);
-      // Journal: default-on for new accounts, so absent key is true.
-      // Explicit false disables the worker; setJournalAutomaticEnabled
-      // stops the journalManager if it was running. Timezone falls
-      // through to whatever activate() seeded (browser zone) when the
-      // setting is absent.
-      setJournalAutomaticEnabled(s.journalAutomaticEnabled ?? true);
-      if (s.journalTimezone) setJournalTimezone(s.journalTimezone);
-      // Profile fields: empty string is the "not set" sentinel that
-      // chat-loop's appendix builder treats as absent. Always assign
-      // - explicit absence in the blob clears whatever was carried
-      // over from a prior unlock or another tab.
-      setUserName(s.userName ?? '');
-      setUserLocation(s.userLocation ?? '');
-      // If the server has a theme choice and it differs from the cached one,
-      // apply it now. setTheme also re-caches, so subsequent loads are fast.
-      if (s.colorMode || s.accent) {
-        setTheme(s.colorMode ?? app.colorMode, s.accent ?? app.accent);
-      }
-      setSystemPrompts(s.systemPrompts ?? []);
-      // Only (re)seed the active set if the user hasn't already started
-      // toggling prompts on the current thread. Avoids clobbering their
-      // per-thread selection when settings arrive late.
+      applyServerSettings(s);
+      // Only (re)seed the active set if the user hasn't already
+      // started toggling prompts on the current thread. Avoids
+      // clobbering their per-thread selection when settings arrive
+      // late.
       if (activePromptIds.size === 0) resetActivePromptsToDefaults();
     } catch {
-      // Best-effort: fall back to DEFAULT_TIER / cached theme from activate().
+      // Best-effort: fall back to whatever activate() seeded (or
+      // earlier applied settings) so a transient Supabase failure
+      // doesn't blow up the screen on an auth refresh.
     }
   }
 
