@@ -38,6 +38,7 @@
   import { searchMemoriesSemantic } from '$lib/memories';
   import { MAX_MEMORY_DATA_CHARS } from '$lib/embeddings/types';
   import type { Memory, MemoryRelation } from '$lib/supabase';
+  import Markdown from '../components/Markdown.svelte';
 
   // Label length is capped at 80 by the memory_create/update tool
   // schemas; mirror it here so the UI rejects early instead of
@@ -564,7 +565,9 @@
                     {relativeTime(m.updated_at)}
                   </span>
                 </div>
-                <p class="memory-card-data">{m.data}</p>
+                <div class="memory-card-data">
+                  <Markdown content={m.data} />
+                </div>
                 {#if (memoriesStore.relations.get(m.id) ?? []).length > 0}
                   <ul class="memory-relations">
                     {#each memoriesStore.relations.get(m.id) ?? [] as edge (edge.id)}
@@ -800,10 +803,17 @@
     margin: 0 0 0.6rem;
     font-size: 0.9rem;
     color: var(--text);
-    /* Preserve paragraph breaks the reflection agent writes, but
-       still let long words wrap. */
-    white-space: pre-wrap;
     word-wrap: break-word;
+  }
+  /* The wrapper owns the bottom margin between the body and the
+     relations / actions row, so collapse the margins on the
+     paragraphs the Markdown component emits to avoid a doubled gap
+     above the next block. */
+  .memory-card-data :global(p:first-child) {
+    margin-top: 0;
+  }
+  .memory-card-data :global(p:last-child) {
+    margin-bottom: 0;
   }
 
   .memory-card-actions {
