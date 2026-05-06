@@ -44,13 +44,13 @@ import { VeniceError } from './venice';
 import { buildUserVeniceContent } from './attachments';
 import {
   buildToolList,
-  buildSystemPrompt,
   executeToolCall,
   toggleToolbox,
   updateTitle,
   type OpenAIToolCall,
   type ToolContext,
 } from './tools';
+import { buildSystemPrompt } from './chat-prompt';
 import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from './tools/wire';
 import {
   fireSamskaras,

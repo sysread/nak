@@ -10,11 +10,11 @@
  *
  * The tool description below is deliberately terse. The ambient
  * "what's the catalog, when should you toggle" policy lives in the
- * baseline system prompt (`buildSystemPrompt` in ./index.ts) so it's
- * visible before any gated tool schemas are on the wire and stays
- * dynamic as toolboxes are added or removed. A tool description is a
- * per-call contract, not a place to teach the model conversation-level
- * rules.
+ * baseline system prompt (`buildSystemPrompt` in ../chat-prompt.ts)
+ * so it's visible before any gated tool schemas are on the wire and
+ * stays dynamic as toolboxes are added or removed. A tool description
+ * is a per-call contract, not a place to teach the model
+ * conversation-level rules.
  *
  * Validation: the always_on toolbox name is dropped silently (it's
  * implicit and cannot be disabled), and any name not in the
