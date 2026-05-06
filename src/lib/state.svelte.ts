@@ -24,36 +24,6 @@ import type { AppConfig } from './config';
 import { SupabaseService, type SystemPrompt, type UserSettings } from './supabase';
 import { VeniceClient } from './venice';
 import { saveSession, clearSession } from './session';
-import { embeddingManager } from './embeddings/manager';
-import { reflectionManager } from './agents/reflection/manager';
-import { summaryManager } from './agents/summary/manager';
-import { samskaraManager } from './agents/samskara/manager';
-import { journalManager } from './agents/journal/manager';
-
-/**
- * Lazy reference to the attachment-expiry manager. Loaded via
- * `import('./agents/attachment_expiry/manager')` from
- * `startBackgroundWorkers()`, then re-used by `lock()` for the
- * teardown side. The static import is gone so Vite code-splits the
- * manager + its worker out of the main chunk.
- *
- * Smoke-test for the dynamic-import pattern across the rest of the
- * worker family. Picked attachment_expiry first because its worker
- * has the smallest dependency footprint (no Venice client, no agent
- * class), it has no custom message handlers or live-update methods,
- * and an hour-granularity idle interval means a few hundred ms of
- * startup latency is invisible. If the pattern works here, the
- * other managers follow the same shape.
- *
- * Held as a Promise rather than a resolved value so `lock()` can
- * fire teardown before the dynamic import has settled - the
- * .then() runs whenever the module finally lands. If activate()
- * was never called the variable stays null and lock()'s teardown
- * is a no-op for this manager (correct: nothing to stop).
- */
-let attachmentExpiryModulePromise:
-  | Promise<typeof import('./agents/attachment_expiry/manager')>
-  | null = null;
 import { startUsagePolling, stopUsagePolling } from './usage-store.svelte';
 import { detectTimezone } from './journal-day';
 import {
@@ -74,6 +44,78 @@ import {
   type ColorMode,
 } from './theme';
 import { DEFAULT_LOG_LEVEL, type LogLevel } from './logger.svelte';
+
+/**
+ * Lazy reference to a worker manager. Each manager module is
+ * imported on the first `start()` call, which lets Vite code-split
+ * the manager class + its worker bundle out of the main chunk - the
+ * managers don't run until activate() fires anyway, so paying the
+ * import cost on unlock instead of at first paint is a clean win.
+ *
+ * The captured Promise is what makes the pattern safe: stop() can
+ * fire before the dynamic import resolves (e.g. the user signs out
+ * faster than the network delivers the chunk), and `.then()` will
+ * still run the teardown whenever the module finally lands.
+ *
+ * `whenLoaded(fn)` is the escape hatch for live-update calls (e.g.
+ * the journal worker's `setProfile` / `setTimezone`). It's a no-op
+ * if start() never fired - which matches the old direct-call
+ * semantics, since the manager's own setProfile was a no-op when
+ * the worker hadn't spawned.
+ */
+function lazyManager<
+  M extends { start: (opts: never) => unknown; stop: () => void },
+>(
+  load: () => Promise<M>
+): {
+  start(opts: Parameters<M['start']>[0]): void;
+  stop(): void;
+  whenLoaded(fn: (m: M) => void): void;
+} {
+  let promise: Promise<M> | null = null;
+  return {
+    start(opts) {
+      if (!promise) promise = load();
+      void promise.then((m) => void m.start(opts as never));
+    },
+    stop() {
+      if (!promise) return;
+      void promise.then((m) => m.stop());
+    },
+    whenLoaded(fn) {
+      if (!promise) return;
+      void promise.then(fn);
+    },
+  };
+}
+
+// One lazy handle per worker manager. The static imports moved here
+// so Vite code-splits each manager + its worker bundle out of the
+// main chunk - they only land when activate() kicks off the
+// background-worker startup. The shared deps (BaseWorkerManager,
+// SupabaseService, LeaseCoordinator, the logger, holder) all ride
+// the SAME dynamic-import graph, so Vite parks them in a chunk that
+// every manager chunk pulls from rather than duplicating them.
+//
+// Order doesn't matter; each handle is independent.
+const embeddings = lazyManager(() =>
+  import('./embeddings/manager').then((m) => m.embeddingManager)
+);
+const reflection = lazyManager(() =>
+  import('./agents/reflection/manager').then((m) => m.reflectionManager)
+);
+const summary = lazyManager(() =>
+  import('./agents/summary/manager').then((m) => m.summaryManager)
+);
+const attachmentExpiry = lazyManager(() =>
+  import('./agents/attachment_expiry/manager').then((m) => m.attachmentExpiryManager)
+);
+const samskara = lazyManager(() =>
+  import('./agents/samskara/manager').then((m) => m.samskaraManager)
+);
+const journal = lazyManager(() =>
+  import('./agents/journal/manager').then((m) => m.journalManager)
+);
 
 export type AppPhase = 'loading' | 'setup' | 'locked' | 'unlocked' | 'edit-config';
 
@@ -243,7 +285,7 @@ export function setNotifyOnComplete(enabled: boolean): void {
  */
 export function setUserName(name: string): void {
   app.userName = name;
-  journalManager.setProfile(name, app.userLocation);
+  journal.whenLoaded((m) => m.setProfile(name, app.userLocation));
 }
 
 /**
@@ -254,7 +296,7 @@ export function setUserName(name: string): void {
  */
 export function setUserLocation(location: string): void {
   app.userLocation = location;
-  journalManager.setProfile(app.userName, location);
+  journal.whenLoaded((m) => m.setProfile(app.userName, location));
 }
 
 /**
@@ -269,7 +311,7 @@ export function setJournalAutomaticEnabled(enabled: boolean): void {
   app.journalAutomaticEnabled = enabled;
   if (!app.supabase || !app.config) return;
   if (enabled) {
-    void journalManager.start({
+    journal.start({
       supabase: app.supabase,
       config: app.config,
       timezone: app.journalTimezone || null,
@@ -277,7 +319,7 @@ export function setJournalAutomaticEnabled(enabled: boolean): void {
       userLocation: app.userLocation,
     });
   } else {
-    journalManager.stop();
+    journal.stop();
   }
 }
 
@@ -290,7 +332,7 @@ export function setJournalAutomaticEnabled(enabled: boolean): void {
  */
 export function setJournalTimezone(tz: string): void {
   app.journalTimezone = tz;
-  journalManager.setTimezone(tz || null);
+  journal.whenLoaded((m) => m.setTimezone(tz || null));
 }
 
 /**
@@ -566,21 +608,13 @@ function startBackgroundWorkers(config: AppConfig): void {
   // attachments on threads quieter than 30 days. The samskara
   // worker forms the chat model's progressively-built predictive
   // model of the user; see docs/dev/samskara.md.
-  void embeddingManager.start({ supabase: app.supabase, config });
-  void reflectionManager.start({ supabase: app.supabase, config });
-  void summaryManager.start({ supabase: app.supabase, config });
-  // Dynamic import: see the comment on `attachmentExpiryModulePromise`
-  // above. Captured into the module-level variable so lock() can
-  // tear down whatever this resolves to, even if the user signs
-  // out before the chunk has finished loading.
-  attachmentExpiryModulePromise = import('./agents/attachment_expiry/manager');
-  void attachmentExpiryModulePromise.then((m) => {
-    if (!app.supabase) return;
-    void m.attachmentExpiryManager.start({ supabase: app.supabase, config });
-  });
-  void samskaraManager.start({ supabase: app.supabase, config });
+  embeddings.start({ supabase: app.supabase, config });
+  reflection.start({ supabase: app.supabase, config });
+  summary.start({ supabase: app.supabase, config });
+  attachmentExpiry.start({ supabase: app.supabase, config });
+  samskara.start({ supabase: app.supabase, config });
   if (app.journalAutomaticEnabled) {
-    void journalManager.start({
+    journal.start({
       supabase: app.supabase,
       config,
       timezone: app.journalTimezone || null,
@@ -657,18 +691,17 @@ export function lock(): void {
   // Tear all workers down before clearing services — each manager
   // releases its Web Lock here so a queued tab can take over as soon
   // as we're gone. Order doesn't matter; the locks are independent.
-  embeddingManager.stop();
-  reflectionManager.stop();
-  summaryManager.stop();
-  // attachment-expiry is dynamically imported. If activate() never
-  // ran (no module promise) there's nothing to stop. If the import
-  // is mid-flight, `.then()` schedules the stop after the chunk
-  // lands so we don't drop the cleanup.
-  if (attachmentExpiryModulePromise) {
-    void attachmentExpiryModulePromise.then((m) => m.attachmentExpiryManager.stop());
-  }
-  samskaraManager.stop();
-  journalManager.stop();
+  // Each handle's stop() is a no-op when start() never fired
+  // (module never loaded) and dispatches through the captured
+  // import Promise otherwise - so a sign-out that races a still-
+  // loading manager chunk still runs the teardown when the chunk
+  // lands.
+  embeddings.stop();
+  reflection.stop();
+  summary.stop();
+  attachmentExpiry.stop();
+  samskara.stop();
+  journal.stop();
   // Tear down the usage poller and wipe the cache so rows billed
   // against the previous API key don't leak into a subsequent
   // unlock-with-different-config.
