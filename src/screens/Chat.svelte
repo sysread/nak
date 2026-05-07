@@ -3184,19 +3184,29 @@
   // the simplest way to get "debounce tokens, snap on commits" without
   // prev-value bookkeeping inside a single effect.
 
-  // Message-list mutations during an active completion - user send,
-  // assistant-persist, regenerate-drop. These mark a clean transition
-  // and should land the view on the bottom immediately. Firing here
-  // also supersedes any pending streaming debounce: the commit we just
-  // observed is the latest state, so a stale late-firing timer would
-  // just flicker.
+  // Rendered-transcript mutations during an active completion - user
+  // send, assistant-persist, regenerate-drop, intuition-card insertion.
+  // These mark a clean transition and should land the view on the
+  // bottom immediately. Firing here also supersedes any pending
+  // streaming debounce: the commit we just observed is the latest
+  // state, so a stale late-firing timer would just flicker.
+  //
+  // Tracks `messageBlocks` (the derived render list) rather than raw
+  // `messages` so the intuition card counts as a discrete mutation.
+  // The card is inserted via `currentIntuitionPayload` changing, not
+  // via the `messages` array, so subscribing to `messages` alone
+  // missed the card's appearance: scrollHeight grew, scrollTop stayed
+  // put, the user was no longer near the bottom, and the next scroll
+  // event (from anywhere - a layout-driven clamp, an attempt to read
+  // the new card) flipped `followBottom` to false and locked out the
+  // rest of the round's autoscroll.
   //
   // Gated on `sending` so a delayed realtime echo or cross-tab mutation
   // arriving after the completion ends doesn't yank the view back to
   // the bottom. Thread-load lands on the bottom via the explicit
   // scrollToBottom in loadMessages, not via this effect.
   $effect(() => {
-    void messages;
+    void messageBlocks;
     const el = messagesEl;
     if (!el) return;
     hasOverflow = el.scrollHeight > el.clientHeight + 1;
