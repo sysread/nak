@@ -145,26 +145,24 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toMatch(/\[x\] research : /);
   });
 
-  it('carries the recall escape-hatch framing', () => {
-    // Topic-boundary recall now rides the chat-loop's context-recall
-    // pipeline (see src/lib/context-recall/), fired on the same
-    // triggers as intuition. The system prompt no longer instructs the
-    // model to fire `memory_recall` / `conversation_recall` per-turn
-    // at topic boundaries - it tells the model the priming is handled
-    // automatically and frames the LLM-callable recall tools as
-    // escape hatches for explicit lookups. The semantics asserted
-    // here are: both tools are still mentioned (so the model knows
-    // they exist), the priming-is-automatic message is present, and
-    // the "don't make the user repeat themselves" anchor survives.
+  it('carries the recall framing: long-term memory exists, priming is automatic, tools used when stale', () => {
+    // The recall block has three load-bearing beats: (1) introduce
+    // long-term memory so the model knows it has persistent state
+    // about this user, (2) tell the model that topic-boundary
+    // recall is auto-injected as a <think> block by the chat-loop's
+    // context-recall pipeline (see src/lib/context-recall/), and
+    // (3) instruct the model to use `memory_recall` /
+    // `conversation_recall` when the auto-injected priming is
+    // likely stale. The "stale" cue is the lever that escalates
+    // tool use - drop it and the model either spams recall every
+    // turn or never reaches for it after the first fetch.
     const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/long-term memory/i);
     expect(prompt).toMatch(/memory_recall/i);
     expect(prompt).toMatch(/conversation_recall/);
     expect(prompt).toMatch(/handled.*automatically/i);
     expect(prompt).toMatch(/<think>/);
-    expect(prompt).toMatch(
-      /(explicit(ly)?\s+ask(s)?)|(explicit\s+(user\s+)?lookups?)/i
-    );
-    expect(prompt).toMatch(/(don’t|don't)\s+make\s+the\s+user\s+repeat/i);
+    expect(prompt).toMatch(/stale/i);
   });
 
   it('explains the toggle_toolbox gating rule', () => {
