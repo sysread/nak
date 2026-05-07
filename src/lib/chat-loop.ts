@@ -51,7 +51,11 @@ import {
   type ToolContext,
 } from './tools';
 import { buildSystemPrompt } from './chat-prompt';
-import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from './tools/wire';
+import {
+  parseToolArguments,
+  sanitizeToolCallIdForWire,
+  sanitizeToolCallsForWire,
+} from './tools/wire';
 import {
   fireSamskaras,
   formatPriming,
@@ -1737,11 +1741,12 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       let args: Record<string, unknown>;
       try {
         // Arguments arrive as a JSON string per the OpenAI spec. An
-        // invalid JSON blob is the model's fault, not ours — surface
+        // invalid JSON blob is the model's fault, not ours - surface
         // it as a tool error so the next round sees the parse failure.
-        args = call.function.arguments.length > 0
-          ? (JSON.parse(call.function.arguments) as Record<string, unknown>)
-          : {};
+        // parseToolArguments also recovers from a known LLM
+        // double-escape bug on multi-line free-form fields (memory
+        // data, recipe instructions); see ./tools/wire.ts.
+        args = parseToolArguments(call.function.arguments);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         handlers?.onToolError?.(call, error);

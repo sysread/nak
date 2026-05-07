@@ -32,7 +32,11 @@ import type { Toolbox, ToolContext, OpenAIToolCall } from './types';
 // `runHeadlessToolLoop` from inside a Web Worker, so this import has
 // to stay on the IIFE-safe side of the graph.
 import { buildToolboxWireList, executeToolboxCall } from './dispatch';
-import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from './wire';
+import {
+  parseToolArguments,
+  sanitizeToolCallIdForWire,
+  sanitizeToolCallsForWire,
+} from './wire';
 import type { VeniceClient, VeniceMessage, ResponseFormat } from '../venice';
 import type { ReasoningEffort } from '../models';
 
@@ -280,12 +284,12 @@ export async function runHeadlessToolLoop(
         // OpenAI streams `arguments` as a JSON string, one fragment
         // at a time; Venice's streamChat concatenates the fragments
         // and hands us the final assembled string. An invalid JSON
-        // blob is a model error — surface it back as a tool result
+        // blob is a model error - surface it back as a tool result
         // so the next round sees the failure and can retry with a
-        // valid argument.
-        args = call.function.arguments.length > 0
-          ? (JSON.parse(call.function.arguments) as Record<string, unknown>)
-          : {};
+        // valid argument. parseToolArguments also recovers from a
+        // known LLM double-escape bug on multi-line free-form
+        // fields; see ./wire.ts.
+        args = parseToolArguments(call.function.arguments);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         return { call, ok: false as const, error };

@@ -13,6 +13,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
+  parseToolArguments,
   sanitizeToolCallIdForWire,
   sanitizeToolCallsForWire,
 } from '../src/lib/tools/wire';
@@ -152,5 +153,86 @@ describe('sanitizeToolCallIdForWire', () => {
     const ids = ['call_a031', 'call_a032', 'call_a033', 'call_b031'];
     const outs = ids.map(sanitizeToolCallIdForWire);
     expect(new Set(outs).size).toBe(ids.length);
+  });
+});
+
+describe('parseToolArguments', () => {
+  it('returns an empty object for an empty string', () => {
+    expect(parseToolArguments('')).toEqual({});
+  });
+
+  it('parses well-formed JSON unchanged when nothing to recover', () => {
+    const out = parseToolArguments(
+      '{"label":"food","data":"line1\\nline2","confidence":2}'
+    );
+    // The `\\n` in the JSON source is the JSON escape for newline, so
+    // after parse the data string has a real newline and our recovery
+    // pass leaves it alone.
+    expect(out).toEqual({
+      label: 'food',
+      data: 'line1\nline2',
+      confidence: 2,
+    });
+  });
+
+  // The bug that prompted this helper: a smaller model emits a tool
+  // call whose arguments JSON has `\\n` (literal backslash + n) where
+  // a real newline was intended. Without recovery, the data field
+  // shows up in the rendered memory card with literal `\n` everywhere
+  // a paragraph break should be.
+  it('unescapes literal \\n when the string has no real newlines', () => {
+    const raw = JSON.stringify({ data: 'line1\\nline2\\nline3' });
+    // raw is now: {"data":"line1\\nline2\\nline3"} - the JSON-encoded
+    // form of a string that literally contains backslash-n sequences.
+    const out = parseToolArguments(raw);
+    expect(out).toEqual({ data: 'line1\nline2\nline3' });
+  });
+
+  it('unescapes literal \\r and \\t alongside \\n', () => {
+    const raw = JSON.stringify({ data: 'col1\\tcol2\\r\\nnext' });
+    const out = parseToolArguments(raw);
+    expect(out).toEqual({ data: 'col1\tcol2\r\nnext' });
+  });
+
+  // Mixed strings (some real whitespace, some literal escape) are
+  // ambiguous - the literal `\n` could be intentional, e.g. a memory
+  // discussing JS escape syntax. We have no way to disambiguate from
+  // the parsed value alone, so we leave the string alone rather than
+  // risk corrupting legitimate content.
+  it('leaves a mixed string alone when real newlines are present', () => {
+    const raw = '{"data":"intentional \\\\n literal\\nthen real newline"}';
+    const out = parseToolArguments(raw);
+    expect(out).toEqual({
+      data: 'intentional \\n literal\nthen real newline',
+    });
+  });
+
+  it('recurses into nested objects', () => {
+    const raw = JSON.stringify({
+      outer: { inner: 'a\\nb', untouched: 'plain' },
+    });
+    const out = parseToolArguments(raw);
+    expect(out).toEqual({
+      outer: { inner: 'a\nb', untouched: 'plain' },
+    });
+  });
+
+  it('recurses into arrays', () => {
+    const raw = JSON.stringify({ items: ['a\\nb', 'no escapes', 42] });
+    const out = parseToolArguments(raw);
+    expect(out).toEqual({ items: ['a\nb', 'no escapes', 42] });
+  });
+
+  it('does not touch non-string values', () => {
+    const raw = '{"n":1,"b":true,"nul":null,"arr":[1,2,3]}';
+    const out = parseToolArguments(raw);
+    expect(out).toEqual({ n: 1, b: true, nul: null, arr: [1, 2, 3] });
+  });
+
+  it('throws on invalid JSON so the caller can route to a tool error', () => {
+    // chat-loop.ts and tools/run.ts both wrap the call in try/catch
+    // and return a tool-error result row; preserving the throw means
+    // those call sites keep working without change.
+    expect(() => parseToolArguments('{not valid json')).toThrow();
   });
 });

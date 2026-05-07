@@ -1,14 +1,15 @@
 /**
- * Wire-projection helpers for tool calls. Pure utilities that operate
- * on `OpenAIToolCall` and have no other dependencies, so anyone
- * projecting stored or in-loop tool calls onto the OpenAI/Venice wire
- * format can call in without dragging the chat-loop module along.
- *
- * The chat loop, the headless agent loop in `./run.ts`, and every
- * agent that replays a stored thread to a model (reflection, journal,
- * recall, conversation_recall, summary) all need this projection.
- * Keeping the sanitiser here means a fix or extension lands in one
- * place rather than five copies.
+ * Wire helpers for tool calls. Pure utilities that handle the
+ * OpenAI/Venice wire format in both directions - projecting stored or
+ * in-loop tool calls back onto the wire (sanitizeToolCallsForWire,
+ * sanitizeToolCallIdForWire), and parsing the inbound arguments JSON
+ * string into a usable args object (parseToolArguments). No other
+ * dependencies, so anyone touching tool-call wire data - the chat
+ * loop, the headless agent loop in `./run.ts`, every agent that
+ * replays a stored thread (reflection, journal, recall,
+ * conversation_recall, summary) - can call in without dragging
+ * chat-loop along. Keeping the helpers here means a fix or extension
+ * lands in one place rather than five copies.
  */
 
 import type { OpenAIToolCall } from './types';
@@ -133,4 +134,65 @@ export function sanitizeToolCallsForWire(
       function: { ...call.function, arguments: safe },
     };
   });
+}
+
+/**
+ * Parse a tool-call `arguments` JSON string into a plain args object,
+ * recovering from a known LLM bug where smaller models double-escape
+ * special characters in free-form string fields.
+ *
+ * Failure mode: a model emits a tool call whose arguments JSON looks
+ * like `{"data": "line1\\nline2"}` when it meant `{"data":
+ * "line1\nline2"}`. JSON.parse decodes `\\n` to a literal backslash-n
+ * (2 chars), not a newline. The string is stored as-is and shows up
+ * with literal `\n` everywhere a newline should be - the screenshot
+ * that prompted this fix had a multi-paragraph memory body with a
+ * dozen `\n` sequences and no real newlines anywhere.
+ *
+ * Detection rule: only unescape `\n`, `\r`, `\t` when the string
+ * contains the literal escape AND has no actual newline / CR / tab.
+ * A mixed string (some real, some literal) is left alone - the
+ * literal `\n` could be intentional (e.g. a memory discussing JS
+ * escape syntax) and we have no way to disambiguate. Pure
+ * double-escape, the common failure mode, is unambiguous and safe to
+ * fix. The walker recurses through arrays and nested objects so a
+ * tool whose schema nests free-form fields under a wrapper still
+ * benefits.
+ *
+ * Throws on invalid JSON. Callers (chat-loop.ts, tools/run.ts) catch
+ * the throw and surface it as a tool error so the next round sees
+ * the parse failure instead of a silent default.
+ */
+export function parseToolArguments(raw: string): Record<string, unknown> {
+  if (raw.length === 0) return {};
+  const parsed = JSON.parse(raw) as unknown;
+  return recoverDoubleEscapedStrings(parsed) as Record<string, unknown>;
+}
+
+function recoverDoubleEscapedStrings(value: unknown): unknown {
+  if (typeof value === 'string') return recoverEscapesInString(value);
+  if (Array.isArray(value)) return value.map(recoverDoubleEscapedStrings);
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = recoverDoubleEscapedStrings(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+function recoverEscapesInString(s: string): string {
+  // Two-step gate: the string must carry at least one literal escape
+  // sequence (otherwise nothing to do) AND zero real whitespace
+  // characters of the same kinds (otherwise we'd be guessing whether
+  // a literal `\n` was intentional).
+  const hasLiteral =
+    s.includes('\\n') || s.includes('\\r') || s.includes('\\t');
+  if (!hasLiteral) return s;
+  if (s.includes('\n') || s.includes('\r') || s.includes('\t')) return s;
+  return s
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t');
 }
