@@ -23,7 +23,6 @@
  * Schema lives in `./conversation_recall.schema.ts`.
  */
 import type { ToolDef } from './types';
-import { ConversationRecallAgent } from '../agents/conversation_recall/agent';
 import { createLogger } from '../logger.svelte';
 import { conversationRecallSchema } from './conversation_recall.schema';
 
@@ -32,6 +31,13 @@ const log = createLogger('conversation-recall-agent');
 export const conversationRecall: ToolDef = {
   ...conversationRecallSchema,
   async execute(args, ctx) {
+    // Same lazy pattern as memory_recall: the agent transitively
+    // pulls conversationRecallToolbox and conversation_search, so
+    // dynamic-importing keeps that chain out of the main chunk
+    // until the model first reaches for prior-conversation recall.
+    const { ConversationRecallAgent } = await import(
+      '../agents/conversation_recall/agent'
+    );
     const topic =
       typeof args.topic === 'string' && args.topic.trim().length > 0
         ? args.topic.trim()

@@ -40,38 +40,218 @@
  * two.
  */
 import type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
+
+// --- Always-on tool imports -----------------------------------------
+// These ride every chat-loop turn (memory_recall + conversation_recall
+// fire on topic boundaries, web_search on time-sensitive questions,
+// update_title on the very first turn of a fresh thread, analyze_image
+// when the user attaches a picture). The cold-start chunk-fetch tax is
+// not acceptable on the first-message critical path, so they stay
+// eagerly imported.
 import { toggleToolbox } from './toggle_tools';
-import { memorySearch } from './memory_search';
-import { memoryCreate } from './memory_create';
-import { memoryUpdate } from './memory_update';
-import { memoryDelete } from './memory_delete';
-import { memoryReaffirm } from './memory_reaffirm';
-import { memoryDoubt } from './memory_doubt';
-import { memoryRelate } from './memory_relate';
-import { memoryUnrelate } from './memory_unrelate';
 import { memoryRecall } from './memory_recall';
-import { conversationSearch } from './conversation_search';
 import { conversationRecall } from './conversation_recall';
 import { webSearch } from './web_search';
-import { recallToolbox } from './recall_toolbox';
-import { conversationRecallToolbox } from './conversation_recall_toolbox';
-import { recipeSave } from './recipe_save';
-import { recipeList } from './recipe_list';
-import { recipeGet } from './recipe_get';
-import { recipeUpdate } from './recipe_update';
-import { recipeDelete } from './recipe_delete';
-import { recipePhotosAttach } from './recipe_photos_attach';
-import { recipePhotosRemove } from './recipe_photos_remove';
-import { recipePhotosReorder } from './recipe_photos_reorder';
-import { recipePhotoLabelSet } from './recipe_photo_label_set';
 import { updateTitle } from './update_title';
 import { analyzeImage } from './analyze_image';
-import { researchDocs } from './research_docs';
-import { memoryToolbox } from './memory_toolbox';
-import { journalList } from './journal_list';
-import { journalRead } from './journal_read';
-import { journalSearch } from './journal_search';
-import { journalDelete } from './journal_delete';
+
+// --- Gated tool schemas ---------------------------------------------
+// The schemas (name + description + shortDescription + parameters)
+// stay eager because every chat-loop turn renders the catalog and
+// every wire payload sends the tool-list shape. The matching impl
+// modules are dynamic-imported on first dispatch via the `lazyTool`
+// helper below; Vite emits one chunk per `import('./<tool>')` call.
+import { memorySearchSchema } from './memory_search.schema';
+import { memoryCreateSchema } from './memory_create.schema';
+import { memoryUpdateSchema } from './memory_update.schema';
+import { memoryDeleteSchema } from './memory_delete.schema';
+import { memoryReaffirmSchema } from './memory_reaffirm.schema';
+import { memoryDoubtSchema } from './memory_doubt.schema';
+import { memoryRelateSchema } from './memory_relate.schema';
+import { memoryUnrelateSchema } from './memory_unrelate.schema';
+import { conversationSearchSchema } from './conversation_search.schema';
+import { recipeListSchema } from './recipe_list.schema';
+import { recipeGetSchema } from './recipe_get.schema';
+import { recipeSaveSchema } from './recipe_save.schema';
+import { recipeUpdateSchema } from './recipe_update.schema';
+import { recipeDeleteSchema } from './recipe_delete.schema';
+import { recipePhotosAttachSchema } from './recipe_photos_attach.schema';
+import { recipePhotosRemoveSchema } from './recipe_photos_remove.schema';
+import { recipePhotosReorderSchema } from './recipe_photos_reorder.schema';
+import { recipePhotoLabelSetSchema } from './recipe_photo_label_set.schema';
+import { researchDocsSchema } from './research_docs.schema';
+import { journalListSchema } from './journal_list.schema';
+import { journalReadSchema } from './journal_read.schema';
+import { journalSearchSchema } from './journal_search.schema';
+import { journalDeleteSchema } from './journal_delete.schema';
+
+// Agent-only toolbox re-exports moved to the bottom of the file
+// alongside other re-exports. Direct `export ... from` rather than
+// `import` + `export` so Rollup can tree-shake the chain out of the
+// main chunk when main-chunk consumers don't reference these
+// symbols (the workers / agents that DO use them import directly
+// from `./memory_toolbox` etc., not via this barrel).
+
+// --- lazyTool helper ------------------------------------------------
+// Wraps a schema + dynamic-import loader into a ToolDef whose
+// `execute` fetches the impl chunk on first call. Vite needs a
+// LITERAL string inside `import('...')` to code-split; passing a
+// path as a parameter would defeat the analysis and pull every
+// tool back into the main chunk. So the loader is a thunk closing
+// over the literal string at the call site.
+//
+// `name` is the export-name in the loaded module - callers spell it
+// explicitly because TypeScript can't infer it from a thunk that
+// returns `Record<string, ToolDef>`. A typo would be caught the
+// first time the tool fires (impl missing from the loaded module);
+// the unit tests under `tests/tools.test.ts` exercise dispatch for
+// every tool, so the typo would surface in CI before deploy.
+// `Record<string, unknown>` rather than `Record<string, ToolDef>`
+// because some tool modules also re-export non-ToolDef helpers
+// (research_docs exports `parseResearchResult`, web_search exports
+// the system-prompt header, etc.). The runtime cast inside the
+// helper is narrowed to a ToolDef shape and validated by the
+// `!impl` / `impl.execute` checks.
+function lazyTool(
+  schema: Omit<ToolDef, 'execute'>,
+  load: () => Promise<Record<string, unknown>>,
+  name: string
+): ToolDef {
+  return {
+    ...schema,
+    async execute(args, ctx) {
+      const m = await load();
+      const impl = m[name] as ToolDef | undefined;
+      if (!impl || typeof impl.execute !== 'function') {
+        throw new Error(
+          `lazyTool: '${name}' not found in lazy-loaded module ` +
+            'or does not have an execute function'
+        );
+      }
+      return impl.execute(args, ctx);
+    },
+  };
+}
+
+// --- Gated tool wrappers --------------------------------------------
+// Each is a thin object: schema fields spread in eagerly, execute()
+// resolves the impl chunk on first call. Subsequent calls hit the
+// browser's module cache - latency is one Promise resolution.
+const memorySearch = lazyTool(
+  memorySearchSchema,
+  () => import('./memory_search'),
+  'memorySearch'
+);
+const memoryCreate = lazyTool(
+  memoryCreateSchema,
+  () => import('./memory_create'),
+  'memoryCreate'
+);
+const memoryUpdate = lazyTool(
+  memoryUpdateSchema,
+  () => import('./memory_update'),
+  'memoryUpdate'
+);
+const memoryDelete = lazyTool(
+  memoryDeleteSchema,
+  () => import('./memory_delete'),
+  'memoryDelete'
+);
+const memoryReaffirm = lazyTool(
+  memoryReaffirmSchema,
+  () => import('./memory_reaffirm'),
+  'memoryReaffirm'
+);
+const memoryDoubt = lazyTool(
+  memoryDoubtSchema,
+  () => import('./memory_doubt'),
+  'memoryDoubt'
+);
+const memoryRelate = lazyTool(
+  memoryRelateSchema,
+  () => import('./memory_relate'),
+  'memoryRelate'
+);
+const memoryUnrelate = lazyTool(
+  memoryUnrelateSchema,
+  () => import('./memory_unrelate'),
+  'memoryUnrelate'
+);
+const conversationSearch = lazyTool(
+  conversationSearchSchema,
+  () => import('./conversation_search'),
+  'conversationSearch'
+);
+const recipeList = lazyTool(
+  recipeListSchema,
+  () => import('./recipe_list'),
+  'recipeList'
+);
+const recipeGet = lazyTool(
+  recipeGetSchema,
+  () => import('./recipe_get'),
+  'recipeGet'
+);
+const recipeSave = lazyTool(
+  recipeSaveSchema,
+  () => import('./recipe_save'),
+  'recipeSave'
+);
+const recipeUpdate = lazyTool(
+  recipeUpdateSchema,
+  () => import('./recipe_update'),
+  'recipeUpdate'
+);
+const recipeDelete = lazyTool(
+  recipeDeleteSchema,
+  () => import('./recipe_delete'),
+  'recipeDelete'
+);
+const recipePhotosAttach = lazyTool(
+  recipePhotosAttachSchema,
+  () => import('./recipe_photos_attach'),
+  'recipePhotosAttach'
+);
+const recipePhotosRemove = lazyTool(
+  recipePhotosRemoveSchema,
+  () => import('./recipe_photos_remove'),
+  'recipePhotosRemove'
+);
+const recipePhotosReorder = lazyTool(
+  recipePhotosReorderSchema,
+  () => import('./recipe_photos_reorder'),
+  'recipePhotosReorder'
+);
+const recipePhotoLabelSet = lazyTool(
+  recipePhotoLabelSetSchema,
+  () => import('./recipe_photo_label_set'),
+  'recipePhotoLabelSet'
+);
+const researchDocs = lazyTool(
+  researchDocsSchema,
+  () => import('./research_docs'),
+  'researchDocs'
+);
+const journalList = lazyTool(
+  journalListSchema,
+  () => import('./journal_list'),
+  'journalList'
+);
+const journalRead = lazyTool(
+  journalReadSchema,
+  () => import('./journal_read'),
+  'journalRead'
+);
+const journalSearch = lazyTool(
+  journalSearchSchema,
+  () => import('./journal_search'),
+  'journalSearch'
+);
+const journalDelete = lazyTool(
+  journalDeleteSchema,
+  () => import('./journal_delete'),
+  'journalDelete'
+);
 
 /**
  * Always-on toolbox. Rides with every request regardless of the
@@ -377,7 +557,13 @@ export async function executeToolCall(
 // header for the IIFE/code-splitting failure mode that keeps it out
 // of `./index.ts`. The recall toolboxes live in their own files to
 // avoid a circular import - see those files' headers for why.
-export { memoryToolbox, recallToolbox, conversationRecallToolbox };
+// Direct `export ... from` re-exports so Rollup can elide the
+// chain when main-chunk consumers don't read these symbols. Worker
+// / agent entry points import the toolboxes directly via their
+// source paths, not through this barrel.
+export { memoryToolbox } from './memory_toolbox';
+export { recallToolbox } from './recall_toolbox';
+export { conversationRecallToolbox } from './conversation_recall_toolbox';
 
 export { toOpenAIToolDef, buildToolboxWireList, executeToolboxCall };
 export { toggleToolbox, updateTitle };
