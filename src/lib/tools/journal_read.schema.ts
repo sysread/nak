@@ -4,12 +4,11 @@
 export const journalReadSchema = {
   name: 'journal_read',
   description:
-    'Read the journal entries for a single date. Returns an array of ' +
-    'entries (any number; at most one user entry plus one automatic ' +
-    'entry per source conversation that day). `date` is ISO YYYY-MM-DD ' +
-    "in the user's local timezone. Each entry has {id, entry_date, " +
-    'source, content, topics, mood, people, thread_id, thread_title, ' +
-    'created_at, updated_at}.',
+    "Read journal entries for a single date in the user's local " +
+    'timezone. Returns an array of entries (at most one user entry ' +
+    'plus one automatic entry per source conversation that day). Each ' +
+    'has {id, entry_date, source, content, topics, mood, people, ' +
+    'thread_id, thread_title, created_at, updated_at}.',
   shortDescription: 'read one day of journal entries',
   parameters: {
     type: 'object',
@@ -17,7 +16,7 @@ export const journalReadSchema = {
       date: {
         type: 'string',
         pattern: '^\\d{4}-\\d{2}-\\d{2}$',
-        description: "ISO date (YYYY-MM-DD) in the user's local timezone.",
+        description: "ISO date (YYYY-MM-DD), user's local timezone.",
       },
     },
     required: ['date'],

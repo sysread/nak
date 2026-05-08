@@ -8,12 +8,11 @@ export const JOURNAL_SEARCH_MAX_LIMIT = 50;
 export const journalSearchSchema = {
   name: 'journal_search',
   description:
-    "Search the user's journal entries by meaning. Paraphrases work; this " +
-    'is a semantic embedding search with a substring fallback for rows ' +
-    'the embeddings worker has not yet processed. Returns an array of ' +
-    '{id, entry_date, source, content, topics, mood, people, ' +
-    'updated_at, similarity?} ranked by relevance. Empty query lists ' +
-    'most-recent-first (use journal_list for that; this is for search).',
+    "Semantic search over the user's journal entries (with substring " +
+    'fallback for rows the embeddings worker has not yet processed). ' +
+    'Returns {id, entry_date, source, content, topics, mood, people, ' +
+    'updated_at, similarity?}[] ranked by relevance. For most-recent ' +
+    'browsing use journal_list.',
   shortDescription: 'search journal entries by meaning',
   parameters: {
     type: 'object',
@@ -21,7 +20,7 @@ export const journalSearchSchema = {
       query: {
         type: 'string',
         minLength: 1,
-        description: 'Natural-language query. Semantic match.',
+        description: 'Natural-language query.',
       },
       limit: {
         type: 'integer',

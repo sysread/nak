@@ -118,57 +118,75 @@ describe('buildSystemPrompt', () => {
     expect(alwaysIdx).toBeGreaterThanOrEqual(0);
     expect(gatedIdx).toBeGreaterThan(alwaysIdx);
 
-    // Recall pair lives under Always available; conversation_search
-    // lives under the conversations toolbox.
+    // Read paths and the recall pair live under Always available;
+    // gated toolboxes carry only writes.
     const alwaysSection = disabled.slice(alwaysIdx, gatedIdx);
     const gatedSection = disabled.slice(gatedIdx);
     expect(alwaysSection).toMatch(/- memory_recall /);
     expect(alwaysSection).toMatch(/- conversation_recall /);
-    expect(alwaysSection).not.toMatch(/- conversation_search /);
-    expect(gatedSection).toMatch(/- conversation_search /);
-    expect(gatedSection).toMatch(/- memory_search /);
-    expect(gatedSection).not.toMatch(/- memory_recall /);
+    expect(alwaysSection).toMatch(/- memory_search /);
+    expect(alwaysSection).toMatch(/- conversation_search /);
+    expect(alwaysSection).toMatch(/- recipe_list /);
+    // Writes do not leak into the always-on listing.
+    expect(alwaysSection).not.toMatch(/- memory_create /);
+    expect(alwaysSection).not.toMatch(/- recipe_save /);
+    // Gated section carries the writes.
+    expect(gatedSection).toMatch(/- memory_create /);
+    expect(gatedSection).toMatch(/- recipe_save /);
+    expect(gatedSection).toMatch(/- journal_delete /);
+    expect(gatedSection).not.toMatch(/- memory_search /);
+    expect(gatedSection).not.toMatch(/- recipe_list /);
 
     // Every gated toolbox gets a "(off) name : description" line with
-    // its tools indented below.
+    // its tools indented below. The conversations and research
+    // toolboxes were dropped (their only tools are now always-on).
     expect(gatedSection).toMatch(/\(off\) cooking : /);
     expect(gatedSection).toMatch(/\(off\) memories : /);
-    expect(gatedSection).toMatch(/\(off\) conversations : /);
-    expect(gatedSection).toMatch(/\(off\) research : /);
+    expect(gatedSection).toMatch(/\(off\) journal : /);
+    expect(gatedSection).not.toMatch(/\(off\) conversations : /);
+    expect(gatedSection).not.toMatch(/\(off\) research : /);
   });
 
   it('shows (on) marks for enabled toolboxes and (off) for disabled ones', () => {
     // The marks give the model visible current state without a second
     // prompt section. A model reading "(on) cooking" knows it can
-    // invoke the cooking tools this turn without a toolbox flip. Plain
-    // English state words instead of [x]/[ ] checkboxes - the checkbox
-    // shape was misread as "unchecked = unavailable" and the model was
-    // skipping over gated tools rather than enabling their toolboxes.
-    const prompt = buildSystemPrompt({ enabledToolboxes: ['cooking', 'research'] });
+    // invoke the cooking write tools this turn without a toolbox
+    // flip. Plain English state words instead of [x]/[ ] checkboxes -
+    // the checkbox shape was misread as "unchecked = unavailable"
+    // and the model was skipping over gated tools rather than
+    // enabling their toolboxes.
+    const prompt = buildSystemPrompt({ enabledToolboxes: ['cooking', 'journal'] });
     expect(prompt).toMatch(/\(on\) cooking : /);
     expect(prompt).toMatch(/\(off\) memories : /);
-    expect(prompt).toMatch(/\(off\) conversations : /);
-    expect(prompt).toMatch(/\(on\) research : /);
+    expect(prompt).toMatch(/\(on\) journal : /);
   });
 
-  it('carries the recall framing: long-term memory exists, priming is automatic, tools used when stale', () => {
-    // The recall block has three load-bearing beats: (1) introduce
+  it('carries the recall framing: long-term memory exists, priming is a projection not a full inventory, tools used when stale or for explicit lookups', () => {
+    // The recall block has four load-bearing beats: (1) introduce
     // long-term memory so the model knows it has persistent state
     // about this user, (2) tell the model that topic-boundary
     // recall is auto-injected as a <think> block by the chat-loop's
-    // context-recall pipeline (see src/lib/context-recall/), and
-    // (3) instruct the model to use `memory_recall` /
-    // `conversation_recall` when the auto-injected priming is
-    // likely stale. The "stale" cue is the lever that escalates
-    // tool use - drop it and the model either spams recall every
-    // turn or never reaches for it after the first fetch.
+    // context-recall pipeline (see src/lib/context-recall/), (3)
+    // make clear that the auto-injection is a topic-relevance
+    // projection rather than a full inventory of the store - drop
+    // this beat and the model treats "I don't see anything
+    // pre-injected" as "nothing is stored" and answers "I don't
+    // remember anything specific" while the store is full, and (4)
+    // route explicit "what do you remember" lookups to memory_search
+    // / conversation_search rather than memory_recall / conversation_recall.
     const prompt = buildSystemPrompt();
     expect(prompt).toMatch(/long-term memory/i);
-    expect(prompt).toMatch(/memory_recall/i);
+    expect(prompt).toMatch(/memory_recall/);
     expect(prompt).toMatch(/conversation_recall/);
+    expect(prompt).toMatch(/memory_search/);
+    expect(prompt).toMatch(/conversation_search/);
     expect(prompt).toMatch(/handled.*automatically/i);
     expect(prompt).toMatch(/<think>/);
     expect(prompt).toMatch(/stale/i);
+    // The projection-vs-inventory distinction. "projection" or
+    // "not a full inventory" both work as load-bearing markers for
+    // this beat; either should survive a phrasing tweak.
+    expect(prompt).toMatch(/projection|not.*full.*inventory|not.*everything/i);
   });
 
   it('explains the toggle_toolbox gating rule', () => {

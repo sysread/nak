@@ -78,17 +78,19 @@ describe('memory_recall — registry scoping', () => {
     expect(recallToolbox.tools.map((t) => t.name)).not.toContain('memory_recall');
   });
 
-  it('description strongly prefers recall over memory_search for context gathering', () => {
-    // Grep the description for the load-bearing phrasing. If someone
-    // softens the wording to something like "consider using recall",
-    // this assertion points at the fact that the design called for
-    // a strong preference.
-    const desc = memoryRecall.description.toUpperCase();
-    expect(desc).toMatch(/STRONGLY PREFER/);
-    // It should also spell out the exception — memory_search is for
-    // user-directed mutations, not for casual recall.
+  it('description scopes recall vs search by use case', () => {
+    // The earlier wording told the model to "STRONGLY PREFER" recall
+    // over memory_search; that framing was dropped when memory_search
+    // moved to always-on. memory_search is now a peer tool the model
+    // should reach for on direct lookups (including "what do you
+    // remember about me" questions), while memory_recall is for the
+    // topic-boundary stale-context use case. The description has to
+    // spell out both halves so the model picks the right tool.
+    expect(memoryRecall.description).toMatch(/recall/i);
     expect(memoryRecall.description).toMatch(/memory_search/);
-    expect(memoryRecall.description).toMatch(/memory_update|memory_delete|memory_invalidate/);
+    // Topic-boundary or stale-context cue - the lever that escalates
+    // recall over a direct search.
+    expect(memoryRecall.description).toMatch(/new topic|stale|context/i);
   });
 
   it('takes no arguments — the tool uses ctx.threadId, not a user-provided id', () => {

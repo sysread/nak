@@ -96,16 +96,20 @@ Plain-spoken and direct is the baseline, not cold or robotic; the user sets the 
 // src/lib/context-recall/) which auto-injects a stitched first-person
 // <think> note on cold-start, title shift, mood-band shift, and the
 // staleness fuse - the model does NOT need a per-turn reflex to fire those.
-// Finally tells the model to use the LLM-callable `memory_recall` /
-// `conversation_recall` tools when context is likely stale. Stance is
-// "use as required when staleness is likely," not "escape hatch only" -
-// the prompt errs toward more recall rather than less because the cost of
-// missed context is felt by the user, the cost of an extra tool call is
-// felt as a few hundred ms of UX latency.
+// Critically the block also tells the model that the auto-injected note
+// is a topic-relevance projection, NOT the full memory store: when the
+// user explicitly asks what is remembered (or what was talked about
+// before), it must reach for memory_search / conversation_search rather
+// than answering from the projection. An earlier version omitted this
+// distinction and the model treated the auto-injection as exhaustive,
+// answering "I don't remember anything specific" to questions like "what
+// do you remember about me" while the memory store was full.
 const RECALL_BLOCK = `\
 You have persistent long-term memory about this user: facts, preferences, and short notes you've written to your future self during prior conversations.
 Topic-boundary recall is handled for you automatically: at the start of a thread, after a topic shift, or after a long stretch without a refresh, the system pre-injects relevant memories and prior-conversation context as a <think> block above.
-Use the memory_recall and conversation_recall tools as required to remember your past interactions with the user, especially when a topic boundary shift or a long stretch without refresh makes it likely that your current context is stale.
+That auto-injection is a topic-relevance projection, not a full inventory of what is stored: it surfaces what looks relevant to the live conversation, not everything the memory store contains.
+When the user explicitly asks what you remember (or what you've talked about), call memory_search and conversation_search to read the actual store rather than answering from the projection.
+Use memory_recall and conversation_recall when context is likely stale at a topic boundary; use memory_search and conversation_search for direct lookups by phrase or for explicit "what do you remember" questions.
 `;
 
 // Journal framing plus reflective-conversation guidance. Two jobs in one
@@ -131,16 +135,18 @@ Do NOT hallucinate or invent psychological concepts or insights that have no bas
 `;
 
 // Toolbox framing. The model sees the catalog below with (on)/(off) marks
-// showing current state. The framing has to push BOTH ways: enable when the
-// request matches a gated tool, don't enable when it doesn't. An earlier
-// version had only the conservative half ("if not needed, don't enable") and
-// the model read that as a blanket "stay (off)" - reaching for `web_search`
-// when the user asked to search memories rather than enabling the memories
-// toolbox. Worked example included so the toggle-then-call shape is concrete.
+// on the gated toolboxes; always-on tools (every read path, plus web search,
+// update_title, analyze_image, the recall pair, and the toggle meta-tool)
+// ride for free with no toggle. The gated toolboxes carry only writes -
+// memories, cookbook recipes, journal entries - so the model has to think
+// before mutating user data, but can read freely without paying a toggle
+// round-trip. An earlier shape gated the read tools too and the model
+// would skip them rather than flip a toolbox; this version makes reads
+// the cheap default.
 const TOOLBOX_FRAMING_BLOCK = `\
-You have additional tools organised into named toolboxes. Toolboxes start (off) to keep your context window small; the catalog below lists them with their tools indented underneath.
+The catalog below lists every tool you can call. Always-on tools fire freely; gated toolboxes (writes only) start (off) and have to be enabled before their tools will accept a call.
 
-When a user request matches a tool in an (off) toolbox, enable that toolbox BEFORE answering: call \`toggle_toolbox({enabled: [...]})\` with the new full set (any toolbox not listed is disabled). Then call the tool. Example: user asks to search their saved memories -> toggle_toolbox({enabled: ["memories"]}) -> memory_search.
+When a user request needs a write tool from an (off) toolbox, enable that toolbox FIRST: call \`toggle_toolbox({enabled: [...]})\` with the new full set (any toolbox not listed is disabled). Then call the write tool. Example: user asks to save a recipe -> toggle_toolbox({enabled: ["cooking"]}) -> recipe_save.
 
 Pass \`{enabled: []}\` to turn every gated toolbox off. Don't enable a toolbox the request doesn't need.
 `;

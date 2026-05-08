@@ -14,7 +14,6 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   TOOLS,
   alwaysOnToolbox,
-  researchToolbox,
   memoryToolbox,
   recallToolbox,
   conversationRecallToolbox,
@@ -73,25 +72,24 @@ describe('research_docs - registry scoping', () => {
     expect(TOOLS.map((t: ToolDef) => t.name)).toContain('research_docs');
   });
 
-  it('lives in the gated research toolbox, not alwaysOnToolbox', () => {
-    // Meta-questions about the app are infrequent relative to actual
-    // work turns; paying a tool-schema tax on every request would be
-    // wasteful. Gating means the LLM (or the user via the composer
-    // popover) flips the toolbox on only for research-oriented
-    // threads.
-    expect(researchToolbox.tools.map((t) => t.name)).toContain('research_docs');
-    expect(alwaysOnToolbox.tools.map((t) => t.name)).not.toContain('research_docs');
+  it('lives in alwaysOnToolbox so it rides without a toolbox toggle', () => {
+    // research_docs is read-only (a sub-completion against bundled
+    // help docs - no DB writes, no network fetch beyond the model
+    // call) and joined the always-on set when read tools were
+    // promoted out of gating. Meta-questions about the app are
+    // infrequent, but the model was passing over the tool when it
+    // had to flip a toolbox to reach it. Always-on means a "how do I
+    // do X in Nak" turn fires research_docs without a prefatory
+    // round-trip.
+    expect(alwaysOnToolbox.tools.map((t) => t.name)).toContain('research_docs');
   });
 
-  it('is absent from the wire catalog until the research toolbox is enabled', () => {
-    // Tripwire: a future edit that accidentally re-promotes
-    // research_docs to always-on would regress the "default request
-    // payload stays small" property. buildToolList is the authoritative
-    // wire builder; assert on its output.
-    expect(buildToolList([]).map((t) => t.function.name)).not.toContain(
-      'research_docs'
-    );
-    expect(buildToolList(['research']).map((t) => t.function.name)).toContain(
+  it('is in the wire catalog on every turn', () => {
+    // Tripwire: a future edit that pushes research_docs back behind
+    // a gate would re-introduce the "model skipped over it" failure
+    // mode. buildToolList with no enabled toolboxes is the cold-start
+    // wire shape; research_docs has to be in it.
+    expect(buildToolList([]).map((t) => t.function.name)).toContain(
       'research_docs'
     );
   });

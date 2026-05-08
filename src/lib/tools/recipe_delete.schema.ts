@@ -4,7 +4,7 @@
 export const recipeDeleteSchema = {
   name: 'recipe_delete',
   description:
-    'Delete a recipe by id. Use recipe_list first to find the id. Returns ' +
+    'Delete a recipe by id. Use recipe_list first. Returns ' +
     '{deleted: true}.',
   shortDescription: 'remove a saved recipe',
   parameters: {
@@ -12,7 +12,7 @@ export const recipeDeleteSchema = {
     properties: {
       id: {
         type: 'string',
-        description: 'UUID of the recipe to delete.',
+        description: 'UUID of the recipe.',
       },
     },
     required: ['id'],

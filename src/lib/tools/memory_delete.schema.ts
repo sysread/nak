@@ -4,7 +4,7 @@
 export const memoryDeleteSchema = {
   name: 'memory_delete',
   description:
-    'Delete a memory by id. Use memory_search first to find the id. ' +
+    'Hard-delete a memory by id. Use memory_search to find the id. ' +
     'Returns {deleted: true}.',
   shortDescription: 'remove a saved note',
   parameters: {
@@ -12,7 +12,7 @@ export const memoryDeleteSchema = {
     properties: {
       id: {
         type: 'string',
-        description: 'UUID of the memory to delete.',
+        description: 'UUID of the memory.',
       },
     },
     required: ['id'],

@@ -17,7 +17,7 @@ import {
   alwaysOnToolbox,
   cookingToolbox,
   memoriesToolbox,
-  conversationsToolbox,
+  journalToolbox,
   buildToolList,
   buildToolboxWireList,
   executeToolboxCall,
@@ -124,24 +124,29 @@ describe('tool registry', () => {
     expect(names).toContain('conversation_search');
   });
 
-  it('buildToolList with no enabled toolboxes returns only the always-on set', () => {
-    // Always-on: toggle_toolbox + the recall pair + web_search +
-    // update_title + analyze_image. The recall tools are reflex-level
-    // - the system prompt tells the model to call them at the top of a
-    // new topic, so they can't sit behind a prefatory toggle round-trip.
-    // web_search joins them for the same reason: time-sensitive
-    // questions should fire a search without the user first enabling a
-    // toolbox. update_title has to fire on the very first turn of a
-    // fresh thread (toolboxes_enabled=[] by default), so gating it
-    // would mean a toggle round-trip before the model could name the
-    // conversation. analyze_image must be always-on so the model can
-    // reach it on any tier when the user sends an image.
+  it('buildToolList with no enabled toolboxes returns the full read-only set plus the meta-tools', () => {
+    // Always-on now carries every read surface in addition to the
+    // reflex-level meta-tools. The "no toolbox is on" payload includes
+    // the recall pair, the search/list/read tools across memories /
+    // conversations / journal / cookbook, the research_docs sub-agent,
+    // web search, the title-rename convenience, the vision sub-call,
+    // and the toggle_toolbox meta-tool itself. This test is the
+    // tripwire for someone accidentally moving a write tool into the
+    // always-on set or dropping a read tool out of it.
     const list = buildToolList([]);
     expect(list.map((t) => t.function.name).sort()).toEqual(
       [
         'analyze_image',
         'conversation_recall',
+        'conversation_search',
+        'journal_list',
+        'journal_read',
+        'journal_search',
         'memory_recall',
+        'memory_search',
+        'recipe_get',
+        'recipe_list',
+        'research_docs',
         'toggle_toolbox',
         'update_title',
         'web_search',
@@ -149,50 +154,59 @@ describe('tool registry', () => {
     );
   });
 
-  it('buildToolList hides gated tools until their toolbox is enabled', () => {
-    // Tripwire: if someone adds a gated tool to the always-on toolbox
-    // by accident, the "no toolboxes => small wire payload" invariant
-    // breaks. Name every tool that MUST be gated here.
+  it('buildToolList hides write tools until their toolbox is enabled', () => {
+    // Writes still gate. Reads are always-on. Name every tool that
+    // MUST be gated here so an accidental promotion to always-on
+    // trips the test.
     const disabled = buildToolList([]).map((t) => t.function.name);
     for (const gated of [
-      'memory_search',
       'memory_create',
       'memory_update',
       'memory_delete',
-      'conversation_search',
-      'recipe_list',
+      'memory_reaffirm',
+      'memory_doubt',
+      'memory_relate',
+      'memory_unrelate',
       'recipe_save',
+      'recipe_update',
+      'recipe_delete',
+      'recipe_photos_attach',
+      'recipe_photos_remove',
+      'recipe_photos_reorder',
+      'recipe_photo_label_set',
+      'journal_delete',
     ]) {
       expect(disabled).not.toContain(gated);
     }
   });
 
-  it('buildToolList(["cooking"]) exposes cooking tools and no other gated tools', () => {
+  it('buildToolList(["cooking"]) exposes cooking writes and no memory/journal writes', () => {
     const names = buildToolList(['cooking']).map((t) => t.function.name);
-    expect(names).toContain('recipe_list');
     expect(names).toContain('recipe_save');
-    expect(names).toContain('recipe_get');
     expect(names).toContain('recipe_update');
     expect(names).toContain('recipe_delete');
-    // Memory + conversation CRUD stays gated behind their own
-    // toolboxes.
-    expect(names).not.toContain('memory_search');
+    expect(names).toContain('recipe_photos_attach');
+    // Read paths are always-on, regardless of which gated toolbox is on.
+    expect(names).toContain('recipe_list');
+    expect(names).toContain('recipe_get');
+    // Memory + journal writes stay gated behind their own toolboxes.
     expect(names).not.toContain('memory_create');
-    expect(names).not.toContain('conversation_search');
-    // Always-on tools ride along regardless of which toolbox is on.
+    expect(names).not.toContain('journal_delete');
+    // Always-on meta-tools ride along.
     expect(names).toContain('toggle_toolbox');
     expect(names).toContain('memory_recall');
   });
 
-  it('buildToolList(["memories", "conversations"]) exposes only those plus always-on', () => {
-    const names = buildToolList(['memories', 'conversations']).map((t) => t.function.name);
-    expect(names).toContain('memory_search');
+  it('buildToolList(["memories"]) exposes memory writes; reads stay always-on', () => {
+    const names = buildToolList(['memories']).map((t) => t.function.name);
     expect(names).toContain('memory_create');
     expect(names).toContain('memory_update');
     expect(names).toContain('memory_delete');
-    expect(names).toContain('conversation_search');
-    expect(names).not.toContain('recipe_list');
+    expect(names).toContain('memory_reaffirm');
+    // memory_search is always-on, not in the memories toolbox.
+    expect(names).toContain('memory_search');
     expect(names).not.toContain('recipe_save');
+    expect(names).not.toContain('journal_delete');
   });
 
   it('buildToolList with every gated toolbox enabled returns the full catalog', () => {
@@ -207,8 +221,12 @@ describe('tool registry', () => {
     // wire builder drops unknowns and returns whatever else it
     // recognised.
     const names = buildToolList(['nonsense', 'cooking']).map((t) => t.function.name);
-    expect(names).toContain('recipe_list');
-    expect(names).not.toContain('memory_search');
+    expect(names).toContain('recipe_save');
+    // memory_create is the load-bearing "would only be present if
+    // 'memories' were enabled" tripwire - it stays absent when only
+    // 'cooking' is on, even though the silently-dropped 'nonsense'
+    // shares its toolbox slot with us.
+    expect(names).not.toContain('memory_create');
   });
 
   it('buildToolList always includes always-on tools even when always_on is named explicitly', () => {
@@ -218,22 +236,27 @@ describe('tool registry', () => {
     const names = buildToolList(['always_on']).map((t) => t.function.name);
     expect(names).toContain('toggle_toolbox');
     expect(names).toContain('web_search');
-    expect(names).not.toContain('recipe_list');
-    expect(names).not.toContain('memory_search');
+    // Read paths now always-on regardless of toolbox state.
+    expect(names).toContain('memory_search');
+    expect(names).toContain('recipe_list');
+    // Writes still gate.
+    expect(names).not.toContain('recipe_save');
+    expect(names).not.toContain('memory_create');
   });
 
   it('TOOLBOXES exposes the canonical ordered list with always_on first', () => {
     // Order is visible to the model (system-prompt catalog) and to the
     // user (popover list). always_on first so the reflex-level
-    // surfaces are read before the gated catalog.
+    // surfaces are read before the gated catalog. The
+    // `conversations` and `research` toolboxes were dropped when their
+    // only members (conversation_search, research_docs) moved into
+    // the always-on set - empty gated toolboxes have no purpose.
     expect(TOOLBOXES[0]).toBe(alwaysOnToolbox);
     expect(TOOLBOXES.map((tb) => tb.name)).toEqual([
       'always_on',
       'cooking',
       'memories',
-      'conversations',
       'journal',
-      'research',
     ]);
   });
 
@@ -241,9 +264,7 @@ describe('tool registry', () => {
     expect(GATED_TOOLBOX_NAMES).toEqual([
       'cooking',
       'memories',
-      'conversations',
       'journal',
-      'research',
     ]);
     expect(GATED_TOOLBOX_NAMES).not.toContain('always_on');
   });
@@ -256,9 +277,7 @@ describe('tool registry', () => {
     expect(GATED_TOOLBOX_META.map((m) => m.name)).toEqual([
       'cooking',
       'memories',
-      'conversations',
       'journal',
-      'research',
     ]);
     for (const m of GATED_TOOLBOX_META) {
       expect(typeof m.description).toBe('string');
@@ -266,10 +285,12 @@ describe('tool registry', () => {
     }
   });
 
-  it('cookingToolbox, memoriesToolbox, conversationsToolbox are pure CRUD subsets', () => {
-    expect(cookingToolbox.tools.map((t) => t.name)).toEqual([
-      'recipe_list',
-      'recipe_get',
+  it('cookingToolbox, memoriesToolbox, journalToolbox are write-only subsets', () => {
+    // Reads (recipe_list, recipe_get, memory_search, journal_list,
+    // journal_read, journal_search) live in alwaysOnToolbox. The
+    // gated boxes carry only the writes a user-or-model gate has to
+    // authorise.
+    expect(cookingToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
       'recipe_save',
       'recipe_update',
       'recipe_delete',
@@ -278,8 +299,7 @@ describe('tool registry', () => {
       'recipe_photos_reorder',
       'recipe_photo_label_set',
     ]);
-    expect(memoriesToolbox.tools.map((t) => t.name)).toEqual([
-      'memory_search',
+    expect(memoriesToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
       'memory_create',
       'memory_update',
       'memory_delete',
@@ -288,9 +308,44 @@ describe('tool registry', () => {
       'memory_relate',
       'memory_unrelate',
     ]);
-    expect(conversationsToolbox.tools.map((t) => t.name)).toEqual([
-      'conversation_search',
+    expect(journalToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
+      'journal_delete',
     ]);
+  });
+
+  it('alwaysOnToolbox carries every read-only surface', () => {
+    // Tripwire for the read-tools-always-on contract. If a read tool
+    // gets demoted out of the always-on set, this test names which.
+    const names = alwaysOnToolbox.tools.map((t: ToolDef) => t.name);
+    for (const expected of [
+      'toggle_toolbox',
+      'memory_recall',
+      'conversation_recall',
+      'memory_search',
+      'conversation_search',
+      'journal_list',
+      'journal_read',
+      'journal_search',
+      'recipe_list',
+      'recipe_get',
+      'research_docs',
+      'web_search',
+      'update_title',
+      'analyze_image',
+    ]) {
+      expect(names).toContain(expected);
+    }
+    // And no writes leak into always-on.
+    for (const write of [
+      'memory_create',
+      'memory_delete',
+      'recipe_save',
+      'recipe_update',
+      'recipe_delete',
+      'journal_delete',
+    ]) {
+      expect(names).not.toContain(write);
+    }
   });
 
   it('toOpenAIToolDef projects to the function-calling wire shape', () => {

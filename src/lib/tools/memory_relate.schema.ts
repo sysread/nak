@@ -15,37 +15,35 @@ export const MEMORY_RELATE_MAX_NOTE_CHARS = 500;
 export const memoryRelateSchema = {
   name: 'memory_relate',
   description:
-    'Link two memories with a directed edge. `kind` is one of ' +
-    'supports/contradicts/generalises/specialises. `note` is an ' +
-    'optional short rationale (up to 500 chars) describing the link. ' +
-    'Relations show up next to their source memory when it surfaces in ' +
-    'retrieval. Self-loops are rejected; repeated edges (same ' +
-    'from/to/kind) collapse to a no-op. Returns {id, kind}.',
+    'Link two memories with a directed edge (supports / contradicts / ' +
+    'generalises / specialises). Optional note (up to 500 chars) ' +
+    'records the rationale. Relations surface next to their source ' +
+    'memory in retrieval. Self-loops rejected; duplicate edges ' +
+    '(same from/to/kind) collapse to no-op. Returns {id, kind}.',
   shortDescription: 'link two memories',
   parameters: {
     type: 'object',
     properties: {
       from_id: {
         type: 'string',
-        description: 'UUID of the source memory (the edge originates here).',
+        description: 'UUID of the source memory (edge originates here).',
       },
       to_id: {
         type: 'string',
-        description: 'UUID of the target memory (the edge points here).',
+        description: 'UUID of the target memory (edge points here).',
       },
       kind: {
         type: 'string',
         enum: [...RELATION_KINDS],
         description:
-          'Relation kind. supports=target reinforces source; ' +
-          'contradicts=target disagrees with source; ' +
-          'generalises=target is a broader form; ' +
-          'specialises=target is a narrower/concrete case.',
+          'supports = target reinforces source; contradicts = target ' +
+          'disagrees; generalises = target is broader; specialises = ' +
+          'target is narrower.',
       },
       note: {
         type: 'string',
         maxLength: MEMORY_RELATE_MAX_NOTE_CHARS,
-        description: 'Optional short rationale for the link.',
+        description: 'Optional rationale for the link.',
       },
     },
     required: ['from_id', 'to_id', 'kind'],

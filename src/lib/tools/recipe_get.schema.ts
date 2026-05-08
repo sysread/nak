@@ -6,19 +6,18 @@ export const recipeGetSchema = {
   description:
     'Fetch a recipe by id. Returns {found: true, recipe: {id, title, ' +
     'source, source_url, cooklang, rating, created_at, updated_at, ' +
-    'photos: [{id, position, label}, ...]}} on hit, or {found: false} ' +
-    'when the id is unknown. Photos are listed in display order; ' +
-    '`label` is the optional caption (null when none). Pass photo ' +
-    'ids to recipe_photos_remove / recipe_photos_reorder, and use ' +
-    'recipe_photo_label_set to add or change captions on existing ' +
-    'photos. Use recipe_list first to discover recipe ids.',
+    'photos: [{id, position, label}, ...]}} or {found: false}. ' +
+    'Photos in display order; label is the optional caption (null when ' +
+    'none). Pass photo ids to recipe_photos_remove / ' +
+    'recipe_photos_reorder / recipe_photo_label_set. Use recipe_list ' +
+    'first to discover recipe ids.',
   shortDescription: 'fetch a recipe by id',
   parameters: {
     type: 'object',
     properties: {
       id: {
         type: 'string',
-        description: 'UUID of the recipe to fetch (from recipe_list).',
+        description: 'UUID of the recipe (from recipe_list).',
       },
     },
     required: ['id'],

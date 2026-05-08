@@ -8,11 +8,11 @@ export const RECIPE_LIST_MAX_LIMIT = 200;
 export const recipeListSchema = {
   name: 'recipe_list',
   description:
-    "List the user's saved recipes. Returns an array of " +
-    '{id, title, source, source_url, rating, updated_at} — call recipe_get ' +
-    'to fetch the full Cooklang source. Leave `query` empty to list ' +
-    "everything. `sort` defaults to most-recent-first; pass 'rating' to " +
-    'order by stars (highest first; unrated last).',
+    "List the user's saved recipes. Returns {id, title, source, " +
+    'source_url, rating, updated_at}[] - call recipe_get for the ' +
+    'full Cooklang source. Empty query lists everything; sort ' +
+    "defaults to most-recent-first ('rating' orders by stars first, " +
+    'unrated last).',
   shortDescription: "list the user's recipes",
   parameters: {
     type: 'object',
@@ -20,8 +20,7 @@ export const recipeListSchema = {
       query: {
         type: 'string',
         description:
-          'Optional case-insensitive substring filter on recipe title. ' +
-          'Omit or leave empty to list all recipes.',
+          'Optional case-insensitive substring filter on title.',
       },
       limit: {
         type: 'integer',
@@ -33,9 +32,8 @@ export const recipeListSchema = {
         type: 'string',
         enum: ['updated', 'rating'],
         description:
-          "Sort order. 'updated' (default) lists most-recently-edited " +
-          "first. 'rating' lists highest-rated first, ties broken by " +
-          'most-recent edit; unrated recipes appear last.',
+          "'updated' (default) most-recently-edited first; 'rating' " +
+          'highest-rated first, unrated last.',
       },
     },
     additionalProperties: false,

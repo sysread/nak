@@ -8,7 +8,7 @@
  *     ...) exports a single ToolDef describing what it does and how to
  *     run it.
  *   - This file composes them into named toolboxes (cooking, memories,
- *     conversations, always_on), resolves names to defs, and projects
+ *     journal, always_on), resolves names to defs, and projects
  *     them into the OpenAI / Venice request shape.
  *   - The main-chat system prompt is assembled in `../chat-prompt.ts`,
  *     which imports the registry from here to render the dynamic tool
@@ -18,14 +18,23 @@
  *     that invokes executeToolCall() - no other module should reach
  *     directly into a tool's execute() handler.
  *
- * Toolbox model: the always_on toolbox rides with every request
- * (reflex-level reads: recall pair, web search, the update_title
- * convenience, and the toggle_toolbox meta-tool itself). Other
- * toolboxes are gated - included only when their name is listed in
+ * Toolbox model: the always_on toolbox rides with every request and
+ * carries every read-only surface (the recall pair, web search,
+ * search/list/read tools across memories / conversations / cookbook /
+ * journal / app docs, the update_title convenience, the
+ * analyze_image vision sub-call, and the toggle_toolbox meta-tool
+ * itself). Gated toolboxes carry only writes (memory_create through
+ * memory_unrelate, recipe_save through recipe_photo_label_set,
+ * journal_delete) and are included only when their name is listed in
  * the thread's `toolboxes_enabled` array. The LLM flips gating via
  * the `toggle_toolbox` meta-tool; the user flips gating via the
  * composer toolbox popover. Both paths write through to the same
- * column.
+ * column. Rationale: read tools were getting passed over because the
+ * model judged a toolbox toggle to be too expensive for a one-off
+ * lookup, then answered from training data instead. Reads are
+ * idempotent and cheap, so they ride for free; writes still need a
+ * deliberate user-or-model gate so an autonomous turn can't scribble
+ * over user data without intent.
  *
  * Note on the agent-only `memoryToolbox` re-exported near the bottom
  * of this file: its definition lives in `./memory_toolbox` (kept out
@@ -41,13 +50,18 @@
  */
 import type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
 
-// --- Always-on tool imports -----------------------------------------
-// These ride every chat-loop turn (memory_recall + conversation_recall
-// fire on topic boundaries, web_search on time-sensitive questions,
-// update_title on the very first turn of a fresh thread, analyze_image
-// when the user attaches a picture). The cold-start chunk-fetch tax is
-// not acceptable on the first-message critical path, so they stay
-// eagerly imported.
+// --- Eagerly-imported always-on tools -------------------------------
+// The recall pair, web search, update_title, analyze_image, and the
+// toggle meta-tool fire on the first-message critical path
+// (memory/conversation_recall on topic boundaries, web_search on
+// time-sensitive questions, update_title on the very first turn,
+// analyze_image when the user attaches an image). The cold-start
+// chunk-fetch tax is not acceptable there, so they stay eager. The
+// other always-on tools (search/list/read across memories,
+// conversations, recipes, journal, app docs) are still always-on but
+// lazy-imported via the lazyTool wrappers below - they fire on
+// demand, not on every turn, so the schema rides eagerly while the
+// impl module loads on first dispatch.
 import { toggleToolbox } from './toggle_tools';
 import { memoryRecall } from './memory_recall';
 import { conversationRecall } from './conversation_recall';
@@ -55,12 +69,14 @@ import { webSearch } from './web_search';
 import { updateTitle } from './update_title';
 import { analyzeImage } from './analyze_image';
 
-// --- Gated tool schemas ---------------------------------------------
+// --- Lazy-loaded tool schemas ---------------------------------------
 // The schemas (name + description + shortDescription + parameters)
 // stay eager because every chat-loop turn renders the catalog and
 // every wire payload sends the tool-list shape. The matching impl
 // modules are dynamic-imported on first dispatch via the `lazyTool`
 // helper below; Vite emits one chunk per `import('./<tool>')` call.
+// Tools split across always-on (read paths) and the gated write
+// boxes - the lazy split is orthogonal to gating.
 import { memorySearchSchema } from './memory_search.schema';
 import { memoryCreateSchema } from './memory_create.schema';
 import { memoryUpdateSchema } from './memory_update.schema';
@@ -223,68 +239,84 @@ const journalDelete = lazyTool(
  * Always-on toolbox. Rides with every request regardless of the
  * thread's `toolboxes_enabled` array.
  *
- * Rationale for each inclusion:
+ * The principle: every read-only surface lives here. Reads are
+ * idempotent and cheap; gating them was forcing the model to weigh
+ * "do I need this badly enough to flip a toolbox?" and frequently
+ * answering wrong - in particular passing over memory_search /
+ * journal_search in favour of answering from training data, even
+ * when the user had explicitly asked what Nak remembered. Writes
+ * still gate (see `cookingToolbox`, `memoriesToolbox`,
+ * `journalToolbox` below) because an autonomous tool turn can
+ * scribble over user data and the user-or-model gate is the
+ * structural backstop.
  *
- *   - `toggle_toolbox` - the gating mechanism itself. Without it in
- *     the always-on set, the model can't enable gated toolboxes.
- *   - `memory_recall`, `conversation_recall` - the LLM-callable
- *     escape hatches for explicit user lookups ("what was that
- *     thread about X?") and for cases where the chat-loop's
- *     automatic context-recall priming has gone stale. The system
- *     prompt frames them as escape hatches rather than per-turn
- *     reflexes, so a prefatory toggle round-trip would add latency
- *     to a path that needs to fire on user demand. Both are read-
- *     only (they spawn a sub-agent and return a structured note).
- *   - `web_search` - a search for "today's weather" or "latest
- *     release of X" is a reflex-level capability that must fire
- *     without first enabling a toolbox. Read-only (no DB writes;
- *     runs a sub-completion with Venice's server-side search on).
- *     The main chat loop never sets `enable_web_search` itself, so
- *     this tool is the only path search results reach the model.
- *   - `update_title` - has to fire on the very first turn of a
- *     fresh thread, when no gated toolbox is on yet. Gating it
- *     would mean a toggle round-trip before the model could set
- *     the initial title, which defeats the "single-call adaptive
- *     title" design.
- *   - `analyze_image` - a fast vision sub-completion the model
- *     reaches for when an attached image needs to be inspected
- *     before answering. Always-on for the same reason as recall:
- *     the user expects the model to look at the image they just
- *     sent without an intervening toolbox flip.
- *
- * Note on what's NOT here: `research_docs` is a research capability
- * (read-only bundled docs) that would pass the always-on criteria on
- * read-safety grounds, but meta-questions about the app are rare
- * relative to actual work turns - gating it keeps the default request
- * payload smaller. See `researchToolbox` below.
+ * Members in catalog order:
+ *   - `toggle_toolbox` - the gating mechanism for the write boxes.
+ *   - `memory_recall`, `conversation_recall` - top-of-thread recall
+ *     passes that return a structured note. Run a sub-agent under
+ *     the hood; their toolboxes are read-only.
+ *   - `memory_search` - direct semantic search over the user's
+ *     long-term memories. Returns rows with ids so the model can
+ *     hand them to the gated write tools.
+ *   - `conversation_search` - direct semantic search over prior
+ *     conversation titles + summaries.
+ *   - `journal_list` / `journal_read` / `journal_search` - date-
+ *     based and meaning-based reads over the user's daily journal.
+ *   - `recipe_list` / `recipe_get` - browse and fetch the user's
+ *     saved recipes.
+ *   - `research_docs` - bounded sub-agent that answers
+ *     meta-questions about Nak itself by reading the bundled
+ *     in-app help corpus.
+ *   - `web_search` - sub-completion against Venice's live web
+ *     search; the only path search results reach the main model.
+ *   - `update_title` - rename the conversation; has to fire on the
+ *     very first turn before any gated toolbox is on.
+ *   - `analyze_image` - vision sub-completion against an image
+ *     attached anywhere in the thread.
  */
 export const alwaysOnToolbox: Toolbox = {
   name: 'always_on',
   description:
-    'Reflex-level tools that ride every request without being toggled. ' +
-    'Includes recall (memory + prior conversations), live web search, ' +
-    'the title-rename convenience, and the toggle_toolbox meta-tool ' +
-    'itself.',
+    'Reflex-level tools that ride every request without being ' +
+    'toggled. Read-only surfaces (recall, search, list, read across ' +
+    'memories / conversations / journal / cookbook / app docs) plus ' +
+    'web search, update_title, analyze_image, and the ' +
+    'toggle_toolbox meta-tool.',
   tools: [
     toggleToolbox,
     memoryRecall,
     conversationRecall,
+    memorySearch,
+    conversationSearch,
+    journalList,
+    journalRead,
+    journalSearch,
+    recipeList,
+    recipeGet,
+    researchDocs,
     webSearch,
     updateTitle,
     analyzeImage,
   ],
 };
 
-/** Save-and-read recipes against the cookbook CRUD. */
+/**
+ * Cookbook write tools. Read paths (`recipe_list`, `recipe_get`)
+ * live in the always-on set; this toolbox carries only the tools
+ * that mutate cookbook state (saving a new recipe, editing an
+ * existing one, deleting one, attaching / removing / reordering
+ * photos, captioning photos). The user enables it from the composer
+ * popover when they want to record a recipe; the model can also
+ * flip it on via `toggle_toolbox` once the conversation makes a
+ * cookbook write the obvious next move.
+ */
 export const cookingToolbox: Toolbox = {
   name: 'cooking',
   description:
-    'Save, read, update, and delete recipes in the cookbook, plus ' +
-    'attach photos from the current conversation to a recipe, ' +
-    'remove or reorder them, and set or clear photo captions.',
+    'Save, edit, and delete recipes in the cookbook; attach, remove, ' +
+    'reorder, and caption recipe photos. Read tools (recipe_list, ' +
+    'recipe_get) are always-on; this toolbox carries the writes.',
   tools: [
-    recipeList,
-    recipeGet,
     recipeSave,
     recipeUpdate,
     recipeDelete,
@@ -296,27 +328,26 @@ export const cookingToolbox: Toolbox = {
 };
 
 /**
- * User-facing memory CRUD plus the volitional-memory lever:
- * reaffirm/doubt tools for graded confidence adjustment, and
- * relate/unrelate for the memory-graph layer. The confidence pair sits
- * alongside memory_invalidate in the reflection toolbox below; here in
- * the chat toolbox they're the primary levers, and memory_delete stays
- * as the user-authorised hard-delete (not present in the reflection
- * toolbox).
+ * Memory write tools. `memory_search` lives in the always-on set so
+ * the model can find ids without a toggle round-trip; this toolbox
+ * carries the writes (create, update, delete) plus the volitional-
+ * memory levers (reaffirm/doubt for graded confidence, relate/
+ * unrelate for the memory-graph layer).
  *
  * Contrast with the agent-only `memoryToolbox` (defined in
  * `./memory_toolbox`, re-exported near the bottom of this file),
- * which swaps `memory_delete` for `memory_invalidate` because agents
- * operating on their own authority only get soft-decay, not hard
- * delete.
+ * which swaps `memory_delete` for `memory_invalidate` and includes
+ * `memory_search` directly because agents don't have access to the
+ * always-on registry. Agents operating on their own authority only
+ * get soft-decay, not hard delete.
  */
 export const memoriesToolbox: Toolbox = {
   name: 'memories',
   description:
-    "Search, create, update, delete, reaffirm, doubt, and link the " +
-    "signed-in user's long-term memories.",
+    "Create, update, delete, reaffirm, doubt, and link the user's " +
+    'long-term memories. Read paths (memory_search, memory_recall) ' +
+    'are always-on; this toolbox carries the writes.',
   tools: [
-    memorySearch,
     memoryCreate,
     memoryUpdate,
     memoryDelete,
@@ -327,80 +358,39 @@ export const memoriesToolbox: Toolbox = {
   ],
 };
 
-/** Search prior conversations by title + summary embedding. */
-export const conversationsToolbox: Toolbox = {
-  name: 'conversations',
-  description: 'Search the titles and summaries of prior conversations.',
-  tools: [conversationSearch],
-};
-
 /**
- * Journal (daily diary). Read-focused tools for the main chat -
- * the write path is the background journaling agent's, not this
- * toolbox's. `journal_delete` is here because removing an entry is
- * user-directed (and invokes the per-thread exclude side-effect);
- * creating an automatic entry is not the model's call.
- *
- * Gated rather than always-on because most conversations don't
- * involve the journal - including the schemas on every turn would
- * grow the request payload without paying rent. The LLM can flip it
- * on via toggle_toolbox once a reflective topic opens up.
+ * Journal write tools. Reads (`journal_list`, `journal_read`,
+ * `journal_search`) live in the always-on set; this toolbox carries
+ * the only chat-callable write, `journal_delete`, which removes a
+ * journal entry and (for automatic entries) marks the source thread
+ * as excluded so the background worker won't regenerate it. Creating
+ * automatic entries is the background journaling agent's job, not
+ * the model's.
  */
 export const journalToolbox: Toolbox = {
   name: 'journal',
   description:
-    "Read and search the user's daily journal entries, " +
-    'and delete entries they no longer want. Entries come from two ' +
-    "sources per day: 'automatic' (written by the background " +
-    "journaling agent from the user's conversations) and 'user' " +
-    '(first-person entries the user composed themselves). Writing ' +
-    'automatic entries is handled by the background worker, not this ' +
-    'toolbox.',
-  tools: [journalList, journalRead, journalSearch, journalDelete],
-};
-
-/**
- * Research capabilities that aren't a fit for always-on. Today this is
- * just `research_docs` - a sub-agent that answers questions about Nak
- * itself by reading the bundled in-app help corpus, and (when the
- * caller passes `include_internal_dev_docs: true`) the developer docs
- * under `docs/dev/` so the same tool can field "how would I add
- * feature X?" architecture questions. The tool is read-only (no DB
- * writes, no network fetch), so it could technically sit in
- * `alwaysOnToolbox`, but meta-questions about the app are a tiny
- * fraction of conversation turns. Gating it keeps the default request
- * payload smaller; the LLM can flip this toolbox on via
- * `toggle_toolbox` the moment a user turn looks like a meta-question
- * and keep it on for the rest of that thread.
- *
- * Future research-adjacent tools (e.g. reading a saved document the
- * user uploaded, pulling a snippet from a knowledge base) would land
- * here rather than each getting their own single-tool toolbox.
- */
-export const researchToolbox: Toolbox = {
-  name: 'research',
-  description:
-    'Research capabilities for answering meta-questions about Nak - ' +
-    'how features work, what a setting does, how the app is built ' +
-    'internally - or other research-adjacent lookups. Enable when ' +
-    'the user asks how to do something in Nak, what a UI element ' +
-    'means, or wants to plan a change to Nak itself.',
-  tools: [researchDocs],
+    "Delete journal entries the user no longer wants. Read tools " +
+    '(journal_list, journal_read, journal_search) are always-on; ' +
+    'this toolbox carries the delete write. Automatic entry creation ' +
+    'is handled by the background worker, not this toolbox.',
+  tools: [journalDelete],
 };
 
 /**
  * The canonical ordered list of toolboxes exposed to the main chat.
  * Order is visible to the model (system-prompt catalog) and to the
  * user (popover list). Always-on goes first so the model reads the
- * reflex-level surfaces before the gated catalog.
+ * reflex-level surfaces before the gated catalog. The conversations
+ * and research toolboxes were dropped: their only members were
+ * read-only (`conversation_search`, `research_docs`) and now ride in
+ * always-on, so an empty gated toolbox would have no tools to gate.
  */
 export const TOOLBOXES: readonly Toolbox[] = [
   alwaysOnToolbox,
   cookingToolbox,
   memoriesToolbox,
-  conversationsToolbox,
   journalToolbox,
-  researchToolbox,
 ];
 
 /**

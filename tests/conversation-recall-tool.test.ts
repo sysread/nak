@@ -86,15 +86,18 @@ describe('conversation_recall — registry scoping', () => {
     );
   });
 
-  it('description prefers recall over conversation_search for context gathering', () => {
-    // Same load-bearing phrasing check as memory_recall: if someone
-    // softens the wording to something like "consider using recall",
-    // this assertion points at the design intent — the model should
-    // treat conversation_recall as the default and fall back to
-    // conversation_search only when it wants raw results.
-    const desc = conversationRecall.description.toUpperCase();
-    expect(desc).toMatch(/PREFER/);
+  it('description scopes recall vs search by use case', () => {
+    // The earlier "PREFER recall over conversation_search" wording was
+    // dropped when conversation_search moved to always-on. The two
+    // tools are peers now: conversation_recall is the topic-boundary
+    // pre-pass (returns a digested note); conversation_search is the
+    // raw-results path for explicit user lookups. The description has
+    // to spell out both halves so the model picks the right tool.
+    expect(conversationRecall.description).toMatch(/recall/i);
     expect(conversationRecall.description).toMatch(/conversation_search/);
+    // Topic-boundary cue - the lever that scopes recall over a direct
+    // search.
+    expect(conversationRecall.description).toMatch(/topic|every turn|context/i);
   });
 
   it('declares a topic parameter (optional), nothing else', () => {
