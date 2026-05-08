@@ -507,6 +507,40 @@ markdownlint-cli2 pass over the doc tree (see
 `tests/markdownlint.test.ts`). Both only surface at `pnpm build` /
 the Pages deploy otherwise.
 
+### Read the warnings, not just the exit code
+
+Exit 0 from `mise run check` is necessary but not sufficient.
+`pnpm build` (the Vite/Rollup pass) emits warnings that don't fail
+the gate but signal real problems - and Rollup's chunk warnings
+in particular often mean the optimisation work you just did
+quietly didn't take effect. Examples that have bitten us:
+
+- `(!) <module> is dynamically imported by X but also statically
+  imported by Y, dynamic import will not move module into another
+  chunk.` Means a dynamic import you added for code-splitting
+  isn't actually splitting because some other module pulls the
+  same target statically. The chunking diff you thought you
+  shipped is a no-op until both consumers go through the same
+  import shape.
+- `(!) Some chunks are larger than 500 kB after minification.`
+  Advisory threshold; reading the surrounding asset list tells
+  you which chunk is over and what's in it. Don't ignore it
+  silently if you're working on bundle size.
+- `(!) <module> is dynamically imported but also statically
+  imported by ...` (variant phrasing). Same family.
+
+When you do bundle-shape work (lazy loads, code-splitting, worker
+boundaries), grep the build output for `(!)` and `plugin:vite:reporter`
+before declaring victory:
+
+```sh
+mise run check 2>&1 | grep -E '\(!\)|plugin:vite:reporter'
+```
+
+Treat each warning as a TODO until you've either resolved it or
+deliberately decided the trade-off (with the reasoning written
+down in code comments next to the import that triggered it).
+
 ## Supabase schema changes
 
 Schema lives in `supabase/schema.sql` and is applied to the linked
