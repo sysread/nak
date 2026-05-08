@@ -47,14 +47,19 @@ export interface RecallInput {
 /**
  * Discriminated union matching the JSON shape the model is asked to
  * emit. `kind:'none'` is the explicit empty signal — the caller
- * should inject nothing into the conversation. `kind:'note'` carries
- * a short first-person paragraph ready to be surfaced as a tool
- * result. Malformed or unparsable output collapses to
- * `{kind:'none', raw}` so the main model never sees a stringly-typed
- * agent failure.
+ * should inject nothing into the conversation. The optional `reason`
+ * rides along for diagnostic surfacing (log drawer, tool-result
+ * panel) so a sustained "always returns empty" pattern can be told
+ * apart from the legitimate "nothing relevant found" case. The main
+ * model sees the reason in the tool result and can use it to gauge
+ * whether to retry with a different query or proceed without
+ * recall. `kind:'note'` carries a short first-person paragraph
+ * ready to be surfaced as a tool result. Malformed or unparsable
+ * output collapses to `{kind:'none', reason: 'parse failed'}` so
+ * the main model never sees a stringly-typed agent failure.
  */
 export type RecallNote =
-  | { kind: 'none' }
+  | { kind: 'none'; reason?: string }
   | { kind: 'note'; note: string };
 
 export interface RecallOutput {
@@ -169,7 +174,7 @@ export function trimToCharBudget(messages: Message[], budget = MAX_RECALL_CHARS)
  */
 export function parseRecallOutput(text: string): RecallNote {
   const trimmed = text.trim();
-  if (trimmed.length === 0) return { kind: 'none' };
+  if (trimmed.length === 0) return { kind: 'none', reason: 'empty model output' };
   // Strip a ```json … ``` or ``` … ``` wrapper if the model added one.
   const fence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   const payload = fence ? fence[1] : trimmed;
@@ -177,15 +182,23 @@ export function parseRecallOutput(text: string): RecallNote {
   try {
     parsed = JSON.parse(payload);
   } catch {
-    return { kind: 'none' };
+    return { kind: 'none', reason: 'JSON parse failed' };
   }
-  if (!parsed || typeof parsed !== 'object') return { kind: 'none' };
+  if (!parsed || typeof parsed !== 'object') {
+    return { kind: 'none', reason: 'response was not a JSON object' };
+  }
   const obj = parsed as Record<string, unknown>;
-  if (obj.kind === 'none') return { kind: 'none' };
+  if (obj.kind === 'none') {
+    const reason =
+      typeof obj.reason === 'string' && obj.reason.trim().length > 0
+        ? obj.reason.trim()
+        : undefined;
+    return reason ? { kind: 'none', reason } : { kind: 'none' };
+  }
   if (obj.kind === 'note' && typeof obj.note === 'string' && obj.note.trim().length > 0) {
     return { kind: 'note', note: obj.note.trim() };
   }
-  return { kind: 'none' };
+  return { kind: 'none', reason: 'response did not match expected schema' };
 }
 
 /**

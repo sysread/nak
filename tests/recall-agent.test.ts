@@ -186,22 +186,63 @@ describe('parseRecallOutput', () => {
     expect(parseRecallOutput(fenced)).toEqual({ kind: 'note', note: 'x' });
   });
 
-  it('collapses malformed JSON to the empty signal', () => {
-    expect(parseRecallOutput('not json')).toEqual({ kind: 'none' });
+  it('collapses malformed JSON to the empty signal with a parse-failed reason', () => {
+    // The diagnostic `reason` field rides along on every empty
+    // signal so a "memory_recall keeps emitting empty" debugging
+    // session can tell parse failures apart from "the model
+    // legitimately decided nothing was relevant." See agent.ts.
+    expect(parseRecallOutput('not json')).toEqual({
+      kind: 'none',
+      reason: 'JSON parse failed',
+    });
   });
 
-  it('collapses an unknown kind to the empty signal', () => {
-    expect(parseRecallOutput('{"kind":"injection"}')).toEqual({ kind: 'none' });
+  it('collapses an unknown kind to the empty signal with a schema-mismatch reason', () => {
+    expect(parseRecallOutput('{"kind":"injection"}')).toEqual({
+      kind: 'none',
+      reason: 'response did not match expected schema',
+    });
   });
 
   it('collapses note missing a string note field to the empty signal', () => {
-    expect(parseRecallOutput('{"kind":"note"}')).toEqual({ kind: 'none' });
-    expect(parseRecallOutput('{"kind":"note","note":""}')).toEqual({ kind: 'none' });
+    expect(parseRecallOutput('{"kind":"note"}')).toEqual({
+      kind: 'none',
+      reason: 'response did not match expected schema',
+    });
+    expect(parseRecallOutput('{"kind":"note","note":""}')).toEqual({
+      kind: 'none',
+      reason: 'response did not match expected schema',
+    });
   });
 
   it('handles empty input', () => {
-    expect(parseRecallOutput('')).toEqual({ kind: 'none' });
-    expect(parseRecallOutput('   ')).toEqual({ kind: 'none' });
+    expect(parseRecallOutput('')).toEqual({
+      kind: 'none',
+      reason: 'empty model output',
+    });
+    expect(parseRecallOutput('   ')).toEqual({
+      kind: 'none',
+      reason: 'empty model output',
+    });
+  });
+
+  it('preserves a model-supplied reason on {kind:"none"}', () => {
+    // The prompt instructs the model to include a short diagnostic
+    // reason when emitting the empty signal (see prompt.ts). The
+    // parser passes it through verbatim so the tool-result panel
+    // and log drawer can show what the agent actually tried.
+    expect(
+      parseRecallOutput('{"kind":"none","reason":"no memories matched"}')
+    ).toEqual({ kind: 'none', reason: 'no memories matched' });
+  });
+
+  it('drops an empty / non-string reason rather than letting it ride', () => {
+    expect(parseRecallOutput('{"kind":"none","reason":""}')).toEqual({
+      kind: 'none',
+    });
+    expect(parseRecallOutput('{"kind":"none","reason":42}')).toEqual({
+      kind: 'none',
+    });
   });
 });
 
@@ -331,11 +372,17 @@ describe('RecallAgent — run() happy path', () => {
       userId: 'u',
     });
 
-    // The raw text is preserved for debugging, but the structured
-    // note collapses to the safe fallback so the main model sees the
-    // "nothing to inject" branch rather than a parse error.
+    // The raw text is preserved for debugging, and the structured
+    // note collapses to the safe fallback (with a `reason` field
+    // for the log drawer / tool-result panel) so the main model
+    // sees "nothing to inject" rather than a parse error, and a
+    // sustained "always emits empty" diagnostic loop has a signal
+    // to read.
     expect(result.stoppedReason).toBe('done');
-    expect(result.output.note).toEqual({ kind: 'none' });
+    expect(result.output.note).toEqual({
+      kind: 'none',
+      reason: 'JSON parse failed',
+    });
     expect(result.output.rawText).toBe('I could not remember anything.');
   });
 });

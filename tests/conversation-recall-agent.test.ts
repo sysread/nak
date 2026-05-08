@@ -258,7 +258,10 @@ describe('ConversationRecallAgent — run() happy path', () => {
     });
 
     expect(result.stoppedReason).toBe('done');
-    expect(result.output.note).toEqual({ kind: 'none' });
+    expect(result.output.note).toEqual({
+      kind: 'none',
+      reason: 'JSON parse failed',
+    });
     expect(result.output.rawText).toBe('I could not recall anything relevant.');
   });
 });
