@@ -38,7 +38,7 @@ const GATED_TOOLBOXES: readonly Toolbox[] = TOOLBOXES.filter(
 /**
  * Inputs to the catalog renderer.
  *
- * `enabledToolboxes` drives the [x] / [ ] marks on the gated catalog
+ * `enabledToolboxes` drives the (on) / (off) marks on the gated catalog
  * lines so the model can see at a glance which toolboxes will accept
  * tool calls this turn. Names not present in the registry are
  * tolerated silently; a stale name should not poison the prompt.
@@ -130,15 +130,19 @@ Explore their boundaries and assumptions.
 Do NOT hallucinate or invent psychological concepts or insights that have no basis in science or established philosophical traditions.
 `;
 
-// Toolbox framing. The model sees the toolbox catalog below with [x]/[ ] marks
-// showing current state. Explicit instructions on how to flip those marks go
-// here; leaving them in the tool description alone is not enough - the model
-// reads the prompt first and only looks at schemas when it decides to call.
+// Toolbox framing. The model sees the catalog below with (on)/(off) marks
+// showing current state. The framing has to push BOTH ways: enable when the
+// request matches a gated tool, don't enable when it doesn't. An earlier
+// version had only the conservative half ("if not needed, don't enable") and
+// the model read that as a blanket "stay (off)" - reaching for `web_search`
+// when the user asked to search memories rather than enabling the memories
+// toolbox. Worked example included so the toggle-then-call shape is concrete.
 const TOOLBOX_FRAMING_BLOCK = `\
-You have additional tools organised into named toolboxes, which are disabled by default to protect your context window.
-Call \`toggle_toolbox({enabled: ["cooking", "memories"]})\` to replace the active set for this conversation; the array is the new set, and any toolbox not listed is disabled.
-Pass \`{enabled: []}\` to turn every gated toolbox off.
-If the user's request clearly doesn't need a toolbox, don't enable it.
+You have additional tools organised into named toolboxes. Toolboxes start (off) to keep your context window small; the catalog below lists them with their tools indented underneath.
+
+When a user request matches a tool in an (off) toolbox, enable that toolbox BEFORE answering: call \`toggle_toolbox({enabled: [...]})\` with the new full set (any toolbox not listed is disabled). Then call the tool. Example: user asks to search their saved memories -> toggle_toolbox({enabled: ["memories"]}) -> memory_search.
+
+Pass \`{enabled: []}\` to turn every gated toolbox off. Don't enable a toolbox the request doesn't need.
 `;
 
 // Activity narration. Every tool schema has an injected `activity` string
@@ -226,13 +230,18 @@ The boundary rule above still applies: the scraped page content sits OUTSIDE the
 
 /**
  * Render the dynamic tool catalog: always-on tools first, then each
- * gated toolbox with its current [x] / [ ] state and its tools
+ * gated toolbox with its current (on) / (off) state and its tools
  * indented below. Built live from the registry so adding a toolbox
  * or a tool extends the prompt automatically. The meta-tool
  * `toggle_toolbox` is intentionally omitted from the always-on
  * listing - it's framed in the dedicated toolbox-framing paragraph
  * above and listing it again in the catalog would invite the model
  * to call it without first reading the toggle policy.
+ *
+ * Why (on) / (off) marks rather than [x] / [ ] checkboxes: the
+ * checkbox shape was misread as "unchecked = unavailable" and the
+ * model was passing over gated tools rather than enabling their
+ * toolboxes. Plain English state words don't have that ambiguity.
  */
 function buildCatalog(enabled: ReadonlySet<string>): string {
   const alwaysOnLines: string[] = [];
@@ -243,7 +252,7 @@ function buildCatalog(enabled: ReadonlySet<string>): string {
 
   const gatedLines: string[] = [];
   for (const tb of GATED_TOOLBOXES) {
-    const mark = enabled.has(tb.name) ? '[x]' : '[ ]';
+    const mark = enabled.has(tb.name) ? '(on)' : '(off)';
     gatedLines.push(`  ${mark} ${tb.name} : ${tb.description}`);
     for (const tool of tb.tools) {
       gatedLines.push(`      - ${tool.name} : ${tool.shortDescription}`);
@@ -254,7 +263,7 @@ function buildCatalog(enabled: ReadonlySet<string>): string {
     'Always available (no toggle needed):',
     ...alwaysOnLines,
     '',
-    'Toolboxes (enable with toggle_toolbox):',
+    'Toolboxes you can enable via toggle_toolbox (call it BEFORE invoking a tool from an (off) toolbox):',
     ...gatedLines,
   ].join('\n');
 }
@@ -290,7 +299,7 @@ function buildCatalog(enabled: ReadonlySet<string>): string {
  * the tool's own description, the activity-parameter narration rule
  * (see ./tools/dispatch.ts for the schema injection that adds the
  * parameter to every tool), and the live toolbox catalog with
- * [x] / [ ] state marks. The catalog is built from `TOOLBOXES` and
+ * (on) / (off) state marks. The catalog is built from `TOOLBOXES` and
  * `alwaysOnToolbox` so adding a tool or a toolbox extends the prompt
  * with no second list to keep in sync.
  *

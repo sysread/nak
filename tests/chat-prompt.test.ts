@@ -3,7 +3,7 @@
  *
  * The prompt's load-bearing beats (identity, recall framing,
  * anti-sycophancy voice block, toggle-toolbox gating rule, dynamic
- * tool catalog with [x]/[ ] marks, user_message boundary, datetime
+ * tool catalog with (on)/(off) marks, user_message boundary, datetime
  * tag, system_reminder channel, URL scraping) are asserted via grep-
  * style matchers so phrasing tweaks don't churn the suite, while a
  * regression on a load-bearing idea still trips a clear failure.
@@ -105,13 +105,16 @@ describe('buildSystemPrompt', () => {
     }
   });
 
-  it('groups gated tools under their toolbox with [x]/[ ] marks', () => {
+  it('groups gated tools under their toolbox with (on)/(off) marks', () => {
     // Unchecked first - default state. `always_on` header should not
     // appear as a toolbox row; it has its own "Always available"
     // section above.
     const disabled = buildSystemPrompt({ enabledToolboxes: [] });
     const alwaysIdx = disabled.indexOf('Always available');
-    const gatedIdx = disabled.indexOf('Toolboxes');
+    // Anchor on the catalog header specifically. The framing block
+    // above the catalog now uses the word "toolbox(es)" too, so a
+    // bare indexOf('Toolboxes') would land in the framing prose.
+    const gatedIdx = disabled.indexOf('Toolboxes you can enable');
     expect(alwaysIdx).toBeGreaterThanOrEqual(0);
     expect(gatedIdx).toBeGreaterThan(alwaysIdx);
 
@@ -126,23 +129,26 @@ describe('buildSystemPrompt', () => {
     expect(gatedSection).toMatch(/- memory_search /);
     expect(gatedSection).not.toMatch(/- memory_recall /);
 
-    // Every gated toolbox gets a "[ ] name : description" line with
+    // Every gated toolbox gets a "(off) name : description" line with
     // its tools indented below.
-    expect(gatedSection).toMatch(/\[ \] cooking : /);
-    expect(gatedSection).toMatch(/\[ \] memories : /);
-    expect(gatedSection).toMatch(/\[ \] conversations : /);
-    expect(gatedSection).toMatch(/\[ \] research : /);
+    expect(gatedSection).toMatch(/\(off\) cooking : /);
+    expect(gatedSection).toMatch(/\(off\) memories : /);
+    expect(gatedSection).toMatch(/\(off\) conversations : /);
+    expect(gatedSection).toMatch(/\(off\) research : /);
   });
 
-  it('shows [x] marks for enabled toolboxes and [ ] for disabled ones', () => {
+  it('shows (on) marks for enabled toolboxes and (off) for disabled ones', () => {
     // The marks give the model visible current state without a second
-    // prompt section. A model reading "[x] cooking" knows it can
-    // invoke the cooking tools this turn without a toolbox flip.
+    // prompt section. A model reading "(on) cooking" knows it can
+    // invoke the cooking tools this turn without a toolbox flip. Plain
+    // English state words instead of [x]/[ ] checkboxes - the checkbox
+    // shape was misread as "unchecked = unavailable" and the model was
+    // skipping over gated tools rather than enabling their toolboxes.
     const prompt = buildSystemPrompt({ enabledToolboxes: ['cooking', 'research'] });
-    expect(prompt).toMatch(/\[x\] cooking : /);
-    expect(prompt).toMatch(/\[ \] memories : /);
-    expect(prompt).toMatch(/\[ \] conversations : /);
-    expect(prompt).toMatch(/\[x\] research : /);
+    expect(prompt).toMatch(/\(on\) cooking : /);
+    expect(prompt).toMatch(/\(off\) memories : /);
+    expect(prompt).toMatch(/\(off\) conversations : /);
+    expect(prompt).toMatch(/\(on\) research : /);
   });
 
   it('carries the recall framing: long-term memory exists, priming is automatic, tools used when stale', () => {
