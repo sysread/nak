@@ -24,6 +24,7 @@
  * the registry level rather than relying on prompt discipline.
  */
 import type { ToolDef } from './types';
+import { RecallAgent } from '../agents/recall/agent';
 import { createLogger } from '../logger.svelte';
 import { memoryRecallSchema } from './memory_recall.schema';
 
@@ -32,14 +33,6 @@ const log = createLogger('recall-agent');
 export const memoryRecall: ToolDef = {
   ...memoryRecallSchema,
   async execute(_args, ctx) {
-    // RecallAgent is dynamic-imported because it transitively pulls
-    // `recallToolbox` and the memory_search / conversation_search
-    // tools it dispatches to. memory_recall is always-on (it fires
-    // on topic boundaries), but most chats don't reach for it on
-    // the first turn - the chunk-fetch tax lands the first time
-    // the model actually decides to recall. Subsequent calls hit
-    // the module cache.
-    const { RecallAgent } = await import('../agents/recall/agent');
     // Task pickup log — mirrors the breadcrumbs on the reflection /
     // embedding workers so the log drawer can surface "something is
     // happening" without us needing per-tool timing instrumentation.

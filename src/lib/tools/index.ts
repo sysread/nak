@@ -92,46 +92,12 @@ import { journalDeleteSchema } from './journal_delete.schema';
 // symbols (the workers / agents that DO use them import directly
 // from `./memory_toolbox` etc., not via this barrel).
 
-// --- lazyTool helper ------------------------------------------------
-// Wraps a schema + dynamic-import loader into a ToolDef whose
-// `execute` fetches the impl chunk on first call. Vite needs a
-// LITERAL string inside `import('...')` to code-split; passing a
-// path as a parameter would defeat the analysis and pull every
-// tool back into the main chunk. So the loader is a thunk closing
-// over the literal string at the call site.
-//
-// `name` is the export-name in the loaded module - callers spell it
-// explicitly because TypeScript can't infer it from a thunk that
-// returns `Record<string, ToolDef>`. A typo would be caught the
-// first time the tool fires (impl missing from the loaded module);
-// the unit tests under `tests/tools.test.ts` exercise dispatch for
-// every tool, so the typo would surface in CI before deploy.
-// `Record<string, unknown>` rather than `Record<string, ToolDef>`
-// because some tool modules also re-export non-ToolDef helpers
-// (research_docs exports `parseResearchResult`, web_search exports
-// the system-prompt header, etc.). The runtime cast inside the
-// helper is narrowed to a ToolDef shape and validated by the
-// `!impl` / `impl.execute` checks.
-function lazyTool(
-  schema: Omit<ToolDef, 'execute'>,
-  load: () => Promise<Record<string, unknown>>,
-  name: string
-): ToolDef {
-  return {
-    ...schema,
-    async execute(args, ctx) {
-      const m = await load();
-      const impl = m[name] as ToolDef | undefined;
-      if (!impl || typeof impl.execute !== 'function') {
-        throw new Error(
-          `lazyTool: '${name}' not found in lazy-loaded module ` +
-            'or does not have an execute function'
-        );
-      }
-      return impl.execute(args, ctx);
-    },
-  };
-}
+// `lazyTool` lives in `./lazy.ts` so the agent-toolbox files
+// (`./memory_toolbox`, `./recall_toolbox`,
+// `./conversation_recall_toolbox`) can use it too. With every
+// consumer going through the lazy path, Vite emits one chunk per
+// impl module regardless of which toolbox dispatches into it.
+import { lazyTool } from './lazy';
 
 // --- Gated tool wrappers --------------------------------------------
 // Each is a thin object: schema fields spread in eagerly, execute()

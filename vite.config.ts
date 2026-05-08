@@ -73,6 +73,18 @@ export default defineConfig({
   // https://vite.dev/guide/features.html#web-workers
   worker: {
     plugins: () => [svelte()],
+    // ES-module workers (rather than Vite's default IIFE) so worker
+    // bundles can use `import('./...')` for code-splitting. Several
+    // tool/toolbox modules under src/lib/tools/ live in worker
+    // bundles (the reflection worker pulls memoryToolbox; recall /
+    // conversation-recall agents pull their toolboxes), and those
+    // toolbox files now use a `lazyTool` wrapper that dynamic-imports
+    // the impl on first dispatch. IIFE workers can't host code-
+    // splitting and the build fails with "UMD and IIFE output
+    // formats are not supported for code-splitting builds." All
+    // browsers nak targets (PWA on modern Chrome / Safari / Firefox
+    // / Edge) ship Module Workers.
+    format: 'es',
   },
   plugins: [
     svelte(),
