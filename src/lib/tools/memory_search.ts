@@ -26,11 +26,13 @@ import {
   type MemoryConfidenceTag,
 } from '../memories';
 import { createLogger } from '../logger.svelte';
+import {
+  memorySearchSchema,
+  MEMORY_SEARCH_DEFAULT_LIMIT,
+  MEMORY_SEARCH_MAX_LIMIT,
+} from './memory_search.schema';
 
 const log = createLogger('memory-search');
-
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 100;
 
 /**
  * Max outbound edges rendered per matched memory in the tool result.
@@ -40,40 +42,15 @@ const MAX_LIMIT = 100;
 const SEARCH_RELATION_FANOUT = 5;
 
 export const memorySearch: ToolDef = {
-  name: 'memory_search',
-  description:
-    "Search the user's saved memories by meaning. Returns an array of " +
-    '{id, label, data, confidence, confidence_tag, updated_at, relations}. ' +
-    '`confidence_tag` is one of "corroborated"/"hedged"/"shaky" or null ' +
-    '(neutral). `relations` is the outbound edges for this memory ' +
-    '(supports/contradicts/generalises/specialises) with the target ' +
-    "memory's label/data inlined. Leave `query` empty to list every " +
-    'memory. Use this before memory_update / memory_delete to find the ' +
-    'id of the memory you want to target.',
-  shortDescription: "search the user's saved notes",
-  parameters: {
-    type: 'object',
-    properties: {
-      query: {
-        type: 'string',
-        description:
-          'Natural-language query. Semantic (embedding) match — paraphrases ' +
-          'and synonyms work, not just substrings. Empty or omitted returns ' +
-          'all memories.',
-      },
-      limit: {
-        type: 'integer',
-        minimum: 1,
-        maximum: MAX_LIMIT,
-        description: `Max results to return (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}).`,
-      },
-    },
-    additionalProperties: false,
-  },
+  ...memorySearchSchema,
   async execute(args, ctx) {
     const query = typeof args.query === 'string' ? args.query.trim() : '';
-    const rawLimit = typeof args.limit === 'number' ? args.limit : DEFAULT_LIMIT;
-    const limit = Math.max(1, Math.min(MAX_LIMIT, Math.floor(rawLimit)));
+    const rawLimit =
+      typeof args.limit === 'number' ? args.limit : MEMORY_SEARCH_DEFAULT_LIMIT;
+    const limit = Math.max(
+      1,
+      Math.min(MEMORY_SEARCH_MAX_LIMIT, Math.floor(rawLimit))
+    );
     const memories = await searchMemoriesSemantic(query, limit, {
       supabase: ctx.supabase,
       venice: ctx.venice,

@@ -37,31 +37,10 @@ import type { ToolDef } from './types';
 // pulled `./index` statically anyway, so the bundler kept it in the
 // main chunk).
 import { GATED_TOOLBOX_NAMES, alwaysOnToolbox } from './index';
+import { toggleToolboxSchema } from './toggle_tools.schema';
 
 export const toggleToolbox: ToolDef = {
-  name: 'toggle_toolbox',
-  description:
-    'Replace the set of gated toolboxes active for this conversation. ' +
-    'Pass {enabled: ["cooking", "memories"]} to enable exactly those two, ' +
-    'or {enabled: []} to turn every gated toolbox off. The always_on ' +
-    'toolbox is implicit and cannot be listed or disabled. Returns the ' +
-    'accepted set; unknown names are silently dropped.',
-  shortDescription: 'enable or disable gated toolboxes for this conversation',
-  parameters: {
-    type: 'object',
-    properties: {
-      enabled: {
-        type: 'array',
-        items: { type: 'string' },
-        description:
-          'The gated toolboxes that should be active. Replaces the ' +
-          'current set; any toolbox not listed is disabled. The ' +
-          'always_on toolbox is implicit and cannot be listed or disabled.',
-      },
-    },
-    required: ['enabled'],
-    additionalProperties: false,
-  },
+  ...toggleToolboxSchema,
   async execute(args, ctx) {
     const raw = Array.isArray(args.enabled) ? (args.enabled as unknown[]) : [];
     const gated = new Set(GATED_TOOLBOX_NAMES);

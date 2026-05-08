@@ -23,57 +23,15 @@
  * and has to decide whether the edge still makes sense.
  */
 import type { ToolDef } from './types';
-
-const RELATION_KINDS = [
-  'supports',
-  'contradicts',
-  'generalises',
-  'specialises',
-] as const;
-
-type RelationKind = (typeof RELATION_KINDS)[number];
-
-const MAX_NOTE_CHARS = 500;
+import {
+  memoryRelateSchema,
+  RELATION_KINDS,
+  MEMORY_RELATE_MAX_NOTE_CHARS,
+  type RelationKind,
+} from './memory_relate.schema';
 
 export const memoryRelate: ToolDef = {
-  name: 'memory_relate',
-  description:
-    'Link two memories with a directed edge. `kind` is one of ' +
-    "supports/contradicts/generalises/specialises. `note` is an " +
-    'optional short rationale (up to 500 chars) describing the link. ' +
-    'Relations show up next to their source memory when it surfaces in ' +
-    'retrieval. Self-loops are rejected; repeated edges (same ' +
-    'from/to/kind) collapse to a no-op. Returns {id, kind}.',
-  shortDescription: 'link two memories',
-  parameters: {
-    type: 'object',
-    properties: {
-      from_id: {
-        type: 'string',
-        description: 'UUID of the source memory (the edge originates here).',
-      },
-      to_id: {
-        type: 'string',
-        description: 'UUID of the target memory (the edge points here).',
-      },
-      kind: {
-        type: 'string',
-        enum: [...RELATION_KINDS],
-        description:
-          'Relation kind. supports=target reinforces source; ' +
-          'contradicts=target disagrees with source; ' +
-          'generalises=target is a broader form; ' +
-          'specialises=target is a narrower/concrete case.',
-      },
-      note: {
-        type: 'string',
-        maxLength: MAX_NOTE_CHARS,
-        description: 'Optional short rationale for the link.',
-      },
-    },
-    required: ['from_id', 'to_id', 'kind'],
-    additionalProperties: false,
-  },
+  ...memoryRelateSchema,
   async execute(args, ctx) {
     const fromId = typeof args.from_id === 'string' ? args.from_id : '';
     const toId = typeof args.to_id === 'string' ? args.to_id : '';
@@ -98,9 +56,9 @@ export const memoryRelate: ToolDef = {
       if (typeof args.note !== 'string') {
         throw new Error('note must be a string');
       }
-      if (args.note.length > MAX_NOTE_CHARS) {
+      if (args.note.length > MEMORY_RELATE_MAX_NOTE_CHARS) {
         throw new Error(
-          `note exceeds ${MAX_NOTE_CHARS}-char limit (got ${args.note.length})`
+          `note exceeds ${MEMORY_RELATE_MAX_NOTE_CHARS}-char limit (got ${args.note.length})`
         );
       }
       const trimmed = args.note.trim();

@@ -11,43 +11,25 @@
  */
 import type { ToolDef } from './types';
 import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from '../models';
-
-const DEFAULT_LIMIT = 10;
-const MAX_LIMIT = 50;
+import {
+  journalSearchSchema,
+  JOURNAL_SEARCH_DEFAULT_LIMIT,
+  JOURNAL_SEARCH_MAX_LIMIT,
+} from './journal_search.schema';
 
 export const journalSearch: ToolDef = {
-  name: 'journal_search',
-  description:
-    "Search the user's journal entries by meaning. Paraphrases work; this " +
-    'is a semantic embedding search with a substring fallback for rows ' +
-    'the embeddings worker has not yet processed. Returns an array of ' +
-    '{id, entry_date, source, content, topics, mood, people, ' +
-    'updated_at, similarity?} ranked by relevance. Empty query lists ' +
-    'most-recent-first (use journal_list for that; this is for search).',
-  shortDescription: 'search journal entries by meaning',
-  parameters: {
-    type: 'object',
-    properties: {
-      query: {
-        type: 'string',
-        minLength: 1,
-        description: 'Natural-language query. Semantic match.',
-      },
-      limit: {
-        type: 'integer',
-        minimum: 1,
-        maximum: MAX_LIMIT,
-        description: `Max results (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}).`,
-      },
-    },
-    required: ['query'],
-    additionalProperties: false,
-  },
+  ...journalSearchSchema,
   async execute(args, ctx) {
     const query = typeof args.query === 'string' ? args.query.trim() : '';
     if (!query) throw new Error('query is required');
-    const rawLimit = typeof args.limit === 'number' ? args.limit : DEFAULT_LIMIT;
-    const limit = Math.max(1, Math.min(MAX_LIMIT, Math.floor(rawLimit)));
+    const rawLimit =
+      typeof args.limit === 'number'
+        ? args.limit
+        : JOURNAL_SEARCH_DEFAULT_LIMIT;
+    const limit = Math.max(
+      1,
+      Math.min(JOURNAL_SEARCH_MAX_LIMIT, Math.floor(rawLimit))
+    );
 
     // Embed the query. Silent fallback to ILIKE-only on failure,
     // matching memory_search's discipline - the model would rather

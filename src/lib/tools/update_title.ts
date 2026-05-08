@@ -33,9 +33,7 @@
  * owns their own sanitisation at the UI layer.
  */
 import type { ToolDef } from './types';
-
-/** Upper bound on stored title length. Matches the old autoTitle worker. */
-const TITLE_MAX_CHARS = 80;
+import { updateTitleSchema, TITLE_MAX_CHARS } from './update_title.schema';
 
 /**
  * Trim, collapse to the first non-empty line, strip wrapping / trailing
@@ -69,28 +67,7 @@ export function sanitizeTitle(raw: string): string {
 }
 
 export const updateTitle: ToolDef = {
-  name: 'update_title',
-  description:
-    'Rename the current conversation. Call this when the topic has ' +
-    'meaningfully shifted from the current title, or on the first turn ' +
-    'when the title is still the default placeholder. Pass a concise ' +
-    '3-6 word title describing the real topic of the conversation. ' +
-    'No trailing punctuation, no quotes, plain text.',
-  shortDescription: 'rename this conversation',
-  parameters: {
-    type: 'object',
-    properties: {
-      title: {
-        type: 'string',
-        minLength: 1,
-        maxLength: TITLE_MAX_CHARS,
-        description:
-          'New 3-6 word title. No trailing punctuation, no quotes, plain text.',
-      },
-    },
-    required: ['title'],
-    additionalProperties: false,
-  },
+  ...updateTitleSchema,
   async execute(args, ctx) {
     const raw = typeof args.title === 'string' ? args.title : '';
     const title = sanitizeTitle(raw);

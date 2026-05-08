@@ -21,28 +21,10 @@
  * replacement via memory_create.
  */
 import type { ToolDef } from './types';
+import { memoryInvalidateSchema } from './memory_invalidate.schema';
 
 export const memoryInvalidate: ToolDef = {
-  name: 'memory_invalidate',
-  description:
-    "Mark a memory as contradicted or outdated by new evidence, lowering its " +
-    'confidence so it stops surfacing in search. Halves confidence on each ' +
-    "call; repeated invalidation hides the memory entirely. The row isn't " +
-    'hard-deleted — if you later re-learn the same fact, memory_update or ' +
-    'memory_create can restore confidence. Returns {id, confidence} with the ' +
-    'post-decay value so you can judge whether further action is needed.',
-  shortDescription: 'soft-delete: halve confidence',
-  parameters: {
-    type: 'object',
-    properties: {
-      id: {
-        type: 'string',
-        description: 'UUID of the memory to invalidate.',
-      },
-    },
-    required: ['id'],
-    additionalProperties: false,
-  },
+  ...memoryInvalidateSchema,
   async execute(args, ctx) {
     const id = typeof args.id === 'string' ? args.id : '';
     if (!id) throw new Error('id is required');
