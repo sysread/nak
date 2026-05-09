@@ -111,6 +111,7 @@
   type CookbookComponent = typeof import('./Cookbook.svelte').default;
   type JournalComponent = typeof import('./Journal.svelte').default;
   type MemoriesComponent = typeof import('./Memories.svelte').default;
+  type WikiComponent = typeof import('./Wiki.svelte').default;
   type SettingsComponent = typeof import('./Settings.svelte').default;
   type HelpComponent = typeof import('./Help.svelte').default;
   type SamskaraComponent = typeof import('./Samskara.svelte').default;
@@ -118,6 +119,7 @@
   import RecipeList from '../components/RecipeList.svelte';
   import JournalList from '../components/JournalList.svelte';
   import MemoryList from '../components/MemoryList.svelte';
+  import WikiList from '../components/WikiList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
   import IntuitionCard from '../components/IntuitionCard.svelte';
   import {
@@ -134,6 +136,11 @@
     memoriesStore,
     runMemoriesSearch,
   } from '$lib/memories-store.svelte';
+  import {
+    wikiStore,
+    runWikiSearch,
+  } from '$lib/wiki-store.svelte';
+  import { onWikiChange } from '$lib/wiki-events';
   import { todayInZone, shiftDay } from '$lib/journal-day';
   import { moodState } from '$lib/samskara/mood.svelte';
   import { bandIndexFor, columnFor } from '$lib/samskara/events';
@@ -195,6 +202,7 @@
   let CookbookComp: CookbookComponent | null = $state(null);
   let JournalComp: JournalComponent | null = $state(null);
   let MemoriesComp: MemoriesComponent | null = $state(null);
+  let WikiComp: WikiComponent | null = $state(null);
   let SettingsComp: SettingsComponent | null = $state(null);
   let HelpComp: HelpComponent | null = $state(null);
   let SamskaraComp: SamskaraComponent | null = $state(null);
@@ -234,6 +242,11 @@
     }
   });
   $effect(() => {
+    if (drawerTab === 'wiki' && !WikiComp) {
+      void import('./Wiki.svelte').then((m) => (WikiComp = m.default));
+    }
+  });
+  $effect(() => {
     if (showSettings && !SettingsComp) {
       void import('./Settings.svelte').then((m) => (SettingsComp = m.default));
     }
@@ -269,7 +282,7 @@
    * use replaceState so a tab flip doesn't fill history with
    * UI-chrome entries.
    */
-  const drawerTab = $derived<'chats' | 'recipes' | 'journal' | 'memories'>(
+  const drawerTab = $derived<'chats' | 'recipes' | 'journal' | 'memories' | 'wiki'>(
     route.drawer ?? 'chats'
   );
   // Recipe, journal, and memory search/listing state has moved to the
@@ -307,6 +320,17 @@
     }
   }
 
+  // Wiki drawer tab. Same lazy-load shape as memories - WikiList's
+  // $effect fires the first search via the shared `wikiStore`, but
+  // kicking it on tab-pick lets a deep-linked panel land on a non-empty
+  // listing.
+  function onPickWikiTab(): void {
+    navigate({ drawer: 'wiki' }, { replace: true });
+    if (app.supabase && !wikiStore.loaded && !wikiStore.loading) {
+      void runWikiSearch(app.supabase, app.venice);
+    }
+  }
+
   // When the user (or a popstate pop) lands on `?drawer=recipes`
   // without having gone through onPickRecipesTab, still make sure the
   // recipe list is fetched so the drawer isn't blank.
@@ -339,6 +363,26 @@
     if (memoriesStore.loaded || memoriesStore.loading) return;
     void runMemoriesSearch(app.supabase, app.venice);
   });
+
+  // Parallel for the wiki tab. Same `loaded`-gate rationale - an
+  // account with zero articles would re-fire the load forever
+  // otherwise.
+  $effect(() => {
+    if (route.drawer !== 'wiki') return;
+    if (!app.supabase) return;
+    if (wikiStore.loaded || wikiStore.loading) return;
+    void runWikiSearch(app.supabase, app.venice);
+  });
+
+  // Wiki cross-surface change channel. The chat-side wiki_* tool calls
+  // and the autonomous wiki worker both fire WIKI_CHANGE_EVENT after a
+  // write; refresh the drawer's listing so the new/updated row shows
+  // up without the user navigating away and back.
+  function onWikiStoreChanged(): void {
+    if (!app.supabase) return;
+    if (!wikiStore.loaded) return;
+    void runWikiSearch(app.supabase, app.venice);
+  }
 
   function onJournalStoreChanged(): void {
     // Any journal write (tool path, worker path, modal compose save)
@@ -1349,10 +1393,12 @@
     // fresh unlock that never opened those tabs stays lazy.
     const offCookbook = onCookbookChange(onCookbookStoreChanged);
     const offJournal = onJournalChange(onJournalStoreChanged);
+    const offWiki = onWikiChange(onWikiStoreChanged);
     return () => {
       unsubscribe();
       offCookbook();
       offJournal();
+      offWiki();
     };
   });
 
@@ -3949,6 +3995,16 @@
               onclick={() => onPickMemoriesTab()}
             >Memories</button>
           </div>
+          <div class="row thread-row">
+            <button
+              type="button"
+              role="tab"
+              class="thread grow"
+              class:active={drawerTab === 'wiki'}
+              aria-selected={drawerTab === 'wiki'}
+              onclick={() => onPickWikiTab()}
+            >Wiki</button>
+          </div>
         </div>
       </header>
       {#if drawerTab === 'chats'}
@@ -4158,11 +4214,16 @@
              Clicking a date navigates to that day in the main panel.
              onSelect mirrors the recipe + thread flow on mobile. -->
         <JournalList onSelect={closeDrawerOnMobile} />
-      {:else}
+      {:else if drawerTab === 'memories'}
         <!-- Memories tab. MemoryList owns the search and label rows.
              Clicking a label scrolls the panel-side card into view.
              onSelect mirrors the other tabs on mobile. -->
         <MemoryList onSelect={closeDrawerOnMobile} />
+      {:else}
+        <!-- Wiki tab. WikiList owns the search and alphabetical
+             listing. Clicking an article surfaces it in the main
+             panel. onSelect mirrors the other tabs on mobile. -->
+        <WikiList onSelect={closeDrawerOnMobile} />
       {/if}
       <footer>
         <div class="subtle" style="margin-bottom:0.4rem;font-size:0.8rem">
@@ -4380,7 +4441,7 @@
             >›</button>
           </div>
           <div class="title-wrap"></div>
-        {:else}
+        {:else if drawerTab === 'memories'}
           <!-- Memories top-bar. No new-row affordance (memories are
                written by the reflection agent and the assistant's
                volitional memory tools, not by direct human compose),
@@ -4390,6 +4451,15 @@
                the title slot. -->
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Memories</span>
+          </div>
+        {:else}
+          <!-- Wiki top-bar. No top-bar new-article button - the create
+               affordance lives inline on the empty-state hint in
+               Wiki.svelte, mirroring how Memories handles the same
+               case. Static label in the title slot keeps the chrome
+               consistent with the other tabs. -->
+          <div class="title-wrap">
+            <span class="title-btn panel-section-label">Wiki</span>
           </div>
         {/if}
         <!-- Logs drawer toggle. Lives outside the per-tab branches so it
@@ -5255,13 +5325,21 @@
         {#if JournalComp}
           <JournalComp bind:triggerNewEntry={journalTriggerNew} />
         {/if}
-      {:else}
+      {:else if drawerTab === 'memories'}
         <!-- Memories panel. Same shape as Cookbook / Journal: inline,
              no modal chrome. The sidebar MemoryList shares the same
              `memoriesStore` so a search keystroke filters this list
              too. Editing happens inline on the cards. -->
         {#if MemoriesComp}
           <MemoriesComp />
+        {/if}
+      {:else}
+        <!-- Wiki panel. Same inline-no-modal-chrome shape. The sidebar
+             WikiList shares the same `wikiStore` so a search keystroke
+             filters both surfaces. Edit / delete / "ask agent to
+             update" all happen inline on the article. -->
+        {#if WikiComp}
+          <WikiComp />
         {/if}
       {/if}
     </main>

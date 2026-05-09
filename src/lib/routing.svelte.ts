@@ -48,7 +48,7 @@
  */
 
 export type Modal = 'settings' | 'help' | 'samskara' | 'intuition';
-export type DrawerTab = 'chats' | 'recipes' | 'journal' | 'memories';
+export type DrawerTab = 'chats' | 'recipes' | 'journal' | 'memories' | 'wiki';
 
 export interface Route {
   cid: string | null;
@@ -67,6 +67,14 @@ export interface Route {
    * with content.
    */
   memory: string | null;
+  /**
+   * Wiki article id for the focused article panel. Absent means the
+   * panel shows an empty-state hint and the sidebar listing is the
+   * only surface with content. Same shape as `memory` - the Wiki tab
+   * mirrors the Memories tab's "list in drawer, single card in
+   * panel" pattern.
+   */
+  wiki_article_id: string | null;
 }
 
 const ROUTED_KEYS = [
@@ -77,6 +85,7 @@ const ROUTED_KEYS = [
   'doc',
   'journal_date',
   'memory',
+  'wiki_article_id',
 ] as const;
 const MODAL_VALUES: readonly Modal[] = [
   'settings',
@@ -89,6 +98,7 @@ const DRAWER_VALUES: readonly DrawerTab[] = [
   'recipes',
   'journal',
   'memories',
+  'wiki',
 ];
 
 export const route = $state<Route>({
@@ -99,6 +109,7 @@ export const route = $state<Route>({
   doc: null,
   journal_date: null,
   memory: null,
+  wiki_article_id: null,
 });
 
 function readEnum<T extends string>(
@@ -126,6 +137,7 @@ export function parseUrl(search: string = typeof location !== 'undefined' ? loca
     doc: readString(params, 'doc'),
     journal_date: readString(params, 'journal_date'),
     memory: readString(params, 'memory'),
+    wiki_article_id: readString(params, 'wiki_article_id'),
   };
 }
 
@@ -148,6 +160,7 @@ export function buildSearch(
   if (r.doc) params.set('doc', r.doc);
   if (r.journal_date) params.set('journal_date', r.journal_date);
   if (r.memory) params.set('memory', r.memory);
+  if (r.wiki_article_id) params.set('wiki_article_id', r.wiki_article_id);
   const s = params.toString();
   return s ? `?${s}` : '';
 }
@@ -193,6 +206,13 @@ function applyPatch(patch: Partial<Route>): boolean {
   }
   if (patch.memory !== undefined && patch.memory !== route.memory) {
     route.memory = patch.memory;
+    changed = true;
+  }
+  if (
+    patch.wiki_article_id !== undefined &&
+    patch.wiki_article_id !== route.wiki_article_id
+  ) {
+    route.wiki_article_id = patch.wiki_article_id;
     changed = true;
   }
   return changed;
@@ -260,6 +280,7 @@ export const __test = {
     route.doc = null;
     route.journal_date = null;
     route.memory = null;
+    route.wiki_article_id = null;
   },
   syncFromUrl,
 };

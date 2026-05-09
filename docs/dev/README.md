@@ -54,6 +54,10 @@ changing a contract that other features depend on.
 - [Journal](./journal.md) — daily automatic +
   user journal entries, the journaling agent, the
   `journal_*` tools, and the Journal modal.
+- [Wiki](./wiki.md) — flat encyclopedic articles about
+  the user, the autonomous wiki agent, the per-article
+  manual update flow, the `wiki_*` tools, and the Wiki
+  drawer tab.
 - [Cookbook](./cookbook.md) — `recipes` store + Cooklang
   parser + the recipe_* tools + the Cookbook modal and
   drawer tab.

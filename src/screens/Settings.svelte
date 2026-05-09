@@ -58,6 +58,7 @@
     persistEmphasisMarkdown,
     persistNotifyOnComplete,
     persistJournalAutomaticEnabled,
+    persistWikiAutomaticEnabled,
     persistJournalTimezone,
     persistSystemPrompts,
     persistTheme,
@@ -113,6 +114,7 @@
     | 'keys'
     | 'ai'
     | 'journal'
+    | 'wiki'
     | 'appearance'
     | 'usage'
     | 'export'
@@ -122,6 +124,7 @@
     { id: 'keys', label: 'API keys' },
     { id: 'ai', label: 'AI' },
     { id: 'journal', label: 'Journal' },
+    { id: 'wiki', label: 'Wiki' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'usage', label: 'Usage' },
     { id: 'export', label: 'Export' },
@@ -184,6 +187,17 @@
   let journalError = $state<string | null>(null);
   let journalInfo = $state<string | null>(null);
   let journalExportBusy = $state(false);
+
+  // --- Wiki pane ---
+  // Toggle for the autonomous wiki agent. Mirrors the journal pane's
+  // shape - the toggle pushes through state.svelte.ts so the worker
+  // starts/stops in real time, and persists on
+  // `profiles.settings.wikiAutomaticEnabled`. The wiki shares the
+  // journal pane's timezone preference (one user-tz covers both
+  // background subsystems), so this pane is just the toggle.
+  let wikiAutomaticEnabled = $state<boolean>(app.wikiAutomaticEnabled);
+  let wikiError = $state<string | null>(null);
+  let wikiInfo = $state<string | null>(null);
 
   // --- Prompts pane ---
   // Local working copy of the prompt library. We edit this in memory and
@@ -938,6 +952,22 @@
     }
   }
 
+  async function onToggleWikiAutomatic(next: boolean): Promise<void> {
+    wikiError = null;
+    wikiInfo = null;
+    const prev = wikiAutomaticEnabled;
+    wikiAutomaticEnabled = next;
+    try {
+      await persistWikiAutomaticEnabled(next);
+      wikiInfo = next
+        ? 'Automatic wiki enabled.'
+        : 'Automatic wiki disabled. Manual edits and the per-article "ask agent to update" button still work.';
+    } catch (err) {
+      wikiAutomaticEnabled = prev;
+      wikiError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   async function onChangeJournalTimezone(next: string): Promise<void> {
     journalError = null;
     journalInfo = null;
@@ -1401,6 +1431,40 @@
 
         {#if journalError}<p class="error">{journalError}</p>{/if}
         {#if journalInfo}<p class="subtle">{journalInfo}</p>{/if}
+      {:else if group === 'wiki'}
+        <h2>Wiki</h2>
+        <p class="subtle">
+          The Wiki is a flat encyclopedia about you - titled articles
+          about projects, people, places, and topics in your life. The
+          background wiki agent reads conversations the day after they
+          settle and either updates an existing article or creates a
+          new one. Articles are never auto-injected into the chat;
+          the assistant reaches them through the always-on
+          <code>wiki_search</code> tool.
+        </p>
+
+        <h3 class="pane-section">Automatic articles</h3>
+        <label class="form-row toggle-row">
+          <input
+            type="checkbox"
+            checked={wikiAutomaticEnabled}
+            onchange={(e) => onToggleWikiAutomatic(e.currentTarget.checked)}
+          />
+          <span>
+            Let Nak's wiki agent maintain articles automatically.
+            Turning this off stops the background agent; manual edits
+            and the per-article "ask agent to update" button still
+            work, and existing articles are untouched.
+          </span>
+        </label>
+
+        <p class="subtle" style="font-size:0.85rem">
+          The wiki uses the same day boundary you set on the Journal
+          pane.
+        </p>
+
+        {#if wikiError}<p class="error">{wikiError}</p>{/if}
+        {#if wikiInfo}<p class="subtle">{wikiInfo}</p>{/if}
       {:else if group === 'appearance'}
         <h2>Appearance</h2>
         <p class="subtle">

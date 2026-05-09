@@ -150,6 +150,7 @@ describe('tool registry', () => {
         'toggle_toolbox',
         'update_title',
         'web_search',
+        'wiki_search',
       ]
     );
   });

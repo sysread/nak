@@ -1,0 +1,94 @@
+/**
+ * Main-thread supervisor for the wiki Web Worker. Mirrors
+ * `../journal/manager.ts`. Lifecycle (cross-tab lock, start/stop,
+ * log routing, auth bridging) lives in `BaseWorkerManager`; this
+ * file carries only the wiki-specific bits:
+ *
+ *   - lock name `nak:wiki-worker`
+ *   - StartOpts add `timezone` (re-uses the journal preference per
+ *     the spec - one user-tz preference covers both)
+ *   - `progress: 'processed'` bubbles up to `emitWikiChange()` so an
+ *     open Wiki drawer / panel refetches when the worker writes
+ *
+ * Activation is gated on `app.wikiAutomaticEnabled` -
+ * state.svelte.ts skips the `start()` call entirely when false;
+ * Settings calls `stop()` / `start()` when the user flips the
+ * toggle mid-session.
+ */
+import type { Session } from '@supabase/supabase-js';
+import { agentModel } from '../../models';
+import { emitWikiChange } from '../../wiki-events';
+import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
+
+export interface WikiStartOpts extends BaseStartOpts {
+  /** IANA timezone; worker falls back to UTC if null. */
+  timezone: string | null;
+}
+
+/**
+ * Same timing defaults as the journal/reflection workers. Wiki-
+ * eligible threads appear at roughly the same rate (one calendar
+ * day after a settled conversation) so identical knobs are fine.
+ */
+const WORKER_DEFAULTS = {
+  leaseTtlSeconds: 45,
+  leaseHeartbeatMs: 20_000,
+  threadClaimTtlSeconds: 600,
+  leasePollMs: 20_000,
+  idleIntervalMs: 30_000,
+  errorBackoffMs: 10_000,
+};
+
+class WikiManager extends BaseWorkerManager<WikiStartOpts> {
+  protected readonly lockName = 'nak:wiki-worker';
+  protected readonly loggerSource = 'wiki-worker';
+
+  protected createWorker(): Worker {
+    return new Worker(new URL('./worker.ts', import.meta.url), {
+      type: 'module',
+      name: 'nak-wiki',
+    });
+  }
+
+  protected buildStartPayload(
+    opts: WikiStartOpts,
+    session: Session
+  ): Record<string, unknown> {
+    return {
+      supabaseUrl: opts.config.supabaseUrl,
+      supabaseAnonKey: opts.config.supabaseAnonKey,
+      accessToken: session.access_token,
+      refreshToken: session.refresh_token,
+      userId: session.user.id,
+      veniceApiKey: opts.config.veniceApiKey,
+      wikiModel: agentModel('wiki').id,
+      timezone: opts.timezone,
+      ...WORKER_DEFAULTS,
+    };
+  }
+
+  protected onWorkerMessage(data: Record<string, unknown>): boolean {
+    if (data.type === 'progress' && data.result === 'processed') {
+      emitWikiChange();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Live-update the worker's timezone without a restart. Called by
+   * state.svelte.ts when `setJournalTimezone` runs (the wiki worker
+   * shares the journal tz preference). No-op when the worker isn't
+   * running; the next `start()` picks the new value off StartOpts.
+   */
+  setTimezone(timezone: string | null): void {
+    if (!this.worker) return;
+    this.worker.postMessage({ type: 'timezone', timezone });
+  }
+}
+
+/**
+ * Single app-wide instance. Imported by state.svelte.ts and nowhere
+ * else.
+ */
+export const wikiManager = new WikiManager();

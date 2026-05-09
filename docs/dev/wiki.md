@@ -1,0 +1,399 @@
+# Wiki
+
+Flat encyclopedic articles about the user. A fourth peer to chats,
+memories, and journal entries. The user authors articles directly
+through the Wiki drawer tab; an autonomous background agent maintains
+articles by reading conversations a day after they settle.
+
+## Role
+
+Three knowledge surfaces with deliberately different shapes:
+
+- **Memory** (`docs/dev/memory.md`) - atomic labelled facts, surfaced
+  inline by the chat-loop's opening recall.
+- **Journal** (`docs/dev/journal.md`) - dated reflective prose, with
+  today's automatic entry included in the opening-turn system prompt.
+- **Wiki** (this doc) - longer-form encyclopedic articles, **never
+  auto-injected** into the chat. The main LLM reaches them only
+  through the always-on `wiki_search` tool.
+
+Articles are titled, single-level (no nesting), and unique per
+`(user_id, title)`. The voice is encyclopedic third-person prose -
+intentionally different from chat-style or journal-reflective
+registers.
+
+## Files
+
+Schema:
+
+- `supabase/schema.sql` - the "User Wiki" block defines
+  `wiki_articles`, the `clear_wiki_embedding_on_change` trigger,
+  RLS policies, three new `threads` columns
+  (`last_wiki_processed_msg_id`, `wiki_claim_holder`,
+  `wiki_claim_expires_at`), and five RPCs:
+  `claim_next_thread_for_wiki`,
+  `mark_thread_wiki_processed_if_claimed`,
+  `claim_next_pending_wiki_article`,
+  `save_wiki_article_embedding_if_claimed`,
+  `search_wiki_articles_by_embedding`.
+
+Data layer (main thread + workers):
+
+- `src/lib/supabase.ts` - `WikiArticle` interface,
+  `coerceWikiArticle`, plus the `SupabaseService` methods:
+  `listWikiArticles`, `getWikiArticleById`, `getWikiArticleByTitle`,
+  `createWikiArticle`, `updateWikiArticle`, `deleteWikiArticle`,
+  `searchWikiArticles`, `claimNextThreadForWiki`,
+  `markThreadWikiProcessedIfClaimed`,
+  `claimNextPendingWikiArticle`, `saveWikiArticleEmbedding`. The
+  `UserSettings` interface gains `wikiAutomaticEnabled?: boolean`.
+- `src/lib/wiki.ts` - the search helper
+  (`searchWikiArticlesSemantic`) plus the `MAX_WIKI_TITLE_CHARS`
+  (200) and `MAX_WIKI_CONTENT_CHARS` (16000) ceilings.
+- `src/lib/wiki-store.svelte.ts` - the shared `wikiStore`,
+  `runWikiSearch`, and the `patchWikiRow` / `removeWikiRow` /
+  `addWikiRow` mutators the panel and tools call.
+- `src/lib/wiki-events.ts` - the `WIKI_CHANGE_EVENT` window-event
+  bus parallel to `journal-events.ts` / `cookbook-events.ts`.
+
+Tools:
+
+- `src/lib/tools/wiki_search.{schema.,}ts` - the always-on recall
+  tool (registered in `src/lib/tools/index.ts`'s
+  `alwaysOnToolbox`).
+- `src/lib/tools/wiki_create.{schema.,}ts`,
+  `wiki_update.{schema.,}ts`, `wiki_delete.{schema.,}ts` - the
+  agent-only write tools.
+- `src/lib/tools/wiki_toolbox.ts` - the agent toolbox that bundles
+  the four tools above with lazy-loaded schemas, parallel to
+  `memory_toolbox.ts`.
+
+Embeddings:
+
+- `src/lib/embeddings/sources/wiki.ts` - the `EmbeddingSource`
+  adapter. The generic worker (`src/lib/embeddings/worker.ts`)
+  picks it up alongside memories, threads, samskara substrate, and
+  journal entries.
+
+Autonomous agent:
+
+- `src/lib/agents/wiki/types.ts` - `WikiInput`, `WikiOutput`.
+- `src/lib/agents/wiki/prompt.ts` - `WIKI_AUTONOMOUS_PROMPT` and
+  `WIKI_MANUAL_PROMPT`.
+- `src/lib/agents/wiki/agent.ts` - the `WikiAgent` class. Two
+  entry points: `run()` for the worker path and `updateOne()` for
+  the main-thread per-article manual flow.
+- `src/lib/agents/wiki/loop.ts` - cycle driver (acquire ->
+  claim -> run -> mark).
+- `src/lib/agents/wiki/worker.ts` - Web Worker entry point.
+  Lease partition `'wiki'`.
+- `src/lib/agents/wiki/manager.ts` - `BaseWorkerManager`
+  subclass. Lock name `nak:wiki-worker`, logger source
+  `wiki-worker`. Bubbles `progress: 'processed'` to
+  `emitWikiChange()`.
+
+Model registry:
+
+- `src/lib/models/index.ts` - `AgentRole` adds `'wiki'`,
+  `AGENT_MODELS.wiki = 'deepseek-v4-flash'` (same model as journal
+  and reflection; rationale documented inline above the table).
+
+Main-thread plumbing:
+
+- `src/lib/state.svelte.ts` - lazy-imports the manager,
+  `app.wikiAutomaticEnabled`, `setWikiAutomaticEnabled`,
+  `persistWikiAutomaticEnabled`, hooks into
+  `applyServerSettings`, `startBackgroundWorkers`,
+  `setJournalTimezone` (live tz update), and `lock()`.
+- `src/lib/routing.svelte.ts` - extends `DrawerTab` with
+  `'wiki'` and `Route` with `wiki_article_id`.
+- `src/lib/chat-prompt.ts` - `WIKI_BLOCK` after `JOURNAL_BLOCK`
+  in the section list.
+
+UI:
+
+- `src/components/WikiList.svelte` - drawer listing. Search
+  input + alphabetical sort.
+- `src/screens/Wiki.svelte` - main-panel article view, edit
+  form, create form, delete confirmation, and the "ask agent
+  to update" preview/accept/cancel flow.
+- `src/screens/Chat.svelte` - new tab, drawer branch,
+  main-panel branch, top-bar branch, change-event listener.
+- `src/screens/Settings.svelte` - new "Wiki" group with the
+  `wikiAutomaticEnabled` toggle.
+
+Docs:
+
+- `docs/user/wiki.md` (this feature's user-facing manual).
+- `docs/dev/wiki.md` (this file).
+
+## Entry points
+
+- `wikiManager.start({ supabase, config, timezone })` - called
+  from `state.svelte.ts:startBackgroundWorkers` when
+  `app.wikiAutomaticEnabled === true`. Spawns the worker
+  inside the `nak:wiki-worker` cross-tab Web Lock.
+- `WikiAgent.run({ input: { threadId, terminalMsgId }, ... })`
+  - the worker's per-cycle entry. Slices thread history at
+  `terminalMsgId`, appends `WIKI_AUTONOMOUS_PROMPT` as the
+  final user turn, runs `runHeadlessToolLoop` against
+  `wikiToolbox`. Side effects (the `wiki_*` tool calls) ARE
+  the output; final text is discarded.
+- `WikiAgent.updateOne({ articleId, currentTitle,
+  currentContent, userInstructions, signal })` - the
+  main-thread per-article manual entry. Single Venice
+  completion with `response_format: {type: 'json_object'}`,
+  no tool loop. Returns `{ kind: 'preview', title, content }`
+  or `{ kind: 'noop', reason }`.
+- `wiki_search` tool - registered in
+  `alwaysOnToolbox.tools` so every chat request can reach
+  it without a toolbox toggle.
+
+## Data model
+
+`wiki_articles`:
+
+- `id uuid pk default gen_random_uuid()`
+- `user_id uuid not null references auth.users on delete cascade`
+- `title text not null`
+- `content text not null`
+- `embedding vector(2048)` - padded by the generic embeddings
+  worker, same shape as memories and journal entries.
+- `embedding_model text`, `embedding_claim_holder text`,
+  `embedding_claim_expires timestamptz` - same claim-protocol
+  columns as memories and journal entries (note: `_expires`
+  not `_expires_at`, matching the existing convention).
+- `created_at`, `updated_at timestamptz default now()`
+- `unique (user_id, title)` - the agent's `wiki_create` tool
+  surfaces a unique-violation as actionable text so the
+  autonomous agent reads the conflict and falls through to
+  `wiki_search` + `wiki_update`.
+- Index `(user_id, lower(title))` for the alphabetical drawer
+  listing.
+- Trigger `clear_wiki_embedding_on_change` nulls the embedding
+  and claim columns on title or content change; the embedding
+  worker re-embeds on its next poll.
+
+`threads` extension columns:
+
+- `last_wiki_processed_msg_id uuid references messages(id) on
+  delete set null` - pointer the autonomous agent advances
+  after each cycle.
+- `wiki_claim_holder text`, `wiki_claim_expires_at timestamptz`
+  - per-thread claim columns (note: `_at` suffix here, matching
+  the existing journal claim columns).
+
+These are independent of the memory-reflection
+(`last_reflected_msg_id`) and journal
+(`last_journaled_msg_id`) pointers. All three workers can run
+concurrently against the same thread.
+
+### Eligibility predicate
+
+`claim_next_thread_for_wiki` differs from
+`claim_next_thread_for_journal` in two specific ways:
+
+1. **Newest-message lateral.** The journal RPC reads
+   `threads.updated_at` for the cooldown bucket. The wiki RPC
+   reads the newest message's `created_at` directly via a
+   second lateral. Both columns move on every insert, but
+   reading from messages.created_at is more honest about
+   "when did the conversation actually last move" - a future
+   bump to threads.updated_at from an unrelated write would
+   shift the gate.
+2. **Strict-yesterday gate.** The eligibility predicate is
+   `(newest.created_at at time zone p_timezone)::date <
+   (now() at time zone p_timezone)::date` - newest message
+   must land on a calendar day strictly before today in the
+   user's tz. Effect: chat Monday -> eligible Tuesday; user
+   resumes Wednesday -> the new newest msg lands on Wednesday
+   and the inequality fails again until Thursday.
+
+Same depth guard (>= 2 user messages) and `for update of t
+skip locked` fairness as the journal RPC.
+
+## Contracts
+
+### Claim/mark atomicity
+
+The autonomous agent's loop is:
+
+1. `claimNextThreadForWiki(holderId, ttl, tz)` - returns
+   `{ threadId, terminalMsgId, title, newestMsgAt }` or null.
+2. `WikiAgent.run({ ... })` - tool calls are the side effects.
+3. `markThreadWikiProcessedIfClaimed(threadId, holderId,
+   terminalMsgId)` - returns true on success, false on
+   claim-lost.
+
+Mark is **unconditional on `done`**. Even a no-op cycle
+(agent decided no topic warranted a wiki update) advances the
+pointer so the same conversation isn't re-processed every
+cycle. New turns added later trigger eligibility again via
+the next-day predicate.
+
+This differs from the journal flow, which uses an atomic
+`upsert_journal_entry_and_mark_thread` RPC because the entry
+write and the pointer advance must happen in lockstep. The
+wiki agent's writes are independent tool calls landing
+through the main `wiki_create`/`wiki_update`/`wiki_delete`
+RPCs - those rows are owned by the user, not the claim, so a
+claim-lost during the cycle leaves any already-landed writes
+intact and just drops the pointer-advance for that cycle.
+The next claim will reprocess the conversation.
+
+### Embedding pipeline
+
+`wiki_articles.embedding` is populated by the generic
+embeddings worker. Its source adapter
+(`src/lib/embeddings/sources/wiki.ts`) builds the input
+string as `${title}\n\n${content}` (mirroring memories'
+label-and-data shape), truncates content to
+`MAX_WIKI_CONTENT_CHARS = 16000`, and calls
+`claimNextPendingWikiArticle` / `saveWikiArticleEmbedding`.
+
+The same `text-embedding-bge-m3` model and 2048-dim padded
+vectors as memories and journal entries.
+
+### Autonomous vs manual agent split
+
+Two distinct flows share the `WikiAgent` class:
+
+| Aspect      | Autonomous (`run`) | Manual (`updateOne`) |
+| ----------- | ------------------ | -------------------- |
+| Runs in     | Web Worker         | Main thread          |
+| Trigger     | Day-after thread   | User clicks button   |
+| Inputs      | Whole conversation | One article + instructions |
+| Tools       | Yes (`wikiToolbox`) | No                   |
+| Output      | Tool side effects  | JSON preview         |
+| Persistence | Tool calls write   | UI persists on Accept |
+| Prompt      | `WIKI_AUTONOMOUS_PROMPT` | `WIKI_MANUAL_PROMPT` |
+
+Both share `agentModel('wiki').id` (deepseek-v4-flash), the
+encyclopedic-third-person voice, and the "preserve facts
+unless explicitly contradicted" discipline. They differ on
+scope (whole wiki vs one article), input shape (conversation
+vs explicit instructions), and output shape (tool calls vs
+JSON).
+
+### Tool toolbox split
+
+- `alwaysOnToolbox` includes only `wiki_search`. The main
+  LLM never gets a path to write to the wiki - that's the
+  spec's "articles are never auto-injected; recall is
+  pulled, never pushed" stance applied symmetrically.
+- `wikiToolbox` (in `src/lib/tools/wiki_toolbox.ts`) bundles
+  search + create + update + delete for the autonomous
+  agent. The agent receives delete because consolidation
+  (subsuming a stale duplicate into another article it just
+  updated) is a legitimate wiki-maintenance operation. The
+  prompt explicitly forbids deleting on the basis of "the
+  user said something different today" alone.
+
+## Interactions
+
+- **Memory** (`docs/dev/memory.md`) - the wiki's embedding
+  shape, claim-protocol columns, and "polymorphic adapter"
+  worker pattern are clones of memories. Both feature docs
+  reference the canonical adapter contract in
+  `embeddings.md`.
+- **Journal** (`docs/dev/journal.md`) - the wiki's manager,
+  worker, loop, and `wikiAutomaticEnabled` setting all clone
+  the journal subsystem's shape. The eligibility predicate
+  in `claim_next_thread_for_wiki` is the deliberate
+  divergence; the rest is parallel structure. Both share the
+  user's `journalTimezone` preference.
+- **Embeddings** (`docs/dev/embeddings.md`) - the generic
+  worker now polls four (now five) sources in round-robin:
+  memories, threads, samskara substrate, journal entries,
+  wiki articles. Adding a source is a one-line append to
+  `worker.ts`'s sources array plus a new file under
+  `sources/`.
+- **Chat-prompt** (search `WIKI_BLOCK` in
+  `src/lib/chat-prompt.ts`) - the WIKI_BLOCK paragraph names
+  the wiki and the recall tool but stays short, since the
+  framing is "articles are pulled, never pushed".
+- **Settings** (`docs/dev/settings.md`) - the `wiki` group
+  exposes only the toggle. The journal pane owns the
+  user-tz preference, which the wiki shares.
+
+## Gotchas
+
+- **Use `messages.created_at` for the day-gate, not
+  `threads.updated_at`.** The journal RPC reads
+  `threads.updated_at` because journals fired on a same-day
+  cooldown predicate that already matched the journal's
+  semantics. The wiki gate is "newest message's calendar day
+  is strictly before today" - reading off the messages
+  lateral keeps the predicate stable against future bumps to
+  `threads.updated_at` from unrelated writes.
+- **`unique(user_id, title)` + ON CONFLICT in the agent.**
+  The autonomous agent is told to always `wiki_search`
+  before writing, but a near-duplicate title can still slip
+  through (the search returned an unrelated article, or
+  caching missed). The unique constraint surfaces the
+  collision as a tool error the agent reads as "fall through
+  to wiki_search + wiki_update". Removing the constraint
+  would silently allow duplicate articles.
+- **Manual agent must NOT discard facts unless told to.**
+  The "rewrite for tone" / "fix paragraph 2" / "add a
+  sentence" patterns all preserve the rest of the article.
+  This is encoded in the `WIKI_MANUAL_PROMPT` and is
+  load-bearing for the trust contract with the user.
+  Reviewer note: a future change that broadens the prompt to
+  "make it better" would silently rewrite parts the user
+  wanted left alone.
+- **Pointer-advance is unconditional on `done`.** Even a
+  no-op cycle (agent issued zero tool calls) advances the
+  pointer. Without this, every cycle would re-process the
+  same "the model decided this conversation has nothing
+  worth wiki-ing" conversation forever.
+- **`wiki_create` rephrases unique-violations.** The
+  autonomous agent reads tool-error text as guidance; the
+  raw Postgres `duplicate key value violates unique
+  constraint` message is opaque. The tool's `execute`
+  rephrases as "An article titled X already exists. Run
+  wiki_search to find its id, then call wiki_update."
+- **`embedding_claim_expires` (no `_at`).** Schema
+  convention for the embedding-side claim columns matches
+  memories and journal_entries. The thread-side claim
+  columns (`wiki_claim_expires_at`) DO have the suffix,
+  matching `journal_claim_expires_at`. Easy to flip when
+  cloning; both are canonical.
+
+## Verification
+
+End-to-end manual smoke test (mirroring the plan's
+verification list):
+
+1. `mise run sync` against a dev Supabase. Confirm
+   `wiki_articles`, the trigger, the five RPCs, and the
+   three new `threads` columns land. Re-run for
+   idempotency.
+2. **Drawer alphabetical sort.** Add "Zebra", "Apple",
+   "Mango" via the panel. Tab reads Apple, Mango, Zebra.
+3. **Search.** Type "ze" -> "Zebra" only. Clear ->
+   alphabetical returns.
+4. **Create / edit / delete** round-trip via the panel.
+   The drawer reflects each change via `WIKI_CHANGE_EVENT`.
+5. **Ask agent to update - preview / accept / cancel /
+   try again.** Open an article, type instructions ->
+   preview populates -> Accept persists, Cancel dismisses,
+   Try again regenerates.
+6. **Autonomous agent fires the day after.** Substantive
+   conversation today: `claim_next_thread_for_wiki` returns
+   nothing. Thread whose newest message is yesterday-in-tz:
+   agent runs, `wiki_search` then `wiki_create` /
+   `wiki_update` lands, `last_wiki_processed_msg_id`
+   advances.
+7. **Eligibility re-opens after continuation.** New
+   message in that thread today -> RPC returns nothing
+   again until tomorrow.
+8. **Recall tool.** Ask the chat "what do you know about
+   my green tea preference?" - the model issues
+   `wiki_search` and grounds its answer.
+9. **Embeddings filled.** New article -> `embedding is
+   null` initially, populates ~30s later.
+10. **Settings toggle.** Disable "Automatic wiki" ->
+    worker stops, no claims. Enable -> resumes.
+11. `mise run check` green; no `(!)` build warnings or
+    `plugin:vite:reporter` chunking warnings introduced.
