@@ -775,6 +775,15 @@ export interface UserSettings {
    */
   wikiAutomaticEnabled?: boolean;
   /**
+   * Wiki librarian: when true, a separate background agent runs every
+   * ~12 hours, reads the full wiki, and consolidates duplicates +
+   * fact-checks against conversation history. Independent of
+   * `wikiAutomaticEnabled` so the user can disable per-conversation
+   * autonomy while still getting periodic reorganisation, or vice
+   * versa. Default-on like the other wiki toggle.
+   */
+  wikiLibrarianEnabled?: boolean;
+  /**
    * Free-form display name the user wants the model to address them
    * by. Optional - absent / empty string means "no name supplied,
    * the model has nothing to reach for." When present, chat-loop
@@ -868,6 +877,9 @@ export function coerceSettings(raw: unknown): UserSettings {
   }
   if (typeof r.wikiAutomaticEnabled === 'boolean') {
     out.wikiAutomaticEnabled = r.wikiAutomaticEnabled;
+  }
+  if (typeof r.wikiLibrarianEnabled === 'boolean') {
+    out.wikiLibrarianEnabled = r.wikiLibrarianEnabled;
   }
   if (
     typeof r.journalTimezone === 'string' &&
@@ -1054,6 +1066,13 @@ export class SupabaseService {
         delete merged.wikiAutomaticEnabled;
       } else if (typeof patch.wikiAutomaticEnabled === 'boolean') {
         merged.wikiAutomaticEnabled = patch.wikiAutomaticEnabled;
+      }
+    }
+    if ('wikiLibrarianEnabled' in patch) {
+      if (patch.wikiLibrarianEnabled === undefined) {
+        delete merged.wikiLibrarianEnabled;
+      } else if (typeof patch.wikiLibrarianEnabled === 'boolean') {
+        merged.wikiLibrarianEnabled = patch.wikiLibrarianEnabled;
       }
     }
     if ('journalTimezone' in patch) {
@@ -3007,6 +3026,27 @@ export class SupabaseService {
         p_embedding_model: model,
       }
     );
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Atomic claim for one wiki-librarian run. Returns true if the
+   * caller acquired the run (the prior timestamp is older than
+   * `minIntervalSeconds`, or no run has happened yet); false
+   * otherwise. The worker calls this BEFORE invoking the agent so
+   * two devices waking up at the same moment don't both run the
+   * agent against the same wiki.
+   *
+   * The atomicity comes from the SQL UPDATE-with-WHERE shape - the
+   * update only matches when the interval has passed, so concurrent
+   * callers either both miss the predicate (one already won) or one
+   * matches and the others don't.
+   */
+  async claimWikiLibrarianRun(minIntervalSeconds: number): Promise<boolean> {
+    const { data, error } = await this.client.rpc('claim_wiki_librarian_run', {
+      p_min_interval_seconds: minIntervalSeconds,
+    });
     if (error) throw new SupabaseError(error.message);
     return data === true;
   }

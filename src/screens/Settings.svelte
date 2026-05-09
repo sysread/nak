@@ -59,6 +59,7 @@
     persistNotifyOnComplete,
     persistJournalAutomaticEnabled,
     persistWikiAutomaticEnabled,
+    persistWikiLibrarianEnabled,
     persistJournalTimezone,
     persistSystemPrompts,
     persistTheme,
@@ -196,6 +197,7 @@
   // journal pane's timezone preference (one user-tz covers both
   // background subsystems), so this pane is just the toggle.
   let wikiAutomaticEnabled = $state<boolean>(app.wikiAutomaticEnabled);
+  let wikiLibrarianEnabled = $state<boolean>(app.wikiLibrarianEnabled);
   let wikiError = $state<string | null>(null);
   let wikiInfo = $state<string | null>(null);
 
@@ -968,6 +970,22 @@
     }
   }
 
+  async function onToggleWikiLibrarian(next: boolean): Promise<void> {
+    wikiError = null;
+    wikiInfo = null;
+    const prev = wikiLibrarianEnabled;
+    wikiLibrarianEnabled = next;
+    try {
+      await persistWikiLibrarianEnabled(next);
+      wikiInfo = next
+        ? 'Wiki librarian enabled.'
+        : 'Wiki librarian disabled. Existing articles are unaffected.';
+    } catch (err) {
+      wikiLibrarianEnabled = prev;
+      wikiError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   async function onChangeJournalTimezone(next: string): Promise<void> {
     journalError = null;
     journalInfo = null;
@@ -1451,10 +1469,28 @@
             onchange={(e) => onToggleWikiAutomatic(e.currentTarget.checked)}
           />
           <span>
-            Let Nak's wiki agent maintain articles automatically.
-            Turning this off stops the background agent; manual edits
-            and the per-article "ask agent to update" button still
-            work, and existing articles are untouched.
+            Let Nak's wiki agent maintain articles automatically as
+            you chat. Turning this off stops the per-conversation
+            agent; manual edits and the per-article "ask agent to
+            update" button still work, and existing articles are
+            untouched.
+          </span>
+        </label>
+
+        <h3 class="pane-section">Librarian</h3>
+        <label class="form-row toggle-row">
+          <input
+            type="checkbox"
+            checked={wikiLibrarianEnabled}
+            onchange={(e) => onToggleWikiLibrarian(e.currentTarget.checked)}
+          />
+          <span>
+            Let Nak's wiki librarian periodically reorganise the wiki:
+            consolidate near-duplicate articles, fact-check claims
+            against your conversation history, and tighten the
+            boundaries between overlapping subjects. Runs at most once
+            every 12 hours; coordinated across devices so only one
+            run happens per cycle.
           </span>
         </label>
 

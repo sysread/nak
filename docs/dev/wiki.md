@@ -2,8 +2,20 @@
 
 Flat encyclopedic articles about the user. A fourth peer to chats,
 memories, and journal entries. The user authors articles directly
-through the Wiki drawer tab; an autonomous background agent maintains
-articles by reading conversations a day after they settle.
+through the Wiki drawer tab; two distinct background agents keep them
+healthy:
+
+- The **per-conversation wiki agent** reads settled threads a day
+  after the newest message and updates / creates articles based on
+  topics that came up.
+- The **wiki librarian** runs every 12 hours, reads the wiki as a
+  whole, and consolidates duplicates / fact-checks claims against
+  conversation history. It cannot create new articles; only update
+  and delete. Cross-device coordination via an atomic claim RPC
+  (`claim_wiki_librarian_run`).
+
+Both agents share the encyclopedic-third-person voice and the
+"preserve facts unless explicitly contradicted" discipline.
 
 ## Role
 
@@ -36,6 +48,10 @@ Schema:
   `claim_next_pending_wiki_article`,
   `save_wiki_article_embedding_if_claimed`,
   `search_wiki_articles_by_embedding`.
+  Plus, for the librarian: a new `profiles.wiki_librarian_last_run_at`
+  column and an atomic-claim RPC `claim_wiki_librarian_run(int)`
+  that returns true at most once per `min_interval_seconds` across
+  all devices.
 
 Data layer (main thread + workers):
 
@@ -64,9 +80,13 @@ Tools:
 - `src/lib/tools/wiki_create.{schema.,}ts`,
   `wiki_update.{schema.,}ts`, `wiki_delete.{schema.,}ts` - the
   agent-only write tools.
-- `src/lib/tools/wiki_toolbox.ts` - the agent toolbox that bundles
-  the four tools above with lazy-loaded schemas, parallel to
-  `memory_toolbox.ts`.
+- `src/lib/tools/wiki_toolbox.ts` - the per-conversation agent's
+  toolbox; bundles search + create + update + delete with lazy-
+  loaded schemas. Parallel to `memory_toolbox.ts`.
+- `src/lib/tools/wiki_librarian_toolbox.ts` - the librarian's
+  toolbox; bundles wiki_search + wiki_update + wiki_delete +
+  conversation_search. **No wiki_create** - the librarian
+  consolidates rather than invents.
 
 Embeddings:
 
@@ -75,11 +95,16 @@ Embeddings:
   picks it up alongside memories, threads, samskara substrate, and
   journal entries.
 
-Autonomous agent:
+Per-conversation autonomous agent:
 
 - `src/lib/agents/wiki/types.ts` - `WikiInput`, `WikiOutput`.
 - `src/lib/agents/wiki/prompt.ts` - `WIKI_AUTONOMOUS_PROMPT` and
-  `WIKI_MANUAL_PROMPT`.
+  `WIKI_MANUAL_PROMPT`. The autonomous prompt biases hard toward
+  "update over create" - the historical failure mode was one new
+  article per conversation; the prompt opens with an explicit
+  rule that update is the default and create is rare, and
+  workflow step 1 mandates at least two different
+  wiki_search angles before considering wiki_create.
 - `src/lib/agents/wiki/agent.ts` - the `WikiAgent` class. Two
   entry points: `run()` for the worker path and `updateOne()` for
   the main-thread per-article manual flow.
@@ -92,19 +117,52 @@ Autonomous agent:
   `wiki-worker`. Bubbles `progress: 'processed'` to
   `emitWikiChange()`.
 
+Librarian:
+
+- `src/lib/agents/wiki-librarian/types.ts` -
+  `WikiLibrarianInput` (a snapshot of all articles - id, title,
+  excerpt), `WikiLibrarianOutput`, plus tunables
+  `LIBRARIAN_EXCERPT_CHARS = 400` and `LIBRARIAN_MIN_ARTICLES = 3`.
+- `src/lib/agents/wiki-librarian/prompt.ts` - `buildWikiLibrarianPrompt`
+  takes the rendered article list and embeds it into a system
+  prompt that frames the agent as a librarian (consolidate,
+  fact-check, tighten boundaries; no wiki_create access).
+- `src/lib/agents/wiki-librarian/agent.ts` - the
+  `WikiLibrarianAgent` class. `run()` reads the snapshot from
+  input, builds the prompt, runs `runHeadlessToolLoop` against
+  `wikiLibrarianToolbox`. No per-thread context; threadId in the
+  ToolContext is set to the empty string (the wiki tools and
+  conversation_search both ignore it - they're scoped by RLS on
+  user_id).
+- `src/lib/agents/wiki-librarian/loop.ts` - different cycle shape
+  from the per-conversation loop. No claim of a thread; instead
+  acquires the lease, then calls `claimWikiLibrarianRun` to gate
+  on the cross-device interval, then snapshots
+  `listWikiArticles({limit: 500})` and either runs the agent or
+  bails on `too-soon` / `too-small`.
+- `src/lib/agents/wiki-librarian/worker.ts` - Web Worker entry
+  point. Lease partition `'wiki-librarian'`.
+- `src/lib/agents/wiki-librarian/manager.ts` - `BaseWorkerManager`
+  subclass. Lock name `nak:wiki-librarian-worker`, logger source
+  `wiki-librarian-worker`. Defaults to 12h min-interval and a 1h
+  idle nap; bubbles `progress: 'reviewed'` to `emitWikiChange()`.
+
 Model registry:
 
-- `src/lib/models/index.ts` - `AgentRole` adds `'wiki'`,
-  `AGENT_MODELS.wiki = 'deepseek-v4-flash'` (same model as journal
-  and reflection; rationale documented inline above the table).
+- `src/lib/models/index.ts` - `AgentRole` adds `'wiki'` and
+  `'wikiLibrarian'`; `AGENT_MODELS.wiki` and
+  `AGENT_MODELS.wikiLibrarian` both pinned to
+  `deepseek-v4-flash` (same family as journal/reflection;
+  rationale documented inline above the table).
 
 Main-thread plumbing:
 
-- `src/lib/state.svelte.ts` - lazy-imports the manager,
-  `app.wikiAutomaticEnabled`, `setWikiAutomaticEnabled`,
-  `persistWikiAutomaticEnabled`, hooks into
-  `applyServerSettings`, `startBackgroundWorkers`,
-  `setJournalTimezone` (live tz update), and `lock()`.
+- `src/lib/state.svelte.ts` - lazy-imports both managers,
+  `app.wikiAutomaticEnabled` + `app.wikiLibrarianEnabled`,
+  `setWikiAutomaticEnabled` / `persistWikiAutomaticEnabled` /
+  `setWikiLibrarianEnabled` / `persistWikiLibrarianEnabled`. Both
+  toggles are independent in `applyServerSettings`,
+  `startBackgroundWorkers`, and `lock()`.
 - `src/lib/routing.svelte.ts` - extends `DrawerTab` with
   `'wiki'` and `Route` with `wiki_article_id`.
 - `src/lib/chat-prompt.ts` - `WIKI_BLOCK` after `JOURNAL_BLOCK`

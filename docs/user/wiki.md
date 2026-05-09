@@ -133,6 +133,42 @@ You can disable the autonomous agent in **Settings -> Wiki**. Manual
 edits and the per-article "Ask agent to update" flow keep working
 when it's off.
 
+## The librarian
+
+A second background agent - the wiki **librarian** - runs every 12
+hours or so. Its job is different from the per-conversation agent:
+instead of reading a single conversation and adding to the wiki, the
+librarian looks at the wiki as a whole and tries to make it more
+coherent. It can:
+
+- **Consolidate near-duplicates.** When two articles cover the same
+  subject under slightly different titles, the librarian merges the
+  unique facts from one into the other and deletes the redundant
+  one.
+- **Fact-check against conversation history.** When an article makes
+  a specific claim that might be stale - a job title, a relationship
+  status, a project status - the librarian searches your past
+  conversations for evidence and updates the article when it finds a
+  clear contradiction.
+- **Tighten subject boundaries.** When two articles bleed into each
+  other (a "Maya" article and a "household" article both covering
+  the same person), the librarian rewrites both so the split is
+  cleaner.
+
+The librarian is intentionally constrained: it cannot create new
+articles, only consolidate or update existing ones. New articles
+flow from the per-conversation agent or from your direct edits. And
+it's conservative - if it isn't confident two articles overlap
+enough to merge, it leaves them alone.
+
+The 12-hour minimum interval is enforced atomically across devices
+(via a Postgres claim); only one run happens per cycle even if you
+have the app open on multiple devices.
+
+You can disable the librarian independently from the per-conversation
+agent in **Settings -> Wiki**. The two toggles are independent: you
+can run one without the other.
+
 ## How the assistant uses the wiki
 
 Articles are **never** auto-injected into the chat. The assistant
@@ -156,6 +192,12 @@ topic (or the title) directly - that's the cue for `wiki_search`.
 
 ## Settings controls
 
-The **Settings -> Wiki** pane has one toggle: whether the autonomous
-wiki agent runs in the background. The wiki uses the same day boundary
-timezone you set on the Journal pane.
+The **Settings -> Wiki** pane has two independent toggles:
+
+- **Automatic articles** - whether the per-conversation wiki agent
+  runs in the background after threads settle.
+- **Librarian** - whether the periodic librarian agent runs in the
+  background to consolidate and fact-check.
+
+Both are on by default. The wiki uses the same day boundary timezone
+you set on the Journal pane.

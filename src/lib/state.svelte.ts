@@ -119,6 +119,9 @@ const journal = lazyManager(() =>
 const wiki = lazyManager(() =>
   import('./agents/wiki/manager').then((m) => m.wikiManager)
 );
+const wikiLibrarian = lazyManager(() =>
+  import('./agents/wiki-librarian/manager').then((m) => m.wikiLibrarianManager)
+);
 
 export type AppPhase = 'loading' | 'setup' | 'locked' | 'unlocked' | 'edit-config';
 
@@ -199,6 +202,14 @@ interface AppState {
    */
   wikiAutomaticEnabled: boolean;
   /**
+   * Wiki librarian: when true, the periodic librarian agent runs in
+   * the background (12h minimum interval, atomically gated across
+   * devices). Independent of `wikiAutomaticEnabled` so the two wiki
+   * agents can be toggled separately. Default true; overwritten from
+   * Supabase `profiles.settings.wikiLibrarianEnabled` on unlock.
+   */
+  wikiLibrarianEnabled: boolean;
+  /**
    * IANA timezone used by the journaling feature to bucket entries.
    * Seeded from the browser's detected zone on activate() so a
    * first-time user lands on sensible defaults; overwritten from
@@ -246,6 +257,7 @@ export const app = $state<AppState>({
   notifyOnComplete: false,
   journalAutomaticEnabled: true,
   wikiAutomaticEnabled: true,
+  wikiLibrarianEnabled: true,
   journalTimezone: detectTimezone(),
   userName: '',
   userLocation: '',
@@ -368,6 +380,24 @@ export function setWikiAutomaticEnabled(enabled: boolean): void {
     });
   } else {
     wiki.stop();
+  }
+}
+
+/**
+ * Flip the wiki librarian on/off. Independent of the per-conversation
+ * wiki worker - the user can disable autonomy on one or the other
+ * without losing the other.
+ */
+export function setWikiLibrarianEnabled(enabled: boolean): void {
+  app.wikiLibrarianEnabled = enabled;
+  if (!app.supabase || !app.config) return;
+  if (enabled) {
+    wikiLibrarian.start({
+      supabase: app.supabase,
+      config: app.config,
+    });
+  } else {
+    wikiLibrarian.stop();
   }
 }
 
@@ -545,6 +575,18 @@ export async function persistWikiAutomaticEnabled(enabled: boolean): Promise<voi
   }
 }
 
+export async function persistWikiLibrarianEnabled(enabled: boolean): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.wikiLibrarianEnabled;
+  setWikiLibrarianEnabled(enabled);
+  try {
+    await app.supabase.updateSettings({ wikiLibrarianEnabled: enabled });
+  } catch (err) {
+    setWikiLibrarianEnabled(prev);
+    throw err;
+  }
+}
+
 /**
  * Save the journal-day timezone. Caller is responsible for
  * normalizing user input to a valid IANA name before calling -
@@ -625,6 +667,7 @@ export function applyServerSettings(s: UserSettings): void {
   // seed (also true).
   setJournalAutomaticEnabled(s.journalAutomaticEnabled ?? true);
   setWikiAutomaticEnabled(s.wikiAutomaticEnabled ?? true);
+  setWikiLibrarianEnabled(s.wikiLibrarianEnabled ?? true);
   if (s.journalTimezone) setJournalTimezone(s.journalTimezone);
   // Profile: empty string is the "not set" sentinel; always
   // assign so explicit absence in the blob clears any value
@@ -678,6 +721,12 @@ function startBackgroundWorkers(config: AppConfig): void {
       timezone: app.journalTimezone || null,
     });
   }
+  if (app.wikiLibrarianEnabled) {
+    wikiLibrarian.start({
+      supabase: app.supabase,
+      config,
+    });
+  }
 }
 
 /**
@@ -711,6 +760,7 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.notifyOnComplete = false;
   app.journalAutomaticEnabled = true;
   app.wikiAutomaticEnabled = true;
+  app.wikiLibrarianEnabled = true;
   app.journalTimezone = detectTimezone();
   app.userName = '';
   app.userLocation = '';
@@ -760,6 +810,7 @@ export function lock(): void {
   samskara.stop();
   journal.stop();
   wiki.stop();
+  wikiLibrarian.stop();
   // Tear down the usage poller and wipe the cache so rows billed
   // against the previous API key don't leak into a subsequent
   // unlock-with-different-config.
@@ -778,6 +829,7 @@ export function lock(): void {
   // inheriting the previous account's choices.
   app.journalAutomaticEnabled = true;
   app.wikiAutomaticEnabled = true;
+  app.wikiLibrarianEnabled = true;
   app.journalTimezone = detectTimezone();
   // Profile: same rationale - never leak the previous account's
   // name/location across a lock-then-unlock-as-someone-else flow.

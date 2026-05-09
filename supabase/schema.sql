@@ -5273,6 +5273,56 @@ language sql stable security invoker as $$
    limit match_limit
 $$;
 
+-- Wiki librarian last-run timestamp + atomic-claim RPC. The wiki
+-- librarian is a separate background agent that periodically
+-- reorganises the user's wiki: consolidating duplicates, fact-
+-- checking against conversation history, merging articles that
+-- belong together. It runs on a long minimum interval (12 hours
+-- by default) - far less often than the per-conversation wiki
+-- agent - and there's no per-thread queue. Cross-device
+-- coordination needs an atomic "is it time to run yet?" check
+-- so two devices that both wake up don't both run the agent.
+--
+-- Approach: store the last successful run timestamp on profiles
+-- and gate the run via an UPDATE-with-WHERE that only matches
+-- when `now() - last_run >= min_interval`. The UPDATE is atomic
+-- per row, so only one device's call ever sees the row update;
+-- the others see zero rows updated and skip.
+alter table public.profiles
+  add column if not exists wiki_librarian_last_run_at timestamptz;
+
+-- Atomic claim. Returns true if this caller acquired the run
+-- (i.e. the timestamp had aged past p_min_interval_seconds, OR
+-- no prior run timestamp was stored), false otherwise. The
+-- worker calls this BEFORE running the agent; if it returns
+-- false the worker skips this cycle and naps until the next
+-- check.
+--
+-- security invoker so RLS scopes the row to the calling user.
+-- profiles already has a self-update policy.
+drop function if exists public.claim_wiki_librarian_run(int);
+create or replace function public.claim_wiki_librarian_run(
+  p_min_interval_seconds int
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  if auth.uid() is null then
+    return false;
+  end if;
+  update public.profiles
+     set wiki_librarian_last_run_at = now()
+   where user_id = auth.uid()
+     and (
+       wiki_librarian_last_run_at is null
+       or wiki_librarian_last_run_at
+            < now() - make_interval(secs => p_min_interval_seconds)
+     );
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
 -- Atomic assistant-message commit with conflict detection -----------------
 --
 -- Terminal assistant rows from the chat-loop are written through this

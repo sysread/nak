@@ -715,10 +715,10 @@
     margin-top: 0.5rem;
     flex-wrap: wrap;
   }
-  .danger {
-    color: var(--error, #b00);
-    border-color: var(--error, #b00);
-  }
+  /* button.danger is styled globally in styles.css (solid red fill +
+     light text on top). No local override - the previous version
+     re-set `color` to red on top of the global red background, which
+     painted the button text invisible. */
   .wiki-preview {
     margin-top: 1rem;
     padding-top: 1rem;

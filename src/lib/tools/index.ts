@@ -529,6 +529,7 @@ export async function executeToolCall(
 // source paths, not through this barrel.
 export { memoryToolbox } from './memory_toolbox';
 export { wikiToolbox } from './wiki_toolbox';
+export { wikiLibrarianToolbox } from './wiki_librarian_toolbox';
 export { recallToolbox } from './recall_toolbox';
 export { conversationRecallToolbox } from './conversation_recall_toolbox';
 
