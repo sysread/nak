@@ -161,6 +161,19 @@ export type WebSearchMode = 'auto' | 'on' | 'off';
 
 export interface ChatRequest {
   model: string;
+  /**
+   * Conversation history sent to the model. Last message MUST be
+   * role `'user'` (or `'tool'` immediately following an assistant
+   * `tool_calls` row). Do NOT end with role `'assistant'` thinking
+   * the model will continue or replace it - on the fast tier
+   * (GLM-4.7 via Venice) that shape made the model echo the system
+   * prompt body verbatim as its `content`, persisting the prompt
+   * into a synthesis field instead of producing a synthesis. See
+   * src/lib/intuition/pipeline.ts stage 3 for the live regression
+   * and the conventional shape that fixed it; if you need to feed
+   * the model "prior internal voices" content, fold it into the
+   * user turn rather than passing it as an assistant message.
+   */
   messages: VeniceMessage[];
   temperature?: number;
   maxTokens?: number;
@@ -884,6 +897,17 @@ export class VeniceClient {
    * recall). See the file header for why background callers
    * shouldn't use streamChat: SSE adds latency the user can't see
    * and exposes us to provider-specific stream-only failure modes.
+   *
+   * Message-shape gotcha: keep the conversation in the conventional
+   * `system` + `(user|assistant)+ user` shape. The fast tier
+   * (GLM-4.7 via Venice) on a request that ends with role
+   * `'assistant'` echoed the SYSTEM prompt body verbatim as its
+   * `content` instead of producing the next turn - bit the
+   * intuition synthesis pipeline live before pipeline.ts was
+   * reshaped. See the comment on {@link ChatRequest.messages} and
+   * src/lib/intuition/pipeline.ts stage 3 for the rationale; fold
+   * "prior internal voices" content into the user turn rather than
+   * passing it as an assistant message.
    */
   async completeChat(req: ChatRequest): Promise<ChatCompletion> {
     const body = this.buildChatBody(req, false);
