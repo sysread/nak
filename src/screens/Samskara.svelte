@@ -895,6 +895,15 @@
            this session. Stale / empty cases rendered explicitly so
            "nothing shown" reads as data rather than a bug. -->
       <h2 class="pane-section">Compound summary (always on in system prompt)</h2>
+      <p class="subtle pane-help">
+        Static for the whole conversation. A background worker rebuilds
+        it once enough new samskaras have been minted since the last
+        regen, so the paragraph drifts between conversations rather than
+        mid-thread. Each turn also gets a per-turn "fired this turn"
+        bullet list appended next to this paragraph - recomputed from
+        the current user message - which is what the Cohort fires
+        section below shows the history of.
+      </p>
       {#if compound === null && !loading && !error}
         <p class="subtle">No compound summary yet - the worker builds one once you have ~5 samskaras.</p>
       {:else if compound}
@@ -956,6 +965,12 @@
           </label>
         {/if}
       </div>
+      <p class="subtle pane-help">
+        One cohort per user turn. Each turn's top-scoring samskaras were
+        appended to that turn's system prompt alongside the compound
+        summary above, then resolved against whatever the user said
+        next.
+      </p>
       {#if !threadId}
         <p class="subtle">Open a conversation to see fires scoped to it.</p>
       {:else if cohortGroups.length === 0 && !loading}
@@ -1272,6 +1287,15 @@
   }
   .pane-section:first-child {
     margin-top: 0;
+  }
+  /* Help text under a section heading. Tucked tight to the heading so
+     the relationship reads as "subtitle" rather than "first paragraph
+     of body content"; uppercase pane-section above already carries the
+     visual break. */
+  .pane-help {
+    margin: -0.2rem 0 0.6rem;
+    font-size: 0.85rem;
+    line-height: 1.4;
   }
 
   .counts-grid {
