@@ -150,6 +150,21 @@ export function coerceIntuitionPayload(raw: unknown): IntuitionPayload | null {
   if (r.v !== 1) return null;
   if (typeof r.perception !== 'string' || r.perception.length === 0) return null;
   if (typeof r.synthesis !== 'string' || r.synthesis.length === 0) return null;
+  // Reject payloads where the synthesis is the synthesis prompt
+  // itself. A live regression (fast-tier model echoing the system
+  // prompt as its content when the conversation ended with an
+  // assistant message) shipped bad payloads to the database with
+  // the prompt body sitting in the synthesis field. The pipeline
+  // shape was fixed in pipeline.ts, but threads with the bad cache
+  // would otherwise keep rendering the prompt until a refresh
+  // trigger fired - rejecting it here makes the next chat-loop
+  // opportunity treat the row as a cold cache and run a clean
+  // pipeline. The signature phrase pairs two terms from the
+  // SYNTHESIS_PROMPT first sentence ("AI agent" + "Subconsciousness")
+  // that no genuine synthesis output should ever contain - the
+  // prompt explicitly forbids the synthesis from referring to its
+  // own process.
+  if (r.synthesis.includes('You are the Subconsciousness')) return null;
   if (typeof r.computed_at_round !== 'number' || !Number.isFinite(r.computed_at_round)) {
     return null;
   }

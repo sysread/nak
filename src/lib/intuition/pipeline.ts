@@ -266,11 +266,19 @@ export async function runIntuitionPipeline(
     return null;
   }
 
-  // Stage 3: synthesis. We pass the perception in user-msg position
-  // and the drives concatenated in assistant-msg position, mirroring
-  // fnord's framing - the synthesis model reads the drives as if
-  // they were its own internal voices already speaking, which keeps
-  // the output in the right register.
+  // Stage 3: synthesis. Perception and drives both ride in a single
+  // user message; the model's reply IS the synthesis. An earlier
+  // shape passed drives in an assistant-role message (mirroring
+  // fnord's "drives are the model's own internal voices already
+  // speaking" framing), but the fast tier (GLM-4.7 via Venice) on
+  // this conversation-shape was returning the SYNTHESIS_PROMPT body
+  // verbatim as its content - the model parsed "ends with assistant"
+  // as a prefix-completion / template-quirk situation and echoed the
+  // system prompt instead of producing a synthesis. The user saw
+  // the prompt rendered in both the intuition card and the
+  // diagnostics modal. Folding drives into the user turn keeps the
+  // shape conventional (system + single user) and the model produces
+  // a normal assistant reply.
   const drivesText = DRIVE_NAMES.map((n) => drives[n])
     .filter((s): s is string => typeof s === 'string' && s.length > 0)
     .join('\n\n');
@@ -281,8 +289,12 @@ export async function runIntuitionPipeline(
       model,
       messages: [
         { role: 'system', content: SYNTHESIS_PROMPT },
-        { role: 'user', content: `# Perception\n${perception}` },
-        { role: 'assistant', content: drivesText },
+        {
+          role: 'user',
+          content:
+            `# Perception\n${perception}\n\n` +
+            `# Drive Reactions\n${drivesText}`,
+        },
       ],
       // 300 tokens fits the 2-3 sentence target with headroom for
       // the strong-convergence case where the synthesis legitimately
@@ -308,6 +320,22 @@ export async function runIntuitionPipeline(
   }
   if (synthesisRaw.length === 0) {
     log.warn('synthesis returned empty text');
+    return null;
+  }
+  // Belt-and-braces guard against the prompt-echo failure mode the
+  // user-message-only shape was supposed to fix: if the model ever
+  // returns the synthesis prompt verbatim again (or any leading slab
+  // of it), bail rather than persist the prompt as the synthesis.
+  // The first sentence of SYNTHESIS_PROMPT is a stable substring
+  // unlikely to appear in any genuine synthesis output - it names
+  // both "AI agent" and "Subconsciousness" in one sentence, neither
+  // of which the synthesis itself should ever use (the prompt
+  // explicitly forbids referring to the synthesis process).
+  if (synthesisRaw.includes('You are the Subconsciousness')) {
+    log.warn(
+      'synthesis echoed the system prompt; treating as failure',
+      synthesisRaw.slice(0, 80)
+    );
     return null;
   }
   log.debug('synthesis', { synthesis: synthesisRaw });
