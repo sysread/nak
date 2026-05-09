@@ -4671,27 +4671,31 @@
                      stream ends the persisted message rerenders through
                      this same <Markdown> path. -->
                 <Markdown content={streamingText} />
-              {:else}
-                <!-- Continuous "still working" signal for the entire
-                     window between "user hit send" and "first answer
-                     token arrived" - including the gaps that aren't
-                     emitting any deltas (model has finished reasoning
-                     and is assembling a tool call; tools are executing
-                     between rounds; round just ended, next round about
-                     to start). Sits below ReasoningPanel rather than
-                     being suppressed by it: once reasoning text has
-                     accumulated the panel itself stops moving, and
-                     without the Scanner the UI reads as frozen during
-                     the tool-call-assembly pause. The Scanner steps
-                     aside the moment streamingText starts arriving
-                     (the answer body is its own progress signal).
-                     Wrapper centers the inline-flex Scanner inside the
-                     bubble so it doesn't read as a stranded artifact in
-                     the top-left corner. -->
-                <div class="thinking">
-                  <Scanner label="Thinking" />
-                </div>
               {/if}
+              <!-- Continuous "still working" signal for the entire
+                   window between "user hit send" and the round
+                   actually closing - including gaps that aren't
+                   emitting any deltas (model has finished reasoning
+                   and is assembling a tool call; tools are executing
+                   between rounds; round just ended, next round about
+                   to start). Stays visible AFTER streamingText starts
+                   arriving too: a single round can emit text deltas
+                   and then switch to tool_call deltas within the same
+                   assistant message, and once the text stops flowing
+                   the bubble otherwise reads as "done responding"
+                   even though the model is still building a tool call
+                   on the wire. Cleared only when the round persists
+                   (onAssistantPersisted resets streamingText) and
+                   ultimately when `sending` flips false at end of
+                   turn. Sits below ReasoningPanel rather than being
+                   suppressed by it - once reasoning text has
+                   accumulated the panel itself stops moving. Wrapper
+                   centers the inline-flex Scanner inside the bubble
+                   so it doesn't read as a stranded artifact in the
+                   top-left corner. -->
+              <div class="thinking">
+                <Scanner label="Thinking" />
+              </div>
               {#if rateLimitWaitUntil !== null}
                 <!-- Rate-limit wait indicator. Sits below the Scanner
                      (or the streaming Markdown when text is already
