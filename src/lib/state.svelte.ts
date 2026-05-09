@@ -116,6 +116,9 @@ const samskara = lazyManager(() =>
 const journal = lazyManager(() =>
   import('./agents/journal/manager').then((m) => m.journalManager)
 );
+const wiki = lazyManager(() =>
+  import('./agents/wiki/manager').then((m) => m.wikiManager)
+);
 
 export type AppPhase = 'loading' | 'setup' | 'locked' | 'unlocked' | 'edit-config';
 
@@ -188,6 +191,14 @@ interface AppState {
    */
   journalAutomaticEnabled: boolean;
   /**
+   * User wiki feature: background wiki worker runs unless this is
+   * explicitly false. Same default-on semantics and persistence
+   * shape as `journalAutomaticEnabled`. Seeded to true on
+   * activate(); overwritten from Supabase
+   * `profiles.settings.wikiAutomaticEnabled` on unlock.
+   */
+  wikiAutomaticEnabled: boolean;
+  /**
    * IANA timezone used by the journaling feature to bucket entries.
    * Seeded from the browser's detected zone on activate() so a
    * first-time user lands on sensible defaults; overwritten from
@@ -234,6 +245,7 @@ export const app = $state<AppState>({
   emphasisMarkdown: false,
   notifyOnComplete: false,
   journalAutomaticEnabled: true,
+  wikiAutomaticEnabled: true,
   journalTimezone: detectTimezone(),
   userName: '',
   userLocation: '',
@@ -325,14 +337,38 @@ export function setJournalAutomaticEnabled(enabled: boolean): void {
 
 /**
  * Apply the journal timezone in memory and push the new zone to the
- * journaling worker so it starts bucketing entries into the right
- * days immediately. Does NOT persist; user-driven changes route
- * through `persistJournalTimezone`. Caller is responsible for
- * normalizing user-supplied input to a valid IANA name first.
+ * journaling and wiki workers so they start bucketing on the right
+ * days immediately. Both background workers share this preference
+ * (per the wiki spec: one user-tz preference covers both). Does NOT
+ * persist; user-driven changes route through `persistJournalTimezone`.
+ * Caller is responsible for normalizing user-supplied input to a
+ * valid IANA name first.
  */
 export function setJournalTimezone(tz: string): void {
   app.journalTimezone = tz;
   journal.whenLoaded((m) => m.setTimezone(tz || null));
+  wiki.whenLoaded((m) => m.setTimezone(tz || null));
+}
+
+/**
+ * Flip the background wiki worker on/off in the current session.
+ * Mirrors `setJournalAutomaticEnabled` - the toggle is the live
+ * switch, not a passive preference. Does NOT persist; user-driven
+ * changes from Settings.svelte route through
+ * `persistWikiAutomaticEnabled`.
+ */
+export function setWikiAutomaticEnabled(enabled: boolean): void {
+  app.wikiAutomaticEnabled = enabled;
+  if (!app.supabase || !app.config) return;
+  if (enabled) {
+    wiki.start({
+      supabase: app.supabase,
+      config: app.config,
+      timezone: app.journalTimezone || null,
+    });
+  } else {
+    wiki.stop();
+  }
 }
 
 /**
@@ -497,6 +533,18 @@ export async function persistJournalAutomaticEnabled(enabled: boolean): Promise<
   }
 }
 
+export async function persistWikiAutomaticEnabled(enabled: boolean): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.wikiAutomaticEnabled;
+  setWikiAutomaticEnabled(enabled);
+  try {
+    await app.supabase.updateSettings({ wikiAutomaticEnabled: enabled });
+  } catch (err) {
+    setWikiAutomaticEnabled(prev);
+    throw err;
+  }
+}
+
 /**
  * Save the journal-day timezone. Caller is responsible for
  * normalizing user input to a valid IANA name before calling -
@@ -576,6 +624,7 @@ export function applyServerSettings(s: UserSettings): void {
   // false in the blob disables; absent key falls through to the
   // seed (also true).
   setJournalAutomaticEnabled(s.journalAutomaticEnabled ?? true);
+  setWikiAutomaticEnabled(s.wikiAutomaticEnabled ?? true);
   if (s.journalTimezone) setJournalTimezone(s.journalTimezone);
   // Profile: empty string is the "not set" sentinel; always
   // assign so explicit absence in the blob clears any value
@@ -622,6 +671,13 @@ function startBackgroundWorkers(config: AppConfig): void {
       userLocation: app.userLocation,
     });
   }
+  if (app.wikiAutomaticEnabled) {
+    wiki.start({
+      supabase: app.supabase,
+      config,
+      timezone: app.journalTimezone || null,
+    });
+  }
 }
 
 /**
@@ -654,6 +710,7 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.emphasisMarkdown = false;
   app.notifyOnComplete = false;
   app.journalAutomaticEnabled = true;
+  app.wikiAutomaticEnabled = true;
   app.journalTimezone = detectTimezone();
   app.userName = '';
   app.userLocation = '';
@@ -702,6 +759,7 @@ export function lock(): void {
   attachmentExpiry.stop();
   samskara.stop();
   journal.stop();
+  wiki.stop();
   // Tear down the usage poller and wipe the cache so rows billed
   // against the previous API key don't leak into a subsequent
   // unlock-with-different-config.
@@ -719,6 +777,7 @@ export function lock(): void {
   // them from the new account's Supabase settings rather than
   // inheriting the previous account's choices.
   app.journalAutomaticEnabled = true;
+  app.wikiAutomaticEnabled = true;
   app.journalTimezone = detectTimezone();
   // Profile: same rationale - never leak the previous account's
   // name/location across a lock-then-unlock-as-someone-else flow.

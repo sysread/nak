@@ -100,6 +100,7 @@ import { journalListSchema } from './journal_list.schema';
 import { journalReadSchema } from './journal_read.schema';
 import { journalSearchSchema } from './journal_search.schema';
 import { journalDeleteSchema } from './journal_delete.schema';
+import { wikiSearchSchema } from './wiki_search.schema';
 
 // Agent-only toolbox re-exports moved to the bottom of the file
 // alongside other re-exports. Direct `export ... from` rather than
@@ -234,6 +235,11 @@ const journalDelete = lazyTool(
   () => import('./journal_delete'),
   'journalDelete'
 );
+const wikiSearch = lazyTool(
+  wikiSearchSchema,
+  () => import('./wiki_search'),
+  'wikiSearch'
+);
 
 /**
  * Always-on toolbox. Rides with every request regardless of the
@@ -262,6 +268,9 @@ const journalDelete = lazyTool(
  *     conversation titles + summaries.
  *   - `journal_list` / `journal_read` / `journal_search` - date-
  *     based and meaning-based reads over the user's daily journal.
+ *   - `wiki_search` - semantic search over the user's flat wiki
+ *     (encyclopedic articles about topics in their life). Articles
+ *     are never auto-injected; this is the only path to reach them.
  *   - `recipe_list` / `recipe_get` - browse and fetch the user's
  *     saved recipes.
  *   - `research_docs` - bounded sub-agent that answers
@@ -291,6 +300,7 @@ export const alwaysOnToolbox: Toolbox = {
     journalList,
     journalRead,
     journalSearch,
+    wikiSearch,
     recipeList,
     recipeGet,
     researchDocs,
@@ -518,6 +528,7 @@ export async function executeToolCall(
 // / agent entry points import the toolboxes directly via their
 // source paths, not through this barrel.
 export { memoryToolbox } from './memory_toolbox';
+export { wikiToolbox } from './wiki_toolbox';
 export { recallToolbox } from './recall_toolbox';
 export { conversationRecallToolbox } from './conversation_recall_toolbox';
 

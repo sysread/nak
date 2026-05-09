@@ -298,6 +298,7 @@ export const DEFAULT_TIER: ModelTier = 'balanced';
 export type AgentRole =
   | 'journal'
   | 'reflection'
+  | 'wiki'
   | 'webSearch'
   | 'researchDocs'
   | 'intuition'
@@ -378,6 +379,16 @@ export type AgentRole =
  *     thread, make some judgments, call the memory tools. Big-window
  *     model is the win - the entire conversation is the context.
  *
+ *   wiki - deepseek-v4-flash. Autonomous wiki agent: read a settled
+ *     thread the day after, decide which topics warrant a new article
+ *     or an update to an existing one, and dispatch wiki_search /
+ *     wiki_create / wiki_update / wiki_delete tool calls. The same
+ *     model also runs the synchronous "ask agent to update" flow
+ *     from the per-article UI (single completion, response_format
+ *     pinned to JSON, no tool loop). Same rationale as reflection -
+ *     big window swallows the conversation, capacity isolation from
+ *     foreground tiers, and the JSON pin works on the manual path.
+ *
  *   webSearch - deepseek-v4-flash. The `web_search` tool's sub-
  *     completion summarises Venice-provided results into 2-4
  *     sentences with citation markers. Bounded synthesis; the call
@@ -422,6 +433,7 @@ export type AgentRole =
 export const AGENT_MODELS = {
   journal:            'deepseek-v4-flash',
   reflection:         'deepseek-v4-flash',
+  wiki:               'deepseek-v4-flash',
   webSearch:          'deepseek-v4-flash',
   researchDocs:       'deepseek-v4-flash',
   intuition:          'mistral-small-3-2-24b-instruct',

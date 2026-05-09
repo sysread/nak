@@ -134,6 +134,22 @@ Explore their boundaries and assumptions.
 Do NOT hallucinate or invent psychological concepts or insights that have no basis in science or established philosophical traditions.
 `;
 
+// Wiki framing. The user maintains a flat encyclopedia about themselves
+// and the topics they care about - articles by title, written in third
+// person, never auto-injected into the chat. wiki_search is the only
+// path the assistant has to reach this layer: when the user references
+// something topical or factual about themselves (a project name, a
+// person, a place, a recurring habit), call wiki_search to pull the
+// relevant article so the reply is grounded rather than guessing.
+// Distinct from memory (atomic facts) and journal (dated reflections):
+// the wiki carries curated topical articles that span many
+// conversations.
+const WIKI_BLOCK = `\
+The application also maintains a user wiki: a flat collection of titled, encyclopedic articles the user (and a background agent) curate alongside memories and the journal.
+Articles are NEVER auto-injected into the chat - call wiki_search whenever the user references something topical or factual about themselves, a project, a person, or a place to retrieve the relevant article.
+The wiki is the right surface for "what is X" lookups against the user's own knowledge graph; memories carry atomic facts, the journal carries dated reflections, and the wiki carries the longer-form topical entries.
+`;
+
 // Toolbox framing. The model sees the catalog below with (on)/(off) marks
 // on the gated toolboxes; always-on tools (every read path, plus web search,
 // update_title, analyze_image, the recall pair, and the toggle meta-tool)
@@ -329,6 +345,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     VOICE_BLOCK,
     RECALL_BLOCK,
     JOURNAL_BLOCK,
+    WIKI_BLOCK,
     TOOLBOX_FRAMING_BLOCK,
     ACTIVITY_BLOCK,
     buildCatalog(enabled),

@@ -31,6 +31,7 @@ import { createMemoriesSource } from './sources/memories';
 import { createThreadsSource } from './sources/threads';
 import { createSamskaraSubstrateSource } from './sources/samskara-substrate';
 import { createJournalSource } from './sources/journal';
+import { createWikiSource } from './sources/wiki';
 import { LeaseCoordinator } from './lease';
 import {
   runOneCycle,
@@ -175,6 +176,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     createThreadsSource(supabase),
     createSamskaraSubstrateSource(supabase),
     createJournalSource(supabase),
+    createWikiSource(supabase),
   ];
   const napConfig: NapConfig = {
     leasePollMs: msg.leasePollMs,

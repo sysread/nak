@@ -509,6 +509,36 @@ function coerceJournalEntry(raw: Record<string, unknown>): JournalEntry {
   };
 }
 
+/**
+ * One topical article in the user's wiki. Flat list (no nesting), one
+ * article per `(user_id, title)` (the schema enforces uniqueness so the
+ * autonomous agent's `wiki_create` can fall through to `wiki_update` on
+ * conflict). Articles are written in encyclopedic third-person prose
+ * and are never auto-injected into the chat - the main LLM reaches
+ * them only through the always-on `wiki_search` tool.
+ */
+export interface WikiArticle {
+  id: string;
+  title: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+  /** Populated only by `searchWikiArticlesByEmbedding`. */
+  similarity?: number;
+}
+
+function coerceWikiArticle(raw: Record<string, unknown>): WikiArticle {
+  return {
+    id: String(raw.id),
+    title: typeof raw.title === 'string' ? raw.title : '',
+    content: typeof raw.content === 'string' ? raw.content : '',
+    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
+    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
+    similarity:
+      typeof raw.similarity === 'number' ? (raw.similarity as number) : undefined,
+  };
+}
+
 export interface Message {
   id: string;
   thread_id: string;
@@ -733,6 +763,18 @@ export interface UserSettings {
    */
   journalTimezone?: string;
   /**
+   * User wiki feature: when true, the background wiki agent processes
+   * settled threads (one calendar day after the newest message in the
+   * user's tz) and updates / creates encyclopedic articles about
+   * topics the conversation surfaced. Same default-on semantics as
+   * `journalAutomaticEnabled` - absent means on; only present when the
+   * user has explicitly disabled. False stops the manager from
+   * starting the worker at unlock and stops it mid-session when
+   * flipped. Manual edits and the per-article "ask agent to update"
+   * button are unaffected by this flag.
+   */
+  wikiAutomaticEnabled?: boolean;
+  /**
    * Free-form display name the user wants the model to address them
    * by. Optional - absent / empty string means "no name supplied,
    * the model has nothing to reach for." When present, chat-loop
@@ -823,6 +865,9 @@ export function coerceSettings(raw: unknown): UserSettings {
   }
   if (typeof r.journalAutomaticEnabled === 'boolean') {
     out.journalAutomaticEnabled = r.journalAutomaticEnabled;
+  }
+  if (typeof r.wikiAutomaticEnabled === 'boolean') {
+    out.wikiAutomaticEnabled = r.wikiAutomaticEnabled;
   }
   if (
     typeof r.journalTimezone === 'string' &&
@@ -1002,6 +1047,13 @@ export class SupabaseService {
         delete merged.journalAutomaticEnabled;
       } else if (typeof patch.journalAutomaticEnabled === 'boolean') {
         merged.journalAutomaticEnabled = patch.journalAutomaticEnabled;
+      }
+    }
+    if ('wikiAutomaticEnabled' in patch) {
+      if (patch.wikiAutomaticEnabled === undefined) {
+        delete merged.wikiAutomaticEnabled;
+      } else if (typeof patch.wikiAutomaticEnabled === 'boolean') {
+        merged.wikiAutomaticEnabled = patch.wikiAutomaticEnabled;
       }
     }
     if ('journalTimezone' in patch) {
@@ -2687,6 +2739,267 @@ export class SupabaseService {
   ): Promise<boolean> {
     const { data, error } = await this.client.rpc(
       'save_journal_entry_embedding_if_claimed',
+      {
+        p_id: id,
+        p_holder_id: holderId,
+        p_embedding: embedding,
+        p_embedding_model: model,
+      }
+    );
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  // User wiki -------------------------------------------------------------
+
+  /**
+   * Alphabetical listing of every wiki article for the current user.
+   * Sort key is `lower(title)` so case differences ("Apple" vs
+   * "apple") fold together. Limit defaults to 500, matching journal
+   * and memories - a single user is unlikely to author thousands of
+   * encyclopedic articles, and pagination would complicate the
+   * client-side store filtering pattern.
+   */
+  async listWikiArticles(opts: { limit?: number } = {}): Promise<WikiArticle[]> {
+    const { data, error } = await this.client
+      .from('wiki_articles')
+      .select('id, title, content, created_at, updated_at')
+      .order('title', { ascending: true })
+      .limit(opts.limit ?? 500);
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []).map((row) => coerceWikiArticle(row as Record<string, unknown>));
+  }
+
+  async getWikiArticleById(id: string): Promise<WikiArticle | null> {
+    const { data, error } = await this.client
+      .from('wiki_articles')
+      .select('id, title, content, created_at, updated_at')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    if (!data) return null;
+    return coerceWikiArticle(data as Record<string, unknown>);
+  }
+
+  /**
+   * Title-keyed lookup. The autonomous agent uses this to resolve a
+   * candidate title to an existing article id when `wiki_create`
+   * raised a unique-violation - the agent then calls `wiki_update`
+   * against the resolved id.
+   */
+  async getWikiArticleByTitle(title: string): Promise<WikiArticle | null> {
+    const { data, error } = await this.client
+      .from('wiki_articles')
+      .select('id, title, content, created_at, updated_at')
+      .eq('title', title)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    if (!data) return null;
+    return coerceWikiArticle(data as Record<string, unknown>);
+  }
+
+  async createWikiArticle(args: {
+    title: string;
+    content: string;
+  }): Promise<WikiArticle> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const { data, error } = await this.client
+      .from('wiki_articles')
+      .insert({
+        user_id: session.user.id,
+        title: args.title,
+        content: args.content,
+      })
+      .select('id, title, content, created_at, updated_at')
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return coerceWikiArticle(data as Record<string, unknown>);
+  }
+
+  /**
+   * Patch an article's title or content. RLS owner-scopes the update.
+   * The schema trigger `clear_wiki_embedding_on_change` nulls the
+   * embedding + claim columns when title or content changes so the
+   * worker re-embeds on its next poll.
+   */
+  async updateWikiArticle(
+    id: string,
+    patch: { title?: string; content?: string }
+  ): Promise<WikiArticle> {
+    const { data, error } = await this.client
+      .from('wiki_articles')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('id, title, content, created_at, updated_at')
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return coerceWikiArticle(data as Record<string, unknown>);
+  }
+
+  async deleteWikiArticle(id: string): Promise<void> {
+    const { error } = await this.client.from('wiki_articles').delete().eq('id', id);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Semantic + substring search over wiki articles. Same shape as
+   * `searchJournalEntries`: vector hits first (RPC), then unembedded
+   * ILIKE hits, deduped by id. Empty `query` returns the alphabetical
+   * listing without embedding. `queryEmbedding` may be null - callers
+   * without Venice get ILIKE-only results.
+   */
+  async searchWikiArticles(opts: {
+    query: string;
+    queryEmbedding: number[] | null;
+    limit?: number;
+  }): Promise<WikiArticle[]> {
+    const query = opts.query.trim();
+    const limit = opts.limit ?? 20;
+    if (query.length === 0) return this.listWikiArticles({ limit });
+
+    const safe = query.replace(/([,()])/g, '\\$1');
+    const pattern = `%${safe}%`;
+
+    const ilikePromise = this.client
+      .from('wiki_articles')
+      .select('id, title, content, created_at, updated_at')
+      .or(`title.ilike.${pattern},content.ilike.${pattern}`)
+      .order('title', { ascending: true })
+      .limit(limit);
+
+    const semanticPromise = opts.queryEmbedding
+      ? this.client.rpc('search_wiki_articles_by_embedding', {
+          query_embedding: opts.queryEmbedding,
+          match_limit: limit,
+        })
+      : Promise.resolve({ data: [] as unknown[], error: null });
+
+    const [ilikeRes, semRes] = await Promise.all([ilikePromise, semanticPromise]);
+    if (ilikeRes.error) throw new SupabaseError(ilikeRes.error.message);
+    const ilikeRows = (ilikeRes.data ?? []).map((row) =>
+      coerceWikiArticle(row as Record<string, unknown>)
+    );
+    const semanticRows =
+      semRes.error !== null
+        ? []
+        : ((semRes.data ?? []) as unknown[]).map((row) =>
+            coerceWikiArticle(row as Record<string, unknown>)
+          );
+
+    const out: WikiArticle[] = [];
+    const seen = new Set<string>();
+    // Semantic first - meaning matches outrank substring matches.
+    for (const a of semanticRows) {
+      if (seen.has(a.id)) continue;
+      seen.add(a.id);
+      out.push(a);
+      if (out.length >= limit) return out;
+    }
+    for (const a of ilikeRows) {
+      if (seen.has(a.id)) continue;
+      seen.add(a.id);
+      out.push(a);
+      if (out.length >= limit) return out;
+    }
+    return out;
+  }
+
+  // Wiki background pipeline ---------------------------------------------
+
+  /**
+   * Claim the oldest thread eligible for the wiki agent. Differs from
+   * `claimNextThreadForJournal` in two ways:
+   *   (1) The eligibility predicate gates on the newest message's
+   *       calendar day in the user's tz being strictly before today
+   *       (the "next-day" rule the spec asks for).
+   *   (2) The lateral that finds the bucket key reads
+   *       `messages.created_at` directly rather than
+   *       `threads.updated_at`, so a future bump to threads.updated_at
+   *       from an unrelated write can't shift the gate.
+   * Returns null when the queue is empty.
+   */
+  async claimNextThreadForWiki(
+    holderId: string,
+    ttlSeconds: number,
+    timezone: string | null
+  ): Promise<{
+    threadId: string;
+    terminalMsgId: string;
+    title: string | null;
+    /** ISO 8601 timestamp of the newest message in the claimed thread. */
+    newestMsgAt: string;
+  } | null> {
+    const { data, error } = await this.client.rpc('claim_next_thread_for_wiki', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+      // Same null-coerce as the journal claim - PostgREST passes
+      // explicit nulls through, and `at time zone null` returns null
+      // which would null out the WHERE predicate.
+      p_timezone: timezone ?? 'UTC',
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      thread_id: string;
+      terminal_msg_id: string;
+      title: string | null;
+      newest_msg_at: string;
+    }[];
+    if (rows.length === 0) return null;
+    return {
+      threadId: rows[0].thread_id,
+      terminalMsgId: rows[0].terminal_msg_id,
+      title: rows[0].title ?? null,
+      newestMsgAt: rows[0].newest_msg_at,
+    };
+  }
+
+  /**
+   * Advance `threads.last_wiki_processed_msg_id` to `msgId` IF our
+   * claim is still ours. Returns false on claim-lost; caller drops
+   * the cycle. Called unconditionally after every agent run so a
+   * no-op cycle (agent decided no topic warranted a wiki update)
+   * still advances the pointer past the terminal message.
+   */
+  async markThreadWikiProcessedIfClaimed(
+    threadId: string,
+    holderId: string,
+    msgId: string
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc(
+      'mark_thread_wiki_processed_if_claimed',
+      {
+        p_thread_id: threadId,
+        p_holder_id: holderId,
+        p_msg_id: msgId,
+      }
+    );
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  async claimNextPendingWikiArticle(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{ id: string; title: string; content: string } | null> {
+    const { data, error } = await this.client.rpc('claim_next_pending_wiki_article', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as { id: string; title: string; content: string }[];
+    if (rows.length === 0) return null;
+    return rows[0];
+  }
+
+  async saveWikiArticleEmbedding(
+    id: string,
+    holderId: string,
+    embedding: number[],
+    model: string
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc(
+      'save_wiki_article_embedding_if_claimed',
       {
         p_id: id,
         p_holder_id: holderId,

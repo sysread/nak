@@ -4976,6 +4976,303 @@ language sql stable security invoker as $$
     left join public.journal_spam_stats s on s.user_id = auth.uid()
 $$;
 
+-- User Wiki ---------------------------------------------------------------
+--
+-- Flat (no nesting) encyclopedia-style articles a fourth peer to chats,
+-- memories, and journal entries. A background worker
+-- (src/lib/agents/wiki/) reads conversations the day after they settle
+-- and either updates an existing article or creates a new one. The user
+-- can also search, view, edit, add, delete, and ask an agent to rewrite
+-- a single article with explicit instructions.
+--
+-- Article voice is wiki-style third-person prose. Articles are NEVER
+-- auto-injected into the chat; the main LLM reaches them only through
+-- the always-on `wiki_search` tool. This is the deliberate split from
+-- memory (atomic facts surfaced inline) and journal (dated reflections
+-- the chat-loop primes on the opening turn).
+--
+-- title is the alphabetical sort key the drawer renders; (user_id,
+-- title) is unique so the autonomous agent's `wiki_create` can hit
+-- ON CONFLICT and fall through to `wiki_update` rather than racing
+-- duplicates. The unique key is per-user; deduplication across users
+-- is meaningless because every user has their own private encyclopedia.
+
+create table if not exists public.wiki_articles (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- Topic / encyclopedia-entry name. Drawer sorts by this column
+  -- (case-insensitive) so the listing reads alphabetically. Also the
+  -- uniqueness key per user.
+  title text not null,
+  content text not null,
+  embedding vector(2048),
+  embedding_model text,
+  embedding_claim_holder text,
+  -- No _at suffix to match the convention from memories /
+  -- journal_entries.
+  embedding_claim_expires timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, title)
+);
+
+create index if not exists wiki_articles_user_title_idx
+  on public.wiki_articles (user_id, lower(title) asc);
+
+-- Same invariant as memories / journal_entries: when the text that
+-- produced the embedding changes, null the embedding so the worker re-
+-- embeds on its next poll. Null the claim columns too so an in-flight
+-- worker save (which guards on holder + expires > now()) cannot land a
+-- stale vector against the new text.
+create or replace function public.clear_wiki_embedding_on_change()
+  returns trigger language plpgsql as $$
+begin
+  if new.title is distinct from old.title
+     or new.content is distinct from old.content then
+    new.embedding := null;
+    new.embedding_model := null;
+    new.embedding_claim_holder := null;
+    new.embedding_claim_expires := null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clear_wiki_embedding_on_change on public.wiki_articles;
+create trigger clear_wiki_embedding_on_change
+  before update on public.wiki_articles
+  for each row execute function public.clear_wiki_embedding_on_change();
+
+alter table public.wiki_articles enable row level security;
+
+drop policy if exists "wiki_articles are self-selectable" on public.wiki_articles;
+create policy "wiki_articles are self-selectable" on public.wiki_articles
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "wiki_articles are self-insertable" on public.wiki_articles;
+create policy "wiki_articles are self-insertable" on public.wiki_articles
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "wiki_articles are self-updatable" on public.wiki_articles;
+create policy "wiki_articles are self-updatable" on public.wiki_articles
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "wiki_articles are self-deletable" on public.wiki_articles;
+create policy "wiki_articles are self-deletable" on public.wiki_articles
+  for delete using (auth.uid() = user_id);
+
+-- Per-thread pointer + claim columns for the autonomous wiki agent.
+-- Independent of last_journaled_msg_id and last_reflected_msg_id so all
+-- three workers can run concurrently against the same thread without
+-- crowding each other's pointers.
+alter table public.threads
+  add column if not exists last_wiki_processed_msg_id uuid references public.messages(id) on delete set null,
+  add column if not exists wiki_claim_holder text,
+  add column if not exists wiki_claim_expires_at timestamptz;
+
+-- Claim the next thread eligible for wiki processing. Differs from
+-- claim_next_thread_for_journal in two specific ways:
+--   (1) Eligibility uses the NEWEST message's created_at (read off a
+--       second lateral) rather than threads.updated_at. Both columns
+--       move on every insert, but reading the timestamp from messages
+--       directly is more honest about "when did the conversation
+--       actually last move" - threads.updated_at can be bumped by
+--       other unrelated writes (a future schema change might add
+--       title-renames or settings-bumps to threads.updated_at and the
+--       gate would shift).
+--   (2) The eligibility gate is "newest message lands on a calendar
+--       day STRICTLY BEFORE today in the user's tz". Effect: chat
+--       Monday -> eligible Tuesday; user resumes Wednesday -> the new
+--       newest msg lands on Wednesday and the inequality fails again
+--       until Thursday. This is the user's "settles for at least one
+--       full day boundary" rule.
+-- Same depth guard (>= 2 user messages) and skip-locked fairness as
+-- the journal RPC.
+drop function if exists public.claim_next_thread_for_wiki(text, int);
+drop function if exists public.claim_next_thread_for_wiki(text, int, text);
+create or replace function public.claim_next_thread_for_wiki(
+  p_holder_id text,
+  p_ttl_seconds int,
+  -- Same Settings -> Journal -> Day boundary timezone the journal
+  -- claim RPC reads. Wiki and journal share the user's preference;
+  -- there is no separate wiki-tz setting.
+  p_timezone text default 'UTC'
+) returns table (
+  thread_id uuid,
+  terminal_msg_id uuid,
+  title text,
+  newest_msg_at timestamptz
+)
+language sql security invoker as $$
+  with candidate as (
+    select
+      t.id as thread_id,
+      term.msg_id as terminal_msg_id,
+      t.title as title,
+      newest.created_at as newest_msg_at
+      from public.threads t
+      cross join lateral (
+        -- Same terminal-msg lateral as the journal RPC: latest
+        -- assistant row whose tool_calls is empty/null and whose
+        -- content is non-empty. The id is what we stamp into
+        -- last_wiki_processed_msg_id when the agent finishes.
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+      cross join lateral (
+        -- Newest message of any role - the timestamp the day-gate
+        -- buckets. Reading it off messages.created_at instead of
+        -- threads.updated_at keeps the gate stable against future
+        -- bumps to threads.updated_at from unrelated writes.
+        select m2.created_at
+          from public.messages m2
+         where m2.thread_id = t.id
+         order by m2.created_at desc
+         limit 1
+      ) newest
+     where t.user_id = auth.uid()
+       and term.msg_id is distinct from t.last_wiki_processed_msg_id
+       and (t.wiki_claim_expires_at is null
+            or t.wiki_claim_expires_at < now())
+       and (
+         -- Skip threads that haven't seen a follow-up user message.
+         -- A one-shot Q&A is not enough material to warrant a wiki
+         -- update.
+         select count(*)
+           from public.messages m3
+          where m3.thread_id = t.id
+            and m3.role = 'user'
+       ) >= 2
+       -- Next-day eligibility (the difference from journal). Newest
+       -- message must land on a calendar day strictly before today
+       -- in the user's tz.
+       and (newest.created_at at time zone p_timezone)::date
+           < (now() at time zone p_timezone)::date
+     order by newest.created_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set wiki_claim_holder = p_holder_id,
+         wiki_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id, c.title, c.newest_msg_at;
+$$;
+
+-- Advance the per-thread wiki pointer IF our claim is still ours.
+-- Called after every agent run regardless of outcome - even a no-op
+-- run (agent decided no topic in the conversation warranted an
+-- article) should advance the pointer so the same conversation is not
+-- re-processed every poll. Returns false on claim-lost; caller drops
+-- the cycle.
+drop function if exists public.mark_thread_wiki_processed_if_claimed(uuid, text, uuid);
+create or replace function public.mark_thread_wiki_processed_if_claimed(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_msg_id uuid
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.threads
+     set last_wiki_processed_msg_id = p_msg_id,
+         wiki_claim_holder = null,
+         wiki_claim_expires_at = null
+   where id = p_thread_id
+     and user_id = auth.uid()
+     and wiki_claim_holder = p_holder_id
+     and wiki_claim_expires_at > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Embeddings pipeline RPCs for wiki articles. Same claim/save shape
+-- as memories and journal entries, same 2048-dim padded vectors,
+-- same security invoker posture letting RLS enforce user scoping.
+drop function if exists public.claim_next_pending_wiki_article(text, int);
+create or replace function public.claim_next_pending_wiki_article(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, title text, content text)
+language sql security invoker as $$
+  with candidate as (
+    select w.id
+      from public.wiki_articles w
+     where w.user_id = auth.uid()
+       and w.embedding is null
+       and (w.embedding_claim_expires is null
+            or w.embedding_claim_expires < now())
+     order by w.updated_at desc
+     limit 1
+     for update skip locked
+  )
+  update public.wiki_articles w
+     set embedding_claim_holder = p_holder_id,
+         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where w.id = c.id
+  returning w.id, w.title, w.content;
+$$;
+
+drop function if exists public.save_wiki_article_embedding_if_claimed(uuid, text, vector, text);
+create or replace function public.save_wiki_article_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.wiki_articles
+     set embedding = p_embedding,
+         embedding_model = p_embedding_model,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where id = p_id
+     and user_id = auth.uid()
+     and embedding_claim_holder = p_holder_id
+     and embedding_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Similarity search RPC. Plain cosine ranking, no confidence boost
+-- (articles are direct user/agent assertions, not probabilistic
+-- memories). Scoped by RLS plus an explicit user_id guard.
+drop function if exists public.search_wiki_articles_by_embedding(vector, int);
+create or replace function public.search_wiki_articles_by_embedding(
+  query_embedding vector(2048),
+  match_limit int
+) returns table (
+  id uuid,
+  title text,
+  content text,
+  created_at timestamptz,
+  updated_at timestamptz,
+  similarity real
+)
+language sql stable security invoker as $$
+  select id, title, content, created_at, updated_at,
+         (1 - (embedding <=> query_embedding))::real as similarity
+    from public.wiki_articles
+   where user_id = auth.uid()
+     and embedding is not null
+   order by embedding <=> query_embedding asc
+   limit match_limit
+$$;
+
 -- Atomic assistant-message commit with conflict detection -----------------
 --
 -- Terminal assistant rows from the chat-loop are written through this
