@@ -299,6 +299,7 @@ export type AgentRole =
   | 'journal'
   | 'reflection'
   | 'wiki'
+  | 'wikiLibrarian'
   | 'webSearch'
   | 'researchDocs'
   | 'intuition'
@@ -389,6 +390,17 @@ export type AgentRole =
  *     big window swallows the conversation, capacity isolation from
  *     foreground tiers, and the JSON pin works on the manual path.
  *
+ *   wikiLibrarian - deepseek-v4-flash. The wiki agent's bigger
+ *     sibling: every ~12 hours it reads the full alphabetical list
+ *     of articles, fact-checks individual claims via
+ *     conversation_search, and consolidates duplicates / updates
+ *     stale info via wiki_update / wiki_delete. The librarian needs
+ *     the same big context window the per-conversation wiki agent
+ *     uses (the article list + several full articles can run wide)
+ *     and the same response shape (tool-driven, no structured
+ *     final output). Pinned to the same id as `wiki` so a future
+ *     swap of the wiki family flows through both surfaces.
+ *
  *   webSearch - deepseek-v4-flash. The `web_search` tool's sub-
  *     completion summarises Venice-provided results into 2-4
  *     sentences with citation markers. Bounded synthesis; the call
@@ -434,6 +446,7 @@ export const AGENT_MODELS = {
   journal:            'deepseek-v4-flash',
   reflection:         'deepseek-v4-flash',
   wiki:               'deepseek-v4-flash',
+  wikiLibrarian:      'deepseek-v4-flash',
   webSearch:          'deepseek-v4-flash',
   researchDocs:       'deepseek-v4-flash',
   intuition:          'mistral-small-3-2-24b-instruct',

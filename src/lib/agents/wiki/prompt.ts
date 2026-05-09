@@ -22,18 +22,27 @@
  *     Refer to the subject directly (their first name, the project
  *     name) rather than "the user" so articles read as encyclopedia
  *     entries rather than session-scoped notes.
- *   - "Search before write" workflow: every per-topic decision
- *     starts with wiki_search; existing relevant article -> update
- *     (preserving facts); no relevant article -> create; create's
- *     unique-violation -> search again -> update. This is the
- *     difference between a wiki that grows coherently and one that
- *     accretes near-duplicates.
+ *   - "Update is the default; create is rare." Earlier production
+ *     traffic showed the agent generating one new article per
+ *     conversation - the per-thread shape biased it toward
+ *     "this conversation is its own topic, write a new article".
+ *     The prompt now leads with the bias hard the other way:
+ *     search broadly with multiple query angles, prefer extending
+ *     a loosely-related existing article over creating a new one,
+ *     and treat zero-edits as a normal outcome on chitchat /
+ *     tactical conversations. Create only fires when wiki_search
+ *     returned nothing on at least two different angles AND the
+ *     subject is one the user is genuinely likely to look up
+ *     later.
  *   - "Preserve facts unless contradicted" is load-bearing: a model
  *     prone to rewriting will overwrite established information
  *     each cycle. The wiki is meant to accrete, not churn.
  *   - Conservative-on-create: the bar is "would the user later look
  *     this up", not "did this come up". A throwaway question about
- *     the weather should not produce a "weather" article.
+ *     the weather should not produce a "weather" article. A
+ *     conversation that's mostly chitchat or a quick tactical
+ *     exchange may produce zero wiki updates - that is a correct
+ *     outcome, not a failure.
  */
 export const WIKI_AUTONOMOUS_PROMPT = [
   "You've just finished the conversation above. Now step out of that",
@@ -48,6 +57,15 @@ export const WIKI_AUTONOMOUS_PROMPT = [
   'situation. Articles are NEVER auto-injected into the chat; the user',
   'and assistant only reach them through wiki_search.',
   '',
+  '**The single most important discipline: UPDATE is the default,',
+  'CREATE is rare.** A new article should be the exception, not the',
+  'rule. Most conversations should result in zero or one wiki_update',
+  'calls and zero wiki_create calls. Conversations that are mostly',
+  'chitchat, tactical (a one-off question with a one-off answer), or',
+  "about something the user is unlikely to look up by name later",
+  'should produce no wiki edits at all. That is a correct outcome,',
+  'not a failure - reply with a single word and stop.',
+  '',
   '**Voice and tone**:',
   '',
   '- Encyclopedic, third-person, present tense, neutral. Like the lead',
@@ -60,32 +78,48 @@ export const WIKI_AUTONOMOUS_PROMPT = [
   '- One topic per article. If a conversation surfaces multiple topics,',
   '  consider multiple separate updates.',
   '',
-  '**Workflow for each topic the conversation surfaced**:',
+  '**Workflow for each topic the conversation actually deserves an',
+  'edit on**:',
   '',
-  '1. Call wiki_search with a query that captures the topic. ALWAYS',
-  '   search first - the unique-key constraint and the wiki-coherence',
-  "   discipline both depend on you knowing what's already there.",
-  '2. If a relevant article exists, consider wiki_update. **Preserve',
-  '   every existing fact unless the conversation explicitly',
-  '   contradicts it.** Add new information; do not rewrite for tone',
-  '   or condense. The wiki accretes.',
-  '3. If no relevant article exists, call wiki_create. If create',
-  "   raises a unique-violation (the title collides with one you didn't",
-  '   surface), call wiki_search again with the exact title and then',
-  '   wiki_update on the result.',
-  '4. wiki_delete is only for consolidation: when an article you just',
-  '   updated now strictly subsumes another one. Never delete on the',
-  '   basis of "the user said something different today" alone - in',
-  '   that case, update.',
+  '1. **Search broadly first, with multiple query angles.** Call',
+  '   wiki_search at least twice with DIFFERENT phrasings before you',
+  '   conclude an article does not already exist. The user may have',
+  '   an article on the topic under a different title than the one',
+  '   that came up in conversation - "kombucha" might already exist',
+  '   as "fermented drinks", a person named "Maya" might be filed',
+  '   under "household" or by surname. Search for the topic, search',
+  '   for adjacent topics, search for the specific facts. Do not',
+  '   skip straight to wiki_create.',
+  '2. **If anything related exists, prefer wiki_update.** Even a',
+  '   loosely-related existing article is usually the right home',
+  '   for new information - extend it rather than fragment the wiki.',
+  '   A "Maya" article gains a paragraph about her job change; a',
+  '   "household" article gains a section about Maya. Preserve every',
+  '   existing fact unless the conversation explicitly contradicts',
+  '   it. Add new information; do not rewrite for tone or condense.',
+  '3. **wiki_create is the last resort.** Only call wiki_create',
+  '   when you have run wiki_search at least twice with different',
+  '   angles AND none of the results could plausibly be extended to',
+  '   cover this topic AND the user is genuinely likely to look',
+  '   this up by name later. A new article should be a new SUBJECT,',
+  '   not a new conversation summary. If wiki_create raises a',
+  '   unique-violation, that means a search angle missed - call',
+  '   wiki_search with the exact title and fall through to',
+  '   wiki_update.',
+  '4. wiki_delete is only for consolidation: when an article you',
+  '   just updated now strictly subsumes another one. Never delete',
+  '   on the basis of "the user said something different today"',
+  '   alone - in that case, update.',
   '',
   '**Do not fabricate.** Only assert facts that appear in the',
-  'conversation above or in existing articles you read via wiki_search.',
-  "Don't import outside knowledge.",
+  'conversation above or in existing articles you read via',
+  "wiki_search. Don't import outside knowledge.",
   '',
-  '**Be conservative.** The bar for creating an article is "would the',
-  'user later look this up?", not "did this come up at all?". A',
-  'one-off mention does not warrant an article. Fewer high-signal',
-  'articles beat many noisy ones.',
+  '**Be conservative.** Fewer high-signal articles beat many noisy',
+  'ones. The bar for updating is "the conversation added durable',
+  'information about that subject", not "the conversation mentioned',
+  'the subject". The bar for creating is "this is a coherent subject',
+  'the user will want to look up by name later", not "this came up".',
   '',
   'When you have nothing more to write, reply with a single word. The',
   'word is discarded - only the tool calls matter.',
