@@ -59,8 +59,16 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
 
   if (!ctx.coordinator.isHolding) {
     const acquired = await ctx.coordinator.acquire();
-    if (!acquired) return 'polling';
+    if (!acquired) {
+      // Polling fires every leasePollMs; .debug rather than .info so
+      // an idle librarian doesn't spam the drawer with a "still
+      // polling" line every minute. The acquired-lease branch below
+      // does land at .info so the user sees the transition.
+      log.debug('polling for lease (another device holds it)');
+      return 'polling';
+    }
     ctx.coordinator.startHeartbeat(ctx.onLeaseLost);
+    log.info('lease acquired - checking eligibility on the next cycle');
     return 'acquired-lease';
   }
 
@@ -72,10 +80,26 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     claimed = await ctx.supabase.claimWikiLibrarianRun(
       ctx.minIntervalSeconds
     );
-  } catch {
+  } catch (err) {
+    log.info(
+      `claim RPC failed: ${err instanceof Error ? err.message : String(err)}`
+    );
     return 'error';
   }
-  if (!claimed) return 'too-soon';
+  if (!claimed) {
+    // Logged at .info so the user can see "yes, the librarian is
+    // alive and waiting" without enabling debug. Idle nap is 1h, so
+    // this lands ~24 lines/day during the 12h cooldown - not noisy.
+    // The interval is named explicitly so the user knows the next
+    // attempt timing without doing the math.
+    const hours = Math.round(ctx.minIntervalSeconds / 3600);
+    log.info(
+      `not yet eligible for a librarian run ` +
+        `(min interval ${hours}h since last successful run)`
+    );
+    return 'too-soon';
+  }
+  log.info('claim acquired - starting librarian run');
 
   // Snapshot of every article. Same listing the drawer uses, but
   // we cap at 500 (matching listWikiArticles' default) - a librarian
@@ -85,9 +109,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   try {
     articles = await ctx.supabase.listWikiArticles({ limit: 500 });
   } catch (err) {
-    log.debug(
-      'failed to list wiki articles for librarian',
-      err instanceof Error ? err.message : String(err)
+    log.info(
+      `failed to list wiki articles: ${err instanceof Error ? err.message : String(err)}`
     );
     return 'error';
   }
@@ -113,9 +136,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       signal: ctx.signal,
     });
   } catch (err) {
-    log.debug(
-      'librarian agent threw unexpectedly',
-      err instanceof Error ? err.message : String(err)
+    log.info(
+      `librarian agent threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`
     );
     return 'error';
   }

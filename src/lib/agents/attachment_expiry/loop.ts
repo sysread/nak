@@ -12,6 +12,9 @@
  */
 import type { SupabaseService } from '../../supabase';
 import type { LeaseCoordinator } from '../../embeddings/lease';
+import { createLogger } from '../../logger.svelte';
+
+const log = createLogger('attachment-expiry-worker');
 
 export type CycleResult =
   /** Just took the lease on this cycle — no work yet, caller should recurse immediately. */
@@ -42,21 +45,42 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
 
   if (!ctx.coordinator.isHolding) {
     const acquired = await ctx.coordinator.acquire();
-    if (!acquired) return 'polling';
+    if (!acquired) {
+      // Polling fires every leasePollMs while another device holds
+      // the lease. Logged at .debug so an idle worker doesn't spam
+      // the drawer.
+      log.debug('polling for lease (another device holds it)');
+      return 'polling';
+    }
     ctx.coordinator.startHeartbeat(ctx.onLeaseLost);
+    log.info('lease acquired - starting expiry sweep');
     return 'acquired-lease';
   }
 
   let affected: number;
   try {
     affected = await ctx.supabase.expireOldAttachments(ctx.expiryDays);
-  } catch {
+  } catch (err) {
     // Transient failure — Supabase hiccup, network blip. Back off and
     // retry. The work isn't time-sensitive so we don't need tight
     // retries; the hourly idle poll will eventually catch up.
+    log.info(
+      `expire RPC failed: ${err instanceof Error ? err.message : String(err)}`
+    );
     return 'error';
   }
-  if (affected === 0) return 'empty-queue';
+  if (affected === 0) {
+    // Empty-queue is the steady state once the backlog drains.
+    // .debug rather than .info to avoid an hourly heartbeat line in
+    // the drawer; the user can flip log level to debug when actively
+    // checking that the worker is alive.
+    log.debug(`expire sweep found no rows older than ${ctx.expiryDays} days`);
+    return 'empty-queue';
+  }
+  log.info(
+    `expired ${affected} attachment row${affected === 1 ? '' : 's'} ` +
+      `older than ${ctx.expiryDays} days`
+  );
   return 'expired';
 }
 

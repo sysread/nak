@@ -202,12 +202,13 @@ async function runAssimilatePhase(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
   if (!claim) return 'empty-phase';
-  log.debug('assimilate: claimed substrate', {
-    substrateId: claim.id,
-    threadId: claim.threadId,
-    userMessageId: claim.userMessageId,
-    assistantMessageId: claim.assistantMessageId,
-  });
+  // Lifecycle headline parallel to "picked up thread X" in the
+  // other agent workers - logged at .info so the user can see
+  // samskara firing in the drawer at the default level.
+  log.info(
+    `assimilate: claimed substrate ${claim.id} ` +
+      `(thread ${claim.threadId})`
+  );
 
   // Fetch the two messages this substrate row anchors. assistantMessageId
   // can be null (a turn that errored before the assistant row landed); in
@@ -267,7 +268,14 @@ async function runAssimilatePhase(ctx: CycleContext): Promise<CycleResult> {
     log.debug('assimilate: save failed', err);
     return 'error';
   }
-  if (!saved) log.debug('assimilate: save rejected (claim expired?)', { substrateId: claim.id });
+  if (!saved) {
+    log.debug('assimilate: save rejected (claim expired?)', { substrateId: claim.id });
+  } else {
+    // Lifecycle "finished" line parallel to "finished thread X" in
+    // the other agent workers. Logged at .info; details about the
+    // assimilation result stay on the .debug line above.
+    log.info(`assimilate: saved substrate ${claim.id}`);
+  }
   return saved ? 'progress' : 'save-rejected';
 }
 
@@ -322,11 +330,12 @@ async function runPairRelatePhase(ctx: CycleContext): Promise<CycleResult> {
   }
 
   const partner = recent[bestIdx];
-  log.debug('pair-relate: selected pair', {
-    seedId: seed.id,
-    partnerId: partner.id,
-    cosine: bestSim,
-  });
+  // Lifecycle "picked up" line parallel to the other agents' "picked
+  // up X" - .info so it's visible at the default log level.
+  log.info(
+    `pair-relate: selected pair ${seed.id} <> ${partner.id} ` +
+      `(cosine ${bestSim.toFixed(3)})`
+  );
   const result = await ctx.agent.relate(
     { situation: seed.situation, outcome: seed.outcome },
     { situation: partner.situation, outcome: partner.outcome },
@@ -380,12 +389,11 @@ async function runPairRelatePhase(ctx: CycleContext): Promise<CycleResult> {
     log.debug('pair-relate: upsert threw', err);
     return 'error';
   }
-  log.debug('pair-relate: associated', {
-    aId,
-    bId,
-    kind: result.kind,
-    label: shorten(result.label),
-  });
+  // Lifecycle "finished" line - .info so the user sees the
+  // association land in the drawer at the default log level.
+  log.info(
+    `pair-relate: associated ${aId} <> ${bId} (${result.kind}: ${shorten(result.label)})`
+  );
   return 'progress';
 }
 
@@ -835,7 +843,12 @@ async function runCompoundRegenPhase(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
   if (rows.length === 0) return 'empty-phase';
-  log.debug('compound-regen: synthesizing', { rows: rows.length, cap });
+  // Lifecycle "starting work" line - .info so a compound-regen run
+  // is visible in the drawer.
+  log.info(
+    `compound-regen: synthesizing summary from ${rows.length} sample row(s) ` +
+      `(cap ${cap})`
+  );
 
   const summary = await ctx.agent.summarizeCompound(
     rows.map((r) => ({
