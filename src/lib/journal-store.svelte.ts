@@ -305,6 +305,36 @@ export async function acceptRegeneratedEntry(
 }
 
 /**
+ * Settings -> Journal -> Reset. Wipes every journal entry the user
+ * owns AND clears the per-thread journal pipeline state so the
+ * background worker re-evaluates conversations from scratch. The
+ * server-side RPC does both in one transaction (see
+ * `reset_journal_data` in schema.sql); we mirror by clearing the
+ * in-memory list and emitting a change event so the Journal modal
+ * (and any future drawer) repaint immediately.
+ *
+ * The caller is responsible for the confirmation prompt - this
+ * function assumes the user has already accepted the irreversible
+ * action.
+ *
+ * Note: the spam filter's accumulated counts (`journal_spam_tokens` /
+ * `journal_spam_stats`) are intentionally left alone. Reset is "wipe
+ * the entries and re-process from scratch"; the trained classifier
+ * represents what the user has taught about journal-worthiness over
+ * time and should outlive a single sweep. A user who wants a fully
+ * blank slate can flip the auto-journal toggle off before resetting.
+ */
+export async function resetAllJournalData(
+  supabase: SupabaseService
+): Promise<void> {
+  await supabase.resetJournalData();
+  journal.entries = [];
+  journal.loaded = true;
+  journal.error = null;
+  emitJournalChange();
+}
+
+/**
  * Mark an automatic entry as appropriate (the "ham" button). One-shot
  * per entry - the supabase call's WHERE clause guards against double-
  * trains via a stale tab. On success, the source thread's tokens get

@@ -4976,6 +4976,54 @@ language sql stable security invoker as $$
     left join public.journal_spam_stats s on s.user_id = auth.uid()
 $$;
 
+-- Wipe-and-rewind for the journal subsystem. Called from Settings ->
+-- Journal -> Reset. Three side effects, all scoped to auth.uid() via
+-- RLS (security invoker):
+--
+--   1. Delete every journal entry the user owns (automatic AND user
+--      sources). The unique-per-(user, thread) index on automatic
+--      entries gets cleared as part of the delete, so subsequent
+--      worker runs can write fresh entries against the same threads.
+--   2. Delete every journal_thread_excludes row for the user. Without
+--      this step, threads the user had previously thumbs-down'd would
+--      stay permanently excluded from the worker, which is the
+--      opposite of "reset"; the user wants the worker to evaluate
+--      everything from scratch.
+--   3. Null out the per-thread journal pointer and claim columns on
+--      every thread the user owns. Clearing last_journaled_msg_id is
+--      what makes the worker actually re-process the conversations -
+--      without it the worker would skip threads it had already
+--      pointer-advanced past, even though the entry rows are gone.
+--      The claim columns are nulled defensively in case a worker
+--      cycle is mid-flight; an in-flight upsert with an expired claim
+--      will simply lose its mark step and roll back.
+--
+-- The three side effects run in a single plpgsql transaction so the
+-- user can't end up half-reset (entries gone but pointers still
+-- advanced, which would leave the journal permanently empty).
+--
+-- Idempotent: calling this on an already-empty journal is a no-op
+-- on the deletes and a vacuous update on the pointers.
+drop function if exists public.reset_journal_data();
+create or replace function public.reset_journal_data()
+returns void
+language plpgsql security invoker as $$
+declare
+  v_user uuid := auth.uid();
+begin
+  if v_user is null then
+    raise exception 'reset_journal_data: not authenticated'
+      using errcode = '28000';
+  end if;
+  delete from public.journal_entries where user_id = v_user;
+  delete from public.journal_thread_excludes where user_id = v_user;
+  update public.threads
+     set last_journaled_msg_id = null,
+         journal_claim_holder = null,
+         journal_claim_expires_at = null
+   where user_id = v_user;
+end $$;
+
 -- User Wiki ---------------------------------------------------------------
 --
 -- Flat (no nesting) encyclopedia-style articles a fourth peer to chats,
@@ -5272,6 +5320,47 @@ language sql stable security invoker as $$
    order by embedding <=> query_embedding asc
    limit match_limit
 $$;
+
+-- Wipe-and-rewind for the wiki subsystem. Called from Settings ->
+-- Wiki -> Reset. Mirrors reset_journal_data but with the wiki-side
+-- column names. Two side effects under RLS scoping:
+--
+--   1. Delete every wiki article the user owns. Unlike the journal,
+--      the wiki has no per-thread exclude table - articles are
+--      aggregated across many threads, so there's no "permanently
+--      exclude this thread" semantic to undo.
+--   2. Null out the per-thread wiki pointer + claim columns on every
+--      thread the user owns. Clearing last_wiki_processed_msg_id is
+--      what re-eligibilizes the threads for the next worker sweep;
+--      the wiki agent will read each conversation fresh and rebuild
+--      articles from scratch. Claim columns are nulled defensively
+--      against an in-flight worker cycle.
+--
+-- Note: the librarian's last-run timestamp on profiles is left alone.
+-- A reset is about the article store and the per-thread pipeline; the
+-- librarian's cadence is orthogonal (and re-running the librarian
+-- immediately after a reset is harmless because it has nothing to
+-- consolidate).
+--
+-- Single plpgsql transaction so the user can't end up half-reset.
+drop function if exists public.reset_wiki_data();
+create or replace function public.reset_wiki_data()
+returns void
+language plpgsql security invoker as $$
+declare
+  v_user uuid := auth.uid();
+begin
+  if v_user is null then
+    raise exception 'reset_wiki_data: not authenticated'
+      using errcode = '28000';
+  end if;
+  delete from public.wiki_articles where user_id = v_user;
+  update public.threads
+     set last_wiki_processed_msg_id = null,
+         wiki_claim_holder = null,
+         wiki_claim_expires_at = null
+   where user_id = v_user;
+end $$;
 
 -- Wiki librarian last-run timestamp + atomic-claim RPC. The wiki
 -- librarian is a separate background agent that periodically

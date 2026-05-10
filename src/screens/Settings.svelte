@@ -68,6 +68,8 @@
   } from '$lib/state.svelte';
   import { detectTimezone, normalizeTimezone } from '$lib/journal-day';
   import { downloadFullArchive } from '$lib/journal-export';
+  import { resetAllJournalData } from '$lib/journal-store.svelte';
+  import { resetAllWikiData } from '$lib/wiki-store.svelte';
   import { isSupported as notificationsSupported, requestPermission } from '$lib/notifications.svelte';
   import { LOG_LEVELS, LOG_LEVEL_LABELS, type LogLevel } from '$lib/logger.svelte';
   import {
@@ -188,6 +190,7 @@
   let journalError = $state<string | null>(null);
   let journalInfo = $state<string | null>(null);
   let journalExportBusy = $state(false);
+  let journalResetBusy = $state(false);
 
   // --- Wiki pane ---
   // Toggle for the autonomous wiki agent. Mirrors the journal pane's
@@ -200,6 +203,7 @@
   let wikiLibrarianEnabled = $state<boolean>(app.wikiLibrarianEnabled);
   let wikiError = $state<string | null>(null);
   let wikiInfo = $state<string | null>(null);
+  let wikiResetBusy = $state(false);
 
   // --- Prompts pane ---
   // Local working copy of the prompt library. We edit this in memory and
@@ -1022,6 +1026,68 @@
     }
   }
 
+  // Settings -> Journal -> Reset. Confirmed-irreversible nuke of every
+  // journal entry plus the per-thread journal pipeline state. Resetting
+  // does NOT change the auto-journal toggle - if it's on, the worker
+  // will start rebuilding entries on its next sweep. The confirm copy
+  // names that side effect so the user can flip the toggle off first
+  // if they want a permanent wipe.
+  async function onResetJournalData(): Promise<void> {
+    if (!app.supabase) return;
+    if (journalResetBusy) return;
+    const ok = window.confirm(
+      'Reset all journal data?\n\n' +
+        'This permanently deletes every journal entry (automatic and your own) ' +
+        'and clears the per-conversation journaling state so the worker ' +
+        're-evaluates your threads from scratch.\n\n' +
+        'This cannot be undone. Consider exporting your journal first.\n\n' +
+        'If automatic entries are still enabled, the journaler will begin ' +
+        'rewriting entries on its next sweep.'
+    );
+    if (!ok) return;
+    journalError = null;
+    journalInfo = null;
+    journalResetBusy = true;
+    try {
+      await resetAllJournalData(app.supabase);
+      journalInfo = 'Journal data reset.';
+    } catch (err) {
+      journalError = err instanceof Error ? err.message : String(err);
+    } finally {
+      journalResetBusy = false;
+    }
+  }
+
+  // Settings -> Wiki -> Reset. Mirrors onResetJournalData for the wiki
+  // subsystem. Same caveat about the toggle: leaving auto-articles on
+  // means the agent will rebuild articles from scratch over the next
+  // sweep.
+  async function onResetWikiData(): Promise<void> {
+    if (!app.supabase) return;
+    if (wikiResetBusy) return;
+    const ok = window.confirm(
+      'Reset all wiki data?\n\n' +
+        'This permanently deletes every wiki article and clears the ' +
+        'per-conversation wiki state so the agent re-evaluates your ' +
+        'threads from scratch.\n\n' +
+        'This cannot be undone.\n\n' +
+        'If automatic articles are still enabled, the wiki agent will ' +
+        'begin rewriting articles on its next sweep.'
+    );
+    if (!ok) return;
+    wikiError = null;
+    wikiInfo = null;
+    wikiResetBusy = true;
+    try {
+      await resetAllWikiData(app.supabase);
+      wikiInfo = 'Wiki data reset.';
+    } catch (err) {
+      wikiError = err instanceof Error ? err.message : String(err);
+    } finally {
+      wikiResetBusy = false;
+    }
+  }
+
   async function onChangePassword(e: SubmitEvent): Promise<void> {
     e.preventDefault();
     pwError = null;
@@ -1390,6 +1456,17 @@
             entries are untouched.
           </span>
         </label>
+        <p class="subtle" style="font-size:0.85rem">
+          Permanently delete every journal entry (automatic and your own)
+          and clear the per-conversation journaling state so the worker
+          re-evaluates your threads from scratch. Irreversible.
+        </p>
+        <button
+          type="button"
+          class="danger"
+          onclick={onResetJournalData}
+          disabled={journalResetBusy}
+        >{journalResetBusy ? 'Resetting…' : 'Reset journal data'}</button>
 
         <h3 class="pane-section">Day boundary</h3>
         <p class="subtle" style="font-size:0.85rem">
@@ -1476,6 +1553,17 @@
             untouched.
           </span>
         </label>
+        <p class="subtle" style="font-size:0.85rem">
+          Permanently delete every wiki article and clear the per-
+          conversation wiki state so the agent re-evaluates your
+          threads from scratch. Irreversible.
+        </p>
+        <button
+          type="button"
+          class="danger"
+          onclick={onResetWikiData}
+          disabled={wikiResetBusy}
+        >{wikiResetBusy ? 'Resetting…' : 'Reset wiki data'}</button>
 
         <h3 class="pane-section">Librarian</h3>
         <label class="form-row toggle-row">

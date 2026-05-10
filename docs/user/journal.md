@@ -171,6 +171,15 @@ The **Journal** pane in Settings controls:
   off. User entries are unaffected either way. Turning this off
   stops the worker immediately; any existing automatic entries
   stay.
+- **Reset journal data** — sits directly below the Automatic
+  entries toggle. Permanently deletes every journal entry (both
+  automatic and your own) and clears the per-conversation
+  journaling state so the worker re-evaluates your threads from
+  scratch. Irreversible. There's a confirmation prompt. If the
+  automatic toggle is still on, the journaler will begin
+  rewriting entries on its next sweep — flip it off first if you
+  want a permanent wipe. Export your journal first if you might
+  want it back.
 - **Day boundary** — the IANA timezone that determines which day
   a conversation lands on. Default is whatever your browser
   reports. A late-night message in Los Angeles should land on
