@@ -161,27 +161,11 @@ export interface ModelSpec {
  * agent-table check becomes a no-op.
  */
 export const MODELS = {
-  'zai-org-glm-5-1': {
-    id: 'zai-org-glm-5-1',
-    contextWindow: 200_000,
+  'deepseek-v4-pro': {
+    id: 'deepseek-v4-pro',
+    contextWindow: 1_000_000,
     supportsReasoning: true,
-    // GLM-5.1 is text-only on Venice - images route through analyze_image().
-    supportsVision: false,
-    supportsResponseFormat: true,
-  },
-  'zai-org-glm-5': {
-    id: 'zai-org-glm-5',
-    contextWindow: 198_000,
-    supportsReasoning: true,
-    // GLM-5 is text-only on Venice - images route through analyze_image().
-    supportsVision: false,
-    supportsResponseFormat: true,
-  },
-  'zai-org-glm-4.7': {
-    id: 'zai-org-glm-4.7',
-    contextWindow: 198_000,
-    supportsReasoning: true,
-    // GLM-4.7 is text-only on Venice - images route through analyze_image().
+    // DeepSeek V4 Pro is text-only on Venice - images route through analyze_image().
     supportsVision: false,
     supportsResponseFormat: true,
   },
@@ -241,27 +225,41 @@ export interface TierSpec extends ModelSpec {
   /**
    * Tier-level reasoning_effort default. When set, wins over the user's
    * account-level default (but not the per-thread override). Used to
-   * differentiate two tiers fronting the same Venice id - e.g. when
-   * Smart and Balanced both ran kimi-k2-6, the tier labels were really
-   * "same model, different thinking budgets" and this field is what
-   * realised that contract. Absent means "no tier opinion - fall
-   * through to the user default." Only consulted when the underlying
-   * model's supportsReasoning is also true.
+   * differentiate tiers fronting the same Venice id - all three tiers
+   * currently front deepseek-v4-pro and the labels really mean "same
+   * model, different thinking budgets," with this field realising that
+   * contract. Absent means "no tier opinion - fall through to the user
+   * default." Only consulted when the underlying model's
+   * supportsReasoning is also true and `disableThinking` is not set.
    */
   readonly defaultReasoningEffort?: ReasoningEffort;
+  /**
+   * Tier-level kill switch for reasoning. When true, the tier sends
+   * `venice_parameters.disable_thinking: true` on every wire call and
+   * skips `reasoning_effort` entirely - reasoning_effort: 'low' shrinks
+   * the CoT but doesn't disable it, so an explicit disableThinking is
+   * the only way to get "zero thinking" out of a reasoning-capable
+   * model. Used by the Fast tier so a tier swap from a non-reasoning
+   * model to a reasoning model doesn't silently leak default-budget
+   * CoT into the response latency. The per-thread reasoning picker is
+   * also hidden when this is true (see Chat.svelte's
+   * `currentSupportsReasoning` derived), since a picker that does
+   * nothing on the wire would just confuse the user.
+   */
+  readonly disableThinking?: boolean;
 }
 
 export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
   smart: {
-    ...MODELS['zai-org-glm-5-1'],
+    ...MODELS['deepseek-v4-pro'],
     tier: 'smart',
     label: 'Smart',
     icon: '🧠',
-    description: 'GLM-5.1 with deep thinking. Best for hard problems.',
-    defaultReasoningEffort: 'high',
+    description: 'DeepSeek V4 Pro with medium thinking. Best for hard problems.',
+    defaultReasoningEffort: 'medium',
   },
   balanced: {
-    ...MODELS['zai-org-glm-5'],
+    ...MODELS['deepseek-v4-pro'],
     tier: 'balanced',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
@@ -270,15 +268,20 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     // in both themes; yin-yang is a solid bi-tonal disc that reads at
     // any size.
     icon: '\u262F\uFE0F',
-    description: 'GLM-5 with light thinking. Good default for most turns.',
+    description: 'DeepSeek V4 Pro with light thinking. Good default for most turns.',
     defaultReasoningEffort: 'low',
   },
   fast: {
-    ...MODELS['zai-org-glm-4.7'],
+    ...MODELS['deepseek-v4-pro'],
     tier: 'fast',
     label: 'Fast',
     icon: '\u26A1\uFE0F',
-    description: 'GLM-4.7. Fast, 198k context.',
+    description: 'DeepSeek V4 Pro with thinking off. Quickest replies.',
+    // disableThinking is what makes the Fast tier feel fast even
+    // though it fronts the same reasoning-capable model as Smart and
+    // Balanced - without it the model would burn its default thinking
+    // budget on CoT before writing any user-visible text.
+    disableThinking: true,
   },
 };
 

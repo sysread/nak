@@ -36,14 +36,17 @@ export const LEGACY_MODELS: Readonly<Record<string, LegacyModelSpec>> = {
   // Retired Smart-tier ids.
   'kimi-k2-5':                         { id: 'kimi-k2-5', contextWindow: 256_000 },
   'kimi-k2-6':                         { id: 'kimi-k2-6', contextWindow: 256_000 },
+  'zai-org-glm-5-1':                   { id: 'zai-org-glm-5-1', contextWindow: 200_000 },
 
   // Retired Balanced-tier ids.
   'arcee-trinity-large-thinking':      { id: 'arcee-trinity-large-thinking', contextWindow: 256_000 },
   'gemma-4-uncensored':                { id: 'gemma-4-uncensored', contextWindow: 256_000 },
   'minimax-m27':                       { id: 'minimax-m27', contextWindow: 198_000 },
+  'zai-org-glm-5':                     { id: 'zai-org-glm-5', contextWindow: 198_000 },
 
   // Retired Fast-tier ids.
   'grok-41-fast':                      { id: 'grok-41-fast', contextWindow: 1_000_000 },
+  'zai-org-glm-4.7':                   { id: 'zai-org-glm-4.7', contextWindow: 198_000 },
 
   // Retired Journal-agent ids. Never fronted a user-facing tier; the
   // ring will only resolve them on assistant rows the user could see
