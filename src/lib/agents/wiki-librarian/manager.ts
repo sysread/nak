@@ -15,12 +15,14 @@ import { emitWikiChange } from '../../wiki-events';
 import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
 
 export interface WikiLibrarianStartOpts extends BaseStartOpts {
-  // No live-mutable knobs at the moment - the librarian uses fixed
-  // timing defaults defined below. If/when we expose a user-tunable
-  // cadence, this becomes a field plus a setMinInterval() method.
-  // Marker so this interface stays distinct from BaseStartOpts at
-  // the type level.
-  readonly _wikiLibrarian?: never;
+  /**
+   * User profile from Settings -> AI -> About you. Empty strings
+   * are the "not set" sentinels; the prompt builder suppresses
+   * the "About the user" block when both are empty. Live-updated
+   * via `setProfile()`.
+   */
+  userName: string;
+  userLocation: string;
 }
 
 /**
@@ -72,6 +74,8 @@ class WikiLibrarianManager extends BaseWorkerManager<WikiLibrarianStartOpts> {
       userId: session.user.id,
       veniceApiKey: opts.config.veniceApiKey,
       wikiLibrarianModel: agentModel('wikiLibrarian').id,
+      userName: opts.userName,
+      userLocation: opts.userLocation,
       ...WORKER_DEFAULTS,
     };
   }
@@ -88,6 +92,15 @@ class WikiLibrarianManager extends BaseWorkerManager<WikiLibrarianStartOpts> {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Live-update the worker's user-profile fields without a
+   * restart. Called by state.svelte.ts on Settings edits.
+   */
+  setProfile(userName: string, userLocation: string): void {
+    if (!this.worker) return;
+    this.worker.postMessage({ type: 'profile', userName, userLocation });
   }
 }
 

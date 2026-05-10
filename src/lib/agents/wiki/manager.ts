@@ -23,6 +23,15 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
 export interface WikiStartOpts extends BaseStartOpts {
   /** IANA timezone; worker falls back to UTC if null. */
   timezone: string | null;
+  /**
+   * Free-form display name from Settings -> AI -> About you. Empty
+   * string is the "not set" sentinel; the prompt builder
+   * suppresses the "About the user" block when both this and
+   * `userLocation` are empty. Live-updated via `setProfile()`.
+   */
+  userName: string;
+  /** Same opt-in semantics as `userName`. */
+  userLocation: string;
 }
 
 /**
@@ -63,6 +72,8 @@ class WikiManager extends BaseWorkerManager<WikiStartOpts> {
       veniceApiKey: opts.config.veniceApiKey,
       wikiModel: agentModel('wiki').id,
       timezone: opts.timezone,
+      userName: opts.userName,
+      userLocation: opts.userLocation,
       ...WORKER_DEFAULTS,
     };
   }
@@ -84,6 +95,17 @@ class WikiManager extends BaseWorkerManager<WikiStartOpts> {
   setTimezone(timezone: string | null): void {
     if (!this.worker) return;
     this.worker.postMessage({ type: 'timezone', timezone });
+  }
+
+  /**
+   * Live-update the worker's user-profile fields without a restart.
+   * Mirrors the journal manager's `setProfile` - the user editing
+   * their name or location in Settings reaches the next cycle
+   * without tearing the worker down.
+   */
+  setProfile(userName: string, userLocation: string): void {
+    if (!this.worker) return;
+    this.worker.postMessage({ type: 'profile', userName, userLocation });
   }
 }
 

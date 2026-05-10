@@ -34,6 +34,17 @@ interface StartMessage {
   wikiModel: string;
   /** IANA timezone or null (the SQL falls back to UTC). */
   timezone: string | null;
+  /**
+   * Free-form display name from Settings -> AI -> About you. Empty
+   * string is the "not set" sentinel; the agent's prompt builder
+   * suppresses the "About the user" block when both this and
+   * `userLocation` are empty. Live-updated via the `profile`
+   * inbound message so a Settings edit reaches the next cycle
+   * without tearing the worker down.
+   */
+  userName: string;
+  /** Same opt-in semantics as `userName`. */
+  userLocation: string;
   holderId: string;
   threadClaimTtlSeconds: number;
   leaseTtlSeconds: number;
@@ -58,11 +69,18 @@ interface TimezoneMessage {
   timezone: string | null;
 }
 
+interface ProfileMessage {
+  type: 'profile';
+  userName: string;
+  userLocation: string;
+}
+
 type InboundMessage =
   | StartMessage
   | StopMessage
   | SessionMessage
-  | TimezoneMessage;
+  | TimezoneMessage
+  | ProfileMessage;
 
 interface LogOutbound {
   type: 'log';
@@ -84,6 +102,32 @@ function post(msg: LogOutbound | ProgressOutbound): void {
 
 let currentClient: SupabaseClient | null = null;
 const tzHolder: { value: string | null } = { value: null };
+// Captures the agent built by `runWorker` so the message handler can
+// call `setUserProfile` on it when a profile-update message arrives.
+// Cleared in the worker's `finally` so a stale pointer can't be
+// dereferenced after teardown. Same shape as the journal worker's
+// `activeAgent` holder.
+let activeAgent: WikiAgent | null = null;
+
+/**
+ * Build the {name, location} pair the prompt builder expects from
+ * the worker's two free-form fields. Returns null when both are
+ * empty so the prompt's "About the user" block is fully suppressed
+ * for accounts that haven't filled the form (zero tokens for the
+ * default case).
+ */
+function buildProfile(
+  name: string,
+  location: string
+): { name: string | null; location: string | null } | null {
+  const n = name.trim();
+  const l = location.trim();
+  if (n.length === 0 && l.length === 0) return null;
+  return {
+    name: n.length > 0 ? n : null,
+    location: l.length > 0 ? l : null,
+  };
+}
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   if (ms <= 0) return Promise.resolve();
@@ -136,7 +180,13 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     heartbeatMs: msg.leaseHeartbeatMs,
   });
 
-  const agent = new WikiAgent(venice, supabase, msg.wikiModel);
+  const agent = new WikiAgent(
+    venice,
+    supabase,
+    msg.wikiModel,
+    buildProfile(msg.userName, msg.userLocation)
+  );
+  activeAgent = agent;
 
   const napConfig: NapConfig = {
     leasePollMs: msg.leasePollMs,
@@ -170,6 +220,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     }
   } finally {
     currentClient = null;
+    activeAgent = null;
     await coordinator.release();
   }
 }
@@ -208,6 +259,9 @@ workerGlobal.addEventListener('message', (evt: MessageEvent<InboundMessage>) => 
       });
   } else if (msg.type === 'timezone') {
     tzHolder.value = msg.timezone;
+  } else if (msg.type === 'profile') {
+    if (!activeAgent) return;
+    activeAgent.setUserProfile(buildProfile(msg.userName, msg.userLocation));
   }
 });
 
