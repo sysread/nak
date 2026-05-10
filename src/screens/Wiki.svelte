@@ -253,6 +253,18 @@
   let manualError = $state<string | null>(null);
   let manualAccepting = $state(false);
   let manualController: AbortController | null = null;
+  let manualTextarea = $state<HTMLTextAreaElement | null>(null);
+
+  // Focus the instructions textarea as soon as the form mounts so the
+  // user can start typing without an extra click. The bound element
+  // stays referentially stable across the form's lifetime; this effect
+  // fires once when the form opens (manualTargetId flips from null to
+  // an id) and is a no-op when it closes.
+  $effect(() => {
+    if (manualTargetId && manualTextarea) {
+      manualTextarea.focus();
+    }
+  });
 
   // Article id whose body is currently mid-fade-out. Set on Accept
   // between the DB write and the in-store patch so the user sees
@@ -510,53 +522,12 @@
           </div>
         </div>
       {:else}
-        <!--
-          The .regen-target outline + dim signals "this article is
-          marked for replacement" while the manual-update flow is
-          open below; .fading-out plays the dissolve animation
-          between the DB write and the in-store content swap on
-          Accept. Both classes share their visual contract with the
-          chat regenerate flow (.msg.disabled / .msg.fading-out) so
-          the language reads consistently across surfaces.
-        -->
-        <article
-          class="wiki-article"
-          class:regen-target={manualTargetId === a.id}
-          class:fading-out={fadingArticleId === a.id}
-        >
-          <header class="wiki-header">
-            <h1 class="wiki-title">{a.title}</h1>
-            <div class="wiki-actions">
-              <button type="button" onclick={() => startEdit(a)}>Edit</button>
-              <button type="button" onclick={() => startManualUpdate(a)}>
-                Ask agent to update
-              </button>
-              <button type="button" onclick={() => requestDelete(a)} class="danger">
-                Delete
-              </button>
-            </div>
-          </header>
-          <div class="wiki-content">
-            <Markdown content={a.content} />
-          </div>
-        </article>
-
-        {#if deletingId === a.id}
-          <div class="wiki-confirm-strip">
-            <p>Delete this article? This cannot be undone.</p>
-            {#if deleteError}
-              <p class="error">{deleteError}</p>
-            {/if}
-            <div class="row">
-              <button type="button" class="danger" onclick={confirmDelete}>
-                Delete
-              </button>
-              <button type="button" onclick={cancelDelete}>Cancel</button>
-            </div>
-          </div>
-        {/if}
-
         {#if manualTargetId === a.id}
+          <!-- Sits ABOVE the article on purpose. Clicking "Ask agent to
+               update" should drop the user straight into the
+               instructions textarea (which auto-focuses on mount); if
+               the form rendered below, a long article would push it
+               off-screen and force a scroll before typing. -->
           <div class="wiki-manual-update">
             <h3>Ask the agent to update this article</h3>
             <p class="subtle">
@@ -568,6 +539,7 @@
               <label for="wiki-manual-instructions">Your instructions</label>
               <textarea
                 id="wiki-manual-instructions"
+                bind:this={manualTextarea}
                 bind:value={manualInstructions}
                 disabled={manualBusy || manualAccepting}
                 rows={4}
@@ -649,6 +621,52 @@
                 </div>
               </div>
             {/if}
+          </div>
+        {/if}
+
+        <!--
+          The .regen-target outline + dim signals "this article is
+          marked for replacement" while the manual-update flow is
+          open above; .fading-out plays the dissolve animation
+          between the DB write and the in-store content swap on
+          Accept. Both classes share their visual contract with the
+          chat regenerate flow (.msg.disabled / .msg.fading-out) so
+          the language reads consistently across surfaces.
+        -->
+        <article
+          class="wiki-article"
+          class:regen-target={manualTargetId === a.id}
+          class:fading-out={fadingArticleId === a.id}
+        >
+          <header class="wiki-header">
+            <h1 class="wiki-title">{a.title}</h1>
+            <div class="wiki-actions">
+              <button type="button" onclick={() => startEdit(a)}>Edit</button>
+              <button type="button" onclick={() => startManualUpdate(a)}>
+                Ask agent to update
+              </button>
+              <button type="button" onclick={() => requestDelete(a)} class="danger">
+                Delete
+              </button>
+            </div>
+          </header>
+          <div class="wiki-content">
+            <Markdown content={a.content} />
+          </div>
+        </article>
+
+        {#if deletingId === a.id}
+          <div class="wiki-confirm-strip">
+            <p>Delete this article? This cannot be undone.</p>
+            {#if deleteError}
+              <p class="error">{deleteError}</p>
+            {/if}
+            <div class="row">
+              <button type="button" class="danger" onclick={confirmDelete}>
+                Delete
+              </button>
+              <button type="button" onclick={cancelDelete}>Cancel</button>
+            </div>
           </div>
         {/if}
       {/if}
