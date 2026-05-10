@@ -48,12 +48,14 @@ export interface WikiLibrarianUserProfile {
 }
 
 /**
- * Same strict wording the per-conversation agent uses - HARD rules
- * around the configured name, with explicit anti-fabrication language.
- * The librarian inherits the same risk: a name from conversation
- * context can leak into an article that's actually about the user.
- * See `../wiki/prompt.ts:renderUserProfileBlock` for the matching
- * rationale block on the per-conversation side.
+ * Same wording shape the per-conversation agent uses - positive
+ * "prefer the configured name over 'the user'" rule plus HARD anti-
+ * fabrication language. The librarian also has its own corrective
+ * pass for articles already on disk that use the wrong name (a per-
+ * conversation hallucination) or default to "the user" instead of
+ * the configured name (a defaulting failure). See
+ * `../wiki/prompt.ts:renderUserProfileBlock` for the matching
+ * rationale on the per-conversation side.
  */
 function renderUserProfileBlock(
   profile: WikiLibrarianUserProfile | null
@@ -72,8 +74,17 @@ function renderUserProfileBlock(
   if (name) {
     lines.push(`The user's name is **${name}**.`);
     lines.push(
-      `When an article refers to the user themselves, the user's ` +
-        `name is **${name}** and ONLY ${name}. NEVER substitute ` +
+      `**Use "${name}" by default when an article refers to the user.** ` +
+        `Avoid the generic phrase "the user" wherever "${name}" fits. ` +
+        `If you find an existing article that defaults to "the user" ` +
+        `where the name would fit naturally (e.g. "the user is ` +
+        `building Nak" instead of "${name} is building Nak"), ` +
+        `wiki_update to replace the generic phrasing with the name. ` +
+        `A natural pronoun ("they", "their") is also fine where the ` +
+        `prose flows better than repeating the name.`
+    );
+    lines.push(
+      `The name is **${name}** and ONLY ${name}. NEVER substitute ` +
         `another name for the user, even if other names appear in ` +
         `the article or in conversation history - those names belong ` +
         `to other people the user knows. If you find an article that ` +
@@ -227,22 +238,35 @@ export function buildWikiLibrarianPrompt(opts: {
     '   wiki_update the article that is the better home (longer,',
     '   broader, or more accurate) to absorb the unique facts from',
     '   the duplicate, then wiki_delete the duplicate.',
-    '3. **Fix fabricated names for the user.** If the "About the',
-    '   user" block above has a name, scan for articles that appear',
-    '   to be about the user but use a DIFFERENT name (a common',
-    '   per-conversation hallucination is grabbing a friend\'s name',
-    '   from conversation context and applying it to the user).',
-    '   Read the full body via wiki_search to confirm the article',
-    '   is in fact about the user, then wiki_update to replace the',
-    '   wrong name with the configured one (or a natural pronoun).',
-    '   Use memory_search and conversation_search to disambiguate -',
-    '   if a name like "Elliot" appears in memories as someone the',
-    '   user knows, the article that calls the user "Elliot" is',
-    '   the wrong one to fix that way; write an article ABOUT',
-    '   Elliot is out of your scope (you cannot wiki_create), but',
-    '   you CAN wiki_update the misnamed article to use the right',
-    '   name for the user and let the per-conversation agent land',
-    '   the separate Elliot article on its own next cycle.',
+    '3. **Fix references to the user.** Two failure patterns to clean',
+    '   up here, both visible from the article body:',
+    '   ',
+    '   (a) **Fabricated names.** If the "About the user" block has a',
+    '       name (e.g. "Jeff"), scan for articles that appear to be',
+    '       about the user but use a DIFFERENT name. The usual cause',
+    '       is the per-conversation agent grabbing a friend\'s name',
+    '       from conversation context and applying it to the user.',
+    '       Read the full body to confirm the article is in fact',
+    '       about the user, then wiki_update to replace the wrong',
+    '       name with the configured one. Use memory_search and',
+    '       conversation_search to disambiguate - if a name like',
+    '       "Elliot" appears in memories as someone the user knows,',
+    '       the article that calls the user "Elliot" is wrong; the',
+    '       separate Elliot article (about the actual friend) is',
+    '       out of your scope to create (no wiki_create), but you',
+    '       CAN wiki_update the misnamed article to use the right',
+    '       name and leave the per-conversation agent to land the',
+    '       Elliot article on its own next cycle.',
+    '   ',
+    '   (b) **Defaulted to "the user".** If the configured name is',
+    '       set, scan for articles that say "the user" where the',
+    '       name would fit naturally ("the user is building Nak",',
+    '       "the user lives in...", "the user has been learning..."),',
+    '       and wiki_update to substitute the configured name. The',
+    '       wiki should read like a personal encyclopedia about the',
+    '       person, not a generic third-party report. Skip cases',
+    '       where "the user" is genuinely the better wording (rare,',
+    '       but possible) - default to substituting the name.',
     '4. **Check for stale facts.** When an excerpt makes a specific',
     '   claim that could plausibly have changed (a job title, a',
     '   relationship status, a project status, a date), use',

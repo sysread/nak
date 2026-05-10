@@ -110,15 +110,29 @@ export interface WikiUserProfile {
  * journal's `buildUserProfileNote` shape so the voice stays consistent
  * across surfaces.
  *
- * The wording around the name is intentionally strict. Production
- * traffic showed the model fabricating names for the user (e.g. an
- * article was written about "Elliot" when the configured name was
- * "Jeff", because the conversation mentioned a friend named Elliot
- * and the model conflated the user with someone else in context).
- * The block now uses HARD rules ("ONLY this name", "NEVER invent
- * another name") rather than the original soft "prefer their name".
+ * Two distinct rules around the name, both load-bearing:
+ *
+ *   1. **POSITIVE: prefer the configured name over "the user".**
+ *      Articles read better and feel more like an actual personal
+ *      wiki when they say "Jeff is building Nak" rather than "the
+ *      user is building Nak". The earlier prompt only told the
+ *      model what NOT to do (don't fabricate); the user reported
+ *      that as a result, articles were defaulting to "the user"
+ *      everywhere even though Jeff was set in Settings. The
+ *      positive instruction now appears first.
+ *
+ *   2. **NEGATIVE: never invent another name.** Production traffic
+ *      showed the model writing articles about "Elliot" when the
+ *      configured name was "Jeff", because the conversation
+ *      mentioned a friend named Elliot and the model conflated
+ *      the user with someone else in context. The HARD anti-
+ *      fabrication rule ("ONLY this name", "NEVER invent another")
+ *      is the second half of the wording, after the positive
+ *      preference instruction.
+ *
  * The unknown-name path (location set, name not) is split out so we
- * don't tell the model to "use their name" when no name was supplied.
+ * don't tell the model to "use their name" when no name was supplied;
+ * in that case "the user" / pronouns is the right fallback.
  */
 export function renderUserProfileBlock(
   profile: WikiUserProfile | null
@@ -137,8 +151,18 @@ export function renderUserProfileBlock(
   if (name) {
     lines.push(`The user's name is **${name}**.`);
     lines.push(
-      `When an article refers to the user themselves, the user's ` +
-        `name is **${name}** and ONLY ${name}. NEVER invent another ` +
+      `**Use "${name}" by default when an article refers to the user.** ` +
+        `Avoid the generic phrase "the user" wherever "${name}" fits ` +
+        `the sentence. This applies in articles ABOUT the user (the ` +
+        `subject is ${name}), articles about projects ${name} is ` +
+        `building ("${name} started this project in ..."), articles ` +
+        `about people in ${name}'s life ("Maya is ${name}'s sister"), ` +
+        `and any other place the user appears. A natural pronoun ` +
+        `("they", "their") is also fine where prose flows better than ` +
+        `repeating the name.`
+    );
+    lines.push(
+      `The name is **${name}** and ONLY ${name}. NEVER invent another ` +
         `name for the user, even if other names appear in the ` +
         `conversation - those other names belong to other people the ` +
         `user knows. If the conversation mentions a friend named ` +
@@ -147,8 +171,7 @@ export function renderUserProfileBlock(
         `whether the article subject IS the user, default to using ` +
         `the literal name from context (Maya, Elliot, etc.) for that ` +
         `subject and reserve "${name}" for explicit references to ` +
-        `the user. A natural pronoun ("they") is also fine where the ` +
-        `prose flows better than repeating the name.`
+        `the user.`
     );
   } else {
     lines.push(
@@ -306,9 +329,12 @@ const WIKI_AUTONOMOUS_BODY_LINES = [
   '',
   '- Encyclopedic, third-person, present tense, neutral. Like the lead',
   '  paragraph of a Wikipedia article.',
-  '- Refer to the subject directly when possible (a first name, the',
-  '  project name, the place). Avoid "the user" except when the article',
-  '  topic IS the user themselves.',
+  '- Refer to subjects directly by their names: the project name, a',
+  '  first name for a person, the place name for a place. When you',
+  '  need to refer to the user themselves, use the configured name',
+  '  from the "About the user" block (when present) - NOT the generic',
+  '  phrase "the user". Fall back to "the user" only when no name is',
+  '  configured.',
   "- No first person, no second person, no chat phrasing. Don't write",
   '  "you mentioned" or "I noted"; write the fact directly.',
   '- One topic per article. If a conversation surfaces multiple topics,',
