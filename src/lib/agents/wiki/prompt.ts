@@ -26,6 +26,21 @@
  *     block tells the model their name + location so articles
  *     about the user themselves can use the actual name rather
  *     than the generic phrase.
+ *   - **No fabricated names for the user.** Production traffic
+ *     surfaced the model inventing names for the user when the
+ *     conversation happened to mention someone else by name (e.g.
+ *     a brainstorm where the user mentioned a friend named "Elliot"
+ *     produced articles that called the user "Elliot" instead of
+ *     the configured "Jeff"). The renderUserProfileBlock helper now
+ *     uses HARD anti-fabrication wording ("the user's name is
+ *     **Jeff** and ONLY Jeff", "NEVER invent another name for the
+ *     user, even if other names appear in the conversation") rather
+ *     than the original soft "prefer their name" wording. The
+ *     unknown-name path (no name in Settings) is split out so we
+ *     don't tell the model to "use their name" when it has none.
+ *     The body's "Do not fabricate" section also gains an explicit
+ *     "do not fabricate names" line that points back to the profile
+ *     block as the single source of truth.
  *   - **User-centric scope.** Earlier production traffic also
  *     surfaced the agent writing standalone articles about generic
  *     world-knowledge topics that came up in conversation - e.g.
@@ -83,25 +98,60 @@ export interface WikiUserProfile {
  * Settings form pays zero tokens for the section. Matches the
  * journal's `buildUserProfileNote` shape so the voice stays consistent
  * across surfaces.
+ *
+ * The wording around the name is intentionally strict. Production
+ * traffic showed the model fabricating names for the user (e.g. an
+ * article was written about "Elliot" when the configured name was
+ * "Jeff", because the conversation mentioned a friend named Elliot
+ * and the model conflated the user with someone else in context).
+ * The block now uses HARD rules ("ONLY this name", "NEVER invent
+ * another name") rather than the original soft "prefer their name".
+ * The unknown-name path (location set, name not) is split out so we
+ * don't tell the model to "use their name" when no name was supplied.
  */
 export function renderUserProfileBlock(
   profile: WikiUserProfile | null
 ): string {
   if (!profile) return '';
-  const lines: string[] = [];
-  if (profile.name && profile.name.trim().length > 0) {
-    lines.push(`The user's name is ${profile.name.trim()}.`);
+  const name =
+    profile.name && profile.name.trim().length > 0
+      ? profile.name.trim()
+      : null;
+  const location =
+    profile.location && profile.location.trim().length > 0
+      ? profile.location.trim()
+      : null;
+  if (!name && !location) return '';
+  const lines: string[] = ['**About the user:**', ''];
+  if (name) {
+    lines.push(`The user's name is **${name}**.`);
+    lines.push(
+      `When an article refers to the user themselves, the user's ` +
+        `name is **${name}** and ONLY ${name}. NEVER invent another ` +
+        `name for the user, even if other names appear in the ` +
+        `conversation - those other names belong to other people the ` +
+        `user knows. If the conversation mentions a friend named ` +
+        `Maya, an article about the user does not call the user ` +
+        `Maya; it calls the user ${name}. If you are uncertain ` +
+        `whether the article subject IS the user, default to using ` +
+        `the literal name from context (Maya, Elliot, etc.) for that ` +
+        `subject and reserve "${name}" for explicit references to ` +
+        `the user. A natural pronoun ("they") is also fine where the ` +
+        `prose flows better than repeating the name.`
+    );
+  } else {
+    lines.push(
+      "The user has not supplied a name in Settings. When an article " +
+        "refers to the user themselves, use a natural pronoun " +
+        "(\"they\") or the phrase \"the user\". NEVER invent a name " +
+        "for the user, even if other names appear in the conversation " +
+        "- those names belong to other people the user knows."
+    );
   }
-  if (profile.location && profile.location.trim().length > 0) {
-    lines.push(`Their location is ${profile.location.trim()}.`);
+  if (location) {
+    lines.push(`Their location is ${location}.`);
   }
-  if (lines.length === 0) return '';
-  lines.push(
-    "When an article refers to the user themselves, prefer their name " +
-      "(or a natural pronoun if their name is a single first name) over " +
-      "the generic phrase \"the user\"."
-  );
-  return ['**About the user:**', '', ...lines].join('\n');
+  return lines.join('\n');
 }
 
 export function buildWikiAutonomousPrompt(
@@ -245,6 +295,14 @@ const WIKI_AUTONOMOUS_BODY_LINES = [
   'conversation above, in existing articles you read via wiki_search,',
   "or in memories you read via memory_search. Don't import outside",
   'knowledge.',
+  '',
+  '**Do not fabricate names** - especially names for the user. The',
+  '"About the user" block above (when present) is the single source',
+  'of truth for what to call the user. Other names that appear in the',
+  'conversation belong to other people the user knows; never assign',
+  'them to the user. If you cannot tell who the article subject is,',
+  'use the literal name as it appears in the conversation rather than',
+  'inventing one.',
   '',
   '**Be conservative.** Fewer high-signal articles beat many noisy',
   'ones. The bar for updating is "the conversation added durable',
