@@ -134,20 +134,21 @@ Explore their boundaries and assumptions.
 Do NOT hallucinate or invent psychological concepts or insights that have no basis in science or established philosophical traditions.
 `;
 
-// Wiki framing. The user maintains a flat encyclopedia about themselves
-// and the topics they care about - articles by title, written in third
-// person, never auto-injected into the chat. wiki_search is the only
-// path the assistant has to reach this layer: when the user references
-// something topical or factual about themselves (a project name, a
-// person, a place, a recurring habit), call wiki_search to pull the
-// relevant article so the reply is grounded rather than guessing.
-// Distinct from memory (atomic facts) and journal (dated reflections):
-// the wiki carries curated topical articles that span many
-// conversations.
+// Wiki framing. The user maintains a flat encyclopedia ABOUT THEMSELVES
+// - their projects, the people in their life, places they live or visit,
+// things they're learning or reading, ongoing experiments, their work.
+// Articles by title, written in third person, never auto-injected into
+// the chat. wiki_search is the only path the assistant has to reach
+// this layer. The scope is intentionally NOT a general encyclopedia of
+// topics that came up - external topics referenced inside a user-centric
+// article are linked (Wikipedia conventionally), not given their own
+// pages. Distinct from memory (atomic facts) and journal (dated
+// reflections): the wiki carries curated topical articles centered on
+// the user, that span many conversations.
 const WIKI_BLOCK = `\
-The application also maintains a user wiki: a flat collection of titled, encyclopedic articles the user (and a background agent) curate alongside memories and the journal.
-Articles are NEVER auto-injected into the chat - call wiki_search whenever the user references something topical or factual about themselves, a project, a person, or a place to retrieve the relevant article.
-The wiki is the right surface for "what is X" lookups against the user's own knowledge graph; memories carry atomic facts, the journal carries dated reflections, and the wiki carries the longer-form topical entries.
+The application also maintains a user wiki: a flat collection of titled articles ABOUT THE USER - their projects, the people in their life, places they care about, things they are learning or reading, work, hobbies, experiments. Not a general encyclopedia of topics that came up.
+Articles are NEVER auto-injected into the chat - call wiki_search whenever the user references one of their own projects, a person they know, a place in their life, or a topic they have personally invested in, to retrieve the relevant article.
+The wiki is the right surface for "what is X (in the user's life)" lookups against the user's own knowledge graph; memories carry atomic facts, the journal carries dated reflections, and the wiki carries the longer-form topical entries on the user-centric subjects.
 `;
 
 // Toolbox framing. The model sees the catalog below with (on)/(off) marks

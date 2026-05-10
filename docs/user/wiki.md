@@ -1,8 +1,9 @@
 # Wiki
 
-The Wiki is a flat encyclopedia about you. Every entry is a titled
-article in encyclopedic third-person prose - about a project, a person
-in your life, a place, an interest, a recurring situation. There's no
+The Wiki is a flat encyclopedia **about you** - your projects, the
+people in your life, places you live or care about, things you're
+learning or reading, work, hobbies, experiments. Every entry is a
+titled article in encyclopedic third-person prose. There's no
 nesting; everything sits at the same level and the drawer lists
 articles alphabetically.
 
@@ -12,6 +13,47 @@ about how a conversation went. Wiki articles are the longer-form
 topical pages that cover what something IS - "the recipe project",
 "Maya", "Lisbon trip planning". An article sits across many
 conversations.
+
+## Scope: about you, not about the world
+
+The wiki is deliberately user-centric. Articles describe things in
+your life. They do **not** describe generic topics that came up in
+conversation. So:
+
+**In scope** - article-worthy when discussed:
+
+- Projects you are building, planning, or running.
+- People in your life - family, friends, colleagues, contacts.
+- Places you live, work, travel to, or care about.
+- Things you are learning or reading - books, courses, papers,
+  skills you are practising.
+- Habits and experiments you are tracking - a running streak,
+  a sourdough starter, an elimination diet.
+- Your career, current job, prior roles, ongoing work.
+- Hobbies and interests you have invested time in.
+
+**Out of scope** - even if the conversation discussed them at length:
+
+- General technical concepts, libraries, protocols, or frameworks
+  not specific to one of your projects.
+- World-knowledge topics: historical events, scientific concepts,
+  geography.
+- Public people you don't know personally - celebrities, authors of
+  books you're reading, historical figures.
+- News, current events.
+- Tutorials and one-off help interactions.
+
+When an external topic gets mentioned inside a user-centric article
+(say, you're building an app whose name references a 1980s
+file-transfer protocol), the agent will add a Markdown link to a
+public source like Wikipedia rather than creating a separate
+article. External topics are linked, never given their own pages.
+
+Both the per-conversation agent and the librarian enforce this
+scope. The librarian will delete out-of-scope articles it finds on
+its periodic sweep, so any encyclopedic-but-not-about-you articles
+that slipped through earlier should disappear over the next 12 to
+24 hours.
 
 ## Opening the Wiki
 
