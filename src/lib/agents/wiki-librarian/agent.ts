@@ -24,7 +24,10 @@ import { wikiLibrarianToolbox } from '../../tools/wiki_librarian_toolbox';
 import { runHeadlessToolLoop } from '../../tools/run';
 import { agentModel } from '../../models';
 import { createLogger } from '../../logger.svelte';
-import { buildWikiLibrarianPrompt } from './prompt';
+import {
+  buildWikiLibrarianPrompt,
+  type WikiLibrarianUserProfile,
+} from './prompt';
 import {
   LIBRARIAN_EXCERPT_CHARS,
   type WikiLibrarianInput,
@@ -60,6 +63,12 @@ export class WikiLibrarianAgent
   readonly name = 'wiki-librarian';
   readonly model: string;
   readonly toolbox = wikiLibrarianToolbox;
+  /**
+   * Mutable user profile from Settings -> AI -> About you. Read on
+   * every `run()` so the worker can live-update it without a
+   * restart. Null suppresses the prompt's "About the user" block.
+   */
+  private userProfile: WikiLibrarianUserProfile | null = null;
 
   constructor(
     private venice: VeniceClient,
@@ -69,9 +78,23 @@ export class WikiLibrarianAgent
      * `wikiLibrarian` slot (currently deepseek-v4-flash). Useful
      * for tests.
      */
-    modelId?: string
+    modelId?: string,
+    /**
+     * Initial user profile. Worker passes from its StartMessage.
+     */
+    userProfile?: WikiLibrarianUserProfile | null
   ) {
     this.model = modelId ?? agentModel('wikiLibrarian').id;
+    this.userProfile = userProfile ?? null;
+  }
+
+  /**
+   * Live-update the profile fields. Called by the worker on a
+   * `{type:'profile'}` postMessage so a Settings edit reaches the
+   * next cycle without a restart.
+   */
+  setUserProfile(profile: WikiLibrarianUserProfile | null): void {
+    this.userProfile = profile;
   }
 
   async run(
@@ -90,7 +113,10 @@ export class WikiLibrarianAgent
 
     try {
       const articleList = renderArticleList(articles);
-      const promptText = buildWikiLibrarianPrompt({ articleList });
+      const promptText = buildWikiLibrarianPrompt({
+        articleList,
+        userProfile: this.userProfile,
+      });
 
       log.info(
         `librarian reviewing ${articles.length} article(s)`

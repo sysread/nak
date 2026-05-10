@@ -38,6 +38,14 @@ interface StartMessage {
   holderId: string;
   /** Min seconds between successive librarian runs (across devices). */
   minIntervalSeconds: number;
+  /**
+   * User profile from Settings -> AI -> About you. Empty strings
+   * are the "not set" sentinels; the agent's prompt builder
+   * suppresses the block when both are empty. Live-updated via
+   * the `profile` inbound message.
+   */
+  userName: string;
+  userLocation: string;
   leaseTtlSeconds: number;
   leaseHeartbeatMs: number;
   leasePollMs: number;
@@ -55,7 +63,17 @@ interface SessionMessage {
   refreshToken: string;
 }
 
-type InboundMessage = StartMessage | StopMessage | SessionMessage;
+interface ProfileMessage {
+  type: 'profile';
+  userName: string;
+  userLocation: string;
+}
+
+type InboundMessage =
+  | StartMessage
+  | StopMessage
+  | SessionMessage
+  | ProfileMessage;
 
 interface LogOutbound {
   type: 'log';
@@ -75,6 +93,20 @@ function post(msg: LogOutbound | ProgressOutbound): void {
 }
 
 let currentClient: SupabaseClient | null = null;
+let activeAgent: WikiLibrarianAgent | null = null;
+
+function buildProfile(
+  name: string,
+  location: string
+): { name: string | null; location: string | null } | null {
+  const n = name.trim();
+  const l = location.trim();
+  if (n.length === 0 && l.length === 0) return null;
+  return {
+    name: n.length > 0 ? n : null,
+    location: l.length > 0 ? l : null,
+  };
+}
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   if (ms <= 0) return Promise.resolve();
@@ -134,8 +166,10 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
   const agent = new WikiLibrarianAgent(
     venice,
     supabase,
-    msg.wikiLibrarianModel
+    msg.wikiLibrarianModel,
+    buildProfile(msg.userName, msg.userLocation)
   );
+  activeAgent = agent;
 
   const napConfig: NapConfig = {
     leasePollMs: msg.leasePollMs,
@@ -168,6 +202,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     }
   } finally {
     currentClient = null;
+    activeAgent = null;
     await coordinator.release();
   }
 }
@@ -204,6 +239,9 @@ workerGlobal.addEventListener('message', (evt: MessageEvent<InboundMessage>) => 
           message: `forwarded setSession failed: ${err.message}`,
         });
       });
+  } else if (msg.type === 'profile') {
+    if (!activeAgent) return;
+    activeAgent.setUserProfile(buildProfile(msg.userName, msg.userLocation));
   }
 });
 

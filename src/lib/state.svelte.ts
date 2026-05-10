@@ -310,6 +310,11 @@ export function setNotifyOnComplete(enabled: boolean): void {
 export function setUserName(name: string): void {
   app.userName = name;
   journal.whenLoaded((m) => m.setProfile(name, app.userLocation));
+  // Forward to both wiki workers so a Settings edit reaches their
+  // next cycle without a restart. Both share the same profile
+  // shape; both run independently of journal.
+  wiki.whenLoaded((m) => m.setProfile(name, app.userLocation));
+  wikiLibrarian.whenLoaded((m) => m.setProfile(name, app.userLocation));
 }
 
 /**
@@ -321,6 +326,8 @@ export function setUserName(name: string): void {
 export function setUserLocation(location: string): void {
   app.userLocation = location;
   journal.whenLoaded((m) => m.setProfile(app.userName, location));
+  wiki.whenLoaded((m) => m.setProfile(app.userName, location));
+  wikiLibrarian.whenLoaded((m) => m.setProfile(app.userName, location));
 }
 
 /**
@@ -377,6 +384,8 @@ export function setWikiAutomaticEnabled(enabled: boolean): void {
       supabase: app.supabase,
       config: app.config,
       timezone: app.journalTimezone || null,
+      userName: app.userName,
+      userLocation: app.userLocation,
     });
   } else {
     wiki.stop();
@@ -395,6 +404,8 @@ export function setWikiLibrarianEnabled(enabled: boolean): void {
     wikiLibrarian.start({
       supabase: app.supabase,
       config: app.config,
+      userName: app.userName,
+      userLocation: app.userLocation,
     });
   } else {
     wikiLibrarian.stop();
@@ -719,12 +730,16 @@ function startBackgroundWorkers(config: AppConfig): void {
       supabase: app.supabase,
       config,
       timezone: app.journalTimezone || null,
+      userName: app.userName,
+      userLocation: app.userLocation,
     });
   }
   if (app.wikiLibrarianEnabled) {
     wikiLibrarian.start({
       supabase: app.supabase,
       config,
+      userName: app.userName,
+      userLocation: app.userLocation,
     });
   }
 }

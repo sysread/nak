@@ -21,7 +21,11 @@
  *   - Voice: encyclopedic third-person, present tense, neutral.
  *     Refer to the subject directly (their first name, the project
  *     name) rather than "the user" so articles read as encyclopedia
- *     entries rather than session-scoped notes.
+ *     entries rather than session-scoped notes. When the user has
+ *     filled in Settings -> AI -> About you, the rendered profile
+ *     block tells the model their name + location so articles
+ *     about the user themselves can use the actual name rather
+ *     than the generic phrase.
  *   - **User-centric scope.** Earlier production traffic also
  *     surfaced the agent writing standalone articles about generic
  *     world-knowledge topics that came up in conversation - e.g.
@@ -60,12 +64,64 @@
  *     exchange may produce zero wiki updates - that is a correct
  *     outcome, not a failure.
  */
-export const WIKI_AUTONOMOUS_PROMPT = [
-  "You've just finished the conversation above. Now step out of that",
-  "role. You're not talking to the user anymore - nobody will read this",
-  'reply. Your job is to maintain the long-term wiki the user keeps',
-  'about themselves and the topics they care about, using the wiki tools',
-  'below.',
+/**
+ * The user's name + location from Settings -> AI -> About you. Both
+ * fields optional; null means "not set". Same shape the journal agent
+ * uses (`JournalUserProfile`); duplicated here rather than imported so
+ * the wiki agent doesn't reach sideways into the journal module's
+ * surface for a two-field interface that's stable.
+ */
+export interface WikiUserProfile {
+  name: string | null;
+  location: string | null;
+}
+
+/**
+ * Render the "About the user" block embedded in both autonomous and
+ * librarian prompts. Returns the empty string when the profile is null
+ * or both fields are empty - a fresh account that hasn't filled the
+ * Settings form pays zero tokens for the section. Matches the
+ * journal's `buildUserProfileNote` shape so the voice stays consistent
+ * across surfaces.
+ */
+export function renderUserProfileBlock(
+  profile: WikiUserProfile | null
+): string {
+  if (!profile) return '';
+  const lines: string[] = [];
+  if (profile.name && profile.name.trim().length > 0) {
+    lines.push(`The user's name is ${profile.name.trim()}.`);
+  }
+  if (profile.location && profile.location.trim().length > 0) {
+    lines.push(`Their location is ${profile.location.trim()}.`);
+  }
+  if (lines.length === 0) return '';
+  lines.push(
+    "When an article refers to the user themselves, prefer their name " +
+      "(or a natural pronoun if their name is a single first name) over " +
+      "the generic phrase \"the user\"."
+  );
+  return ['**About the user:**', '', ...lines].join('\n');
+}
+
+export function buildWikiAutonomousPrompt(
+  opts: { userProfile: WikiUserProfile | null } = { userProfile: null }
+): string {
+  const profileBlock = renderUserProfileBlock(opts.userProfile);
+  const lines: string[] = [
+    "You've just finished the conversation above. Now step out of that",
+    "role. You're not talking to the user anymore - nobody will read this",
+    'reply. Your job is to maintain the long-term wiki the user keeps',
+    'about themselves and the topics they care about, using the wiki tools',
+    'below.',
+  ];
+  if (profileBlock.length > 0) {
+    lines.push('', profileBlock);
+  }
+  return [...lines, ...WIKI_AUTONOMOUS_BODY_LINES].join('\n');
+}
+
+const WIKI_AUTONOMOUS_BODY_LINES = [
   '',
   'The wiki is a flat collection of titled articles (no nesting). Each',
   'article is encyclopedic third-person prose about one topic - a',
@@ -176,9 +232,19 @@ export const WIKI_AUTONOMOUS_PROMPT = [
   '   on the basis of "the user said something different today"',
   '   alone - in that case, update.',
   '',
+  '**Use memory_search to ground article content in established',
+  'facts.** The reflection agent extracts atomic facts about the user',
+  '(people in their life, projects they work on, preferences,',
+  'constraints) into the memory store on every conversation. Before',
+  "writing a new article or expanding an existing one about a person",
+  "or project, run memory_search for that subject - it often returns",
+  "exactly the durable facts you should be folding in. memory_search",
+  "is read-only here; never write to memory.",
+  '',
   '**Do not fabricate.** Only assert facts that appear in the',
-  'conversation above or in existing articles you read via',
-  "wiki_search. Don't import outside knowledge.",
+  'conversation above, in existing articles you read via wiki_search,',
+  "or in memories you read via memory_search. Don't import outside",
+  'knowledge.',
   '',
   '**Be conservative.** Fewer high-signal articles beat many noisy',
   'ones. The bar for updating is "the conversation added durable',
@@ -188,7 +254,7 @@ export const WIKI_AUTONOMOUS_PROMPT = [
   '',
   'When you have nothing more to write, reply with a single word. The',
   'word is discarded - only the tool calls matter.',
-].join('\n');
+];
 
 /**
  * Manual-agent ("ask agent to update this article") system prompt.
@@ -204,9 +270,21 @@ export const WIKI_AUTONOMOUS_PROMPT = [
  * bearing here too - "rewrite for tone" should keep facts; "fix the
  * date in paragraph 2" should patch only that.
  */
-export const WIKI_MANUAL_PROMPT = [
-  'You are editing one article in the user\'s personal wiki, in',
-  'response to explicit instructions from them.',
+export function buildWikiManualPrompt(
+  opts: { userProfile: WikiUserProfile | null } = { userProfile: null }
+): string {
+  const profileBlock = renderUserProfileBlock(opts.userProfile);
+  const lines: string[] = [
+    'You are editing one article in the user\'s personal wiki, in',
+    'response to explicit instructions from them.',
+  ];
+  if (profileBlock.length > 0) {
+    lines.push('', profileBlock);
+  }
+  return [...lines, ...WIKI_MANUAL_BODY_LINES].join('\n');
+}
+
+const WIKI_MANUAL_BODY_LINES = [
   '',
   '**Voice**: encyclopedic, third-person, present tense, neutral - the',
   'same register as a Wikipedia lead paragraph. No first or second',
@@ -255,4 +333,4 @@ export const WIKI_MANUAL_PROMPT = [
   'On `action: "update"`, include the FULL final article in `content`,',
   'not a diff or a patch. The UI will preview your output and the user',
   'will accept or reject.',
-].join('\n');
+];

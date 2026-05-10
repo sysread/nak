@@ -31,7 +31,11 @@ import { runHeadlessToolLoop } from '../../tools/run';
 import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
 import { agentModel } from '../../models';
 import { createLogger } from '../../logger.svelte';
-import { WIKI_AUTONOMOUS_PROMPT, WIKI_MANUAL_PROMPT } from './prompt';
+import {
+  buildWikiAutonomousPrompt,
+  buildWikiManualPrompt,
+  type WikiUserProfile,
+} from './prompt';
 import type { WikiInput, WikiOutput } from './types';
 
 const log = createLogger('wiki-worker');
@@ -119,6 +123,14 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
   readonly name = 'wiki';
   readonly model: string;
   readonly toolbox = wikiToolbox;
+  /**
+   * Mutable user profile (Settings -> AI -> About you). Read on
+   * every `run()` / `updateOne()` so the worker can live-update it
+   * via `setUserProfile` without a restart - mirrors the journal
+   * agent's pattern. Null (or both fields empty) suppresses the
+   * "About the user" block entirely.
+   */
+  private userProfile: WikiUserProfile | null = null;
 
   constructor(
     private venice: VeniceClient,
@@ -127,9 +139,27 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
      * Optional model override. Defaults to the registry's `wiki`
      * slot (currently deepseek-v4-flash). Useful for tests.
      */
-    modelId?: string
+    modelId?: string,
+    /**
+     * Initial user profile. The worker passes this from its
+     * StartMessage; the per-article manual flow (called on the
+     * main thread) passes the values it just read off
+     * `app.userName` / `app.userLocation`. Null keeps the prompt's
+     * "About the user" block off.
+     */
+    userProfile?: WikiUserProfile | null
   ) {
     this.model = modelId ?? agentModel('wiki').id;
+    this.userProfile = userProfile ?? null;
+  }
+
+  /**
+   * Live-update the profile fields. Called by the worker on a
+   * `{type:'profile'}` postMessage so a Settings edit reaches the
+   * next cycle without a restart.
+   */
+  setUserProfile(profile: WikiUserProfile | null): void {
+    this.userProfile = profile;
   }
 
   async run(
@@ -164,7 +194,10 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
       }
 
       const convo: VeniceMessage[] = slice.map(messageToVenice);
-      convo.push({ role: 'user', content: WIKI_AUTONOMOUS_PROMPT });
+      convo.push({
+        role: 'user',
+        content: buildWikiAutonomousPrompt({ userProfile: this.userProfile }),
+      });
 
       log.info(
         `asking model about thread ${req.input.threadId} ` +
@@ -248,7 +281,10 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
     ].join('\n');
 
     const convo: VeniceMessage[] = [
-      { role: 'system', content: WIKI_MANUAL_PROMPT },
+      {
+        role: 'system',
+        content: buildWikiManualPrompt({ userProfile: this.userProfile }),
+      },
       { role: 'user', content: userTurn },
     ];
 

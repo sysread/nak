@@ -28,11 +28,42 @@
  * register, same "do not fabricate / do not discard facts" rules.
  */
 
+/**
+ * Same shape the per-conversation wiki agent uses; duplicated here
+ * rather than imported because the modules don't otherwise depend
+ * on each other and the interface is two stable fields.
+ */
+export interface WikiLibrarianUserProfile {
+  name: string | null;
+  location: string | null;
+}
+
+function renderUserProfileBlock(
+  profile: WikiLibrarianUserProfile | null
+): string {
+  if (!profile) return '';
+  const lines: string[] = [];
+  if (profile.name && profile.name.trim().length > 0) {
+    lines.push(`The user's name is ${profile.name.trim()}.`);
+  }
+  if (profile.location && profile.location.trim().length > 0) {
+    lines.push(`Their location is ${profile.location.trim()}.`);
+  }
+  if (lines.length === 0) return '';
+  lines.push(
+    "Use the user's name when an article refers to them as the subject, " +
+      "rather than the generic phrase \"the user\"."
+  );
+  return ['**About the user:**', '', ...lines].join('\n');
+}
+
 export function buildWikiLibrarianPrompt(opts: {
   articleList: string;
+  userProfile?: WikiLibrarianUserProfile | null;
 }): string {
   const { articleList } = opts;
-  return [
+  const profileBlock = renderUserProfileBlock(opts.userProfile ?? null);
+  const intro: string[] = [
     "You are reviewing the user's personal wiki as the librarian. The",
     'list below is every article in the wiki right now, by title, with',
     'a short excerpt of each. Your job is to make the wiki more',
@@ -40,6 +71,12 @@ export function buildWikiLibrarianPrompt(opts: {
     'consolidating duplicates, removing out-of-scope articles, fact-',
     'checking against conversation history, and tightening the',
     'boundaries between articles that overlap.',
+  ];
+  if (profileBlock.length > 0) {
+    intro.push('', profileBlock);
+  }
+  return [
+    ...intro,
     '',
     'Articles in the wiki:',
     '',
@@ -70,6 +107,13 @@ export function buildWikiLibrarianPrompt(opts: {
     '  when an article makes a specific factual assertion that you',
     '  want to corroborate, or when you suspect two articles cover',
     '  the same conversation thread under different titles.',
+    '- `memory_search` - read the user\'s atomic-fact memory store',
+    '  (the same store the chat-side memory_search hits). Useful as',
+    '  a second corroboration source for fact-checking - if an',
+    "  article says \"Maya works at Foo\" and memory_search returns a",
+    "  memory \"Maya works at Bar\", that's a contradiction worth",
+    '  resolving. Read-only here; the librarian does not write to',
+    '  memory.',
     '- `wiki_update` - rewrite an article in place. Preserve facts',
     '  that are still accurate; integrate facts from a duplicate',
     '  article you intend to delete; correct stale information you',

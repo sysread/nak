@@ -81,12 +81,16 @@ Tools:
   `wiki_update.{schema.,}ts`, `wiki_delete.{schema.,}ts` - the
   agent-only write tools.
 - `src/lib/tools/wiki_toolbox.ts` - the per-conversation agent's
-  toolbox; bundles search + create + update + delete with lazy-
-  loaded schemas. Parallel to `memory_toolbox.ts`.
+  toolbox; bundles wiki search/create/update/delete plus
+  read-only `memory_search` so the agent can ground article
+  content in atomic facts the reflection agent has already
+  extracted (people, projects, preferences). Lazy-loaded
+  schemas. Parallel to `memory_toolbox.ts`.
 - `src/lib/tools/wiki_librarian_toolbox.ts` - the librarian's
   toolbox; bundles wiki_search + wiki_update + wiki_delete +
-  conversation_search. **No wiki_create** - the librarian
-  consolidates rather than invents.
+  conversation_search + memory_search. **No wiki_create** and
+  no memory writes - the librarian consolidates / fact-checks
+  read-only.
 
 Embeddings:
 
@@ -98,13 +102,20 @@ Embeddings:
 Per-conversation autonomous agent:
 
 - `src/lib/agents/wiki/types.ts` - `WikiInput`, `WikiOutput`.
-- `src/lib/agents/wiki/prompt.ts` - `WIKI_AUTONOMOUS_PROMPT` and
-  `WIKI_MANUAL_PROMPT`. The autonomous prompt biases hard toward
-  "update over create" - the historical failure mode was one new
-  article per conversation; the prompt opens with an explicit
-  rule that update is the default and create is rare, and
-  workflow step 1 mandates at least two different
-  wiki_search angles before considering wiki_create.
+- `src/lib/agents/wiki/prompt.ts` -
+  `buildWikiAutonomousPrompt({ userProfile })` and
+  `buildWikiManualPrompt({ userProfile })`, plus the shared
+  `WikiUserProfile` type. Both builders fold an "About the user"
+  block into the prompt when the profile carries a name or
+  location (Settings -> AI -> About you). The autonomous prompt
+  biases hard toward "update over create" - the historical
+  failure mode was one new article per conversation; the prompt
+  opens with an explicit rule that update is the default and
+  create is rare, and workflow step 1 mandates at least two
+  different wiki_search angles before considering wiki_create.
+  Both prompts also encourage `memory_search` to ground article
+  content in atomic facts the reflection agent has already
+  extracted.
 - `src/lib/agents/wiki/agent.ts` - the `WikiAgent` class. Two
   entry points: `run()` for the worker path and `updateOne()` for
   the main-thread per-article manual flow.
@@ -187,13 +198,18 @@ Docs:
 
 ## Entry points
 
-- `wikiManager.start({ supabase, config, timezone })` - called
-  from `state.svelte.ts:startBackgroundWorkers` when
+- `wikiManager.start({ supabase, config, timezone, userName,
+  userLocation })` - called from
+  `state.svelte.ts:startBackgroundWorkers` when
   `app.wikiAutomaticEnabled === true`. Spawns the worker
-  inside the `nak:wiki-worker` cross-tab Web Lock.
+  inside the `nak:wiki-worker` cross-tab Web Lock. Profile
+  fields are forwarded to the agent and live-updated on
+  Settings edits via `setProfile()`.
 - `WikiAgent.run({ input: { threadId, terminalMsgId }, ... })`
   - the worker's per-cycle entry. Slices thread history at
-  `terminalMsgId`, appends `WIKI_AUTONOMOUS_PROMPT` as the
+  `terminalMsgId`, appends the user-turn rendered by
+  `buildWikiAutonomousPrompt` (with the agent's current
+  profile) as the
   final user turn, runs `runHeadlessToolLoop` against
   `wikiToolbox`. Side effects (the `wiki_*` tool calls) ARE
   the output; final text is discarded.
