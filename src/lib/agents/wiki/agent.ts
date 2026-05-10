@@ -216,7 +216,17 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
           threadId: req.input.threadId,
         },
         signal,
-        reasoningEffort: 'low',
+        // Bumped from 'low' to 'medium' after production traffic
+        // showed the agent surface-pattern-matching its way through
+        // conversations - extracting every named entity into a
+        // separate article (Kermit protocol, NAK signal, ...) instead
+        // of stopping to ask "what aspect of the user does this
+        // conversation actually reveal?". Medium gives the model
+        // budget to apply the prime-directive framing before
+        // dispatching tool calls. The manual updateOne path stays
+        // on 'low' - it's a single-completion JSON shape with the
+        // user already directing the change.
+        reasoningEffort: 'medium',
       });
 
       return {

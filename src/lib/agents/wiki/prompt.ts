@@ -41,22 +41,33 @@
  *     The body's "Do not fabricate" section also gains an explicit
  *     "do not fabricate names" line that points back to the profile
  *     block as the single source of truth.
- *   - **User-centric scope.** Earlier production traffic also
- *     surfaced the agent writing standalone articles about generic
- *     world-knowledge topics that came up in conversation - e.g.
- *     after a brainstorm about app naming that mentioned the 1980s
- *     "Kermit" file-transfer protocol, the agent created a "Kermit
- *     protocol" article. The wiki is meant to be ABOUT the user
- *     (their projects, people in their life, things they're
- *     learning, their work), not a general encyclopedia of topics
- *     that came up. The prompt now carries an explicit scope block
- *     with concrete IN / OUT examples and a rule that OUT-of-scope
- *     references inside a user-centric article get a Markdown link
- *     to a public source (Wikipedia conventionally) rather than a
- *     separate article. Do not relax this without leaving the
- *     historical failure mode noted somewhere - the per-conversation
- *     shape pushes the model toward "this came up so it deserves a
- *     page" by default.
+ *   - **Prime directive: user-centric subject identification, NOT
+ *     topic extraction.** The Kermit case re-occurred even after the
+ *     scope rule and IN/OUT lists were in place: an app-naming
+ *     brainstorm that mentioned the Kermit protocol still produced
+ *     a "Kermit (protocol)" article, with no Nak article. The
+ *     failure pattern is the agent reading the conversation as a
+ *     bag of topics (Nak, Kermit, NAK signal, Henson) and minting
+ *     an article for each instead of asking "what aspect of THE
+ *     USER did this conversation reveal?". The prompt now opens
+ *     with that question as the prime directive and includes a
+ *     concrete worked example (Kermit case + correct output), plus
+ *     a "sterility test" the agent can run before wiki_create
+ *     ("if I delete every reference to the user from this draft,
+ *     what's left? if it's a self-contained Wikipedia-style entry,
+ *     the article is sterile - do not create"). Most conversations
+ *     have ONE user-centric subject; if the agent is listing
+ *     multiple candidate articles, it's almost certainly topic-
+ *     extracting and should re-read.
+ *   - **User-centric scope.** Beyond the prime directive, the
+ *     prompt also carries explicit IN / OUT examples and a rule
+ *     that OUT-of-scope references inside a user-centric article
+ *     get a Markdown link to a public source (Wikipedia
+ *     conventionally) rather than a separate article. Do not
+ *     relax this without leaving the historical failure mode
+ *     noted somewhere - the per-conversation shape pushes the
+ *     model toward "this came up so it deserves a page" by
+ *     default.
  *   - "Update is the default; create is rare." Earlier production
  *     traffic also showed the agent generating one new article per
  *     conversation - the per-thread shape biased it toward
@@ -179,6 +190,50 @@ const WIKI_AUTONOMOUS_BODY_LINES = [
   'situation. Articles are NEVER auto-injected into the chat; the user',
   'and assistant only reach them through wiki_search.',
   '',
+  '**Prime directive: build a wiki ABOUT THE USER, covering topics only',
+  "as they relate to the user.** Your task is NOT to extract a list of",
+  'topics from the conversation and write an article for each. Your',
+  'task is to ask "what aspect of THE USER did this conversation reveal',
+  'or develop?" and update the wiki to reflect THAT.',
+  '',
+  'Concrete worked example - the case to learn from:',
+  '',
+  '  The conversation was a brainstorm session for the logo of an app',
+  '  the user is building. During the brainstorm the user mentioned',
+  '  that the app is named "Nak" because of older file-transfer',
+  '  protocols that used a NAK signal, like Kermit, which itself was',
+  '  named after Kermit the Frog.',
+  '',
+  '  WRONG (topic-extraction failure mode): create separate articles',
+  '  for "Kermit (protocol)", "NAK signal", "Henson Associates", etc.',
+  '  None of those are about the user. The Kermit protocol is a',
+  '  generic encyclopedia topic regardless of the conversation that',
+  "  surfaced it. It is sterile of information about the user.",
+  '',
+  '  RIGHT: there is ONE user-centric subject in this conversation -',
+  '  "Nak", the app the user is building. The article belongs there.',
+  '  The Kermit-protocol etymology is a useful detail INSIDE the Nak',
+  '  article: "Nak takes its name from the NAK (negative-acknowledge)',
+  '  signal used in older file-transfer protocols such as',
+  '  [Kermit](https://en.wikipedia.org/wiki/Kermit_(protocol))." That',
+  '  is the entire correct output for this conversation: one wiki_',
+  '  search for "Nak" / "the app", then either wiki_update on an',
+  '  existing Nak article or wiki_create a new one with the brainstorm',
+  '  details and a Markdown link out for Kermit.',
+  '',
+  'Most conversations have ONE user-centric subject (or zero, if it',
+  'was generic Q&A about something external). A single conversation',
+  'should never produce more than one or two articles, and most',
+  'conversations produce zero. If you find yourself listing multiple',
+  'candidate articles, you are probably topic-extracting rather than',
+  'identifying-the-subject - stop, re-read the conversation, and ask',
+  'what user-centric subject (singular) it was actually about.',
+  '',
+  'If you cannot identify a user-centric subject, produce zero edits',
+  'and stop. That is the correct outcome for tutorials, generic',
+  'technical Q&A, news discussions, debugging unrelated libraries,',
+  'and chitchat.',
+  '',
   '**Scope: this wiki is about the user, not the world.** Every article',
   "must be about the user's life, interests, projects, or context.",
   'External topics that came up in conversation but have no specific',
@@ -210,6 +265,16 @@ const WIKI_AUTONOMOUS_BODY_LINES = [
   "- News, current events, things in the wider world.",
   "- Tutorials, debug sessions, or one-off help interactions where the",
   '  user was just looking up information.',
+  '',
+  '**A useful sterility test before wiki_create:** "If I delete every',
+  'reference to the user from this draft article, what is left?" If',
+  'what is left is a self-contained Wikipedia-style entry on a generic',
+  'topic, the article is sterile of user information and should NOT',
+  'be created. The Kermit-protocol case fails this test: a generic',
+  'encyclopedia entry on a 1981 file-transfer protocol survives the',
+  "deletion. The Nak-app case passes: removing the user's involvement",
+  'leaves nothing - the article only exists because the user is',
+  'building it.',
   '',
   'When an OUT-of-scope topic comes up INSIDE a user-centric article',
   '(e.g. the conversation mentioned that the app being built is named',
