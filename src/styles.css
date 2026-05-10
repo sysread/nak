@@ -2973,17 +2973,21 @@ h1 {
    <Scanner> component (see src/components/Scanner.svelte) for any short-
    lived "working on it" state that has no useful progress signal yet.
 
-   Five dots each pulse (small/dim → large/bright → small/dim) on a
-   shared 1.4s cycle with staggered delays. `animation-direction:
+   Five vertical bars each pulse (dim/short → bright/full → dim/short) on
+   a shared 1.4s cycle with staggered delays. `animation-direction:
    alternate` reverses the timeline each cycle, so the peak walks
-   left→right→left→right, producing the bounce. */
+   left→right→left→right, producing the bounce. The bar shape (tall and
+   narrow, near-square corners) matches the segmented red grille on the
+   front of K.I.T.T. in the show; the earlier circular-dot rendering was
+   the same animation but read as a row of LEDs rather than the original
+   prop. */
 .scanner {
   display: inline-flex;
   align-items: center;
-  gap: 0.3em;
+  gap: 0.2em;
   /* `--scanner-scale` is set inline by the component to let callers
      resize without touching CSS. Default 1 inherits the caller's font
-     size so the dots feel proportional wherever it lands. */
+     size so the bars feel proportional wherever it lands. */
   font-size: calc(1em * var(--scanner-scale, 1));
   line-height: 1;
   color: #ff3b3b;
@@ -2994,12 +2998,18 @@ h1 {
 
 .scanner > span:not(.sr-only) {
   display: inline-block;
-  width: 0.5em;
-  height: 0.5em;
-  border-radius: 50%;
+  width: 0.28em;
+  height: 0.9em;
+  /* Subtle rounding only - the show's segments are flat-edged
+     rectangles, not pill shapes. */
+  border-radius: 0.06em;
   background: currentColor;
   box-shadow: 0 0 0.5em currentColor;
-  transform: scale(0.3);
+  /* Anchor the shrink to the bottom so the bars look like they're
+     growing up from a baseline rather than collapsing toward a centre
+     point - closer to the show's segment-by-segment ignition. */
+  transform-origin: 50% 100%;
+  transform: scaleY(0.35);
   opacity: 0.25;
   animation: knight-pulse 1.4s ease-in-out infinite alternate;
 }
@@ -3014,14 +3024,14 @@ h1 {
 .scanner > span:not(.sr-only):nth-child(5) { animation-delay: 0.7s; }
 
 @keyframes knight-pulse {
-  0%   { transform: scale(0.3); opacity: 0.2; }
-  100% { transform: scale(1.0); opacity: 1; }
+  0%   { transform: scaleY(0.35); opacity: 0.2; }
+  100% { transform: scaleY(1.0); opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .scanner > span:not(.sr-only) {
     animation: none;
-    transform: scale(0.8);
+    transform: scaleY(0.8);
     opacity: 0.6;
   }
 }

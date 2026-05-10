@@ -614,7 +614,7 @@
           KITT-style Scanner stands in for the regenerating entry until
           the proposed replacement arrives. Same component the chat
           composer uses pre-first-token. Wrapper flex-centers it so the
-          dots sit in the middle of the card body rather than reading as
+          bars sit in the middle of the card body rather than reading as
           a stranded artifact in the top-left.
         -->
         <div class="journal-card-body journal-card-body-loading">
