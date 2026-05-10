@@ -130,11 +130,13 @@ sentence noting that Maya prefers green tea", "fix the date in
 paragraph two", "rewrite the second paragraph for tone but keep the
 facts") and click **Ask agent**.
 
-The agent runs on the spot and shows a preview. You then have three
-choices:
+The agent runs on the spot and shows a preview. While the update is
+open the article above picks up a red outline (the same "marked for
+replacement" cue you get on chat messages when you regenerate a
+turn). You then have three choices:
 
-- **Accept** - persist the agent's version. The article updates and
-  the listing reflects the change.
+- **Accept** - persist the agent's version. The original fades out
+  and the new content snaps in; the listing reflects the change.
 - **Try again** - throw away the preview and run the agent again.
   Useful if the agent's interpretation didn't quite match what you
   wanted.

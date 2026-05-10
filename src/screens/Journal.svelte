@@ -124,6 +124,14 @@
   // tear down promptly rather than running to completion in the
   // background.
   let regenerateController: AbortController | null = null;
+  // Entry id whose original card is mid-fade-out. Set on Accept (or
+  // Save on the declined branch) between the DB write and the
+  // in-store update so the user sees the OLD card dissolve before
+  // the new content snaps in - mirrors the pending-delete + fade-out
+  // sequence chat messages get when a turn is regenerated. Kept in
+  // sync with the @keyframes msg-fade-out duration in styles.css.
+  let fadingOutEntryId = $state<string | null>(null);
+  const FADE_OUT_MS = 500;
 
   // User-entry compose / edit state. Only one day can be edited at a
   // time - the daily view renders a single user card anyway.
@@ -458,17 +466,30 @@
     if (!app.supabase || !regenerateTargetId || !regeneratePreview) return;
     if (regenerateAccepting) return;
     regenerateAccepting = true;
+    const targetId = regenerateTargetId;
     try {
+      // Fade the original card out BEFORE the in-store update so
+      // the user sees the old version dissolve, then the new content
+      // snaps in when fadingOutEntryId clears. The .fading-out class
+      // is pinned forwards (opacity 0) so there's no flash if the
+      // store update races slightly with the timeout.
+      fadingOutEntryId = targetId;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, FADE_OUT_MS));
       await acceptRegeneratedEntry(
         app.supabase,
-        regenerateTargetId,
+        targetId,
         regeneratePreview
       );
       regenerateTargetId = null;
       regeneratePreview = null;
       regenerateDeclined = null;
       regenerateError = null;
+      fadingOutEntryId = null;
     } catch (err) {
+      // Drop the fade so the user can read the original entry and
+      // the surfaced error in the proposal block. The proposal
+      // sibling stays mounted for a retry.
+      fadingOutEntryId = null;
       regenerateError = err instanceof Error ? err.message : String(err);
     } finally {
       regenerateAccepting = false;
@@ -490,12 +511,20 @@
     if (!target) return;
     regenerateAccepting = true;
     try {
+      // Same fade-then-mutate sequence as acceptRegenerate. On the
+      // declined branch the entry is being deleted, so the card
+      // unmounts entirely once the store refetches - the fade
+      // bridges that disappearance instead of a content swap.
+      fadingOutEntryId = target.id;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, FADE_OUT_MS));
       await dismissDeclinedRegenerate(app.supabase, target);
       regenerateTargetId = null;
       regeneratePreview = null;
       regenerateDeclined = null;
       regenerateError = null;
+      fadingOutEntryId = null;
     } catch (err) {
+      fadingOutEntryId = null;
       regenerateError = err instanceof Error ? err.message : String(err);
     } finally {
       regenerateAccepting = false;
@@ -574,7 +603,24 @@
 
 {#snippet automaticCard(entry: JournalEntry)}
   {@const isRegenerating = regenerateTargetId === entry.id}
-  <article class="journal-card card-automatic">
+  {@const isFading = fadingOutEntryId === entry.id}
+  <!--
+    The original entry's card. Stays mounted (and visible at full
+    fidelity) during regenerate so the user can compare the existing
+    entry against the proposal sibling rendered below. .regen-target
+    dims it and paints a red outline while the regenerate flow is
+    open; .fading-out plays the dissolve on Accept (or on Save when
+    the journaler declined), bridging the DB write and the in-store
+    content swap. Both classes share their visual contract with the
+    chat regenerate flow (.msg.disabled / .msg.fading-out) so the
+    "this is on the way out" signal reads consistently across
+    surfaces.
+  -->
+  <article
+    class="journal-card card-automatic"
+    class:regen-target={isRegenerating}
+    class:fading-out={isFading}
+  >
     <header class="journal-card-conversation-title">
       {#if entry.thread_id}
         <!--
@@ -601,14 +647,157 @@
         </span>
       {/if}
     </header>
+    {#if entry.mood || entry.topics.length > 0}
+      <div class="journal-card-chips">
+        {#if entry.mood}
+          <span class="chip">mood: {entry.mood}</span>
+        {/if}
+        {#each entry.topics as t}
+          <span class="chip">{t}</span>
+        {/each}
+      </div>
+    {/if}
+    <div class="journal-card-body">
+      <Markdown content={entry.content} />
+    </div>
+    {#if entry.people.length > 0}
+      <p class="subtle journal-people">
+        People: {entry.people.join(', ')}
+      </p>
+    {/if}
+    <footer class="journal-card-actions">
+      <!--
+        Copy-markdown glyph: 📋 (CLIPBOARD) by default, ✅ (WHITE
+        HEAVY CHECK MARK) for ~1.5s after a successful clipboard
+        write. Same temporary-feedback shape CopyButton.svelte
+        uses; inline here so the emoji visual register matches the
+        rest of this row. Copies entry.content (the rendered
+        Markdown body) so a paste lands the raw source the model
+        produced, not the rendered HTML.
+      -->
+      <button
+        type="button"
+        class="secondary journal-vote-btn"
+        aria-label={copiedEntryId === entry.id
+          ? 'Copied'
+          : 'Copy entry as Markdown'}
+        onclick={() => copyEntryMarkdown(entry)}
+        title={copiedEntryId === entry.id
+          ? 'Copied'
+          : 'Copy this entry as Markdown'}
+      >{copiedEntryId === entry.id ? '✅' : '📋'}</button>
+      <!--
+        Download glyph: U+2B07 DOWNWARDS BLACK ARROW + U+FE0F
+        variation selector forces emoji-style presentation so the
+        arrow reads as a colored glyph alongside the 👍 🔄 👎
+        buttons in this row, rather than a thin text-style arrow
+        that would visually disappear next to them. aria-label +
+        title carry the verb for keyboard / screen-reader users.
+      -->
+      <button
+        type="button"
+        class="secondary journal-vote-btn"
+        aria-label="Download as Markdown"
+        onclick={() => downloadEntryMarkdown(entry)}
+        title="Download this entry as Markdown"
+      >⬇️</button>
+      <!--
+        Regenerate sits immediately after the download button and
+        before the spam-filter votes so the row reads as "save /
+        rewrite / approve / reject" - the two passive actions
+        (download, vote) bracket the one that mutates the entry.
+        Only available when the source thread still exists - the
+        agent needs the messages to feed the model. Disabled while a
+        regenerate is already in flight or previewing on this card;
+        the proposal block below carries its own Cancel / Try Again
+        / Accept buttons during that window.
+
+        Spam-filter votes follow. Thumbs-up trains the source
+        conversation's tokens as ham; thumbs-down (Delete) trains
+        them as spam AND deletes the entry + adds the thread to
+        journal_thread_excludes. Both buttons stay visible once the
+        entry has a thread; the thumbs-up gets a green border
+        (.is-voted) once ham_marked_at flips so the durable vote
+        state lives on the button itself rather than being replaced
+        by a separate "you voted" tag. Re-clicking an already-hammed
+        thumbs-up is a no-op (the click handler short-circuits when
+        ham_marked_at is set) - the visual state is the indicator.
+        aria-label + title carry the verb for keyboard /
+        screen-reader users.
+      -->
+      {#if entry.thread_id}
+        <button
+          type="button"
+          class="secondary journal-vote-btn"
+          aria-label="Regenerate this entry"
+          onclick={() => startRegenerate(entry)}
+          disabled={isRegenerating}
+          title="Regenerate - have the journaler write a different take on this conversation"
+        >🔄</button>
+        <button
+          type="button"
+          class="secondary journal-vote-btn"
+          class:is-voted={entry.ham_marked_at !== null}
+          aria-label="Looks good"
+          aria-pressed={entry.ham_marked_at !== null}
+          onclick={() => onMarkHam(entry.id)}
+          disabled={hamBusyId === entry.id}
+          title={entry.ham_marked_at !== null
+            ? 'You marked this entry as appropriate.'
+            : 'Looks good - tell the spam filter this kind of conversation IS journal-worthy'}
+        >{hamBusyId === entry.id ? '…' : '👍'}</button>
+      {/if}
+      {#if deleteTargetId === entry.id}
+        <span class="subtle journal-delete-prompt">
+          Delete and stop journaling this conversation?
+        </span>
+        <button
+          type="button"
+          class="secondary"
+          onclick={cancelDelete}
+        >Cancel</button>
+        <button
+          type="button"
+          class="danger"
+          onclick={confirmDelete}
+        >Delete</button>
+      {:else}
+        <button
+          type="button"
+          class="secondary journal-vote-btn"
+          aria-label="Delete and mark as spam"
+          onclick={() => requestDelete(entry.id)}
+          title="Delete - tell the spam filter this kind of conversation is NOT journal-worthy"
+        >👎</button>
+      {/if}
+    </footer>
+    {#if deleteTargetId === entry.id && deleteError}
+      <p class="error">{deleteError}</p>
+    {/if}
+    {#if hamErrorId === entry.id && hamError}
+      <p class="error">{hamError}</p>
+    {/if}
+  </article>
+
+  {#if isRegenerating}
     <!--
-      Regenerate preview takes over the card body when the user has
-      asked for a rewrite. The chips/people from the ORIGINAL entry
-      are hidden during preview because the proposed replacement
-      carries its own metadata - showing both at once would conflate
-      two versions in one card.
+      Proposal sibling. Sits immediately below the original card so
+      the pair reads as "current + proposed" - the user compares
+      both versions side by side before deciding. Carries the
+      Scanner during the agent run, then the previewed entry / the
+      declined-with-reasoning state / a parse-or-network error.
+      Cancel discards the proposal and reverts to the original
+      untouched (no DB write). Try again re-runs the agent against
+      the ORIGINAL entry (not the prior proposal), so each retry
+      takes an independent fresh angle. Accept persists the
+      proposal via updateJournalEntry; Save (declined branch only)
+      dismisses the existing entry and advances the thread's
+      pointer without training the spam filter.
     -->
-    {#if isRegenerating}
+    <aside class="journal-card journal-regen-proposal" aria-label="Proposed replacement">
+      <header class="journal-card-chips">
+        <span class="journal-badge badge-regenerate">Proposed replacement</span>
+      </header>
       {#if regenerateBusy && !regeneratePreview && !regenerateDeclined}
         <!--
           KITT-style Scanner stands in for the regenerating entry until
@@ -621,15 +810,16 @@
           <Scanner label="Regenerating entry" />
         </div>
       {:else if regeneratePreview}
-        <div class="journal-card-chips">
-          <span class="journal-badge badge-regenerate">Proposed</span>
-          {#if regeneratePreview.mood}
-            <span class="chip">mood: {regeneratePreview.mood}</span>
-          {/if}
-          {#each regeneratePreview.topics as t}
-            <span class="chip">{t}</span>
-          {/each}
-        </div>
+        {#if regeneratePreview.mood || regeneratePreview.topics.length > 0}
+          <div class="journal-card-chips">
+            {#if regeneratePreview.mood}
+              <span class="chip">mood: {regeneratePreview.mood}</span>
+            {/if}
+            {#each regeneratePreview.topics as t}
+              <span class="chip">{t}</span>
+            {/each}
+          </div>
+        {/if}
         <div class="journal-card-body">
           <Markdown content={regeneratePreview.content} />
         </div>
@@ -670,38 +860,11 @@
           <p class="error">{regenerateError}</p>
         </div>
       {/if}
-    {:else}
-      {#if entry.mood || entry.topics.length > 0}
-        <div class="journal-card-chips">
-          {#if entry.mood}
-            <span class="chip">mood: {entry.mood}</span>
-          {/if}
-          {#each entry.topics as t}
-            <span class="chip">{t}</span>
-          {/each}
-        </div>
-      {/if}
-      <div class="journal-card-body">
-        <Markdown content={entry.content} />
-      </div>
-      {#if entry.people.length > 0}
-        <p class="subtle journal-people">
-          People: {entry.people.join(', ')}
-        </p>
-      {/if}
-    {/if}
-    <footer class="journal-card-actions">
-      {#if isRegenerating}
+      <footer class="journal-card-actions">
         <!--
-          Regenerate-mode footer. Cancel reverts to the original
-          entry (no DB write). Try again re-runs the agent against
-          the original (not the proposal), so each retry takes a
-          fresh angle. Accept persists the proposal via
-          updateJournalEntry. Save (declined-only) dismisses the
-          existing entry and advances the thread's pointer without
-          training the spam filter. Buttons are ordered Cancel /
-          Try again / [Accept | Save] so the primary action sits on
-          the right where the eye lands at the end of the row.
+          Buttons ordered Cancel / Try again / [Accept | Save] so
+          the primary action sits on the right where the eye lands
+          at the end of the row.
         -->
         <span class="subtle journal-delete-prompt">
           {regeneratePreview
@@ -739,119 +902,12 @@
             title="Delete this entry and mark the conversation as processed without training the spam filter"
           >{regenerateAccepting ? 'Saving…' : 'Save'}</button>
         {/if}
-      {:else}
-        <!--
-          Copy-markdown glyph: 📋 (CLIPBOARD) by default, ✅ (WHITE
-          HEAVY CHECK MARK) for ~1.5s after a successful clipboard
-          write. Same temporary-feedback shape CopyButton.svelte
-          uses; inline here so the emoji visual register matches the
-          rest of this row. Copies entry.content (the rendered
-          Markdown body) so a paste lands the raw source the model
-          produced, not the rendered HTML.
-        -->
-        <button
-          type="button"
-          class="secondary journal-vote-btn"
-          aria-label={copiedEntryId === entry.id
-            ? 'Copied'
-            : 'Copy entry as Markdown'}
-          onclick={() => copyEntryMarkdown(entry)}
-          title={copiedEntryId === entry.id
-            ? 'Copied'
-            : 'Copy this entry as Markdown'}
-        >{copiedEntryId === entry.id ? '✅' : '📋'}</button>
-        <!--
-          Download glyph: U+2B07 DOWNWARDS BLACK ARROW + U+FE0F
-          variation selector forces emoji-style presentation so the
-          arrow reads as a colored glyph alongside the 👍 🔄 👎
-          buttons in this row, rather than a thin text-style arrow
-          that would visually disappear next to them. aria-label +
-          title carry the verb for keyboard / screen-reader users.
-        -->
-        <button
-          type="button"
-          class="secondary journal-vote-btn"
-          aria-label="Download as Markdown"
-          onclick={() => downloadEntryMarkdown(entry)}
-          title="Download this entry as Markdown"
-        >⬇️</button>
-        <!--
-          Regenerate sits immediately after the download button and
-          before the spam-filter votes so the row reads as "save /
-          rewrite / approve / reject" - the two passive actions
-          (download, vote) bracket the one that mutates the entry.
-          Only available when the source thread still exists - the
-          agent needs the messages to feed the model.
-
-          Spam-filter votes follow. Thumbs-up trains the source
-          conversation's tokens as ham; thumbs-down (Delete) trains
-          them as spam AND deletes the entry + adds the thread to
-          journal_thread_excludes. Both buttons stay visible once the
-          entry has a thread; the thumbs-up gets a green border
-          (.is-voted) once ham_marked_at flips so the durable vote
-          state lives on the button itself rather than being replaced
-          by a separate "you voted" tag. Re-clicking an already-hammed
-          thumbs-up is a no-op (the click handler short-circuits when
-          ham_marked_at is set) - the visual state is the indicator.
-          aria-label + title carry the verb for keyboard /
-          screen-reader users.
-        -->
-        {#if entry.thread_id}
-          <button
-            type="button"
-            class="secondary journal-vote-btn"
-            aria-label="Regenerate this entry"
-            onclick={() => startRegenerate(entry)}
-            title="Regenerate - have the journaler write a different take on this conversation"
-          >🔄</button>
-          <button
-            type="button"
-            class="secondary journal-vote-btn"
-            class:is-voted={entry.ham_marked_at !== null}
-            aria-label="Looks good"
-            aria-pressed={entry.ham_marked_at !== null}
-            onclick={() => onMarkHam(entry.id)}
-            disabled={hamBusyId === entry.id}
-            title={entry.ham_marked_at !== null
-              ? 'You marked this entry as appropriate.'
-              : 'Looks good - tell the spam filter this kind of conversation IS journal-worthy'}
-          >{hamBusyId === entry.id ? '…' : '👍'}</button>
-        {/if}
-        {#if deleteTargetId === entry.id}
-          <span class="subtle journal-delete-prompt">
-            Delete and stop journaling this conversation?
-          </span>
-          <button
-            type="button"
-            class="secondary"
-            onclick={cancelDelete}
-          >Cancel</button>
-          <button
-            type="button"
-            class="danger"
-            onclick={confirmDelete}
-          >Delete</button>
-        {:else}
-          <button
-            type="button"
-            class="secondary journal-vote-btn"
-            aria-label="Delete and mark as spam"
-            onclick={() => requestDelete(entry.id)}
-            title="Delete - tell the spam filter this kind of conversation is NOT journal-worthy"
-          >👎</button>
-        {/if}
+      </footer>
+      {#if regeneratePreview && regenerateError}
+        <p class="error">{regenerateError}</p>
       {/if}
-    </footer>
-    {#if deleteTargetId === entry.id && deleteError}
-      <p class="error">{deleteError}</p>
-    {/if}
-    {#if hamErrorId === entry.id && hamError}
-      <p class="error">{hamError}</p>
-    {/if}
-    {#if isRegenerating && regeneratePreview && regenerateError}
-      <p class="error">{regenerateError}</p>
-    {/if}
-  </article>
+    </aside>
+  {/if}
 {/snippet}
 
 {#snippet userCard(entry: JournalEntry)}
@@ -1141,6 +1197,25 @@
 
   .card-automatic {
     background: var(--bg-2);
+  }
+
+  /* Proposal sibling block rendered alongside the original automatic
+     card while a regenerate is in flight. Uses --warn (the same
+     color as .badge-regenerate) for the border so the visual
+     register reads as "pending decision" without competing with the
+     red .regen-target outline on the original above. The negative
+     top margin + dashed left border pull the proposal toward the
+     original visually so the pair reads as one combined unit
+     rather than two disconnected cards; the surrounding curtain-
+     rod divider only renders between distinct entries (different
+     entry indices in the day-view loop), so there's no other
+     separator between original and proposal to compete with this
+     pairing cue. */
+  .journal-regen-proposal {
+    background: var(--bg-2);
+    border-color: color-mix(in srgb, var(--warn) 50%, var(--border));
+    border-style: dashed;
+    margin-top: -0.25rem;
   }
 
   .journal-card-body {
