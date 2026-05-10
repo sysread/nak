@@ -376,6 +376,22 @@ JSON).
 
 ## Gotchas
 
+- **The wiki is user-centric, not a general encyclopedia.** The
+  per-conversation prompt has historically slipped on this - a
+  brainstorm about app naming that mentioned the 1980s "Kermit"
+  protocol produced a standalone "Kermit protocol" article. Both
+  the per-conversation prompt and the librarian prompt now carry
+  an explicit scope block (IN: projects, people, places,
+  learning, work, hobbies, experiments / OUT: generic technical
+  concepts, world history, public figures the user does not
+  know, tutorials). The librarian's workflow step 1 is "delete
+  out-of-scope articles", deliberately ahead of duplicate
+  consolidation so it doesn't tidy two off-topic articles into
+  one off-topic article. External topics referenced inside a
+  user-centric article get a Markdown link (Wikipedia
+  conventionally), not their own page. If you relax the scope
+  rule, leave the historical failure mode noted somewhere or
+  the per-thread shape will silently re-introduce it.
 - **Use `messages.created_at` for the day-gate, not
   `threads.updated_at`.** The journal RPC reads
   `threads.updated_at` because journals fired on a same-day

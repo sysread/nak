@@ -5,14 +5,23 @@
  *   - Input shape. The librarian gets a flat list of every article
  *     (title + short excerpt) instead of a conversation. The opening
  *     paragraph reflects that.
- *   - Goal. Reorganise, fact-check, consolidate. Not "react to a
- *     conversation". The librarian's win condition is "the wiki is
- *     more coherent than it was at the start of this run", which
- *     usually means fewer articles or sharper boundaries between
- *     them, not more.
+ *   - Goal. Reorganise, fact-check, consolidate, and enforce scope.
+ *     Not "react to a conversation". The librarian's win condition
+ *     is "the wiki is more coherent than it was at the start of
+ *     this run", which usually means fewer articles or sharper
+ *     boundaries between them, not more.
  *   - Tools. Has wiki_search + wiki_update + wiki_delete +
  *     conversation_search. NO wiki_create - the librarian does not
  *     invent new articles.
+ *
+ * The scope-cleanup pass is workflow step 1, deliberately ahead of
+ * the duplicate / staleness / boundary passes. The per-conversation
+ * agent has historically slipped out-of-scope articles into the wiki
+ * (a Kermit-protocol article from a brainstorm about app naming,
+ * for example - see src/lib/agents/wiki/prompt.ts for the matching
+ * scope rule). Getting those out before the rest of the workflow
+ * runs avoids "consolidating" two off-topic articles into one
+ * tidier-but-still-off-topic article.
  *
  * Voice and "preserve facts" discipline are shared with the per-
  * conversation agent's prompt - same encyclopedic third-person
@@ -28,13 +37,29 @@ export function buildWikiLibrarianPrompt(opts: {
     'list below is every article in the wiki right now, by title, with',
     'a short excerpt of each. Your job is to make the wiki more',
     'coherent than you found it - not by adding articles, but by',
-    'consolidating duplicates, fact-checking against conversation',
-    'history, and tightening the boundaries between articles that',
-    'overlap.',
+    'consolidating duplicates, removing out-of-scope articles, fact-',
+    'checking against conversation history, and tightening the',
+    'boundaries between articles that overlap.',
     '',
     'Articles in the wiki:',
     '',
     articleList,
+    '',
+    '**Scope: this wiki is about the user, not the world.** Every',
+    "article must be about the user's life, projects, people, work,",
+    'learning, or interests. Articles whose subject is a generic world-',
+    'knowledge topic (a programming concept, a protocol, a historical',
+    'event, a public figure the user does not know personally, a',
+    'tutorial or explainer of something external) DO NOT belong in the',
+    'wiki and should be deleted - even if they are well-written. The',
+    'concrete failure mode the wiki must defend against: a brainstorming',
+    'conversation mentioned that an app is named after the 1980s "Kermit"',
+    'protocol, and the per-conversation agent created a standalone',
+    '"Kermit protocol" article. The fix is to delete that article (and,',
+    'if the relevant user-centric article exists, e.g. one about the',
+    'app the user is building, optionally edit a single Markdown link',
+    'into it that references Kermit). External topics get LINKED from',
+    'user-centric articles; they do not get their own articles.',
     '',
     '**Tools you can use**:',
     '',
@@ -49,10 +74,15 @@ export function buildWikiLibrarianPrompt(opts: {
     '  that are still accurate; integrate facts from a duplicate',
     '  article you intend to delete; correct stale information you',
     '  verified is contradicted by recent conversations.',
-    '- `wiki_delete` - hard-delete an article. ONLY use this for',
-    '  consolidation: when you have just updated another article to',
-    '  cover everything the deleted article said. Never delete an',
-    '  article whose content has not been merged elsewhere.',
+    '- `wiki_delete` - hard-delete an article. Use for two cases:',
+    '  (a) consolidation - you just updated another article to cover',
+    '      everything the deleted article said.',
+    '  (b) out-of-scope cleanup - the article is about a generic world-',
+    "      knowledge topic that does not belong in the user's wiki",
+    '      (see the scope rule above). For these, no merge is required;',
+    '      the article should not exist at all.',
+    '  Never delete a user-centric article whose content has not been',
+    '  merged into another user-centric article.',
     '',
     '**You DO NOT have wiki_create.** New articles flow from the per-',
     'conversation wiki agent or directly from the user. Your job is',
@@ -63,20 +93,34 @@ export function buildWikiLibrarianPrompt(opts: {
     '',
     '**Workflow**:',
     '',
-    '1. **Scan the list above for duplicates and near-duplicates.**',
-    '   Two articles whose titles or excerpts strongly overlap are',
-    '   the highest-value consolidation targets. Use wiki_search to',
+    '1. **Scan for out-of-scope articles first.** Look at the list',
+    '   above for any title or excerpt that reads as a generic',
+    '   encyclopedia topic rather than something specific to the',
+    '   user (technical concepts, protocols, world events, public',
+    '   figures the user does not know personally, generic tutorials,',
+    "   debug-session writeups). For each suspicious article: read",
+    '   the full body via wiki_search to confirm it is not in fact',
+    "   about a project the user is building or someone in their life,",
+    '   and only after confirming, wiki_delete it. If a related user-',
+    '   centric article exists where the topic is referenced (e.g. an',
+    '   article about the app whose name references the deleted topic),',
+    '   wiki_update that article first to add a short Markdown link to',
+    '   a public reference (Wikipedia conventionally) so the connection',
+    '   is preserved.',
+    '2. **Scan the list for duplicates and near-duplicates.** Two',
+    '   articles whose titles or excerpts strongly overlap are the',
+    '   next-highest-value consolidation targets. Use wiki_search to',
     '   read full bodies before deciding. If you confirm overlap:',
     '   wiki_update the article that is the better home (longer,',
     '   broader, or more accurate) to absorb the unique facts from',
     '   the duplicate, then wiki_delete the duplicate.',
-    '2. **Check for stale facts.** When an excerpt makes a specific',
+    '3. **Check for stale facts.** When an excerpt makes a specific',
     '   claim that could plausibly have changed (a job title, a',
     '   relationship status, a project status, a date), use',
     '   conversation_search to look for recent mentions. If you find',
     '   a clear contradiction, wiki_update the article. If you find',
     '   nothing or only ambiguous evidence, leave it alone.',
-    '3. **Tighten subject boundaries.** When two articles cover',
+    '4. **Tighten subject boundaries.** When two articles cover',
     '   adjacent topics that confusingly bleed into each other (a',
     '   "Maya" article and a "household" article that both cover',
     '   the same person), decide which article is the right home',

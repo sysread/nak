@@ -22,8 +22,24 @@
  *     Refer to the subject directly (their first name, the project
  *     name) rather than "the user" so articles read as encyclopedia
  *     entries rather than session-scoped notes.
+ *   - **User-centric scope.** Earlier production traffic also
+ *     surfaced the agent writing standalone articles about generic
+ *     world-knowledge topics that came up in conversation - e.g.
+ *     after a brainstorm about app naming that mentioned the 1980s
+ *     "Kermit" file-transfer protocol, the agent created a "Kermit
+ *     protocol" article. The wiki is meant to be ABOUT the user
+ *     (their projects, people in their life, things they're
+ *     learning, their work), not a general encyclopedia of topics
+ *     that came up. The prompt now carries an explicit scope block
+ *     with concrete IN / OUT examples and a rule that OUT-of-scope
+ *     references inside a user-centric article get a Markdown link
+ *     to a public source (Wikipedia conventionally) rather than a
+ *     separate article. Do not relax this without leaving the
+ *     historical failure mode noted somewhere - the per-conversation
+ *     shape pushes the model toward "this came up so it deserves a
+ *     page" by default.
  *   - "Update is the default; create is rare." Earlier production
- *     traffic showed the agent generating one new article per
+ *     traffic also showed the agent generating one new article per
  *     conversation - the per-thread shape biased it toward
  *     "this conversation is its own topic, write a new article".
  *     The prompt now leads with the bias hard the other way:
@@ -56,6 +72,55 @@ export const WIKI_AUTONOMOUS_PROMPT = [
   'project, a person in their life, a place, an interest, a recurring',
   'situation. Articles are NEVER auto-injected into the chat; the user',
   'and assistant only reach them through wiki_search.',
+  '',
+  '**Scope: this wiki is about the user, not the world.** Every article',
+  "must be about the user's life, interests, projects, or context.",
+  'External topics that came up in conversation but have no specific',
+  "connection to the user do NOT get their own article, even if the",
+  'conversation discussed them at length. They get linked from a user-',
+  'centric article instead.',
+  '',
+  'IN scope (article-worthy when discussed):',
+  "- Projects the user is building, planning, or running.",
+  "- People in the user's life - family, friends, colleagues, contacts.",
+  "- Places the user lives, works, travels, or cares about.",
+  "- Things the user is learning or reading - books, courses, papers,",
+  '  skills they are practising.',
+  "- Habits and experiments the user is tracking - a running streak,",
+  '  a sourdough starter, an elimination diet.',
+  "- The user's career, current job, prior roles, ongoing work.",
+  "- Hobbies and interests the user has invested time in.",
+  '- The user themselves (a single article about them as the subject).',
+  '',
+  'OUT of scope (do NOT create articles for these, even if the',
+  'conversation went deep on them):',
+  "- General technical concepts, libraries, protocols, or frameworks",
+  "  that are not specific to one of the user's projects (e.g.",
+  '  JavaScript closures, the Kermit protocol, HTTP semantics, regex).',
+  "- World-knowledge topics: historical events, scientific concepts,",
+  '  geography, biology, finance fundamentals.',
+  "- Public people the user does not know personally (celebrities,",
+  '  authors of books they are reading, historical figures).',
+  "- News, current events, things in the wider world.",
+  "- Tutorials, debug sessions, or one-off help interactions where the",
+  '  user was just looking up information.',
+  '',
+  'When an OUT-of-scope topic comes up INSIDE a user-centric article',
+  '(e.g. the conversation mentioned that the app being built is named',
+  "after a 1980s file-transfer protocol called \"Kermit\"), link to a",
+  'public reference rather than creating a separate article. The link',
+  'goes inside the relevant user-centric article in standard Markdown',
+  'form, e.g.',
+  '  "The name comes from [Kermit](https://en.wikipedia.org/wiki/Kermit_(protocol)),',
+  '  a 1980s file-transfer protocol."',
+  'Wikipedia URLs are the conventional choice; any stable public URL',
+  'works. Do NOT fabricate URLs - only use links you can write from',
+  'memory of well-known articles, or omit the URL and just bold or',
+  'italicize the term.',
+  '',
+  'If a conversation is mostly out-of-scope - tutorials, generic',
+  'technical Q&A, news, debugging unrelated libraries - produce zero',
+  'edits. That is a correct outcome.',
   '',
   '**The single most important discipline: UPDATE is the default,',
   'CREATE is rare.** A new article should be the exception, not the',
@@ -147,6 +212,16 @@ export const WIKI_MANUAL_PROMPT = [
   'same register as a Wikipedia lead paragraph. No first or second',
   'person. Refer to the subject directly (a first name, the project',
   "name) rather than \"the user\" unless the article's topic IS the user.",
+  '',
+  '**Scope**: this wiki is about the user, not the world. Articles',
+  "describe the user's life, projects, people, work, learning, and",
+  'interests. References to external topics (a generic library, a',
+  'historical event, a public figure the user does not know) belong',
+  "as Markdown links inside a user-centric article, NOT as their own",
+  'articles. If the user instructs you to add information that would',
+  'pull the article away from being about them - e.g. asks you to',
+  'expand the article into a general explainer of an external topic',
+  '- prefer a noop with a one-sentence reason over silently drifting.',
   '',
   '**Rules**:',
   '',
