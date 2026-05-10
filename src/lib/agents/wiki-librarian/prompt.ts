@@ -23,6 +23,15 @@
  * runs avoids "consolidating" two off-topic articles into one
  * tidier-but-still-off-topic article.
  *
+ * Workflow step 3 (fix fabricated user names) is the second known
+ * recovery surface for a per-conversation agent failure mode. A
+ * conversation that mentions a friend named "Elliot" can produce a
+ * user-article that calls the user "Elliot" instead of their actual
+ * configured name. The renderUserProfileBlock helper now carries
+ * HARD anti-fabrication wording so this failure mode should be rare
+ * going forward, but the librarian still runs the corrective pass
+ * so any historical occurrences get cleaned up on the next 12h cycle.
+ *
  * Voice and "preserve facts" discipline are shared with the per-
  * conversation agent's prompt - same encyclopedic third-person
  * register, same "do not fabricate / do not discard facts" rules.
@@ -38,23 +47,55 @@ export interface WikiLibrarianUserProfile {
   location: string | null;
 }
 
+/**
+ * Same strict wording the per-conversation agent uses - HARD rules
+ * around the configured name, with explicit anti-fabrication language.
+ * The librarian inherits the same risk: a name from conversation
+ * context can leak into an article that's actually about the user.
+ * See `../wiki/prompt.ts:renderUserProfileBlock` for the matching
+ * rationale block on the per-conversation side.
+ */
 function renderUserProfileBlock(
   profile: WikiLibrarianUserProfile | null
 ): string {
   if (!profile) return '';
-  const lines: string[] = [];
-  if (profile.name && profile.name.trim().length > 0) {
-    lines.push(`The user's name is ${profile.name.trim()}.`);
+  const name =
+    profile.name && profile.name.trim().length > 0
+      ? profile.name.trim()
+      : null;
+  const location =
+    profile.location && profile.location.trim().length > 0
+      ? profile.location.trim()
+      : null;
+  if (!name && !location) return '';
+  const lines: string[] = ['**About the user:**', ''];
+  if (name) {
+    lines.push(`The user's name is **${name}**.`);
+    lines.push(
+      `When an article refers to the user themselves, the user's ` +
+        `name is **${name}** and ONLY ${name}. NEVER substitute ` +
+        `another name for the user, even if other names appear in ` +
+        `the article or in conversation history - those names belong ` +
+        `to other people the user knows. If you find an article that ` +
+        `appears to be about the user but uses a name OTHER than ` +
+        `${name} (a per-conversation agent hallucination is the ` +
+        `usual cause), wiki_update it to replace the wrong name with ` +
+        `${name} or a natural pronoun.`
+    );
+  } else {
+    lines.push(
+      "The user has not supplied a name in Settings. When an article " +
+        "refers to the user themselves, the right rendering is a " +
+        "natural pronoun (\"they\") or the phrase \"the user\". " +
+        "If you find an article that appears to be about the user " +
+        "but uses an invented name, wiki_update to replace the " +
+        "name with a pronoun."
+    );
   }
-  if (profile.location && profile.location.trim().length > 0) {
-    lines.push(`Their location is ${profile.location.trim()}.`);
+  if (location) {
+    lines.push(`Their location is ${location}.`);
   }
-  if (lines.length === 0) return '';
-  lines.push(
-    "Use the user's name when an article refers to them as the subject, " +
-      "rather than the generic phrase \"the user\"."
-  );
-  return ['**About the user:**', '', ...lines].join('\n');
+  return lines.join('\n');
 }
 
 export function buildWikiLibrarianPrompt(opts: {
@@ -158,13 +199,29 @@ export function buildWikiLibrarianPrompt(opts: {
     '   wiki_update the article that is the better home (longer,',
     '   broader, or more accurate) to absorb the unique facts from',
     '   the duplicate, then wiki_delete the duplicate.',
-    '3. **Check for stale facts.** When an excerpt makes a specific',
+    '3. **Fix fabricated names for the user.** If the "About the',
+    '   user" block above has a name, scan for articles that appear',
+    '   to be about the user but use a DIFFERENT name (a common',
+    '   per-conversation hallucination is grabbing a friend\'s name',
+    '   from conversation context and applying it to the user).',
+    '   Read the full body via wiki_search to confirm the article',
+    '   is in fact about the user, then wiki_update to replace the',
+    '   wrong name with the configured one (or a natural pronoun).',
+    '   Use memory_search and conversation_search to disambiguate -',
+    '   if a name like "Elliot" appears in memories as someone the',
+    '   user knows, the article that calls the user "Elliot" is',
+    '   the wrong one to fix that way; write an article ABOUT',
+    '   Elliot is out of your scope (you cannot wiki_create), but',
+    '   you CAN wiki_update the misnamed article to use the right',
+    '   name for the user and let the per-conversation agent land',
+    '   the separate Elliot article on its own next cycle.',
+    '4. **Check for stale facts.** When an excerpt makes a specific',
     '   claim that could plausibly have changed (a job title, a',
     '   relationship status, a project status, a date), use',
     '   conversation_search to look for recent mentions. If you find',
     '   a clear contradiction, wiki_update the article. If you find',
     '   nothing or only ambiguous evidence, leave it alone.',
-    '4. **Tighten subject boundaries.** When two articles cover',
+    '5. **Tighten subject boundaries.** When two articles cover',
     '   adjacent topics that confusingly bleed into each other (a',
     '   "Maya" article and a "household" article that both cover',
     '   the same person), decide which article is the right home',
