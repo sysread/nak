@@ -844,6 +844,17 @@ export interface ChatLoopOptions {
    */
   reasoningEffort?: ReasoningEffort;
   /**
+   * Tier-level kill switch for reasoning. When true, every streamChat
+   * call this turn ships `venice_parameters.disable_thinking: true`.
+   * Caller (Chat.svelte) is expected to also omit `reasoningEffort`
+   * when this is true - the two knobs are mutually exclusive on the
+   * wire (reasoning_effort: 'low' shrinks the CoT but doesn't disable
+   * it; disable_thinking is the full off switch). Used by the Fast
+   * tier so it stays fast even though it fronts a reasoning-capable
+   * model.
+   */
+  disableThinking?: boolean;
+  /**
    * Optional text.verbosity knob forwarded to every streamChat call.
    * Unlike reasoningEffort there's no model-capability gate — providers
    * that don't recognize the field silently ignore it.
@@ -1108,6 +1119,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     signal,
     handlers,
     reasoningEffort,
+    disableThinking,
     verbosity,
     emphasisMarkdown,
     journalTimezone,
@@ -1539,6 +1551,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         signal,
         tools: buildToolList(toolboxesEnabled),
         reasoningEffort,
+        disableThinking,
         verbosity,
       },
       handlers

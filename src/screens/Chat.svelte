@@ -1710,8 +1710,12 @@
       TIERS[currentTier].defaultReasoningEffort
     )
   );
+  // Hide the per-thread reasoning picker when the model can't reason,
+  // OR when the current tier explicitly disables thinking (Fast tier
+  // ships `venice_parameters.disable_thinking: true` so a picker
+  // would show effort levels that have no wire effect).
   const currentSupportsReasoning = $derived<boolean>(
-    TIERS[currentTier].supportsReasoning
+    TIERS[currentTier].supportsReasoning && !TIERS[currentTier].disableThinking
   );
   const defaultVerbosity = $derived<Verbosity>(
     app.defaultVerbosity ?? DEFAULT_VERBOSITY
@@ -2009,15 +2013,19 @@
     const tier = resolveTier(active?.model ?? null, defaultTier);
     const modelId = TIERS[tier].id;
     const tierSpec = TIERS[tier];
-    // Only pass reasoning_effort on models that accept it; letting it
-    // ride along to a non-reasoning model produces a 400 on some providers.
-    const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
-      ? resolveReasoningEffort(
-          active?.reasoning_effort ?? null,
-          defaultReasoning,
-          tierSpec.defaultReasoningEffort
-        )
-      : undefined;
+    // Skip reasoning_effort in two cases: the model can't reason
+    // (some providers 400 on the unknown field) OR the tier explicitly
+    // disables thinking. disable_thinking and reasoning_effort are
+    // mutually exclusive on the wire - the off-switch wins.
+    const sendReasoning: ReasoningEffort | undefined =
+      tierSpec.supportsReasoning && !tierSpec.disableThinking
+        ? resolveReasoningEffort(
+            active?.reasoning_effort ?? null,
+            defaultReasoning,
+            tierSpec.defaultReasoningEffort
+          )
+        : undefined;
+    const sendDisableThinking: boolean = tierSpec.disableThinking ?? false;
     // Verbosity is safe to send unconditionally — providers that don't
     // recognize `text.verbosity` silently ignore it.
     const sendVerbosity: Verbosity = resolveVerbosity(
@@ -2161,6 +2169,7 @@
       tierSpec,
       systemMessages,
       sendReasoning,
+      sendDisableThinking,
       sendVerbosity,
       sendEmphasis: app.emphasisMarkdown,
       sendUserName: app.userName,
@@ -2185,6 +2194,14 @@
     tierSpec: ModelSpec;
     systemMessages: { role: 'system'; content: string }[];
     sendReasoning: ReasoningEffort | undefined;
+    /**
+     * Snapshot of the tier's thinking-off kill switch at send time.
+     * Captured here for the same reason as sendReasoning: a tier swap
+     * mid-stream must not change the wire shape of an in-flight turn.
+     * When true, the chat-loop ships `disable_thinking: true` and
+     * sendReasoning is forced undefined.
+     */
+    sendDisableThinking: boolean;
     sendVerbosity: Verbosity;
     /**
      * Snapshot of the "Emphasis markdown" toggle taken at send time.
@@ -2364,6 +2381,7 @@
           signal: abortCtl!.signal,
           userMessageId: ctx.userMessageId,
           reasoningEffort: ctx.sendReasoning,
+          disableThinking: ctx.sendDisableThinking,
           verbosity: ctx.sendVerbosity,
           emphasisMarkdown: ctx.sendEmphasis,
           userName: ctx.sendUserName,
@@ -2766,13 +2784,17 @@
     if (!active || active.isDraft || active.archived) return;
     const tier = resolveTier(active.model ?? null, defaultTier);
     const tierSpec = TIERS[tier];
-    const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
-      ? resolveReasoningEffort(
-          active.reasoning_effort ?? null,
-          defaultReasoning,
-          tierSpec.defaultReasoningEffort
-        )
-      : undefined;
+    // Skip reasoning_effort when the model can't reason OR when the
+    // tier explicitly disables thinking - mirror of the send() path.
+    const sendReasoning: ReasoningEffort | undefined =
+      tierSpec.supportsReasoning && !tierSpec.disableThinking
+        ? resolveReasoningEffort(
+            active.reasoning_effort ?? null,
+            defaultReasoning,
+            tierSpec.defaultReasoningEffort
+          )
+        : undefined;
+    const sendDisableThinking: boolean = tierSpec.disableThinking ?? false;
     const sendVerbosity: Verbosity = resolveVerbosity(active.verbosity ?? null, defaultVerbosity);
     const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
       .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
@@ -2788,6 +2810,7 @@
       tierSpec,
       systemMessages,
       sendReasoning,
+      sendDisableThinking,
       sendVerbosity,
       sendEmphasis: app.emphasisMarkdown,
       sendUserName: app.userName,
@@ -2834,13 +2857,17 @@
     const tier = resolveTier(active.model ?? null, defaultTier);
     const tierSpec = TIERS[tier];
     const modelId = tierSpec.id;
-    const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
-      ? resolveReasoningEffort(
-          active.reasoning_effort ?? null,
-          defaultReasoning,
-          tierSpec.defaultReasoningEffort
-        )
-      : undefined;
+    // Skip reasoning_effort when the model can't reason OR when the
+    // tier explicitly disables thinking - mirror of the send() path.
+    const sendReasoning: ReasoningEffort | undefined =
+      tierSpec.supportsReasoning && !tierSpec.disableThinking
+        ? resolveReasoningEffort(
+            active.reasoning_effort ?? null,
+            defaultReasoning,
+            tierSpec.defaultReasoningEffort
+          )
+        : undefined;
+    const sendDisableThinking: boolean = tierSpec.disableThinking ?? false;
     const sendVerbosity: Verbosity = resolveVerbosity(
       active.verbosity ?? null,
       defaultVerbosity
@@ -2861,6 +2888,7 @@
       tierSpec,
       systemMessages,
       sendReasoning,
+      sendDisableThinking,
       sendVerbosity,
       sendEmphasis: app.emphasisMarkdown,
       sendUserName: app.userName,
@@ -2907,13 +2935,17 @@
     const tier = resolveTier(active.model ?? null, defaultTier);
     const tierSpec = TIERS[tier];
     const modelId = tierSpec.id;
-    const sendReasoning: ReasoningEffort | undefined = tierSpec.supportsReasoning
-      ? resolveReasoningEffort(
-          active.reasoning_effort ?? null,
-          defaultReasoning,
-          tierSpec.defaultReasoningEffort
-        )
-      : undefined;
+    // Skip reasoning_effort when the model can't reason OR when the
+    // tier explicitly disables thinking - mirror of the send() path.
+    const sendReasoning: ReasoningEffort | undefined =
+      tierSpec.supportsReasoning && !tierSpec.disableThinking
+        ? resolveReasoningEffort(
+            active.reasoning_effort ?? null,
+            defaultReasoning,
+            tierSpec.defaultReasoningEffort
+          )
+        : undefined;
+    const sendDisableThinking: boolean = tierSpec.disableThinking ?? false;
     const sendVerbosity: Verbosity = resolveVerbosity(
       active.verbosity ?? null,
       defaultVerbosity
@@ -2932,6 +2964,7 @@
       tierSpec,
       systemMessages,
       sendReasoning,
+      sendDisableThinking,
       sendVerbosity,
       sendEmphasis: app.emphasisMarkdown,
       sendUserName: app.userName,

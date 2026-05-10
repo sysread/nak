@@ -55,9 +55,11 @@ describe('MODELS (active registry)', () => {
 
 describe('TIERS (user-facing wrappers)', () => {
   it('has the three tiers with the expected Venice model ids', () => {
-    expect(TIERS.smart.id).toBe('zai-org-glm-5-1');
-    expect(TIERS.balanced.id).toBe('zai-org-glm-5');
-    expect(TIERS.fast.id).toBe('zai-org-glm-4.7');
+    // All three tiers currently front the same deepseek-v4-pro id; the
+    // difference is the reasoning configuration (medium / low / off).
+    expect(TIERS.smart.id).toBe('deepseek-v4-pro');
+    expect(TIERS.balanced.id).toBe('deepseek-v4-pro');
+    expect(TIERS.fast.id).toBe('deepseek-v4-pro');
   });
   it('each tier wraps its corresponding MODELS entry', () => {
     for (const t of TIER_ORDER) {
@@ -69,11 +71,17 @@ describe('TIERS (user-facing wrappers)', () => {
       expect(spec.supportsResponseFormat).toBe(model.supportsResponseFormat);
     }
   });
-  it('differentiates smart and balanced by reasoning effort', () => {
-    expect(TIERS.smart.defaultReasoningEffort).toBe('high');
+  it('differentiates the tiers by reasoning configuration', () => {
+    expect(TIERS.smart.defaultReasoningEffort).toBe('medium');
     expect(TIERS.balanced.defaultReasoningEffort).toBe('low');
-    // Fast intentionally has no tier default - it defers to the user.
+    // Fast disables thinking entirely - reasoning_effort: 'low' would
+    // shrink the CoT but not zero it. Fast also carries no tier-level
+    // defaultReasoningEffort because the kill switch wins on the wire.
+    expect(TIERS.fast.disableThinking).toBe(true);
     expect(TIERS.fast.defaultReasoningEffort).toBeUndefined();
+    // Smart and Balanced share the model with thinking on.
+    expect(TIERS.smart.disableThinking).toBeUndefined();
+    expect(TIERS.balanced.disableThinking).toBeUndefined();
   });
   it('has matching tier/label and sensible context windows', () => {
     for (const t of TIER_ORDER) {
@@ -81,7 +89,9 @@ describe('TIERS (user-facing wrappers)', () => {
       expect(TIERS[t].label.length).toBeGreaterThan(0);
       expect(TIERS[t].contextWindow).toBeGreaterThan(0);
     }
-    expect(TIERS.fast.contextWindow).toBe(198_000);
+    // deepseek-v4-pro carries a 1M-token window; all three tiers
+    // inherit it via the spread.
+    expect(TIERS.fast.contextWindow).toBe(1_000_000);
   });
 });
 
@@ -281,7 +291,7 @@ describe('padEmbeddingForStorage', () => {
 
 describe('findModelById', () => {
   it('returns the spec for currently-active ids', () => {
-    expect(findModelById('zai-org-glm-5-1')).toBe(MODELS['zai-org-glm-5-1']);
+    expect(findModelById('deepseek-v4-pro')).toBe(MODELS['deepseek-v4-pro']);
     expect(findModelById('deepseek-v4-flash')).toBe(MODELS['deepseek-v4-flash']);
     expect(findModelById('qwen3-5-35b-a3b')).toBe(MODELS['qwen3-5-35b-a3b']);
   });
@@ -289,6 +299,7 @@ describe('findModelById', () => {
     expect(findModelById('arcee-trinity-large-thinking')).toBeNull();
     expect(findModelById('grok-41-fast')).toBeNull();
     expect(findModelById('kimi-k2-5')).toBeNull();
+    expect(findModelById('zai-org-glm-5-1')).toBeNull();
   });
   it('returns null for unknown / empty inputs', () => {
     expect(findModelById('never-existed')).toBeNull();
@@ -300,9 +311,8 @@ describe('findModelById', () => {
 
 describe('findContextWindowById', () => {
   it('returns the window for a currently-active id', () => {
-    expect(findContextWindowById('zai-org-glm-5-1')).toBe(MODELS['zai-org-glm-5-1'].contextWindow);
-    expect(findContextWindowById('zai-org-glm-5')).toBe(MODELS['zai-org-glm-5'].contextWindow);
-    expect(findContextWindowById('zai-org-glm-4.7')).toBe(MODELS['zai-org-glm-4.7'].contextWindow);
+    expect(findContextWindowById('deepseek-v4-pro')).toBe(MODELS['deepseek-v4-pro'].contextWindow);
+    expect(findContextWindowById('deepseek-v4-flash')).toBe(MODELS['deepseek-v4-flash'].contextWindow);
     expect(findContextWindowById('qwen3-5-35b-a3b')).toBe(MODELS['qwen3-5-35b-a3b'].contextWindow);
   });
 
@@ -317,6 +327,9 @@ describe('findContextWindowById', () => {
     expect(findContextWindowById('kimi-k2-6')).toBe(256_000);
     expect(findContextWindowById('minimax-m27')).toBe(198_000);
     expect(findContextWindowById('grok-41-fast')).toBe(1_000_000);
+    expect(findContextWindowById('zai-org-glm-5-1')).toBe(200_000);
+    expect(findContextWindowById('zai-org-glm-5')).toBe(198_000);
+    expect(findContextWindowById('zai-org-glm-4.7')).toBe(198_000);
   });
 
   it('returns null for an unknown id and for null/empty input', () => {
