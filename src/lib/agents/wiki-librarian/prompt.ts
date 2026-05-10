@@ -32,6 +32,19 @@
  * going forward, but the librarian still runs the corrective pass
  * so any historical occurrences get cleaned up on the next 12h cycle.
  *
+ * Workflow step 4 (date markers) is positioned to read the
+ * progressive-history shape the per-conversation agent now writes
+ * with. Articles carry "as of March 2026" / "in late 2025" markers
+ * that anchor when each fact was added. The librarian uses old
+ * dates as a freshness signal (a job title dated 2024 is worth
+ * re-checking via conversation_search; an undated fact is just
+ * history without a freshness anchor). Crucially, the librarian
+ * appends new dated statements rather than overwriting old ones
+ * when it finds a contradiction - the historical record is part
+ * of the article's value. Preserve-dates is in the Discipline
+ * section so every wiki_update path respects it, not just the
+ * fact-checking step.
+ *
  * Voice and "preserve facts" discipline are shared with the per-
  * conversation agent's prompt - same encyclopedic third-person
  * register, same "do not fabricate / do not discard facts" rules.
@@ -267,12 +280,29 @@ export function buildWikiLibrarianPrompt(opts: {
     '       person, not a generic third-party report. Skip cases',
     '       where "the user" is genuinely the better wording (rare,',
     '       but possible) - default to substituting the name.',
-    '4. **Check for stale facts.** When an excerpt makes a specific',
-    '   claim that could plausibly have changed (a job title, a',
-    '   relationship status, a project status, a date), use',
-    '   conversation_search to look for recent mentions. If you find',
-    '   a clear contradiction, wiki_update the article. If you find',
-    '   nothing or only ambiguous evidence, leave it alone.',
+    '4. **Check for stale facts using date markers.** Articles are',
+    '   written with date markers attached to facts ("as of March',
+    '   2026", "in late 2025", "Jeff started this in early 2026").',
+    '   These are the freshness signal you use to decide what to',
+    '   re-check.',
+    '   - When an excerpt makes a specific claim with an OLD date',
+    '     marker that could plausibly have changed (a job title, a',
+    '     relationship status, a project status), use',
+    '     conversation_search to look for more recent mentions. If',
+    '     you find a clear contradiction in newer conversations,',
+    '     wiki_update the article: APPEND the new dated statement',
+    '     ("As of March 2026, Maya is at Foo. As of November 2026,',
+    '     she has moved to Bar.") rather than overwriting the old',
+    '     one. The historical record is part of the value.',
+    '   - When an excerpt makes a specific claim with NO date marker,',
+    '     use conversation_search to find when the fact was last',
+    '     mentioned and consider wiki_update to retrofit a date',
+    '     marker so future librarian passes have a freshness anchor.',
+    '   - When you find no contradiction and no recent mention,',
+    '     leave the article alone - undated or old-dated facts',
+    '     without contradiction are just history, not stale.',
+    '   - Preserve all existing date markers verbatim when you',
+    '     wiki_update; never strip a date from an earlier statement.',
     '5. **Tighten subject boundaries.** When two articles cover',
     '   adjacent topics that confusingly bleed into each other (a',
     '   "Maya" article and a "household" article that both cover',
@@ -290,6 +320,14 @@ export function buildWikiLibrarianPrompt(opts: {
     '  another, every concrete fact from the absorbed article must',
     '  appear in the merged result unless you are confident it is',
     '  wrong (and conversation_search corroborates the contradiction).',
+    '- Preserve dates. Articles carry month + year date markers',
+    '  ("as of March 2026", "in late 2025") that anchor when each',
+    '  fact was added. When you wiki_update for any reason -',
+    '  consolidation, fact-correction, name-fix, scope-cleanup link-',
+    '  in - leave existing date markers in the prose verbatim. They',
+    '  are the article\'s historical record. New statements you add',
+    '  during a librarian update should themselves carry a fresh',
+    '  date marker (a recent month + year is fine).',
     '- Do not fabricate. Only assert facts that appear in the',
     '  existing articles, in conversations you searched, or in the',
     '  excerpts above. Do not import outside knowledge.',
