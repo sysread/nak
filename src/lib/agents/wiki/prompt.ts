@@ -83,6 +83,16 @@
  *   - "Preserve facts unless contradicted" is load-bearing: a model
  *     prone to rewriting will overwrite established information
  *     each cycle. The wiki is meant to accrete, not churn.
+ *   - **Date-anchored facts.** New information added to an article
+ *     gets a date marker drawn from the conversation timestamp
+ *     ("March 2026", "late 2025"). Two payoffs: articles read like
+ *     a progressive history rather than a flat snapshot, and the
+ *     librarian gains a freshness signal it can use during fact-
+ *     checking ("a 2024 statement that 2026 conversations don't
+ *     mention is just old, not necessarily wrong"). The user
+ *     surfaced this as desirable after observing the agent doing
+ *     it organically - the prompt now reinforces it explicitly so
+ *     it doesn't drift back to undated snapshots.
  *   - Conservative-on-create: the bar is "would the user later look
  *     this up", not "did this come up". A throwaway question about
  *     the weather should not produce a "weather" article. A
@@ -339,6 +349,21 @@ const WIKI_AUTONOMOUS_BODY_LINES = [
   '  "you mentioned" or "I noted"; write the fact directly.',
   '- One topic per article. If a conversation surfaces multiple topics,',
   '  consider multiple separate updates.',
+  '- **Anchor information in time.** When you add a new fact or update',
+  '  an existing one, attach a date marker drawn from the conversation',
+  "  you're processing - use the latest message timestamp in the",
+  '  thread, rendered as month + year ("March 2026", "early 2026",',
+  '  "late 2025"). This lets articles accumulate as a progressive',
+  '  history rather than a flat snapshot, and gives the librarian a',
+  '  freshness signal it can use. Examples:',
+  '    "Jeff began learning Rust in March 2026."',
+  '    "As of November 2026, the recipe project is in beta."',
+  '    "Maya started a new role at Foo in late 2025."',
+  '  Month + year granularity is enough; you don\'t need exact dates.',
+  '  When you add a NEW fact to an existing article, do not rewrite',
+  '  earlier dated statements - leave them as the historical record.',
+  '  Append the new fact with its own date marker so the article',
+  "  reads like an entry that's been added to over time.",
   '',
   '**Workflow for each topic the conversation actually deserves an',
   'edit on**:',
@@ -357,8 +382,12 @@ const WIKI_AUTONOMOUS_BODY_LINES = [
   '   for new information - extend it rather than fragment the wiki.',
   '   A "Maya" article gains a paragraph about her job change; a',
   '   "household" article gains a section about Maya. Preserve every',
-  '   existing fact unless the conversation explicitly contradicts',
-  '   it. Add new information; do not rewrite for tone or condense.',
+  '   existing fact (and every existing date marker) unless the',
+  '   conversation explicitly contradicts it. Add new information',
+  '   with a fresh date marker drawn from the current conversation;',
+  '   do not rewrite earlier dated statements or condense for tone.',
+  '   The article should read as a stack of dated developments over',
+  '   time, not a single rewritten snapshot.',
   '3. **wiki_create is the last resort.** Only call wiki_create',
   '   when you have run wiki_search at least twice with different',
   '   angles AND none of the results could plausibly be extended to',
@@ -458,6 +487,12 @@ const WIKI_MANUAL_BODY_LINES = [
   '  that fact to be removed or replaced. "Add" means add. "Fix" means',
   '  patch the specified part, leaving the rest alone. "Rewrite for',
   '  tone" means keep facts and only rewrite the prose.',
+  '- Preserve any existing date markers ("as of March 2026", "in',
+  '  late 2025") in the article verbatim. They are part of the',
+  '  historical record. If the user is adding a new fact, you may',
+  '  attach a date marker to it (use a recent month + year, or a',
+  '  marker the user supplies in their instructions). Do not strip',
+  '  dates from earlier statements when rewording.',
   '- Do NOT fabricate. Any new fact must come from the user\'s',
   '  instructions. If the instructions imply information you don\'t',
   '  have, ask via the noop path (see below) rather than inventing.',
