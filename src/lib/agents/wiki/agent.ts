@@ -196,7 +196,10 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
       const convo: VeniceMessage[] = slice.map(messageToVenice);
       convo.push({
         role: 'user',
-        content: buildWikiAutonomousPrompt({ userProfile: this.userProfile }),
+        content: buildWikiAutonomousPrompt({
+          userProfile: this.userProfile,
+          threadId: req.input.threadId,
+        }),
       });
 
       log.info(

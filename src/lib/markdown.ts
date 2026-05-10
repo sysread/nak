@@ -339,6 +339,15 @@ function registerLinkHardening(): void {
       // though the anchor never navigates. The citation-ref click
       // handler preventDefaults and expands/flashes the panel instead.
       if (href.startsWith('#')) return;
+      // Relative `?...` URLs are in-app navigation (the wiki agents
+      // emit `?cid=<thread-id>` source links to anchor article facts
+      // to their source conversation; the same convention can be used
+      // for any of the routed keys in src/lib/routing.svelte.ts).
+      // We skip `target="_blank"` so the click stays in the current
+      // tab; the surrounding component (e.g. Wiki.svelte) intercepts
+      // the click and calls navigate() for soft navigation rather
+      // than letting the browser do a full reload.
+      if (href.startsWith('?')) return;
       node.setAttribute('rel', 'noopener noreferrer nofollow');
       node.setAttribute('target', '_blank');
     }

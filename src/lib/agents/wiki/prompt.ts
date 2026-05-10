@@ -199,7 +199,20 @@ export function renderUserProfileBlock(
 }
 
 export function buildWikiAutonomousPrompt(
-  opts: { userProfile: WikiUserProfile | null } = { userProfile: null }
+  opts: {
+    userProfile: WikiUserProfile | null;
+    /**
+     * The id of the thread the agent is processing this cycle.
+     * Embedded in the prompt as the ONLY valid source-conversation
+     * link target. The autonomous agent has direct evidence of
+     * exactly one thread id - the one it's processing - and must
+     * not invent others. The wiki_create / wiki_update tools
+     * validate `?cid=<uuid>` links at the boundary as defense in
+     * depth, but constraining the prompt to the known id is the
+     * primary defense.
+     */
+    threadId?: string | null;
+  } = { userProfile: null }
 ): string {
   const profileBlock = renderUserProfileBlock(opts.userProfile);
   const lines: string[] = [
@@ -212,7 +225,47 @@ export function buildWikiAutonomousPrompt(
   if (profileBlock.length > 0) {
     lines.push('', profileBlock);
   }
+  if (opts.threadId) {
+    lines.push('', renderSourceLinkBlock(opts.threadId));
+  }
   return [...lines, ...WIKI_AUTONOMOUS_BODY_LINES].join('\n');
+}
+
+/**
+ * Render the "source-conversation links" block. Tells the agent that
+ * (a) the wiki supports anchoring facts to their source conversation
+ * via Markdown links of the form `[label](?cid=<uuid>)`, (b) the
+ * ONLY valid id for this cycle is the current thread's, and (c)
+ * fabricating an id will fail tool-boundary validation.
+ *
+ * Kept as a separate helper so the librarian's prompt can reuse the
+ * same conventions with a different "valid ids come from
+ * conversation_search results" framing.
+ */
+function renderSourceLinkBlock(threadId: string): string {
+  return [
+    '**Source-conversation links:**',
+    '',
+    'You may anchor facts in articles to their source conversation by',
+    'inserting a Markdown link of the form `[short label](?cid=<id>)`.',
+    'When the user clicks one, they navigate straight to that thread.',
+    '',
+    `For THIS cycle, the only valid id is the current thread's id: \`${threadId}\`.`,
+    'A typical use looks like:',
+    `  "Jeff began planning the recipe project in [March 2026](?cid=${threadId})."`,
+    '',
+    "Do NOT fabricate other thread ids - the wiki tools validate every",
+    '`?cid=` link before persisting and will reject the call with an',
+    'actionable error if you try. If a fact came up in a different',
+    'conversation than the one you are processing now, omit the source',
+    'link rather than guess; the librarian (a separate agent that',
+    'reads conversation_search results) can backfill it later.',
+    '',
+    'Source links are optional. Use them sparingly for facts where',
+    "linking back to the conversation actually helps the user (\"why",
+    'did I write this?", "what did we decide?"); skip them for routine',
+    'updates where the link would just be noise.',
+  ].join('\n');
 }
 
 const WIKI_AUTONOMOUS_BODY_LINES = [

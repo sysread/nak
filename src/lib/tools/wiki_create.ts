@@ -9,7 +9,11 @@
  * knows to fall back to wiki_search + wiki_update.
  */
 import type { ToolDef } from './types';
-import { MAX_WIKI_TITLE_CHARS, MAX_WIKI_CONTENT_CHARS } from '../wiki';
+import {
+  MAX_WIKI_TITLE_CHARS,
+  MAX_WIKI_CONTENT_CHARS,
+  findUnknownCidLinks,
+} from '../wiki';
 import { wikiCreateSchema } from './wiki_create.schema';
 import { emitWikiChange } from '../wiki-events';
 
@@ -28,6 +32,23 @@ export const wikiCreate: ToolDef = {
     if (content.length > MAX_WIKI_CONTENT_CHARS) {
       throw new Error(
         `content exceeds ${MAX_WIKI_CONTENT_CHARS}-char limit (got ${content.length}); split or trim`
+      );
+    }
+    // Validate any `?cid=<uuid>` source-conversation links the
+    // agent embedded in the article body. Constraint: agents only
+    // use thread ids they got from runtime context (the current
+    // thread's id, or ids returned by conversation_search). This
+    // is the defense-in-depth that catches a fabricated id at the
+    // tool boundary - rejecting the tool call surfaces an
+    // actionable error so the agent can retry without the bad
+    // link rather than landing a broken article.
+    const unknownLinks = await findUnknownCidLinks(ctx.supabase, content);
+    if (unknownLinks.length > 0) {
+      throw new Error(
+        `content contains source-conversation link(s) to thread id(s) ` +
+          `that do not exist for this user: ${unknownLinks.join(', ')}. ` +
+          `Only use thread ids you saw in your input or in conversation_search ` +
+          `results; never invent. Retry without the offending ?cid= link(s).`
       );
     }
     try {

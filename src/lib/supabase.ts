@@ -2927,6 +2927,34 @@ export class SupabaseService {
   // Wiki background pipeline ---------------------------------------------
 
   /**
+   * Filter a candidate set of thread ids down to those that exist
+   * for the current user (RLS-scoped). Used by the wiki tools
+   * (wiki_create / wiki_update) to validate `?cid=<uuid>` source
+   * links the agent embedded in article content - the constraint
+   * is "agents only use thread ids they got from the runtime
+   * (their current thread, conversation_search results)", and
+   * this method is the defense-in-depth that catches a
+   * fabricated id at the tool boundary.
+   *
+   * Empty input returns an empty set without a round-trip.
+   * Postgres errors propagate as SupabaseError.
+   */
+  async findExistingThreadIds(ids: readonly string[]): Promise<Set<string>> {
+    if (ids.length === 0) return new Set();
+    const { data, error } = await this.client
+      .from('threads')
+      .select('id')
+      .in('id', [...ids]);
+    if (error) throw new SupabaseError(error.message);
+    const out = new Set<string>();
+    for (const row of data ?? []) {
+      const id = (row as { id?: unknown }).id;
+      if (typeof id === 'string') out.add(id);
+    }
+    return out;
+  }
+
+  /**
    * Claim the oldest thread eligible for the wiki agent. Differs from
    * `claimNextThreadForJournal` in two ways:
    *   (1) The eligibility predicate gates on the newest message's
