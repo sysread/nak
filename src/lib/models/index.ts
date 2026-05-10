@@ -161,14 +161,6 @@ export interface ModelSpec {
  * agent-table check becomes a no-op.
  */
 export const MODELS = {
-  'deepseek-v4-pro': {
-    id: 'deepseek-v4-pro',
-    contextWindow: 1_000_000,
-    supportsReasoning: true,
-    // DeepSeek V4 Pro is text-only on Venice - images route through analyze_image().
-    supportsVision: false,
-    supportsResponseFormat: true,
-  },
   'deepseek-v4-flash': {
     id: 'deepseek-v4-flash',
     contextWindow: 1_000_000,
@@ -226,7 +218,7 @@ export interface TierSpec extends ModelSpec {
    * Tier-level reasoning_effort default. When set, wins over the user's
    * account-level default (but not the per-thread override). Used to
    * differentiate tiers fronting the same Venice id - all three tiers
-   * currently front deepseek-v4-pro and the labels really mean "same
+   * currently front deepseek-v4-flash and the labels really mean "same
    * model, different thinking budgets," with this field realising that
    * contract. Absent means "no tier opinion - fall through to the user
    * default." Only consulted when the underlying model's
@@ -251,15 +243,15 @@ export interface TierSpec extends ModelSpec {
 
 export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
   smart: {
-    ...MODELS['deepseek-v4-pro'],
+    ...MODELS['deepseek-v4-flash'],
     tier: 'smart',
     label: 'Smart',
     icon: '🧠',
-    description: 'DeepSeek V4 Pro with medium thinking. Best for hard problems.',
+    description: 'DeepSeek V4 Flash with medium thinking. Best for hard problems.',
     defaultReasoningEffort: 'medium',
   },
   balanced: {
-    ...MODELS['deepseek-v4-pro'],
+    ...MODELS['deepseek-v4-flash'],
     tier: 'balanced',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
@@ -268,15 +260,15 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     // in both themes; yin-yang is a solid bi-tonal disc that reads at
     // any size.
     icon: '\u262F\uFE0F',
-    description: 'DeepSeek V4 Pro with light thinking. Good default for most turns.',
+    description: 'DeepSeek V4 Flash with light thinking. Good default for most turns.',
     defaultReasoningEffort: 'low',
   },
   fast: {
-    ...MODELS['deepseek-v4-pro'],
+    ...MODELS['deepseek-v4-flash'],
     tier: 'fast',
     label: 'Fast',
     icon: '\u26A1\uFE0F',
-    description: 'DeepSeek V4 Pro with thinking off. Quickest replies.',
+    description: 'DeepSeek V4 Flash with thinking off. Quickest replies.',
     // disableThinking is what makes the Fast tier feel fast even
     // though it fronts the same reasoning-capable model as Smart and
     // Balanced - without it the model would burn its default thinking
@@ -323,14 +315,23 @@ export type AgentRole =
  * decision context lives next to the swap):
  *
  *   journal - deepseek-v4-flash. The journaler walks every settled
- *     conversation in the background, so capacity isolation from the
- *     foreground tiers and a wide context window matter more than
- *     per-call latency. The 1M-token window swallows even long
- *     threads without a summariser layer. Hard constraint on any
- *     pin: the id MUST accept `response_format: {type:
+ *     conversation in the background, and the 1M-token window swallows
+ *     even long threads without a summariser layer. Hard constraint
+ *     on any pin: the id MUST accept `response_format: {type:
  *     'json_object'}` - the prompt's prose schema covers "right
  *     intent, wrong shape" but not "ignored the JSON instruction
  *     entirely."
+ *
+ *     NOTE on capacity: as of the deepseek-v4-flash tier swap, all
+ *     three foreground tiers (Smart / Balanced / Fast) ALSO front
+ *     this id. The earlier policy of "background agents must not
+ *     share capacity with foreground tiers" has been deliberately
+ *     relaxed - the Pro variant shipped with no visible reasoning
+ *     stream from Venice, so we're back on Flash everywhere. If
+ *     overload errors return under the shared-capacity shape, the
+ *     next move is repointing the background agents (journal,
+ *     reflection, wiki, wikiLibrarian, webSearch, researchDocs) to
+ *     a non-foreground id, NOT downgrading the foreground tiers.
  *
  *     Predecessors and why they were dropped:
  *       - The balanced profile (GLM-5) hit overload errors -
@@ -369,15 +370,11 @@ export type AgentRole =
  *         deepseek-v4-flash trial that replaced it; revert here
  *         if deepseek's entry quality lags.
  *
- *     If overload errors return, the next move is yet another
- *     non-user-fronted id. Don't fall back to Smart / Balanced /
- *     Fast tier ids - the journaler walking every settled thread
- *     in order in the background should never fight foreground
- *     turns for capacity. If the prompt's dense constraint set
- *     defeats yet another model family, the next move is the
- *     two-stage architecture (separate clinical-analyst and
- *     narrative passes, each with a focused subset of the
- *     constraints) rather than another single-model swap.
+ *     If the prompt's dense constraint set defeats yet another
+ *     model family, the next move is the two-stage architecture
+ *     (separate clinical-analyst and narrative passes, each with
+ *     a focused subset of the constraints) rather than another
+ *     single-model swap.
  *
  *   reflection - deepseek-v4-flash. Same shape as journal: read the
  *     thread, make some judgments, call the memory tools. Big-window
@@ -390,8 +387,9 @@ export type AgentRole =
  *     model also runs the synchronous "ask agent to update" flow
  *     from the per-article UI (single completion, response_format
  *     pinned to JSON, no tool loop). Same rationale as reflection -
- *     big window swallows the conversation, capacity isolation from
- *     foreground tiers, and the JSON pin works on the manual path.
+ *     big window swallows the conversation and the JSON pin works
+ *     on the manual path. See the journal entry above for the
+ *     shared-capacity-with-foreground note.
  *
  *   wikiLibrarian - deepseek-v4-flash. The wiki agent's bigger
  *     sibling: every ~12 hours it reads the full alphabetical list

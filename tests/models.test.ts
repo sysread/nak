@@ -55,11 +55,11 @@ describe('MODELS (active registry)', () => {
 
 describe('TIERS (user-facing wrappers)', () => {
   it('has the three tiers with the expected Venice model ids', () => {
-    // All three tiers currently front the same deepseek-v4-pro id; the
+    // All three tiers currently front the same deepseek-v4-flash id; the
     // difference is the reasoning configuration (medium / low / off).
-    expect(TIERS.smart.id).toBe('deepseek-v4-pro');
-    expect(TIERS.balanced.id).toBe('deepseek-v4-pro');
-    expect(TIERS.fast.id).toBe('deepseek-v4-pro');
+    expect(TIERS.smart.id).toBe('deepseek-v4-flash');
+    expect(TIERS.balanced.id).toBe('deepseek-v4-flash');
+    expect(TIERS.fast.id).toBe('deepseek-v4-flash');
   });
   it('each tier wraps its corresponding MODELS entry', () => {
     for (const t of TIER_ORDER) {
@@ -291,15 +291,18 @@ describe('padEmbeddingForStorage', () => {
 
 describe('findModelById', () => {
   it('returns the spec for currently-active ids', () => {
-    expect(findModelById('deepseek-v4-pro')).toBe(MODELS['deepseek-v4-pro']);
     expect(findModelById('deepseek-v4-flash')).toBe(MODELS['deepseek-v4-flash']);
     expect(findModelById('qwen3-5-35b-a3b')).toBe(MODELS['qwen3-5-35b-a3b']);
+    expect(findModelById('mistral-small-3-2-24b-instruct')).toBe(
+      MODELS['mistral-small-3-2-24b-instruct']
+    );
   });
   it('returns null for retired ids - retired specs do not carry the same shape', () => {
     expect(findModelById('arcee-trinity-large-thinking')).toBeNull();
     expect(findModelById('grok-41-fast')).toBeNull();
     expect(findModelById('kimi-k2-5')).toBeNull();
     expect(findModelById('zai-org-glm-5-1')).toBeNull();
+    expect(findModelById('deepseek-v4-pro')).toBeNull();
   });
   it('returns null for unknown / empty inputs', () => {
     expect(findModelById('never-existed')).toBeNull();
@@ -311,7 +314,6 @@ describe('findModelById', () => {
 
 describe('findContextWindowById', () => {
   it('returns the window for a currently-active id', () => {
-    expect(findContextWindowById('deepseek-v4-pro')).toBe(MODELS['deepseek-v4-pro'].contextWindow);
     expect(findContextWindowById('deepseek-v4-flash')).toBe(MODELS['deepseek-v4-flash'].contextWindow);
     expect(findContextWindowById('qwen3-5-35b-a3b')).toBe(MODELS['qwen3-5-35b-a3b'].contextWindow);
   });
@@ -330,6 +332,7 @@ describe('findContextWindowById', () => {
     expect(findContextWindowById('zai-org-glm-5-1')).toBe(200_000);
     expect(findContextWindowById('zai-org-glm-5')).toBe(198_000);
     expect(findContextWindowById('zai-org-glm-4.7')).toBe(198_000);
+    expect(findContextWindowById('deepseek-v4-pro')).toBe(1_000_000);
   });
 
   it('returns null for an unknown id and for null/empty input', () => {

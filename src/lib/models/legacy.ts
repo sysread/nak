@@ -38,6 +38,11 @@ export const LEGACY_MODELS: Readonly<Record<string, LegacyModelSpec>> = {
   'kimi-k2-6':                         { id: 'kimi-k2-6', contextWindow: 256_000 },
   'zai-org-glm-5-1':                   { id: 'zai-org-glm-5-1', contextWindow: 200_000 },
 
+  // Briefly fronted all three tiers between the GLM swap and the swap
+  // back to deepseek-v4-flash. Kept for the short window during which
+  // any user-facing assistant row could have stamped this id.
+  'deepseek-v4-pro':                   { id: 'deepseek-v4-pro', contextWindow: 1_000_000 },
+
   // Retired Balanced-tier ids.
   'arcee-trinity-large-thinking':      { id: 'arcee-trinity-large-thinking', contextWindow: 256_000 },
   'gemma-4-uncensored':                { id: 'gemma-4-uncensored', contextWindow: 256_000 },
