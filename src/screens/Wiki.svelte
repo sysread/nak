@@ -395,6 +395,57 @@
     manualError = null;
     await submitManualUpdate(article);
   }
+
+  /**
+   * Intercept clicks on relative `?...` anchors in the rendered
+   * article body. The wiki agents emit Markdown links of the form
+   * `[label](?cid=<thread-id>)` to anchor facts to their source
+   * conversation; the same mechanism would work for any of the
+   * routed keys in src/lib/routing.svelte.ts (e.g. `?wiki_article_id=...`,
+   * `?recipe=...`).
+   *
+   * Without interception the browser does a full same-origin
+   * navigation when the user clicks one of these links - which
+   * works functionally (the fresh load reads the new search params
+   * and lands on the right surface) but is jarring. This handler
+   * preventDefaults the click, parses the href's search params,
+   * and calls `navigate()` for a soft in-app navigation instead.
+   *
+   * Only `?...` hrefs are intercepted. Absolute / external links
+   * still flow through the markdown component's link-hardening
+   * (target="_blank" etc.). Anchors without an href (icons, etc.)
+   * are ignored.
+   */
+  function onArticleClick(event: MouseEvent): void {
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    const anchor = target.closest('a') as HTMLAnchorElement | null;
+    if (!anchor) return;
+    const href = anchor.getAttribute('href');
+    if (!href || !href.startsWith('?')) return;
+    if (event.defaultPrevented) return;
+    if (event.button !== 0) return; // let middle-click open a new tab
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    const params = new URLSearchParams(href);
+    // Build the navigate patch from whichever routed keys appear.
+    // `cid` is by far the most common (the source-link convention),
+    // but the same handler covers other in-app `?key=val` link
+    // patterns the agents might add later. Unknown keys silently
+    // fall through - navigate ignores keys it doesn't recognise.
+    const patch: Record<string, string | null> = {};
+    const cid = params.get('cid');
+    if (cid !== null) {
+      patch.cid = cid;
+      // Clearing the wiki tab so the user lands on the chat surface
+      // for that thread, rather than staying inside the wiki panel
+      // with a thread id behind the scenes.
+      patch.drawer = null;
+      patch.wiki_article_id = null;
+    }
+    if (Object.keys(patch).length === 0) return;
+    navigate(patch);
+  }
 </script>
 
 <section class="wiki-panel" aria-label="Wiki">
@@ -592,7 +643,11 @@
                     Title would change to: <strong>{manualPreview.title}</strong>
                   </p>
                 {/if}
-                <div class="wiki-content">
+                <div
+                  class="wiki-content"
+                  role="presentation"
+                  onclick={onArticleClick}
+                >
                   <Markdown content={manualPreview.content} />
                 </div>
                 <div class="row">
@@ -650,7 +705,11 @@
               </button>
             </div>
           </header>
-          <div class="wiki-content">
+          <div
+            class="wiki-content"
+            role="presentation"
+            onclick={onArticleClick}
+          >
             <Markdown content={a.content} />
           </div>
         </article>
