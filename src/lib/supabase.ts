@@ -2769,6 +2769,24 @@ export class SupabaseService {
     return data === true;
   }
 
+  /**
+   * Nuke the journal subsystem for the current user. Deletes every
+   * `journal_entries` row (automatic and user-authored), drops every
+   * `journal_thread_excludes` row so the worker re-evaluates from
+   * scratch, and nulls `last_journaled_msg_id` + the journal claim
+   * columns on the user's threads. Wraps three statements in a single
+   * server-side transaction (see `reset_journal_data` in schema.sql)
+   * so a failure can't leave the journal half-cleared with stale
+   * thread pointers.
+   *
+   * Callers (Settings -> Journal -> Reset) MUST gate this behind an
+   * explicit user confirmation - it's irreversible.
+   */
+  async resetJournalData(): Promise<void> {
+    const { error } = await this.client.rpc('reset_journal_data');
+    if (error) throw new SupabaseError(error.message);
+  }
+
   // User wiki -------------------------------------------------------------
 
   /**
@@ -2858,6 +2876,22 @@ export class SupabaseService {
 
   async deleteWikiArticle(id: string): Promise<void> {
     const { error } = await this.client.from('wiki_articles').delete().eq('id', id);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Nuke the wiki subsystem for the current user. Deletes every
+   * `wiki_articles` row and nulls `last_wiki_processed_msg_id` + the
+   * wiki claim columns on the user's threads so the per-conversation
+   * agent re-evaluates from scratch. Wraps both statements in a single
+   * server-side transaction (see `reset_wiki_data` in schema.sql) so
+   * the articles and the per-thread pipeline state stay in lockstep.
+   *
+   * Callers (Settings -> Wiki -> Reset) MUST gate this behind an
+   * explicit user confirmation - it's irreversible.
+   */
+  async resetWikiData(): Promise<void> {
+    const { error } = await this.client.rpc('reset_wiki_data');
     if (error) throw new SupabaseError(error.message);
   }
 

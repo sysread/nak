@@ -12,6 +12,7 @@
  */
 import type { SupabaseService, WikiArticle } from './supabase';
 import type { VeniceClient } from './venice';
+import { emitWikiChange } from './wiki-events';
 import { searchWikiArticlesSemantic } from './wiki';
 
 interface WikiStore {
@@ -100,4 +101,30 @@ export function addWikiRow(row: WikiArticle): void {
   if (insertAt < 0) insertAt = next.length;
   next.splice(insertAt, 0, row);
   wikiStore.results = next;
+}
+
+/**
+ * Settings -> Wiki -> Reset. Wipes every wiki article the user owns
+ * AND clears the per-thread wiki pipeline state so the per-
+ * conversation agent re-evaluates from scratch. Backed by the
+ * transactional `reset_wiki_data` RPC; we mirror by clearing the
+ * in-memory list and emitting a change event so the Wiki drawer
+ * repaints immediately.
+ *
+ * The caller is responsible for the confirmation prompt - this
+ * function assumes the user has already accepted the irreversible
+ * action.
+ *
+ * Note: the librarian's last-run timestamp on `profiles` is left
+ * alone. A reset is about the article store and the per-thread
+ * pipeline; the librarian's cadence is orthogonal.
+ */
+export async function resetAllWikiData(
+  supabase: SupabaseService,
+): Promise<void> {
+  await supabase.resetWikiData();
+  wikiStore.results = [];
+  wikiStore.loaded = true;
+  wikiStore.error = null;
+  emitWikiChange();
 }
