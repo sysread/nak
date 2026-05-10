@@ -4717,7 +4717,27 @@
               </div>
             </div>
           {/if}
-          {#if sending || streamingText || streamingReasoning}
+          <!-- Streaming bubble visibility is gated on `sending` alone -
+               the master flag for "chat loop is running". This
+               guarantees the KITT Scanner inside stays on screen for
+               the ENTIRE response cycle: from the moment the user hits
+               send, through every reasoning + content delta, across
+               every tool round (model assembles a tool call, tools
+               execute, next round opens, text streams in again), and
+               only winks out when the chat loop finally closes after
+               the terminal round's `data: [DONE]`. Earlier shapes
+               OR'd in `streamingText || streamingReasoning` defensively;
+               that read as "is there content" rather than "is the
+               turn alive" and made the bubble's lifetime ambiguous to
+               anyone reading it. Both buffers are cleared by
+               onAssistantPersisted at the close of every round (so
+               the bubble collapses back to a Scanner-only card while
+               tools execute or the next round is being opened) and
+               the runExchange success/error paths clear them both
+               before `sending = false` runs in finally - so dropping
+               them from the condition can't shorten the visible
+               window, only document the intent. -->
+          {#if sending}
             <div class="msg assistant">
               <!-- Live reasoning panel. Open when `streamingReasoningOpen`
                    is true; flipped on by the first reasoning delta and
@@ -4743,26 +4763,28 @@
                 <Markdown content={streamingText} />
               {/if}
               <!-- Continuous "still working" signal for the entire
-                   window between "user hit send" and the round
+                   window between "user hit send" and the chat loop
                    actually closing - including gaps that aren't
                    emitting any deltas (model has finished reasoning
                    and is assembling a tool call; tools are executing
                    between rounds; round just ended, next round about
-                   to start). Stays visible AFTER streamingText starts
-                   arriving too: a single round can emit text deltas
-                   and then switch to tool_call deltas within the same
+                   to start; final round persisted but post-loop
+                   bookkeeping like refreshThreads is still running).
+                   Stays visible AFTER streamingText starts arriving
+                   too: a single round can emit text deltas and then
+                   switch to tool_call deltas within the same
                    assistant message, and once the text stops flowing
                    the bubble otherwise reads as "done responding"
-                   even though the model is still building a tool call
-                   on the wire. Cleared only when the round persists
-                   (onAssistantPersisted resets streamingText) and
-                   ultimately when `sending` flips false at end of
-                   turn. Sits below ReasoningPanel rather than being
-                   suppressed by it - once reasoning text has
-                   accumulated the panel itself stops moving. Wrapper
-                   centers the inline-flex Scanner inside the bubble
-                   so it doesn't read as a stranded artifact in the
-                   top-left corner. -->
+                   even though the model is still building a tool
+                   call on the wire. Cleared only when `sending` flips
+                   false in runExchange's outer finally - by which
+                   time every round, every tool execution, and every
+                   inter-round gap has played out. Sits below
+                   ReasoningPanel rather than being suppressed by it -
+                   once reasoning text has accumulated the panel
+                   itself stops moving. Wrapper centers the inline-
+                   flex Scanner inside the bubble so it doesn't read
+                   as a stranded artifact in the top-left corner. -->
               <div class="thinking">
                 <Scanner label="Thinking" />
               </div>
