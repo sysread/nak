@@ -2016,6 +2016,25 @@ h1 {
   pointer-events: none;
 }
 
+/* Same visual contract as .msg.disabled / .msg.fading-out, applied
+   to non-chat surfaces (wiki articles during the "Ask agent to
+   update" flow, journal cards during regenerate-with-preview). The
+   chat version sits on .msg because the bubble structure is
+   chat-specific; .regen-target rides on whichever container element
+   represents "the thing that's about to be replaced" - the wiki
+   article, the journal automatic card, etc. Reuses the
+   msg-fade-out keyframe above so the fade timing is identical
+   across surfaces; tweaking the duration there propagates here. */
+.regen-target {
+  opacity: 0.55;
+  outline: 1px solid var(--danger);
+  outline-offset: -1px;
+}
+.regen-target.fading-out {
+  animation: msg-fade-out 500ms ease-in forwards;
+  pointer-events: none;
+}
+
 /* Subdued inline indicator emitted by the chat-loop when the LLM
    called the `update_title` tool mid-turn. Sits in the transcript at
    the position the call fired (after the assistant block that

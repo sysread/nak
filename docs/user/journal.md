@@ -93,21 +93,23 @@ the entry rescinds that vote.
 
 The 🔄 button on an automatic entry asks the journaler to write
 a different take on the same conversation. Click it and the
-card's body is replaced with the proposed new entry as soon as
-the model has finished. You then have three choices:
+original card picks up a red outline (the same "marked for
+replacement" cue you get on chat messages when you regenerate a
+turn) while a proposal card appears just below, showing a
+spinner first and then the journaler's new version. You can
+read both side by side, then choose:
 
-- **Accept** replaces the original entry with the proposal.
+- **Accept** replaces the original entry with the proposal. The
+  original card fades out and the new content snaps in.
 - **Try again** re-runs the journaler against the original entry
   for another fresh angle. Each try ignores the previous proposal,
   so retries don't compound.
 - **Cancel** discards the proposal and restores the original
   entry untouched.
 
-Nothing is saved until you click Accept. While the regenerate is
-running, the card shows a "Regenerating this entry…" placeholder;
-your thumbs-up vote, the entry's spam-filter training, and the
-source conversation's link to the entry are all preserved when
-you accept.
+Nothing is saved until you click Accept. Your thumbs-up vote,
+the entry's spam-filter training, and the source conversation's
+link to the entry are all preserved when you accept.
 
 Regenerate runs the journaler with the worthy / not-worthy gate
 bypassed - clicking the button is itself a "yes, I want an entry

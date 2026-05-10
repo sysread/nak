@@ -254,6 +254,16 @@
   let manualAccepting = $state(false);
   let manualController: AbortController | null = null;
 
+  // Article id whose body is currently mid-fade-out. Set on Accept
+  // between the DB write and the in-store patch so the user sees
+  // the OLD content dissolve before the NEW content snaps in -
+  // mirrors the pending-delete / fade-out sequence on chat message
+  // bubbles when a turn is regenerated. Kept in sync with the
+  // FADE_OUT_MS constant; the matching @keyframes msg-fade-out
+  // duration lives in styles.css.
+  let fadingArticleId = $state<string | null>(null);
+  const FADE_OUT_MS = 500;
+
   function startManualUpdate(a: WikiArticle): void {
     manualTargetId = a.id;
     manualInstructions = '';
@@ -343,10 +353,24 @@
         title: manualPreview.title,
         content: manualPreview.content,
       });
+      // Fade out the original article BEFORE the in-store patch so
+      // the user sees the old version dissolve, then the new content
+      // snaps in. The DB write has already succeeded at this point;
+      // the fade is purely visual sequencing. If the user navigates
+      // away mid-fade the panel unmounts cleanly - the fade target
+      // is keyed by article id so a stale fade won't bleed onto a
+      // different article.
+      fadingArticleId = article.id;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, FADE_OUT_MS));
       patchWikiRow(article.id, updated);
       emitWikiChange();
+      fadingArticleId = null;
       cancelManualUpdate();
     } catch (err) {
+      // On error the fade was either never started or the panel is
+      // unmounting; clearing here keeps the article visible at full
+      // opacity so the user can read the failure context.
+      fadingArticleId = null;
       manualError = err instanceof Error ? err.message : String(err);
     } finally {
       manualAccepting = false;
@@ -486,7 +510,20 @@
           </div>
         </div>
       {:else}
-        <article class="wiki-article">
+        <!--
+          The .regen-target outline + dim signals "this article is
+          marked for replacement" while the manual-update flow is
+          open below; .fading-out plays the dissolve animation
+          between the DB write and the in-store content swap on
+          Accept. Both classes share their visual contract with the
+          chat regenerate flow (.msg.disabled / .msg.fading-out) so
+          the language reads consistently across surfaces.
+        -->
+        <article
+          class="wiki-article"
+          class:regen-target={manualTargetId === a.id}
+          class:fading-out={fadingArticleId === a.id}
+        >
           <header class="wiki-header">
             <h1 class="wiki-title">{a.title}</h1>
             <div class="wiki-actions">
