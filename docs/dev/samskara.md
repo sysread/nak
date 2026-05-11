@@ -90,10 +90,11 @@ toast is just a glance cue that the bias model is forming.
   bundle, which cannot import Svelte runes.
 - `src/components/SamskaraToasts.svelte` - the persistent
   mood-pill UI. Listens for `SAMSKARA_MINT_EVENT` on `window`,
-  renders the latest mint's emoji as a fixed pill in the
-  top-right corner, and stays visible until the next mint (or a
-  thread switch) so the user can connect the glyph to whatever
-  it reacted to. Whenever a thread is active (`route.cid` set)
+  renders the latest mint's emoji as a pill in the bottom-right
+  of the messages pane (between the IntuitionPill above and the
+  scroll-to-bottom arrow below), and stays visible until the
+  next mint (or a thread switch) so the user can connect the
+  glyph to whatever it reacted to. Whenever a thread is active (`route.cid` set)
   the pill is visible. On thread open it seeds asynchronously
   from `samskaraGetLatestFireMood(cid)` (the most recent stored
   fire's joined valence + tier + confidence), so reopened
@@ -787,7 +788,7 @@ summarizer reads samskaras to feed the agent.
   formation worker is hours behind, the model just operates on
   staler bias.
 - **Samskara is almost-opaque to the user.** The only UI
-  surface is the top-right toast stack showing one valence-
+  surface is the bottom-right mood pill showing one valence-
   mapped emoji per mint. No prediction text leaks; showing it
   would invite the user to reason about their own bias model
   and collapses the "absorption over disclaimer" framing. Deep

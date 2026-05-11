@@ -243,8 +243,8 @@ that travels with the PWA install.
 
 ### Samskara diagnostics
 
-Click the **mood emoji** in the top-right corner of a conversation
-(the persistent pill that updates when a samskara mints) to open a
+Click the **mood emoji** at the bottom-right of the conversation
+pane (the persistent pill that updates when a samskara mints) to open a
 dedicated **samskara diagnostics** screen - a read-only window into
 the samskara pipeline for the current conversation. Useful while
 vetting the feature or debugging a "why did the model seem to

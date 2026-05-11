@@ -77,7 +77,7 @@ changing a contract that other features depend on.
   built predictive model of the user. Substrate compounds into
   samskaras compounds into a prose summary that lives
   always-on in the system prompt; mints surface as a subtle
-  top-right toast.
+  bottom-right mood pill.
 - [Intuition](./intuition.md) — the subconscious layer. A
   perception agent + five drives + a synthesis agent that
   produces a `<think>`-tagged internal monologue, injected
