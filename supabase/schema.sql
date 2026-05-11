@@ -4797,6 +4797,14 @@ drop policy if exists "journal_spam_tokens are self-updatable" on public.journal
 create policy "journal_spam_tokens are self-updatable" on public.journal_spam_tokens
   for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
+-- Required by untrain_journal_spam's GC step, which deletes token
+-- rows that lost their last evidence (ham_count = 0 AND spam_count
+-- = 0). Without this policy, RLS suppressed the DELETE silently
+-- and zero-count rows accumulated forever - storage bloat, no leak.
+drop policy if exists "journal_spam_tokens are self-deletable" on public.journal_spam_tokens;
+create policy "journal_spam_tokens are self-deletable" on public.journal_spam_tokens
+  for delete using (auth.uid() = user_id);
+
 -- Per-user totals. Used as Naive Bayes priors and as the cold-start
 -- gate (worker suppresses the hint while either total is below
 -- threshold so the LLM doesn't try to interpret meaningless scores).
@@ -4822,6 +4830,14 @@ create policy "journal_spam_stats are self-insertable" on public.journal_spam_st
 drop policy if exists "journal_spam_stats are self-updatable" on public.journal_spam_stats;
 create policy "journal_spam_stats are self-updatable" on public.journal_spam_stats
   for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- No live caller deletes from this table today. Added for parity
+-- with journal_spam_tokens above so a future "wipe spam model" path
+-- (Settings -> Reset, an admin tool) can remove the totals row in
+-- the same call as the per-token rows without a hidden RLS-suppress.
+drop policy if exists "journal_spam_stats are self-deletable" on public.journal_spam_stats;
+create policy "journal_spam_stats are self-deletable" on public.journal_spam_stats
+  for delete using (auth.uid() = user_id);
 
 -- Idempotency marker for the ham button. Set once when the user
 -- marks an automatic entry as appropriate; the UI hides the button
