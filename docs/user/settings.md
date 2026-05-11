@@ -68,8 +68,8 @@ Two rotations live here:
 - **Master password** - the passphrase that unlocks your encrypted
   config blob in this browser. Re-encrypts locally; does not touch
   Supabase.
-- **Supabase password** - the password you use to sign in to your
-  Supabase project. Nak re-verifies your current password before
+- **Account password** - the password you use to sign in to your
+  Supabase account. Nak re-verifies your current password before
   updating, then calls Supabase to set the new one.
 
 Both require the current password and enforce an 8-character

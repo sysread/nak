@@ -123,16 +123,16 @@
     | 'security'
     | 'about';
   const GROUPS: { id: Group; label: string }[] = [
-    { id: 'keys', label: 'API keys' },
     { id: 'ai', label: 'AI' },
     { id: 'journal', label: 'Journal' },
     { id: 'wiki', label: 'Wiki' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'usage', label: 'Usage' },
     { id: 'security', label: 'Security' },
+    { id: 'keys', label: 'API keys' },
     { id: 'about', label: 'About' },
   ];
-  let group = $state<Group>('keys');
+  let group = $state<Group>('ai');
 
   // --- Keys pane ---
   let supabaseUrl = $state(app.config?.supabaseUrl ?? '');
@@ -1134,7 +1134,7 @@
     authPwError = null;
     authPwInfo = null;
     if (!authPwCurrent) {
-      authPwError = 'Enter your current Supabase password.';
+      authPwError = 'Enter your current account password.';
       return;
     }
     // Supabase enforces a 6-character minimum by default. Bump to 8 to
@@ -1155,7 +1155,7 @@
     authPwBusy = true;
     try {
       await app.supabase.changeAuthPassword(authPwCurrent, authPwNew);
-      authPwInfo = 'Supabase password changed.';
+      authPwInfo = 'Account password changed.';
       authPwCurrent = '';
       authPwNew = '';
       authPwConfirm = '';
@@ -1900,31 +1900,31 @@
           <button type="submit" disabled={busy}>Change password</button>
         </form>
 
-        <h3 class="pane-section">Change Supabase password</h3>
+        <h3 class="pane-section">Change account password</h3>
         <p class="subtle">
-          Rotate the password you use to sign in to your Supabase project.
+          Rotate the password you use to sign in to your Supabase account.
           We re-verify your current password before updating, so a stolen
           unlocked tab can't quietly rotate you out of your own account.
         </p>
         <form onsubmit={onChangeAuthPassword}>
           <div class="form-row">
-            <label for="auth-pw-current">Current Supabase password</label>
+            <label for="auth-pw-current">Current account password</label>
             <SecretInput id="auth-pw-current" bind:value={authPwCurrent} required
                          autocomplete="current-password" />
           </div>
           <div class="form-row">
-            <label for="auth-pw-new">New Supabase password</label>
+            <label for="auth-pw-new">New account password</label>
             <SecretInput id="auth-pw-new" bind:value={authPwNew} minlength={8} required
                          autocomplete="new-password" />
           </div>
           <div class="form-row">
-            <label for="auth-pw-confirm">Confirm new Supabase password</label>
+            <label for="auth-pw-confirm">Confirm new account password</label>
             <SecretInput id="auth-pw-confirm" bind:value={authPwConfirm} minlength={8} required
                          autocomplete="new-password" />
           </div>
           {#if authPwError}<p class="error">{authPwError}</p>{/if}
           {#if authPwInfo}<p class="subtle">{authPwInfo}</p>{/if}
-          <button type="submit" disabled={authPwBusy}>Change Supabase password</button>
+          <button type="submit" disabled={authPwBusy}>Change account password</button>
         </form>
       {:else if group === 'about'}
         <!-- About pane: surfaces the build fingerprint and lets the
