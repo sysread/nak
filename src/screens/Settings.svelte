@@ -721,11 +721,13 @@
   // form doesn't blow away feedback from the other.
   let pwCurrent = $state('');
   let pwNew = $state('');
+  let pwConfirm = $state('');
   let pwError = $state<string | null>(null);
   let pwInfo = $state<string | null>(null);
 
   let authPwCurrent = $state('');
   let authPwNew = $state('');
+  let authPwConfirm = $state('');
   let authPwError = $state<string | null>(null);
   let authPwInfo = $state<string | null>(null);
   let authPwBusy = $state(false);
@@ -1109,12 +1111,17 @@
       pwError = 'New password must be at least 8 characters.';
       return;
     }
+    if (pwNew !== pwConfirm) {
+      pwError = 'New password and confirmation do not match.';
+      return;
+    }
     busy = true;
     try {
       await changePassword(pwCurrent, pwNew);
       pwInfo = 'Master password changed.';
       pwCurrent = '';
       pwNew = '';
+      pwConfirm = '';
     } catch (err) {
       pwError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -1137,6 +1144,10 @@
       authPwError = 'New password must be at least 8 characters.';
       return;
     }
+    if (authPwNew !== authPwConfirm) {
+      authPwError = 'New password and confirmation do not match.';
+      return;
+    }
     if (!app.supabase) {
       authPwError = 'Not connected to Supabase.';
       return;
@@ -1147,6 +1158,7 @@
       authPwInfo = 'Supabase password changed.';
       authPwCurrent = '';
       authPwNew = '';
+      authPwConfirm = '';
     } catch (err) {
       authPwError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -1878,6 +1890,11 @@
             <SecretInput id="pw-new" bind:value={pwNew} minlength={8} required
                          autocomplete="new-password" />
           </div>
+          <div class="form-row">
+            <label for="pw-confirm">Confirm new master password</label>
+            <SecretInput id="pw-confirm" bind:value={pwConfirm} minlength={8} required
+                         autocomplete="new-password" />
+          </div>
           {#if pwError}<p class="error">{pwError}</p>{/if}
           {#if pwInfo}<p class="subtle">{pwInfo}</p>{/if}
           <button type="submit" disabled={busy}>Change password</button>
@@ -1898,6 +1915,11 @@
           <div class="form-row">
             <label for="auth-pw-new">New Supabase password</label>
             <SecretInput id="auth-pw-new" bind:value={authPwNew} minlength={8} required
+                         autocomplete="new-password" />
+          </div>
+          <div class="form-row">
+            <label for="auth-pw-confirm">Confirm new Supabase password</label>
+            <SecretInput id="auth-pw-confirm" bind:value={authPwConfirm} minlength={8} required
                          autocomplete="new-password" />
           </div>
           {#if authPwError}<p class="error">{authPwError}</p>{/if}
