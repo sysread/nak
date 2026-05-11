@@ -18,7 +18,7 @@
  * banner, the About pane, and any future surface (e.g. a footer
  * version tag) all read from one source.
  *
- * The update check runs on an interval (5 minutes) plus whenever the
+ * The update check runs on an interval (3 minutes) plus whenever the
  * tab regains visibility. Browsers also fire their own update check
  * roughly every 24h; our polling shortens that window so a new deploy
  * is noticed within minutes instead of after next-day page load.
@@ -38,10 +38,10 @@ import { createLogger } from './logger.svelte';
 const log = createLogger('update');
 
 // How often to ping the browser's SW registration to re-check for a
-// new precache manifest. Five minutes is a compromise — short enough
+// new precache manifest. Three minutes is a compromise - short enough
 // that a user who left the tab open sees "new version" within minutes
 // of a deploy, long enough that we're not hammering the network.
-const UPDATE_POLL_MS = 5 * 60 * 1000;
+const UPDATE_POLL_MS = 3 * 60 * 1000;
 
 // Safety net for the reload flow. If `controllerchange` hasn't fired
 // this many ms after we post SKIP_WAITING to the waiting SW, force a
