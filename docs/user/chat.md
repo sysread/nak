@@ -308,18 +308,19 @@ stroke buttons under each assistant message. Click it to expand a
 panel anchored to that turn. The panel shows:
 
 - A header pill marking the cohort as **confirmed**,
-  **disconfirmed**, **waiting**, or **aged out**, depending on what
-  the reaction classifier did with it on the following turn.
-- The **predictions that fired** for that turn, grouped by theme
-  (paraphrase clusters collapse into a representative with a
-  "+N similar" chevron). "Show all" bypasses the clustering and
+  **disconfirmed**, or **pending**, depending on what the reaction
+  classifier did with it on the following turn.
+- The **substrate row** for the same round, lifted to the top of the
+  panel with an accent stripe because it's the worker's after-the-
+  fact summary of what actually happened on this turn ("user asked
+  X about Y, expressing Z" / "the assistant did W and it landed P").
+  Includes its lifecycle state (pending assimilation, assimilated
+  but unembedded, or fully baked) and the round's valence reading.
+- Below that, the **predictions that fired** for that turn, grouped
+  by theme (paraphrase clusters collapse into a representative with
+  a "+N similar" chevron). "Show all" bypasses the clustering and
   lists every fire individually. Each entry shows its tier, ranking
   score, valence, confidence, and health.
-- The **substrate row** for the same round - the worker's structured
-  summary of what happened ("user asked X about Y, expressing Z"
-  / "the assistant did W and it landed P"), with its lifecycle
-  state (pending assimilation, assimilated but unembedded, or fully
-  baked) and the round's valence reading.
 
 The icon only appears on messages that produced at least one fire
 or substrate row, so cold-start messages and any turn the worker

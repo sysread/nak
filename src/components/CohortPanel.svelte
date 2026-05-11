@@ -123,20 +123,18 @@
     return `${sign}${v.toFixed(2)}`;
   }
 
-  // Three-state resolution label. Null means the reaction classifier
-  // hasn't scored this cohort yet - distinguish in-flight from aged-
-  // out by the 10-minute resolution window the classifier uses.
-  function resolutionLabel(
-    confirmed: boolean | null,
-    firedAtIso: string | null
-  ): string {
+  // Three-state resolution. The old four-way label (in-flight /
+  // window-open / aged-out) earned its keep in the diagnostics
+  // modal where cohorts were a flat list with no message context;
+  // inline under the user message that fired them, the transcript
+  // already encodes "this turn fired N exchanges ago" - if a later
+  // user turn is visible the classifier had its shot, and if it
+  // didn't, the cohort is the latest one. "pending" covers every
+  // unresolved state.
+  function resolutionLabel(confirmed: boolean | null): string {
     if (confirmed === true) return 'confirmed';
     if (confirmed === false) return 'disconfirmed';
-    if (!firedAtIso) return 'pending';
-    const ageMs = Date.now() - new Date(firedAtIso).getTime();
-    if (ageMs < 60 * 1000) return 'waiting (in-flight)';
-    if (ageMs < 10 * 60 * 1000) return 'waiting (resolution window open)';
-    return 'aged out (no reaction)';
+    return 'pending';
   }
 
   function resolutionStatusClass(confirmed: boolean | null): string {
@@ -164,7 +162,7 @@
     <span
       class="cohort-status status-{resolutionStatusClass(wasConfirmed)}"
     >
-      {resolutionLabel(wasConfirmed, firedAt)}
+      {resolutionLabel(wasConfirmed)}
     </span>
     <span class="cohort-count">
       {#if collapsed && !raw}
@@ -187,6 +185,45 @@
       </button>
     {/if}
   </header>
+
+  {#if substrate}
+    <!-- Substrate stub for the same round, mounted ABOVE the fires
+         because it's the worker's after-the-fact summary of what
+         actually happened on this turn ("user asked X about Y,
+         expressing Z" / "the assistant did W and it landed P") -
+         the headline read. The fires below are the predictions that
+         fed into producing this turn; the substrate is the result.
+         Visually emphasised with a left-edge accent stripe and a
+         tinted background so the panel reads as "answer up top,
+         working below" rather than a flat list of equal-weight
+         sections. Lifecycle status tracks how far the formation
+         worker has carried the row - situation/outcome filled by
+         the assimilator, embedding model filled by the embedder. -->
+    <div class="substrate-block">
+      <header class="substrate-head">
+        <span class="substrate-label">substrate</span>
+        <span
+          class="substrate-status status-{substrateStatusClass(substrate)}"
+        >
+          {assimilationStatus(substrate)}
+        </span>
+        {#if substrate.valence !== null}
+          <span class="substrate-meta">
+            valence {formatValence(substrate.valence)}
+          </span>
+        {/if}
+      </header>
+      {#if substrate.situation}
+        <p class="substrate-situation">{substrate.situation}</p>
+      {/if}
+      {#if substrate.outcome}
+        <p class="substrate-outcome subtle">
+          <em>Outcome:</em>
+          {substrate.outcome}
+        </p>
+      {/if}
+    </div>
+  {/if}
 
   {#if raw}
     <ul class="fire-list">
@@ -228,39 +265,6 @@
         </li>
       {/each}
     </ul>
-  {/if}
-
-  {#if substrate}
-    <!-- Substrate stub for the same round. Lives in the panel because
-         it shares the same per-user-message anchor: the chat loop
-         writes both at the boundaries of one turn. Lifecycle status
-         tracks how far the formation worker has carried the row -
-         situation/outcome filled by the assimilator, embedding model
-         filled by the embedder. -->
-    <div class="substrate-block">
-      <header class="substrate-head">
-        <span class="substrate-label">substrate</span>
-        <span
-          class="substrate-status status-{substrateStatusClass(substrate)}"
-        >
-          {assimilationStatus(substrate)}
-        </span>
-        {#if substrate.valence !== null}
-          <span class="substrate-meta">
-            valence {formatValence(substrate.valence)}
-          </span>
-        {/if}
-      </header>
-      {#if substrate.situation}
-        <p class="substrate-situation">{substrate.situation}</p>
-      {/if}
-      {#if substrate.outcome}
-        <p class="substrate-outcome subtle">
-          <em>Outcome:</em>
-          {substrate.outcome}
-        </p>
-      {/if}
-    </div>
   {/if}
 </div>
 
@@ -434,12 +438,18 @@
     font-weight: 700;
   }
 
+  /* Substrate emphasised as the headline read of the turn: left-
+     edge accent stripe + faintly tinted background lift it visually
+     above the fire list that follows. Padded inside the stripe so
+     the text doesn't crowd against the accent. */
   .substrate-block {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
-    padding-top: 0.5rem;
-    border-top: 1px dashed var(--border);
+    padding: 0.45rem 0.6rem 0.5rem;
+    border-left: 3px solid var(--accent);
+    border-radius: 0 4px 4px 0;
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
   }
   .substrate-head {
     display: flex;
@@ -451,8 +461,8 @@
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: var(--muted);
-    font-weight: 600;
+    color: var(--accent);
+    font-weight: 700;
   }
   .substrate-meta {
     font-size: 0.72rem;
