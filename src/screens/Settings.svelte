@@ -120,7 +120,6 @@
     | 'wiki'
     | 'appearance'
     | 'usage'
-    | 'export'
     | 'security'
     | 'about';
   const GROUPS: { id: Group; label: string }[] = [
@@ -130,7 +129,6 @@
     { id: 'wiki', label: 'Wiki' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'usage', label: 'Usage' },
-    { id: 'export', label: 'Export' },
     { id: 'security', label: 'Security' },
     { id: 'about', label: 'About' },
   ];
@@ -1224,6 +1222,26 @@
           {#if keysInfo}<p class="subtle">{keysInfo}</p>{/if}
           <button type="submit" disabled={busy}>Save keys</button>
         </form>
+
+        <h3 class="pane-section">Export</h3>
+        <p class="subtle">
+          Download your Supabase and Venice credentials as a JSON file so you
+          can reimport them when setting up Nak on another browser. This is a
+          local-only feature - the file is generated in your browser and
+          never uploaded.
+        </p>
+        <p class="subtle" style="color:var(--warn);font-size:0.85rem">
+          ⚠ The exported file contains your API keys in plaintext. Store it
+          with the same care as any other secret (e.g. your password
+          manager). Deleting it afterward is a fine choice.
+        </p>
+        <p class="subtle" style="font-size:0.85rem">
+          Import happens on the Setup screen of a fresh install - the
+          "Import from JSON" button pre-fills the credentials for you.
+        </p>
+        <button type="button" onclick={onExportConfig}>Export config as JSON</button>
+        {#if exportError}<p class="error">{exportError}</p>{/if}
+        {#if exportInfo}<p class="subtle">{exportInfo}</p>{/if}
       {:else if group === 'ai'}
         <!-- AI-adjacent settings share one pane so the sidebar doesn't
              fan out into a dedicated tab per toggle. All subsections
@@ -1840,26 +1858,6 @@
           ingested your recent requests yet — the ledger can lag live
           traffic by a few minutes.
         </p>
-      {:else if group === 'export'}
-        <h2>Export</h2>
-        <p class="subtle">
-          Download your Supabase and Venice credentials as a JSON file so you
-          can reimport them when setting up Nak on another browser. This is a
-          local-only feature — the file is generated in your browser and
-          never uploaded.
-        </p>
-        <p class="subtle" style="color:var(--warn);font-size:0.85rem">
-          ⚠ The exported file contains your API keys in plaintext. Store it
-          with the same care as any other secret (e.g. your password
-          manager). Deleting it afterward is a fine choice.
-        </p>
-        <p class="subtle" style="font-size:0.85rem">
-          Import happens on the Setup screen of a fresh install — the
-          "Import from JSON" button pre-fills the credentials for you.
-        </p>
-        <button type="button" onclick={onExportConfig}>Export config as JSON</button>
-        {#if exportError}<p class="error">{exportError}</p>{/if}
-        {#if exportInfo}<p class="subtle">{exportInfo}</p>{/if}
       {:else if group === 'security'}
         <h2>Security</h2>
 

@@ -10,7 +10,11 @@ behavior.
 
 ### API keys
 
-See [Security model](./security.md) for how keys are stored.
+Update your Supabase and Venice credentials, and download a JSON
+copy of those credentials for re-import on another browser. See
+[Security model](./security.md) for how keys are stored locally,
+and [Export & import](./export-import.md) for the export/import
+workflow itself.
 
 ### AI
 
@@ -56,10 +60,6 @@ Each row shows a horizontal bar scaled by total tokens
 - Numbers come from Venice's beta billing endpoint. The ledger can
   lag live traffic by a few minutes, so a just-sent message may not
   appear immediately.
-
-### Export
-
-Covered in detail on [Export & import](./export-import.md).
 
 ### Security
 
