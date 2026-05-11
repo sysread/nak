@@ -11,13 +11,36 @@
 import type { JournalEntry, SupabaseService } from './supabase';
 import type { VeniceClient } from './venice';
 import { emitJournalChange } from './journal-events';
-import { JournalAgent, type RegenerateResult } from './agents/journal/agent';
-import {
-  trainSpamFilterForThread,
-  trainSpamFilterForUserEntry,
-  untrainSpamFilterForThread,
-  untrainSpamFilterForUserEntry,
-} from './agents/journal/spam_filter';
+// `JournalAgent` is type-only so the chunker doesn't pull
+// agent.ts (and its transitive `snowball-stemmers` import via
+// spam_filter.ts, ~60 kB gzipped) into the main bundle. The class
+// is instantiated only inside regenerateAutomaticEntry, which fires
+// on a user clicking Regenerate inside the Journal modal - we
+// dynamic-import the implementation there.
+import type { JournalAgent, RegenerateResult } from './agents/journal/agent';
+export type { RegenerateResult };
+
+// Spam-filter helpers live in `./agents/journal/spam_filter`, which
+// pulls in `snowball-stemmers` (~865 kB raw / ~60 kB gzipped). The
+// filter only fires on explicit journal actions (save / delete / ham
+// click), so we dynamic-import the module on-demand to keep
+// snowball out of the main chunk. Each call site goes through
+// `loadSpamFilter()` and reads the helper off the resolved module
+// namespace. Module is cached after first load, so subsequent uses
+// pay only a Promise resolution.
+async function loadSpamFilter(): Promise<
+  typeof import('./agents/journal/spam_filter')
+> {
+  return import('./agents/journal/spam_filter');
+}
+
+// JournalAgent ctor lives on the same lazy path - its module
+// chain is what pulls spam_filter into main if we statically
+// import it here.
+async function loadJournalAgentClass(): Promise<typeof JournalAgent> {
+  const m = await import('./agents/journal/agent');
+  return m.JournalAgent;
+}
 
 interface JournalStore {
   entries: JournalEntry[];
@@ -98,7 +121,9 @@ export async function saveUserEntry(
   // already shaped the model on save, and re-training on every save
   // would over-weight verbose users. The trade-off: heavy edits drift
   // the trained vocabulary slightly off the current content.
-  void trainSpamFilterForUserEntry(supabase, entry.content);
+  void loadSpamFilter().then((m) =>
+    m.trainSpamFilterForUserEntry(supabase, entry.content)
+  );
   return entry;
 }
 
@@ -143,10 +168,11 @@ export async function deleteEntry(
     const threadId = target.thread_id;
     const wasHam = target.ham_marked_at !== null;
     void (async () => {
+      const m = await loadSpamFilter();
       if (wasHam) {
-        await untrainSpamFilterForThread(supabase, threadId, 'ham');
+        await m.untrainSpamFilterForThread(supabase, threadId, 'ham');
       }
-      await trainSpamFilterForThread(supabase, threadId, 'spam');
+      await m.trainSpamFilterForThread(supabase, threadId, 'spam');
     })();
   }
   // User entries get auto-hammed on creation. Rescind that vote on
@@ -155,7 +181,10 @@ export async function deleteEntry(
   // legacy user entries (created before auto-ham wiring) decrement
   // to no-op rather than underflowing.
   if (target?.source === 'user' && target.content) {
-    void untrainSpamFilterForUserEntry(supabase, target.content);
+    const content = target.content;
+    void loadSpamFilter().then((m) =>
+      m.untrainSpamFilterForUserEntry(supabase, content)
+    );
   }
 }
 
@@ -254,7 +283,8 @@ export async function regenerateAutomaticEntry(
           name: trimmedName.length > 0 ? trimmedName : null,
           location: trimmedLocation.length > 0 ? trimmedLocation : null,
         };
-  const agent = new JournalAgent(venice, supabase, undefined, profile);
+  const AgentClass = await loadJournalAgentClass();
+  const agent = new AgentClass(venice, supabase, undefined, profile);
   return agent.regenerate({
     threadId: entry.thread_id,
     entryDate: entry.entry_date,
@@ -351,7 +381,10 @@ export async function markEntryHam(
   journal.entries = journal.entries.map((e) => (e.id === id ? updated : e));
   emitJournalChange();
   if (updated.thread_id) {
-    void trainSpamFilterForThread(supabase, updated.thread_id, 'ham');
+    const threadId = updated.thread_id;
+    void loadSpamFilter().then((m) =>
+      m.trainSpamFilterForThread(supabase, threadId, 'ham')
+    );
   }
   return updated;
 }

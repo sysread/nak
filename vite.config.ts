@@ -4,9 +4,10 @@
 // flipped TypeScript's overload resolution onto a stricter path
 // that rejected `test` as unknown. This import gives us a single
 // type that knows about both surfaces.
-import { defineConfig } from 'vitest/config';
+import { defineConfig, type Plugin } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { VitePWA } from 'vite-plugin-pwa';
+import { visualizer } from 'rollup-plugin-visualizer';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 
@@ -162,6 +163,21 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
       },
     }),
+    // Bundle visualizer for chunking work. Set NAK_BUNDLE_STATS=1 to
+    // emit dist/stats.html alongside the build. Off by default so a
+    // routine `pnpm build` doesn't churn an extra artifact. Cast
+    // because rollup-plugin-visualizer's Plugin type targets a
+    // newer Rollup than Vite 5 vendors.
+    ...(process.env.NAK_BUNDLE_STATS
+      ? [
+          visualizer({
+            filename: 'dist/stats.html',
+            template: 'treemap',
+            gzipSize: true,
+            brotliSize: true,
+          }) as unknown as Plugin,
+        ]
+      : []),
   ],
   test: {
     globals: true,

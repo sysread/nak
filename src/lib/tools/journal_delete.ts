@@ -18,11 +18,22 @@
  * is just a row removal.
  */
 import type { ToolDef } from './types';
-import {
-  trainSpamFilterForThread,
-  untrainSpamFilterForThread,
-} from '../agents/journal/spam_filter';
 import { journalDeleteSchema } from './journal_delete.schema';
+
+// spam_filter.ts transitively imports snowball-stemmers (~60 kB
+// gzipped). journal-store.svelte.ts dynamic-imports the same module
+// to keep it out of the main chunk; if we statically imported here
+// the static chain through this file would defeat that split (the
+// chunk that ends up carrying spam_filter would be reachable from
+// both lazyTool consumers in the main bundle, and Rollup would warn
+// that the dynamic import "will not move module into another
+// chunk"). Both paths now dynamic-import so the module lands in its
+// own chunk and rides only when a spam-filter call actually fires.
+async function loadSpamFilter(): Promise<
+  typeof import('../agents/journal/spam_filter')
+> {
+  return import('../agents/journal/spam_filter');
+}
 
 export const journalDelete: ToolDef = {
   ...journalDeleteSchema,
@@ -51,10 +62,11 @@ export const journalDelete: ToolDef = {
     // so the same tokens don't contribute to both classes. See the
     // matching block in journal-store.svelte.ts:deleteEntry.
     if (target.source === 'automatic' && target.thread_id) {
+      const m = await loadSpamFilter();
       if (target.ham_marked_at !== null) {
-        await untrainSpamFilterForThread(ctx.supabase, target.thread_id, 'ham');
+        await m.untrainSpamFilterForThread(ctx.supabase, target.thread_id, 'ham');
       }
-      await trainSpamFilterForThread(ctx.supabase, target.thread_id, 'spam');
+      await m.trainSpamFilterForThread(ctx.supabase, target.thread_id, 'spam');
     }
     return {
       id,
