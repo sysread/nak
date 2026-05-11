@@ -132,7 +132,7 @@
     { id: 'keys', label: 'API keys' },
     { id: 'about', label: 'About' },
   ];
-  let group = $state<Group>('keys');
+  let group = $state<Group>('ai');
 
   // --- Keys pane ---
   let supabaseUrl = $state(app.config?.supabaseUrl ?? '');
