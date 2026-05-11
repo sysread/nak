@@ -100,10 +100,12 @@ thread by the first response.
   message blocks.
 - `src/lib/intuition/index.ts` - public re-exports. Chat-loop and
   Chat.svelte import only from here.
-- `src/components/IntuitionPill.svelte` - top-right brain icon
-  that opens the modal. Sibling to `SamskaraToasts.svelte`,
-  positioned 3.25rem from the right edge so the two pills don't
-  overlap. Suppressed when the active thread has no cached
+- `src/components/IntuitionPill.svelte` - brain icon that opens
+  the modal. Absolutely positioned inside `.messages-wrap`,
+  stacked at the top of a vertical column with
+  `SamskaraToasts.svelte` (middle) and the `.scroll-to-bottom`
+  arrow (bottom) - all three pinned to the bottom-right of the
+  messages pane. Suppressed when the active thread has no cached
   payload.
 - `src/screens/Intuition.svelte` - the diagnostics modal. Reads
   the active thread's payload, renders synthesis + perception +
@@ -117,12 +119,14 @@ thread by the first response.
   `<think>` push; mid-turn trigger lives at the end of each
   iteration's tool-result for-loop, gated on a successful
   `update_title` call appearing in `settled`.
-- **UI mount**: `Chat.svelte`. The Pill mounts beside
-  `SamskaraToasts`; the modal mounts in the modal-overlay
-  block. The transcript itself shows no per-round indicator -
-  the brain pill in the top-right is the only surface, and it
-  opens the same diagnostics modal regardless of which round
-  the cached payload was computed for.
+- **UI mount**: `Chat.svelte`. The Pill mounts inside
+  `.messages-wrap` above `SamskaraToasts` and the
+  `.scroll-to-bottom` arrow; the modal mounts in the
+  modal-overlay block. The transcript itself shows no per-round
+  indicator - the brain pill at the bottom-right of the
+  messages pane is the only surface, and it opens the same
+  diagnostics modal regardless of which round the cached
+  payload was computed for.
 - **Chat-loop options**: `intuitionModelId` (omit to disable
   the feature on this turn) and `intuitionMood` (the
   `{ band, column }` pair from `bandIndexFor` / `columnFor`).

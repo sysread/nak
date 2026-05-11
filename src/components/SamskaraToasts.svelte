@@ -30,10 +30,13 @@
    * switch) turns it into a persistent "current mood" glance rather
    * than a fleeting alert.
    *
-   * Rendered as a fixed-position pill in the top-right corner, below
-   * where the UpdateBanner sits so both can coexist on a rare
-   * version-deploy overlap. Safe-area insets clear the iOS notch on
-   * installed PWA.
+   * Rendered as an absolutely-positioned pill anchored inside
+   * .messages-wrap (Chat.svelte). Stacks in a vertical column between
+   * the IntuitionPill above and the .scroll-to-bottom arrow below,
+   * all pinned to the bottom-right of the messages pane. Mounting
+   * inside .messages-wrap (rather than as a viewport-fixed pill) is
+   * what keeps the column aligned with the scroll arrow regardless of
+   * composer height.
    *
    * Deliberately minimal chrome - one emoji, no text, no border.
    * The predictive-model formation is opaque to the user beyond this
@@ -261,18 +264,22 @@
 </div>
 
 <style>
-  /* Fixed pill in the top-right. Offset just below the UpdateBanner
-     slot (3rem gives clearance for the banner pill + a breath of
-     space) so both coexist on the rare overlap. z-index 25 sits
-     above the chat surface but below modals (30), drawers (40),
-     Cookbook (40), Samskara (50), and the update banner (100) - this
-     is a passive glance cue and should never float over interactive
-     surfaces. pointer-events:none on the container so the indicator
-     never blocks clicks on content beneath it. */
+  /* Middle slot of the bottom-right pill column. The scroll-to-bottom
+     arrow sits at bottom: 1rem with a 2.2rem footprint; this pill
+     stacks directly above it at bottom: 1rem + 2.2rem + 0.4rem gap =
+     3.6rem (2.1rem height), and the IntuitionPill stacks above this
+     one at 6.1rem. All three are right-anchored at 1rem; the 0.05rem
+     horizontal offset between the 2.1rem pills and the 2.2rem arrow
+     is below perceptual threshold. z-index 25 sits above the chat
+     surface but below modals (30), drawers (40), Cookbook (40),
+     Samskara (50), and the update banner (100) - this is a passive
+     glance cue and should never float over interactive surfaces.
+     pointer-events:none on the container so the indicator never
+     blocks clicks on content beneath it. */
   .samskara-mood {
-    position: fixed;
-    top: calc(env(safe-area-inset-top, 0px) + 3rem);
-    right: calc(env(safe-area-inset-right, 0px) + 0.75rem);
+    position: absolute;
+    bottom: 3.6rem;
+    right: 1rem;
     z-index: 25;
     pointer-events: none;
   }

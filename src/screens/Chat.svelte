@@ -4844,6 +4844,20 @@
             </svg>
           </button>
         {/if}
+        <!-- Diagnostic pills (intuition brain, samskara mood) stack
+             above the scroll-to-bottom arrow in a vertical column
+             pinned to the bottom-right of the messages pane. They sit
+             inside .messages-wrap (which is position:relative) so they
+             share a coordinate system with .scroll-to-bottom; that
+             keeps the column aligned regardless of composer height.
+             Mounting them here, rather than as siblings of the shell
+             at the bottom of this file, is what couples the alignment
+             to the scroll arrow. Both pills suppress themselves when
+             their backing data isn't present (no cached intuition
+             payload / no samskara reading), so the column collapses
+             gracefully on cold threads. -->
+        <SamskaraToasts />
+        <IntuitionPill payload={currentIntuitionPayload} />
       </div>
       {#if error}
         <div class="error-bar">
@@ -5369,16 +5383,12 @@
   {#if ExtractedTextDrawerComp}
     <ExtractedTextDrawerComp />
   {/if}
-  <!-- Samskara mood toasts are tied to the conversation stream - only
-       relevant in the chats panel. Suppress them on the recipe and
-       journal panels where no conversation is running. -->
-  {#if drawerTab === 'chats'}
-    <SamskaraToasts />
-    <!-- Intuition pill sits to the LEFT of the mood pill (same fixed
-         row). Suppressed on cold threads where no payload exists yet -
-         the pill itself only renders when a payload is present. -->
-    <IntuitionPill payload={currentIntuitionPayload} />
-  {/if}
+  <!-- SamskaraToasts and IntuitionPill mount inside .messages-wrap
+       (see above) so they share a coordinate system with the
+       scroll-to-bottom arrow and stack as a vertical column at the
+       bottom-right of the messages pane. Only rendered on the chats
+       panel because .messages-wrap itself is gated on
+       drawerTab === 'chats'. -->
 
   <!--
     Modal overlays. Rendered alongside the shell (above via their

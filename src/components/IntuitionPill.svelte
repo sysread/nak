@@ -1,11 +1,14 @@
 <script lang="ts">
   /**
-   * Top-right indicator that opens the Intuition diagnostics modal.
+   * Bottom-right indicator that opens the Intuition diagnostics modal.
    *
-   * Sibling to SamskaraToasts - same fixed-position posture, offset
-   * to the LEFT so the two pills stack horizontally without overlap.
-   * The mood pill sits at right ~0.75rem; this one at right ~3.25rem
-   * (mood pill's right edge + 2.1rem width + a small gap).
+   * Sibling to SamskaraToasts and the .scroll-to-bottom arrow - all
+   * three are absolutely positioned within .messages-wrap (Chat.svelte)
+   * and stack as a vertical column at the bottom-right of the messages
+   * pane. This pill sits at the top of the column, above the mood pill
+   * and the scroll arrow. Mounting inside .messages-wrap (rather than
+   * as a viewport-fixed pill) is what keeps the column aligned with
+   * the scroll arrow regardless of composer height.
    *
    * Visible whenever a thread is active AND a payload was passed in.
    * On a cold thread (no intuition fired yet) the parent passes null
@@ -49,14 +52,20 @@
 </div>
 
 <style>
-  /* Sits to the left of SamskaraToasts, same vertical position. The
-     mood pill is at right: env(...) + 0.75rem with a 2.1rem width;
-     this sits at right: env(...) + 0.75rem + 2.1rem + 0.4rem = ~3.25rem
-     so the two pills never overlap. */
+  /* Top of the bottom-right pill column. The scroll-to-bottom arrow
+     sits at bottom: 1rem with a 2.2rem footprint; the mood pill stacks
+     directly above it at bottom: ~3.6rem with a 2.1rem height; this
+     pill stacks above the mood pill at bottom: ~6.1rem (3.6rem +
+     2.1rem mood-pill height + 0.4rem gap). All three are right-anchored
+     at 1rem; the 0.05rem horizontal offset between the 2.1rem pills
+     and the 2.2rem arrow is below perceptual threshold. z-index 25
+     matches the mood pill: above chat surface, below modals (30) and
+     drawers (40). pointer-events:none on the wrap keeps the messages
+     pane underneath clickable; the button itself opts back in. */
   .intuition-pill-wrap {
-    position: fixed;
-    top: calc(env(safe-area-inset-top, 0px) + 3rem);
-    right: calc(env(safe-area-inset-right, 0px) + 3.25rem);
+    position: absolute;
+    bottom: 6.1rem;
+    right: 1rem;
     z-index: 25;
     pointer-events: none;
   }
