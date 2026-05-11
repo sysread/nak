@@ -161,25 +161,39 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toMatch(/\(on\) journal : /);
   });
 
-  it('carries the recall framing: long-term memory exists, priming is a projection not a full inventory, tools used when stale or for explicit lookups', () => {
-    // The recall block has four load-bearing beats: (1) introduce
-    // long-term memory so the model knows it has persistent state
-    // about this user, (2) tell the model that topic-boundary
-    // recall is auto-injected as a <think> block by the chat-loop's
-    // context-recall pipeline (see src/lib/context-recall/), (3)
-    // make clear that the auto-injection is a topic-relevance
-    // projection rather than a full inventory of the store - drop
-    // this beat and the model treats "I don't see anything
-    // pre-injected" as "nothing is stored" and answers "I don't
-    // remember anything specific" while the store is full, and (4)
-    // route explicit "what do you remember" lookups to memory_search
-    // / conversation_search rather than memory_recall / conversation_recall.
+  it('carries the recall framing: long-term memory across four layers, priming is a projection not a full inventory, tools used when stale or for explicit lookups', () => {
+    // The recall block has five load-bearing beats:
+    //   (1) introduce long-term memory across four parallel layers
+    //       (memories, prior conversations, wiki, daily journal) so
+    //       the model knows what kinds of persistent state exist;
+    //   (2) tell the model that topic-boundary recall is auto-
+    //       injected as a <think> block by the chat-loop's context-
+    //       recall pipeline (see src/lib/context-recall/);
+    //   (3) make clear that the auto-injection is a topic-relevance
+    //       projection rather than a full inventory of the store -
+    //       drop this beat and the model treats "I don't see anything
+    //       pre-injected" as "nothing is stored" and answers "I don't
+    //       remember anything specific" while the store is full;
+    //   (4) frame the umbrella `context` tool as the preferred first
+    //       step for broad lookups - one round-trip across all four
+    //       layers instead of four sequential per-layer calls;
+    //   (5) route explicit "what do you remember" lookups to the
+    //       *_search tools (memory_search, conversation_search,
+    //       wiki_search, journal_search) rather than the *_recall
+    //       tools.
     const prompt = buildSystemPrompt();
     expect(prompt).toMatch(/long-term memory/i);
+    // Every per-layer recall tool and the umbrella context tool.
     expect(prompt).toMatch(/memory_recall/);
     expect(prompt).toMatch(/conversation_recall/);
+    expect(prompt).toMatch(/wiki_recall/);
+    expect(prompt).toMatch(/journal_recall/);
+    expect(prompt).toMatch(/`context`/);
+    // Every direct-search counterpart.
     expect(prompt).toMatch(/memory_search/);
     expect(prompt).toMatch(/conversation_search/);
+    expect(prompt).toMatch(/wiki_search/);
+    expect(prompt).toMatch(/journal_search/);
     expect(prompt).toMatch(/handled.*automatically/i);
     expect(prompt).toMatch(/<think>/);
     expect(prompt).toMatch(/stale/i);
@@ -187,6 +201,11 @@ describe('buildSystemPrompt', () => {
     // "not a full inventory" both work as load-bearing markers for
     // this beat; either should survive a phrasing tweak.
     expect(prompt).toMatch(/projection|not.*full.*inventory|not.*everything/i);
+    // The umbrella `context` tool's framing: "consider calling
+    // context first" should survive the moderate-nudge wording. If
+    // the prompt rephrases this beat, that's a deliberate change
+    // and the test should be updated alongside it.
+    expect(prompt).toMatch(/consider.*context|context.*first/i);
   });
 
   it('explains the toggle_toolbox gating rule', () => {

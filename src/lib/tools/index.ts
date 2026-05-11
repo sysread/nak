@@ -51,20 +51,24 @@
 import type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
 
 // --- Eagerly-imported always-on tools -------------------------------
-// The recall pair, web search, update_title, analyze_image, and the
-// toggle meta-tool fire on the first-message critical path
-// (memory/conversation_recall on topic boundaries, web_search on
-// time-sensitive questions, update_title on the very first turn,
+// The umbrella `context` tool, the four per-layer recall tools, web
+// search, update_title, analyze_image, and the toggle meta-tool fire
+// on the first-message critical path (the recall surfaces on topic
+// boundaries / when the model needs persistent context, web_search
+// on time-sensitive questions, update_title on the very first turn,
 // analyze_image when the user attaches an image). The cold-start
 // chunk-fetch tax is not acceptable there, so they stay eager. The
 // other always-on tools (search/list/read across memories,
-// conversations, recipes, journal, app docs) are still always-on but
-// lazy-imported via the lazyTool wrappers below - they fire on
-// demand, not on every turn, so the schema rides eagerly while the
-// impl module loads on first dispatch.
+// conversations, recipes, journal, wiki, app docs) are still
+// always-on but lazy-imported via the lazyTool wrappers below - they
+// fire on demand, not on every turn, so the schema rides eagerly
+// while the impl module loads on first dispatch.
 import { toggleToolbox } from './toggle_tools';
 import { memoryRecall } from './memory_recall';
 import { conversationRecall } from './conversation_recall';
+import { wikiRecall } from './wiki_recall';
+import { journalRecall } from './journal_recall';
+import { contextTool } from './context';
 import { webSearch } from './web_search';
 import { updateTitle } from './update_title';
 import { analyzeImage } from './analyze_image';
@@ -111,9 +115,10 @@ import { wikiSearchSchema } from './wiki_search.schema';
 
 // `lazyTool` lives in `./lazy.ts` so the agent-toolbox files
 // (`./memory_toolbox`, `./recall_toolbox`,
-// `./conversation_recall_toolbox`) can use it too. With every
-// consumer going through the lazy path, Vite emits one chunk per
-// impl module regardless of which toolbox dispatches into it.
+// `./conversation_recall_toolbox`, `./wiki_recall_toolbox`,
+// `./journal_recall_toolbox`) can use it too. With every consumer
+// going through the lazy path, Vite emits one chunk per impl module
+// regardless of which toolbox dispatches into it.
 import { lazyTool } from './lazy';
 
 // --- Gated tool wrappers --------------------------------------------
@@ -258,9 +263,17 @@ const wikiSearch = lazyTool(
  *
  * Members in catalog order:
  *   - `toggle_toolbox` - the gating mechanism for the write boxes.
- *   - `memory_recall`, `conversation_recall` - top-of-thread recall
- *     passes that return a structured note. Run a sub-agent under
- *     the hood; their toolboxes are read-only.
+ *   - `context` - the umbrella recall tool that fans out across all
+ *     four persistent layers (memories, prior conversations, wiki,
+ *     journal) in parallel and returns one stitched first-person
+ *     note. PREFERRED first step when the model wants broad context
+ *     on the user; the per-layer recall tools below stay as
+ *     targeted drill-downs.
+ *   - `memory_recall`, `conversation_recall`, `wiki_recall`,
+ *     `journal_recall` - per-layer recall passes, each returning a
+ *     structured note from one store. Drill-downs after `context`,
+ *     or first-line picks when the model already knows which layer
+ *     it wants. Toolboxes are read-only.
  *   - `memory_search` - direct semantic search over the user's
  *     long-term memories. Returns rows with ids so the model can
  *     hand them to the gated write tools.
@@ -287,14 +300,18 @@ export const alwaysOnToolbox: Toolbox = {
   name: 'always_on',
   description:
     'Reflex-level tools that ride every request without being ' +
-    'toggled. Read-only surfaces (recall, search, list, read across ' +
-    'memories / conversations / journal / cookbook / app docs) plus ' +
-    'web search, update_title, analyze_image, and the ' +
+    'toggled. The umbrella `context` recall, the four per-layer ' +
+    'recall tools, and read-only surfaces (search, list, read across ' +
+    'memories / conversations / journal / wiki / cookbook / app docs) ' +
+    'plus web search, update_title, analyze_image, and the ' +
     'toggle_toolbox meta-tool.',
   tools: [
     toggleToolbox,
+    contextTool,
     memoryRecall,
     conversationRecall,
+    wikiRecall,
+    journalRecall,
     memorySearch,
     conversationSearch,
     journalList,
@@ -530,6 +547,8 @@ export async function executeToolCall(
 export { memoryToolbox } from './memory_toolbox';
 export { recallToolbox } from './recall_toolbox';
 export { conversationRecallToolbox } from './conversation_recall_toolbox';
+export { wikiRecallToolbox } from './wiki_recall_toolbox';
+export { journalRecallToolbox } from './journal_recall_toolbox';
 
 export { toOpenAIToolDef, buildToolboxWireList, executeToolboxCall };
 export { toggleToolbox, updateTitle };

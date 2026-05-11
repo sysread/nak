@@ -186,11 +186,19 @@ A chat turn goes:
   `role='tool'` rows and echoed back in the next round's
   `history`. See `./tools.md`.
 - **Memory (recall)** — `memory_recall` is a tool; the main model
-  calls it whenever it judges prior context would help. The chat
-  loop dispatches it like any other tool. See `./memory.md`.
+  calls it whenever it judges prior memory context would help. The
+  chat loop dispatches it like any other tool. See `./memory.md`.
 - **Conversation recall** — same: `conversation_recall` is a tool
   that drops into the same executor path. See
   `./conversation-recall.md`.
+- **Wiki / journal recall** — `wiki_recall` and `journal_recall`
+  are their per-layer counterparts; same executor path, dedicated
+  sub-agents. See `./context-recall.md`.
+- **Umbrella `context` tool** — fans out all four recall agents in
+  parallel (`runRecallFanOut`) and returns a single stitched note;
+  the system prompt nudges the model to consider this first when
+  it wants broad context on the user. Same executor path. See
+  `./context-recall.md`.
 - **Summaries / reflection / journal** — no direct call;
   their triggers watch for a terminal assistant message
   newer than `last_summarised_msg_id` /
