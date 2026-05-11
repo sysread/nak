@@ -716,10 +716,21 @@
   }
 
   // --- Security pane ---
+  // Two independent rotations live here:
+  //   - master password: unlocks the local encrypted config blob
+  //   - Supabase login password: signs in to the user's Supabase project
+  // Each has its own current/new/error/info pair so a failure in one
+  // form doesn't blow away feedback from the other.
   let pwCurrent = $state('');
   let pwNew = $state('');
   let pwError = $state<string | null>(null);
   let pwInfo = $state<string | null>(null);
+
+  let authPwCurrent = $state('');
+  let authPwNew = $state('');
+  let authPwError = $state<string | null>(null);
+  let authPwInfo = $state<string | null>(null);
+  let authPwBusy = $state(false);
 
   let busy = $state(false);
 
@@ -1110,6 +1121,38 @@
       pwError = err instanceof Error ? err.message : String(err);
     } finally {
       busy = false;
+    }
+  }
+
+  async function onChangeAuthPassword(e: SubmitEvent): Promise<void> {
+    e.preventDefault();
+    authPwError = null;
+    authPwInfo = null;
+    if (!authPwCurrent) {
+      authPwError = 'Enter your current Supabase password.';
+      return;
+    }
+    // Supabase enforces a 6-character minimum by default. Bump to 8 to
+    // match the master-password form above so both rotations have the
+    // same floor.
+    if (authPwNew.length < 8) {
+      authPwError = 'New password must be at least 8 characters.';
+      return;
+    }
+    if (!app.supabase) {
+      authPwError = 'Not connected to Supabase.';
+      return;
+    }
+    authPwBusy = true;
+    try {
+      await app.supabase.changeAuthPassword(authPwCurrent, authPwNew);
+      authPwInfo = 'Supabase password changed.';
+      authPwCurrent = '';
+      authPwNew = '';
+    } catch (err) {
+      authPwError = err instanceof Error ? err.message : String(err);
+    } finally {
+      authPwBusy = false;
     }
   }
 </script>
@@ -1818,9 +1861,13 @@
         {#if exportError}<p class="error">{exportError}</p>{/if}
         {#if exportInfo}<p class="subtle">{exportInfo}</p>{/if}
       {:else if group === 'security'}
-        <h2>Change master password</h2>
+        <h2>Security</h2>
+
+        <h3 class="pane-section">Change master password</h3>
         <p class="subtle">
           Rotate the passphrase that unlocks your encrypted config blob.
+          Local-only - this re-encrypts the blob in your browser and does
+          not touch Supabase.
         </p>
         <form onsubmit={onChangePassword}>
           <div class="form-row">
@@ -1836,6 +1883,28 @@
           {#if pwError}<p class="error">{pwError}</p>{/if}
           {#if pwInfo}<p class="subtle">{pwInfo}</p>{/if}
           <button type="submit" disabled={busy}>Change password</button>
+        </form>
+
+        <h3 class="pane-section">Change Supabase password</h3>
+        <p class="subtle">
+          Rotate the password you use to sign in to your Supabase project.
+          We re-verify your current password before updating, so a stolen
+          unlocked tab can't quietly rotate you out of your own account.
+        </p>
+        <form onsubmit={onChangeAuthPassword}>
+          <div class="form-row">
+            <label for="auth-pw-current">Current Supabase password</label>
+            <SecretInput id="auth-pw-current" bind:value={authPwCurrent} required
+                         autocomplete="current-password" />
+          </div>
+          <div class="form-row">
+            <label for="auth-pw-new">New Supabase password</label>
+            <SecretInput id="auth-pw-new" bind:value={authPwNew} minlength={8} required
+                         autocomplete="new-password" />
+          </div>
+          {#if authPwError}<p class="error">{authPwError}</p>{/if}
+          {#if authPwInfo}<p class="subtle">{authPwInfo}</p>{/if}
+          <button type="submit" disabled={authPwBusy}>Change Supabase password</button>
         </form>
       {:else if group === 'about'}
         <!-- About pane: surfaces the build fingerprint and lets the

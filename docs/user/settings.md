@@ -63,7 +63,18 @@ Covered in detail on [Export & import](./export-import.md).
 
 ### Security
 
-Covered in detail on [Security model](./security.md).
+Two rotations live here:
+
+- **Master password** - the passphrase that unlocks your encrypted
+  config blob in this browser. Re-encrypts locally; does not touch
+  Supabase.
+- **Supabase password** - the password you use to sign in to your
+  Supabase project. Nak re-verifies your current password before
+  updating, then calls Supabase to set the new one.
+
+Both require the current password and enforce an 8-character
+minimum on the new one. Covered in more detail on
+[Security model](./security.md).
 
 ### About
 
