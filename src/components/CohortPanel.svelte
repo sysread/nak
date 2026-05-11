@@ -410,6 +410,7 @@
   .fire-prediction {
     margin: 0;
     font-size: 0.85rem;
+    font-style: italic;
   }
   .fire-inner-voice {
     margin: 0;
