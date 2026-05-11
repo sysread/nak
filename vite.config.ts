@@ -87,6 +87,67 @@ export default defineConfig({
     // / Edge) ship Module Workers.
     format: 'es',
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Route long-tail lazy chunks into named subdirectories so
+        // the service worker's precache (`injectManifest.globPatterns`
+        // below) can exclude them by path. Without this every
+        // language grammar, doc page, and rarely-opened screen lands
+        // in the PWA install download - which on mobile/metered data
+        // is felt - even though most users will never trigger most of
+        // them. The runtime-cache handler in src/sw.ts picks them up
+        // on first fetch, so an offline session that previously
+        // touched a feature still works.
+        //
+        // The buckets:
+        //   assets/hljs/    - highlight.js per-language grammars,
+        //                     loaded on first fenced code block of
+        //                     that language.
+        //   assets/docs/    - the bundled Help corpus
+        //                     (docs/user/**/*.md raw-string chunks),
+        //                     loaded when the Help modal navigates
+        //                     to that page OR when `research_docs`
+        //                     fires.
+        //   assets/screens/ - Settings / Cookbook / Journal / Wiki /
+        //                     Samskara / Memories / Intuition /
+        //                     drawers. Each is the modal or panel a
+        //                     specific UI flip opens; cold installs
+        //                     don't need any of them on disk yet.
+        //
+        // Anything not matched falls through to the default
+        // `assets/[name]-[hash].js` and stays precached - that
+        // includes the main entry, the marked/dompurify stack on the
+        // assistant-message hot path, the katex/highlight cores
+        // (which sit behind the markdown renderer), and the small
+        // utility chunks the chat-loop reaches for on every turn.
+        chunkFileNames(chunkInfo) {
+          // Match on `facadeModuleId` (the single module that
+          // triggered the chunk's creation via a dynamic import)
+          // rather than `moduleIds` (every module IN the chunk).
+          // Rollup may pack the highlight.js core + statically-
+          // imported languages into one chunk; testing moduleIds
+          // would sweep that chunk into `hljs/` too, removing the
+          // highlight engine from the precache and forcing a fetch
+          // on the first code block. The facade check keeps the
+          // chunk-into-folder mapping pinned to "this chunk exists
+          // because of one dynamic-import call site," which is what
+          // the runtime cache fallback was designed for.
+          const facade = chunkInfo.facadeModuleId || '';
+          if (/\/highlight\.js\/.*\/languages\//.test(facade)) {
+            return 'assets/hljs/[name]-[hash].js';
+          }
+          if (/\/docs\/(user|dev)\/.*\.md/.test(facade)) {
+            return 'assets/docs/[name]-[hash].js';
+          }
+          if (/\/src\/screens\/.*\.svelte$/.test(facade)) {
+            return 'assets/screens/[name]-[hash].js';
+          }
+          return 'assets/[name]-[hash].js';
+        },
+      },
+    },
+  },
   plugins: [
     svelte(),
     VitePWA({
@@ -160,7 +221,22 @@ export default defineConfig({
         },
       },
       injectManifest: {
+        // Precache the app shell - main entry, the markdown/render
+        // stack the assistant message hot path uses, fonts, icons,
+        // CSS, the manifest, and worker bundles. The long-tail lazy
+        // chunks (hljs grammars, doc-page chunks, lazy screens) are
+        // bucketed into named subdirectories by `chunkFileNames`
+        // above and excluded here; the SW's runtime fetch handler
+        // (src/sw.ts) caches those on first request via a
+        // stale-while-revalidate strategy. Net: cold PWA install
+        // downloads ~1 MB less while a previously-opened feature
+        // remains offline-functional via the runtime cache.
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+        globIgnores: [
+          'assets/hljs/**',
+          'assets/docs/**',
+          'assets/screens/**',
+        ],
       },
     }),
     // Bundle visualizer for chunking work. Set NAK_BUNDLE_STATS=1 to

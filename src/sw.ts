@@ -72,13 +72,76 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+/**
+ * Runtime cache for the long-tail lazy chunks excluded from precache
+ * via `injectManifest.globIgnores` in vite.config.ts (hljs language
+ * grammars, doc-page chunks, lazy screen chunks). Strategy is
+ * stale-while-revalidate: serve the cached copy immediately if we
+ * have one, kick off a network fetch in parallel, and update the
+ * cache when it lands. After the first visit that touches a feature,
+ * everything that feature needs lives in this cache and works
+ * offline; the cold install never had to download it.
+ *
+ * Hand-rolled rather than reaching for workbox-strategies +
+ * workbox-routing because the rule is one-shape and the SW bundle
+ * doesn't need another ~15-20 kB to express it. The bucketed
+ * subdirs (`assets/hljs/`, `assets/docs/`, `assets/screens/`) come
+ * from `chunkFileNames` in vite.config.ts; keep both ends in sync.
+ *
+ * Cache versioning: include the SW's own URL fragment in the cache
+ * name so a new SW version starts fresh and old caches eventually
+ * fall out of the LRU when storage pressure hits. Versioning by SW
+ * URL avoids the "stale cache forever" trap that fixed names hit
+ * when a chunk's content changes but its hashed filename doesn't
+ * (which shouldn't happen with Vite's content-hashed names, but
+ * belt-and-suspenders is cheap).
+ */
+const RUNTIME_CACHE_NAME = `nak-runtime-${self.registration.scope}`;
+const RUNTIME_CACHE_PATTERN = /\/assets\/(hljs|docs|screens)\//;
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
-  if (request.method !== 'POST') return;
+
+  if (request.method === 'POST') {
+    const url = new URL(request.url);
+    if (url.pathname !== SHARE_PATH) return;
+    event.respondWith(handleShare(request));
+    return;
+  }
+
+  if (request.method !== 'GET') return;
   const url = new URL(request.url);
-  if (url.pathname !== SHARE_PATH) return;
-  event.respondWith(handleShare(request));
+  if (!RUNTIME_CACHE_PATTERN.test(url.pathname)) return;
+  event.respondWith(staleWhileRevalidate(request));
 });
+
+async function staleWhileRevalidate(request: Request): Promise<Response> {
+  const cache = await caches.open(RUNTIME_CACHE_NAME);
+  const cached = await cache.match(request);
+  const networkFetch = fetch(request)
+    .then((response) => {
+      // Only cache successful responses. A 4xx/5xx getting stuck in
+      // cache would serve forever even after the underlying chunk
+      // becomes available. Opaque responses (cross-origin, no CORS)
+      // are also skipped - they'd consume cache quota but can't be
+      // inspected for validity.
+      if (response.ok && response.type === 'basic') {
+        // Clone before caching - the Response body is a stream and
+        // can only be consumed once. The clone goes to the cache,
+        // the original goes back to the caller.
+        void cache.put(request, response.clone());
+      }
+      return response;
+    })
+    .catch(() => {
+      // Network unreachable. If we have a cached copy, the caller
+      // already got it; otherwise the outer Promise.race / fallback
+      // below surfaces the error. Swallow here so the unhandled-
+      // rejection telemetry stays clean.
+      return null;
+    });
+  return cached ?? (await networkFetch) ?? Response.error();
+}
 
 async function handleShare(request: Request): Promise<Response> {
   try {
