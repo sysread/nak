@@ -294,14 +294,38 @@ The screen shows:
 - **Compound summary** - the prose block currently riding in every
   system prompt, plus how many samskaras it covers and when the
   worker last regenerated it.
-- **Cohort fires** - each "cohort" is one turn's worth of
-  predictions that fired together. Cards are marked confirmed /
-  disconfirmed / waiting / aged out so you can see whether the
-  reaction-classify phase has caught up. Each prediction shows its
-  ranking score, tier, valence, confidence, and health.
-- **Substrate** - the per-turn records the worker is assimilating
-  into samskaras, with their lifecycle state (pending assimilation
-  / pending embed / fully baked).
+
+Per-turn detail (which samskaras fired on a specific user message,
+plus the assimilator's notes for that round) lives **inline in the
+chat transcript**, not in this modal. See **Per-message diagnostics**
+below.
+
+### Per-message diagnostics
+
+Every user message that triggered samskaras on its turn carries a
+small **pulse-line icon** in its action row, mirroring the outline-
+stroke buttons under each assistant message. Click it to expand a
+panel anchored to that turn. The panel shows:
+
+- A header pill marking the cohort as **confirmed**,
+  **disconfirmed**, **waiting**, or **aged out**, depending on what
+  the reaction classifier did with it on the following turn.
+- The **predictions that fired** for that turn, grouped by theme
+  (paraphrase clusters collapse into a representative with a
+  "+N similar" chevron). "Show all" bypasses the clustering and
+  lists every fire individually. Each entry shows its tier, ranking
+  score, valence, confidence, and health.
+- The **substrate row** for the same round - the worker's structured
+  summary of what happened ("user asked X about Y, expressing Z"
+  / "the assistant did W and it landed P"), with its lifecycle
+  state (pending assimilation, assimilated but unembedded, or fully
+  baked) and the round's valence reading.
+
+The icon only appears on messages that produced at least one fire
+or substrate row, so cold-start messages and any turn the worker
+couldn't predict against stay clean. Panels remember whether you
+opened them for the duration of the open thread; switching to
+another conversation collapses them all.
 
 The toolbar also has a **Consolidate** button. The samskara
 worker runs the same consolidation pass automatically each

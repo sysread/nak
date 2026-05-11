@@ -7,12 +7,14 @@
  *   - `getCompoundSummary(supabase)` — read the cached prose summary
  *     row at round-1 entry. Returns null when cold-start or when the
  *     cache is stale enough that we'd rather inject nothing.
- *   - `fireSamskaras(supabase, venice, threadId, userText)` — embed
- *     the user's input, run the cosine fire RPC, and persist the
- *     resulting cohort. Returns the fired set so the caller can
+ *   - `fireSamskaras(supabase, venice, threadId, userRound, userText)`
+ *     — embed the user's input, run the cosine fire RPC, and persist
+ *     the resulting cohort. Returns the fired set so the caller can
  *     format the priming block. The cohort id is generated here and
- *     written to the fire log via the same RPC, so reaction-classify
- *     in the worker can later resolve the cohort as a unit.
+ *     written to the fire log along with the user-round index, so
+ *     reaction-classify in the worker can later resolve the cohort
+ *     as a unit and the per-message inline UI can anchor each cohort
+ *     to the user message that triggered it.
  *   - `recordSubstrateStub(supabase, threadId, msgIds)` — insert the
  *     per-round substrate row at end-of-round. The assimilator phase
  *     of the formation worker enriches it later; this call is fast
@@ -104,6 +106,7 @@ export async function fireSamskaras(
   supabase: SupabaseService,
   venice: VeniceClient,
   threadId: string,
+  userRound: number,
   userText: string,
   signal?: AbortSignal
 ): Promise<FireResult | null> {
@@ -181,6 +184,7 @@ export async function fireSamskaras(
     await supabase.samskaraRecordFires(
       cohortId,
       threadId,
+      userRound,
       fired.map((f) => ({ samskaraId: f.id, score: f.score }))
     );
   } catch (err) {

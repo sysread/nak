@@ -2214,6 +2214,21 @@ h1 {
   background: var(--bg-2);
 }
 
+/* Cohort-panel toggle on user messages. Reuses .copy-btn for the
+   visual base; .cohort-toggle adds the open-state highlight via
+   aria-expanded so the icon visibly reads as "active" while the
+   panel is showing. Sibling .cohort-panel-host below provides the
+   spacing between the .msg-actions strip and the expanded panel. */
+.copy-btn.cohort-toggle[aria-expanded='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.cohort-panel-host {
+  margin-top: 0.6rem;
+}
+
 /* Context-window indicator (ContextRing.svelte). Sits right of the
    CopyButton in `.msg-actions`. Matches the button's footprint exactly
    — same padding, border, radius, background — so the strip reads as

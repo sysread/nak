@@ -50,6 +50,8 @@
     type ThreadSearchHit,
     type Message,
     type NewAttachment,
+    type SamskaraFireDiagnosticRow,
+    type SamskaraSubstrateDiagnosticRow,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
   import { isRecoveryMessage } from '$lib/conversation-recovery';
@@ -150,6 +152,7 @@
   } from '$lib/intuition';
   import { pickFresherContextRecallPayload } from '$lib/context-recall';
   import AssistantBody from '../components/AssistantBody.svelte';
+  import CohortPanel from '../components/CohortPanel.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
   import ReasoningPicker from '../components/ReasoningPicker.svelte';
@@ -413,6 +416,114 @@
     void selectThread(route.cid);
   });
   let messages = $state<Message[]>([]);
+
+  // --- Per-user-message samskara diagnostics --------------------------
+  // The cohort fires + substrate that the modal used to render in its
+  // own sections now mount inline under each user message. Three
+  // pieces of state for the active thread: the flat fires list, the
+  // flat substrate list, and the thread-wide cluster map. Loaded once
+  // when a thread is opened and refreshed at end-of-turn so a fresh
+  // cohort appears under its triggering message without a manual
+  // reload. Cleared on thread switch so a stale thread's cohorts
+  // never bleed into the new one's transcript.
+  let cohortFires = $state<SamskaraFireDiagnosticRow[]>([]);
+  let cohortSubstrate = $state<SamskaraSubstrateDiagnosticRow[]>([]);
+  let cohortClusterMap = $state<
+    Map<string, { clusterSeq: number; clusterSize: number }>
+  >(new Map());
+  // Which user messages have their cohort panel expanded. Keyed by
+  // user_message_id, not user_round, because the user can edit/delete
+  // user messages and the round count would shift but the id wouldn't.
+  // Reset on thread switch.
+  let expandedCohortPanels = $state<Set<string>>(new Set());
+
+  function toggleCohortPanel(userMessageId: string): void {
+    const next = new Set(expandedCohortPanels);
+    if (next.has(userMessageId)) next.delete(userMessageId);
+    else next.add(userMessageId);
+    expandedCohortPanels = next;
+  }
+
+  // Walk messages in transcript order and assign 1..N to user
+  // messages. Matches the runtime countUserRounds() the chat loop
+  // calls at fire time: both count current user messages, both stop
+  // at the same boundary, so the index produced here is the same
+  // value persisted on samskara_fires.user_round at fire time. Tool
+  // and assistant rows do not advance the counter.
+  const userRoundByMessageId: Map<string, number> = $derived.by(() => {
+    const map = new Map<string, number>();
+    let n = 0;
+    for (const m of messages) {
+      if (m.role === 'user') {
+        n += 1;
+        map.set(m.id, n);
+      }
+    }
+    return map;
+  });
+
+  // Group fires by their persisted user_round. Legacy rows whose
+  // backfill didn't produce a value (the column was NULL and the
+  // approximate ranking couldn't reach them - shouldn't happen but
+  // guard anyway) are dropped from the inline view rather than
+  // anchored at an arbitrary message.
+  const firesByUserRound: Map<number, SamskaraFireDiagnosticRow[]> = $derived.by(
+    () => {
+      const map = new Map<number, SamskaraFireDiagnosticRow[]>();
+      for (const f of cohortFires) {
+        if (f.userRound === null) continue;
+        const bucket = map.get(f.userRound);
+        if (bucket) bucket.push(f);
+        else map.set(f.userRound, [f]);
+      }
+      return map;
+    }
+  );
+
+  const substrateByUserMsgId: Map<string, SamskaraSubstrateDiagnosticRow> =
+    $derived.by(() => {
+      const map = new Map<string, SamskaraSubstrateDiagnosticRow>();
+      for (const r of cohortSubstrate) {
+        map.set(r.userMessageId, r);
+      }
+      return map;
+    });
+
+  // Load fires + substrate + cluster map for one thread. Guards
+  // against thread switches mid-flight (the user can change rooms
+  // while three round trips are racing). Failures clear the inline
+  // state silently - the toggle button just doesn't appear on any
+  // user message, same as a thread with no fires yet.
+  async function loadCohortDiagnostics(threadId: string): Promise<void> {
+    if (!app.supabase) return;
+    try {
+      const [fires, substrate] = await Promise.all([
+        app.supabase.samskaraListFiresForThread(threadId),
+        app.supabase.samskaraListSubstrateForThread(threadId),
+      ]);
+      if (activeThreadId !== threadId) return;
+      cohortFires = fires;
+      cohortSubstrate = substrate;
+      // Cluster map is best-effort. The RPC can be expensive for
+      // long threads; a failure here just means the panel renders
+      // every fire as its own singleton, which is the documented
+      // fallback inside CohortPanel.
+      try {
+        const map = await app.supabase.samskaraClusterThreadFires(threadId);
+        if (activeThreadId !== threadId) return;
+        cohortClusterMap = map;
+      } catch {
+        if (activeThreadId === threadId) cohortClusterMap = new Map();
+      }
+    } catch {
+      if (activeThreadId === threadId) {
+        cohortFires = [];
+        cohortSubstrate = [];
+        cohortClusterMap = new Map();
+      }
+    }
+  }
+
   /**
    * Message ids that the user has clicked "regenerate" on but whose
    * row hasn't been deleted from the DB yet. The chat-loop's wire
@@ -1610,6 +1721,13 @@
     // grow on browser-back navigations.
     navigate({ cid: id });
     messages = [];
+    // Drop the prior thread's inline diagnostics in lockstep with
+    // its messages. loadMessagesForThread re-populates these once
+    // the new thread's listMessages call settles.
+    cohortFires = [];
+    cohortSubstrate = [];
+    cohortClusterMap = new Map();
+    expandedCohortPanels = new Set();
     streamingText = '';
     interruptedDraft = null;
     // Re-seed the active prompt set from defaults whenever the user
@@ -1647,6 +1765,13 @@
       // against a late response stomping newer state.
       if (activeThreadId !== id) return;
       messages = fetched;
+      // Kick off the cohort + substrate fetch in parallel with the
+      // draft check below. The inline cohort panels under each user
+      // message read off this state; loading it lazily on first
+      // toggle would block the panel open for a round trip, while
+      // loading it inline with the thread keeps the toggle instant
+      // for every message in the transcript.
+      void loadCohortDiagnostics(id);
       // Check for an orphaned streaming draft from a previous session
       // that ended abruptly (tab close, Chrome freeze, power loss). A
       // draft is orphaned when the last message in the thread is a user
@@ -2654,6 +2779,19 @@
         });
       }
       await refreshThreads();
+      // Refresh inline diagnostics so the cohort + substrate written
+      // by this turn appear under the user message that triggered
+      // them. Fire-and-forget: a fetch failure leaves the previous
+      // snapshot in place, which is the same fallback as the modal.
+      // Guarded against a thread switch mid-turn - the function
+      // checks activeThreadId before mutating state.
+      if (
+        !loopResult.interrupted &&
+        !loopResult.conflictDetected &&
+        activeThreadId === ctx.threadId
+      ) {
+        void loadCohortDiagnostics(ctx.threadId);
+      }
     } catch (err) {
       // User-initiated stop: runChatLoop catches mid-stream aborts
       // itself and returns cleanly with `interrupted: true`, so we
@@ -4560,6 +4698,21 @@
                 />
               </div>
             {:else}
+              {@const isUser = block.message.role === 'user'}
+              {@const userRound = isUser
+                ? userRoundByMessageId.get(block.message.id) ?? null
+                : null}
+              {@const firesForRound =
+                userRound !== null ? firesByUserRound.get(userRound) ?? null : null}
+              {@const substrateForMsg = isUser
+                ? substrateByUserMsgId.get(block.message.id) ?? null
+                : null}
+              {@const hasInlineCohort =
+                (firesForRound !== null && firesForRound.length > 0) ||
+                substrateForMsg !== null}
+              {@const cohortExpanded = isUser
+                ? expandedCohortPanels.has(block.message.id)
+                : false}
               <div
                 class="msg {block.message.role}"
                 class:disabled={pendingDeleteSet.has(block.message.id)}
@@ -4569,6 +4722,53 @@
                 <Markdown content={block.message.content} />
                 {#if block.message.role === 'user' && block.message.attachments && block.message.attachments.length > 0}
                   <MessageAttachments attachments={block.message.attachments} />
+                {/if}
+                {#if isUser && hasInlineCohort}
+                  <!-- User-message action row. Mirrors the assistant
+                       message's .msg-actions strip but lives outside
+                       AssistantBody since user messages are rendered
+                       directly in Chat.svelte. Reuses the shared
+                       .msg-actions and .copy-btn rules so the visual
+                       weight matches the assistant row's copy /
+                       citations / regenerate buttons (14px outline
+                       SVG, 2px stroke, hover ramps from muted to
+                       text). Only mounts when this turn actually
+                       fired samskaras or wrote a substrate stub - we
+                       don't surface an empty toggle on cold-start
+                       messages. -->
+                  <div class="msg-actions">
+                    <button
+                      type="button"
+                      class="copy-btn cohort-toggle"
+                      aria-expanded={cohortExpanded}
+                      title={cohortExpanded
+                        ? 'Hide what samskaras fired on this turn'
+                        : 'Show what samskaras fired on this turn'}
+                      aria-label={cohortExpanded
+                        ? 'Hide samskara fires for this turn'
+                        : 'Show samskara fires for this turn'}
+                      onclick={() => toggleCohortPanel(block.message.id)}
+                    >
+                      <!-- Feather "activity" pulse line - reads as a
+                           heartbeat / signal trace, matching the
+                           assistant action row's outline-stroke icons
+                           (14px, 2px stroke). -->
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                           stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                           stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  {#if cohortExpanded}
+                    <div class="cohort-panel-host">
+                      <CohortPanel
+                        fires={firesForRound ?? []}
+                        substrate={substrateForMsg}
+                        clusterMap={cohortClusterMap}
+                      />
+                    </div>
+                  {/if}
                 {/if}
               </div>
             {/if}
