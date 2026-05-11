@@ -127,20 +127,24 @@ describe('tool registry', () => {
   it('buildToolList with no enabled toolboxes returns the full read-only set plus the meta-tools', () => {
     // Always-on now carries every read surface in addition to the
     // reflex-level meta-tools. The "no toolbox is on" payload includes
-    // the recall pair, the search/list/read tools across memories /
-    // conversations / journal / cookbook, the research_docs sub-agent,
-    // web search, the title-rename convenience, the vision sub-call,
-    // and the toggle_toolbox meta-tool itself. This test is the
-    // tripwire for someone accidentally moving a write tool into the
-    // always-on set or dropping a read tool out of it.
+    // the umbrella `context` recall, the four per-layer recall tools
+    // (memory / conversation / wiki / journal), the search/list/read
+    // tools across memories / conversations / journal / wiki / cookbook,
+    // the research_docs sub-agent, web search, the title-rename
+    // convenience, the vision sub-call, and the toggle_toolbox meta-
+    // tool itself. This test is the tripwire for someone accidentally
+    // moving a write tool into the always-on set or dropping a read
+    // tool out of it.
     const list = buildToolList([]);
     expect(list.map((t) => t.function.name).sort()).toEqual(
       [
         'analyze_image',
+        'context',
         'conversation_recall',
         'conversation_search',
         'journal_list',
         'journal_read',
+        'journal_recall',
         'journal_search',
         'memory_recall',
         'memory_search',
@@ -150,6 +154,7 @@ describe('tool registry', () => {
         'toggle_toolbox',
         'update_title',
         'web_search',
+        'wiki_recall',
         'wiki_search',
       ]
     );

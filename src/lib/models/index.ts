@@ -302,6 +302,8 @@ export type AgentRole =
   | 'samskara'
   | 'recall'
   | 'conversationRecall'
+  | 'wikiRecall'
+  | 'journalRecall'
   | 'visionAnalysis';
 
 /**
@@ -436,6 +438,17 @@ export type AgentRole =
  *   conversationRecall - qwen3-5-35b-a3b. Conversation-recall agent;
  *     same shape and rationale as recall.
  *
+ *   wikiRecall - qwen3-5-35b-a3b. Wiki-recall agent: read the live
+ *     conversation, search the user's wiki articles, produce a short
+ *     first-person note. Same bounded-synthesis JSON-out shape as
+ *     recall / conversationRecall; distinct slot so the three recall
+ *     surfaces can be tuned independently if one regresses.
+ *
+ *   journalRecall - qwen3-5-35b-a3b. Journal-recall agent: read the
+ *     live conversation, search the user's daily journal entries,
+ *     produce a short first-person note. Same shape and rationale as
+ *     the other recall slots.
+ *
  *   visionAnalysis - e2ee-qwen3-5-122b-a10b. Vision sub-completion
  *     for the analyze_image tool. Decoupled from any user-facing
  *     tier so a tier retarget doesn't silently break image
@@ -455,6 +468,8 @@ export const AGENT_MODELS = {
   samskara:           'mistral-small-3-2-24b-instruct',
   recall:             'qwen3-5-35b-a3b',
   conversationRecall: 'qwen3-5-35b-a3b',
+  wikiRecall:         'qwen3-5-35b-a3b',
+  journalRecall:      'qwen3-5-35b-a3b',
   visionAnalysis:     'e2ee-qwen3-5-122b-a10b',
 } as const satisfies Record<AgentRole, ModelId>;
 

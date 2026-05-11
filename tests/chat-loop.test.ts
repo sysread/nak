@@ -2017,15 +2017,27 @@ describe('runChatLoop', () => {
      *
      * Disambiguation by message content: each recall agent appends its
      * own prompt as the final user turn. Memory-recall mentions
-     * `memory_search`; conversation-recall mentions `conversation_search`.
-     * The mock keys off those tokens to know which agent is asking.
+     * `memory_search`; conversation-recall mentions `conversation_search`;
+     * wiki-recall mentions `wiki_search`; journal-recall mentions
+     * `journal_search`. The mock keys off those tokens to know which
+     * agent is asking. Notes default to null (empty signal) for any
+     * layer the caller doesn't override.
      */
+    interface RecallVeniceNotes {
+      memory?: string | null;
+      conversation?: string | null;
+      wiki?: string | null;
+      journal?: string | null;
+    }
     function recallVenice(
       recallCalls: ChatRequest[],
-      memoryNote: string | null,
-      conversationNote: string | null,
+      notes: RecallVeniceNotes = {},
       streamRound: StreamEvent[] = [{ type: 'text', delta: 'ok' }]
     ): VeniceClient {
+      const memoryNote = notes.memory ?? null;
+      const conversationNote = notes.conversation ?? null;
+      const wikiNote = notes.wiki ?? null;
+      const journalNote = notes.journal ?? null;
       return {
         async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
           for (const ev of streamRound) yield ev;
@@ -2037,17 +2049,19 @@ describe('runChatLoop', () => {
             .find((m) => m.role === 'user');
           const content =
             typeof lastUser?.content === 'string' ? lastUser.content : '';
+          const pick = (n: string | null): string =>
+            n === null
+              ? '{"kind":"none"}'
+              : `{"kind":"note","note":${JSON.stringify(n)}}`;
           let text = '';
           if (content.includes('memory_search')) {
-            text =
-              memoryNote === null
-                ? '{"kind":"none"}'
-                : `{"kind":"note","note":${JSON.stringify(memoryNote)}}`;
+            text = pick(memoryNote);
           } else if (content.includes('conversation_search')) {
-            text =
-              conversationNote === null
-                ? '{"kind":"none"}'
-                : `{"kind":"note","note":${JSON.stringify(conversationNote)}}`;
+            text = pick(conversationNote);
+          } else if (content.includes('wiki_search')) {
+            text = pick(wikiNote);
+          } else if (content.includes('journal_search')) {
+            text = pick(journalNote);
           }
           return {
             text,
@@ -2073,11 +2087,12 @@ describe('runChatLoop', () => {
 
     it('fires the pipeline on a cold thread, persists, calls handler, injects <think>', async () => {
       const recallCalls: ChatRequest[] = [];
-      const venice = recallVenice(
-        recallCalls,
-        'I remember the user is past the basics on Haskell.',
-        'we landed on monad transformers last time.'
-      );
+      const venice = recallVenice(recallCalls, {
+        memory: 'I remember the user is past the basics on Haskell.',
+        conversation: 'we landed on monad transformers last time.',
+        // Wiki and journal stay silent (default null) so the stitched
+        // note here is just the two-layer memory + conversation case.
+      });
       const { svc, mocks } = mockSupabase({
         // Both recall agents call listMessages; return one user turn so
         // they reach the Venice round rather than short-circuiting.
@@ -2108,9 +2123,11 @@ describe('runChatLoop', () => {
           onContextRecallUpdate: (payload) => updates.push(payload),
         },
       });
-      // Two completeChat calls = one per child agent (both single-round
-      // settle since the agents don't issue tool calls in this test).
-      expect(recallCalls).toHaveLength(2);
+      // Four completeChat calls = one per child agent (all four single-
+      // round settle since the agents don't issue tool calls in this
+      // test). Pipeline fans out memory, conversation, wiki, journal
+      // in parallel.
+      expect(recallCalls).toHaveLength(4);
       // The chat-loop fires onContextRecallUpdate exactly once per
       // refresh, with the freshly-computed payload.
       expect(updates).toHaveLength(1);
@@ -2148,7 +2165,7 @@ describe('runChatLoop', () => {
       // onContextRecallUpdate never invokes - identical pre-feature
       // behaviour.
       const recallCalls: ChatRequest[] = [];
-      const venice = recallVenice(recallCalls, 'A', 'B');
+      const venice = recallVenice(recallCalls, { memory: 'A', conversation: 'B' });
       const { svc, mocks } = mockSupabase({
         listMessages: vi.fn(async () => [userRow('hi')]),
       });
@@ -2178,7 +2195,7 @@ describe('runChatLoop', () => {
       // empty <think> block onto history. Empty injection would just
       // burn tokens.
       const recallCalls: ChatRequest[] = [];
-      const venice = recallVenice(recallCalls, null, null);
+      const venice = recallVenice(recallCalls, {});
       const { svc, mocks } = mockSupabase({
         listMessages: vi.fn(async () => [userRow('hi')]),
       });
@@ -2200,7 +2217,7 @@ describe('runChatLoop', () => {
         signal: new AbortController().signal,
         contextRecallEnabled: true,
       });
-      expect(recallCalls).toHaveLength(2); // both children ran
+      expect(recallCalls).toHaveLength(4); // all four children ran
       expect(mocks.setThreadContextRecallPayload).toHaveBeenCalledTimes(1);
       const persistedArg = mocks.setThreadContextRecallPayload.mock.calls[0][1];
       expect(persistedArg).toMatchObject({ v: 1, note: '' });
@@ -2301,6 +2318,33 @@ describe('runChatLoop', () => {
               finishReason: 'stop',
             };
           }
+          // The wiki and journal recall agents also gate on the same
+          // perception-released signal. We don't need notes from them
+          // for the assertions below; the empty signal is fine. They
+          // exist so the test correctly captures the four-way fan-out
+          // the pipeline now performs.
+          if (lastUserText.includes('wiki_search')) {
+            await recallGate;
+            return {
+              text: '{"kind":"none"}',
+              reasoning: '',
+              toolCalls: [],
+              usage: null,
+              citations: [],
+              finishReason: 'stop',
+            };
+          }
+          if (lastUserText.includes('journal_search')) {
+            await recallGate;
+            return {
+              text: '{"kind":"none"}',
+              reasoning: '',
+              toolCalls: [],
+              usage: null,
+              citations: [],
+              finishReason: 'stop',
+            };
+          }
           return {
             text: '',
             reasoning: '',
@@ -2329,10 +2373,11 @@ describe('runChatLoop', () => {
       // Both caches written.
       expect(mocks.setThreadIntuitionPayload).toHaveBeenCalledTimes(1);
       expect(mocks.setThreadContextRecallPayload).toHaveBeenCalledTimes(1);
-      // Total calls = 7 intuition + 2 recall agents.
-      expect(allCalls.length).toBe(9);
-      // Both recall calls were gated on an intuition-side event - if
-      // the chat-loop had run intuition first and recall second
+      // Total calls = 7 intuition + 4 recall agents (memory,
+      // conversation, wiki, journal).
+      expect(allCalls.length).toBe(11);
+      // The four recall calls were gated on an intuition-side event -
+      // if the chat-loop had run intuition first and recall second
       // (serial), the gate-release would have happened during the
       // intuition phase, AFTER recall would have already settled.
       // The recall calls landing AFTER perception (the gate releaser)
@@ -2341,13 +2386,17 @@ describe('runChatLoop', () => {
         c.sys.includes('objective *perception*')
       )?.at;
       const recallTimes = allCalls
-        .filter((c) =>
-          c.lastUser.includes('memory_search') ||
-          c.lastUser.includes('conversation_search')
+        .filter(
+          (c) =>
+            c.lastUser.includes('memory_search') ||
+            c.lastUser.includes('conversation_search') ||
+            c.lastUser.includes('wiki_search') ||
+            c.lastUser.includes('journal_search')
         )
         .map((c) => c.at);
       expect(perceptionAt).toBeDefined();
-      expect(recallTimes.length).toBe(2);
+      // Four-way fan-out: memory + conversation + wiki + journal.
+      expect(recallTimes.length).toBe(4);
       for (const t of recallTimes) {
         expect(t).toBeGreaterThanOrEqual(perceptionAt!);
       }

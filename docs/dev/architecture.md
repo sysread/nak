@@ -215,9 +215,10 @@ OpenAI-compatible endpoints. Three chat methods matter:
 - `completeChat(req)` — non-streaming POST returning a single
   `ChatCompletion` record with the same fields as the streaming
   events would produce. Used by every background path: the
-  intuition / samskara / summary / recall / reflection / journal /
-  conversation_recall agents and the headless tool loop they share,
-  plus the web_search / research_docs / analyze_image sub-tools.
+  intuition / samskara / summary / reflection / journal agents,
+  the four recall agents (memory, conversation, wiki, journal),
+  and the headless tool loop they share, plus the web_search /
+  research_docs / analyze_image sub-tools.
   Background callers don't have a UI surface to render
   token-by-token into, and SSE costs measurable per-chunk latency
   the user can't see; non-streaming also sidesteps provider-

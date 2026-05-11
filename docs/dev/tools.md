@@ -28,11 +28,21 @@ The always-on toolbox carries:
 
 - `toggle_toolbox` - the gating mechanism itself. Without it in the
   always-on set, the model cannot enable any gated toolbox.
-- `memory_recall` and `conversation_recall` - reflex-level reads
-  the system prompt asks the model to call at the top of a new
-  topic. Both are read-only (they spawn a sub-agent and return a
-  structured note) so there's no write risk from always exposing
-  them.
+- `context` - umbrella over the four recall tools. Fans out the
+  same four recall agents (memory, conversation, wiki, journal) the
+  topic-boundary pipeline uses, in parallel, and returns a single
+  stitched first-person paragraph. The system prompt nudges the
+  model to consider this first when it wants broad context on the
+  user - one round-trip instead of four sequential per-layer calls.
+  Read-only.
+- `memory_recall`, `conversation_recall`, `wiki_recall`,
+  `journal_recall` - reflex-level per-layer reads the model uses
+  when it already knows which store it wants (or when it wants to
+  drill into one layer after the umbrella `context` call). Each
+  spawns its dedicated recall sub-agent and returns a structured
+  note. All four are read-only - they each ship with a toolbox
+  that carries only the matching `*_search` tool, so a bug in a
+  recall prompt can't scribble over user data.
 - `web_search` - runs a one-shot Venice sub-completion with
   `enable_web_search: 'on'` + `enable_web_citations: true` and
   returns `{answer, citations}`. Must be available without a
@@ -40,8 +50,9 @@ The always-on toolbox carries:
   prices, today's weather) are the canonical case for search and
   we don't want the model to refuse or hedge while waiting for a
   toolbox flip. Read-only (no DB writes). Deliberately excluded
-  from `memoryToolbox`, `recallToolbox`, and
-  `conversationRecallToolbox` - background agents have no reason
+  from `memoryToolbox`, `recallToolbox`,
+  `conversationRecallToolbox`, `wikiRecallToolbox`, and
+  `journalRecallToolbox` - background agents have no reason
   to reach for live web data, and giving them the tool would burn
   search quota and pollute memories with scraped noise.
 - `update_title` - has to fire on the very first turn of a fresh
@@ -98,7 +109,8 @@ The gated `research` toolbox carries:
   catalog builders (`buildToolList`, `buildSystemPrompt`), and the
   main dispatcher `executeToolCall`. Also exports the agent-only
   toolboxes (`memoryToolbox`, `recallToolbox`,
-  `conversationRecallToolbox`).
+  `conversationRecallToolbox`, `wikiRecallToolbox`,
+  `journalRecallToolbox`).
 - `src/lib/tools/run.ts` - `runHeadlessToolLoop`: the agent-side
   executor. Parallel to the chat loop but without persistence or
   streaming callbacks.
@@ -114,6 +126,16 @@ The gated `research` toolbox carries:
 - `src/lib/tools/conversation_search.ts`,
   `conversation_recall.ts` - thread-level search + recall-agent
   trigger.
+- `src/lib/tools/wiki_recall.ts`, `wiki_recall_toolbox.ts` - the
+  wiki-recall tool (main-chat) and the read-only toolbox the
+  wiki-recall agent uses internally.
+- `src/lib/tools/journal_recall.ts`, `journal_recall_toolbox.ts` -
+  same shape for the journal-recall agent.
+- `src/lib/tools/context.ts` - the umbrella recall tool: fans out
+  all four recall agents in parallel via `runRecallFanOut` (see
+  `src/lib/context-recall/pipeline.ts`) and returns the stitched
+  paragraph. Thin wrapper; the heavy lifting is shared with the
+  reflexive pipeline.
 - `src/lib/tools/recipe_*.ts` - five cookbook tools (`save`,
   `list`, `get`, `update`, `delete`). Mutating ones fire
   `notifyCookbookChanged` from `cookbook-store.svelte.ts` so the
@@ -284,6 +306,14 @@ The gated `research` toolbox carries:
   that imports `conversation_search` directly from its file to
   avoid the cycle tools/index -> conversation_recall -> agents/...
   -> tools/index. See `./conversation-recall.md`.
+- **Wiki recall and journal recall** - `wiki_recall` and
+  `journal_recall` follow the same pattern as the memory and
+  conversation recall tools: always-on entries in the main chat,
+  each backed by a dedicated sub-agent whose toolbox carries only
+  the matching `*_search` tool. The umbrella `context` tool wraps
+  all four recall agents (via `runRecallFanOut`) so a single tool
+  call surfaces broad context across every persistent layer. See
+  `./context-recall.md`.
 - **Cookbook** - five `recipe_*` tools gated by the `cooking`
   toolbox. The store in `cookbook-store.svelte.ts` owns the
   reactive recipe list; mutating tools fire a `window`
@@ -307,8 +337,9 @@ The gated `research` toolbox carries:
   deletes are user-directed) and NOT `memory_recall` or any
   `*_recall` (recursion with no purpose - reflection already has
   the whole conversation in context). See `./memory.md`.
-- **Logging** - the two recall tools (`memory_recall`,
-  `conversation_recall`) emit diagnostic breadcrumbs via
+- **Logging** - the recall tools (`memory_recall`,
+  `conversation_recall`, `wiki_recall`, `journal_recall`) and the
+  umbrella `context` tool emit diagnostic breadcrumbs via
   `createLogger`. New tools should follow suit rather than
   calling `console.*` directly - the `no-console` ESLint rule
   enforces this outside `src/lib/logger.svelte.ts`. See
@@ -349,8 +380,9 @@ The gated `research` toolbox carries:
   which needs a toolbox. If the agent imported the toolbox from
   `tools/index.ts` the cycle would bite - the agent would load
   before `memoryRecall` was defined, giving it an undefined
-  toolbox. The fix: `recall_toolbox.ts` and
-  `conversation_recall_toolbox.ts` are their own files,
+  toolbox. The fix: `recall_toolbox.ts`,
+  `conversation_recall_toolbox.ts`, `wiki_recall_toolbox.ts`, and
+  `journal_recall_toolbox.ts` are their own files,
   re-exported from `tools/index.ts` so consumers that read
   `$lib/tools` still see them. Don't inline them back into the
   barrel. For the same reason, `toggle_tools.ts` imports
