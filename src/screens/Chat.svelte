@@ -121,7 +121,6 @@
   import MemoryList from '../components/MemoryList.svelte';
   import WikiList from '../components/WikiList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
-  import IntuitionCard from '../components/IntuitionCard.svelte';
   import {
     cookbook,
     loadRecipes,
@@ -3264,21 +3263,15 @@
   // prev-value bookkeeping inside a single effect.
 
   // Rendered-transcript mutations during an active completion - user
-  // send, assistant-persist, regenerate-drop, intuition-card insertion.
-  // These mark a clean transition and should land the view on the
-  // bottom immediately. Firing here also supersedes any pending
-  // streaming debounce: the commit we just observed is the latest
-  // state, so a stale late-firing timer would just flicker.
+  // send, assistant-persist, regenerate-drop. These mark a clean
+  // transition and should land the view on the bottom immediately.
+  // Firing here also supersedes any pending streaming debounce: the
+  // commit we just observed is the latest state, so a stale
+  // late-firing timer would just flicker.
   //
   // Tracks `messageBlocks` (the derived render list) rather than raw
-  // `messages` so the intuition card counts as a discrete mutation.
-  // The card is inserted via `currentIntuitionPayload` changing, not
-  // via the `messages` array, so subscribing to `messages` alone
-  // missed the card's appearance: scrollHeight grew, scrollTop stayed
-  // put, the user was no longer near the bottom, and the next scroll
-  // event (from anywhere - a layout-driven clamp, an attempt to read
-  // the new card) flipped `followBottom` to false and locked out the
-  // rest of the round's autoscroll.
+  // `messages` so non-message render blocks (e.g. the rename
+  // indicator) also count as discrete mutations.
   //
   // Gated on `sending` so a delayed realtime echo or cross-tab mutation
   // arriving after the completion ends doesn't yank the view back to
@@ -3453,14 +3446,7 @@
     // (unlikely, but the model could do it). `assistantId` anchors
     // the block to its originating assistant row for debugging /
     // future deep-link needs.
-    | { kind: 'rename'; key: string; assistantId: string; title: string }
-    // Inline subconscious-read card. Anchored to the user message at
-    // the same user-round as `payload.computed_at_round`. Only one
-    // ever appears in the transcript at a time because the cache only
-    // holds the most recent payload; older rounds render without a
-    // card. The card itself owns its expand/collapse state (see
-    // IntuitionCard.svelte).
-    | { kind: 'intuition'; payload: IntuitionPayload };
+    | { kind: 'rename'; key: string; assistantId: string; title: string };
 
   // Tool names rendered as something other than a standard tool-call
   // card:
@@ -3531,36 +3517,13 @@
         resultsByCallId[m.tool_call_id] = m;
       }
     }
-    // Inline-card emission: walk user messages in order and emit the
-    // intuition card immediately after the user message whose round
-    // matches `payload.computed_at_round`. The cache only holds the
-    // most recent payload, so this fires at most once across the
-    // whole transcript - older rounds render without a card. Reading
-    // the payload reactively here keeps the card in sync with
-    // onIntuitionUpdate's optimistic patch (no separate effect
-    // wiring needed).
-    const intuitionPayload = currentIntuitionPayload;
-    let userRoundCounter = 0;
     // Second pass: emit blocks, folding assistant-with-tool_calls rows
     // into a tool-group that carries the matching result rows.
     const blocks: MessageBlock[] = [];
     for (const m of messages) {
       if (m.role === 'tool') continue; // folded under their assistant parent
       if (m.role === 'user') {
-        userRoundCounter++;
         blocks.push({ kind: 'plain', message: m });
-        // Drop the intuition card immediately after the user message
-        // whose round id matches the cached payload. Anchor on the
-        // user side so the card sits between the user's prompt and
-        // the assistant's reply, matching the mental model "the
-        // assistant had this thought after reading their message,
-        // before responding".
-        if (
-          intuitionPayload &&
-          intuitionPayload.computed_at_round === userRoundCounter
-        ) {
-          blocks.push({ kind: 'intuition', payload: intuitionPayload });
-        }
         continue;
       }
       if (
@@ -4532,8 +4495,6 @@
               ? block.message.id
               : block.kind === 'rename'
               ? `rename:${block.key}`
-              : block.kind === 'intuition'
-              ? `intuition:${block.payload.computed_at_round}:${block.payload.computed_at_at}`
               : block.assistant.id
           )}
             {#if block.kind === 'tool-group'}
@@ -4580,15 +4541,6 @@
               <div class="renamed-to" role="note" aria-label="Conversation renamed">
                 Renamed to <em>{block.title}</em>
               </div>
-            {:else if block.kind === 'intuition'}
-              <!-- Inline subconscious-read card. Sits between the
-                   user message it was computed for and the assistant
-                   response that followed. Distinct visual register
-                   (dashed border, no avatar) so it reads as
-                   commentary alongside the conversation, not a
-                   message in it. Component owns its expand/collapse
-                   state. -->
-              <IntuitionCard payload={block.payload} />
             {:else if block.message.role === 'assistant'}
               <div
                 class="msg assistant"

@@ -105,9 +105,6 @@ thread by the first response.
   positioned 3.25rem from the right edge so the two pills don't
   overlap. Suppressed when the active thread has no cached
   payload.
-- `src/components/IntuitionCard.svelte` - inline card rendered
-  in the message list, anchored to the user message at
-  `payload.computed_at_round`. Owns its expand/collapse state.
 - `src/screens/Intuition.svelte` - the diagnostics modal. Reads
   the active thread's payload, renders synthesis + perception +
   the five drives + a footer with the trigger reason and
@@ -122,10 +119,10 @@ thread by the first response.
   `update_title` call appearing in `settled`.
 - **UI mount**: `Chat.svelte`. The Pill mounts beside
   `SamskaraToasts`; the modal mounts in the modal-overlay
-  block. The IntuitionCard is emitted into the
-  `messageBlocks` derivation as a new `kind: 'intuition'`
-  block, anchored to the user message whose user-round id
-  matches `payload.computed_at_round`.
+  block. The transcript itself shows no per-round indicator -
+  the brain pill in the top-right is the only surface, and it
+  opens the same diagnostics modal regardless of which round
+  the cached payload was computed for.
 - **Chat-loop options**: `intuitionModelId` (omit to disable
   the feature on this turn) and `intuitionMood` (the
   `{ band, column }` pair from `bandIndexFor` / `columnFor`).
@@ -163,14 +160,14 @@ There is no historical record. The cache holds the most recent
 payload only; older payloads are overwritten. Anyone wanting an
 audit trail would have to add a `intuition_history` table; we
 deliberately did not because the current payload is what the
-model sees and the inline card already gives a transient view of
-the most recent fire.
+model sees and the diagnostics modal already exposes it on
+demand.
 
 ## Contracts
 
 - **Cache is source of truth.** The ephemeral assistant message
   on the in-memory history is reconstructed from the cache at
-  request time. The UI inline card reads from the same cache.
+  request time. The diagnostics modal reads from the same cache.
   Two projections, one source - they cannot drift.
 - **No persistence of the ephemeral message.** The synthesis
   text never lands in `messages`. The cache survives reload;

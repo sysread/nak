@@ -35,14 +35,6 @@ The modal shows three things:
 The drives don't always agree. The synthesis is where they get
 weighted against each other into one read.
 
-You may also see an **inline card** between your message and the
-assistant's reply, with the same brain icon. That's the same payload
-the modal renders, scoped to the round it was computed for. Click the
-`+` to expand it, or the `↗` to open the full modal. Only the most
-recent intuition card appears in the transcript; scrolling back
-through older rounds, you'll see the user/assistant exchanges without
-cards.
-
 ## When it runs
 
 The pipeline costs about seven model calls (one perception, five
