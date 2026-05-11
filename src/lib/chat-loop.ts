@@ -1186,6 +1186,14 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // reaction-classified, which the worker's resolution-window
   // discards naturally.
   const userText = extractUserText(history[history.length - 1]);
+  // User-round index for the current turn (1-based count of user
+  // messages in history, including the just-sent one). Hoisted up
+  // here from its later use because fireSamskaras now persists this
+  // value on every cohort fire so the per-message inline UI can
+  // anchor each cohort to the user message that triggered it. The
+  // count includes the current user message because history's last
+  // element is that message at this point in the loop.
+  const currentUserRound = countUserRounds(history);
   // "Opening turn" = no assistant messages in history yet. A fresh
   // thread on turn 1 matches; a thread where the user edited their
   // first message before any reply also matches (correctly - the
@@ -1213,7 +1221,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     const [compoundSummary, fireResult, openingRecallBlock, journalRows] =
       await Promise.all([
         getCompoundSummary(supabase),
-        fireSamskaras(supabase, venice, thread.id, userText, signal),
+        fireSamskaras(supabase, venice, thread.id, currentUserRound, userText, signal),
         isOpeningTurn
           ? recallOpeningMemories(supabase, venice, userText, signal)
           : Promise.resolve<string | null>(null),
@@ -1339,12 +1347,12 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // wall-clock cost is max(intuition, context-recall) plus one
   // Promise.all on the persist writes, not additive.
   //
-  // The round id is the user-message count in history INCLUDING the
-  // just-sent user turn. Tool-using rounds inflate the chat-loop's
-  // internal `round` counter but do not change the user-round - one
-  // user message, one round id, regardless of how many tool calls
-  // happen during the response.
-  const currentUserRound = countUserRounds(history);
+  // `currentUserRound` is computed up at the top of this function
+  // (before priming) because fireSamskaras now needs it to anchor
+  // each cohort to a user-message round. Tool-using rounds inflate
+  // the chat-loop's internal `round` counter but do not change this
+  // value - one user message, one round id, regardless of how many
+  // tool calls happen during the response.
   let intuitionCache: IntuitionPayload | null = readIntuitionCache(thread);
   let intuitionMessageIdx: number | null = null;
   let contextRecallCache: ContextRecallPayload | null =

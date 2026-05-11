@@ -169,15 +169,29 @@ toast is just a glance cue that the bias model is forming.
 - **`runChatLoop` round-1 entry** - in `src/lib/chat-loop.ts`,
   before the first round's `requestMessages` is assembled, the
   loop races `getCompoundSummary(supabase)` and
-  `fireSamskaras(supabase, venice, threadId, userText, signal)`
-  in parallel under a `SAMSKARA_PRIMING_TIMEOUT_MS` (1500ms)
-  cap. The resulting appendix is passed into
-  `buildSystemPrompt({ promptAppendix })` so every round this
-  turn sees the same compound + fire signal (one cohort id per
-  user turn, not per round). Underlying Promises keep running
-  on timeout; the worst case is one cohort logged but never
-  reaction-classified, which the worker's resolution-window
-  drops naturally.
+  `fireSamskaras(supabase, venice, threadId, currentUserRound,
+  userText, signal)` in parallel under a
+  `SAMSKARA_PRIMING_TIMEOUT_MS` (1500ms) cap. `currentUserRound`
+  is hoisted up to fire time from `countUserRounds(history)` so
+  each cohort row carries the user-message index it anchors to.
+  The resulting appendix is passed into `buildSystemPrompt({
+  promptAppendix })` so every round this turn sees the same
+  compound + fire signal (one cohort id per user turn, not per
+  round). Underlying Promises keep running on timeout; the
+  worst case is one cohort logged but never reaction-classified,
+  which the worker's resolution-window drops naturally.
+- **Inline `CohortPanel` in `Chat.svelte`** - on thread load,
+  `Chat.svelte` calls `samskaraListFiresForThread`,
+  `samskaraListSubstrateForThread`, and
+  `samskaraClusterThreadFires` once. Fires group by
+  `user_round`, substrate joins on `user_message_id`. Each user
+  message in the transcript gets a pulse-icon toggle in its
+  action row; click it to expand a `CohortPanel` anchored to
+  that turn. End-of-turn the loader is invoked again so the
+  just-fired cohort appears under its triggering message
+  without a manual refresh. The Samskara diagnostics modal no
+  longer carries per-message detail - cohort fires + substrate
+  for one round are exclusively the inline panel's domain.
 - **`runChatLoop` end of turn** - after the terminal assistant
   row persists, the loop calls
   `recordSubstrateStub(supabase, threadId, userMessageId,
@@ -309,13 +323,22 @@ One row per samskara fired per turn. Drives reaction
 reinforcement and cohort detection.
 
 - `id`, `user_id`, `samskara_id` (FK on cascade), `thread_id`,
-  `cohort_id uuid not null`, `fired_at`, `score real not null`,
-  `was_confirmed boolean`.
+  `cohort_id uuid not null`, `user_round integer`, `fired_at`,
+  `score real not null`, `was_confirmed boolean`.
 - `cohort_id` is shared across the set of samskaras fired
   together on the same turn, generated client-side when the
   chat loop assembles the fire. Lets the reaction classifier
   and (eventually) the tier-2 mint phase operate on the cohort
   as a unit.
+- `user_round` is the 1-based index of the user message that
+  triggered this cohort, counted by `countUserRounds(history)`
+  in the chat loop at fire time. The inline `CohortPanel` in
+  the chat transcript walks user messages in transcript order
+  and joins on this column. Nullable for legacy rows; a
+  one-time backfill ranks each (user_id, thread_id) cohort by
+  min(fired_at) and assigns sequential integers, which is exact
+  when every user message produced a fire and off-by-N for
+  threads with cold-start gaps.
 - `score` is the ranking score at fire time, kept for
   analytics.
 - `was_confirmed` starts NULL, set to true/false by the
@@ -324,6 +347,9 @@ reinforcement and cohort detection.
   stale signal.
 - Partial index on `(user_id, thread_id, fired_at desc) where
   was_confirmed is null` targets the reaction-classify poll.
+- Partial index on `(user_id, thread_id, user_round) where
+  user_round is not null` targets the inline CohortPanel
+  lookup ("which cohort fired at user-round N in this thread").
 
 ### `samskara_compound_summary`
 

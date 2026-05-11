@@ -4101,6 +4101,7 @@ export class SupabaseService {
   async samskaraRecordFires(
     cohortId: string,
     threadId: string,
+    userRound: number,
     fires: { samskaraId: string; score: number }[]
   ): Promise<void> {
     if (fires.length === 0) return;
@@ -4108,6 +4109,7 @@ export class SupabaseService {
     const { error } = await this.client.rpc('samskara_record_fires', {
       p_cohort_id: cohortId,
       p_thread_id: threadId,
+      p_user_round: userRound,
       p_fires: payload,
     });
     if (error) throw new SupabaseError(error.message);
@@ -4579,7 +4581,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('samskara_fires')
       .select(
-        'id, cohort_id, samskara_id, score, fired_at, was_confirmed, samskaras(tier, prediction, inner_voice, valence, confidence, health)'
+        'id, cohort_id, samskara_id, score, fired_at, was_confirmed, user_round, samskaras(tier, prediction, inner_voice, valence, confidence, health)'
       )
       .eq('thread_id', threadId)
       .order('fired_at', { ascending: false });
@@ -4603,6 +4605,7 @@ export class SupabaseService {
       score: number;
       fired_at: string;
       was_confirmed: boolean | null;
+      user_round: number | null;
       samskaras: EmbeddedSamskara | EmbeddedSamskara[] | null;
     }[];
     return rows.map((r) => {
@@ -4616,6 +4619,7 @@ export class SupabaseService {
         score: r.score,
         firedAt: r.fired_at,
         wasConfirmed: r.was_confirmed,
+        userRound: r.user_round,
         samskara: joined
           ? {
               tier: joined.tier,
@@ -4809,6 +4813,12 @@ export interface SamskaraFireDiagnosticRow {
   score: number;
   firedAt: string;
   wasConfirmed: boolean | null;
+  /** 1-based index of the user message that triggered this cohort, as
+   *  counted by the chat loop at fire time. Null for legacy rows
+   *  written before the column existed and not yet covered by the
+   *  one-time backfill - the per-message inline UI suppresses the
+   *  toggle on user messages where no cohort maps to this round. */
+  userRound: number | null;
   /** Null only when the samskara was deleted after the fire logged;
    *  the row keeps pointing to the now-orphaned id. */
   samskara: {

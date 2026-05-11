@@ -3005,11 +3005,66 @@ create table if not exists public.samskara_fires (
   was_confirmed boolean
 );
 
+-- Per-thread index of the user message this cohort fired in response
+-- to. 1-based, matches the in-memory countUserRounds(history) value
+-- the chat loop sees at fire time (the current user message is
+-- already in history when fireSamskaras runs). The UI joins user
+-- messages to their cohort by walking the transcript and using the
+-- Nth user message's index as the user_round; new fires from the
+-- chat loop always carry an accurate value. Nullable for legacy
+-- rows written before the column existed; those get an approximate
+-- backfill below. Anchoring on a per-thread integer rather than a
+-- message_id FK lets the value survive message edits/regenerations
+-- without rewriting fire rows, at the cost of an off-by-N if the
+-- user deletes earlier user messages (rare; not worth a trigger).
+alter table public.samskara_fires
+  add column if not exists user_round integer;
+
+-- Best-effort backfill of user_round for fire rows written before
+-- this column existed. Ranks cohorts within (user_id, thread_id) by
+-- min(fired_at) and assigns sequential integers, so every fire in a
+-- cohort shares the same user_round. Approximate: any user message
+-- that produced no fire row (empty top-k from samskaraFireTopK,
+-- empty user text, embed failure) shifts the ranking by one for
+-- everything that followed. Acceptable for historical rows because
+-- the inline UI just won't anchor cleanly there; new fires written
+-- by the chat loop carry the precise value. Idempotent via the
+-- NULL-only WHERE guard.
+update public.samskara_fires sf
+   set user_round = ranked.r
+  from (
+    select user_id, thread_id, cohort_id,
+           dense_rank() over (
+             partition by user_id, thread_id
+             order by min_fired_at
+           )::int as r
+      from (
+        select user_id, thread_id, cohort_id,
+               min(fired_at) as min_fired_at
+          from public.samskara_fires
+         group by user_id, thread_id, cohort_id
+      ) as cohort_starts
+  ) as ranked
+ where sf.user_id = ranked.user_id
+   and sf.thread_id = ranked.thread_id
+   and sf.cohort_id = ranked.cohort_id
+   and sf.user_round is null;
+
 create index if not exists samskara_fires_user_recent_idx
   on public.samskara_fires (user_id, fired_at desc);
 
 create index if not exists samskara_fires_cohort_idx
   on public.samskara_fires (cohort_id);
+
+-- Look up "which cohort fired at user-round N in this thread?" - the
+-- per-message inline UI uses this on thread load to map each user
+-- message in the transcript (numbered 1..N by the renderer) to its
+-- cohort group. Partial-on-not-null is a tiny optimization for the
+-- common path; the backfill above populates historical rows so the
+-- legacy gap is short-lived.
+create index if not exists samskara_fires_user_round_idx
+  on public.samskara_fires (user_id, thread_id, user_round)
+  where user_round is not null;
 
 create index if not exists samskara_fires_unresolved_idx
   on public.samskara_fires (user_id, thread_id, fired_at desc)
@@ -3204,10 +3259,16 @@ $$;
 -- Bumps `fire_count` and `last_fired_at` on each samskara as a side
 -- effect — the SQL `update ... in (select ...)` is one round trip and
 -- keeps the bookkeeping atomic with the fire-log insert.
+-- Old (cohort, thread, fires) signature retired in favor of the
+-- (cohort, thread, user_round, fires) one below. Dropping the old
+-- shape forces every client through the new path so a stale wrapper
+-- can't silently insert NULL user_round rows.
 drop function if exists public.samskara_record_fires(uuid, uuid, jsonb);
+drop function if exists public.samskara_record_fires(uuid, uuid, integer, jsonb);
 create or replace function public.samskara_record_fires(
   p_cohort_id uuid,
   p_thread_id uuid,
+  p_user_round integer,
   p_fires jsonb
 ) returns void
 language plpgsql security invoker as $$
@@ -3251,12 +3312,13 @@ begin
   -- so the conflict can't trip; if a regression introduces a second
   -- call path, the table stays clean instead of growing duplicates.
   insert into public.samskara_fires (
-    user_id, samskara_id, thread_id, cohort_id, score
+    user_id, samskara_id, thread_id, cohort_id, user_round, score
   )
   select v_uid,
          (elem->>'samskara_id')::uuid,
          p_thread_id,
          p_cohort_id,
+         p_user_round,
          (elem->>'score')::real
     from jsonb_array_elements(p_fires) as elem
    on conflict (user_id, cohort_id, samskara_id) do nothing;

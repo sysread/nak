@@ -1,30 +1,27 @@
 <script lang="ts">
   /*
-   * Samskara diagnostics modal. Read-only window into the samskara
-   * pipeline's state for the currently-selected conversation, plus
-   * corpus-level counters and the compound summary that's being
-   * injected into every system prompt.
+   * Samskara diagnostics modal. Read-only window into the corpus-
+   * level state of the samskara pipeline: corpus counters, the
+   * compound summary that's injected into every system prompt, and
+   * the mood-pill legend.
+   *
+   * Per-user-message diagnostics (cohort fires + substrate stub for
+   * one turn) live INLINE in the chat transcript via CohortPanel,
+   * not here. Each user message that triggered samskaras gets a
+   * pulse-icon toggle in its action row; click it to expand a panel
+   * anchored to that turn. Reaching per-turn detail no longer
+   * requires opening the modal at all - the modal is for everything
+   * that isn't tied to a specific user message.
    *
    * Reached from the fist-icon button in the Logs drawer footer;
    * opens via `navigate({ modal: 'samskara' })` and reads `route.cid`
-   * to know which thread to fetch for. Non-thread-scoped sections
-   * (counters, compound summary) render regardless, so the modal is
-   * still useful on the empty thread-picker state.
-   *
-   * Chrome mirrors Memories/Help (single scrolling column). The panel
-   * deliberately does NOT show substrate embeddings (2048 floats per
-   * row is too fat to wire), fires older than the current thread (a
-   * full history view is out of scope for this first cut), or any
-   * corpus-wide samskara list (same reason). When/if the user asks
-   * for those, they're additional sections below the existing ones.
+   * only for the per-thread Overview counters. Renders fine on the
+   * empty thread-picker state because the global sections (corpus
+   * counts, compound summary, mood legend) don't need a thread.
    */
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
   import { route } from '$lib/routing.svelte';
-  import type {
-    SamskaraSubstrateDiagnosticRow,
-    SamskaraFireDiagnosticRow,
-  } from '$lib/supabase';
   import {
     MOOD_TABLE,
     CONFIDENCE_CUT,
@@ -61,63 +58,6 @@
   let error = $state<string | null>(null);
   let compound = $state<CompoundSummary | null>(null);
   let counts = $state<Counts | null>(null);
-  let substrate = $state<SamskaraSubstrateDiagnosticRow[]>([]);
-  let fires = $state<SamskaraFireDiagnosticRow[]>([]);
-  // fire_id -> cluster assignment within its cohort. Populated by the
-  // samskara_cluster_thread_fires RPC after the fires fetch lands. An
-  // empty map (RPC failed, or no fires) falls back to one-cluster-per-
-  // fire in the derivation below, so the renderer always has clusters
-  // to walk.
-  let clusterMap = $state<Map<string, { clusterSeq: number; clusterSize: number }>>(
-    new Map()
-  );
-  // Per-cluster expand state: keys are `${cohortId}:${clusterSeq}`.
-  // Singleton clusters never collapse (no chevron rendered) so they
-  // don't need entries here.
-  let expandedClusters = $state<Set<string>>(new Set());
-  // Per-cohort "show raw fires" override. When a cohort id is present
-  // in this set, the renderer bypasses clustering and shows the
-  // original flat fires list. Toggle lives on each cohort header.
-  let rawCohorts = $state<Set<string>>(new Set());
-  // Cosine-similarity threshold for the cluster RPC. Read from
-  // localStorage on mount so the user's chosen value sticks across
-  // sessions. 0.7 is the documented default - sits in BGE-M3's
-  // "topically similar" band (paraphrases run 0.65-0.78) without
-  // collapsing genuinely-different ideas. Slider lives in the cohort-
-  // fires section header so the user can tune live; persisted on
-  // every settle (input event), not just commit (change event), so a
-  // back-button doesn't lose the dial position.
-  const THRESHOLD_KEY = 'nak:samskara:cluster-threshold:v1';
-  const DEFAULT_THRESHOLD = 0.7;
-  function readStoredThreshold(): number {
-    try {
-      const raw = localStorage.getItem(THRESHOLD_KEY);
-      if (!raw) return DEFAULT_THRESHOLD;
-      const n = Number.parseFloat(raw);
-      // Reject NaN and out-of-range values rather than silently
-      // clamping - a corrupt stored value should fall back to the
-      // documented default, not anchor the user at -2.
-      if (!Number.isFinite(n) || n < 0.5 || n > 0.95) return DEFAULT_THRESHOLD;
-      return n;
-    } catch {
-      return DEFAULT_THRESHOLD;
-    }
-  }
-  function persistThreshold(v: number): void {
-    try {
-      localStorage.setItem(THRESHOLD_KEY, v.toFixed(2));
-    } catch {
-      // private mode / quota - drop silently. The slider still
-      // affects the live session; just won't carry across reloads.
-    }
-  }
-  let clusterThreshold = $state<number>(readStoredThreshold());
-  // Generation counter to drop stale RPC responses when the slider
-  // moves faster than the network. Without it, a slow response from
-  // an earlier threshold can land after a faster response from the
-  // current threshold and overwrite the right answer.
-  let clusterGen = 0;
-  let clusterReclustering = $state(false);
   // Snapshot route.cid ONCE at mount. The modal is full-screen so
   // the user can't switch threads without first closing us; a fresh
   // open re-runs onMount. Intentionally NOT reactive to avoid the
@@ -125,78 +65,6 @@
   // during the cold-load path when route.cid + app.supabase were
   // both still settling.
   const threadId = route.cid;
-
-  // Group fires by cohort so the renderer draws "one cohort" cards
-  // instead of one row per (cohort, samskara) pair. Cohort order
-  // preserved from the original array (newest fired_at first). Each
-  // cohort also carries a clusters[] view derived from clusterMap,
-  // which the renderer prefers over the flat fires list unless the
-  // user toggled "Show raw fires" on this cohort.
-  interface ClusterView {
-    seq: number;
-    representative: SamskaraFireDiagnosticRow;
-    siblings: SamskaraFireDiagnosticRow[];
-  }
-  interface CohortGroup {
-    cohortId: string;
-    firedAt: string;
-    wasConfirmed: boolean | null;
-    fires: SamskaraFireDiagnosticRow[];
-    clusters: ClusterView[];
-  }
-  const cohortGroups: CohortGroup[] = $derived.by(() => {
-    const groups = new Map<string, CohortGroup>();
-    for (const f of fires) {
-      const existing = groups.get(f.cohortId);
-      if (existing) {
-        existing.fires.push(f);
-        // Within a cohort every row shares cohort_id + fired_at +
-        // was_confirmed, so the first wins. Ordering inside the
-        // cohort is highest-score-first.
-      } else {
-        groups.set(f.cohortId, {
-          cohortId: f.cohortId,
-          firedAt: f.firedAt,
-          wasConfirmed: f.wasConfirmed,
-          fires: [f],
-          clusters: [],
-        });
-      }
-    }
-    for (const g of groups.values()) {
-      g.fires.sort((a, b) => b.score - a.score);
-      // Build clusters off clusterMap. Fires without an entry (RPC
-      // hadn't loaded, or failed) fall through to a singleton cluster
-      // each, which means the worst case still renders something
-      // sensible - just no abstraction.
-      const bySeq = new Map<number, SamskaraFireDiagnosticRow[]>();
-      let nextFallbackSeq = -1;
-      for (const f of g.fires) {
-        const assigned = clusterMap.get(f.id);
-        const seq = assigned?.clusterSeq ?? nextFallbackSeq--;
-        const bucket = bySeq.get(seq);
-        if (bucket) bucket.push(f);
-        else bySeq.set(seq, [f]);
-      }
-      // Order clusters by their representative's score (descending)
-      // so the most-relevant theme leads. The representative is the
-      // first member after the per-cohort score-desc sort above.
-      // Use bySeq.entries() to carry the bucket key through - the key
-      // is either the real clusterSeq or the unique negative fallback
-      // assigned above. Previously used a fresh clusterMap lookup with
-      // ?? 0 fallback, which made every unassigned cluster get seq=0
-      // and caused duplicate each-block keys.
-      const clusters: ClusterView[] = [...bySeq.entries()]
-        .map(([seq, members]) => ({
-          seq,
-          representative: members[0],
-          siblings: members.slice(1),
-        }))
-        .sort((a, b) => b.representative.score - a.representative.score);
-      g.clusters = clusters;
-    }
-    return [...groups.values()];
-  });
 
   // Where the mood pill currently sits in MOOD_TABLE, for the
   // legend's "you are here" dot. Reads through the shared moodState
@@ -214,73 +82,18 @@
     }
   );
 
-  function clusterKey(cohortId: string, seq: number): string {
-    return `${cohortId}:${seq}`;
-  }
-  function toggleCluster(cohortId: string, seq: number): void {
-    const key = clusterKey(cohortId, seq);
-    const next = new Set(expandedClusters);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    expandedClusters = next;
-  }
-  function toggleRaw(cohortId: string): void {
-    const next = new Set(rawCohorts);
-    if (next.has(cohortId)) next.delete(cohortId);
-    else next.add(cohortId);
-    rawCohorts = next;
-  }
-
-  // Re-cluster fires at a new threshold. Driven by the slider's
-  // input event so the user sees the grouping shift live as they
-  // drag. Each call bumps clusterGen so a slow response from a
-  // previous threshold doesn't clobber a faster response from the
-  // current one - the user can drag past several positions and the
-  // last commit always wins.
+  // Two sequential queries: corpus counters + compound summary.
+  // Sequential rather than Promise.all'd because supabase-js shares
+  // a single auth-token lock per client; concurrent calls on the
+  // cold-load path (alongside refreshSettings + the worker clients)
+  // used to trip the 5s lock timeout and fail every in-flight fetch
+  // with "TypeError: Failed to fetch". Sequential keeps the lock
+  // uncontested. Total wall-clock is well under a second on warm
+  // sessions and the modal is explicitly opened, so the latency is
+  // not on a hot path.
   //
-  // Fires/substrate are not refetched because the threshold only
-  // affects how the existing fires bucket - the underlying data
-  // doesn't change. expandedClusters resets because cluster_seq
-  // values shift across thresholds; a stale "open this cluster"
-  // flag would point at a different cluster after re-clustering.
-  async function reCluster(threshold: number): Promise<void> {
-    if (!app.supabase || !threadId) return;
-    persistThreshold(threshold);
-    expandedClusters = new Set();
-    clusterGen++;
-    const thisGen = clusterGen;
-    clusterReclustering = true;
-    try {
-      const map = await app.supabase.samskaraClusterThreadFires(threadId, threshold);
-      if (thisGen === clusterGen) clusterMap = map;
-    } catch {
-      if (thisGen === clusterGen) clusterMap = new Map();
-    } finally {
-      if (thisGen === clusterGen) clusterReclustering = false;
-    }
-  }
-
-  function onThresholdInput(e: Event): void {
-    const v = Number.parseFloat((e.currentTarget as HTMLInputElement).value);
-    if (!Number.isFinite(v)) return;
-    clusterThreshold = v;
-    void reCluster(v);
-  }
-
-  // Sequenced fetch. Earlier version ran 4 top-level queries in
-  // Promise.all and the counts helper ran 6 more underneath, for a
-  // fan-out of up to 9 concurrent Supabase calls. On a cold-load
-  // path those all hit `@supabase/gotrue-js`'s navigator.locks-
-  // based auth-token lock at once, alongside the main-thread
-  // refreshSettings and five worker clients. The lock's 5s timeout
-  // triggered, supabase-js force-acquired, and in-flight fetches
-  // failed with "TypeError: Failed to fetch". Running the queries
-  // sequentially keeps the lock uncontested; the full modal loads
-  // in ~500-800ms, which is fine for an explicitly-opened panel.
-  //
-  // Each section is wrapped independently so a single-query failure
-  // doesn't blank the whole screen. The section either renders its
-  // data or shows its own "couldn't load" line.
+  // Each section wraps its own try/catch so a single-query failure
+  // doesn't blank the whole screen.
   async function refresh(): Promise<void> {
     if (!app.supabase) {
       error = 'Not connected to Supabase yet.';
@@ -308,51 +121,6 @@
       counts = null;
       error = error ?? `Counts: ${err instanceof Error ? err.message : String(err)}`;
     }
-
-    if (threadId) {
-      try {
-        substrate = await sb.samskaraListSubstrateForThread(threadId);
-      } catch (err) {
-        substrate = [];
-        error = error ?? `Substrate: ${err instanceof Error ? err.message : String(err)}`;
-      }
-
-      try {
-        fires = await sb.samskaraListFiresForThread(threadId);
-      } catch (err) {
-        fires = [];
-        error = error ?? `Fires: ${err instanceof Error ? err.message : String(err)}`;
-      }
-
-      // Cluster the fires by prediction-embedding cosine so the
-      // renderer can collapse 22-row cohorts down to a few themes.
-      // Soft-failure: an empty map falls through to one-cluster-per-
-      // fire in the cohortGroups derivation, so the panel still
-      // renders if the RPC isn't deployed yet (fresh schema not
-      // synced) or errors out. Bumps clusterGen so any in-flight
-      // slider-triggered call from a prior render is treated as
-      // stale.
-      clusterGen++;
-      const thisGen = clusterGen;
-      try {
-        const map = await sb.samskaraClusterThreadFires(threadId, clusterThreshold);
-        if (thisGen === clusterGen) clusterMap = map;
-      } catch (err) {
-        if (thisGen === clusterGen) {
-          clusterMap = new Map();
-          error = error ?? `Clusters: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      }
-    } else {
-      substrate = [];
-      fires = [];
-      clusterMap = new Map();
-    }
-    // Drop any per-cohort UI state from a prior refresh; the cohort
-    // ids may be the same but the cluster assignments could differ if
-    // the threshold or underlying samskaras changed between loads.
-    expandedClusters = new Set();
-    rawCohorts = new Set();
 
     loading = false;
   }
@@ -382,32 +150,6 @@
     return `${diffYr}y ago`;
   }
 
-  function formatValence(v: number | null): string {
-    if (v === null) return '—';
-    const sign = v > 0 ? '+' : '';
-    return `${sign}${v.toFixed(2)}`;
-  }
-
-  // Three-state label for a cohort's resolution status. The data
-  // model stores was_confirmed as boolean | null with null meaning
-  // "reaction-classify hasn't looked at this cohort yet". Distinguish
-  // "recently fired, waiting" from "aged out without resolution" by
-  // the 10-minute window the classifier uses.
-  function resolutionLabel(wasConfirmed: boolean | null, firedAt: string): string {
-    if (wasConfirmed === true) return 'confirmed';
-    if (wasConfirmed === false) return 'disconfirmed';
-    const ageMs = Date.now() - new Date(firedAt).getTime();
-    if (ageMs < 60 * 1000) return 'waiting (in-flight)';
-    if (ageMs < 10 * 60 * 1000) return 'waiting (resolution window open)';
-    return 'aged out (no reaction)';
-  }
-
-  function assimilationStatus(r: SamskaraSubstrateDiagnosticRow): string {
-    if (r.situation === null) return 'pending assimilation';
-    if (r.embeddingModel === null) return 'assimilated, pending embed';
-    return 'assimilated + embedded';
-  }
-
   // Copy-to-clipboard: build one self-contained JSON blob that
   // mirrors what the panel renders, so pasting it into a separate
   // conversation gives an assistant enough context to reason about
@@ -419,6 +161,14 @@
   let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   function buildSnapshot(): string {
+    // Corpus-level snapshot: counters + compound summary. Per-user-
+    // message detail (cohort fires + substrate stub for one turn)
+    // is no longer aggregated here because it lives inline in the
+    // chat transcript and the user's preferred snapshot path for
+    // those is "open the panel under the message, screenshot or
+    // paste the visible content." Re-adding a bulk export here
+    // would have to re-walk the thread anyway; do it lazily when
+    // someone asks.
     const snapshot = {
       capturedAt: new Date().toISOString(),
       buildCommit: __APP_COMMIT__,
@@ -426,35 +176,6 @@
       threadId,
       counts,
       compoundSummary: compound,
-      substrate: substrate.map((r) => ({
-        id: r.id,
-        createdAt: r.createdAt,
-        userMessageId: r.userMessageId,
-        assistantMessageId: r.assistantMessageId,
-        status: assimilationStatus(r),
-        situation: r.situation,
-        outcome: r.outcome,
-        valence: r.valence,
-        embeddingModel: r.embeddingModel,
-      })),
-      cohortFires: cohortGroups.map((g) => ({
-        cohortId: g.cohortId,
-        firedAt: g.firedAt,
-        resolution: resolutionLabel(g.wasConfirmed, g.firedAt),
-        wasConfirmed: g.wasConfirmed,
-        // Full member detail is preserved in the export even when the
-        // panel is rendering a collapsed-by-theme view. clusterSeq is
-        // included so a reader can reconstruct the same grouping the
-        // panel produced (or reason about why two fires landed in the
-        // same theme) without re-running the clustering RPC.
-        members: g.fires.map((f) => ({
-          id: f.id,
-          samskaraId: f.samskaraId,
-          score: f.score,
-          clusterSeq: clusterMap.get(f.id)?.clusterSeq ?? null,
-          samskara: f.samskara,
-        })),
-      })),
     };
     return JSON.stringify(snapshot, null, 2);
   }
@@ -771,7 +492,7 @@
             <div class="count-value">{counts.firesInThread}</div>
             <div class="count-label">Fires in this chat</div>
             <div class="count-sub">
-              {cohortGroups.length} cohort{cohortGroups.length === 1 ? '' : 's'}
+              expand the pulse icon on each user message to see its cohort
             </div>
           </div>
         </div>
@@ -786,11 +507,9 @@
            glowing red dot on the matching cell, read from the shared
            moodState so the dot can never drift from the pill the
            user clicked to open us. Wrapped in <details> so the user
-           can fold it once they've internalised the axes - the
-           cohort-fires section below it can be tall on a busy
-           thread. Defaults to open because clicking the pill is
-           the moment the "what does that emoji mean?" question is
-           likeliest. -->
+           can fold it once they've internalised the axes. Defaults
+           to open because clicking the pill is the moment the
+           "what does that emoji mean?" question is likeliest. -->
       <details class="mood-legend" open>
         <summary class="mood-legend-summary">
           What controls the "mood"?
@@ -900,9 +619,10 @@
         it once enough new samskaras have been minted since the last
         regen, so the paragraph drifts between conversations rather than
         mid-thread. Each turn also gets a per-turn "fired this turn"
-        bullet list appended next to this paragraph - recomputed from
-        the current user message - which is what the Cohort fires
-        section below shows the history of.
+        bullet list appended next to this paragraph, recomputed from
+        the current user message. Click the pulse icon under a user
+        message in the chat transcript to inspect what fired for that
+        specific turn.
       </p>
       {#if compound === null && !loading && !error}
         <p class="subtle">No compound summary yet - the worker builds one once you have ~5 samskaras.</p>
@@ -920,205 +640,6 @@
         {/if}
       {/if}
 
-      <!-- Cohort fires for this thread. Each card is one cohort (one
-           turn's worth of fired predictions). Default view collapses
-           the per-cohort fire list into themed clusters by cosine
-           similarity of the underlying samskara prediction embeddings
-           (RPC samskara_cluster_thread_fires; threshold from the
-           live slider, default 0.7). Each theme shows its highest-
-           scoring representative; siblings are tucked behind a
-           "+N similar" chevron. A per-cohort "Show all" toggle
-           bypasses clustering for the diagnostic case. Resolution
-           state still reads from the header pill - the abstraction
-           only affects density, not the underlying data. -->
-      <div class="cohort-section-head">
-        <h2 class="pane-section cohort-section-title">
-          Cohort fires {threadId ? 'in this chat' : '(no chat selected)'}
-        </h2>
-        {#if threadId && cohortGroups.length > 0}
-          <!-- Threshold slider. Step 0.05 keeps the input snappy
-               (each step is one RPC) while still spanning the useful
-               range from "near-duplicate only" (0.95) down to
-               "loosely related" (0.50). The label shows the live
-               value and dims while a re-cluster is in flight so the
-               user has feedback that the dial took effect. -->
-          <label class="cluster-slider">
-            <span class="cluster-slider-label">
-              theme threshold
-              <span
-                class="cluster-slider-value"
-                class:reclustering={clusterReclustering}
-              >
-                {clusterThreshold.toFixed(2)}
-              </span>
-            </span>
-            <input
-              type="range"
-              min="0.5"
-              max="0.95"
-              step="0.05"
-              value={clusterThreshold}
-              oninput={onThresholdInput}
-              aria-label="Cosine-similarity threshold for theme clustering"
-              title="Lower = fewer, broader themes. Higher = more, tighter themes."
-            />
-          </label>
-        {/if}
-      </div>
-      <p class="subtle pane-help">
-        One cohort per user turn. Each turn's top-scoring samskaras were
-        appended to that turn's system prompt alongside the compound
-        summary above, then resolved against whatever the user said
-        next.
-      </p>
-      {#if !threadId}
-        <p class="subtle">Open a conversation to see fires scoped to it.</p>
-      {:else if cohortGroups.length === 0 && !loading}
-        <p class="subtle">
-          No samskaras have fired in this chat yet. Cohorts will appear
-          here as the conversation progresses and the worker has
-          something to predict against.
-        </p>
-      {:else}
-        <ul class="cohort-list">
-          {#each cohortGroups as group (group.cohortId)}
-            {@const isRaw = rawCohorts.has(group.cohortId)}
-            {@const collapsed = group.clusters.length < group.fires.length}
-            <li class="cohort-card">
-              <header class="cohort-head">
-                <span class="cohort-time">{formatRelative(group.firedAt)}</span>
-                <span class="cohort-status status-{group.wasConfirmed === true ? 'confirm' : group.wasConfirmed === false ? 'disconfirm' : 'pending'}">
-                  {resolutionLabel(group.wasConfirmed, group.firedAt)}
-                </span>
-                <span class="cohort-count">
-                  {#if collapsed && !isRaw}
-                    {group.clusters.length} theme{group.clusters.length === 1 ? '' : 's'}
-                    from {group.fires.length} prediction{group.fires.length === 1 ? '' : 's'}
-                  {:else}
-                    {group.fires.length} prediction{group.fires.length === 1 ? '' : 's'}
-                  {/if}
-                </span>
-                {#if collapsed}
-                  <button
-                    type="button"
-                    class="raw-toggle"
-                    onclick={() => toggleRaw(group.cohortId)}
-                    title={isRaw
-                      ? 'Re-collapse this cohort by theme'
-                      : 'Bypass clustering and show every fire individually'}
-                  >
-                    {isRaw ? 'Group by theme' : 'Show all'}
-                  </button>
-                {/if}
-              </header>
-              {#if isRaw}
-                <ul class="fire-list">
-                  {#each group.fires as fire (fire.id)}
-                    <li class="fire-row">
-                      {@render fireRow(fire)}
-                    </li>
-                  {/each}
-                </ul>
-              {:else}
-                <ul class="fire-list">
-                  {#each group.clusters as cluster (cluster.seq)}
-                    {@const expanded = expandedClusters.has(clusterKey(group.cohortId, cluster.seq))}
-                    <li class="fire-row">
-                      {@render fireRow(cluster.representative)}
-                      {#if cluster.siblings.length > 0}
-                        <button
-                          type="button"
-                          class="cluster-chip"
-                          aria-expanded={expanded}
-                          onclick={() => toggleCluster(group.cohortId, cluster.seq)}
-                          title="Other predictions that fired in this cohort with cosine ≥ 0.85 to the representative"
-                        >
-                          <span class="cluster-chip-mark" aria-hidden="true">{expanded ? '−' : '+'}</span>
-                          {cluster.siblings.length} similar
-                        </button>
-                        {#if expanded}
-                          <ul class="sibling-list">
-                            {#each cluster.siblings as sibling (sibling.id)}
-                              <li class="sibling-row">
-                                {@render fireRow(sibling)}
-                              </li>
-                            {/each}
-                          </ul>
-                        {/if}
-                      {/if}
-                    </li>
-                  {/each}
-                </ul>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {/if}
-
-      {#snippet fireRow(fire: SamskaraFireDiagnosticRow)}
-        <div class="fire-head">
-          <span class="fire-tier">T{fire.samskara?.tier ?? '?'}</span>
-          <span class="fire-score" title="cosine^1.3 * sqrt(health * confidence) * sample-size bonus">
-            score {fire.score.toFixed(3)}
-          </span>
-          {#if fire.samskara}
-            <span class="fire-meta">
-              val {formatValence(fire.samskara.valence)} ·
-              conf {fire.samskara.confidence.toFixed(2)} ·
-              health {fire.samskara.health.toFixed(2)}
-            </span>
-          {:else}
-            <span class="fire-meta subtle">samskara deleted since fire</span>
-          {/if}
-        </div>
-        {#if fire.samskara}
-          <p class="fire-prediction">{fire.samskara.prediction}</p>
-          {#if fire.samskara.innerVoice}
-            <p class="fire-inner-voice">
-              <em>{fire.samskara.innerVoice}</em>
-            </p>
-          {/if}
-        {/if}
-      {/snippet}
-
-      <!-- Substrate: per-turn rows recorded at end-of-round. Shown
-           with their lifecycle state (pending assimilation / pending
-           embed / fully baked) so you can see the enrichment
-           pipeline walking forward behind the chat. -->
-      <h2 class="pane-section">
-        Substrate {threadId ? 'in this chat' : '(no chat selected)'}
-      </h2>
-      {#if !threadId}
-        <p class="subtle">Open a conversation to see its substrate.</p>
-      {:else if substrate.length === 0 && !loading}
-        <p class="subtle">
-          No substrate recorded for this chat yet. New rows are stubbed
-          at the end of every assistant turn and enriched by the
-          background worker shortly after.
-        </p>
-      {:else}
-        <ul class="substrate-list">
-          {#each substrate as row (row.id)}
-            <li class="substrate-card">
-              <header class="substrate-head">
-                <span class="substrate-time">{formatRelative(row.createdAt)}</span>
-                <span class="substrate-status status-{row.situation === null ? 'pending' : row.embeddingModel === null ? 'partial' : 'done'}">
-                  {assimilationStatus(row)}
-                </span>
-                {#if row.valence !== null}
-                  <span class="substrate-meta">valence {formatValence(row.valence)}</span>
-                {/if}
-              </header>
-              {#if row.situation}
-                <p class="substrate-situation">{row.situation}</p>
-              {/if}
-              {#if row.outcome}
-                <p class="substrate-outcome subtle"><em>Outcome:</em> {row.outcome}</p>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {/if}
     </section>
   </div>
 </div>
@@ -1608,260 +1129,9 @@
     font-size: 0.75rem;
   }
 
-  .cohort-list,
-  .fire-list,
-  .substrate-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-  }
-
-  .fire-list {
-    gap: 0.35rem;
-    margin-top: 0.5rem;
-  }
-
-  .cohort-card,
-  .substrate-card {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-    padding: 0.6rem 0.75rem;
-  }
-
-  .cohort-head,
-  .substrate-head {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-    font-size: 0.78rem;
-  }
-
-  .cohort-time,
-  .substrate-time {
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .cohort-count {
-    color: var(--muted);
-    margin-left: auto;
-  }
-
-  /* Status pills. Colors echo the log-level badges (green-ish accent
-     for good, warm red for bad, muted for in-progress / stale) so
-     users reading both panels pick up the vocabulary by osmosis. */
-  .cohort-status,
-  .substrate-status {
-    font-size: 0.7rem;
-    font-weight: 600;
-    padding: 0 0.4rem;
-    border-radius: 2px;
-    letter-spacing: 0.03em;
-  }
-  .status-confirm {
-    background: color-mix(in srgb, var(--accent) 20%, transparent);
-    color: var(--accent);
-  }
-  .status-disconfirm {
-    background: color-mix(in srgb, #d14343 22%, transparent);
-    color: #d14343;
-  }
-  .status-pending {
-    background: color-mix(in srgb, #d89614 22%, transparent);
-    color: #d89614;
-  }
-  .status-partial {
-    background: color-mix(in srgb, #d89614 18%, transparent);
-    color: #d89614;
-  }
-  .status-done {
-    background: color-mix(in srgb, var(--accent) 18%, transparent);
-    color: var(--accent);
-  }
-
-  .fire-row {
-    border-top: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
-    padding-top: 0.35rem;
-  }
-  .fire-row:first-child {
-    border-top: 0;
-    padding-top: 0;
-  }
-
-  .fire-head {
-    display: flex;
-    gap: 0.5rem;
-    align-items: baseline;
-    flex-wrap: wrap;
-    font-size: 0.75rem;
-  }
-
-  .fire-tier {
-    font-weight: 600;
-    color: var(--accent);
-  }
-
-  .fire-score {
-    font-variant-numeric: tabular-nums;
-    color: var(--muted);
-  }
-
-  .fire-meta {
-    font-size: 0.72rem;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .fire-prediction {
-    margin: 0.25rem 0 0;
-    font-size: 0.85rem;
-    line-height: 1.4;
-  }
-
-  .fire-inner-voice {
-    margin: 0.15rem 0 0;
-    font-size: 0.8rem;
-    color: var(--muted);
-  }
-
-  /* Cohort-fires section header carries the H2 plus the threshold
-     slider. Flex row lets the slider shove right against the gutter
-     on desktop and wrap below the title on narrow viewports. The
-     margin-top sits on this wrapper rather than the H2 because flex
-     containers don't collapse margins with the previous element -
-     leaving the H2's own margin-top inside a flex parent reads as
-     "nearly touching" the prior section. The H2 inside has its
-     pane-section top margin zeroed so the spacing isn't doubled. */
-  .cohort-section-head {
-    display: flex;
-    align-items: baseline;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    margin-top: 1.2rem;
-  }
-  .cohort-section-title {
-    margin-top: 0;
-    margin-right: auto;
-  }
-  .cluster-slider {
-    display: inline-flex;
-    flex-direction: column;
-    gap: 0.15rem;
-    font-size: 0.72rem;
-    color: var(--muted);
-    cursor: pointer;
-  }
-  .cluster-slider-label {
-    display: flex;
-    align-items: baseline;
-    gap: 0.4rem;
-  }
-  .cluster-slider-value {
-    font-variant-numeric: tabular-nums;
-    color: var(--accent);
-    font-weight: 600;
-    transition: opacity 120ms;
-  }
-  .cluster-slider-value.reclustering {
-    /* Half-fade while the RPC for the new threshold is in flight, so
-       the user has a visible "the dial took effect, waiting" signal
-       rather than wondering whether the slider hooked up. */
-    opacity: 0.5;
-  }
-  .cluster-slider input[type='range'] {
-    width: 11rem;
-    accent-color: var(--accent);
-    cursor: pointer;
-  }
-
-  /* Per-cohort "Show all" / "Group by theme" pivot. Sits at the right
-     edge of the cohort header, after the count, so the cohort-count's
-     `margin-left: auto` still pushes both elements to the right. Kept
-     small and quiet because it's an escape hatch, not the primary
-     control. */
-  .raw-toggle {
-    appearance: none;
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    border-radius: 2px;
-    font-size: 0.7rem;
-    padding: 0.05rem 0.4rem;
-    cursor: pointer;
-    line-height: 1.4;
-  }
-  .raw-toggle:hover {
-    color: var(--accent);
-    border-color: var(--accent);
-  }
-
-  /* Cluster-expand chip. Sits below the representative's prediction
-     so the eye reads "this prediction" then "+N similar" as a
-     second-tier signal. Same surface tone as the cohort status pills
-     so the visual vocabulary stays consistent. */
-  .cluster-chip {
-    appearance: none;
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
-    color: var(--accent);
-    border: 0;
-    border-radius: 2px;
-    font-size: 0.7rem;
-    font-weight: 600;
-    padding: 0.05rem 0.45rem;
-    margin-top: 0.3rem;
-    cursor: pointer;
-    letter-spacing: 0.02em;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-  }
-  .cluster-chip:hover {
-    background: color-mix(in srgb, var(--accent) 22%, transparent);
-  }
-  .cluster-chip-mark {
-    font-family: var(--font-mono, monospace);
-    font-size: 0.85rem;
-    line-height: 1;
-  }
-
-  /* Sibling list inside an expanded cluster. Indented + slightly
-     dimmed so siblings read as subordinate to the representative
-     above. Their per-row markup is the same as the representative
-     (same fire-head / fire-prediction / fire-inner-voice) so the
-     reader doesn't have to context-switch when expanding a cluster. */
-  .sibling-list {
-    list-style: none;
-    margin: 0.4rem 0 0;
-    padding: 0 0 0 0.75rem;
-    border-left: 2px solid color-mix(in srgb, var(--border) 70%, transparent);
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-  }
-  .sibling-row {
-    opacity: 0.85;
-  }
-
-  .substrate-situation {
-    margin: 0.3rem 0 0;
-    font-size: 0.85rem;
-    line-height: 1.4;
-  }
-
-  .substrate-outcome {
-    margin: 0.2rem 0 0;
-    font-size: 0.8rem;
-    line-height: 1.4;
-  }
-
   /* Mobile: claw back the gutter the desktop layout was happy to spend
-     so the diagnostic body actually has room for stat cards and long
-     substrate / fire entries. Mirrors the pattern in Journal.svelte -
+     so the diagnostic body actually has room for the stat cards and
+     the compound-summary block. Mirrors the pattern in Journal.svelte -
      tighten the backdrop padding and the per-pane paddings instead of
      letting the modal stay 1rem-inset on a 360px screen. */
   @media (max-width: 720px) {
@@ -1878,9 +1148,7 @@
       padding: 0.85rem 0.85rem 1.25rem;
     }
     .count-card,
-    .compound-block,
-    .cohort-card,
-    .substrate-card {
+    .compound-block {
       padding: 0.5rem 0.6rem;
     }
     /* Drop the auto-fit minimum so two narrow stat cards fit on a row
