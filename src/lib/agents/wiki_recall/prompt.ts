@@ -146,6 +146,3 @@ export function buildWikiRecallPrompt(topic?: string | null): string {
     `The main assistant flagged this topic specifically: ${clean}`
   );
 }
-
-/** Plain prompt without a topic, exported for tests that need the string directly. */
-export const WIKI_RECALL_PROMPT = BASE_PROMPT;
