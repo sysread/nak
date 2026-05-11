@@ -49,7 +49,7 @@ import type { ReasoningEffort } from '../models';
  * before settling on a JSON entry) doesn't bump into it under normal
  * use; if a run actually hits this, something is misbehaving.
  */
-export const DEFAULT_MAX_ROUNDS = 20;
+const DEFAULT_MAX_ROUNDS = 20;
 
 /**
  * Maximum nested-agent depth allowed below the main chat. The main

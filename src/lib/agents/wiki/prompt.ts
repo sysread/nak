@@ -144,7 +144,7 @@ export interface WikiUserProfile {
  * don't tell the model to "use their name" when no name was supplied;
  * in that case "the user" / pronouns is the right fallback.
  */
-export function renderUserProfileBlock(
+function renderUserProfileBlock(
   profile: WikiUserProfile | null
 ): string {
   if (!profile) return '';

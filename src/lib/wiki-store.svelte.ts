@@ -35,7 +35,7 @@ export const wikiStore = $state<WikiStore>({
 
 // Match the assistant's `wiki_search` per-call cap so the human UI
 // never hides articles the assistant can reach.
-export const WIKI_LIST_LIMIT = 100;
+const WIKI_LIST_LIMIT = 100;
 
 let currentAbort: AbortController | null = null;
 

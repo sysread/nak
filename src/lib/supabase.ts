@@ -615,7 +615,7 @@ export interface Message {
   synthetic?: boolean;
 }
 
-export class SupabaseError extends Error {
+class SupabaseError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'SupabaseError';
@@ -815,7 +815,7 @@ export interface UserSettings {
  * descriptive entry ("Brooklyn, NY - born in Lagos, partial to
  * Pacific timezones") without being a foothold for prompt-stuffing.
  */
-export const USER_PROFILE_FIELD_MAX = 200;
+const USER_PROFILE_FIELD_MAX = 200;
 
 /**
  * A named system prompt. `enabledByDefault` is the "ride along on every new

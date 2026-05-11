@@ -1,0 +1,31 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "src/sw.ts",
+    "scripts/bootstrap.mjs",
+    "scripts/branch-cleanup.mjs",
+    "scripts/doctor.mjs",
+    "scripts/setup-pages.mjs",
+    "scripts/setup-supabase.mjs",
+    "scripts/user-edit.mjs",
+    "tests/**/*.test.ts",
+    "tests/**/*.integration.test.ts"
+  ],
+  "project": [
+    "src/**/*.{ts,svelte}",
+    "scripts/**/*.mjs"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "rules": {
+    "exports": "error",
+    "files": "error",
+    "dependencies": "error",
+    "devDependencies": "error",
+    "types": "off",
+    "duplicates": "off",
+    "binaries": "off",
+    "unlisted": "off",
+    "nsExports": "off",
+    "nsTypes": "off"
+  }
+}

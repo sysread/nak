@@ -265,6 +265,78 @@ caller or assume intent. Context-agnostic contracts are fine.
 Special cases handled at integration points, not buried in
 lower-level functions.
 
+## Dead-code hygiene
+
+AI-generated code leaves orphans easily - a helper extracted
+"for clarity" that ends up with no caller; an export added "for
+a test that didn't materialise"; a constant declared next to its
+former consumer that was later inlined; a barrel re-export pointing
+at a source the consumers all import directly. The user's biggest
+struggle with AI-assisted development is exactly this drift, and
+the standing instruction is: **clean up before you finish, don't
+ship orphans.**
+
+Concrete rules. Apply each before declaring a task done.
+
+**1. Every new export needs a live external consumer.** If you
+add `export function foo()`, grep for who calls it from another
+file. If the answer is "nobody yet, but later something will" -
+don't export it. Make it a plain function in the same module.
+Add the export only when an external caller actually lands.
+The same applies to constants and types: `export const FOO = 5`
+without a non-local reader is the same orphan as a dead function.
+
+**2. When you remove a call site, audit what becomes unused.**
+Every removed call is a chance to delete the callee, drop an
+`export` keyword, or delete a stale type. Don't leave the
+ex-helper sitting in the file "in case." If you genuinely
+expect to need it again later, git remembers - resurrect from
+history when the need shows up, not as speculation.
+
+**3. When you refactor a barrel.** Pull the consumer list before
+editing it. If a barrel re-export has zero consumers (the source
+file is imported directly everywhere), delete the re-export -
+not just the surrounding `from './foo'` line, the whole entry.
+Many nak barrel files accumulate re-exports of every symbol from
+every sibling on the theory of "centralised public API" - then
+nothing ever imports through the barrel and the re-exports rot.
+
+**4. Test-only hooks stay internal.** A function whose only
+external caller is a `tests/*.test.ts` file should still be
+flagged in the test's setup with `// test hook` and named with a
+leading `_` (or carry a `__test` namespace export at the bottom
+of the file). Don't widen the production API for a test that
+could read internal state via a dedicated export. The
+`__test = { ... }` pattern (see `routing.svelte.ts`,
+`crypto.ts`, `session.ts`) keeps the test surface visible and
+the production exports narrow.
+
+**5. Run knip before merging non-trivial work.** `mise run knip`
+catches unused files, exports, and dependencies. The
+configuration in `knip.json` is calibrated so a clean tree
+prints "Unused exports (0)" or one well-understood dynamic-import
+false positive. Anything beyond that is a TODO. The full gate
+(`mise run check`) does NOT chain knip on purpose - rot in
+untouched corners shouldn't gate every PR - so this is one you
+have to think to run.
+
+**6. Drop the `export` keyword as a first cleanup move.** When
+knip flags an unused export but the function/constant is still
+used INSIDE its source file, the fix is usually just to delete
+the `export` keyword. The body stays, the API surface shrinks.
+Many "Unused exports" findings resolve this way without
+deleting any code.
+
+**7. Genuinely-dead delete.** If knip says an export is unused
+AND your grep confirms no internal use, AND no test references
+it, AND it's not a dynamic-import target - delete the whole
+declaration. Don't comment it out. Don't leave a "TODO: maybe
+useful later" stub. Trust git for resurrection.
+
+When you finish a feature that's drained-down to its real
+load-bearing parts, run knip. The smaller surface area you
+hand back is the next session's reduced cognitive load.
+
 ## User-facing documentation
 
 The repo ships two parallel doc trees:
@@ -479,6 +551,7 @@ the gate provisions its own npm devDependencies on demand. Cost is
 mise run check        # full local gate: deps + test + svelte-check + lint + build
 mise run test         # vitest run (auto-installs deps)
 mise run markdownlint # markdownlint-cli2 only (auto-installs deps)
+mise run knip         # dead-code scan (auto-installs deps); not in the gate by design
 mise run dev          # Vite dev server (auto-installs deps)
 mise run build        # production PWA build (auto-installs deps)
 ```

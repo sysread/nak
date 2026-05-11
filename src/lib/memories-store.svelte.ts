@@ -49,7 +49,7 @@ export const memoriesStore = $state<MemoriesStore>({
 
 // Match the assistant's `memory_search` per-call cap so the human UI
 // never hides rows the assistant can reach.
-export const MEMORIES_LIST_LIMIT = 100;
+const MEMORIES_LIST_LIMIT = 100;
 
 // Cancel the in-flight semantic search if the user keeps typing.
 // Module-scoped so the debounce timer can reach it.

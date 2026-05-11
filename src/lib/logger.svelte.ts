@@ -324,15 +324,6 @@ export function createLogger(source: string): Logger {
   };
 }
 
-/** Fallback logger for callers without a natural subsystem tag. */
-export const log: Logger = {
-  trace: (msg, ...rest) => emit('trace', null, msg, rest),
-  debug: (msg, ...rest) => emit('debug', null, msg, rest),
-  info: (msg, ...rest) => emit('info', null, msg, rest),
-  warn: (msg, ...rest) => emit('warn', null, msg, rest),
-  error: (msg, ...rest) => emit('error', null, msg, rest),
-};
-
 /**
  * Relay a worker-originated log entry into the main-thread buffer.
  * Called by each worker manager's `message` handler when it sees a

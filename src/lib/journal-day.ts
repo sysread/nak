@@ -150,27 +150,6 @@ export function formatDateFull(ymd: string): string {
 }
 
 /**
- * Compact human-readable label for a YYYY-MM-DD key ("SUN 2026-04-19").
- * Short weekday + ISO date stays to a single line at any reasonable
- * phone width. Uses UTC interpretation because the key is a
- * zone-agnostic day bucket.
- */
-export function formatDateCompact(ymd: string): string {
-  const [y, m, d] = ymd.split('-').map((n) => Number.parseInt(n, 10));
-  if (!Number.isFinite(y)) return ymd;
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  try {
-    const weekday = new Intl.DateTimeFormat(undefined, {
-      weekday: 'short',
-      timeZone: 'UTC',
-    }).format(dt);
-    return `${weekday.toUpperCase()} ${ymd}`;
-  } catch {
-    return ymd;
-  }
-}
-
-/**
  * Validate an IANA zone name by round-tripping it through
  * `Intl.DateTimeFormat`. Returns the original string when the runtime
  * accepts it; null when the zone is unknown. Callers use this to guard

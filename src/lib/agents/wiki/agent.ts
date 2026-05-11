@@ -94,7 +94,7 @@ interface ManualDecision {
  * when response_format=json_object is set, and stripping it here is
  * cheaper than re-prompting.
  */
-export function parseManualDecision(text: string): ManualDecision | null {
+function parseManualDecision(text: string): ManualDecision | null {
   const trimmed = text.trim();
   if (trimmed.length === 0) return null;
   const fence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);

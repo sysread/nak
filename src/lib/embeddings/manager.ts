@@ -20,11 +20,6 @@ import type { Session } from '@supabase/supabase-js';
 import { BaseWorkerManager, type BaseStartOpts } from '../agents/base-manager';
 import { VENICE_EMBEDDING_MODEL } from '../models';
 
-// Re-export so older import sites (`from '../embeddings/manager'`)
-// keep working until they migrate to '../agents/holder' directly.
-// New call sites should pull from the holder module.
-export { makeHolderId } from '../agents/holder';
-
 /**
  * Match these with the worker's `StartMessage` shape - any drift
  * between the two is a silent bug the TypeScript compiler can't

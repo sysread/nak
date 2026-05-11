@@ -188,9 +188,3 @@ export function parseExportedConfig(raw: string): AppConfig {
   if (!veniceApiKey) throw new ConfigError('Missing veniceApiKey.');
   return { supabaseUrl, supabaseAnonKey, veniceApiKey };
 }
-
-export const __storage = {
-  STORAGE_KEY,
-  EXPORT_KIND,
-  EXPORT_VERSION,
-};

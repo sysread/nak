@@ -10,7 +10,7 @@
  * for `wiki_articles`. A future realtime subscriber can fire this
  * same event from INSERT/UPDATE/DELETE without consumers changing.
  */
-export const WIKI_CHANGE_EVENT = 'nak:wiki-change';
+const WIKI_CHANGE_EVENT = 'nak:wiki-change';
 
 export function emitWikiChange(): void {
   if (typeof window === 'undefined') return;

@@ -32,5 +32,3 @@ export async function saveState(next) {
   if (!existsSync(STATE_DIR)) await mkdir(STATE_DIR, { recursive: true });
   await writeFile(STATE_PATH, JSON.stringify(next, null, 2) + '\n', 'utf8');
 }
-
-export const __paths = { STATE_DIR, STATE_PATH };

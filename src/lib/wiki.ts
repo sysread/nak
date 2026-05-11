@@ -135,7 +135,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * candidates that don't match UUID shape - those are either typos or
  * deliberate fakery; either way they'll fail validation.
  */
-export function extractCidLinkIds(content: string): string[] {
+function extractCidLinkIds(content: string): string[] {
   if (!content) return [];
   const seen = new Set<string>();
   const out: string[] = [];

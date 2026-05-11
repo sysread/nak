@@ -103,11 +103,8 @@ export const MAX_ROUNDS = 20;
  * add visible latency to the user's first token. Picked at 1500ms
  * because async chat tolerates a half-second send delay but not
  * more - anything beyond that and the user starts noticing.
- *
- * Exported for tests that want to assert the timeout behaviour
- * without waiting for real time.
  */
-export const SAMSKARA_PRIMING_TIMEOUT_MS = 1500;
+const SAMSKARA_PRIMING_TIMEOUT_MS = 1500;
 
 /**
  * Boundary markers we splice around the current turn's user text when

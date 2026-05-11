@@ -44,21 +44,11 @@ export function markThreadRead(threadId: string): void {
   notifications.unread = next;
 }
 
-export function clearAllUnread(): void {
-  if (notifications.unread.size === 0) return;
-  notifications.unread = new Set();
-}
-
 export function isSupported(): boolean {
   return typeof window !== 'undefined' && 'Notification' in window;
 }
 
-export type PermissionState = NotificationPermission | 'unsupported';
-
-export function getPermission(): PermissionState {
-  if (!isSupported()) return 'unsupported';
-  return Notification.permission;
-}
+type PermissionState = NotificationPermission | 'unsupported';
 
 /**
  * Thin wrapper over `Notification.requestPermission()`. The modern

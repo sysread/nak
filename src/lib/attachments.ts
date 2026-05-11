@@ -46,7 +46,7 @@ export const MAX_ATTACHMENTS_PER_MESSAGE = 20;
  * preserves aspect ratio; images already under this threshold pass
  * through untouched.
  */
-export const IMAGE_MAX_EDGE_PX = 2048;
+const IMAGE_MAX_EDGE_PX = 2048;
 
 /**
  * One attachment the user has queued in the composer but not sent

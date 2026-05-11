@@ -274,6 +274,12 @@ export function onLanguageLoaded(cb: () => void): () => void {
  * Highlight `code` for `lang`. Returns an HTML string with highlight.js
  * `<span class="hljs-*">` tokens. Unknown languages fall back to the
  * HTML-escaped code.
+ *
+ * @public
+ *   Called via the dynamic-import path in markdown.ts (`hl.highlight`
+ *   on a `await import('./highlight')` result). Knip can't trace
+ *   that runtime module reference, so the @public tag tells it the
+ *   export is intentional.
  */
 export function highlight(code: string, lang: string): string {
   const normalized = normalizeLang(lang);

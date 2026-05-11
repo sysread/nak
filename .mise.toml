@@ -100,6 +100,19 @@ depends = ["deps"]
 # same targets, one for dev iteration and one as the CI gate.
 run = "pnpm exec markdownlint-cli2 'docs/**/*.md' README.md CLAUDE.md"
 
+[tasks.knip]
+description = "Scan for dead code: unused files, exports, and dependencies"
+depends = ["deps"]
+# Knip's strictness is calibrated in knip.json. The `types` /
+# `duplicates` / `binaries` / `unlisted` rules are intentionally
+# `off` to keep the report focused on actionable dead code rather
+# than churning on interface declarations or near-duplicates. The
+# gate (`check`) does NOT chain knip - rot in untouched corners of
+# the repo should not gate a PR that didn't introduce it. Run
+# manually before merging a feature, and at the start of any
+# session whose task is "find what's no longer paying rent."
+run = "pnpm knip"
+
 [tasks.check]
 description = "Full local gate — tests, svelte-check, ESLint, production build"
 # `depends` runs `deps` and `test` before this task's own `run` list

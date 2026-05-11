@@ -77,10 +77,3 @@ export async function withIntuitionInflight(
   inflight.set(threadId, p);
   return p;
 }
-
-/** Test hook: clear all in-flight registrations. Production code
- *  should never call this - the natural settle path handles
- *  cleanup. */
-export function _clearInflightForTests(): void {
-  inflight.clear();
-}

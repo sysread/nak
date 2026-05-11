@@ -384,8 +384,3 @@ function escapeHtml(s: string): string {
 function escapeAttr(s: string): string {
   return s.replace(/[^a-zA-Z0-9_\-+]/g, '');
 }
-
-export const __test = {
-  ALLOWED_TAGS,
-  ALLOWED_ATTR,
-};

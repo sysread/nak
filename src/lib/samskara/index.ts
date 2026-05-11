@@ -38,9 +38,8 @@ import { createLogger } from '../logger.svelte';
 
 const log = createLogger('samskara');
 
-export type { FireResult, FiredSamskara, PrimingInput } from './types';
-export { K_BASE, PRIMING_CHAR_BUDGET, STALE_CEILING_HOURS } from './types';
-export { formatPriming, topKForCorpusSize } from './format';
+export type { FireResult } from './types';
+export { formatPriming } from './format';
 
 /**
  * Read the cached compound summary. Returns null when the row is
@@ -222,7 +221,7 @@ export async function recordSubstrateStub(
  * uses, so this file is independently testable from any browser-
  * only assumption.
  */
-export function generateCohortId(): string {
+function generateCohortId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }

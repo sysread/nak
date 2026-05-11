@@ -264,31 +264,40 @@ export const app = $state<AppState>({
   error: null,
 });
 
-export function setDefaultModel(tier: ModelTier): void {
+// `set*` helpers below are only called by `applyServerSettings` in
+// this same file. They stay as named functions (instead of inlined
+// assignments) because some forward to background workers via
+// `manager.whenLoaded(...)` and re-using the named entry-point keeps
+// the load-side and the live-update side textually adjacent. They
+// are intentionally NOT exported: outside callers should never reach
+// past the persist-and-update wrappers (persistDefaultModel etc.)
+// and write app.* directly. Add a comment above any new setter
+// describing why it has to do more than a plain assignment.
+function setDefaultModel(tier: ModelTier): void {
   app.defaultModel = tier;
 }
 
-export function setDefaultReasoningEffort(effort: ReasoningEffort): void {
+function setDefaultReasoningEffort(effort: ReasoningEffort): void {
   app.defaultReasoningEffort = effort;
 }
 
-export function setDefaultVerbosity(verbosity: Verbosity): void {
+function setDefaultVerbosity(verbosity: Verbosity): void {
   app.defaultVerbosity = verbosity;
 }
 
-export function setSystemPrompts(prompts: SystemPrompt[]): void {
+function setSystemPrompts(prompts: SystemPrompt[]): void {
   app.systemPrompts = prompts;
 }
 
-export function setDefaultLogLevel(level: LogLevel): void {
+function setDefaultLogLevel(level: LogLevel): void {
   app.defaultLogLevel = level;
 }
 
-export function setEmphasisMarkdown(enabled: boolean): void {
+function setEmphasisMarkdown(enabled: boolean): void {
   app.emphasisMarkdown = enabled;
 }
 
-export function setNotifyOnComplete(enabled: boolean): void {
+function setNotifyOnComplete(enabled: boolean): void {
   app.notifyOnComplete = enabled;
 }
 
@@ -307,7 +316,7 @@ export function setNotifyOnComplete(enabled: boolean): void {
  * persisting it again would be redundant). User-driven changes
  * from Settings.svelte route through `persistUserName` instead.
  */
-export function setUserName(name: string): void {
+function setUserName(name: string): void {
   app.userName = name;
   journal.whenLoaded((m) => m.setProfile(name, app.userLocation));
   // Forward to both wiki workers so a Settings edit reaches their
@@ -323,7 +332,7 @@ export function setUserName(name: string): void {
  * as `setUserName`: the settings-load path uses this directly,
  * user-driven changes route through `persistUserLocation`.
  */
-export function setUserLocation(location: string): void {
+function setUserLocation(location: string): void {
   app.userLocation = location;
   journal.whenLoaded((m) => m.setProfile(app.userName, location));
   wiki.whenLoaded((m) => m.setProfile(app.userName, location));
@@ -338,7 +347,7 @@ export function setUserLocation(location: string): void {
  * changes from Settings.svelte route through
  * `persistJournalAutomaticEnabled` so the choice survives reloads.
  */
-export function setJournalAutomaticEnabled(enabled: boolean): void {
+function setJournalAutomaticEnabled(enabled: boolean): void {
   app.journalAutomaticEnabled = enabled;
   if (!app.supabase || !app.config) return;
   if (enabled) {
@@ -363,7 +372,7 @@ export function setJournalAutomaticEnabled(enabled: boolean): void {
  * Caller is responsible for normalizing user-supplied input to a
  * valid IANA name first.
  */
-export function setJournalTimezone(tz: string): void {
+function setJournalTimezone(tz: string): void {
   app.journalTimezone = tz;
   journal.whenLoaded((m) => m.setTimezone(tz || null));
   wiki.whenLoaded((m) => m.setTimezone(tz || null));
@@ -376,7 +385,7 @@ export function setJournalTimezone(tz: string): void {
  * changes from Settings.svelte route through
  * `persistWikiAutomaticEnabled`.
  */
-export function setWikiAutomaticEnabled(enabled: boolean): void {
+function setWikiAutomaticEnabled(enabled: boolean): void {
   app.wikiAutomaticEnabled = enabled;
   if (!app.supabase || !app.config) return;
   if (enabled) {
@@ -397,7 +406,7 @@ export function setWikiAutomaticEnabled(enabled: boolean): void {
  * wiki worker - the user can disable autonomy on one or the other
  * without losing the other.
  */
-export function setWikiLibrarianEnabled(enabled: boolean): void {
+function setWikiLibrarianEnabled(enabled: boolean): void {
   app.wikiLibrarianEnabled = enabled;
   if (!app.supabase || !app.config) return;
   if (enabled) {

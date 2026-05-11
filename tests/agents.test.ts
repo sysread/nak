@@ -22,7 +22,7 @@
  * the shared contract.
  */
 import { describe, it, expect, vi } from 'vitest';
-import type { Agent, AgentRunRequest, AgentRunResult } from '../src/lib/agents';
+import type { Agent, AgentRunRequest, AgentRunResult } from '../src/lib/agents/types';
 import { memoryToolbox, executeToolboxCall, type ToolContext } from '../src/lib/tools';
 import type { SupabaseService } from '../src/lib/supabase';
 import type { VeniceClient } from '../src/lib/venice';

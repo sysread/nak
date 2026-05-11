@@ -1,7 +1,7 @@
 // Figure out owner/repo from the git remote.
 import { runCapture } from './shell.mjs';
 
-export async function getOriginRemote() {
+async function getOriginRemote() {
   const res = await runCapture('git', ['remote', 'get-url', 'origin']);
   if (res.code !== 0) {
     throw new Error('No `origin` remote configured on this repository.');

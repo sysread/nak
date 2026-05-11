@@ -13,7 +13,7 @@
  * it safely.
  */
 
-export const COOKBOOK_CHANGE_EVENT = 'nak:recipes:changed';
+const COOKBOOK_CHANGE_EVENT = 'nak:recipes:changed';
 
 /**
  * Fire-and-forget signal that something in the cookbook changed.

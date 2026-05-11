@@ -24,10 +24,8 @@ import { MAX_JOURNAL_CONTENT_CHARS } from '../../agents/journal/types';
  * boundary already caps content, but historical rows or direct DB
  * writes might not have, and silent truncation here keeps the worker
  * from looping forever on a too-long row Venice rejects.
- *
- * Exported for direct unit testing.
  */
-export function buildJournalEmbedInput(
+function buildJournalEmbedInput(
   entryDate: string,
   content: string,
   topics: readonly string[],

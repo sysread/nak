@@ -194,7 +194,7 @@ export type RegenerateResult =
  * upsert RPC would otherwise fail on the empty-body check and the
  * worker would re-run the same thread next cycle.
  */
-export function parseJournalDecision(text: string): JournalDecision | null {
+function parseJournalDecision(text: string): JournalDecision | null {
   const trimmed = text.trim();
   if (trimmed.length === 0) return null;
   // Strip a ```json … ``` or ``` … ``` wrapper if the model added one.

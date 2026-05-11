@@ -114,5 +114,3 @@ export async function downloadFullArchive(supabase: SupabaseService): Promise<vo
   const stamp = new Date().toISOString().slice(0, 10);
   triggerDownload(blob, `nak-reflections-${stamp}.zip`);
 }
-
-export { formatEntryMarkdown, formatDayMarkdown };

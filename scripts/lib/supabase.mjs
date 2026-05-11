@@ -6,7 +6,7 @@
 import { homedir } from 'node:os';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { runCapture, runInherit, which } from './shell.mjs';
+import { runInherit, which } from './shell.mjs';
 
 const MGMT_BASE = 'https://api.supabase.com';
 
@@ -112,20 +112,6 @@ export async function waitForProject(ref, { timeoutMs = 180_000, intervalMs = 50
     await new Promise((r) => setTimeout(r, intervalMs));
   }
   throw new Error(`Timed out waiting for project ${ref} to become healthy.`);
-}
-
-/**
- * Run arbitrary SQL against a linked project via the CLI. Requires that
- * `supabase link --project-ref <ref>` has been run (or that the repo has
- * a `supabase/config.toml` + linked state).
- */
-export async function applySchemaViaCli(sqlPath) {
-  const res = await runCapture('supabase', ['db', 'execute', '--file', sqlPath]);
-  if (res.code !== 0) {
-    // Older CLI versions use `db remote` or `db push`. Fall back.
-    return runCapture('supabase', ['db', 'push', '--include-seed', 'false']);
-  }
-  return res;
 }
 
 /**

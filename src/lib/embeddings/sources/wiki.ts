@@ -23,10 +23,8 @@ import { MAX_WIKI_CONTENT_CHARS } from '../../wiki';
  * the tool boundary already caps content, but historical rows or
  * direct DB writes might not have, and silent truncation keeps the
  * worker from looping forever on a too-long row Venice rejects.
- *
- * Exported for direct unit testing.
  */
-export function buildWikiEmbedInput(title: string, content: string): string {
+function buildWikiEmbedInput(title: string, content: string): string {
   const body =
     content.length > MAX_WIKI_CONTENT_CHARS
       ? content.slice(0, MAX_WIKI_CONTENT_CHARS)

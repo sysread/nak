@@ -6,6 +6,13 @@
  * The trigger evaluator is shared with intuition (see
  * src/lib/intuition/triggers.ts) - context-recall does not maintain
  * its own trigger logic by design.
+ *
+ * Anything not re-exported here is intentionally internal. Tests
+ * reach into `./cache`, `./pipeline`, `./types`, `./ephemeral`
+ * directly because the test-only hooks should never be a public
+ * surface. The `_clearContextRecallInflightForTests` helper lives
+ * in `./cache` and is imported directly by the suites that need
+ * it; do not re-export it from this barrel.
  */
 export {
   coerceContextRecallPayload,
@@ -13,20 +20,12 @@ export {
   type ContextRecallPayload,
 } from './types';
 
-export {
-  runContextRecallPipeline,
-  stitchRecallNotes,
-  type RunContextRecallInputs,
-} from './pipeline';
+export { runContextRecallPipeline } from './pipeline';
 
 export {
   readContextRecallCache,
   writeContextRecallCache,
   withContextRecallInflight,
-  _clearContextRecallInflightForTests,
 } from './cache';
 
-export {
-  buildContextRecallThinkMessage,
-  CONTEXT_RECALL_THINK_MARKER,
-} from './ephemeral';
+export { buildContextRecallThinkMessage } from './ephemeral';

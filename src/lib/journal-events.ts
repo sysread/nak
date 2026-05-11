@@ -11,7 +11,7 @@
  * later realtime subscription can fire this same event from an
  * INSERT/UPDATE subscriber without the consumers needing to change.
  */
-export const JOURNAL_CHANGE_EVENT = 'nak:journal-change';
+const JOURNAL_CHANGE_EVENT = 'nak:journal-change';
 
 export function emitJournalChange(): void {
   if (typeof window === 'undefined') return;

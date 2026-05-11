@@ -64,14 +64,14 @@ const OPENING_RECALL_RELATION_FANOUT = 5;
  * surfaces the score distribution so we can tune upward if
  * weak matches are polluting the priming.
  */
-export const OPENING_RECALL_MIN_SCORE = 0.4;
+const OPENING_RECALL_MIN_SCORE = 0.4;
 
 /**
  * Top-N rows to ask the RPC for. We want 2-3 memories in the
  * <think> block; requesting 3 gives the threshold something to
  * filter against without over-fetching on cold threads.
  */
-export const OPENING_RECALL_LIMIT = 3;
+const OPENING_RECALL_LIMIT = 3;
 
 /**
  * Run the opening-turn recall pipeline. Returns the formatted
