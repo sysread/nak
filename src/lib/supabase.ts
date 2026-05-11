@@ -974,6 +974,33 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
   }
 
+  // Rotate the Supabase auth (login) password. Supabase's updateUser
+  // endpoint does NOT require the current password - any holder of a
+  // valid session token could otherwise rotate it. To match what users
+  // expect from a "change password" form (and to block a stolen-tab
+  // attack against an unlocked session), re-verify the current password
+  // by re-signing in first. The re-signin issues a fresh session for
+  // the same user, which is harmless.
+  async changeAuthPassword(currentPassword: string, newPassword: string): Promise<void> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const email = session.user.email;
+    if (!email) {
+      throw new SupabaseError(
+        'This account has no email on file, so the password cannot be changed here.',
+      );
+    }
+    const reauth = await this.client.auth.signInWithPassword({
+      email,
+      password: currentPassword,
+    });
+    if (reauth.error) {
+      throw new SupabaseError('Current password is incorrect.');
+    }
+    const { error } = await this.client.auth.updateUser({ password: newPassword });
+    if (error) throw new SupabaseError(error.message);
+  }
+
   async getSettings(): Promise<UserSettings> {
     const session = await this.getSession();
     if (!session) throw new SupabaseError('Not authenticated.');

@@ -120,7 +120,6 @@
     | 'wiki'
     | 'appearance'
     | 'usage'
-    | 'export'
     | 'security'
     | 'about';
   const GROUPS: { id: Group; label: string }[] = [
@@ -130,7 +129,6 @@
     { id: 'wiki', label: 'Wiki' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'usage', label: 'Usage' },
-    { id: 'export', label: 'Export' },
     { id: 'security', label: 'Security' },
     { id: 'about', label: 'About' },
   ];
@@ -716,10 +714,23 @@
   }
 
   // --- Security pane ---
+  // Two independent rotations live here:
+  //   - master password: unlocks the local encrypted config blob
+  //   - Supabase login password: signs in to the user's Supabase project
+  // Each has its own current/new/error/info pair so a failure in one
+  // form doesn't blow away feedback from the other.
   let pwCurrent = $state('');
   let pwNew = $state('');
+  let pwConfirm = $state('');
   let pwError = $state<string | null>(null);
   let pwInfo = $state<string | null>(null);
+
+  let authPwCurrent = $state('');
+  let authPwNew = $state('');
+  let authPwConfirm = $state('');
+  let authPwError = $state<string | null>(null);
+  let authPwInfo = $state<string | null>(null);
+  let authPwBusy = $state(false);
 
   let busy = $state(false);
 
@@ -1100,16 +1111,58 @@
       pwError = 'New password must be at least 8 characters.';
       return;
     }
+    if (pwNew !== pwConfirm) {
+      pwError = 'New password and confirmation do not match.';
+      return;
+    }
     busy = true;
     try {
       await changePassword(pwCurrent, pwNew);
       pwInfo = 'Master password changed.';
       pwCurrent = '';
       pwNew = '';
+      pwConfirm = '';
     } catch (err) {
       pwError = err instanceof Error ? err.message : String(err);
     } finally {
       busy = false;
+    }
+  }
+
+  async function onChangeAuthPassword(e: SubmitEvent): Promise<void> {
+    e.preventDefault();
+    authPwError = null;
+    authPwInfo = null;
+    if (!authPwCurrent) {
+      authPwError = 'Enter your current Supabase password.';
+      return;
+    }
+    // Supabase enforces a 6-character minimum by default. Bump to 8 to
+    // match the master-password form above so both rotations have the
+    // same floor.
+    if (authPwNew.length < 8) {
+      authPwError = 'New password must be at least 8 characters.';
+      return;
+    }
+    if (authPwNew !== authPwConfirm) {
+      authPwError = 'New password and confirmation do not match.';
+      return;
+    }
+    if (!app.supabase) {
+      authPwError = 'Not connected to Supabase.';
+      return;
+    }
+    authPwBusy = true;
+    try {
+      await app.supabase.changeAuthPassword(authPwCurrent, authPwNew);
+      authPwInfo = 'Supabase password changed.';
+      authPwCurrent = '';
+      authPwNew = '';
+      authPwConfirm = '';
+    } catch (err) {
+      authPwError = err instanceof Error ? err.message : String(err);
+    } finally {
+      authPwBusy = false;
     }
   }
 </script>
@@ -1181,6 +1234,26 @@
           {#if keysInfo}<p class="subtle">{keysInfo}</p>{/if}
           <button type="submit" disabled={busy}>Save keys</button>
         </form>
+
+        <h3 class="pane-section">Export</h3>
+        <p class="subtle">
+          Download your Supabase and Venice credentials as a JSON file so you
+          can reimport them when setting up Nak on another browser. This is a
+          local-only feature - the file is generated in your browser and
+          never uploaded.
+        </p>
+        <p class="subtle" style="color:var(--warn);font-size:0.85rem">
+          ⚠ The exported file contains your API keys in plaintext. Store it
+          with the same care as any other secret (e.g. your password
+          manager). Deleting it afterward is a fine choice.
+        </p>
+        <p class="subtle" style="font-size:0.85rem">
+          Import happens on the Setup screen of a fresh install - the
+          "Import from JSON" button pre-fills the credentials for you.
+        </p>
+        <button type="button" onclick={onExportConfig}>Export config as JSON</button>
+        {#if exportError}<p class="error">{exportError}</p>{/if}
+        {#if exportInfo}<p class="subtle">{exportInfo}</p>{/if}
       {:else if group === 'ai'}
         <!-- AI-adjacent settings share one pane so the sidebar doesn't
              fan out into a dedicated tab per toggle. All subsections
@@ -1797,30 +1870,14 @@
           ingested your recent requests yet — the ledger can lag live
           traffic by a few minutes.
         </p>
-      {:else if group === 'export'}
-        <h2>Export</h2>
-        <p class="subtle">
-          Download your Supabase and Venice credentials as a JSON file so you
-          can reimport them when setting up Nak on another browser. This is a
-          local-only feature — the file is generated in your browser and
-          never uploaded.
-        </p>
-        <p class="subtle" style="color:var(--warn);font-size:0.85rem">
-          ⚠ The exported file contains your API keys in plaintext. Store it
-          with the same care as any other secret (e.g. your password
-          manager). Deleting it afterward is a fine choice.
-        </p>
-        <p class="subtle" style="font-size:0.85rem">
-          Import happens on the Setup screen of a fresh install — the
-          "Import from JSON" button pre-fills the credentials for you.
-        </p>
-        <button type="button" onclick={onExportConfig}>Export config as JSON</button>
-        {#if exportError}<p class="error">{exportError}</p>{/if}
-        {#if exportInfo}<p class="subtle">{exportInfo}</p>{/if}
       {:else if group === 'security'}
-        <h2>Change master password</h2>
+        <h2>Security</h2>
+
+        <h3 class="pane-section">Change master password</h3>
         <p class="subtle">
           Rotate the passphrase that unlocks your encrypted config blob.
+          Local-only - this re-encrypts the blob in your browser and does
+          not touch Supabase.
         </p>
         <form onsubmit={onChangePassword}>
           <div class="form-row">
@@ -1833,9 +1890,41 @@
             <SecretInput id="pw-new" bind:value={pwNew} minlength={8} required
                          autocomplete="new-password" />
           </div>
+          <div class="form-row">
+            <label for="pw-confirm">Confirm new master password</label>
+            <SecretInput id="pw-confirm" bind:value={pwConfirm} minlength={8} required
+                         autocomplete="new-password" />
+          </div>
           {#if pwError}<p class="error">{pwError}</p>{/if}
           {#if pwInfo}<p class="subtle">{pwInfo}</p>{/if}
           <button type="submit" disabled={busy}>Change password</button>
+        </form>
+
+        <h3 class="pane-section">Change Supabase password</h3>
+        <p class="subtle">
+          Rotate the password you use to sign in to your Supabase project.
+          We re-verify your current password before updating, so a stolen
+          unlocked tab can't quietly rotate you out of your own account.
+        </p>
+        <form onsubmit={onChangeAuthPassword}>
+          <div class="form-row">
+            <label for="auth-pw-current">Current Supabase password</label>
+            <SecretInput id="auth-pw-current" bind:value={authPwCurrent} required
+                         autocomplete="current-password" />
+          </div>
+          <div class="form-row">
+            <label for="auth-pw-new">New Supabase password</label>
+            <SecretInput id="auth-pw-new" bind:value={authPwNew} minlength={8} required
+                         autocomplete="new-password" />
+          </div>
+          <div class="form-row">
+            <label for="auth-pw-confirm">Confirm new Supabase password</label>
+            <SecretInput id="auth-pw-confirm" bind:value={authPwConfirm} minlength={8} required
+                         autocomplete="new-password" />
+          </div>
+          {#if authPwError}<p class="error">{authPwError}</p>{/if}
+          {#if authPwInfo}<p class="subtle">{authPwInfo}</p>{/if}
+          <button type="submit" disabled={authPwBusy}>Change Supabase password</button>
         </form>
       {:else if group === 'about'}
         <!-- About pane: surfaces the build fingerprint and lets the
