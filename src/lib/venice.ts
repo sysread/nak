@@ -458,6 +458,64 @@ function parseRetryAfterMs(headers: Headers): number | null {
   return Math.round(Math.min(...candidates));
 }
 
+/**
+ * Maximum attempts (initial + retries) before {@link VeniceClient.completeChat}
+ * surfaces a 429 to the caller. Picked so a brief quota dip recovers
+ * transparently while a stuck quota still surfaces within ~10s of total
+ * wait. The streaming path in chat-loop.ts uses 3 attempts; completeChat
+ * sits behind tool sub-calls and background agents with no UI feedback,
+ * so a propagated 429 lands as a silent `{error: "..."}` in a tool-
+ * result row or a swallowed agent failure - being a bit more patient
+ * here trades a few seconds of latency for not burning a turn.
+ */
+const COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS = 5;
+
+/**
+ * Fallback wait schedule for completeChat 429s, used only when Venice
+ * sends no Retry-After or x-ratelimit-reset-* header. Log10-spaced from
+ * 1s to 5s across the four retry intervals: 10^(i * log10(5) / 3) for
+ * i in 0..3. Smooths the request burst across a quota reset window
+ * without piling up several seconds of wait on the first retry.
+ */
+const COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS = [1_000, 1_710, 2_924, 5_000];
+
+/**
+ * Hard cap on a single 429 wait inside completeChat. Mirrors
+ * RATE_LIMIT_WAIT_CAP_MS in chat-loop.ts: a Retry-After longer than a
+ * minute almost certainly means a daily/monthly cap that won't clear
+ * during the current call, so surface it as a hard error rather than
+ * blocking a tool sub-call (or, worse, a background agent the user
+ * can't see) for that long.
+ */
+const COMPLETE_CHAT_RATE_LIMIT_WAIT_CAP_MS = 60_000;
+
+/**
+ * Sleep that resolves either when `ms` elapses or `signal` aborts.
+ * Returns true if the signal interrupted the sleep, false on a clean
+ * timeout. When no signal is passed, behaves as a plain delay and
+ * always returns false. Local to this module - the chat-loop has its
+ * own copy because the retry shapes diverge slightly (chat-loop emits
+ * UI lifecycle events on either side of the sleep; this one just
+ * waits).
+ */
+function sleepCancellable(
+  ms: number,
+  signal: AbortSignal | undefined
+): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      resolve(false);
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 const DEFAULT_BASE_URL = 'https://api.venice.ai/api/v1';
 
 /**
@@ -908,31 +966,91 @@ export class VeniceClient {
    * src/lib/intuition/pipeline.ts stage 3 for the rationale; fold
    * "prior internal voices" content into the user turn rather than
    * passing it as an assistant message.
+   *
+   * Rate-limit retry: a 429 response is retried up to
+   * {@link COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS} times before
+   * propagating. The wait between retries comes from Venice's
+   * Retry-After / x-ratelimit-reset-* headers when present, falling
+   * back to a log10-spaced 1s -> 5s schedule otherwise. The wait is
+   * cancellable via `req.signal` - aborting during the sleep throws
+   * a spec-shaped AbortError matching what a mid-fetch abort would
+   * raise. Every other VeniceError kind propagates on the first
+   * occurrence; only 'rate_limit' is retryable here. Streaming chat
+   * has its own retry loop in chat-loop.ts ({@link streamChatWithRateLimitRetry});
+   * the two paths intentionally do not share code because streaming
+   * emits UI lifecycle events around its sleep and completeChat sits
+   * behind tool sub-calls / background agents with no UI surface.
    */
   async completeChat(req: ChatRequest): Promise<ChatCompletion> {
     const body = this.buildChatBody(req, false);
-    let res: Response;
-    try {
-      res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: this.headers(),
-        body: JSON.stringify(body),
-        signal: req.signal,
-      });
-    } catch (err) {
-      throw new VeniceError(
-        `Network error contacting Venice: ${(err as Error).message}`,
-        'network'
+    const bodyJson = JSON.stringify(body);
+    let attempt = 0;
+    // Retry loop: every iteration runs one POST attempt. On 429 we
+    // sleep and continue; on any other failure (including final 429
+    // after retries are exhausted) we throw.
+    while (true) {
+      let res: Response;
+      try {
+        res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: this.headers(),
+          body: bodyJson,
+          signal: req.signal,
+        });
+      } catch (err) {
+        throw new VeniceError(
+          `Network error contacting Venice: ${(err as Error).message}`,
+          'network'
+        );
+      }
+      if (res.ok) {
+        let payload: unknown;
+        try {
+          payload = await res.json();
+        } catch {
+          throw new VeniceError(
+            'Failed to parse Venice completion response.',
+            'parse'
+          );
+        }
+        return parseChatCompletion(payload);
+      }
+      const veniceErr = await this.classifyError(res);
+      const retriesExhausted =
+        attempt >= COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS - 1;
+      if (
+        veniceErr.kind !== 'rate_limit' ||
+        retriesExhausted ||
+        req.signal?.aborted === true
+      ) {
+        throw veniceErr;
+      }
+      const hint = veniceErr.retryAfterMs;
+      // Header hint wins when present; otherwise pick the next entry
+      // from the log10-spaced schedule. The schedule has one entry per
+      // retry interval, so `attempt` (0-based, pre-increment) indexes
+      // directly into it.
+      const fallbackIdx = Math.min(
+        attempt,
+        COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS.length - 1
       );
+      const baseMs =
+        hint ?? COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS[fallbackIdx];
+      const waitMs = Math.min(baseMs, COMPLETE_CHAT_RATE_LIMIT_WAIT_CAP_MS);
+      log.info(
+        `completeChat rate-limited (attempt ${attempt + 1}/${COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS}); waiting ${waitMs}ms before retry`
+      );
+      const interrupted = await sleepCancellable(waitMs, req.signal);
+      if (interrupted) {
+        // Aborted during the sleep. Throw a spec-shaped AbortError so
+        // callers' existing AbortError branches fire - same path a
+        // mid-fetch abort would have taken.
+        const abortErr = new Error('Aborted');
+        abortErr.name = 'AbortError';
+        throw abortErr;
+      }
+      attempt += 1;
     }
-    if (!res.ok) throw await this.classifyError(res);
-    let payload: unknown;
-    try {
-      payload = await res.json();
-    } catch {
-      throw new VeniceError('Failed to parse Venice completion response.', 'parse');
-    }
-    return parseChatCompletion(payload);
   }
 
   /**

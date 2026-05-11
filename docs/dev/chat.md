@@ -157,7 +157,17 @@ A chat turn goes:
   immune to provider-specific stream-only failure modes (e.g. the
   silent "stream completed with no text" condition the web_search
   tool kept hitting on Venice). The two methods share their wire
-  body builder so behaviour stays in lockstep.
+  body builder so behaviour stays in lockstep. 429 responses are
+  retried transparently inside `completeChat` (up to 5 attempts,
+  honoring Retry-After / x-ratelimit-reset-* when present, falling
+  back to a log10-spaced 1s -> 5s schedule otherwise, cancellable
+  via `req.signal`); a stuck quota still surfaces as a
+  `VeniceError(kind='rate_limit')` after retries exhaust. Streaming
+  chat has its own retry loop in `chat-loop.ts`
+  (`streamChatWithRateLimitRetry`) because that path emits UI
+  lifecycle events around the sleep; `completeChat` sits behind
+  tool sub-calls and background agents with no UI surface, so the
+  retry is silent except for a log entry.
 - `ChatLoopHandlers` - the event surface the UI uses: text
   updates, tool start/done/error, persistence events,
   `onToolboxesEnabledChange` (for the composer toolbox flash when

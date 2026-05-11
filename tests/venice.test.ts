@@ -909,6 +909,133 @@ describe('VeniceClient.completeChat', () => {
       client.completeChat({ model: 'm', messages: [] })
     ).rejects.toMatchObject({ kind: 'parse' });
   });
+
+  it('retries on 429 and succeeds on the next attempt', async () => {
+    // Background sub-calls (web_search, research_docs, intuition, etc.)
+    // used to lose the whole turn on a transient 429 - the error
+    // surfaced as `{error: "Venice rate limit hit (HTTP 429)..."}` on
+    // the tool-result row and the main model had to handle it. We now
+    // sleep and retry transparently here.
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(new Response('overloaded', { status: 429 }))
+        .mockResolvedValueOnce(
+          jsonResponse({
+            choices: [
+              { message: { content: 'eventually-ok' }, finish_reason: 'stop' },
+            ],
+          })
+        );
+      const client = new VeniceClient({
+        apiKey: 'k',
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      const promise = client.completeChat({ model: 'm', messages: [] });
+      await vi.runAllTimersAsync();
+      const result = await promise;
+      expect(result.text).toBe('eventually-ok');
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('honors Retry-After before retrying', async () => {
+    // When Venice tells us how long to wait, respect that hint rather
+    // than the fallback log10 schedule. Pins behavior parity with the
+    // streaming retry path in chat-loop.ts.
+    vi.useFakeTimers();
+    try {
+      const rateLimit = new Response('slow down', {
+        status: 429,
+        headers: { 'retry-after': '7' },
+      });
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(rateLimit)
+        .mockResolvedValueOnce(
+          jsonResponse({
+            choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+          })
+        );
+      const client = new VeniceClient({
+        apiKey: 'k',
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      const promise = client.completeChat({ model: 'm', messages: [] });
+      // Let the first 429 land and the sleep enqueue.
+      await vi.advanceTimersByTimeAsync(0);
+      // 6s elapsed - retry should still be pending (Retry-After: 7).
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      // Cross the threshold; retry fires.
+      await vi.advanceTimersByTimeAsync(2_000);
+      const result = await promise;
+      expect(result.text).toBe('ok');
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('propagates 429 after exhausting retries', async () => {
+    // Five attempts (initial + four retries). A stuck quota surfaces
+    // as a rate_limit VeniceError so the caller can decide whether to
+    // wrap into a tool-error row or surface to the user.
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(new Response('overloaded', { status: 429 }));
+      const client = new VeniceClient({
+        apiKey: 'k',
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      const promise = client
+        .completeChat({ model: 'm', messages: [] })
+        .catch((err: unknown) => err);
+      await vi.runAllTimersAsync();
+      const err = await promise;
+      expect(err).toBeInstanceOf(VeniceError);
+      expect(err).toMatchObject({ kind: 'rate_limit', status: 429 });
+      expect(fetchImpl).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts during the retry sleep and surfaces an AbortError', async () => {
+    // Mirrors the streaming path: a cancel during the rate-limit wait
+    // throws a spec-shaped AbortError so existing AbortError branches
+    // (tool cancel, send-cancel) fire identically.
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(new Response('overloaded', { status: 429 }));
+      const client = new VeniceClient({
+        apiKey: 'k',
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      });
+      const ac = new AbortController();
+      const promise = client
+        .completeChat({ model: 'm', messages: [], signal: ac.signal })
+        .catch((err: unknown) => err);
+      // Let the first 429 land and the sleep enqueue.
+      await vi.advanceTimersByTimeAsync(0);
+      ac.abort();
+      await vi.runAllTimersAsync();
+      const err = await promise;
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).name).toBe('AbortError');
+      // Only the initial attempt fired; the retry was cancelled mid-sleep.
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('parseChatCompletion', () => {
