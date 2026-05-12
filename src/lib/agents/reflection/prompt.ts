@@ -43,44 +43,42 @@
  *     logarithmic (corroborated memories win, but a dense list of
  *     one-off observations still dilutes rank).
  */
-export const REFLECTION_PROMPT = [
-  "You've just finished the conversation above. Now step out of that",
-  "role. You're not talking to the user anymore — nobody will read this",
-  'reply. Your job is to update long-term memory based on what',
-  'happened, using the memory tools below.',
-  '',
-  'Think about:',
-  '',
-  '- **Facts about the user** — name, work, tools, projects, preferences,',
-  '  constraints. Concrete, reusable information.',
-  '- **Personality signals** — how they communicate, what they value, what',
-  '  frustrates or delights them.',
-  '- **Reactions to you** — did they push back? agree? redirect? That is',
-  "  data about what works and doesn't with this person.",
-  '- **Self-guidance** — short notes to your future self, in the voice',
-  "  of a coach. \"This user prefers terse answers.\" \"Don't assume",
-  '  they want code examples without asking." "They appreciate when',
-  '  you name the tradeoff rather than defaulting to a recommendation."',
-  '',
-  'Workflow for each memory you consider writing:',
-  '',
-  '1. Call memory_search with a related query FIRST. Check whether a',
-  '   similar memory already exists.',
-  '2. If one exists and your new insight is a refinement, call',
-  '   memory_update on it (which also bumps confidence — corroborated',
-  "   memories rank higher). Don't create a near-duplicate.",
-  '3. If a new insight contradicts an existing memory, call',
-  "   memory_invalidate on the stale one. This doesn't delete it, it",
-  '   halves its confidence so search stops surfacing it. Repeated',
-  '   invalidation hides it entirely. Recoverable if you re-learn the',
-  '   fact later.',
-  '4. Only call memory_create when nothing close exists.',
-  '',
-  'Be conservative. Fewer high-signal memories beat many low-signal',
-  "ones. Don't record the obvious (\"the user asked a question\"),",
-  'ephemeral details that only matter for one conversation, or',
-  'anything that reads like a summary of what was already said.',
-  '',
-  'When you have nothing more to write, reply with a single word. The',
-  'word is discarded — only the tool calls matter.',
-].join('\n');
+export const REFLECTION_PROMPT = `You've just finished the conversation above. Now step out of that
+role. You're not talking to the user anymore — nobody will read this
+reply. Your job is to update long-term memory based on what
+happened, using the memory tools below.
+
+Think about:
+
+- **Facts about the user** — name, work, tools, projects, preferences,
+  constraints. Concrete, reusable information.
+- **Personality signals** — how they communicate, what they value, what
+  frustrates or delights them.
+- **Reactions to you** — did they push back? agree? redirect? That is
+  data about what works and doesn't with this person.
+- **Self-guidance** — short notes to your future self, in the voice
+  of a coach. "This user prefers terse answers." "Don't assume
+  they want code examples without asking." "They appreciate when
+  you name the tradeoff rather than defaulting to a recommendation."
+
+Workflow for each memory you consider writing:
+
+1. Call memory_search with a related query FIRST. Check whether a
+   similar memory already exists.
+2. If one exists and your new insight is a refinement, call
+   memory_update on it (which also bumps confidence — corroborated
+   memories rank higher). Don't create a near-duplicate.
+3. If a new insight contradicts an existing memory, call
+   memory_invalidate on the stale one. This doesn't delete it, it
+   halves its confidence so search stops surfacing it. Repeated
+   invalidation hides it entirely. Recoverable if you re-learn the
+   fact later.
+4. Only call memory_create when nothing close exists.
+
+Be conservative. Fewer high-signal memories beat many low-signal
+ones. Don't record the obvious ("the user asked a question"),
+ephemeral details that only matter for one conversation, or
+anything that reads like a summary of what was already said.
+
+When you have nothing more to write, reply with a single word. The
+word is discarded — only the tool calls matter.`;

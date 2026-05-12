@@ -32,14 +32,12 @@
  * mind if you're tempted to tune the prompt for a particular prose
  * style; the audience is bge-m3, not a reader.
  */
-export const SUMMARY_PROMPT = [
-  "You've just finished the conversation above. Step out of that role.",
-  "Nobody will read this reply as a chat turn — it's being used as a",
-  'search index for this conversation.',
-  '',
-  'Write a 2–3 sentence topical summary of what this conversation is',
-  'about. Describe the subject matter — the problem, the domain, the',
-  'artifacts discussed — not the shape of the exchange. Present tense.',
-  'No preamble, no trailing pleasantries, no hedging, no bullet list.',
-  'Just the summary.',
-].join('\n');
+export const SUMMARY_PROMPT = `You've just finished the conversation above. Step out of that role.
+Nobody will read this reply as a chat turn — it's being used as a
+search index for this conversation.
+
+Write a 2–3 sentence topical summary of what this conversation is
+about. Describe the subject matter — the problem, the domain, the
+artifacts discussed — not the shape of the exchange. Present tense.
+No preamble, no trailing pleasantries, no hedging, no bullet list.
+Just the summary.`;
