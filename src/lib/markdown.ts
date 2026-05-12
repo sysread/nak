@@ -369,8 +369,17 @@ export function renderMarkdown(src: string): string {
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS,
     ALLOWED_ATTR,
+    // The `\?` clause is for in-app relative URLs like `?cid=<id>`
+    // or `?wiki_article_id=<id>`. The `registerLinkHardening` hook
+    // above has explicit handling for `href.startsWith('?')` (skips
+    // target="_blank" so the click stays in the current tab); that
+    // branch is only reachable if DOMPurify allows the href through
+    // in the first place, so the prefix has to live in this regex
+    // too. Forgetting it once made the hook effectively dead code
+    // and silently turned every `[label](?cid=<uuid>)` source link
+    // into bare text without a clickable anchor.
     KEEP_CONTENT: true,
-    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|#|\/|\.\/|\.\.\/)/i,
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|#|\?|\/|\.\/|\.\.\/)/i,
   });
 }
 

@@ -208,6 +208,28 @@ describe('renderMarkdown — security', () => {
     expect(html).toMatch(/target="_blank"/);
   });
 
+  it('preserves the href on relative `?...` in-app links', () => {
+    // Wiki source-conversation links (and any other in-app routed
+    // key) ride the relative-query convention. Two things have to
+    // line up: DOMPurify's ALLOWED_URI_REGEXP must accept the `?...`
+    // prefix, and the link-hardening hook must SKIP target="_blank"
+    // (the click handler in Wiki.svelte does a soft navigate, not
+    // a same-tab same-origin reload). If either breaks, the anchor
+    // either loses its href entirely (silent broken link) or opens
+    // in a new tab landing on the same origin with no thread context.
+    const html = renderMarkdown(
+      '[source](?cid=8f19fbfc-e73c-4c98-82c8-59940fb06980)'
+    );
+    expect(html).toMatch(
+      /<a [^>]*href="\?cid=8f19fbfc-e73c-4c98-82c8-59940fb06980"[^>]*>source<\/a>/
+    );
+    expect(html).not.toMatch(/target="_blank"/);
+    // No rel attribute either - those are for offsite navigation.
+    const anchor =
+      /<a [^>]*href="\?cid=[^"]+"[^>]*>/.exec(html)?.[0] ?? '';
+    expect(anchor).not.toMatch(/rel=/);
+  });
+
   it('drops raw HTML elements from the source', () => {
     const html = renderMarkdown('<iframe src="https://evil.example"></iframe>');
     expect(html).not.toMatch(/<iframe/);
