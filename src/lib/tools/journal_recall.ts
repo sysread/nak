@@ -26,7 +26,6 @@
  * Schema lives in `./journal_recall.schema.ts`.
  */
 import type { ToolDef } from './types';
-import { JournalRecallAgent } from '../agents/journal_recall/agent';
 import { createLogger } from '../logger.svelte';
 import { journalRecallSchema } from './journal_recall.schema';
 
@@ -46,6 +45,9 @@ export const journalRecall: ToolDef = {
     // tags per surface.
     log.info(`picked up thread ${ctx.threadId}`);
 
+    const { JournalRecallAgent } = await import(
+      '../agents/journal_recall/agent'
+    );
     const agent = new JournalRecallAgent(ctx.venice, ctx.supabase);
     const result = await agent.run({
       input: { threadId: ctx.threadId, topic },

@@ -24,7 +24,6 @@
  * the registry level rather than relying on prompt discipline.
  */
 import type { ToolDef } from './types';
-import { RecallAgent } from '../agents/recall/agent';
 import { createLogger } from '../logger.svelte';
 import { memoryRecallSchema } from './memory_recall.schema';
 
@@ -38,6 +37,10 @@ export const memoryRecall: ToolDef = {
     // happening" without us needing per-tool timing instrumentation.
     log.info(`picked up thread ${ctx.threadId}`);
 
+    // Dynamic-import the agent class so its module stays out of the
+    // main bundle. Recall is gated on the model invoking the tool;
+    // on cold-boot we don't need the agent code resident.
+    const { RecallAgent } = await import('../agents/recall/agent');
     const agent = new RecallAgent(ctx.venice, ctx.supabase);
     const result = await agent.run({
       input: { threadId: ctx.threadId },

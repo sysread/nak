@@ -23,7 +23,6 @@
  * Schema lives in `./conversation_recall.schema.ts`.
  */
 import type { ToolDef } from './types';
-import { ConversationRecallAgent } from '../agents/conversation_recall/agent';
 import { createLogger } from '../logger.svelte';
 import { conversationRecallSchema } from './conversation_recall.schema';
 
@@ -43,6 +42,9 @@ export const conversationRecall: ToolDef = {
     // recall right now" without remembering two distinct tags.
     log.info(`picked up thread ${ctx.threadId}`);
 
+    const { ConversationRecallAgent } = await import(
+      '../agents/conversation_recall/agent'
+    );
     const agent = new ConversationRecallAgent(ctx.venice, ctx.supabase);
     const result = await agent.run({
       input: { threadId: ctx.threadId, topic },

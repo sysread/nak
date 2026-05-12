@@ -25,7 +25,6 @@
  * Schema lives in `./wiki_recall.schema.ts`.
  */
 import type { ToolDef } from './types';
-import { WikiRecallAgent } from '../agents/wiki_recall/agent';
 import { createLogger } from '../logger.svelte';
 import { wikiRecallSchema } from './wiki_recall.schema';
 
@@ -45,6 +44,7 @@ export const wikiRecall: ToolDef = {
     // tags per surface.
     log.info(`picked up thread ${ctx.threadId}`);
 
+    const { WikiRecallAgent } = await import('../agents/wiki_recall/agent');
     const agent = new WikiRecallAgent(ctx.venice, ctx.supabase);
     const result = await agent.run({
       input: { threadId: ctx.threadId, topic },

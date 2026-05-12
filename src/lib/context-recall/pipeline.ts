@@ -51,10 +51,14 @@
  */
 import type { VeniceClient } from '../venice';
 import type { SupabaseService } from '../supabase';
-import { RecallAgent } from '../agents/recall/agent';
-import { ConversationRecallAgent } from '../agents/conversation_recall/agent';
-import { WikiRecallAgent } from '../agents/wiki_recall/agent';
-import { JournalRecallAgent } from '../agents/journal_recall/agent';
+// Recall agent classes are dynamic-imported below inside
+// `runRecallFanOut`. Keeping them out of this module's static graph
+// is what lets the four agent chunks stay out of the main bundle -
+// Rollup's mixed-import rule means a single static importer anywhere
+// on the main-graph path collapses the split into a no-op, even if
+// every direct caller (the four recall tools) is already dynamic.
+// `RecallNote` is a type-only import; it carries no runtime cost
+// and doesn't pull the agent module into the static graph.
 import type { RecallNote } from '../agents/recall/agent';
 import type { IntuitionTrigger } from '../intuition/types';
 import { createLogger } from '../logger.svelte';
@@ -236,6 +240,22 @@ export async function runRecallFanOut(
   inputs: RecallFanOutInputs
 ): Promise<RecallFanOutResult> {
   const { venice, supabase, threadId, userId, signal, depth, topic } = inputs;
+
+  // Fire all four agent-module fetches in parallel so the
+  // chunk-load cost is one network round-trip rather than four.
+  // Each module sits in its own lazy chunk; the dynamic imports
+  // are what keep them out of the main bundle.
+  const [
+    { RecallAgent },
+    { ConversationRecallAgent },
+    { WikiRecallAgent },
+    { JournalRecallAgent },
+  ] = await Promise.all([
+    import('../agents/recall/agent'),
+    import('../agents/conversation_recall/agent'),
+    import('../agents/wiki_recall/agent'),
+    import('../agents/journal_recall/agent'),
+  ]);
 
   const memoryAgent = new RecallAgent(venice, supabase);
   const conversationAgent = new ConversationRecallAgent(venice, supabase);
