@@ -17,6 +17,7 @@
   import { app } from '$lib/state.svelte';
   import { route, navigate } from '$lib/routing.svelte';
   import { wikiStore, runWikiSearch } from '$lib/wiki-store.svelte';
+  import Scanner from './Scanner.svelte';
 
   interface Props {
     onSelect?: () => void;
@@ -45,17 +46,17 @@
     };
   });
 
-  // Sort by title case-insensitively. Semantic-search results come back
-  // in similarity order; alphabetising at the view layer keeps the
-  // drawer reading as a wiki listing rather than a relevance ranking.
-  // Substring-only and empty-query results land here already alpha-
-  // sorted but a re-sort is a no-op on those, so this stays the only
-  // place that owns the order.
-  const sorted = $derived(
-    [...wikiStore.results].sort((a, b) =>
+  // Empty query: alphabetical, so the drawer reads as a wiki listing
+  // rather than a relevance ranking. Active query: pass server-returned
+  // order through verbatim - semantic hits come back ordered by cosine
+  // similarity ascending (closest first), then ILIKE hits the vector
+  // pass missed. That's what "ordered by closest match" means here.
+  const sorted = $derived.by(() => {
+    if (wikiStore.query.trim().length > 0) return wikiStore.results;
+    return [...wikiStore.results].sort((a, b) =>
       a.title.toLowerCase().localeCompare(b.title.toLowerCase()),
-    ),
-  );
+    );
+  });
 
   function pickArticle(id: string): void {
     navigate({ wiki_article_id: id });
@@ -75,8 +76,19 @@
       spellcheck="false"
     />
   </div>
-  {#if wikiStore.loading && wikiStore.results.length === 0}
-    <p class="subtle" style="padding:0.75rem">Loading wiki…</p>
+  {#if wikiStore.loading}
+    <!-- Replace the entries list with the K.I.T.T. scanner for the
+         duration of any in-flight wiki search - including the empty-
+         query refresh on mount. Embedding the query takes a Venice
+         round-trip; without this the drawer reads as frozen. -->
+    <div class="search-status">
+      <Scanner
+        label={wikiStore.query.trim().length > 0
+          ? 'Searching wiki'
+          : 'Loading wiki'}
+        size={0.9}
+      />
+    </div>
   {:else if wikiStore.error}
     <p class="error" style="padding:0.75rem">
       Couldn't load wiki: {wikiStore.error}

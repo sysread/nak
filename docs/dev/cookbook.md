@@ -16,8 +16,10 @@ user can do the same via the Cookbook modal.
 Storage layout follows `memories` deliberately — recipes are
 user-owned notes that the LLM can also author, same row-level
 security posture, same "freeform text column as source of truth"
-philosophy. No embeddings pipeline: ILIKE on `title` is fast enough
-at cookbook scale (tens to low hundreds of rows per user).
+philosophy. Embeddings pipeline added later (see "Embeddings"
+below) for the drawer-side recipe search; the LLM tool path
+(`recipe_list`, `recipe_search`) still uses ILIKE-on-title and is
+unaffected.
 
 ## Files
 
@@ -207,6 +209,36 @@ sync` is a no-op.
 user opted in to keeping every revision so the History panel reads
 as a complete diary.
 
+## Embeddings
+
+The drawer's recipe search runs through the same embed-then-merge
+pipeline as the wiki and journal sidebars (see `./embeddings.md`).
+Added after the original `recipes` design, which omitted embeddings
+on the rationale that ILIKE-on-title is enough for a small
+single-user cookbook. That holds for the LLM tool path - the model
+knows exactly what title it wrote - but the human drawer is a
+different problem: a fuzzy query like "fluffy potato side" should
+find "Mashed Potatoes" by meaning.
+
+Columns: `embedding vector(2048)`, `embedding_model text`,
+`embedding_claim_holder text`, `embedding_claim_expires timestamptz`
+on `public.recipes`. A `clear_recipe_embedding_on_change` trigger
+nulls the embedding (and the claim) whenever `title`, `cooklang`,
+or `source` change; `recipe_update_with_version` updates these
+columns inside its own RPC so the trigger fires automatically.
+
+RPCs: `claim_next_pending_recipe`, `save_recipe_embedding_if_claimed`,
+`search_recipes_by_embedding`. Same shape as the wiki RPCs and the
+same `for update skip locked` claim discipline. The worker adapter
+is `src/lib/embeddings/sources/recipes.ts`, registered in
+`src/lib/embeddings/worker.ts` alongside the other five sources.
+
+Search wrapper: `SupabaseService.searchRecipes({query, queryEmbedding,
+limit})` merges semantic hits (RPC, cosine order) and ILIKE hits
+(title only) deduped by id and capped at `limit`. The sidebar
+(`src/components/RecipeList.svelte`) calls it on debounced
+keystrokes; the LLM tool path keeps using `listRecipes`.
+
 ## Interactions
 
 - **Tools** (`./tools.md`) — five recipe tools registered in
@@ -248,10 +280,14 @@ as a complete diary.
   add textarea treats each line as an item — a "saucepan" row would
   sit in the shopping list permanently. Instructions and
   ingredients are the useful parts for transfer.
-- **No embeddings.** ILIKE on `title` is fine at cookbook scale. If
-  a user ever needs semantic search, the escape hatch mirrors
-  memories exactly: add `embedding vector(2048)` + claim columns +
-  the worker-claim RPC pattern. Don't pre-emptively wire it.
+- **Drawer search is semantic; LLM tool path is not.** The
+  embedding pipeline (added after the original "no embeddings"
+  design - see "Embeddings" below) feeds `searchRecipes` only.
+  The `recipe_list` and `recipe_search` tools the model uses
+  still go through ILIKE-on-title. Two reasons: the model knows
+  exactly what title it just wrote so meaning matching adds no
+  value on the tool path, and keeping the tool's behaviour
+  deterministic avoids fuzz on a path the agent reasons about.
 - **Cooklang source is the source of truth.** The parsed
   ingredients list you see in the render is derived, not stored.
   This means a future parser bug is a pure read-path issue —

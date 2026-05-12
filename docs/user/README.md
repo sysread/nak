@@ -51,8 +51,8 @@ You can reach these pages two ways:
   alongside your conversations, plus space for your own entries.
 - [Cookbook](./cookbook.md) — a personal store for Cooklang recipes,
   with a dedicated modal and a tab in the conversation drawer.
-- [Search](./search.md) — finding a thread or a message across your
-  history.
+- [Search](./search.md) — finding a thread, recipe, journal day, or
+  wiki article by meaning across your history.
 - [Keyboard shortcuts](./shortcuts.md) — the keys that save you the
   most time.
 
