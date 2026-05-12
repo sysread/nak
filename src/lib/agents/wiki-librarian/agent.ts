@@ -4,7 +4,10 @@
  * for each, and runs `runHeadlessToolLoop` against the
  * `wikiLibrarianToolbox` (wiki_search + wiki_update + wiki_delete +
  * conversation_search). Side effects from those tool calls ARE the
- * output; the model's final text is discarded.
+ * persistent output; the model's final text is its one-or-two-
+ * sentence operator summary of merges, deletions, and considered-
+ * but-left-alone cases (see WikiLibrarianOutput.finalText), surfaced
+ * in the log drawer by the cycle driver.
  *
  * No per-thread claim, no entry_date, no terminal-message slicing -
  * the librarian operates on the wiki as a whole, on a separate

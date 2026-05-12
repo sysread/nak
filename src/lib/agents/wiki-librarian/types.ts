@@ -25,7 +25,16 @@ export interface WikiLibrarianInput {
 }
 
 export interface WikiLibrarianOutput {
-  /** Final post-tool-loop text. Discarded by production callers. */
+  /**
+   * The model's final (post-tool-loop) text. Used as the operator-
+   * facing reasoning surfaced in the log drawer - the prompt's "Final
+   * reply" block instructs the librarian to emit a one-or-two-sentence
+   * summary of what it merged, deleted, or considered-but-left-alone
+   * (e.g. "Merged the two Maya articles; left 'Maya' and 'household'
+   * separate because they cover different subjects."). The loop trims
+   * and inlines this as `reasoning="..."` on the librarian-finished
+   * log line, matching the shape the journal and wiki workers use.
+   */
   finalText: string;
   /** Number of articles in the snapshot. Surface for observability. */
   articleCount: number;

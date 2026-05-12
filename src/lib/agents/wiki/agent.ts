@@ -5,8 +5,10 @@
  *     settled thread, appends `WIKI_AUTONOMOUS_PROMPT` as the final
  *     user turn, and runs the headless tool loop with `wikiToolbox`.
  *     The loop's side effects (wiki_search / wiki_create /
- *     wiki_update / wiki_delete calls) ARE the output; final text is
- *     discarded after being captured for logs.
+ *     wiki_update / wiki_delete calls) ARE the persistent output;
+ *     the final text is the model's one-or-two-sentence operator
+ *     summary of its choices (see WikiOutput.finalText), surfaced
+ *     in the log drawer by the cycle driver.
  *
  *   - **Manual**: `updateOne()` runs synchronously on the main thread
  *     when the user clicks "Ask agent to update" on a single article.
