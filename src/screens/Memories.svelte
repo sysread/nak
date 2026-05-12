@@ -802,6 +802,11 @@
   .memory-card-data {
     margin: 0 0 0.6rem;
     font-size: 0.9rem;
+    /* Match the prose leading the rest of the app uses for read-side
+       content (wiki 1.6, journal 1.75, chat 1.45). Without an explicit
+       value memory bodies inherit the browser default ~1.2 and read
+       noticeably cramped next to every other card-rendered surface. */
+    line-height: 1.6;
     color: var(--text);
     word-wrap: break-word;
   }
