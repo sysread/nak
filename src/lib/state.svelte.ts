@@ -700,8 +700,21 @@ export function applyServerSettings(s: UserSettings): void {
   setSystemPrompts(s.systemPrompts ?? []);
 }
 
+// One-way latch flipped by `haltBackgroundWork()` when a newer build is
+// detected. Module-scoped (not on the reactive `app` object) because it
+// must survive a lock/unlock cycle - if the user signs out and back in
+// after the update banner appears, we still don't want to fire fresh
+// workers against soon-to-be-stale code. The page reload through
+// `applyUpdate()` is the only thing that clears it.
+let workersHalted = false;
+
 function startBackgroundWorkers(config: AppConfig): void {
   if (!app.supabase) return;
+  // A newer build was announced (see `haltBackgroundWork()` below) -
+  // don't fire workers that we'd just tear down. This covers the race
+  // where `onNeedRefresh` lands between `activate()` and the settings
+  // fetch that gates worker startup.
+  if (workersHalted) return;
   // Each manager acquires a cross-tab lock before spawning its
   // worker, so another tab holding the lock will make these calls
   // hang internally - they're fire-and-forget by design, never
@@ -818,15 +831,19 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
   startBackgroundWorkers(config);
 }
 
-export function lock(): void {
-  // Tear all workers down before clearing services — each manager
-  // releases its Web Lock here so a queued tab can take over as soon
-  // as we're gone. Order doesn't matter; the locks are independent.
-  // Each handle's stop() is a no-op when start() never fired
-  // (module never loaded) and dispatches through the captured
-  // import Promise otherwise - so a sign-out that races a still-
-  // loading manager chunk still runs the teardown when the chunk
-  // lands.
+/**
+ * Tear down every background worker plus the usage poller. Each
+ * manager handle's stop() is a no-op when start() never fired (module
+ * never loaded) and dispatches through the captured import Promise
+ * otherwise - so a teardown that races a still-loading manager chunk
+ * still runs when the chunk lands. Order doesn't matter; the locks are
+ * independent.
+ *
+ * Used by `lock()` (sign-out releases each Web Lock so a queued tab
+ * can take over) and by `haltBackgroundWork()` (newer build detected,
+ * stop processing on the old code until the user reloads).
+ */
+function stopBackgroundWorkers(): void {
   embeddings.stop();
   reflection.stop();
   summary.stop();
@@ -835,10 +852,31 @@ export function lock(): void {
   journal.stop();
   wiki.stop();
   wikiLibrarian.stop();
-  // Tear down the usage poller and wipe the cache so rows billed
-  // against the previous API key don't leak into a subsequent
-  // unlock-with-different-config.
   stopUsagePolling();
+}
+
+/**
+ * Halt all background work because a newer build is waiting. Called
+ * from `update.svelte.ts::onNeedRefresh` once the SW reports a waiting
+ * version. Latches the `workersHalted` flag so that a subsequent
+ * sign-out + sign-in inside the same page session cannot accidentally
+ * fire workers back up on stale code - the only way out of the halted
+ * state is the page reload that `applyUpdate()` performs.
+ *
+ * The update poller itself lives in update.svelte.ts and is not in the
+ * worker list - it's what's announcing the new build, so it has to
+ * keep running. Same for the in-flight chat loop: it's user-initiated,
+ * not background, and the user gets to finish their turn before the
+ * update banner asks them to reload.
+ */
+export function haltBackgroundWork(): void {
+  if (workersHalted) return;
+  workersHalted = true;
+  stopBackgroundWorkers();
+}
+
+export function lock(): void {
+  stopBackgroundWorkers();
   app.config = null;
   app.supabase = null;
   app.venice = null;

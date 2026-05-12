@@ -34,6 +34,7 @@
 
 import { registerSW } from 'virtual:pwa-register';
 import { createLogger } from './logger.svelte';
+import { haltBackgroundWork } from './state.svelte';
 
 const log = createLogger('update');
 
@@ -123,6 +124,14 @@ export function initUpdateWatcher(): void {
         controller: !!navigator.serviceWorker?.controller,
       });
       updateState.available = true;
+      // A newer build is waiting. Halt every background worker on
+      // this tab - they'd otherwise keep processing leases against
+      // soon-to-be-stale code until the user clicks Reload. The
+      // halt is one-way; the page reload through `applyUpdate()` is
+      // what clears it. The update poller itself keeps running -
+      // it's what flipped `available`, and it stays in
+      // update.svelte.ts so the halt doesn't touch it.
+      haltBackgroundWork();
     },
     onRegisteredSW(swUrl, registration) {
       // Routine SW-registered confirmation - fires on every load; the
