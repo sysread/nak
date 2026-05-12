@@ -3,15 +3,45 @@
  * can be omitted. Any change to title or content fires the schema
  * trigger that nulls the embedding, sending the row back to the
  * worker's pending queue.
+ *
+ * Source attribution path:
+ *   - Autonomous agent (ctx.threadId is a real thread id): the current
+ *     thread is attached to the article's bibliography automatically.
+ *     The model does not handle source ids.
+ *   - Librarian (ctx.threadId is empty): the `source_thread_ids`
+ *     parameter carries the ids the librarian believes informed this
+ *     update. We validate each id against the threads table (filtering
+ *     out anything the user doesn't own) before attaching - the
+ *     librarian sees many ids in conversation_search results and copy
+ *     fidelity can drift, so we treat the parameter as advisory and
+ *     drop unknown ids silently rather than rejecting the whole call.
+ *   - Manual path (Wiki.svelte "Ask agent to update"): doesn't go
+ *     through tool calls, so no attribution happens. The user's
+ *     direct edits don't add to the bibliography.
  */
 import type { ToolDef } from './types';
-import {
-  MAX_WIKI_TITLE_CHARS,
-  MAX_WIKI_CONTENT_CHARS,
-  findUnknownCidLinks,
-} from '../wiki';
+import { MAX_WIKI_TITLE_CHARS, MAX_WIKI_CONTENT_CHARS } from '../wiki';
 import { wikiUpdateSchema } from './wiki_update.schema';
 import { emitWikiChange } from '../wiki-events';
+
+/**
+ * Pull `source_thread_ids` out of the model's arguments, coercing to
+ * an array of trimmed strings and dropping anything non-string. The
+ * downstream validator (findExistingThreadIds) rejects ids that don't
+ * exist; this helper just sanitises the shape.
+ */
+function collectSourceThreadIds(args: Record<string, unknown>): string[] {
+  const raw = args.source_thread_ids;
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (trimmed.length === 0) continue;
+    out.push(trimmed);
+  }
+  return out;
+}
 
 export const wikiUpdate: ToolDef = {
   ...wikiUpdateSchema,
@@ -34,25 +64,41 @@ export const wikiUpdate: ToolDef = {
           `content exceeds ${MAX_WIKI_CONTENT_CHARS}-char limit (got ${args.content.length}); split or trim`
         );
       }
-      // Validate any `?cid=<uuid>` source-conversation links the
-      // agent embedded in the article body. See wiki_create.ts for
-      // the matching rationale - this is the defense-in-depth that
-      // catches a fabricated thread id at the tool boundary.
-      const unknownLinks = await findUnknownCidLinks(ctx.supabase, args.content);
-      if (unknownLinks.length > 0) {
-        throw new Error(
-          `content contains source-conversation link(s) to thread id(s) ` +
-            `that do not exist for this user: ${unknownLinks.join(', ')}. ` +
-            `Only use thread ids you saw in your input or in conversation_search ` +
-            `results; never invent. Retry without the offending ?cid= link(s).`
-        );
-      }
       patch.content = args.content;
     }
     if (Object.keys(patch).length === 0) {
       throw new Error('provide at least one of title or content');
     }
     const article = await ctx.supabase.updateWikiArticle(id, patch);
+
+    // Decide which thread ids to attach as sources. ctx.threadId
+    // (when non-empty) is trusted directly - the autonomous worker
+    // is processing the user's own thread. source_thread_ids are
+    // validated against the threads table so a fabricated id can't
+    // land.
+    const sourceIds = new Set<string>();
+    if (ctx.threadId) sourceIds.add(ctx.threadId);
+    const candidate = collectSourceThreadIds(args);
+    if (candidate.length > 0) {
+      const known = await ctx.supabase.findExistingThreadIds(candidate);
+      for (const tid of candidate) {
+        if (known.has(tid)) sourceIds.add(tid);
+      }
+    }
+    if (sourceIds.size > 0) {
+      try {
+        await ctx.supabase.attachWikiArticleSources(article.id, [
+          ...sourceIds,
+        ]);
+      } catch {
+        // Best-effort secondary write. The update itself already
+        // succeeded; a failed attach just means the bibliography
+        // misses a row, which is much smaller damage than failing
+        // the whole call and surfacing a confusing error to a model
+        // that already wrote the right prose.
+      }
+    }
+
     emitWikiChange();
     return article;
   },

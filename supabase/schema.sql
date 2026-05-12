@@ -5533,6 +5533,231 @@ language sql stable security invoker as $$
    limit match_limit
 $$;
 
+-- Source-conversation attribution. Replaces the older inline-citation
+-- convention (Markdown links of the form `[label](?cid=<uuid>)` inside
+-- article bodies) with structured many-to-many rows. Two motivations:
+--
+--   1. The autonomous and librarian agents kept emitting malformed
+--      citation markdown (`([?cid=<uuid>)` was the consistent shape),
+--      because building a structured Markdown link with a UUID in the
+--      URL is a low-frequency pattern in training data. Taking
+--      citation-formatting work away from the model entirely sidesteps
+--      the failure mode.
+--   2. The bibliography view that surfaces these rows orders them by
+--      `last_processed_at` ascending, so the reader sees the article's
+--      narrative of growth (first contributing conversation, then the
+--      conversations that added to it) rather than scattered inline
+--      anchors. Per-fact provenance is lost; article-level provenance
+--      is gained and is more honest about what we actually know.
+--
+-- Tools (wiki_create / wiki_update) populate these rows on every
+-- successful write. The autonomous agent's wrapper auto-attaches the
+-- current thread id (it processes exactly one thread per cycle). The
+-- librarian (which synthesises from `conversation_search` results)
+-- passes `source_thread_ids` explicitly; the tool validates each id
+-- belongs to a thread the user owns before inserting.
+--
+-- Composite PK + `on conflict do nothing` upserts means re-processing
+-- a thread bumps `last_processed_at` (via an explicit update path in
+-- the tool) instead of creating duplicate rows. Cascade-on-delete from
+-- both sides keeps the table consistent under article deletion and
+-- thread deletion (reset_wiki_data + the rare manual thread purge).
+create table if not exists public.wiki_article_sources (
+  article_id uuid not null references public.wiki_articles(id) on delete cascade,
+  thread_id  uuid not null references public.threads(id)       on delete cascade,
+  first_processed_at timestamptz not null default now(),
+  last_processed_at  timestamptz not null default now(),
+  primary key (article_id, thread_id)
+);
+
+create index if not exists wiki_article_sources_article_chrono_idx
+  on public.wiki_article_sources (article_id, last_processed_at);
+create index if not exists wiki_article_sources_thread_idx
+  on public.wiki_article_sources (thread_id);
+
+alter table public.wiki_article_sources enable row level security;
+
+-- RLS via the owning article's user_id. We don't need a user_id
+-- column on this sidecar because the article's row already carries
+-- one; an `exists` subquery enforces ownership transitively and keeps
+-- the schema narrower.
+drop policy if exists "wiki_article_sources are self-selectable" on public.wiki_article_sources;
+create policy "wiki_article_sources are self-selectable" on public.wiki_article_sources
+  for select using (
+    exists (
+      select 1 from public.wiki_articles wa
+       where wa.id = wiki_article_sources.article_id
+         and wa.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "wiki_article_sources are self-insertable" on public.wiki_article_sources;
+create policy "wiki_article_sources are self-insertable" on public.wiki_article_sources
+  for insert with check (
+    exists (
+      select 1 from public.wiki_articles wa
+       where wa.id = wiki_article_sources.article_id
+         and wa.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "wiki_article_sources are self-updatable" on public.wiki_article_sources;
+create policy "wiki_article_sources are self-updatable" on public.wiki_article_sources
+  for update using (
+    exists (
+      select 1 from public.wiki_articles wa
+       where wa.id = wiki_article_sources.article_id
+         and wa.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "wiki_article_sources are self-deletable" on public.wiki_article_sources;
+create policy "wiki_article_sources are self-deletable" on public.wiki_article_sources
+  for delete using (
+    exists (
+      select 1 from public.wiki_articles wa
+       where wa.id = wiki_article_sources.article_id
+         and wa.user_id = auth.uid()
+    )
+  );
+
+-- See Also RPC. Returns wiki articles topically related to the
+-- target article, using a dynamically-calibrated similarity floor:
+-- the minimum cosine similarity between the target's embedding and
+-- the embeddings of the conversations attributed to it. Articles
+-- built from tight-topic sources end up with a high bar (only very
+-- close siblings clear it); articles built from a wider net of
+-- sources get a more permissive bar. An article with no related
+-- siblings honestly returns an empty list rather than padding with
+-- low-quality matches.
+--
+-- Single-sample floors (an article with one source) are noisy but
+-- acceptable; the floor is whatever it is for that one source. If
+-- the article has zero sources, or no source's embedding has been
+-- computed yet, the floor falls through to 0.0 - we still return
+-- the top-k most-similar articles rather than nothing, on the
+-- assumption that "no signal" should not punish discovery.
+drop function if exists public.find_related_wiki_articles(uuid);
+drop function if exists public.find_related_wiki_articles(uuid, int);
+create or replace function public.find_related_wiki_articles(
+  p_article_id uuid,
+  p_limit int default 5
+) returns table (
+  id uuid,
+  title text,
+  similarity real
+)
+language sql stable security invoker as $$
+  with target as (
+    select embedding
+      from public.wiki_articles
+     where id = p_article_id
+       and user_id = auth.uid()
+       and embedding is not null
+  ),
+  floor as (
+    select coalesce(
+             min(1 - (t.embedding <=> (select embedding from target))),
+             0.0
+           )::real as min_sim
+      from public.wiki_article_sources ws
+      join public.threads t on t.id = ws.thread_id
+     where ws.article_id = p_article_id
+       and t.embedding is not null
+  )
+  select a.id,
+         a.title,
+         (1 - (a.embedding <=> (select embedding from target)))::real as similarity
+    from public.wiki_articles a, floor f
+   where a.user_id = auth.uid()
+     and a.id <> p_article_id
+     and a.embedding is not null
+     and exists (select 1 from target)
+     and (1 - (a.embedding <=> (select embedding from target)))::real >= f.min_sim
+   order by a.embedding <=> (select embedding from target) asc
+   limit p_limit;
+$$;
+
+-- One-time data migration: extract source-conversation citations the
+-- wiki agents previously emitted as `?cid=<uuid>` substrings inside
+-- article bodies, hoist them into wiki_article_sources, and strip the
+-- broken citation text from the content. Idempotent: after the first
+-- successful run there are no `?cid=` substrings left, the regex
+-- matches nothing, no inserts/updates fire. Cheap to re-run on every
+-- deploy (~one no-op pass over the article set).
+--
+-- The strip handles two shapes seen in the wild:
+--   ([?cid=<uuid>)            - the consistent malformed citation
+--                               the model emitted as its "citation"
+--   [<label>](?cid=<uuid>)    - the correctly-formed link the
+--                               prompt's example produced when the
+--                               model followed instructions
+-- The correctly-formed variant leaves the human-readable label in
+-- place; the malformed shape is removed entirely. Any remaining
+-- `?cid=<uuid>` fragments (other malformed variants we didn't see)
+-- get stripped wholesale in a final pass.
+do $$
+declare
+  v_article record;
+  v_cid record;
+  v_cleaned text;
+begin
+  for v_article in
+    select id, user_id, content from public.wiki_articles
+  loop
+    -- Hoist every UUID-shaped ?cid= candidate into the sidecar,
+    -- conditional on the thread actually existing and belonging to
+    -- the same user as the article (defense against any historical
+    -- fabrications that happened to round-trip the JS validator).
+    for v_cid in
+      select distinct (m[1])::uuid as thread_id
+        from regexp_matches(
+               v_article.content,
+               '\?cid=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})',
+               'g'
+             ) m
+    loop
+      if exists (
+        select 1 from public.threads
+         where id = v_cid.thread_id
+           and user_id = v_article.user_id
+      ) then
+        insert into public.wiki_article_sources (article_id, thread_id)
+          values (v_article.id, v_cid.thread_id)
+          on conflict do nothing;
+      end if;
+    end loop;
+
+    v_cleaned := v_article.content;
+    -- Malformed shape first - greedier match, would otherwise be
+    -- partially consumed by the correctly-formed pattern.
+    v_cleaned := regexp_replace(
+      v_cleaned,
+      '\(\[\?cid=[0-9a-fA-F-]+\)',
+      '',
+      'g'
+    );
+    -- Correctly-formed markdown link - keep the label, drop the URL.
+    v_cleaned := regexp_replace(
+      v_cleaned,
+      '\[([^\]]+)\]\(\?cid=[0-9a-fA-F-]+\)',
+      '\1',
+      'g'
+    );
+    -- Catch-all for any remaining ?cid=... fragment.
+    v_cleaned := regexp_replace(v_cleaned, '\?cid=[0-9a-fA-F-]+', '', 'g');
+    -- Tidy whitespace artefacts the strips can leave behind.
+    v_cleaned := regexp_replace(v_cleaned, '  +', ' ', 'g');
+    v_cleaned := regexp_replace(v_cleaned, ' +([.,;:!?])', '\1', 'g');
+
+    if v_cleaned <> v_article.content then
+      update public.wiki_articles
+         set content = v_cleaned
+       where id = v_article.id;
+    end if;
+  end loop;
+end $$;
+
 -- Wipe-and-rewind for the wiki subsystem. Called from Settings ->
 -- Wiki -> Reset. Mirrors reset_journal_data but with the wiki-side
 -- column names. Two side effects under RLS scoping:

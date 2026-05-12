@@ -26,7 +26,11 @@
   } from '$lib/wiki';
   import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
   import { WikiAgent, type WikiUpdateOneResult } from '$lib/agents/wiki/agent';
-  import type { WikiArticle } from '$lib/supabase';
+  import type {
+    WikiArticle,
+    WikiArticleSource,
+    WikiArticleRelated,
+  } from '$lib/supabase';
   import Markdown from '../components/Markdown.svelte';
 
   const selectedArticle = $derived<WikiArticle | null>(
@@ -49,6 +53,81 @@
     });
     return () => off();
   });
+
+  // --- Bibliography + See Also -----------------------------------------
+  //
+  // Two sections rendered beneath the article body. Both are derived
+  // from structured data, not from anything embedded in the article
+  // markdown itself - the wiki tools attach source threads to a
+  // sidecar table (wiki_article_sources) and the See Also list comes
+  // from a server-side RPC that uses a dynamic cosine-similarity
+  // floor calibrated from the article's own source conversations.
+  //
+  // Both surfaces stay empty (no section rendered) when the article
+  // has no data for them - a brand-new article whose embedding hasn't
+  // landed yet has neither sources nor neighbors, and an honest empty
+  // state beats an "everything is empty here" placeholder.
+  let sourceRows = $state<WikiArticleSource[] | null>(null);
+  let relatedRows = $state<WikiArticleRelated[] | null>(null);
+
+  $effect(() => {
+    const supabase = app.supabase;
+    const article = selectedArticle;
+    if (!supabase || !article) {
+      sourceRows = null;
+      relatedRows = null;
+      return;
+    }
+    // Re-run on content updates: when the autonomous agent or the
+    // librarian touches the article, updated_at moves and the
+    // bibliography may have gained a row. Same for See Also after
+    // the embedding worker re-embeds.
+    void article.updated_at;
+    const id = article.id;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [srcs, rel] = await Promise.all([
+          supabase.listWikiArticleSources(id),
+          supabase.findRelatedWikiArticles(id, 5),
+        ]);
+        if (!cancelled) {
+          sourceRows = srcs;
+          relatedRows = rel;
+        }
+      } catch {
+        // Best-effort - the article body still renders. Surfacing an
+        // error banner for a missing bibliography would be more noise
+        // than signal.
+        if (!cancelled) {
+          sourceRows = [];
+          relatedRows = [];
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  /**
+   * Soft-navigate to a thread when the user clicks a Sources entry.
+   * Mirrors the patch the inline-markdown click handler produces for
+   * `?cid=` anchors: set cid, clear the wiki tab so the user lands
+   * on the chat surface rather than staying inside the wiki panel
+   * with a thread id behind the scenes.
+   */
+  function openSourceThread(threadId: string): void {
+    navigate({ cid: threadId, drawer: null, wiki_article_id: null });
+  }
+
+  /**
+   * Soft-navigate to another wiki article (See Also click). Keeps
+   * the wiki tab open and just swaps the selected article id.
+   */
+  function openRelatedArticle(articleId: string): void {
+    navigate({ wiki_article_id: articleId });
+  }
 
   // --- Edit mode ---------------------------------------------------------
 
@@ -712,6 +791,62 @@
           >
             <Markdown content={a.content} />
           </div>
+
+          {#if sourceRows && sourceRows.length > 0}
+            <!--
+              Bibliography. Ordered by last_processed_at ascending so
+              the first contributing conversation is at the top - tells
+              the story of how the article grew. Deleted-thread rows
+              (cascade not yet caught up) render as a non-link placeholder
+              rather than a broken link.
+            -->
+            <aside class="wiki-sources" aria-label="Sources">
+              <h2>Sources</h2>
+              <ul>
+                {#each sourceRows as src (src.thread_id)}
+                  <li>
+                    {#if src.thread_title !== null}
+                      <button
+                        type="button"
+                        class="wiki-link"
+                        onclick={() => openSourceThread(src.thread_id)}
+                      >
+                        {src.thread_title || '(untitled thread)'}
+                      </button>
+                    {:else}
+                      <span class="wiki-link-gone">(thread no longer available)</span>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            </aside>
+          {/if}
+
+          {#if relatedRows && relatedRows.length > 0}
+            <!--
+              See Also. Returned by find_related_wiki_articles, which
+              uses the article's own source-conversation embeddings to
+              calibrate a similarity floor. Articles whose embeddings
+              don't clear the floor never reach us, so an empty section
+              is the honest "no real neighbors" answer.
+            -->
+            <aside class="wiki-related" aria-label="See also">
+              <h2>See also</h2>
+              <ul>
+                {#each relatedRows as rel (rel.id)}
+                  <li>
+                    <button
+                      type="button"
+                      class="wiki-link"
+                      onclick={() => openRelatedArticle(rel.id)}
+                    >
+                      {rel.title}
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            </aside>
+          {/if}
         </article>
 
         {#if deletingId === a.id}
@@ -840,5 +975,50 @@
   }
   .wiki-preview h4 {
     margin: 0 0 0.5rem 0;
+  }
+
+  /* Sources and See Also share a visual contract: small heading, tight
+     list, links styled as buttons-that-look-like-links so they're
+     keyboard-focusable and accessible without sprouting button chrome. */
+  .wiki-sources,
+  .wiki-related {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px dashed var(--border);
+  }
+  .wiki-sources h2,
+  .wiki-related h2 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .wiki-sources ul,
+  .wiki-related ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .wiki-link {
+    background: none;
+    border: none;
+    color: var(--accent, var(--text));
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 0;
+    font: inherit;
+    text-align: left;
+  }
+  .wiki-link:hover {
+    text-decoration: none;
+  }
+  .wiki-link-gone {
+    color: var(--muted);
+    font-style: italic;
   }
 </style>

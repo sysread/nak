@@ -7,13 +7,15 @@
  * The Postgres unique-violation surfaces here as a SupabaseError; we
  * detect and rephrase it as actionable text the agent can read so it
  * knows to fall back to wiki_search + wiki_update.
+ *
+ * Source attribution: when this tool is invoked by the autonomous wiki
+ * agent (ctx.threadId is non-empty), the current thread is automatically
+ * attached to the new article's bibliography in wiki_article_sources.
+ * The model is not asked to handle source tracking - the entire
+ * attribution flow lives on the tool side.
  */
 import type { ToolDef } from './types';
-import {
-  MAX_WIKI_TITLE_CHARS,
-  MAX_WIKI_CONTENT_CHARS,
-  findUnknownCidLinks,
-} from '../wiki';
+import { MAX_WIKI_TITLE_CHARS, MAX_WIKI_CONTENT_CHARS } from '../wiki';
 import { wikiCreateSchema } from './wiki_create.schema';
 import { emitWikiChange } from '../wiki-events';
 
@@ -34,25 +36,23 @@ export const wikiCreate: ToolDef = {
         `content exceeds ${MAX_WIKI_CONTENT_CHARS}-char limit (got ${content.length}); split or trim`
       );
     }
-    // Validate any `?cid=<uuid>` source-conversation links the
-    // agent embedded in the article body. Constraint: agents only
-    // use thread ids they got from runtime context (the current
-    // thread's id, or ids returned by conversation_search). This
-    // is the defense-in-depth that catches a fabricated id at the
-    // tool boundary - rejecting the tool call surfaces an
-    // actionable error so the agent can retry without the bad
-    // link rather than landing a broken article.
-    const unknownLinks = await findUnknownCidLinks(ctx.supabase, content);
-    if (unknownLinks.length > 0) {
-      throw new Error(
-        `content contains source-conversation link(s) to thread id(s) ` +
-          `that do not exist for this user: ${unknownLinks.join(', ')}. ` +
-          `Only use thread ids you saw in your input or in conversation_search ` +
-          `results; never invent. Retry without the offending ?cid= link(s).`
-      );
-    }
     try {
       const article = await ctx.supabase.createWikiArticle({ title, content });
+      // Auto-attach the current thread as a source. The autonomous
+      // wiki agent processes exactly one thread per cycle and that
+      // thread's id is in ctx.threadId; the librarian (which doesn't
+      // have wiki_create) would never reach this branch. The attach
+      // is a best-effort secondary write - if it fails, the article
+      // is still created and the user just doesn't see the thread in
+      // the bibliography. Throwing here would force a duplicate-title
+      // retry, which is worse than a missing source row.
+      if (ctx.threadId) {
+        try {
+          await ctx.supabase.attachWikiArticleSources(article.id, [ctx.threadId]);
+        } catch {
+          // best-effort; see comment above.
+        }
+      }
       emitWikiChange();
       return article;
     } catch (err) {

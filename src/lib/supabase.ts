@@ -541,6 +541,40 @@ function coerceWikiArticle(raw: Record<string, unknown>): WikiArticle {
   };
 }
 
+/**
+ * One row of the bibliography shown beneath a wiki article: a thread
+ * that contributed to the article, with the thread's title and the
+ * timestamp this attribution was last refreshed (re-processing the
+ * same thread bumps this rather than inserting a duplicate row).
+ *
+ * Surfaced via `listWikiArticleSources`; populated by the wiki tools
+ * themselves when an article is created or updated (autonomous agent
+ * attaches the current thread; librarian passes `source_thread_ids`
+ * explicitly through the tool boundary).
+ */
+export interface WikiArticleSource {
+  thread_id: string;
+  /** May be null when the thread has been hard-deleted but the
+   *  attribution row hasn't been cascade-cleaned yet. The UI renders
+   *  a placeholder title in that window. */
+  thread_title: string | null;
+  first_processed_at: string;
+  last_processed_at: string;
+}
+
+/**
+ * One row of the See Also section beneath a wiki article. Returned
+ * by the `find_related_wiki_articles` RPC, which uses the dynamic
+ * similarity floor (the minimum cosine similarity between the target
+ * article and its source conversations) to decide which candidates
+ * clear the bar.
+ */
+export interface WikiArticleRelated {
+  id: string;
+  title: string;
+  similarity: number;
+}
+
 export interface Message {
   id: string;
   thread_id: string;
@@ -3028,6 +3062,114 @@ export class SupabaseService {
   }
 
   /**
+   * Attribute one or more source conversations to a wiki article.
+   * Upsert semantics on the composite (article_id, thread_id) primary
+   * key: a thread already attributed gets its `last_processed_at`
+   * bumped rather than producing a duplicate row.
+   *
+   * Called by the wiki tools after a successful create/update:
+   *   - autonomous agent: passes its current threadId (singular).
+   *   - librarian: passes the `source_thread_ids` parameter the
+   *     model supplied, after filtering through `findExistingThreadIds`
+   *     so a hallucinated id can't land.
+   *
+   * Empty / all-invalid input is a silent no-op (no round-trip).
+   */
+  async attachWikiArticleSources(
+    articleId: string,
+    threadIds: readonly string[]
+  ): Promise<void> {
+    if (threadIds.length === 0) return;
+    const seen = new Set<string>();
+    const rows: Array<{
+      article_id: string;
+      thread_id: string;
+      last_processed_at: string;
+    }> = [];
+    const now = new Date().toISOString();
+    for (const id of threadIds) {
+      if (typeof id !== 'string' || id.length === 0) continue;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      rows.push({ article_id: articleId, thread_id: id, last_processed_at: now });
+    }
+    if (rows.length === 0) return;
+    const { error } = await this.client
+      .from('wiki_article_sources')
+      .upsert(rows, { onConflict: 'article_id,thread_id' });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Return the bibliography for one article: every thread that has
+   * been attributed, joined with the thread's title, ordered by
+   * `last_processed_at` ascending so the reader sees the article's
+   * narrative of growth (oldest contributing conversation first).
+   *
+   * Threads hard-deleted out from under their attribution rows show
+   * up with a null title until the cascade catches up; the UI handles
+   * that with a placeholder.
+   */
+  async listWikiArticleSources(articleId: string): Promise<WikiArticleSource[]> {
+    const { data, error } = await this.client
+      .from('wiki_article_sources')
+      .select('thread_id, first_processed_at, last_processed_at, threads(title)')
+      .eq('article_id', articleId)
+      .order('last_processed_at', { ascending: true });
+    if (error) throw new SupabaseError(error.message);
+    const out: WikiArticleSource[] = [];
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      const threadId = row.thread_id;
+      if (typeof threadId !== 'string') continue;
+      const thread = row.threads as { title?: unknown } | null;
+      const title =
+        thread && typeof thread.title === 'string' ? thread.title : null;
+      out.push({
+        thread_id: threadId,
+        thread_title: title,
+        first_processed_at: String(row.first_processed_at ?? ''),
+        last_processed_at: String(row.last_processed_at ?? ''),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * See Also for an article. Single RPC call; the floor calculation
+   * (minimum cosine similarity between the article and its source
+   * conversations) lives server-side so the client never has to fetch
+   * raw embeddings.
+   *
+   * Returns an empty array when the article has no embedding yet (the
+   * embeddings worker hasn't caught up after a content change),
+   * when no other articles clear the floor, or when there are simply
+   * no other articles. All three are honest "nothing to suggest".
+   */
+  async findRelatedWikiArticles(
+    articleId: string,
+    limit = 5
+  ): Promise<WikiArticleRelated[]> {
+    const { data, error } = await this.client.rpc('find_related_wiki_articles', {
+      p_article_id: articleId,
+      p_limit: limit,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const out: WikiArticleRelated[] = [];
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      const id = row.id;
+      const title = row.title;
+      const similarity = row.similarity;
+      if (typeof id !== 'string' || typeof title !== 'string') continue;
+      out.push({
+        id,
+        title,
+        similarity: typeof similarity === 'number' ? similarity : 0,
+      });
+    }
+    return out;
+  }
+
+  /**
    * Nuke the wiki subsystem for the current user. Deletes every
    * `wiki_articles` row and nulls `last_wiki_processed_msg_id` + the
    * wiki claim columns on the user's threads so the per-conversation
@@ -3110,13 +3252,13 @@ export class SupabaseService {
 
   /**
    * Filter a candidate set of thread ids down to those that exist
-   * for the current user (RLS-scoped). Used by the wiki tools
-   * (wiki_create / wiki_update) to validate `?cid=<uuid>` source
-   * links the agent embedded in article content - the constraint
-   * is "agents only use thread ids they got from the runtime
-   * (their current thread, conversation_search results)", and
-   * this method is the defense-in-depth that catches a
-   * fabricated id at the tool boundary.
+   * for the current user (RLS-scoped). Used by the librarian's
+   * `wiki_update` path to validate the `source_thread_ids` parameter
+   * the model supplied - the constraint is "agents only attribute
+   * thread ids they got from the runtime (their current thread, or
+   * `conversation_search` results)", and this method is the defense
+   * in depth that catches a hallucinated id at the tool boundary
+   * before it lands in `wiki_article_sources`.
    *
    * Empty input returns an empty set without a round-trip.
    * Postgres errors propagate as SupabaseError.

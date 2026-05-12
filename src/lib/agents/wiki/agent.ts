@@ -200,7 +200,6 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
         role: 'user',
         content: buildWikiAutonomousPrompt({
           userProfile: this.userProfile,
-          threadId: req.input.threadId,
         }),
       });
 
