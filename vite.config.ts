@@ -147,6 +147,14 @@ export default defineConfig({
         },
       },
     },
+    // Bump the chunk-size advisory from Rollup's 500 kB default to
+    // 750 kB. Modern PWAs on persistent caches comfortably handle
+    // chunks in this range; the 500 kB ceiling is from a much older
+    // browser-cache era. Bundle-shape investigations should still
+    // grep the build output for `(!)` warnings - this just stops the
+    // routine `pnpm build` from emitting the chunk-size advisory
+    // every time on the main index chunk.
+    chunkSizeWarningLimit: 750,
   },
   plugins: [
     svelte(),
