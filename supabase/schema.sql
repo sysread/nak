@@ -886,11 +886,14 @@ create policy "memory_relations are self-deletable"
 -- machine-readable URL when the model imported it from the web. Both
 -- nullable because hand-typed recipes often have neither.
 --
--- No embedding column: a personal cookbook is small (tens to low
--- hundreds of rows). ILIKE on `title` is fast enough and keeps us off
--- the embeddings worker's critical path. If cookbook sizes grow past a
--- few hundred rows, the escape hatch mirrors memories exactly — add
--- vector(2048) + claim columns + the same RPC shape.
+-- Embedding column added later (see "Recipe embeddings" section below).
+-- Original design omitted it on the rationale that ILIKE-on-title is
+-- enough for a single-user cookbook; that holds for the LLM tool path
+-- but the drawer's recipe search is a human surface where a fuzzy
+-- "fluffy potato side" should find "Mashed Potatoes." Vector storage
+-- mirrors memories / wiki: 2048-padded, written by the shared
+-- embeddings worker. The default ILIKE-on-title still works for
+-- callers that pass no embedding (e.g. the `recipe_list` tool).
 
 create table if not exists public.recipes (
   id uuid primary key default gen_random_uuid(),
@@ -1997,6 +2000,137 @@ begin
      where l.recipe_version_id = v_new_version_id
      order by l.position;
 end $$;
+
+-- Recipe embeddings ------------------------------------------------------
+--
+-- Late add to the recipes table: the file-level comment further up
+-- claims "no embedding column" on the rationale that ILIKE-on-title is
+-- enough for a single-user cookbook. That holds for the LLM tool path
+-- (the model already knows what title it just wrote), but the drawer's
+-- recipe search is a human-facing surface where "fluffy potato side"
+-- should find "Mashed Potatoes with Olive Oil." The sidebar wires
+-- through the same embed-then-merge pipeline wiki and journal use, so
+-- a column + the standard claim/save/search RPC trio joins recipes
+-- without disturbing the existing recipe_*_with_version RPCs.
+--
+-- Same 2048-padded vector storage as memories / journal_entries / wiki
+-- so the single embeddings worker can share a pool and no per-source
+-- dim plumbing is needed.
+alter table public.recipes
+  add column if not exists embedding vector(2048);
+alter table public.recipes
+  add column if not exists embedding_model text;
+alter table public.recipes
+  add column if not exists embedding_claim_holder text;
+alter table public.recipes
+  add column if not exists embedding_claim_expires timestamptz;
+
+-- Invalidate the embedding whenever the text that produced it changes.
+-- The embedding source builds its input from title + source + cooklang
+-- (see src/lib/embeddings/sources/recipes.ts), so any of those three
+-- diverging means the stored vector is stale. Null the claim columns
+-- too so an in-flight worker save (which guards on holder + expires >
+-- now()) cannot land a stale vector against the new text.
+create or replace function public.clear_recipe_embedding_on_change()
+  returns trigger language plpgsql as $$
+begin
+  if new.title is distinct from old.title
+     or new.cooklang is distinct from old.cooklang
+     or new.source is distinct from old.source then
+    new.embedding := null;
+    new.embedding_model := null;
+    new.embedding_claim_holder := null;
+    new.embedding_claim_expires := null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clear_recipe_embedding_on_change on public.recipes;
+create trigger clear_recipe_embedding_on_change
+  before update on public.recipes
+  for each row execute function public.clear_recipe_embedding_on_change();
+
+-- Claim the next recipe whose embedding is null or whose prior claim
+-- has expired. Same skip-locked fairness and claim shape as the wiki
+-- and journal pipelines. Returns (id, title, source, cooklang) so the
+-- worker can build the embedding input without a second round-trip.
+drop function if exists public.claim_next_pending_recipe(text, int);
+create or replace function public.claim_next_pending_recipe(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, title text, source text, cooklang text)
+language sql security invoker as $$
+  with candidate as (
+    select r.id
+      from public.recipes r
+     where r.user_id = auth.uid()
+       and r.embedding is null
+       and (r.embedding_claim_expires is null
+            or r.embedding_claim_expires < now())
+     order by r.updated_at desc
+     limit 1
+     for update skip locked
+  )
+  update public.recipes r
+     set embedding_claim_holder = p_holder_id,
+         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where r.id = c.id
+  returning r.id, r.title, r.source, r.cooklang;
+$$;
+
+drop function if exists public.save_recipe_embedding_if_claimed(uuid, text, vector, text);
+create or replace function public.save_recipe_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.recipes
+     set embedding = p_embedding,
+         embedding_model = p_embedding_model,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where id = p_id
+     and user_id = auth.uid()
+     and embedding_claim_holder = p_holder_id
+     and embedding_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Cosine similarity search. Same shape as the wiki RPC; the sidebar
+-- merges these hits with an ILIKE pass on the client side so freshly
+-- written recipes that the worker has not embedded yet still appear.
+drop function if exists public.search_recipes_by_embedding(vector, int);
+create or replace function public.search_recipes_by_embedding(
+  query_embedding vector(2048),
+  match_limit int
+) returns table (
+  id uuid,
+  title text,
+  source text,
+  source_url text,
+  cooklang text,
+  rating smallint,
+  created_at timestamptz,
+  updated_at timestamptz,
+  similarity real
+)
+language sql stable security invoker as $$
+  select id, title, source, source_url, cooklang, rating,
+         created_at, updated_at,
+         (1 - (embedding <=> query_embedding))::real as similarity
+    from public.recipes
+   where user_id = auth.uid()
+     and embedding is not null
+   order by embedding <=> query_embedding asc
+   limit match_limit
+$$;
 
 -- worker_leases ----------------------------------------------------------
 --

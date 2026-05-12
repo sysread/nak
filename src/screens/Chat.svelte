@@ -4262,9 +4262,12 @@
         {#if searchQuery.trim().length > 0}
           <!-- Search mode: replace the paginated list entirely.
                Escape or clearing the input returns to the list view.
-               An in-flight search renders a Scanner in place of the
-               result list so the user sees the work happening. -->
-          {#if searchBusy && searchResults.length === 0}
+               An in-flight search renders a Scanner in place of any
+               prior result list - the spinner-replaces-entries idiom
+               that the wiki / recipe / journal sidebars also use, so
+               every search surface in the app gives the same kind of
+               progress feedback. -->
+          {#if searchBusy}
             <div class="search-status">
               <Scanner label="Searching conversations" size={0.9} />
             </div>

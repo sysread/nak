@@ -42,9 +42,11 @@ under-ranked until the worker catches up.
 - `src/lib/embeddings/types.ts` — `EmbeddingSource` interface
   and shared constants.
 - `src/lib/embeddings/sources/memories.ts`,
-  `sources/threads.ts` — per-table adapters. Each knows how to
-  claim one pending row, build the input string for Venice,
-  and save the result under a guard.
+  `sources/threads.ts`, `sources/journal.ts`,
+  `sources/wiki.ts`, `sources/samskara-substrate.ts`,
+  `sources/recipes.ts` — per-table adapters. Each knows how
+  to claim one pending row, build the input string for
+  Venice, and save the result under a guard.
 - `supabase/schema.sql` — `worker_leases` table, lease RPCs,
   `claim_next_pending_memory` /
   `claim_next_pending_thread_embedding`,
@@ -165,6 +167,13 @@ extension.
   `clear_journal_embedding_on_change` trigger fires when
   `content | topics | mood` change so an edit reselects
   the row. See `./journal.md`.
+- **Cookbook** — `recipes` joined the registered-source list
+  so the drawer's recipe search can rank by meaning. The
+  `clear_recipe_embedding_on_change` trigger fires when
+  `title | cooklang | source` change. The LLM-facing
+  `recipe_list` tool still runs ILIKE-on-title only - the
+  embedding pipeline is for the human drawer search. See
+  `./cookbook.md`.
 - **Auth-session** — worker startup is gated on an active
   Supabase session; `manager.start()` pulls the session from
   the Supabase client and passes tokens to the Worker. A

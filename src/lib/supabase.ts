@@ -301,6 +301,8 @@ export interface Recipe {
   rating: number | null;
   created_at: string;
   updated_at: string;
+  /** Populated only by `search_recipes_by_embedding`. */
+  similarity?: number;
 }
 
 /**
@@ -1693,10 +1695,14 @@ export class SupabaseService {
   //
   // Same RLS posture as memories: every query is scoped to the signed-in
   // user automatically; only inserts need an explicit user_id because the
-  // with_check policy has no default to fall back on. No embedding
-  // pipeline — the cookbook stays small enough that ILIKE on `title`
-  // is cheap, and the model doesn't need semantic search to find a
-  // recipe it just wrote.
+  // with_check policy has no default to fall back on.
+  //
+  // Embedding pipeline: the cookbook stays small enough that the LLM
+  // tool path (`recipe_list`, `recipe_search`) gets by on ILIKE alone,
+  // but the human-facing drawer search (`RecipeList.svelte`) wires
+  // through the shared embeddings worker so a fuzzy query ("fluffy
+  // potato side") can find a recipe by meaning rather than title
+  // substring. Same claim/save/search RPC trio as wiki/journal.
 
   /**
    * List recipes, optionally filtered by a case-insensitive `title`
@@ -1751,6 +1757,121 @@ export class SupabaseService {
       .maybeSingle();
     if (error) throw new SupabaseError(error.message);
     return (data as Recipe | null) ?? null;
+  }
+
+  /**
+   * Semantic + substring search over recipes. Same merge contract as
+   * `searchWikiArticles` and `searchJournalEntries`: vector hits first
+   * (RPC, ordered by cosine similarity), then ILIKE hits the vector
+   * pass missed, deduped by id and capped at `limit`. Empty `query`
+   * falls back to `listRecipes` (most-recently-updated first) so
+   * callers don't need to special-case the no-query branch.
+   * `queryEmbedding` may be null - callers without Venice get ILIKE-
+   * only results.
+   *
+   * The ILIKE side runs on title only; the semantic side has the
+   * full `title + source + cooklang` blob folded into the embedding
+   * by the worker, so a meaning match can reach ingredient or
+   * technique text the title alone misses.
+   */
+  async searchRecipes(opts: {
+    query: string;
+    queryEmbedding: number[] | null;
+    limit?: number;
+  }): Promise<Recipe[]> {
+    const query = opts.query.trim();
+    const limit = opts.limit ?? 50;
+    if (query.length === 0) return this.listRecipes('', limit);
+
+    const safe = query.replace(/([,()])/g, '\\$1');
+    const pattern = `%${safe}%`;
+
+    const ilikePromise = this.client
+      .from('recipes')
+      .select(
+        'id, title, source, source_url, cooklang, rating, created_at, updated_at'
+      )
+      .ilike('title', pattern)
+      .order('updated_at', { ascending: false })
+      .limit(limit);
+
+    const semanticPromise = opts.queryEmbedding
+      ? this.client.rpc('search_recipes_by_embedding', {
+          query_embedding: opts.queryEmbedding,
+          match_limit: limit,
+        })
+      : Promise.resolve({ data: [] as unknown[], error: null });
+
+    const [ilikeRes, semRes] = await Promise.all([ilikePromise, semanticPromise]);
+    if (ilikeRes.error) throw new SupabaseError(ilikeRes.error.message);
+    const ilikeRows = ((ilikeRes.data ?? []) as unknown[]) as Recipe[];
+    const semanticRows: Recipe[] =
+      semRes.error !== null ? [] : (((semRes.data ?? []) as unknown[]) as Recipe[]);
+
+    const out: Recipe[] = [];
+    const seen = new Set<string>();
+    for (const r of semanticRows) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      out.push(r);
+      if (out.length >= limit) return out;
+    }
+    for (const r of ilikeRows) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      out.push(r);
+      if (out.length >= limit) return out;
+    }
+    return out;
+  }
+
+  /**
+   * Claim the next recipe whose embedding column is null (or whose
+   * prior claim has expired). Used by the embeddings worker via the
+   * `createRecipesSource` adapter. Returns null when the queue is
+   * empty. Mirrors `claimNextPendingWikiArticle`.
+   */
+  async claimNextPendingRecipe(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{
+    id: string;
+    title: string;
+    source: string | null;
+    cooklang: string;
+  } | null> {
+    const { data, error } = await this.client.rpc('claim_next_pending_recipe', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      id: string;
+      title: string;
+      source: string | null;
+      cooklang: string;
+    }[];
+    if (rows.length === 0) return null;
+    return rows[0];
+  }
+
+  async saveRecipeEmbedding(
+    id: string,
+    holderId: string,
+    embedding: number[],
+    model: string
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc(
+      'save_recipe_embedding_if_claimed',
+      {
+        p_id: id,
+        p_holder_id: holderId,
+        p_embedding: embedding,
+        p_embedding_model: model,
+      }
+    );
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
   }
 
   /**
