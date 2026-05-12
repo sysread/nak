@@ -20,9 +20,14 @@ export interface WikiInput {
 
 export interface WikiOutput {
   /**
-   * The model's final (post-tool-loop) text. Always discarded by
-   * production callers - "reply with a single word" per the prompt -
-   * but returned here for debug logs and test assertions.
+   * The model's final (post-tool-loop) text. Used as the operator-
+   * facing reasoning surfaced in the log drawer - the prompt's "Final
+   * reply" block instructs the model to emit a one-or-two-sentence
+   * summary of what it did and why (e.g. "Updated the Nak article
+   * with March 2026 logo details." / "No edits - generic Q&A with no
+   * user-centric subject."). The loop trims and inlines this as
+   * `reasoning="..."` on the finished-thread log line, matching the
+   * shape the journal worker uses.
    */
   finalText: string;
   /**

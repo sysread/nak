@@ -212,7 +212,17 @@ Docs:
   profile) as the
   final user turn, runs `runHeadlessToolLoop` against
   `wikiToolbox`. Side effects (the `wiki_*` tool calls) ARE
-  the output; final text is discarded.
+  the persistent output; the model's final text is a one-or-
+  two-sentence operator-facing summary of its choices ("Updated
+  Nak article with March 2026 logo details" / "No edits -
+  generic Q&A with no user-centric subject") that the cycle
+  driver inlines as `reasoning="..."` on the finished-thread
+  log line, matching the journal worker's shape. The prompt's
+  "Final reply" block instructs the model to surface both
+  decisions made and decisions skipped (e.g. why a topic that
+  came up was deliberately NOT given its own article), so a
+  human skimming the log drawer can see WHY a cycle was a no-op
+  without having to re-read the conversation.
 - `WikiAgent.updateOne({ articleId, currentTitle,
   currentContent, userInstructions, signal })` - the
   main-thread per-article manual entry. Single Venice
@@ -437,6 +447,20 @@ JSON).
   pointer. Without this, every cycle would re-process the
   same "the model decided this conversation has nothing
   worth wiki-ing" conversation forever.
+- **Final-text is load-bearing now.** Both the per-conversation
+  wiki agent and the librarian historically ended with "reply
+  with a single word; the word is discarded" so the tool loop
+  would terminate cleanly. That changed: the final reply is now
+  the operator-facing reasoning surfaced as `reasoning="..."`
+  on the cycle's `finished thread` / `librarian finished` log
+  line. The prompts ask for one or two plain-text sentences
+  naming what the agent did or skipped and why; the loop
+  normalises whitespace and inlines that string. Do not revert
+  the prompt to "single word" without also dropping the
+  reasoning surface on the loop side - users debug "why did the
+  agent decide X" by reading those summaries in the log drawer,
+  and the librarian's "two articles I considered merging but
+  left alone" case is only visible there.
 - **`wiki_create` rephrases unique-violations.** The
   autonomous agent reads tool-error text as guidance; the
   raw Postgres `duplicate key value violates unique

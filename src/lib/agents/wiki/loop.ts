@@ -126,9 +126,19 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
   if (marked) {
+    // Reasoning is the agent's brief operator-facing summary of what
+    // it did and why (see WIKI_AUTONOMOUS_BODY_LINES' "Final reply"
+    // block in ../wiki/prompt.ts). Normalise whitespace so a stray
+    // newline does not break the single-line log convention, and
+    // fall back to a sentinel when the model returned an empty
+    // string (shouldn't happen in production, but a missing summary
+    // is still better surfaced as "(none)" than a dangling `reasoning=""`).
+    const reasoning =
+      runResult.output.finalText.replace(/\s+/g, ' ').trim() || '(none)';
     log.info(
       `finished thread ${claim.threadId} ` +
-        `(${runResult.toolCalls} tool calls over ${runResult.output.inputMessageCount} messages) ${titleTag}`
+        `(${runResult.toolCalls} tool calls over ${runResult.output.inputMessageCount} messages, ` +
+        `reasoning="${reasoning}") ${titleTag}`
     );
     return 'processed';
   }

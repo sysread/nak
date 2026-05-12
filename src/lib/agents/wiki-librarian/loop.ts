@@ -149,9 +149,18 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
 
+  // Reasoning is the agent's brief operator-facing summary of what
+  // it merged / deleted / left alone (see the "Final reply" block in
+  // ../wiki-librarian/prompt.ts). Normalise whitespace so a multi-
+  // line reply still fits on one log line, and fall back to a
+  // sentinel when the model returned empty (shouldn't happen in
+  // production but better surfaced as "(none)" than a dangling
+  // `reasoning=""`).
+  const reasoning =
+    runResult.output.finalText.replace(/\s+/g, ' ').trim() || '(none)';
   log.info(
     `librarian finished (${runResult.toolCalls} tool calls over ` +
-      `${runResult.output.articleCount} articles)`
+      `${runResult.output.articleCount} articles, reasoning="${reasoning}")`
   );
   return 'reviewed';
 }
