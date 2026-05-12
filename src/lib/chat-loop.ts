@@ -403,6 +403,39 @@ export function buildThreadAttachmentsBlock(
 }
 
 /**
+ * Format a millisecond duration as a coarse, conversational
+ * description of elapsed time. The output is intentionally fuzzy -
+ * the model uses this to calibrate its register ("you just asked"
+ * vs "it's been a while") rather than to do arithmetic, so a stepped
+ * bucket matches the LLM's actual decision boundary better than a
+ * precise "22 hours 14 minutes" string.
+ *
+ * Negative or non-finite input returns "just now" - clock skew (a
+ * persisted assistant row whose created_at is slightly in the
+ * future relative to the browser's `Date.now()` because the DB
+ * stamped it on the server side) shouldn't surface as a baffling
+ * "in the future" string in the prompt.
+ */
+function formatRelativeDuration(elapsedMs: number): string {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return 'just now';
+  const sec = Math.floor(elapsedMs / 1000);
+  if (sec < 120) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 10) return 'a few minutes';
+  if (min < 60) return `about ${min} minutes`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return hr === 1 ? 'about an hour' : `about ${hr} hours`;
+  const day = Math.floor(hr / 24);
+  if (day < 2) return 'yesterday';
+  if (day < 14) return `about ${day} days`;
+  const week = Math.floor(day / 7);
+  if (day < 60) return `about ${week} weeks`;
+  const month = Math.floor(day / 30);
+  if (month < 12) return `about ${month} months`;
+  return 'over a year';
+}
+
+/**
  * Build the per-turn `<datetime>` tag that gets prepended to the
  * latest user turn (outside the `<user_message>` boundary, see
  * `tagLastUserMessage` below). The tag carries the wall-clock time
@@ -420,6 +453,13 @@ export function buildThreadAttachmentsBlock(
  *   - `zone`: the IANA zone name itself, so the model can name the
  *     timezone in replies ("it's 3pm in America/Los_Angeles") and
  *     so the value is self-describing if surfaced in logs.
+ *   - `since_last_response`: coarse human-friendly elapsed time
+ *     since the last persisted assistant message, e.g. "about 22
+ *     hours" or "yesterday". OMITTED on the opening turn of a
+ *     thread (no prior assistant message to anchor against) and on
+ *     any call that doesn't supply `lastAssistantTimestamp` - so a
+ *     fresh thread doesn't carry a meaningless "just now" and older
+ *     test fixtures keep matching their datetime regexes.
  *
  * This exists because LLMs have no clock - the model was trained
  * months ago, and without an injected datetime it either refuses
@@ -427,14 +467,20 @@ export function buildThreadAttachmentsBlock(
  * outside `<user_message>` so the boundary contract from the system
  * prompt applies: anything outside the tags is platform-injected
  * metadata, not human input the model should echo or thank the
- * user for.
+ * user for. The `since_last_response` attribute extends that
+ * contract to "how long since you last replied?" - the model can
+ * calibrate register (resume vs. greet, refresh context vs. assume
+ * shared state) without the user having to spell it out.
  *
  * Computed fresh per round in the chat-loop, not once at send-time.
  * Multi-round tool loops can take 30+ seconds; recomputing every
  * round keeps the value honest if the model asks the user "what
  * time is it now?" mid-tool-loop on a long-running turn.
  */
-function buildDatetimeTag(tz: string | null | undefined): string {
+function buildDatetimeTag(
+  tz: string | null | undefined,
+  lastAssistantTimestamp: string | null | undefined,
+): string {
   const now = new Date();
   // Drop sub-second precision: noisy in the prompt and the model
   // doesn't use millisecond resolution for anything.
@@ -473,7 +519,17 @@ function buildDatetimeTag(tz: string | null | undefined): string {
     // calibration.
     zoneAttr = 'UTC';
   }
-  return `<datetime local="${local}" utc="${utc}" zone="${zoneAttr}" />`;
+  let sinceAttr = '';
+  if (typeof lastAssistantTimestamp === 'string' && lastAssistantTimestamp.length > 0) {
+    const anchor = Date.parse(lastAssistantTimestamp);
+    // Date.parse returns NaN for an unparseable input (corrupt row,
+    // legacy timestamp shape). Skip the attribute rather than ship a
+    // garbage value - the boundary contract still holds without it.
+    if (Number.isFinite(anchor)) {
+      sinceAttr = ` since_last_response="${formatRelativeDuration(now.getTime() - anchor)}"`;
+    }
+  }
+  return `<datetime local="${local}" utc="${utc}" zone="${zoneAttr}"${sinceAttr} />`;
 }
 
 /**
@@ -893,6 +949,20 @@ export interface ChatLoopOptions {
    */
   journalTimezone?: string | null;
   /**
+   * ISO 8601 `created_at` of the most recent persisted assistant
+   * message on the thread, used to compute the `since_last_response`
+   * attribute on the per-turn `<datetime>` tag. Null / undefined on
+   * the opening turn of a thread (no prior assistant message); the
+   * datetime tag then omits the attribute rather than shipping a
+   * meaningless "just now". Caller (Chat.svelte) walks its
+   * `messages` array for the latest role==='assistant' row -
+   * synthetic ephemeral injections (intuition / context-recall
+   * <think> blocks) are not persisted and therefore not eligible
+   * anchors, which is the correct semantic: "how long since your
+   * last actual reply to the user?".
+   */
+  lastAssistantTimestamp?: string | null;
+  /**
    * Optional id of the user message that opened this turn. When set,
    * the chat-loop pairs it with the terminal assistant message id and
    * writes a samskara substrate stub at end-of-round (the formation
@@ -1120,6 +1190,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     verbosity,
     emphasisMarkdown,
     journalTimezone,
+    lastAssistantTimestamp,
     userMessageId,
     userName,
     userLocation,
@@ -1518,7 +1589,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // appendix gets buried above a long `history`. Riding inside the
     // user-role content is the position the model is guaranteed to
     // attend to.
-    const datetimeTag = buildDatetimeTag(journalTimezone);
+    const datetimeTag = buildDatetimeTag(journalTimezone, lastAssistantTimestamp);
     const projectedHistory = tagLastUserMessage(history, datetimeTag, titleReminder);
     const requestMessages: VeniceMessage[] = [
       {
@@ -1998,3 +2069,12 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 
   return { finalText, roundsRun, stoppedByLimit, interrupted, conflictDetected, toolboxesEnabled };
 }
+
+// Test hook: the formatter is otherwise integration-tested via the
+// `<datetime>` tag's since_last_response attribute, but the bucket
+// thresholds (just-now / few-minutes / hour / day / week / month /
+// year boundaries) are easier to verify directly than via a
+// runChatLoop fixture per bucket.
+export const __test = {
+  formatRelativeDuration,
+};

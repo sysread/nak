@@ -17,6 +17,7 @@ import {
   toVeniceMessage,
   INTERRUPTED_MARKER,
   buildThreadAttachmentsBlock,
+  __test as chatLoopTest,
 } from '../src/lib/chat-loop';
 import type {
   ChatCompletion,
@@ -457,6 +458,77 @@ describe('toVeniceMessage', () => {
     };
     const out = toVeniceMessage(m);
     expect(out.tool_calls![0].function.arguments).toBe('{}');
+  });
+});
+
+describe('formatRelativeDuration', () => {
+  // Buckets matching the formatter's decision tree. The model uses
+  // these as a register-calibration signal, not for arithmetic, so
+  // the values are deliberately coarse - the goal is for "yesterday"
+  // and "about 3 days" to obviously read as a stale-thread revival
+  // while "a few minutes" and "just now" read as a live continuation.
+  const fmt = chatLoopTest.formatRelativeDuration;
+  const SEC = 1000;
+  const MIN = 60 * SEC;
+  const HR = 60 * MIN;
+  const DAY = 24 * HR;
+
+  it('returns "just now" for <2 minutes and for clock skew', () => {
+    expect(fmt(0)).toBe('just now');
+    expect(fmt(30 * SEC)).toBe('just now');
+    expect(fmt(119 * SEC)).toBe('just now');
+    // Negative ms = anchor is in the future relative to now. Can
+    // happen when the DB stamped created_at server-side and the
+    // browser clock is slightly behind; ship "just now" rather than
+    // "in 4 seconds".
+    expect(fmt(-5 * SEC)).toBe('just now');
+    expect(fmt(NaN)).toBe('just now');
+  });
+
+  it('returns "a few minutes" for 2-10 minutes', () => {
+    expect(fmt(2 * MIN)).toBe('a few minutes');
+    expect(fmt(9 * MIN)).toBe('a few minutes');
+  });
+
+  it('returns "about N minutes" for 10-60 minutes', () => {
+    expect(fmt(10 * MIN)).toBe('about 10 minutes');
+    expect(fmt(45 * MIN)).toBe('about 45 minutes');
+    expect(fmt(59 * MIN)).toBe('about 59 minutes');
+  });
+
+  it('singularizes the hour bucket', () => {
+    expect(fmt(60 * MIN)).toBe('about an hour');
+    expect(fmt(119 * MIN)).toBe('about an hour');
+  });
+
+  it('returns "about N hours" for 2-24 hours', () => {
+    expect(fmt(2 * HR)).toBe('about 2 hours');
+    expect(fmt(22 * HR)).toBe('about 22 hours');
+  });
+
+  it('returns "yesterday" for 24-48 hours', () => {
+    expect(fmt(24 * HR)).toBe('yesterday');
+    expect(fmt(36 * HR)).toBe('yesterday');
+  });
+
+  it('returns "about N days" for 2-14 days', () => {
+    expect(fmt(2 * DAY)).toBe('about 2 days');
+    expect(fmt(13 * DAY)).toBe('about 13 days');
+  });
+
+  it('returns "about N weeks" for 14-60 days', () => {
+    expect(fmt(14 * DAY)).toBe('about 2 weeks');
+    expect(fmt(59 * DAY)).toBe('about 8 weeks');
+  });
+
+  it('returns "about N months" for 60 days to a year', () => {
+    expect(fmt(60 * DAY)).toBe('about 2 months');
+    expect(fmt(300 * DAY)).toBe('about 10 months');
+  });
+
+  it('returns "over a year" beyond ~12 months', () => {
+    expect(fmt(365 * DAY)).toBe('over a year');
+    expect(fmt(5 * 365 * DAY)).toBe('over a year');
   });
 });
 
@@ -934,6 +1006,99 @@ describe('runChatLoop', () => {
     expect(local).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}([+-]\d{2}:\d{2}|Z)$/);
     expect(utc).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
     expect(zone.length).toBeGreaterThan(0);
+  });
+
+  it('omits since_last_response from the datetime tag on the opening turn', async () => {
+    // Opening turn = no prior assistant message to anchor against, so
+    // the caller passes lastAssistantTimestamp=null (or omits it).
+    // Shipping "just now" or any other value here would be a lie -
+    // there is no prior reply. Match the tag with an immediate `/>`
+    // closer to assert the attribute is absent.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      lastAssistantTimestamp: null,
+      signal: new AbortController().signal,
+    });
+    const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
+    const content = userMsg?.content as string;
+    expect(content).toMatch(
+      /^<datetime local="[^"]+" utc="[^"]+" zone="[^"]+" \/>\n<user_message>hi<\/user_message>$/,
+    );
+    expect(content.includes('since_last_response')).toBe(false);
+  });
+
+  it('includes since_last_response in the datetime tag when lastAssistantTimestamp is supplied', async () => {
+    // Mid-thread turns carry a coarse human-friendly elapsed string
+    // so the model can calibrate register ("you just answered" vs
+    // "it's been a few days"). We assert the attribute lands with a
+    // sensible bucket - exact wording is the formatter's job and is
+    // covered separately.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    // 22 hours ago - "about 22 hours" bucket.
+    const anchor = new Date(Date.now() - 22 * 60 * 60 * 1000).toISOString();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      lastAssistantTimestamp: anchor,
+      signal: new AbortController().signal,
+    });
+    const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
+    const content = userMsg?.content as string;
+    expect(content).toMatch(
+      /^<datetime local="[^"]+" utc="[^"]+" zone="[^"]+" since_last_response="about 22 hours" \/>\n<user_message>hi<\/user_message>$/,
+    );
+  });
+
+  it('omits since_last_response when lastAssistantTimestamp is unparseable', async () => {
+    // A corrupt / unexpected timestamp string (Date.parse returns NaN)
+    // is treated as "no anchor available" rather than emitting a
+    // garbage value. The rest of the datetime tag still rides; only
+    // the elapsed attribute is dropped.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      lastAssistantTimestamp: 'not-a-date',
+      signal: new AbortController().signal,
+    });
+    const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
+    const content = userMsg?.content as string;
+    expect(content.includes('since_last_response')).toBe(false);
   });
 
   it('persists a plain text response in one round', async () => {
