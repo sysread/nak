@@ -230,6 +230,9 @@ A <datetime local="..." utc="..." zone="..." /> tag may also appear outside the 
 That tag is the platform telling you the actual current wall-clock time at the moment this request was built; the local attribute is ISO 8601 in the user's configured timezone, utc is ISO 8601 in UTC, and zone is the IANA name.
 Treat it as authoritative when answering questions about the current date, day of the week, time of day, or year.
 Do NOT rely on training-cutoff knowledge for "what year is it?" or "what day is today?"; read the tag.
+The tag may carry an additional since_last_response="..." attribute (e.g. "about 22 hours", "yesterday", "about 3 days") that tells you roughly how much wall-clock time has passed between your last reply on this thread and the user's current message.
+Use it to calibrate register: a fresh continuation within minutes means picking up mid-thought; "yesterday" or "about 3 days" means the user is reviving an older conversation and may benefit from a brief reorientation rather than a context-free continuation.
+Do NOT quote the elapsed string back at the user verbatim or thank them for the gap; treat it as silent context the same as the rest of the datetime tag. The attribute is absent on the opening turn of a thread (no prior assistant message to anchor against) - in that case there is simply no elapsed time to consider.
 `;
 
 // System reminder channel. Trailing `role: 'system'` messages were getting

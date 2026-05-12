@@ -2416,6 +2416,27 @@
         .map((m) => toVeniceMessage(m, { visionSpec: ctx.tierSpec })),
     ];
 
+    // Anchor for the `<datetime>` tag's since_last_response attribute.
+    // Walk the persisted messages from the end and return the
+    // created_at of the most recent role==='assistant' row that isn't
+    // marked for regenerate-from-here (pendingDeleteSet) - those rows
+    // are about to be replaced and shouldn't count as "your last
+    // reply". null on the opening turn (no prior assistant) and on a
+    // regenerate that drops every prior assistant row; the chat-loop
+    // omits the attribute in both cases. Recomputed at call time so
+    // an auto-retry after a 429 sees newly-persisted assistant rows
+    // from earlier tool rounds (the chat-loop persists mid-turn
+    // assistant rows before any final-text row lands).
+    const findLastAssistantTimestamp = (): string | null => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m.role !== 'assistant') continue;
+        if (pendingDeleteSet.has(m.id)) continue;
+        return m.created_at;
+      }
+      return null;
+    };
+
     // Throttle streamingText updates to ~2Hz while the response
     // arrives. Every assignment drives <Markdown> to re-run marked
     // + DOMPurify + highlight.js over the full growing buffer, so
@@ -2511,6 +2532,7 @@
           userName: ctx.sendUserName,
           userLocation: ctx.sendUserLocation,
           journalTimezone: app.journalTimezone || null,
+          lastAssistantTimestamp: findLastAssistantTimestamp(),
           intuitionModelId: agentModel('intuition').id,
           intuitionMood: intuitionMoodArg,
           // Topic-boundary recall rides the same trigger machinery as

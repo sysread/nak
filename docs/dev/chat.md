@@ -320,6 +320,25 @@ A chat turn goes:
   every round of the loop, not once at send-time, so a long
   multi-tool turn reflects actual elapsed time.
 
+  On mid-thread turns the same tag also carries
+  `since_last_response="..."` (e.g. "about 22 hours",
+  "yesterday", "about 3 days"). The chat-loop receives the
+  most recent persisted assistant message's `created_at` via
+  the `lastAssistantTimestamp` option (Chat.svelte walks its
+  messages array for the latest role==='assistant' row that
+  isn't in `pendingDeleteSet`), and `formatRelativeDuration`
+  buckets the wall-clock delta into a coarse human-friendly
+  string. The model uses it to calibrate register - resume
+  vs. re-orient - on a thread the user revived hours or days
+  later. The attribute is OMITTED on the opening turn (no
+  prior assistant to anchor against) and when the supplied
+  timestamp doesn't parse, so a fresh thread never carries
+  a misleading "just now". Synthetic ephemeral injections
+  (intuition / context-recall `<think>` blocks) aren't
+  persisted and therefore not eligible anchors - the semantic
+  is "how long since you last actually replied to the user?",
+  not "since any assistant-role row appeared on the wire."
+
   The system prompt unconditionally mentions URL scraping so the
   model doesn't refuse "what does this page say?" with a generic
   "I can't browse the web" when a scraped page is sitting in the
