@@ -32,10 +32,11 @@
   }
   const { onSelect }: Props = $props();
 
-  // Same window the old in-modal search used. Long enough that the
-  // semantic-search request fires once at the end of a typing burst,
-  // short enough that intent-to-result still feels responsive.
-  const SEARCH_DEBOUNCE_MS = 200;
+  // Long enough that a moderate typist (~200ms inter-keystroke
+  // intervals) doesn't fire one Venice embed per keystroke; short
+  // enough that a deliberate query feels responsive. Matches the
+  // other drawer searches.
+  const SEARCH_DEBOUNCE_MS = 400;
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 

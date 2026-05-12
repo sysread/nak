@@ -3835,7 +3835,11 @@
   /** AbortController for the in-flight Venice embed call — newer queries cancel older ones. */
   let searchAbort: AbortController | null = null;
 
-  const SEARCH_DEBOUNCE_MS = 200;
+  // Long enough that a moderate typist (~200ms inter-keystroke
+  // intervals) doesn't fire one Venice embed per keystroke; short
+  // enough that a deliberate query feels responsive. Matches the
+  // other drawer searches.
+  const SEARCH_DEBOUNCE_MS = 400;
 
   $effect(() => {
     // Reactively read searchQuery — if it changes, the cleanup below

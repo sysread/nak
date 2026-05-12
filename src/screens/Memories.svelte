@@ -49,7 +49,7 @@
   // Debounce keystrokes inside the relation-picker so rapid typing
   // doesn't fire one embedding request per character. Same window the
   // store uses for its main search.
-  const SEARCH_DEBOUNCE_MS = 200;
+  const SEARCH_DEBOUNCE_MS = 400;
 
   // The single memory currently displayed. Selection lives on
   // `route.memory` so it survives a refresh / back / forward and can

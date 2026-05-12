@@ -24,7 +24,11 @@
   }
   const { onSelect }: Props = $props();
 
-  const SEARCH_DEBOUNCE_MS = 200;
+  // Long enough that a moderate typist (~200ms inter-keystroke
+  // intervals) doesn't fire one Venice embed per keystroke; short
+  // enough that a deliberate query feels responsive. Matches the
+  // other drawer searches.
+  const SEARCH_DEBOUNCE_MS = 400;
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 

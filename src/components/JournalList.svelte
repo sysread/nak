@@ -43,7 +43,11 @@
   let searchError = $state<string | null>(null);
   let searchAbort: AbortController | null = null;
 
-  const SEARCH_DEBOUNCE_MS = 200;
+  // Long enough that a moderate typist (~200ms inter-keystroke
+  // intervals) doesn't fire one Venice embed per keystroke; short
+  // enough that a deliberate query feels responsive. Matches the
+  // other drawer searches.
+  const SEARCH_DEBOUNCE_MS = 400;
   // Match the journal_search tool's max so the sidebar surfaces every
   // day the assistant could reach. Aggregated by date downstream so
   // the actual row count in the drawer is the unique-date count.
