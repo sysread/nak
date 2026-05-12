@@ -1737,6 +1737,10 @@
     // Opening a thread starts in follow-bottom mode; the autoscroll
     // effect lands the view on the newest messages once they load.
     followBottom = true;
+    // Cancel any post-load scroll watchdog still running for the
+    // previously-open thread - the new thread's loadMessages will
+    // start a fresh one once its content commits.
+    cancelPostLoadScroll();
     // Tool-call timings are a session-scoped display aid; nav to another
     // thread drops them so the previous thread's pills don't leak into
     // the new one.
@@ -1793,8 +1797,15 @@
       // commits the new messages. Re-check activeThreadId post-tick: a
       // fast thread-hop during the await would have us scrolling the
       // wrong list otherwise.
+      //
+      // The transcript keeps growing after the initial tick as image
+      // attachments decode, markdown highlighting runs, KaTeX mounts,
+      // and inline panels paint. pinBottomWhileSettling() keeps the
+      // view glued to the bottom across that window so the user lands
+      // on the last message, not on the last message minus an image's
+      // worth of pixels.
       await tick();
-      if (activeThreadId === id) scrollToBottom(false);
+      if (activeThreadId === id) pinBottomWhileSettling();
     } catch (err) {
       error = { text: err instanceof Error ? err.message : String(err) };
     }
@@ -3334,6 +3345,62 @@
       top: el.scrollHeight,
       behavior: smooth ? 'smooth' : 'auto',
     });
+  }
+
+  // Re-pin to bottom while async-rendering content (image attachments,
+  // markdown highlighting, KaTeX, the cohort/intuition panels) keeps
+  // growing the transcript after the initial post-load snap. Without
+  // this, opening a thread lands the view at the bottom of the
+  // *currently-rendered* content, then the last message drifts upward
+  // as images and other deferred work finish painting - the user
+  // arrives at the conversation already scrolled away from the
+  // newest message.
+  //
+  // Strategy: poll scrollHeight on rAF. Re-snap whenever it grows;
+  // exit when it's been stable for STABLE_FRAMES frames, or the
+  // budget runs out, or the user scrolls up (followBottom flips),
+  // or another loadMessages supersedes us.
+  let postLoadScrollRaf = 0;
+  let postLoadScrollToken = 0;
+
+  function cancelPostLoadScroll(): void {
+    if (postLoadScrollRaf !== 0) {
+      cancelAnimationFrame(postLoadScrollRaf);
+      postLoadScrollRaf = 0;
+    }
+  }
+
+  function pinBottomWhileSettling(): void {
+    cancelPostLoadScroll();
+    const el = messagesEl;
+    if (!el) return;
+    const token = ++postLoadScrollToken;
+    const STABLE_FRAMES = 6;
+    const TIMEOUT_MS = 3000;
+    const start = performance.now();
+    let lastHeight = el.scrollHeight;
+    let stable = 0;
+    scrollToBottom(false);
+
+    const step = () => {
+      postLoadScrollRaf = 0;
+      // Superseded by a newer load, container unmounted, or user
+      // scrolled up - drop the watchdog.
+      if (token !== postLoadScrollToken) return;
+      if (!messagesEl || messagesEl !== el) return;
+      if (!followBottom) return;
+      if (performance.now() - start > TIMEOUT_MS) return;
+      const h = el.scrollHeight;
+      if (h !== lastHeight) {
+        lastHeight = h;
+        stable = 0;
+        scrollToBottom(false);
+      } else if (++stable >= STABLE_FRAMES) {
+        return;
+      }
+      postLoadScrollRaf = requestAnimationFrame(step);
+    };
+    postLoadScrollRaf = requestAnimationFrame(step);
   }
 
   function onMessagesScroll(): void {
