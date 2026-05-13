@@ -37,6 +37,63 @@ import { analyzeImageSchema } from './analyze_image.schema';
 
 const log = createLogger('analyze-image-tool');
 
+// Max attempts (initial + retries) for the vision sub-call. Vision
+// completions occasionally come back empty or truncated mid-sentence
+// - the SSE stream finishes before the model has actually wrapped up,
+// or the provider returns a finish_reason that says otherwise. Three
+// attempts is the same shape the streaming chat path uses for its
+// rate-limit retries and is enough that a single transient blip
+// doesn't surface to the user as a half-sentence "answer".
+const MAX_VISION_ATTEMPTS = 3;
+
+// Characters that signal a vision description finished on a complete
+// thought. `.`, `!`, `?`, `…` are sentence terminators; the quote and
+// bracket variants close a sentence that ended inside them; backtick
+// and asterisk catch responses whose tail is a closed code/emphasis
+// span. We don't include digits or letters - those would over-fire.
+const TERMINAL_TAIL_CHARS = new Set([
+  '.', '!', '?', '…',
+  '"', '”', // closing double quote
+  "'", '’', // closing single quote
+  ')', ']', '}',
+  '`', '*', '_',
+]);
+
+/**
+ * Detect responses that look like the vision stream ended before the
+ * model finished. Two signals:
+ *
+ *   1. `finish_reason` is anything other than 'stop'. 'length' means
+ *      the model hit the maxTokens cap; null / 'content_filter' /
+ *      'error' / unknown values all indicate the provider aborted
+ *      rather than completed.
+ *   2. The trimmed text does not end on terminal punctuation. Vision
+ *      descriptions are prose and effectively always end on a period
+ *      or close-quote; a tail like "description of the" with no
+ *      terminator is the observable signature of an SSE that closed
+ *      mid-clause even when the provider reported finish_reason='stop'.
+ *
+ * Returns a short reason string for the log drawer when truncated, or
+ * null when the response looks complete.
+ */
+function detectTruncation(
+  text: string,
+  finishReason: string | null
+): string | null {
+  if (finishReason && finishReason !== 'stop') {
+    return `finish_reason=${finishReason}`;
+  }
+  if (finishReason === null) {
+    return 'no finish_reason in response';
+  }
+  if (text.length === 0) return null; // caller handles empty separately
+  const lastChar = text.slice(-1);
+  if (!TERMINAL_TAIL_CHARS.has(lastChar)) {
+    return 'response does not end on terminal punctuation';
+  }
+  return null;
+}
+
 export const analyzeImage: ToolDef = {
   ...analyzeImageSchema,
   async execute(args, ctx) {
@@ -111,35 +168,69 @@ export const analyzeImage: ToolDef = {
       },
     ];
 
-    // The vision sub-call uses agentModel('visionAnalysis').id, which
-    // is decoupled from any user-facing tier so a tier retarget
-    // doesn't silently break image analysis. Uses the non-streaming
-    // completion endpoint - this is a background sub-call with no UI
-    // to render token-by-token into, and the one-shot path avoids the
-    // SSE-only failure modes other sub-tools used to hit.
-    const result = await ctx.venice.completeChat({
-      model: agentModel('visionAnalysis').id,
-      messages,
-      signal: ctx.signal,
-      maxTokens: 1024,
-    });
+    // Vision sub-call retry loop. The non-streaming completion endpoint
+    // is normally a one-shot, but the vision model has been observed to
+    // return:
+    //   - an empty body (provider blip; no deltas before the stream
+    //     closed)
+    //   - a body that ends mid-clause ("...description of the") even
+    //     when finish_reason is 'stop' - the SSE finished before the
+    //     model actually did
+    //   - a body with finish_reason='length' (rare with maxTokens=1024
+    //     against a describe-this-image prompt, but possible if the
+    //     provider silently caps lower)
+    // The retry burns another vision call but produces a usable answer
+    // ~95% of the time on the second attempt. Each retry logs a warning
+    // to the log drawer so a sticky failure stays visible to the user
+    // rather than silently looping.
+    let lastFinishReason: string | null = null;
+    let lastLength = 0;
+    for (let attempt = 1; attempt <= MAX_VISION_ATTEMPTS; attempt += 1) {
+      const result = await ctx.venice.completeChat({
+        model: agentModel('visionAnalysis').id,
+        messages,
+        signal: ctx.signal,
+        maxTokens: 1024,
+      });
 
-    const trimmed = result.text.trim();
-    if (trimmed.length === 0) {
-      // Empty completion means the vision sub-call produced no text -
-      // typically a transient provider blip (model overloaded, network
-      // dropped mid-stream, or the stream finished before any delta
-      // arrived). Throw rather than return `{answer: ""}` so the model
-      // sees a real tool error and can apologise / retry, rather than
-      // guessing the tool itself is broken and emitting a different
-      // filename on retry.
-      log.warn(`empty vision response for "${filename}"`);
-      throw new Error(
-        `Vision model returned no text for "${filename}". This is usually a transient provider blip - try again, or describe to the user that the image analysis failed.`
-      );
+      const trimmed = result.text.trim();
+      lastFinishReason = result.finishReason;
+      lastLength = trimmed.length;
+
+      if (trimmed.length === 0) {
+        log.warn(
+          `empty vision response for "${filename}" (attempt ${attempt}/${MAX_VISION_ATTEMPTS}, finish_reason=${result.finishReason ?? 'null'})`
+        );
+        continue;
+      }
+
+      const truncationReason = detectTruncation(trimmed, result.finishReason);
+      if (truncationReason) {
+        // Capture the tail so the drawer entry is enough to diagnose
+        // the failure without needing to re-run with extra logging.
+        const tail = trimmed.slice(-80);
+        log.warn(
+          `truncated vision response for "${filename}" (attempt ${attempt}/${MAX_VISION_ATTEMPTS}, ${truncationReason}, ${trimmed.length} chars); tail=${JSON.stringify(tail)}`
+        );
+        continue;
+      }
+
+      log.info(`done: ${trimmed.length} chars`);
+      return { answer: trimmed };
     }
 
-    log.info(`done: ${trimmed.length} chars`);
-    return { answer: trimmed };
+    // All attempts came back empty or truncated. Throw rather than
+    // return a partial answer so the main model sees a real tool error
+    // and can apologise / retry / describe the failure - returning a
+    // half-sentence as if it were the answer causes the main model to
+    // confidently relay nonsense to the user.
+    if (lastLength === 0) {
+      throw new Error(
+        `Vision model returned no text for "${filename}" after ${MAX_VISION_ATTEMPTS} attempts. This is usually a transient provider blip - try again, or describe to the user that the image analysis failed.`
+      );
+    }
+    throw new Error(
+      `Vision model returned truncated output for "${filename}" after ${MAX_VISION_ATTEMPTS} attempts (last finish_reason=${lastFinishReason ?? 'null'}). The image analysis sub-model is unstable right now - retry the tool, or describe to the user that the image analysis failed.`
+    );
   },
 };
