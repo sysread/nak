@@ -176,9 +176,12 @@ export const analyzeImage: ToolDef = {
     //   - a body that ends mid-clause ("...description of the") even
     //     when finish_reason is 'stop' - the SSE finished before the
     //     model actually did
-    //   - a body with finish_reason='length' (rare with maxTokens=1024
-    //     against a describe-this-image prompt, but possible if the
-    //     provider silently caps lower)
+    //   - a body with finish_reason='length' when the model genuinely
+    //     runs out of budget. 1024 was too tight for dense photos -
+    //     the model burned a few hundred tokens on preamble and then
+    //     truncated mid-description. 8196 is the new cap; still
+    //     bounded, but enough headroom that a verbose describe-this-
+    //     photo response wraps up naturally.
     // The retry burns another vision call but produces a usable answer
     // ~95% of the time on the second attempt. Each retry logs a warning
     // to the log drawer so a sticky failure stays visible to the user
@@ -190,7 +193,7 @@ export const analyzeImage: ToolDef = {
         model: agentModel('visionAnalysis').id,
         messages,
         signal: ctx.signal,
-        maxTokens: 1024,
+        maxTokens: 8196,
       });
 
       const trimmed = result.text.trim();
