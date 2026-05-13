@@ -5621,6 +5621,64 @@ create policy "wiki_article_sources are self-deletable" on public.wiki_article_s
     )
   );
 
+-- Wiki changelog. One row per individual mutation - create, update, or
+-- delete - written by every wiki write path: the per-conversation wiki
+-- agent's tool calls, the librarian's tool calls, and the user's direct
+-- edits in Wiki.svelte. The `message` column is the commit-message-style
+-- one-line summary the writer supplied at the time of the change; the
+-- librarian's broader run summary is implicit from the cluster of rows
+-- sharing a created_at neighbourhood.
+--
+-- `article_id` is `on delete set null` so a deleted article doesn't take
+-- its history with it. The `title_at_change` snapshot is captured at
+-- write time so a row whose article has been deleted still reads
+-- meaningfully in the changelog UI without a join.
+--
+-- Rows are append-only - no policy allowing update or delete (rebuilds
+-- via reset_wiki_data go through a separate path; see the same-named
+-- function in this file).
+create table if not exists public.wiki_changelog (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  article_id uuid references public.wiki_articles(id) on delete set null,
+  -- 'create' | 'update' | 'delete'. Constrained at the column level so a
+  -- typo'd kind value can't land silently.
+  kind text not null check (kind in ('create', 'update', 'delete')),
+  -- Snapshot of the article title as it was at the time of this change.
+  -- For create/update this is the new title; for delete it's the title
+  -- the article had immediately before deletion. Allows the changelog
+  -- UI to render meaningfully even when article_id has been nulled by
+  -- the FK cascade.
+  title_at_change text not null,
+  -- The commit-message-style explanation supplied by the writer. Capped
+  -- at 200 chars to match the column-level CHECK that mirrors the tool
+  -- schemas; longer prose belongs in the article body, not here.
+  message text not null check (char_length(message) between 1 and 200),
+  created_at timestamptz not null default now()
+);
+
+-- Primary access pattern is "page through the user's history newest-
+-- first", so the chronological index is the index that pays its way.
+-- A separate per-article index would let the article panel show its own
+-- timeline cheaply, but no surface needs that today - add it when one
+-- does.
+create index if not exists wiki_changelog_user_created_idx
+  on public.wiki_changelog (user_id, created_at desc);
+
+alter table public.wiki_changelog enable row level security;
+
+drop policy if exists "wiki_changelog are self-selectable" on public.wiki_changelog;
+create policy "wiki_changelog are self-selectable" on public.wiki_changelog
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "wiki_changelog are self-insertable" on public.wiki_changelog;
+create policy "wiki_changelog are self-insertable" on public.wiki_changelog
+  for insert with check (auth.uid() = user_id);
+
+-- No update or delete policies. The changelog is append-only from the
+-- client's perspective; bulk wipes go through reset_wiki_data which
+-- runs as the security-definer owner and isn't subject to RLS.
+
 -- See Also RPC. Returns wiki articles topically related to the
 -- target article, using a dynamically-calibrated similarity floor:
 -- the minimum cosine similarity between the target's embedding and
@@ -5792,6 +5850,11 @@ begin
       using errcode = '28000';
   end if;
   delete from public.wiki_articles where user_id = v_user;
+  -- A wipe is a fresh start. Surviving changelog rows would point at
+  -- nothing (article_id nulled by the FK cascade) and read confusingly
+  -- alongside an empty wiki, so we drop them here as part of the same
+  -- reset rather than leaving orphans.
+  delete from public.wiki_changelog where user_id = v_user;
   update public.threads
      set last_wiki_processed_msg_id = null,
          wiki_claim_holder = null,

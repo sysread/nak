@@ -575,6 +575,50 @@ export interface WikiArticleRelated {
   similarity: number;
 }
 
+/**
+ * One row of the wiki changelog: a single create / update / delete
+ * recorded at the time of the mutation. `article_id` is null when the
+ * underlying article has since been deleted (the FK uses ON DELETE SET
+ * NULL); `title_at_change` is the snapshot taken at write time so the
+ * row still reads meaningfully without a join. See the matching table
+ * + RLS in `supabase/schema.sql:wiki_changelog`.
+ */
+export type WikiChangelogKind = 'create' | 'update' | 'delete';
+export interface WikiChangelogEntry {
+  id: string;
+  article_id: string | null;
+  kind: WikiChangelogKind;
+  title_at_change: string;
+  message: string;
+  created_at: string;
+}
+
+function coerceWikiChangelogKind(raw: unknown): WikiChangelogKind | null {
+  if (raw === 'create' || raw === 'update' || raw === 'delete') return raw;
+  return null;
+}
+
+function coerceWikiChangelogEntry(
+  raw: Record<string, unknown>
+): WikiChangelogEntry | null {
+  const id = raw.id;
+  const kind = coerceWikiChangelogKind(raw.kind);
+  if (typeof id !== 'string' || !kind) return null;
+  const articleIdRaw = raw.article_id;
+  return {
+    id,
+    article_id:
+      typeof articleIdRaw === 'string' && articleIdRaw.length > 0
+        ? articleIdRaw
+        : null,
+    kind,
+    title_at_change:
+      typeof raw.title_at_change === 'string' ? raw.title_at_change : '',
+    message: typeof raw.message === 'string' ? raw.message : '',
+    created_at: String(raw.created_at ?? ''),
+  };
+}
+
 export interface Message {
   id: string;
   thread_id: string;
@@ -3165,6 +3209,71 @@ export class SupabaseService {
         title,
         similarity: typeof similarity === 'number' ? similarity : 0,
       });
+    }
+    return out;
+  }
+
+  /**
+   * Append a wiki-changelog row. Called by every wiki write path: the
+   * three tools (`wiki_create`/`wiki_update`/`wiki_delete`), the
+   * librarian's same three tools, and the user's direct edits in
+   * Wiki.svelte. Throws on a failed insert so callers can decide
+   * whether to surface the error or swallow it - the tool path
+   * currently swallows (the mutation already landed; a missed
+   * changelog row is a smaller harm than a confusing post-success
+   * error).
+   *
+   * `article_id` is null for deletes (the article is already gone by
+   * the time this lands). For create/update it points at the live
+   * article; if the article is later deleted the FK cascades to null
+   * but `title_at_change` keeps the row meaningful.
+   */
+  async createWikiChangelogEntry(args: {
+    article_id: string | null;
+    kind: WikiChangelogKind;
+    title_at_change: string;
+    message: string;
+  }): Promise<void> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const title = args.title_at_change.trim();
+    const message = args.message.trim();
+    if (title.length === 0 || message.length === 0) return;
+    const { error } = await this.client.from('wiki_changelog').insert({
+      user_id: session.user.id,
+      article_id: args.article_id,
+      kind: args.kind,
+      title_at_change: title,
+      message,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Paged listing of the wiki changelog, newest first. `before` is the
+   * exclusive cursor in `created_at desc` order - pass the last entry's
+   * `created_at` from the prior page to fetch the next one. The
+   * (user_id, created_at desc) index makes this a one-row-per-page
+   * range scan rather than a sort, so the modal can lazy-load deep
+   * history cheaply.
+   */
+  async listWikiChangelog(opts: {
+    limit?: number;
+    before?: string | null;
+  } = {}): Promise<WikiChangelogEntry[]> {
+    const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
+    let q = this.client
+      .from('wiki_changelog')
+      .select('id, article_id, kind, title_at_change, message, created_at')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (opts.before) q = q.lt('created_at', opts.before);
+    const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    const out: WikiChangelogEntry[] = [];
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      const entry = coerceWikiChangelogEntry(row);
+      if (entry) out.push(entry);
     }
     return out;
   }

@@ -72,7 +72,7 @@ describe('wiki_create source attribution', () => {
     const { svc, spies } = mockSupabase();
     const ctx = ctxFor(svc, 'thread-abc');
     const result = await wikiCreate.execute(
-      { title: 'Foo', content: 'Hello world.' },
+      { title: 'Foo', content: 'Hello world.', message: 'add Foo' },
       ctx
     );
     expect(spies.createWikiArticle).toHaveBeenCalledTimes(1);
@@ -86,7 +86,10 @@ describe('wiki_create source attribution', () => {
   it('skips the attach when ctx.threadId is empty (would never happen via the agent, but is the right no-op)', async () => {
     const { svc, spies } = mockSupabase();
     const ctx = ctxFor(svc, '');
-    await wikiCreate.execute({ title: 'Foo', content: 'body' }, ctx);
+    await wikiCreate.execute(
+      { title: 'Foo', content: 'body', message: 'add Foo' },
+      ctx
+    );
     expect(spies.attachWikiArticleSources).not.toHaveBeenCalled();
   });
 
@@ -97,7 +100,7 @@ describe('wiki_create source attribution', () => {
     });
     const ctx = ctxFor(svc, 'thread-abc');
     const result = await wikiCreate.execute(
-      { title: 'Foo', content: 'body' },
+      { title: 'Foo', content: 'body', message: 'add Foo' },
       ctx
     );
     expect((result as WikiArticle).id).toBe('art-new');
@@ -108,7 +111,10 @@ describe('wiki_update source attribution', () => {
   it('autonomous: attaches ctx.threadId after a successful update', async () => {
     const { svc, spies } = mockSupabase();
     const ctx = ctxFor(svc, 'thread-abc');
-    await wikiUpdate.execute({ id: 'art-1', content: 'new body' }, ctx);
+    await wikiUpdate.execute(
+      { id: 'art-1', content: 'new body', message: 'tweak body' },
+      ctx
+    );
     expect(spies.updateWikiArticle).toHaveBeenCalledTimes(1);
     expect(spies.attachWikiArticleSources).toHaveBeenCalledTimes(1);
     expect(spies.attachWikiArticleSources).toHaveBeenCalledWith('art-1', [
@@ -123,6 +129,7 @@ describe('wiki_update source attribution', () => {
       {
         id: 'art-1',
         content: 'new body',
+        message: 'tweak body',
         source_thread_ids: ['t-real-1', 't-real-2', 't-fake'],
       },
       ctx
@@ -147,6 +154,7 @@ describe('wiki_update source attribution', () => {
       {
         id: 'art-1',
         content: 'new body',
+        message: 'tweak body',
         source_thread_ids: ['t-fake-1', 't-fake-2'],
       },
       ctx
@@ -165,6 +173,7 @@ describe('wiki_update source attribution', () => {
       {
         id: 'art-1',
         content: 'new body',
+        message: 'tweak body',
         source_thread_ids: ['t-extra', 't-fake'],
       },
       ctx
@@ -180,7 +189,10 @@ describe('wiki_update source attribution', () => {
   it('manual-like (no threadId, no source_thread_ids): attaches nothing', async () => {
     const { svc, spies } = mockSupabase();
     const ctx = ctxFor(svc, '');
-    await wikiUpdate.execute({ id: 'art-1', content: 'new body' }, ctx);
+    await wikiUpdate.execute(
+      { id: 'art-1', content: 'new body', message: 'tweak body' },
+      ctx
+    );
     expect(spies.updateWikiArticle).toHaveBeenCalledTimes(1);
     expect(spies.attachWikiArticleSources).not.toHaveBeenCalled();
   });
@@ -188,9 +200,17 @@ describe('wiki_update source attribution', () => {
   it('rejects when neither title nor content is provided', async () => {
     const { svc } = mockSupabase();
     const ctx = ctxFor(svc, 'thread-abc');
-    await expect(wikiUpdate.execute({ id: 'art-1' }, ctx)).rejects.toThrow(
-      /at least one of title or content/i
-    );
+    await expect(
+      wikiUpdate.execute({ id: 'art-1', message: 'no-op?' }, ctx)
+    ).rejects.toThrow(/at least one of title or content/i);
+  });
+
+  it('rejects when message is missing', async () => {
+    const { svc } = mockSupabase();
+    const ctx = ctxFor(svc, 'thread-abc');
+    await expect(
+      wikiUpdate.execute({ id: 'art-1', content: 'new body' }, ctx)
+    ).rejects.toThrow(/message is required/i);
   });
 });
 

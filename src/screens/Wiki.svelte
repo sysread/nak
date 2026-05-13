@@ -23,6 +23,7 @@
   import {
     MAX_WIKI_TITLE_CHARS,
     MAX_WIKI_CONTENT_CHARS,
+    MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
   } from '$lib/wiki';
   import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
   import { WikiAgent, type WikiUpdateOneResult } from '$lib/agents/wiki/agent';
@@ -156,12 +157,19 @@
   let editingId = $state<string | null>(null);
   let editTitle = $state('');
   let editContent = $state('');
+  // One-line "what did you change and why" message that lands in the
+  // wiki changelog when the user clicks Save. The agent paths supply
+  // their own message via the tool's `message` arg or the manual
+  // agent's `reason` field; this state is just the direct-edit form's
+  // input box.
+  let editMessage = $state('');
   let saveState = $state<SaveState>({ kind: 'idle' });
 
   function startEdit(a: WikiArticle): void {
     editingId = a.id;
     editTitle = a.title;
     editContent = a.content;
+    editMessage = '';
     saveState = { kind: 'idle' };
     cancelDelete();
     cancelManualUpdate();
@@ -172,6 +180,7 @@
     editingId = null;
     editTitle = '';
     editContent = '';
+    editMessage = '';
     saveState = { kind: 'idle' };
   }
 
@@ -180,6 +189,7 @@
     const id = editingId;
     const title = editTitle.trim();
     const content = editContent;
+    const message = editMessage.trim();
     if (!title) {
       saveState = { kind: 'error', message: 'Title is required.' };
       return;
@@ -202,11 +212,40 @@
       };
       return;
     }
+    if (!message) {
+      saveState = {
+        kind: 'error',
+        message: 'Add a one-line change message before saving.',
+      };
+      return;
+    }
+    if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
+      saveState = {
+        kind: 'error',
+        message: `Change message must be ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS} chars or fewer.`,
+      };
+      return;
+    }
     saveState = { kind: 'saving' };
     try {
       const updated = await app.supabase.updateWikiArticle(id, { title, content });
       patchWikiRow(id, updated);
+      // Append the changelog row after the update lands. Best-effort -
+      // the article already updated, and a failed log write should
+      // not roll back a successful edit. Errors here are silent for
+      // the same reason as the tool path (see wiki_update.ts).
+      try {
+        await app.supabase.createWikiChangelogEntry({
+          article_id: id,
+          kind: 'update',
+          title_at_change: updated.title,
+          message,
+        });
+      } catch {
+        // best-effort; see comment above.
+      }
       emitWikiChange();
+      editMessage = '';
       saveState = { kind: 'saved' };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -235,6 +274,11 @@
   let composing = $state(false);
   let composeTitle = $state('');
   let composeContent = $state('');
+  // Same as editMessage above - direct-edit commit message that lands
+  // in the wiki changelog. The compose path always logs a 'create'
+  // entry; the user-supplied message is the only thing here that's
+  // not a side-effect of the article fields themselves.
+  let composeMessage = $state('');
   let composeBusy = $state(false);
   let composeError = $state<string | null>(null);
 
@@ -242,6 +286,7 @@
     composing = true;
     composeTitle = '';
     composeContent = '';
+    composeMessage = '';
     composeError = null;
     cancelEdit();
     cancelDelete();
@@ -253,6 +298,7 @@
     composing = false;
     composeTitle = '';
     composeContent = '';
+    composeMessage = '';
     composeError = null;
   }
 
@@ -260,6 +306,7 @@
     if (!app.supabase) return;
     const title = composeTitle.trim();
     const content = composeContent;
+    const message = composeMessage.trim();
     if (!title) {
       composeError = 'Title is required.';
       return;
@@ -276,15 +323,36 @@
       composeError = `Content must be ${MAX_WIKI_CONTENT_CHARS} chars or fewer.`;
       return;
     }
+    if (!message) {
+      composeError = 'Add a one-line change message before saving.';
+      return;
+    }
+    if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
+      composeError = `Change message must be ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS} chars or fewer.`;
+      return;
+    }
     composeBusy = true;
     composeError = null;
     try {
       const created = await app.supabase.createWikiArticle({ title, content });
       addWikiRow(created);
+      // Append the changelog row. Best-effort - see the matching
+      // comment in saveEdit above.
+      try {
+        await app.supabase.createWikiChangelogEntry({
+          article_id: created.id,
+          kind: 'create',
+          title_at_change: created.title,
+          message,
+        });
+      } catch {
+        // best-effort; see comment above.
+      }
       emitWikiChange();
       composing = false;
       composeTitle = '';
       composeContent = '';
+      composeMessage = '';
       // Surface the new article in the panel so the user lands on
       // their edit straight away.
       navigate({ wiki_article_id: created.id });
@@ -305,10 +373,16 @@
   // --- Delete flow -------------------------------------------------------
 
   let deletingId = $state<string | null>(null);
+  // Commit message captured in the delete confirmation strip. Required
+  // before the destructive call fires; the article title at this point
+  // gets snapshotted into the changelog row's `title_at_change` so the
+  // log still reads after the article itself is gone.
+  let deleteMessage = $state('');
   let deleteError = $state<string | null>(null);
 
   function requestDelete(a: WikiArticle): void {
     deletingId = a.id;
+    deleteMessage = '';
     deleteError = null;
     cancelEdit();
     cancelManualUpdate();
@@ -316,17 +390,47 @@
 
   function cancelDelete(): void {
     deletingId = null;
+    deleteMessage = '';
     deleteError = null;
   }
 
   async function confirmDelete(): Promise<void> {
     if (!deletingId || !app.supabase) return;
     const id = deletingId;
+    const message = deleteMessage.trim();
+    if (!message) {
+      deleteError = 'Add a one-line change message before deleting.';
+      return;
+    }
+    if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
+      deleteError = `Change message must be ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS} chars or fewer.`;
+      return;
+    }
+    // Capture the title BEFORE the delete so the changelog row can
+    // snapshot it - same reasoning as wiki_delete.ts. Reads off the
+    // in-store row to avoid a round-trip.
+    const article = wikiStore.results.find((a) => a.id === id) ?? null;
     try {
       await app.supabase.deleteWikiArticle(id);
       removeWikiRow(id);
+      if (article) {
+        try {
+          await app.supabase.createWikiChangelogEntry({
+            // Same as the tool path - article_id stays null because
+            // the row is already gone; the snapshot title carries
+            // the meaning forward.
+            article_id: null,
+            kind: 'delete',
+            title_at_change: article.title,
+            message,
+          });
+        } catch {
+          // best-effort; the delete already landed.
+        }
+      }
       emitWikiChange();
       deletingId = null;
+      deleteMessage = '';
       deleteError = null;
       if (route.wiki_article_id === id) navigate({ wiki_article_id: null });
     } catch (err) {
@@ -342,7 +446,10 @@
   let manualTargetId = $state<string | null>(null);
   let manualInstructions = $state('');
   let manualBusy = $state(false);
-  let manualPreview = $state<{ title: string; content: string } | null>(null);
+  // `reason` is the agent's one-line commit-style summary - carried
+  // alongside the preview so the UI can show it AND use it as the
+  // changelog message when the user accepts. See WikiAgent.updateOne.
+  let manualPreview = $state<{ title: string; content: string; reason: string } | null>(null);
   let manualNoop = $state<{ reason: string } | null>(null);
   let manualError = $state<string | null>(null);
   let manualAccepting = $state(false);
@@ -435,7 +542,11 @@
       // resurface a stale preview.
       if (manualController !== ctl || manualTargetId !== article.id) return;
       if (result.kind === 'preview') {
-        manualPreview = { title: result.title, content: result.content };
+        manualPreview = {
+          title: result.title,
+          content: result.content,
+          reason: result.reason,
+        };
       } else {
         manualNoop = { reason: result.reason };
       }
@@ -453,12 +564,33 @@
 
   async function acceptManualUpdate(article: WikiArticle): Promise<void> {
     if (!app.supabase || !manualPreview) return;
+    // Snapshot the agent's reason BEFORE the await so a stale-result
+    // race (which cancels manualPreview) can't null it out mid-flight.
+    // The reason is the changelog message for this edit - the agent
+    // produced it alongside the preview content, so it always
+    // accurately describes what's being applied here.
+    const reason = manualPreview.reason;
+    const targetTitle = manualPreview.title;
+    const targetContent = manualPreview.content;
     manualAccepting = true;
     try {
       const updated = await app.supabase.updateWikiArticle(article.id, {
-        title: manualPreview.title,
-        content: manualPreview.content,
+        title: targetTitle,
+        content: targetContent,
       });
+      // Append the changelog row. Best-effort, same as the direct-
+      // edit path - the article already updated; a failed log write
+      // shouldn't surface as an error to the user.
+      try {
+        await app.supabase.createWikiChangelogEntry({
+          article_id: updated.id,
+          kind: 'update',
+          title_at_change: updated.title,
+          message: reason,
+        });
+      } catch {
+        // best-effort; see comment above.
+      }
       // Fade out the original article BEFORE the in-store patch so
       // the user sees the old version dissolve, then the new content
       // snaps in. The DB write has already succeeded at this point;
@@ -740,6 +872,23 @@
               {composeContent.length} / {MAX_WIKI_CONTENT_CHARS}
             </p>
           </div>
+          <div class="form-row">
+            <!-- Changelog commit message. Required: lands in the wiki
+                 changelog so the user has an audit trail of why this
+                 article was added. Mirrors the same field on the edit
+                 and delete strips. -->
+            <label for="wiki-new-message">Change message</label>
+            <input
+              id="wiki-new-message"
+              type="text"
+              bind:value={composeMessage}
+              maxlength={MAX_WIKI_CHANGELOG_MESSAGE_CHARS}
+              disabled={composeBusy}
+              placeholder={'One line, e.g. "Add Maya, my sister"'}
+              autocomplete="off"
+              spellcheck="true"
+            />
+          </div>
           {#if composeError}
             <p class="error">{composeError}</p>
           {/if}
@@ -800,6 +949,23 @@
             <p class="subtle char-count">
               {editContent.length} / {MAX_WIKI_CONTENT_CHARS}
             </p>
+          </div>
+          <div class="form-row">
+            <!-- Same changelog commit message as the compose form.
+                 Cleared back to blank on Save so a follow-up edit
+                 has to write its own message rather than inheriting
+                 the prior one. -->
+            <label for="wiki-edit-message">Change message</label>
+            <input
+              id="wiki-edit-message"
+              type="text"
+              bind:value={editMessage}
+              maxlength={MAX_WIKI_CHANGELOG_MESSAGE_CHARS}
+              disabled={saveState.kind === 'saving'}
+              placeholder={'One line, e.g. "Fix Maya\'s job title"'}
+              autocomplete="off"
+              spellcheck="true"
+            />
           </div>
           {#if saveState.kind === 'error'}
             <p class="error">{saveState.message}</p>
@@ -897,6 +1063,13 @@
                     Title would change to: <strong>{manualPreview.title}</strong>
                   </p>
                 {/if}
+                <!-- Show the agent's commit-style summary so the user
+                     knows what will land in the wiki changelog if they
+                     accept. The agent supplied this alongside the
+                     content; no separate input is needed. -->
+                <p class="subtle wiki-preview-reason">
+                  Changelog entry: <em>{manualPreview.reason}</em>
+                </p>
                 <div
                   class="wiki-content"
                   role="presentation"
@@ -1027,6 +1200,24 @@
         {#if deletingId === a.id}
           <div class="wiki-confirm-strip">
             <p>Delete this article? This cannot be undone.</p>
+            <div class="form-row">
+              <!-- Required: the title snapshot is captured for the
+                   changelog row but the WHY isn't, so the user has to
+                   supply it. Lands as a one-line entry in the wiki
+                   changelog with article_id=null (the article is gone
+                   after the delete; the title snapshot is what makes
+                   the row legible). -->
+              <label for="wiki-delete-message">Change message</label>
+              <input
+                id="wiki-delete-message"
+                type="text"
+                bind:value={deleteMessage}
+                maxlength={MAX_WIKI_CHANGELOG_MESSAGE_CHARS}
+                placeholder={'One line, e.g. "Remove draft duplicate of Maya"'}
+                autocomplete="off"
+                spellcheck="true"
+              />
+            </div>
             {#if deleteError}
               <p class="error">{deleteError}</p>
             {/if}

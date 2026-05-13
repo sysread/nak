@@ -401,6 +401,16 @@ edit on**:
    on the basis of "the user said something different today"
    alone - in that case, update.
 
+**Every wiki_create / wiki_update / wiki_delete call requires a
+\`message\` parameter.** Treat it like a git commit summary: one
+imperative-voice line under ~200 chars naming WHAT this edit does
+and WHY ("Add Maya's new job at Bar (Nov 2026 chat)", "Fold the
+draft sister article into household", "Delete out-of-scope Kermit
+protocol entry"). These messages land in the user's wiki
+changelog, which is the audit surface they use to understand what
+the agent has been doing. Don't paste in the entire conversation
+or restate the article body; one line, what changed, why.
+
 **Use memory_search to ground article content in established
 facts.** The reflection agent extracts atomic facts about the user
 (people in their life, projects they work on, preferences,
@@ -516,7 +526,7 @@ expand the article into a general explainer of an external topic
     "action": "update" | "noop",
     "title": <final title, possibly unchanged>,
     "content": <final article body, full text - not a diff>,
-    "reason": <one-sentence string, optional on update, required on noop>
+    "reason": <one-sentence string, required on BOTH update and noop>
   }
 
 Use \`action: "noop"\` when the instructions do not actually require
@@ -527,4 +537,9 @@ user why no change was made.
 
 On \`action: "update"\`, include the FULL final article in \`content\`,
 not a diff or a patch. The UI will preview your output and the user
-will accept or reject.`;
+will accept or reject. The \`reason\` field on update is a git-
+commit-style summary of WHAT you changed and WHY ("Add Maya's new
+job at Bar per user instructions", "Tighten the lead paragraph,
+preserve all dated facts"); when the user accepts the preview it
+lands in the wiki changelog. One imperative line, under ~200
+chars, plain text.`;

@@ -20,7 +20,11 @@
  *     direct edits don't add to the bibliography.
  */
 import type { ToolDef } from './types';
-import { MAX_WIKI_TITLE_CHARS, MAX_WIKI_CONTENT_CHARS } from '../wiki';
+import {
+  MAX_WIKI_TITLE_CHARS,
+  MAX_WIKI_CONTENT_CHARS,
+  MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
+} from '../wiki';
 import { wikiUpdateSchema } from './wiki_update.schema';
 import { emitWikiChange } from '../wiki-events';
 
@@ -48,6 +52,13 @@ export const wikiUpdate: ToolDef = {
   async execute(args, ctx) {
     const id = typeof args.id === 'string' ? args.id : '';
     if (!id) throw new Error('id is required');
+    const message = typeof args.message === 'string' ? args.message.trim() : '';
+    if (!message) throw new Error('message is required');
+    if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
+      throw new Error(
+        `message exceeds ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS}-char limit (got ${message.length})`
+      );
+    }
     const patch: { title?: string; content?: string } = {};
     if (typeof args.title === 'string' && args.title.trim().length > 0) {
       const title = args.title.trim();
@@ -97,6 +108,21 @@ export const wikiUpdate: ToolDef = {
         // the whole call and surfacing a confusing error to a model
         // that already wrote the right prose.
       }
+    }
+
+    // Append the changelog row with the post-update title so the
+    // entry references the article by its current name. Best-effort
+    // for the same reason source-attribution is - the mutation
+    // already landed.
+    try {
+      await ctx.supabase.createWikiChangelogEntry({
+        article_id: article.id,
+        kind: 'update',
+        title_at_change: article.title,
+        message,
+      });
+    } catch {
+      // best-effort; see comment above.
     }
 
     emitWikiChange();

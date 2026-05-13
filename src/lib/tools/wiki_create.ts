@@ -15,7 +15,11 @@
  * attribution flow lives on the tool side.
  */
 import type { ToolDef } from './types';
-import { MAX_WIKI_TITLE_CHARS, MAX_WIKI_CONTENT_CHARS } from '../wiki';
+import {
+  MAX_WIKI_TITLE_CHARS,
+  MAX_WIKI_CONTENT_CHARS,
+  MAX_WIKI_CHANGELOG_MESSAGE_CHARS,
+} from '../wiki';
 import { wikiCreateSchema } from './wiki_create.schema';
 import { emitWikiChange } from '../wiki-events';
 
@@ -24,8 +28,10 @@ export const wikiCreate: ToolDef = {
   async execute(args, ctx) {
     const title = typeof args.title === 'string' ? args.title.trim() : '';
     const content = typeof args.content === 'string' ? args.content : '';
+    const message = typeof args.message === 'string' ? args.message.trim() : '';
     if (!title) throw new Error('title is required');
     if (!content) throw new Error('content is required');
+    if (!message) throw new Error('message is required');
     if (title.length > MAX_WIKI_TITLE_CHARS) {
       throw new Error(
         `title exceeds ${MAX_WIKI_TITLE_CHARS}-char limit (got ${title.length})`
@@ -34,6 +40,11 @@ export const wikiCreate: ToolDef = {
     if (content.length > MAX_WIKI_CONTENT_CHARS) {
       throw new Error(
         `content exceeds ${MAX_WIKI_CONTENT_CHARS}-char limit (got ${content.length}); split or trim`
+      );
+    }
+    if (message.length > MAX_WIKI_CHANGELOG_MESSAGE_CHARS) {
+      throw new Error(
+        `message exceeds ${MAX_WIKI_CHANGELOG_MESSAGE_CHARS}-char limit (got ${message.length})`
       );
     }
     try {
@@ -52,6 +63,22 @@ export const wikiCreate: ToolDef = {
         } catch {
           // best-effort; see comment above.
         }
+      }
+      // Append the changelog row. Best-effort - the article is
+      // already created at this point; a failure here would leave
+      // an article on disk without a matching changelog entry, which
+      // is a smaller harm than throwing back to the agent and
+      // tempting it into a retry that would hit the unique-title
+      // constraint.
+      try {
+        await ctx.supabase.createWikiChangelogEntry({
+          article_id: article.id,
+          kind: 'create',
+          title_at_change: article.title,
+          message,
+        });
+      } catch {
+        // best-effort; see comment above.
       }
       emitWikiChange();
       return article;

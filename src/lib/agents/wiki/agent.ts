@@ -73,9 +73,16 @@ function messageToVenice(m: Message): VeniceMessage {
  * tell "model produced an updated article to preview" apart from
  * "model decided no change is warranted" without sniffing strings.
  * Genuine errors (parse failure, abort, network) still throw.
+ *
+ * The preview variant carries `reason` (the agent's one-line summary
+ * of what it changed and why) so the UI can render it next to the
+ * preview AND pass it through as the wiki-changelog message on
+ * Accept. The agent has the most context for that summary - prompting
+ * the user a second time for "describe the edit you just asked for"
+ * would be busywork.
  */
 export type WikiUpdateOneResult =
-  | { kind: 'preview'; title: string; content: string }
+  | { kind: 'preview'; title: string; content: string; reason: string }
   | { kind: 'noop'; reason: string };
 
 /**
@@ -340,6 +347,21 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
         'The model returned an update with empty content. Try again.'
       );
     }
-    return { kind: 'preview', title: finalTitle, content: finalContent };
+    // Older / non-conforming completions may omit `reason` on an
+    // update. Fall back to a generic snippet of the user's
+    // instructions so the changelog row still carries SOMETHING
+    // useful rather than nothing - this is preferable to throwing
+    // and forcing the user to retry just because the model
+    // forgot a field.
+    const reason =
+      decision.reason && decision.reason.length > 0
+        ? decision.reason
+        : `Manual edit: ${instructions.slice(0, 140)}`;
+    return {
+      kind: 'preview',
+      title: finalTitle,
+      content: finalContent,
+      reason,
+    };
   }
 }
