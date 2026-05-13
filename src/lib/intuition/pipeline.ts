@@ -60,16 +60,12 @@ const log = createLogger('intuition');
  * disableThinking is non-negotiable: the fast tier currently routes
  * to GLM-4.7, a reasoning model that by default emits chain-of-
  * thought through `reasoning_content` BEFORE writing any text into
- * `content`. With our small maxTokens cap (~400-500), the budget
- * gets eaten by the CoT preamble and `content` comes back empty
- * with `finish_reason: 'length'`. Perception then sees an empty
- * string and aborts the whole pipeline; the cache stays null
- * forever, the brain icon never appears, and the user reads it as
- * "the feature is broken." Web_search hit the same trap and fixed
- * it the same way (see src/lib/tools/web_search.ts for the long-
- * form rationale). Bypassing reasoning gives every token to the
- * answer; for an internal-monologue prompt the reasoning pass
- * wouldn't have added much anyway.
+ * `content`. Even with the 2048 floor we keep `disableThinking` set
+ * so the budget goes to the answer instead of a CoT preamble that
+ * sometimes still runs long enough to eat the cap. Web_search hit
+ * the same trap and fixed it the same way; for an internal-
+ * monologue prompt the reasoning pass wouldn't have added much
+ * anyway.
  */
 async function callOnce(
   venice: VeniceClient,
@@ -191,11 +187,11 @@ export async function runIntuitionPipeline(
     return null;
   }
 
-  // Stage 1: perception. The cap is generous for a 2-3 sentence
-  // ask plus the classification prefix line; a routine turn lands
-  // around 80-150 tokens. The headroom exists so a model hitting
-  // an unusual situation can write a longer paragraph without
-  // truncating mid-thought.
+  // Stage 1: perception. 2048 is the project-wide floor on agent
+  // sub-call caps (see CLAUDE.md / analyze_image post-mortem); a
+  // routine turn lands around 80-150 tokens, so the cap is mostly
+  // headroom against an unusual situation where the model wants to
+  // write a longer paragraph without truncating mid-thought.
   let perceptionRaw: string;
   try {
     perceptionRaw = await callOnce(
@@ -204,7 +200,7 @@ export async function runIntuitionPipeline(
       PERCEPTION_PROMPT,
       transcript,
       signal,
-      300
+      2048
     );
   } catch (err) {
     if (err instanceof VeniceError && err.kind === 'rate_limit') {
@@ -228,18 +224,17 @@ export async function runIntuitionPipeline(
     async (name): Promise<[DriveName, string | null]> => {
       const systemPrompt = `${DRIVE_BASE_PROMPT}\n\n${DRIVE_PROMPTS[name]}`;
       try {
-        // 250 tokens fits the 2-3 sentence default with a buffer for
-        // the alarmed-drive case where it earns the air to push
-        // harder. Lower than perception/synthesis because each drive
-        // speaks in one voice; only the synthesis stage needs to
-        // weave multiple threads together.
+        // 2048 is the project-wide floor on agent sub-call caps. The
+        // prompt's 2-3 sentence target lands well under that; the
+        // headroom only matters when an alarmed drive earns the air
+        // to push harder.
         const text = await callOnce(
           venice,
           model,
           systemPrompt,
           `# My perception of the discussion:\n${perception}`,
           signal,
-          250
+          2048
         );
         if (text.length === 0) return [name, null];
         log.debug(`drive:${name}`, { reaction: text });
@@ -296,12 +291,10 @@ export async function runIntuitionPipeline(
             `# Drive Reactions\n${drivesText}`,
         },
       ],
-      // 300 tokens fits the 2-3 sentence target with headroom for
-      // the strong-convergence case where the synthesis legitimately
-      // needs to push harder. Anything tighter risks clipping a
-      // genuinely-loud aggregate; anything looser invites the model
-      // to ramble even though the prompt asks it not to.
-      maxTokens: 300,
+      // 2048 is the project-wide floor on agent sub-call caps. The
+      // prompt's 2-3 sentence target lands well under that; the
+      // prompt itself is what discourages rambling, not the cap.
+      maxTokens: 2048,
       // Same rationale as callOnce above - the fast tier is a
       // reasoning model and we cannot afford to spend the maxTokens
       // budget on a CoT preamble that never reaches the content

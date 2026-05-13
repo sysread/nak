@@ -127,21 +127,20 @@ export const webSearch: ToolDef = {
     // at (currently deepseek-v4-flash; see AGENT_MODELS in
     // src/lib/models). That id is a reasoning model that, by
     // default, emits its chain-of-thought through `reasoning_content`
-    // BEFORE writing any answer text into `content`. The previous
-    // 400-token cap was sized for a non-reasoning model where the
-    // entire budget went to the
-    // answer; on a reasoning model the budget got eaten by the CoT
-    // preamble and the model hit `finish_reason: 'length'` with
-    // empty `content`, surfacing as the "no answer text" error
-    // every call. Lowering reasoning_effort to 'low' shrunk the CoT
-    // but didn't eliminate it - long-reasoning queries still ate
-    // through the cap.
+    // BEFORE writing any answer text into `content`. A tight cap
+    // got eaten by the CoT preamble and the model hit
+    // `finish_reason: 'length'` with empty `content`. disable_thinking
+    // is Venice's full off switch: the model skips the reasoning
+    // pass entirely, so the entire token budget goes to the user-
+    // visible answer.
     //
-    // disable_thinking is Venice's full off switch: the model skips
-    // the reasoning pass entirely, so the entire token budget goes
-    // to the user-visible answer. With CoT off, maxTokens=600 is
-    // ample headroom for the prompt's 2-4 sentence target (~150
-    // tokens) and any inline ^N^ citation markup.
+    // 8196 is the heightened ceiling for web-search and recall-shape
+    // sub-calls - a single query can pull a dense, citation-heavy
+    // summary and we'd rather pay the tokens than truncate a
+    // synthesis the user is going to act on. The 2048 project-wide
+    // floor would also work for the typical 2-4 sentence answer,
+    // but web-search has a long tail of "summarise these N hits"
+    // queries where 2048 is uncomfortably close to the wire.
     let result;
     try {
       result = await ctx.venice.completeChat({
@@ -151,7 +150,7 @@ export const webSearch: ToolDef = {
         webSearch: 'on',
         webCitations: true,
         disableThinking: true,
-        maxTokens: 600,
+        maxTokens: 8196,
       });
     } catch (err) {
       // Surface the underlying Venice error into the log drawer

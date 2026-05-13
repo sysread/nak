@@ -63,11 +63,13 @@ describe('web_search integration (live Venice)', () => {
     'captures the raw completeChat shape for a simple time-sensitive query',
     async () => {
       const venice = new VeniceClient({ apiKey });
-      // Mirror the exact wire shape `web_search` builds: same system
-      // prompt, same maxTokens, same web-search flags. The only
-      // difference is we call completeChat directly (rather than
-      // through the tool) so we can see Venice's full response, not
-      // just the post-trim throw the tool would do on empty text.
+      // Historical regression witness: the 400-token cap (without
+      // disableThinking) is the failure shape web_search hit before
+      // the fix - the reasoning model's CoT preamble ate the budget
+      // and `content` came back empty. We hold the value at 400 on
+      // purpose so this test stays a useful repro for "did the
+      // budget-vs-CoT bug come back?"; the production tool now uses
+      // an 8196 cap + disableThinking and is well clear of this trap.
       const result = await venice.completeChat({
         model: agentModel('webSearch').id,
         messages: [

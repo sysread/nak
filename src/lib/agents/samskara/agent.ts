@@ -140,7 +140,7 @@ export class SamskaraAgent {
     });
     let raw: string;
     try {
-      raw = await callOnce(this.venice, this.model, ASSIMILATOR_PROMPT, payload, signal, 400);
+      raw = await callOnce(this.venice, this.model, ASSIMILATOR_PROMPT, payload, signal, 2048);
     } catch (err) {
       // Rate-limit re-throws so the cycle driver can map to its
       // long back-off (60s) rather than the short error back-off
@@ -182,7 +182,7 @@ export class SamskaraAgent {
     const payload = JSON.stringify({ a, b });
     let raw: string;
     try {
-      raw = await callOnce(this.venice, this.model, RELATOR_PROMPT, payload, signal, 200);
+      raw = await callOnce(this.venice, this.model, RELATOR_PROMPT, payload, signal, 2048);
     } catch (err) {
       // Rate-limit re-throws so the cycle driver can map to its
       // long back-off (60s) rather than the short error back-off
@@ -223,7 +223,7 @@ export class SamskaraAgent {
     const payload = JSON.stringify(cluster);
     let raw: string;
     try {
-      raw = await callOnce(this.venice, this.model, MINTER_PROMPT, payload, signal, 400);
+      raw = await callOnce(this.venice, this.model, MINTER_PROMPT, payload, signal, 2048);
     } catch (err) {
       // Rate-limit re-throws so the cycle driver can map to its
       // long back-off (60s) rather than the short error back-off
@@ -272,7 +272,7 @@ export class SamskaraAgent {
     });
     let raw: string;
     try {
-      raw = await callOnce(this.venice, this.model, REACTION_PROMPT, payload, signal, 400);
+      raw = await callOnce(this.venice, this.model, REACTION_PROMPT, payload, signal, 2048);
     } catch (err) {
       // Rate-limit re-throws so the cycle driver can map to its
       // long back-off (60s) rather than the short error back-off
@@ -319,7 +319,7 @@ export class SamskaraAgent {
         COMPOUND_SUMMARY_PROMPT,
         payload,
         signal,
-        500
+        2048
       );
     } catch (err) {
       // Rate-limit re-throws so the cycle driver can map to its
