@@ -3457,7 +3457,8 @@ h1 {
 .journal-backdrop,
 .help-backdrop,
 .memories-backdrop,
-.settings-backdrop {
+.settings-backdrop,
+.wiki-changelog-backdrop {
   position: fixed;
   inset: 0;
   z-index: 30;
@@ -3478,13 +3479,15 @@ h1 {
   .journal-backdrop,
   .help-backdrop,
   .memories-backdrop,
-  .settings-backdrop {
+  .settings-backdrop,
+  .wiki-changelog-backdrop {
     padding: 0;
   }
   .journal-shell,
   .help-shell,
   .memories-shell,
-  .settings-shell {
+  .settings-shell,
+  .wiki-changelog-shell {
     border-radius: 0;
     border-left-width: 0;
     border-right-width: 0;

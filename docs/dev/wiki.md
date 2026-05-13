@@ -52,6 +52,16 @@ Schema:
   column and an atomic-claim RPC `claim_wiki_librarian_run(int)`
   that returns true at most once per `min_interval_seconds` across
   all devices.
+  Plus, for the changelog: a `wiki_changelog` table (one row per
+  create/update/delete; `article_id` is `on delete set null` so a
+  deleted article doesn't take its history with it; `title_at_change`
+  snapshot keeps the row readable when `article_id` is nulled;
+  `message` has a column-level `char_length` between 1 and 200
+  CHECK that mirrors `MAX_WIKI_CHANGELOG_MESSAGE_CHARS`) plus
+  append-only RLS (select + insert only, no update/delete) and a
+  `(user_id, created_at desc)` index for the modal's cursor-paged
+  listing. `reset_wiki_data` clears `wiki_changelog` alongside
+  `wiki_articles` so a wipe leaves no orphan history.
 
 Data layer (main thread + workers):
 
@@ -63,9 +73,15 @@ Data layer (main thread + workers):
   `markThreadWikiProcessedIfClaimed`,
   `claimNextPendingWikiArticle`, `saveWikiArticleEmbedding`. The
   `UserSettings` interface gains `wikiAutomaticEnabled?: boolean`.
+  For the changelog: `WikiChangelogKind` union,
+  `WikiChangelogEntry` interface, `coerceWikiChangelogEntry`
+  helper, plus the `createWikiChangelogEntry` (append) and
+  `listWikiChangelog({ limit, before })` (cursor-paged listing)
+  methods.
 - `src/lib/wiki.ts` - the search helper
   (`searchWikiArticlesSemantic`) plus the `MAX_WIKI_TITLE_CHARS`
-  (200) and `MAX_WIKI_CONTENT_CHARS` (16000) ceilings.
+  (200), `MAX_WIKI_CONTENT_CHARS` (16000), and
+  `MAX_WIKI_CHANGELOG_MESSAGE_CHARS` (200) ceilings.
 - `src/lib/wiki-store.svelte.ts` - the shared `wikiStore`,
   `runWikiSearch`, and the `patchWikiRow` / `removeWikiRow` /
   `addWikiRow` mutators the panel and tools call.
@@ -79,7 +95,12 @@ Tools:
   `alwaysOnToolbox`).
 - `src/lib/tools/wiki_create.{schema.,}ts`,
   `wiki_update.{schema.,}ts`, `wiki_delete.{schema.,}ts` - the
-  agent-only write tools.
+  agent-only write tools. Each takes a required `message` param
+  (the git-commit-style one-line summary that lands in the wiki
+  changelog) and appends a `wiki_changelog` row via
+  `supabase.createWikiChangelogEntry` after the underlying
+  mutation. Best-effort logging: a failed changelog write does
+  not roll back the mutation that already succeeded.
 - `src/lib/tools/wiki_toolbox.ts` - the per-conversation agent's
   toolbox; bundles wiki search/create/update/delete plus
   read-only `memory_search` so the agent can ground article
@@ -185,9 +206,25 @@ UI:
   input + alphabetical sort.
 - `src/screens/Wiki.svelte` - main-panel article view, edit
   form, create form, delete confirmation, and the "ask agent
-  to update" preview/accept/cancel flow.
+  to update" preview/accept/cancel flow. Each direct-edit flow
+  carries a required one-line change-message input that lands
+  in the wiki changelog after the mutation. The "ask agent to
+  update" preview surfaces the agent's `reason` field as the
+  changelog entry it would write; Accept passes it through.
+- `src/screens/WikiChangelog.svelte` - the changelog modal
+  itself. Cursor-paged list (`listWikiChangelog`); kind chips
+  (Added/Edited/Deleted), per-entry article link when the
+  article still exists, plain title snapshot for deletes.
+  Lazy-loaded from `Chat.svelte` on `route.modal ===
+  'wiki-changelog'`. Listens on `onWikiChange` so a write that
+  happens while the modal is open refreshes the first page.
 - `src/screens/Chat.svelte` - new tab, drawer branch,
   main-panel branch, top-bar branch, change-event listener.
+  Top-bar branch carries the `librarian-run-btn` (sparkles)
+  next to the `wiki-changelog-btn` (clock); the latter
+  navigates to `modal: 'wiki-changelog'`. Lazy-import effect
+  for `WikiChangelog.svelte` parallels the other modal
+  components.
 - `src/screens/Settings.svelte` - new "Wiki" group with the
   `wikiAutomaticEnabled` toggle.
 
@@ -491,23 +528,37 @@ verification list):
    The drawer reflects each change via `WIKI_CHANGE_EVENT`.
 5. **Ask agent to update - preview / accept / cancel /
    try again.** Open an article, type instructions ->
-   preview populates -> Accept persists, Cancel dismisses,
-   Try again regenerates.
-6. **Autonomous agent fires the day after.** Substantive
+   preview populates with the agent's `reason` rendered above
+   the body -> Accept persists and writes a changelog row
+   using the agent's `reason` as the message; Cancel
+   dismisses; Try again regenerates.
+6. **Changelog modal.** Click the clock icon next to the
+   sparkles librarian button in the Wiki top bar. Modal opens
+   with the user's create/update/delete history newest-first,
+   kind chips visible. Click an Edit/Add entry's title -> the
+   drawer flips to Wiki and the article opens. Delete-kind
+   titles are non-interactive. "Load more" appends the next
+   50 rows; the button hides once the tail is reached.
+7. **Required commit messages.** The direct create / edit /
+   delete strips on the Wiki panel all require a one-line
+   change message before the destructive action enables; the
+   agent tools enforce the same via the `message` parameter
+   on each schema.
+8. **Autonomous agent fires the day after.** Substantive
    conversation today: `claim_next_thread_for_wiki` returns
    nothing. Thread whose newest message is yesterday-in-tz:
    agent runs, `wiki_search` then `wiki_create` /
    `wiki_update` lands, `last_wiki_processed_msg_id`
    advances.
-7. **Eligibility re-opens after continuation.** New
+9. **Eligibility re-opens after continuation.** New
    message in that thread today -> RPC returns nothing
    again until tomorrow.
-8. **Recall tool.** Ask the chat "what do you know about
-   my green tea preference?" - the model issues
-   `wiki_search` and grounds its answer.
-9. **Embeddings filled.** New article -> `embedding is
-   null` initially, populates ~30s later.
-10. **Settings toggle.** Disable "Automatic wiki" ->
+10. **Recall tool.** Ask the chat "what do you know about
+    my green tea preference?" - the model issues
+    `wiki_search` and grounds its answer.
+11. **Embeddings filled.** New article -> `embedding is
+    null` initially, populates ~30s later.
+12. **Settings toggle.** Disable "Automatic wiki" ->
     worker stops, no claims. Enable -> resumes.
-11. `mise run check` green; no `(!)` build warnings or
+13. `mise run check` green; no `(!)` build warnings or
     `plugin:vite:reporter` chunking warnings introduced.

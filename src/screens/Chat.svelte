@@ -118,6 +118,7 @@
   type HelpComponent = typeof import('./Help.svelte').default;
   type SamskaraComponent = typeof import('./Samskara.svelte').default;
   type IntuitionComponent = typeof import('./Intuition.svelte').default;
+  type WikiChangelogComponent = typeof import('./WikiChangelog.svelte').default;
   import RecipeList from '../components/RecipeList.svelte';
   import JournalList from '../components/JournalList.svelte';
   import MemoryList from '../components/MemoryList.svelte';
@@ -192,6 +193,7 @@
   const showHelp = $derived(route.modal === 'help');
   const showSamskara = $derived(route.modal === 'samskara');
   const showIntuition = $derived(route.modal === 'intuition');
+  const showWikiChangelog = $derived(route.modal === 'wiki-changelog');
 
   // Lazy components. Each holds the loaded constructor in $state
   // (cached after first import) and an $effect that fires the
@@ -210,6 +212,7 @@
   let HelpComp: HelpComponent | null = $state(null);
   let SamskaraComp: SamskaraComponent | null = $state(null);
   let IntuitionComp: IntuitionComponent | null = $state(null);
+  let WikiChangelogComp: WikiChangelogComponent | null = $state(null);
   $effect(() => {
     if (sessionLoaded && !session && !AuthComp) {
       void import('./Auth.svelte').then((m) => (AuthComp = m.default));
@@ -262,6 +265,13 @@
   $effect(() => {
     if (showSamskara && !SamskaraComp) {
       void import('./Samskara.svelte').then((m) => (SamskaraComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (showWikiChangelog && !WikiChangelogComp) {
+      void import('./WikiChangelog.svelte').then(
+        (m) => (WikiChangelogComp = m.default)
+      );
     }
   });
   $effect(() => {
@@ -4718,6 +4728,26 @@
               <path d="M19 14l.6 1.5L21 16l-1.4.5L19 18l-.6-1.5L17 16l1.4-.5L19 14z" />
             </svg>
           </button>
+          <!-- Wiki changelog launcher. Sits next to the librarian button
+               so the two "audit the wiki agent's behavior" affordances
+               (run it now / see what it has been doing) live side by
+               side. The modal itself is the `wiki-changelog` modal
+               value on the route; navigating preserves the rest of
+               the URL so closing the modal lands the user back on
+               the same tab. -->
+          <button
+            class="secondary icon-btn wiki-changelog-btn"
+            onclick={() => navigate({ modal: 'wiki-changelog' })}
+            title="Wiki changelog"
+            aria-label="Wiki changelog"
+          >
+            <!-- Feather "clock" - reads as "history / audit log". -->
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          </button>
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Wiki</span>
           </div>
@@ -5741,6 +5771,9 @@
       onClose={() => navigate({ modal: null })}
       threads={loadedThreads}
     />
+  {/if}
+  {#if showWikiChangelog && WikiChangelogComp}
+    <WikiChangelogComp onClose={() => navigate({ modal: null })} />
   {/if}
   <!-- Cookbook, Journal, and Memories now render inline in the main
        panel (drawerTab === 'recipes' / 'journal' / 'memories') rather

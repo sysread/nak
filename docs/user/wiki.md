@@ -93,9 +93,11 @@ Clearing the search returns the alphabetical listing.
 ## Adding an article
 
 Click the empty-state link **add a new one**, or click **Wiki** in the
-drawer with no article selected. The inline form takes a title and
-content; **Save** persists immediately and surfaces the new article in
-the panel.
+drawer with no article selected. The inline form takes a title,
+content, and a one-line **change message** (a git-style summary of
+why you're adding the article - lands in the [changelog](#changelog)).
+**Save** persists immediately and surfaces the new article in the
+panel.
 
 Titles are unique per user. If you try to create an article with a
 title that already exists you get a clear error and can either rename
@@ -104,9 +106,15 @@ the new draft or open the existing article and edit it.
 ## Editing
 
 Open an article and click **Edit**. The view flips to a form with the
-title and content fields. The form shows "Unsaved changes" the moment
-you diverge from the stored row; **Save** persists, **Cancel** drops
-the draft.
+title, content, and a **change message** field. The form shows
+"Unsaved changes" the moment you diverge from the stored row;
+**Save** persists, **Cancel** drops the draft.
+
+The change message is required - it's the one-line entry the
+[changelog](#changelog) shows next to this edit. Treat it like a git
+commit summary: "Fix Maya's job title" rather than "edits". The
+message clears back to blank after each successful save so a follow-
+up edit writes its own message rather than inheriting the prior one.
 
 Saving an article nulls its embedding - the background embedding
 worker will re-compute on its next poll (within ~30 seconds). Search
@@ -114,13 +122,16 @@ falls back to substring matches in the meantime.
 
 ## Deleting
 
-Click **Delete** on the open article. A confirmation strip appears -
-**Delete** is the destructive action, **Cancel** dismisses the prompt.
+Click **Delete** on the open article. A confirmation strip appears
+with a required **change message** field; **Delete** is the
+destructive action, **Cancel** dismisses the prompt.
 
 Deletes are hard - the article doesn't move to a trash bin. If you
 delete by mistake the easy recovery is to ask the assistant to
 reconstruct it from the relevant conversations and call `wiki_create`,
-or to recreate it manually.
+or to recreate it manually. The deletion stays visible in the
+[changelog](#changelog) with the title snapshot and the reason you
+typed, so the audit trail survives even when the article doesn't.
 
 ## Asking the agent to update an article
 
@@ -238,6 +249,38 @@ background run. Manual and scheduled runs are independent.
 
 The button is grayed out while a scheduled librarian run is in
 flight - the two paths never write to the wiki at the same time.
+
+## Changelog
+
+Every change to the wiki - article added, edited, deleted, by you or
+by either agent - is recorded as a one-line entry in the **wiki
+changelog**. The Wiki top bar has a **clock** button next to the
+sparkles librarian button; click it to open the changelog modal.
+
+Each entry shows:
+
+- A **kind chip** (Added / Edited / Deleted) so you can scan the
+  history at a glance.
+- The **article title** at the time of the change. For Added and
+  Edited entries the title is a link - clicking it switches to the
+  Wiki tab and opens that article. For Deleted entries the title is
+  plain text (the article no longer exists to open).
+- The **timestamp** the change was applied.
+- The **one-line message** explaining what changed and why - written
+  by whoever made the change. The autonomous agent and the librarian
+  write their own messages as part of each tool call; your direct
+  edits and the "Ask agent to update" preview both supply a message
+  before the change lands.
+
+Entries are newest-first. The list pages in chunks of 50; a **Load
+more** button at the bottom fetches the next chunk. Reopening the
+modal always fetches a fresh first page.
+
+The changelog is per-user and read-only - entries cannot be edited
+or removed individually. The only way to wipe it is **Settings ->
+Wiki -> Reset wiki data**, which clears the changelog along with
+the articles (the orphaned history wouldn't be useful next to an
+empty wiki).
 
 ## How the assistant uses the wiki
 

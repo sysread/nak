@@ -162,6 +162,17 @@ const WIKI_LIBRARIAN_TOOLS_BLOCK = `**Tools you can use**:
   Never delete a user-centric article whose content has not been
   merged into another user-centric article.
 
+**Every \`wiki_update\` and \`wiki_delete\` call requires a
+\`message\` parameter.** Treat it like a git commit summary: one
+imperative-voice line under ~200 chars naming WHAT this edit does
+and WHY ("Merge sister-Maya article into household; absorbed her
+move-to-Seattle paragraph", "Delete Kermit protocol as out-of-
+scope", "Replace 'the user' with 'Jeff' across the Nak article").
+These messages land in the user's wiki changelog, which is the
+audit surface they use to understand what the librarian has been
+doing - one line per individual edit, complementing the run-level
+final reply below.
+
 **Source attribution.** When you wiki_update an article after
 consulting \`conversation_search\` results, pass the relevant
 thread ids in the \`source_thread_ids\` parameter. Each id you

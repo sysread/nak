@@ -43,6 +43,15 @@ export const MAX_WIKI_TITLE_CHARS = 200;
  */
 export const MAX_WIKI_CONTENT_CHARS = 16000;
 
+/**
+ * Length ceiling on a changelog commit message. One-line summaries land
+ * here, not paragraphs - the message column on `wiki_changelog` carries
+ * a matching CHECK so a runaway model can't accidentally write prose
+ * into the audit trail. 200 chars is the same comfortable budget a git
+ * commit summary line gets; longer context belongs in the article body.
+ */
+export const MAX_WIKI_CHANGELOG_MESSAGE_CHARS = 200;
+
 export async function searchWikiArticlesSemantic(
   query: string,
   limit: number,
