@@ -26,12 +26,27 @@
   } from '$lib/wiki';
   import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
   import { WikiAgent, type WikiUpdateOneResult } from '$lib/agents/wiki/agent';
+  import {
+    runManually as runLibrarianManually,
+    type RunManuallyResult,
+  } from '$lib/agents/wiki-librarian/runner.svelte';
   import type {
     WikiArticle,
     WikiArticleSource,
     WikiArticleRelated,
   } from '$lib/supabase';
   import Markdown from '../components/Markdown.svelte';
+
+  interface Props {
+    /**
+     * Top-bar manual-run button in Chat.svelte flips this to true; the
+     * panel opens the librarian confirmation strip and resets the flag.
+     * `$bindable` so the reset is visible to the parent without a
+     * dedicated callback prop.
+     */
+    triggerLibrarianRun?: boolean;
+  }
+  let { triggerLibrarianRun = $bindable(false) }: Props = $props();
 
   const selectedArticle = $derived<WikiArticle | null>(
     route.wiki_article_id
@@ -475,6 +490,91 @@
     await submitManualUpdate(article);
   }
 
+  // --- Manual librarian-run flow ---------------------------------------
+  //
+  // Triggered by the top-bar button in Chat.svelte via the
+  // `triggerLibrarianRun` $bindable prop. Confirmation strip with an
+  // optional custom-instructions textarea is rendered at the top of
+  // the panel below; submitting calls `runLibrarianManually()` (a
+  // main-thread runner that does NOT touch the scheduled worker's
+  // claim RPC, so the next periodic run still fires on its 12h
+  // cadence). The button itself is disabled while either a scheduled
+  // run is in flight (`wikiLibrarianRunner.workerBusy`) or this
+  // strip's own submission is in flight (`librarianBusy`).
+  let librarianConfirmOpen = $state(false);
+  let librarianInstructions = $state('');
+  let librarianBusy = $state(false);
+  let librarianError = $state<string | null>(null);
+  let librarianResult = $state<RunManuallyResult | null>(null);
+  let librarianTextarea = $state<HTMLTextAreaElement | null>(null);
+
+  // Watch the trigger from the top-bar button. Opens the confirmation
+  // strip (and only the strip - the run itself is gated behind the
+  // user clicking "Run librarian"). Resets the trigger so the parent
+  // can re-fire on subsequent clicks.
+  $effect(() => {
+    if (triggerLibrarianRun) {
+      openLibrarianConfirm();
+      triggerLibrarianRun = false;
+    }
+  });
+
+  // Auto-focus the instructions textarea when the strip opens so the
+  // user can start typing without an extra click. Mirrors the focus
+  // pattern on the "Ask agent to update" form above.
+  $effect(() => {
+    if (librarianConfirmOpen && !librarianBusy && librarianTextarea) {
+      librarianTextarea.focus();
+    }
+  });
+
+  function openLibrarianConfirm(): void {
+    librarianConfirmOpen = true;
+    librarianInstructions = '';
+    librarianBusy = false;
+    librarianError = null;
+    librarianResult = null;
+  }
+
+  function cancelLibrarianRun(): void {
+    if (librarianBusy) return;
+    librarianConfirmOpen = false;
+    librarianInstructions = '';
+    librarianError = null;
+    librarianResult = null;
+  }
+
+  async function submitLibrarianRun(): Promise<void> {
+    if (!app.supabase || !app.venice) return;
+    if (librarianBusy) return;
+    librarianBusy = true;
+    librarianError = null;
+    librarianResult = null;
+    try {
+      const session = await app.supabase.getSession();
+      if (!session) {
+        librarianError = 'Not signed in.';
+        return;
+      }
+      const result = await runLibrarianManually({
+        supabase: app.supabase,
+        venice: app.venice,
+        userId: session.user.id,
+        userName: app.userName,
+        userLocation: app.userLocation,
+        customInstructions: librarianInstructions.trim() || null,
+      });
+      librarianResult = result;
+      if (result.kind === 'error') {
+        librarianError = result.error ?? 'Librarian run failed.';
+      }
+    } catch (err) {
+      librarianError = err instanceof Error ? err.message : String(err);
+    } finally {
+      librarianBusy = false;
+    }
+  }
+
   /**
    * Intercept clicks on relative `?...` anchors in the rendered
    * article body. The wiki agents emit Markdown links of the form
@@ -531,6 +631,81 @@
   <div class="wiki-body">
     {#if wikiStore.error}
       <p class="error">{wikiStore.error}</p>
+    {/if}
+
+    {#if librarianConfirmOpen}
+      <!-- Manual-librarian confirmation strip. Sits at the top of the
+           panel so the user lands on it regardless of which article
+           was last selected. Three layered states:
+             1. fresh:  textarea + Run / Cancel
+             2. busy:   textarea disabled, "Working..." spinner
+             3. done:   summary + Close (the run's wiki edits, if any,
+                        have already streamed through the wikiStore via
+                        emitWikiChange()). -->
+      <div class="wiki-librarian-confirm">
+        <h3>Run the librarian now</h3>
+        <p class="subtle">
+          The librarian reviews, consolidates, fact-checks, and may delete
+          articles in your wiki. <strong>Edits are immediate and cannot be
+          undone.</strong> Add optional instructions to scope what it
+          should do; leave the box empty to run the normal periodic
+          sweep. This manual run does not reset the schedule for the
+          next background run.
+        </p>
+        {#if librarianResult && librarianResult.kind === 'ok'}
+          <p>
+            <strong>Done.</strong>
+            {#if librarianResult.finalText.trim().length > 0}
+              {librarianResult.finalText}
+            {:else}
+              The librarian completed without any changes.
+            {/if}
+          </p>
+          <p class="subtle">
+            {librarianResult.toolCalls} tool call{librarianResult.toolCalls === 1 ? '' : 's'}
+            over {librarianResult.articleCount} article{librarianResult.articleCount === 1 ? '' : 's'}.
+            See the Logs drawer for the full trace.
+          </p>
+          <div class="row">
+            <button type="button" onclick={cancelLibrarianRun}>Close</button>
+          </div>
+        {:else}
+          <div class="form-row">
+            <label for="wiki-librarian-instructions">
+              Custom instructions (optional)
+            </label>
+            <textarea
+              id="wiki-librarian-instructions"
+              bind:this={librarianTextarea}
+              bind:value={librarianInstructions}
+              disabled={librarianBusy}
+              rows={4}
+              spellcheck="true"
+              placeholder={'e.g. "Delete the article about Kermit protocol; it’s out of scope."'}
+            ></textarea>
+          </div>
+          {#if librarianError}
+            <p class="error">{librarianError}</p>
+          {/if}
+          <div class="row">
+            <button
+              type="button"
+              class="primary"
+              onclick={submitLibrarianRun}
+              disabled={librarianBusy}
+            >
+              {librarianBusy ? 'Working…' : 'Run librarian'}
+            </button>
+            <button
+              type="button"
+              onclick={cancelLibrarianRun}
+              disabled={librarianBusy}
+            >
+              Cancel
+            </button>
+          </div>
+        {/if}
+      </div>
     {/if}
 
     {#if !route.wiki_article_id}
@@ -918,7 +1093,8 @@
   .wiki-edit,
   .wiki-compose,
   .wiki-manual-update,
-  .wiki-confirm-strip {
+  .wiki-confirm-strip,
+  .wiki-librarian-confirm {
     border: 1px solid var(--border);
     border-radius: 0.5rem;
     padding: 1rem;
@@ -926,7 +1102,8 @@
     background: var(--bg-2);
   }
   .wiki-compose h2,
-  .wiki-manual-update h3 {
+  .wiki-manual-update h3,
+  .wiki-librarian-confirm h3 {
     margin: 0 0 0.75rem 0;
   }
   .form-row {

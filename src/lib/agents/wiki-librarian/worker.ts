@@ -86,9 +86,23 @@ interface ProgressOutbound {
   result: string;
 }
 
+/**
+ * Brackets the actual `agent.run()` invocation - emitted at the top of
+ * the agent call and again when it returns (success or failure). The
+ * main-thread manager turns these into a `wikiLibrarianRunner.workerBusy`
+ * boolean that the Wiki top-bar reads to disable the manual-run button
+ * while a scheduled run is in flight. Distinct from the cycle-end
+ * `progress` event because the cycle-end fires even on cheap outcomes
+ * (polling, too-soon) that don't need to gray out the button.
+ */
+interface BusyOutbound {
+  type: 'busy';
+  busy: boolean;
+}
+
 const workerGlobal = self as unknown as DedicatedWorkerGlobalScope;
 
-function post(msg: LogOutbound | ProgressOutbound): void {
+function post(msg: LogOutbound | ProgressOutbound | BusyOutbound): void {
   workerGlobal.postMessage(msg);
 }
 
@@ -194,6 +208,8 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
             message: 'wiki librarian lease lost - re-entering polling',
           });
         },
+        onAgentStart: () => post({ type: 'busy', busy: true }),
+        onAgentEnd: () => post({ type: 'busy', busy: false }),
       };
       const result = await runOneCycle(ctx);
       post({ type: 'progress', result });

@@ -213,6 +213,32 @@ You can disable the librarian independently from the per-conversation
 agent in **Settings -> Wiki**. The two toggles are independent: you
 can run one without the other.
 
+### Running the librarian on demand
+
+The Wiki top bar has a **sparkles** button next to the logs toggle.
+Clicking it opens a confirmation strip with an optional instructions
+textarea, then runs the librarian against your wiki immediately.
+
+- **Leave the instructions empty** to run the normal periodic sweep
+  (the consolidate / fact-check / boundary-tighten pass described
+  above).
+- **Type instructions** to scope the run. The librarian will carry
+  out what you ask plus any follow-on edits required to keep the
+  wiki coherent (for example, if you ask it to delete an article,
+  it may remove references to that article in other places). It
+  will NOT also perform the broader periodic sweep - it stays
+  inside the scope you specified.
+
+A manual run is irreversible - the librarian's `wiki_update` and
+`wiki_delete` tools write to your wiki directly, with no preview
+step. The confirmation strip surfaces this before you commit.
+
+A manual run does **not** reset the 12-hour cadence for the next
+background run. Manual and scheduled runs are independent.
+
+The button is grayed out while a scheduled librarian run is in
+flight - the two paths never write to the wiki at the same time.
+
 ## How the assistant uses the wiki
 
 Articles are **never** auto-injected into the chat. The assistant

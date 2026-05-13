@@ -142,6 +142,7 @@
     runWikiSearch,
   } from '$lib/wiki-store.svelte';
   import { onWikiChange } from '$lib/wiki-events';
+  import { wikiLibrarianRunner } from '$lib/agents/wiki-librarian/runner.svelte';
   import { todayInZone, shiftDay } from '$lib/journal-day';
   import { moodState } from '$lib/samskara/mood.svelte';
   import { bandIndexFor, columnFor } from '$lib/samskara/events';
@@ -273,6 +274,11 @@
   // via the $bindable prop after handling the event.
   let cookbookTriggerNew = $state(false);
   let journalTriggerNew = $state(false);
+  // Trigger flag for the wiki "Run librarian now" top-bar button.
+  // Same $bindable pattern as cookbook/journal: Chat.svelte flips it
+  // to true on click, Wiki.svelte opens its confirmation strip and
+  // resets the flag.
+  let wikiLibrarianTrigger = $state(false);
   // Focused date for the journal top-bar navigation. Derived from the
   // route so back/forward keeps the header in sync with the panel.
   const journalToday = $derived(todayInZone(app.journalTimezone || null));
@@ -4683,7 +4689,35 @@
                affordance lives inline on the empty-state hint in
                Wiki.svelte, mirroring how Memories handles the same
                case. Static label in the title slot keeps the chrome
-               consistent with the other tabs. -->
+               consistent with the other tabs.
+
+               Manual-librarian button: opens the Wiki panel's
+               confirmation strip (with an optional custom-instructions
+               textarea). Disabled while either the scheduled worker
+               is mid-run or a previous manual run is still in flight -
+               we never want two librarian agents writing to the wiki
+               concurrently. The strip itself, the run, and the post-
+               run summary live in Wiki.svelte; this button is just
+               the launcher. -->
+          <button
+            class="secondary icon-btn librarian-run-btn"
+            onclick={() => (wikiLibrarianTrigger = true)}
+            disabled={wikiLibrarianRunner.busy}
+            title={wikiLibrarianRunner.busy
+              ? 'The librarian is already running'
+              : 'Run the wiki librarian now'}
+            aria-label={wikiLibrarianRunner.busy
+              ? 'The librarian is already running'
+              : 'Run the wiki librarian now'}
+          >
+            <!-- Feather "sparkles" - reads as "agent / clean up". -->
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3l1.9 4.6L18 9l-4.1 1.4L12 15l-1.9-4.6L6 9l4.1-1.4L12 3z" />
+              <path d="M5 17l.8 2L8 19.5l-2.2.5L5 22l-.8-2L2 19.5l2.2-.5L5 17z" />
+              <path d="M19 14l.6 1.5L21 16l-1.4.5L19 18l-.6-1.5L17 16l1.4-.5L19 14z" />
+            </svg>
+          </button>
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Wiki</span>
           </div>
@@ -5650,9 +5684,11 @@
         <!-- Wiki panel. Same inline-no-modal-chrome shape. The sidebar
              WikiList shares the same `wikiStore` so a search keystroke
              filters both surfaces. Edit / delete / "ask agent to
-             update" all happen inline on the article. -->
+             update" all happen inline on the article. The
+             triggerLibrarianRun prop wires the top-bar sparkles button
+             to the panel's manual-librarian confirmation strip. -->
         {#if WikiComp}
-          <WikiComp />
+          <WikiComp bind:triggerLibrarianRun={wikiLibrarianTrigger} />
         {/if}
       {/if}
     </main>

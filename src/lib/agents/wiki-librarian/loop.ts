@@ -52,6 +52,17 @@ export interface CycleContext {
   minIntervalSeconds: number;
   signal: AbortSignal;
   onLeaseLost: () => void;
+  /**
+   * Fires immediately before `agent.run()` and again after it returns,
+   * regardless of success/failure. The worker uses these to post a
+   * `{type:'busy', busy:true/false}` outbound message so the main-
+   * thread manager can light up a "background librarian is currently
+   * running" flag. The Wiki top-bar reads that flag to gray out the
+   * manual-run button - we don't want the user kicking off a second
+   * run on top of the scheduled one. Optional so tests can omit them.
+   */
+  onAgentStart?: () => void;
+  onAgentEnd?: () => void;
 }
 
 export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
@@ -129,6 +140,7 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   }));
 
   let runResult;
+  ctx.onAgentStart?.();
   try {
     runResult = await ctx.agent.run({
       input: { articles: projection },
@@ -140,6 +152,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       `librarian agent threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`
     );
     return 'error';
+  } finally {
+    ctx.onAgentEnd?.();
   }
 
   if (runResult.stoppedReason === 'error') {

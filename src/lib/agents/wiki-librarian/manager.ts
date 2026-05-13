@@ -13,6 +13,7 @@ import type { Session } from '@supabase/supabase-js';
 import { agentModel } from '../../models';
 import { emitWikiChange } from '../../wiki-events';
 import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
+import { wikiLibrarianRunner } from './runner.svelte';
 
 export interface WikiLibrarianStartOpts extends BaseStartOpts {
   /**
@@ -85,10 +86,19 @@ class WikiLibrarianManager extends BaseWorkerManager<WikiLibrarianStartOpts> {
    * open Wiki drawer / panel refetches whenever the librarian
    * actually moves articles around. Other progress states
    * (`too-soon` / `too-small` / `polling`) are silent.
+   *
+   * `busy` brackets the actual `agent.run()` call inside the worker
+   * loop; we mirror it onto the shared `wikiLibrarianRunner` rune so
+   * the Wiki top-bar can gray out the manual-run button while the
+   * scheduled run holds the floor.
    */
   protected onWorkerMessage(data: Record<string, unknown>): boolean {
     if (data.type === 'progress' && data.result === 'reviewed') {
       emitWikiChange();
+      return true;
+    }
+    if (data.type === 'busy' && typeof data.busy === 'boolean') {
+      wikiLibrarianRunner.setWorkerBusy(data.busy);
       return true;
     }
     return false;
@@ -101,6 +111,19 @@ class WikiLibrarianManager extends BaseWorkerManager<WikiLibrarianStartOpts> {
   setProfile(userName: string, userLocation: string): void {
     if (!this.worker) return;
     this.worker.postMessage({ type: 'profile', userName, userLocation });
+  }
+
+  /**
+   * Wrap the base `stop()` to clear the shared workerBusy flag. The
+   * worker self-terminates on `{type:'stop'}` so it cannot send a
+   * trailing `{busy:false}`; without this reset, a stop() during an
+   * in-flight cycle would leave the manual-run button disabled until
+   * the next worker spawn. Calls super.stop() so the base lifecycle
+   * (lock release, auth-unsubscribe, terminate()) still runs.
+   */
+  override stop(): void {
+    wikiLibrarianRunner.setWorkerBusy(false);
+    super.stop();
   }
 }
 
