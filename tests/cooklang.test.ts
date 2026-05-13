@@ -10,6 +10,7 @@ import {
   parseCooklang,
   recipeToHtml,
   cooklangToHtml,
+  recipeToMarkdown,
   recipeToPlainText,
 } from '../src/lib/cooklang';
 
@@ -163,6 +164,69 @@ describe('recipeToPlainText', () => {
     const ingredientsBlock = text.split('Instructions')[0]!;
     expect(ingredientsBlock).toContain('- 2 tbsp oil');
     expect(ingredientsBlock).not.toContain('saucepan');
+  });
+});
+
+describe('recipeToMarkdown', () => {
+  it('renders title + source link + ingredients + numbered steps', () => {
+    const recipe = parseCooklang('Stir @flour{200%g} into a #bowl{}.');
+    const md = recipeToMarkdown('Test Recipe', recipe, {
+      source: 'NYT Cooking',
+      sourceUrl: 'https://example.com/r',
+    });
+    expect(md).toContain('# Test Recipe');
+    expect(md).toContain('*Source: [NYT Cooking](https://example.com/r)*');
+    expect(md).toContain('## Ingredients');
+    expect(md).toContain('- 200 g flour');
+    expect(md).toContain('## Cookware');
+    expect(md).toContain('- bowl');
+    expect(md).toContain('## Instructions');
+    expect(md).toContain('1. Stir flour into a bowl.');
+  });
+
+  it('omits the source line when neither source nor URL is provided', () => {
+    const recipe = parseCooklang('Boil @water{1%L}.');
+    const md = recipeToMarkdown('Plain', recipe);
+    expect(md).not.toContain('*Source');
+  });
+
+  it('renders a bare URL as a markdown auto-link when no source name is set', () => {
+    const recipe = parseCooklang('Boil @water{1%L}.');
+    const md = recipeToMarkdown('Plain', recipe, {
+      sourceUrl: 'https://example.com/r',
+    });
+    expect(md).toContain('*Source: <https://example.com/r>*');
+  });
+
+  it('emits `>> key: value` metadata as bolded bullets', () => {
+    const recipe = parseCooklang('>> servings: 4\n>> prep_time: 20 min\nMix @flour{200%g}.');
+    const md = recipeToMarkdown('Meta', recipe);
+    expect(md).toContain('- **servings**: 4');
+    expect(md).toContain('- **prep_time**: 20 min');
+  });
+
+  it('passes inline markdown in the step text through verbatim', () => {
+    // The LLM occasionally drops markdown emphasis into a recipe and the
+    // markdown export should round-trip it, not escape the asterisks
+    // back to literal characters.
+    const recipe = parseCooklang('Whisk the **eggs** until **fluffy**.');
+    const md = recipeToMarkdown('Inline MD', recipe);
+    expect(md).toContain('1. Whisk the **eggs** until **fluffy**.');
+  });
+
+  it('renders sectioned ingredients and instructions with ### sub-headings', () => {
+    const src = `== Soup ==
+Simmer @lentils{200%g} with @onion{1} in @water{1%L}.
+
+== Finishing ==
+Stir in @butter{2%tbsp} and serve.`;
+    const md = recipeToMarkdown('Lentil Soup', parseCooklang(src));
+    expect(md).toContain('### Soup');
+    expect(md).toContain('### Finishing');
+    // Per-section numbering restarts at 1 in the Instructions block,
+    // matching the HTML renderer's "one ol per section" output.
+    expect(md).toContain('1. Simmer lentils with onion in water.');
+    expect(md).toContain('1. Stir in butter and serve.');
   });
 });
 

@@ -23,10 +23,11 @@ unaffected.
 
 ## Files
 
-- `src/lib/cooklang.ts` — inline Cooklang parser + HTML / plain-text
+- `src/lib/cooklang.ts` — inline Cooklang parser + HTML / plain-text / markdown
   renderers. Deliberately no upstream dep. Exports `parseCooklang`,
-  `recipeToHtml`, `cooklangToHtml`, `recipeToPlainText`, and the
-  size constants the tools and the modal share.
+  `recipeToHtml`, `cooklangToHtml`, `recipeToPlainText`,
+  `recipeToMarkdown`, and the size constants the tools and the modal
+  share.
 - `src/lib/cookbook-store.svelte.ts` — module-level `$state` for the
   recipe list, plus `loadRecipes` and `notifyCookbookChanged`. The
   bridge between the tool layer and the UI is a window `CustomEvent`
@@ -148,6 +149,14 @@ unaffected.
   AnyList-friendly export. Title + ingredients list + numbered
   instructions. Cookware omitted by design (shopping-list apps don't
   accept pots as items).
+- `recipeToMarkdown(title, recipe, { source?, sourceUrl? }): string`
+  — human-readable markdown export aimed at notes apps and issue
+  trackers. Same structural pieces as the plain-text export plus a
+  source link, `>> key: value` metadata as bolded bullets, and the
+  cookware list (which the markdown target wants and the plain-text
+  target deliberately strips). Content (title, step text, ingredient
+  names, metadata values) is emitted verbatim - any inline markdown
+  the LLM left in the recipe round-trips, by design.
 - `MAX_RECIPE_COOKLANG_CHARS = 20_000`, `MAX_RECIPE_TITLE_CHARS = 160`
   — shared between the tools and the modal so schema validation
   agrees everywhere.
@@ -280,6 +289,17 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   add textarea treats each line as an item — a "saucepan" row would
   sit in the shopping list permanently. Instructions and
   ingredients are the useful parts for transfer.
+- **Copy as Markdown deliberately does NOT escape content.** Step
+  text, ingredient names, metadata values, and the title pass
+  through verbatim. The LLM occasionally drops markdown emphasis
+  (`**bold**`, backticks, inline links) into a recipe and the user
+  wants that to land in the destination notes app as markdown, not
+  as escaped literal characters. Structural markdown (headings,
+  list markers, link syntax) is ours to author; content markdown is
+  the recipe's. The cost of this choice is that a recipe with a
+  stray `*` in an ingredient name will render as italics in the
+  paste target - acceptable trade vs. mangling the LLM's intent
+  every time.
 - **Drawer search is semantic; LLM tool path is not.** The
   embedding pipeline (added after the original "no embeddings"
   design - see "Embeddings" below) feeds `searchRecipes` only.

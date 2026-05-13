@@ -38,6 +38,7 @@
   import {
     cooklangToHtml,
     parseCooklang,
+    recipeToMarkdown,
     recipeToPlainText,
     MAX_RECIPE_COOKLANG_CHARS,
     MAX_RECIPE_TITLE_CHARS,
@@ -600,6 +601,17 @@
     await copyWithFeedback(recipeToPlainText(r.title, parsed), 'Copied.');
   }
 
+  async function onCopyMarkdown(): Promise<void> {
+    const r = activeRecipe;
+    if (!r) return;
+    const parsed = parseCooklang(r.cooklang);
+    const md = recipeToMarkdown(r.title, parsed, {
+      source: r.source,
+      sourceUrl: r.source_url,
+    });
+    await copyWithFeedback(md, 'Markdown copied.');
+  }
+
   async function onCopyCooklang(): Promise<void> {
     const r = activeRecipe;
     if (!r) return;
@@ -866,6 +878,27 @@
                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
                   <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+              </button>
+              <!-- Markdown copy. The glyph is the canonical Markdown
+                   logo shape - rounded rect with an "M" stroke on the
+                   left and a down-arrow on the right - simplified to
+                   stroke-only so it matches the rest of the icon bar's
+                   weight. The "M" is two diagonals + a baseline, the
+                   arrow is a vertical with two chevron strokes. -->
+              <button
+                type="button"
+                class="secondary icon-btn"
+                onclick={onCopyMarkdown}
+                title="Copy as Markdown"
+                aria-label="Copy as Markdown"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="2" y="6" width="20" height="12" rx="2" ry="2" />
+                  <path d="M6 15V9l2.5 3L11 9v6" />
+                  <path d="M16 9v6" />
+                  <path d="M14 13l2 2 2-2" />
                 </svg>
               </button>
               <button
