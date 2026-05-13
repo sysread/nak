@@ -848,6 +848,163 @@ export function recipeToPlainText(title: string, recipe: Recipe): string {
 }
 
 // ---------------------------------------------------------------------------
+// Markdown export (for pasting into Obsidian / Notion / a GitHub issue)
+// ---------------------------------------------------------------------------
+
+/**
+ * Render a parsed recipe as a Markdown document the user can paste into
+ * any markdown-aware app (notes apps, issue trackers, journals). Sibling
+ * to `recipeToPlainText` but aimed at a different transfer target -
+ * plain text is the AnyList path (one-item-per-line ingredients,
+ * cookware stripped), markdown is the human-readable path (full
+ * structure, cookware included, source link clickable).
+ *
+ * Shape:
+ *
+ *   # Title
+ *
+ *   *Source: [Name](url)*
+ *
+ *   - **servings**: 4
+ *   - **prep_time**: 20 min
+ *
+ *   ## Ingredients
+ *   - 200 g flour
+ *   - 2 eggs
+ *
+ *   ### Section (when sections exist)
+ *   - ...
+ *
+ *   ## Cookware
+ *   - bowl
+ *
+ *   ## Instructions
+ *   1. Step one.
+ *   2. Step two.
+ *
+ *   ### Section (when sections exist)
+ *   1. ...
+ *
+ * Pass-through for inline markdown: step text, ingredient names,
+ * metadata values, and the title are emitted verbatim. The LLM
+ * occasionally drops markdown emphasis (`**bold**`, backticks) into a
+ * recipe and the user wants that to round-trip - escaping the special
+ * chars would mangle the writer's intent. Structural markdown
+ * (headings, list markers, link syntax) is ours to author; content
+ * markdown is the recipe's.
+ */
+export function recipeToMarkdown(
+  title: string,
+  recipe: Recipe,
+  options: { source?: string | null; sourceUrl?: string | null } = {},
+): string {
+  const lines: string[] = [];
+
+  if (title.trim().length > 0) {
+    lines.push(`# ${title.trim()}`, '');
+  }
+
+  // Source attribution. Prefer a named link when both pieces are
+  // present, fall back to the URL alone (rendered as an auto-link via
+  // angle brackets so CommonMark and GFM both make it clickable), or
+  // the source name alone when there's no URL to point at. Wrapped in
+  // italics so it reads as a byline rather than body content.
+  const source = options.source?.trim() ?? '';
+  const sourceUrl = options.sourceUrl?.trim() ?? '';
+  if (source && sourceUrl) {
+    lines.push(`*Source: [${source}](${sourceUrl})*`, '');
+  } else if (sourceUrl) {
+    lines.push(`*Source: <${sourceUrl}>*`, '');
+  } else if (source) {
+    lines.push(`*Source: ${source}*`, '');
+  }
+
+  // `>> key: value` metadata as a bulleted list. Keys are bolded so the
+  // block reads as labelled facts (servings, prep_time, yield, etc.)
+  // rather than a wall of colons. Insertion order is preserved by
+  // Object.keys on a plain object in modern engines.
+  const metaKeys = Object.keys(recipe.metadata);
+  if (metaKeys.length > 0) {
+    for (const key of metaKeys) {
+      lines.push(`- **${key}**: ${recipe.metadata[key]}`);
+    }
+    lines.push('');
+  }
+
+  if (recipe.ingredients.length > 0) {
+    lines.push('## Ingredients', '');
+    if (recipe.sections.length === 0) {
+      for (const ing of recipe.ingredients) {
+        const qty = formatQtyUnit(ing.qty, ing.unit);
+        lines.push(qty.length > 0 ? `- ${qty} ${ing.name}` : `- ${ing.name}`);
+      }
+      lines.push('');
+    } else {
+      // Mirror the HTML renderer's per-section ingredient grouping:
+      // when declaration lines exist, only buckets containing
+      // declarations get their own ingredient sub-list; otherwise
+      // every bucket contributes via cross-references in its steps.
+      const hasDeclarations = recipe.steps.some((s) => s.kind === 'declaration');
+      for (const bucket of groupStepsBySection(recipe)) {
+        const bucketHasDeclarations = bucket.steps.some((s) => s.kind === 'declaration');
+        if (hasDeclarations && !bucketHasDeclarations) continue;
+        const ings = dedupeFromSteps(bucket.steps);
+        if (ings.length === 0) continue;
+        if (bucket.name !== null) {
+          lines.push(`### ${bucket.name}`, '');
+        }
+        for (const ing of ings) {
+          const qty = formatQtyUnit(ing.qty, ing.unit);
+          lines.push(qty.length > 0 ? `- ${qty} ${ing.name}` : `- ${ing.name}`);
+        }
+        lines.push('');
+      }
+    }
+  }
+
+  // Unlike the plain-text export we DO include cookware - the markdown
+  // target is a human-readable doc, not a shopping list, so "what
+  // tools do I need" is useful prep info. Stays flat (no section
+  // grouping) for the same reason the HTML renderer does: pan-by-
+  // section helps nobody.
+  if (recipe.cookware.length > 0) {
+    lines.push('## Cookware', '');
+    for (const cw of recipe.cookware) {
+      lines.push(`- ${cw.name}`);
+    }
+    lines.push('');
+  }
+
+  // Declaration steps are filtered out - they contributed their
+  // ingredients to the Ingredients block and have no text to number.
+  // Same filter the HTML and plain-text renderers use so all three
+  // outputs agree on which lines count as instructions.
+  const instructionSteps = recipe.steps.filter((s) => s.kind === 'instruction');
+  if (instructionSteps.length > 0) {
+    lines.push('## Instructions', '');
+    if (recipe.sections.length === 0) {
+      instructionSteps.forEach((step, i) => {
+        lines.push(`${i + 1}. ${step.text}`);
+      });
+    } else {
+      for (const bucket of groupStepsBySection(recipe)) {
+        const bucketInstructions = bucket.steps.filter((s) => s.kind === 'instruction');
+        if (bucketInstructions.length === 0) continue;
+        if (bucket.name !== null) {
+          lines.push(`### ${bucket.name}`, '');
+        }
+        bucketInstructions.forEach((step, i) => {
+          lines.push(`${i + 1}. ${step.text}`);
+        });
+        lines.push('');
+      }
+    }
+  }
+
+  return lines.join('\n').trimEnd();
+}
+
+// ---------------------------------------------------------------------------
 // Limits
 // ---------------------------------------------------------------------------
 

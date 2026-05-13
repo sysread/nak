@@ -253,12 +253,18 @@ alongside your hand-written ones.
 
 ## Copying for another app
 
-Two copy buttons on every detail pane:
+Three copy buttons on every detail pane:
 
 - **Copy plain text** — a structured plain-text version (title,
   ingredients list, numbered instructions). This is what you want
   to paste into AnyList's "add multiple items" text area, or into
   any app that accepts "one ingredient per line".
+- **Copy as Markdown** — the same structure rendered as Markdown,
+  with headings, list bullets, a clickable source link, and cookware
+  included. For pasting into a notes app (Obsidian, Notion, an
+  Apple Note that renders markdown) or a GitHub issue. If you (or
+  the model) left inline markdown in the recipe text — emphasis,
+  backticks, links — it round-trips verbatim; nak doesn't escape it.
 - **Copy Cooklang** — the raw source, for backup or for pasting into
   another Cooklang-aware app.
 
