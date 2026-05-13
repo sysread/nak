@@ -116,13 +116,21 @@ export class WikiLibrarianAgent
 
     try {
       const articleList = renderArticleList(articles);
+      const customInstructions = req.input.customInstructions ?? null;
       const promptText = buildWikiLibrarianPrompt({
         articleList,
         userProfile: this.userProfile,
+        customInstructions,
       });
 
+      // Surface custom-vs-standard in the log so the user reading the
+      // drawer can tell at a glance which variant of the prompt fired.
+      const variant =
+        customInstructions && customInstructions.trim().length > 0
+          ? 'custom-instructions'
+          : 'standard';
       log.info(
-        `librarian reviewing ${articles.length} article(s)`
+        `librarian reviewing ${articles.length} article(s) (${variant})`
       );
 
       const messages: VeniceMessage[] = [

@@ -22,6 +22,15 @@ export interface WikiLibrarianInput {
     /** First N chars of content; full body via wiki_search by id. */
     excerpt: string;
   }>;
+  /**
+   * When supplied, swap the standard periodic-sweep prompt body for
+   * the custom-instructions variant - the agent carries out the
+   * user's instructions plus only the follow-on edits required to
+   * keep the wiki coherent. Set by the manual-run path in the Wiki
+   * top-bar; unset (the usual case) for the scheduled worker. A
+   * null or whitespace-only string is treated as "not supplied".
+   */
+  customInstructions?: string | null;
 }
 
 export interface WikiLibrarianOutput {

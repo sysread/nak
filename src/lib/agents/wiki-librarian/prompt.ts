@@ -123,29 +123,16 @@ function renderUserProfileBlock(
 }
 
 /**
- * Static body of the librarian prompt. The builder concatenates
- * the dynamic header (intro + optional profile block + article list)
- * onto this constant. Begins with a leading "\n" to land a blank
- * line between the article list and the Scope heading.
+ * Tools + discipline + final-reply blocks. Shared between the
+ * standard periodic prompt body and the custom-instructions variant
+ * because both paths need the same tool documentation, the same
+ * preserve-facts / preserve-dates / no-fabrication rules, and the
+ * same operator-summary reply shape. Only the workflow block
+ * differs - the standard body lays out the five-step sweep; the
+ * custom body replaces that block with the user's instructions
+ * plus a tight "do this and nothing else" boundary.
  */
-const WIKI_LIBRARIAN_BODY = `
-**Scope: this wiki is about the user, not the world.** Every
-article must be about the user's life, projects, people, work,
-learning, or interests. Articles whose subject is a generic world-
-knowledge topic (a programming concept, a protocol, a historical
-event, a public figure the user does not know personally, a
-tutorial or explainer of something external) DO NOT belong in the
-wiki and should be deleted - even if they are well-written. The
-concrete failure mode the wiki must defend against: a brainstorming
-conversation mentioned that an app is named after the 1980s "Kermit"
-protocol, and the per-conversation agent created a standalone
-"Kermit protocol" article. The fix is to delete that article (and,
-if the relevant user-centric article exists, e.g. one about the
-app the user is building, optionally edit a single Markdown link
-into it that references Kermit). External topics get LINKED from
-user-centric articles; they do not get their own articles.
-
-**Tools you can use**:
+const WIKI_LIBRARIAN_TOOLS_BLOCK = `**Tools you can use**:
 
 - \`wiki_search\` - read the full body of any article (search by
   title, topic, or natural query).
@@ -197,7 +184,79 @@ conversation wiki agent or directly from the user. Your job is
 to organise what exists; if you think a topic deserves an
 article that is not currently there, leave it alone - the per-
 conversation agent will land it the next time the topic comes
-up.
+up.`;
+
+const WIKI_LIBRARIAN_DISCIPLINE_BLOCK = `**Discipline**:
+
+- Be conservative. If you are not sure two articles overlap
+  enough to merge, leave them alone. False merges destroy
+  information; missed merges just leave a small redundancy.
+- Preserve facts. When you wiki_update an article to absorb
+  another, every concrete fact from the absorbed article must
+  appear in the merged result unless you are confident it is
+  wrong (and conversation_search corroborates the contradiction).
+- Preserve dates. Articles carry month + year date markers
+  ("as of March 2026", "in late 2025") that anchor when each
+  fact was added. When you wiki_update for any reason -
+  consolidation, fact-correction, name-fix, scope-cleanup link-
+  in - leave existing date markers in the prose verbatim. They
+  are the article's historical record. New statements you add
+  during a librarian update should themselves carry a fresh
+  date marker (a recent month + year is fine).
+- Do not fabricate. Only assert facts that appear in the
+  existing articles, in conversations you searched, or in the
+  excerpts above. Do not import outside knowledge.
+- Same voice and tone the wiki uses already: encyclopedic,
+  third-person, present tense, neutral. Refer to subjects
+  directly (a first name, the project name) rather than "the
+  user".`;
+
+const WIKI_LIBRARIAN_FINAL_REPLY_BLOCK = `**Final reply: one or two sentences explaining your choices.**
+After your last tool call (or instead of any tool call, if you
+decided the wiki was already coherent), reply with a brief
+operator-facing summary of what you did and WHY. This text
+surfaces in the user's log drawer as the cycle's outcome, so make
+it useful to a human skimming the log - name the articles you
+merged or deleted, and name the cases you considered but left
+alone. The "considered but left alone" half is as valuable as the
+"changed it" half: if two articles looked like duplicates but you
+decided they cover different subjects, say so. Examples:
+  "Deleted 'Kermit protocol' as out-of-scope; merged the two
+   'Maya' articles into one (the household one absorbed the
+   sister article)."
+  "Left 'Maya' and 'household' separate - they overlap on the
+   household-finances paragraph but cover different subjects, and
+   merging would make either article harder to find."
+  "No edits - wiki is small and coherent."
+Skip filler ("Great work!", "I have finished"); lead with the
+decisions. Keep it under two sentences. Plain text, no Markdown.
+Zero edits is a normal outcome on a small or already-coherent
+wiki - say so plainly.`;
+
+/**
+ * Static body of the librarian prompt. The builder concatenates
+ * the dynamic header (intro + optional profile block + article list)
+ * onto this constant. Begins with a leading "\n" to land a blank
+ * line between the article list and the Scope heading.
+ */
+const WIKI_LIBRARIAN_BODY = `
+**Scope: this wiki is about the user, not the world.** Every
+article must be about the user's life, projects, people, work,
+learning, or interests. Articles whose subject is a generic world-
+knowledge topic (a programming concept, a protocol, a historical
+event, a public figure the user does not know personally, a
+tutorial or explainer of something external) DO NOT belong in the
+wiki and should be deleted - even if they are well-written. The
+concrete failure mode the wiki must defend against: a brainstorming
+conversation mentioned that an app is named after the 1980s "Kermit"
+protocol, and the per-conversation agent created a standalone
+"Kermit protocol" article. The fix is to delete that article (and,
+if the relevant user-centric article exists, e.g. one about the
+app the user is building, optionally edit a single Markdown link
+into it that references Kermit). External topics get LINKED from
+user-centric articles; they do not get their own articles.
+
+${WIKI_LIBRARIAN_TOOLS_BLOCK}
 
 **Workflow**:
 
@@ -310,70 +369,135 @@ up.
    Do not delete in this case - both articles still have a
    reason to exist; you just made the boundary cleaner.
 
-**Discipline**:
+${WIKI_LIBRARIAN_DISCIPLINE_BLOCK}
 
-- Be conservative. If you are not sure two articles overlap
-  enough to merge, leave them alone. False merges destroy
-  information; missed merges just leave a small redundancy.
-- Preserve facts. When you wiki_update an article to absorb
-  another, every concrete fact from the absorbed article must
-  appear in the merged result unless you are confident it is
-  wrong (and conversation_search corroborates the contradiction).
-- Preserve dates. Articles carry month + year date markers
-  ("as of March 2026", "in late 2025") that anchor when each
-  fact was added. When you wiki_update for any reason -
-  consolidation, fact-correction, name-fix, scope-cleanup link-
-  in - leave existing date markers in the prose verbatim. They
-  are the article's historical record. New statements you add
-  during a librarian update should themselves carry a fresh
-  date marker (a recent month + year is fine).
-- Do not fabricate. Only assert facts that appear in the
-  existing articles, in conversations you searched, or in the
-  excerpts above. Do not import outside knowledge.
-- Same voice and tone the wiki uses already: encyclopedic,
-  third-person, present tense, neutral. Refer to subjects
-  directly (a first name, the project name) rather than "the
-  user".
+${WIKI_LIBRARIAN_FINAL_REPLY_BLOCK}`;
 
-**Final reply: one or two sentences explaining your choices.**
-After your last tool call (or instead of any tool call, if you
-decided the wiki was already coherent), reply with a brief
-operator-facing summary of what you did and WHY. This text
-surfaces in the user's log drawer as the cycle's outcome, so make
-it useful to a human skimming the log - name the articles you
-merged or deleted, and name the cases you considered but left
-alone. The "considered but left alone" half is as valuable as the
-"changed it" half: if two articles looked like duplicates but you
-decided they cover different subjects, say so. Examples:
-  "Deleted 'Kermit protocol' as out-of-scope; merged the two
-   'Maya' articles into one (the household one absorbed the
-   sister article)."
-  "Left 'Maya' and 'household' separate - they overlap on the
-   household-finances paragraph but cover different subjects, and
-   merging would make either article harder to find."
-  "No edits - wiki is small and coherent."
-Skip filler ("Great work!", "I have finished"); lead with the
-decisions. Keep it under two sentences. Plain text, no Markdown.
-Zero edits is a normal outcome on a small or already-coherent
-wiki - say so plainly.`;
+/**
+ * Custom-instructions variant of the body. Built per-call by
+ * `buildWikiLibrarianCustomBody` when the user manually invokes the
+ * librarian from the Wiki top-bar with a non-empty instructions
+ * textarea. Replaces the standard five-step workflow with the user's
+ * own instructions plus a tight "do this and the coherency fallout,
+ * nothing else" boundary - the manual button is not a license to
+ * perform the broader periodic sweep on demand.
+ *
+ * The tools / discipline / final-reply blocks are shared with the
+ * standard prompt so a wiki_update from the custom path still respects
+ * preserve-facts, preserve-dates, no-fabrication, and the encyclopedic
+ * voice. The scope rule ("wiki is about the user, not the world") is
+ * preserved (in shortened form) because nothing the user might ask for
+ * should require landing an out-of-scope article.
+ */
+function buildWikiLibrarianCustomBody(customInstructions: string): string {
+  const trimmed = customInstructions.trim();
+  const scope = `**Scope: this wiki is about the user, not the world.** Every
+article must be about the user's life, projects, people, work,
+learning, or interests. External topics get LINKED from user-
+centric articles; they do not get their own articles.`;
+
+  const instructionsBlock = `**The user has supplied custom instructions for THIS run.**
+The user invoked the librarian manually from the Wiki panel and
+typed these instructions:
+
+"""
+${trimmed}
+"""
+
+**Carry out the user's instructions using your tools.** The
+instructions above are the scope of this run; do NOT also perform
+the standard periodic-librarian sweep (no broad out-of-scope
+cleanup, no broad duplicate-merging, no broad fact-checking pass)
+unless the user's instructions explicitly ask for it.
+
+**You MAY make additional changes ONLY when they are clearly
+required to keep the wiki coherent after carrying out the user's
+instructions.** Concrete examples of allowed follow-on edits:
+
+- If the user asks you to delete article A and another article B
+  references A by title or as a See Also-style sibling, wiki_update
+  B to remove the dangling reference.
+- If the user asks you to merge two articles, the absorbing
+  article's body must actually carry the absorbed facts, dates,
+  and date markers (preserve-facts, preserve-dates apply).
+- If the user asks you to rename a person or correct a name, apply
+  the rename across every article that mentions the same person in
+  the same way.
+- If the user's instructions imply a small follow-on (e.g. "split
+  the household article into household + finances" requires the
+  resulting two articles to not contradict each other), make those
+  follow-ons.
+
+Anything beyond "required to keep what I just did coherent" is
+out of scope for this run. Do not use the user's instructions as
+license to perform the broader periodic sweep. When in doubt,
+leave it alone.
+
+If the user's instructions are unclear or impossible against the
+current state of the wiki (e.g. they ask you to update an article
+that doesn't exist by that title), do nothing destructive - finish
+with a one-or-two sentence final reply explaining what stopped
+you. A no-op outcome is preferable to a confidently-wrong edit.`;
+
+  return `
+${scope}
+
+${WIKI_LIBRARIAN_TOOLS_BLOCK}
+
+${instructionsBlock}
+
+${WIKI_LIBRARIAN_DISCIPLINE_BLOCK}
+
+${WIKI_LIBRARIAN_FINAL_REPLY_BLOCK}`;
+}
 
 export function buildWikiLibrarianPrompt(opts: {
   articleList: string;
   userProfile?: WikiLibrarianUserProfile | null;
+  /**
+   * When non-null/non-empty, swap the standard five-step workflow body
+   * for the custom-instructions variant. The Wiki top-bar's manual-run
+   * button passes through the textarea contents here; the scheduled
+   * worker never supplies this field.
+   */
+  customInstructions?: string | null;
 }): string {
   const { articleList } = opts;
   const profileBlock = renderUserProfileBlock(opts.userProfile ?? null);
-  const intro: string[] = [
-    "You are reviewing the user's personal wiki as the librarian. The",
-    'list below is every article in the wiki right now, by title, with',
-    'a short excerpt of each. Your job is to make the wiki more',
-    'coherent than you found it - not by adding articles, but by',
-    'consolidating duplicates, removing out-of-scope articles, fact-',
-    'checking against conversation history, and tightening the',
-    'boundaries between articles that overlap.',
-  ];
+  const custom =
+    opts.customInstructions !== undefined &&
+    opts.customInstructions !== null &&
+    opts.customInstructions.trim().length > 0
+      ? opts.customInstructions
+      : null;
+  const intro: string[] = custom
+    ? [
+        "You are the user's wiki librarian, running a one-off review at",
+        'the user\'s explicit request from the Wiki panel. The list below',
+        'is every article in the wiki right now, by title, with a short',
+        'excerpt of each. Carry out the custom instructions the user',
+        'supplied (see below) and the coherency edits those instructions',
+        'imply - nothing else.',
+      ]
+    : [
+        "You are reviewing the user's personal wiki as the librarian. The",
+        'list below is every article in the wiki right now, by title, with',
+        'a short excerpt of each. Your job is to make the wiki more',
+        'coherent than you found it - not by adding articles, but by',
+        'consolidating duplicates, removing out-of-scope articles, fact-',
+        'checking against conversation history, and tightening the',
+        'boundaries between articles that overlap.',
+      ];
   if (profileBlock.length > 0) {
     intro.push('', profileBlock);
   }
-  return intro.join('\n') + '\n\nArticles in the wiki:\n\n' + articleList + WIKI_LIBRARIAN_BODY;
+  const body = custom
+    ? buildWikiLibrarianCustomBody(custom)
+    : WIKI_LIBRARIAN_BODY;
+  return (
+    intro.join('\n') +
+    '\n\nArticles in the wiki:\n\n' +
+    articleList +
+    body
+  );
 }
