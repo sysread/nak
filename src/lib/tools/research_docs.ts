@@ -170,8 +170,11 @@ export const researchDocs: ToolDef = {
       { role: 'user', content: userTurn },
     ];
 
-    // Dev-mode answers can run longer - architecture questions aren't
-    // well-served by the 2-5 sentence cap that fits user-help questions.
+    // 2048 is the project-wide floor on agent sub-call caps. User-
+    // help questions hit a 2-5 sentence target that lands well under
+    // 2048; dev architecture explanations earn the extra headroom of
+    // 4096 since they pull in cross-module context. The prompt is
+    // what controls answer length; the cap is the safety net.
     // Non-streaming sub-completion: there's no UI surface to render
     // tokens incrementally, and the one-shot endpoint avoids the SSE
     // failure modes streaming sub-calls exhibit.
@@ -179,7 +182,7 @@ export const researchDocs: ToolDef = {
       model: agentModel('researchDocs').id,
       messages,
       signal: ctx.signal,
-      maxTokens: includeDev ? 1500 : 600,
+      maxTokens: includeDev ? 4096 : 2048,
     });
 
     const raw = result.text;

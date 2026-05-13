@@ -192,14 +192,14 @@ export class SummaryAgent implements Agent<SummaryInput, SummaryOutput> {
       const convo: VeniceMessage[] = condensed.map(messageToVenice);
       convo.push({ role: 'user', content: SUMMARY_PROMPT });
 
-      // Non-streaming call: we only want the final text. maxTokens
-      // caps the response at ~150 tokens, which is plenty for 2-3
-      // sentences and a safety net against a model that ignores the
-      // length instruction.
+      // Non-streaming call: we only want the final text. 2048 is the
+      // project-wide floor on agent sub-call caps; the prompt's 2-3
+      // sentence target lands well under that. The prompt controls
+      // length, not the cap.
       const result = await this.venice.completeChat({
         model: this.model,
         messages: convo,
-        maxTokens: 180,
+        maxTokens: 2048,
         signal,
       });
 
