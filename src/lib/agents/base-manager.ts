@@ -1,8 +1,8 @@
 /**
  * Base class for every background-worker supervisor on the main
- * thread. Owns the parts that were duplicated across six previously-
+ * thread. Owns the parts that were duplicated across the previously-
  * standalone manager files (`embeddings`, `reflection`, `summary`,
- * `journal`, `samskara`, `attachment_expiry`):
+ * `wiki`, `samskara`, `attachment_expiry`):
  *
  *   - cross-tab Web Lock acquisition + idempotent `start()` /
  *     `stop()` lifecycle
@@ -35,7 +35,7 @@
  *
  *   - `onWorkerMessage(data)`: handle worker-to-main-thread
  *     messages other than the two log channels (e.g. samskara's
- *     `mint` UI bubbles, journal's `progress: journaled` change-
+ *     `mint` UI bubbles, wiki's `progress: processed` change-
  *     events). Default is a no-op.
  *
  * What subclasses CAN'T currently customise (but feel free to
@@ -107,7 +107,7 @@ export abstract class BaseWorkerManager<O extends BaseStartOpts = BaseStartOpts>
 
   /**
    * The worker reference. Exposed to subclasses so they can post
-   * live-update messages (e.g. journal's `setTimezone`) without
+   * live-update messages (e.g. wiki's `setTimezone`) without
    * needing to re-implement the auth-bridge or lifecycle.
    */
   protected worker: Worker | null = null;

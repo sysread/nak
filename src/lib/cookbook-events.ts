@@ -32,8 +32,8 @@ export function notifyCookbookChanged(): void {
 /**
  * Subscribe to COOKBOOK_CHANGE_EVENT. Returns an `off` callback that
  * removes the listener; intended for use inside `$effect` blocks that
- * want a single returned cleanup. Mirrors `onJournalChange` in
- * `journal-events.ts`. No-op + no-op cleanup when `window` is
+ * want a single returned cleanup. Mirrors `onWikiChange` in
+ * `wiki-events.ts`. No-op + no-op cleanup when `window` is
  * undefined so SSR / worker contexts compile without guarding the
  * call site.
  */

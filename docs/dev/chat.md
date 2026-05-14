@@ -202,19 +202,9 @@ A chat turn goes:
 - **Summaries / reflection / journal** — no direct call;
   their triggers watch for a terminal assistant message
   newer than `last_summarised_msg_id` /
-  `last_reflected_msg_id` / `last_journaled_msg_id`. The
-  chat loop creates that assistant message; the workers
-  pick it up on their next poll. See `./summaries.md`,
-  `./memory.md`, `./journal.md`.
-- **Journal** — the model reaches for `journal_search` when
-  reflective topics come up. The chat-loop used to auto-inject
-  today's automatic journal entry on the opening turn of each
-  conversation, but that path was retired with the wire-shape
-  refactor; the always-on toolbox now carries `journal_search`,
-  `journal_list`, and `journal_read` so the model can pull the
-  same content on demand when it actually helps. The Journal
-  modal + drawer tab + Settings pane are parallel to the
-  Cookbook surfaces. See `./journal.md`.
+  `last_reflected_msg_id`. The chat loop creates that
+  assistant message; the workers pick it up on their next
+  poll. See `./summaries.md`, `./memory.md`.
 - **Settings** — `Chat.svelte` reads `app.defaultModel`,
   `app.defaultReasoningEffort`, `app.defaultVerbosity`,
   `app.systemPrompts` from the state store. Settings writes

@@ -85,10 +85,6 @@ interface MockSupabase {
   samskaraFireTopK: ReturnType<typeof vi.fn>;
   samskaraRecordFires: ReturnType<typeof vi.fn>;
   samskaraRecordSubstrate: ReturnType<typeof vi.fn>;
-  // Journal - runChatLoop fetches today's automatic entry on the
-  // opening turn to build the `Today's journal` appendix. Default to
-  // an empty list so legacy tests keep passing.
-  getJournalEntriesForDate: ReturnType<typeof vi.fn>;
   // Attachments - runChatLoop fetches a lightweight summary of every
   // attachment in the thread on every turn to build the
   // `<thread_attachments>` block. Default to empty so legacy tests
@@ -161,7 +157,6 @@ function mockSupabase(overrides: Partial<MockSupabase> = {}): {
     samskaraFireTopK: vi.fn(async () => []),
     samskaraRecordFires: vi.fn(async () => undefined),
     samskaraRecordSubstrate: vi.fn(async () => 'sub-stub'),
-    getJournalEntriesForDate: vi.fn(async () => []),
     listAttachmentSummariesForThread: vi.fn(async () => []),
     setThreadIntuitionPayload: vi.fn(async () => undefined),
     setThreadContextRecallPayload: vi.fn(async () => undefined),
@@ -931,7 +926,7 @@ describe('runChatLoop', () => {
       userId: 'u-1',
       modelId: 'm',
       history: [{ role: 'user', content: 'what time is it?' }],
-      journalTimezone: 'America/Los_Angeles',
+      displayTimezone: 'America/Los_Angeles',
       signal: new AbortController().signal,
     });
     const meta = seenRequests[0].messages[1].content as string;
@@ -943,7 +938,7 @@ describe('runChatLoop', () => {
     );
   });
 
-  it('falls back to a usable zone label when journalTimezone is null', async () => {
+  it('falls back to a usable zone label when displayTimezone is null', async () => {
     // No configured timezone falls back to the runtime's reported
     // zone; in the Vitest environment that's typically UTC. The
     // important contract is that the wall-clock paragraph lands with
@@ -2151,16 +2146,14 @@ describe('runChatLoop', () => {
      * Disambiguation by message content: each recall agent appends its
      * own prompt as the final user turn. Memory-recall mentions
      * `memory_search`; conversation-recall mentions `conversation_search`;
-     * wiki-recall mentions `wiki_search`; journal-recall mentions
-     * `journal_search`. The mock keys off those tokens to know which
-     * agent is asking. Notes default to null (empty signal) for any
-     * layer the caller doesn't override.
+     * wiki-recall mentions `wiki_search`. The mock keys off those
+     * tokens to know which agent is asking. Notes default to null
+     * (empty signal) for any layer the caller doesn't override.
      */
     interface RecallVeniceNotes {
       memory?: string | null;
       conversation?: string | null;
       wiki?: string | null;
-      journal?: string | null;
     }
     function recallVenice(
       recallCalls: ChatRequest[],
@@ -2170,7 +2163,6 @@ describe('runChatLoop', () => {
       const memoryNote = notes.memory ?? null;
       const conversationNote = notes.conversation ?? null;
       const wikiNote = notes.wiki ?? null;
-      const journalNote = notes.journal ?? null;
       return {
         async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
           for (const ev of streamRound) yield ev;
@@ -2193,8 +2185,6 @@ describe('runChatLoop', () => {
             text = pick(conversationNote);
           } else if (content.includes('wiki_search')) {
             text = pick(wikiNote);
-          } else if (content.includes('journal_search')) {
-            text = pick(journalNote);
           }
           return {
             text,
@@ -2223,8 +2213,8 @@ describe('runChatLoop', () => {
       const venice = recallVenice(recallCalls, {
         memory: 'I remember the user is past the basics on Haskell.',
         conversation: 'we landed on monad transformers last time.',
-        // Wiki and journal stay silent (default null) so the stitched
-        // note here is just the two-layer memory + conversation case.
+        // Wiki stays silent (default null) so the stitched note here
+        // is just the two-layer memory + conversation case.
       });
       const { svc, mocks } = mockSupabase({
         // Both recall agents call listMessages; return one user turn so
@@ -2256,11 +2246,10 @@ describe('runChatLoop', () => {
           onContextRecallUpdate: (payload) => updates.push(payload),
         },
       });
-      // Four completeChat calls = one per child agent (all four single-
+      // Three completeChat calls = one per child agent (all three single-
       // round settle since the agents don't issue tool calls in this
-      // test). Pipeline fans out memory, conversation, wiki, journal
-      // in parallel.
-      expect(recallCalls).toHaveLength(4);
+      // test). Pipeline fans out memory, conversation, wiki in parallel.
+      expect(recallCalls).toHaveLength(3);
       // The chat-loop fires onContextRecallUpdate exactly once per
       // refresh, with the freshly-computed payload.
       expect(updates).toHaveLength(1);
@@ -2350,7 +2339,7 @@ describe('runChatLoop', () => {
         signal: new AbortController().signal,
         contextRecallEnabled: true,
       });
-      expect(recallCalls).toHaveLength(4); // all four children ran
+      expect(recallCalls).toHaveLength(3); // all three children ran
       expect(mocks.setThreadContextRecallPayload).toHaveBeenCalledTimes(1);
       const persistedArg = mocks.setThreadContextRecallPayload.mock.calls[0][1];
       expect(persistedArg).toMatchObject({ v: 1, note: '' });
@@ -2451,23 +2440,12 @@ describe('runChatLoop', () => {
               finishReason: 'stop',
             };
           }
-          // The wiki and journal recall agents also gate on the same
-          // perception-released signal. We don't need notes from them
-          // for the assertions below; the empty signal is fine. They
-          // exist so the test correctly captures the four-way fan-out
+          // The wiki recall agent also gates on the same
+          // perception-released signal. We don't need a note from it
+          // for the assertions below; the empty signal is fine. It
+          // exists so the test correctly captures the three-way fan-out
           // the pipeline now performs.
           if (lastUserText.includes('wiki_search')) {
-            await recallGate;
-            return {
-              text: '{"kind":"none"}',
-              reasoning: '',
-              toolCalls: [],
-              usage: null,
-              citations: [],
-              finishReason: 'stop',
-            };
-          }
-          if (lastUserText.includes('journal_search')) {
             await recallGate;
             return {
               text: '{"kind":"none"}',
@@ -2506,10 +2484,10 @@ describe('runChatLoop', () => {
       // Both caches written.
       expect(mocks.setThreadIntuitionPayload).toHaveBeenCalledTimes(1);
       expect(mocks.setThreadContextRecallPayload).toHaveBeenCalledTimes(1);
-      // Total calls = 7 intuition + 4 recall agents (memory,
-      // conversation, wiki, journal).
-      expect(allCalls.length).toBe(11);
-      // The four recall calls were gated on an intuition-side event -
+      // Total calls = 7 intuition + 3 recall agents (memory,
+      // conversation, wiki).
+      expect(allCalls.length).toBe(10);
+      // The three recall calls were gated on an intuition-side event -
       // if the chat-loop had run intuition first and recall second
       // (serial), the gate-release would have happened during the
       // intuition phase, AFTER recall would have already settled.
@@ -2523,13 +2501,12 @@ describe('runChatLoop', () => {
           (c) =>
             c.lastUser.includes('memory_search') ||
             c.lastUser.includes('conversation_search') ||
-            c.lastUser.includes('wiki_search') ||
-            c.lastUser.includes('journal_search')
+            c.lastUser.includes('wiki_search')
         )
         .map((c) => c.at);
       expect(perceptionAt).toBeDefined();
-      // Four-way fan-out: memory + conversation + wiki + journal.
-      expect(recallTimes.length).toBe(4);
+      // Three-way fan-out: memory + conversation + wiki.
+      expect(recallTimes.length).toBe(3);
       for (const t of recallTimes) {
         expect(t).toBeGreaterThanOrEqual(perceptionAt!);
       }

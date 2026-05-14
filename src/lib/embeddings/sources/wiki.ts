@@ -5,8 +5,8 @@
  *
  * Thin wrapper over two SupabaseService RPCs (`claimNextPendingWikiArticle`
  * and `saveWikiArticleEmbedding`) plus a string-builder helper. Same
- * shape as `./memories.ts` and `./journal.ts`; the generic loop in
- * `../loop.ts` drives every source the worker registers.
+ * shape as `./memories.ts`; the generic loop in `../loop.ts` drives
+ * every source the worker registers.
  */
 import type { SupabaseService } from '../../supabase';
 import type { EmbeddingSource, PendingItem } from '../types';
@@ -19,7 +19,7 @@ import { MAX_WIKI_CONTENT_CHARS } from '../../wiki';
  * with title verbatim and double-newline before the body to give the
  * embedding model a soft boundary.
  *
- * Defensive truncation mirrors the memories and journal adapters:
+ * Defensive truncation mirrors the memories adapter:
  * the tool boundary already caps content, but historical rows or
  * direct DB writes might not have, and silent truncation keeps the
  * worker from looping forever on a too-long row Venice rejects.

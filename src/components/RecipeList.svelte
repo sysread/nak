@@ -11,7 +11,7 @@
    * `supabase.searchRecipes` so the closest-meaning recipe floats to
    * the top (semantic hits before ILIKE hits, dedup at the supabase
    * layer). While the request is in flight a Scanner replaces the
-   * listing - the same shape the wiki and journal sidebars use.
+   * listing - the same shape the wiki sidebar uses.
    *
    * The sort picker is hidden during a search; relevance ordering is
    * the active sort in that mode, and the picker would be a confusing
@@ -215,7 +215,7 @@
     align-items: center;
     padding: 0.4rem 0.6rem;
     /* Space below the divider so the first recipe row doesn't crowd
-       the search input. Mirrors the chats / journal / memories tabs. */
+       the search input. Mirrors the chats / memories / wiki tabs. */
     margin-bottom: 0.5rem;
     border-bottom: 1px solid var(--border);
   }

@@ -100,8 +100,8 @@
   //   - Auth: only rendered when the user is signed OUT (no
   //     session). Most cold-starts arrive with a valid session and
   //     never touch this component.
-  //   - Cookbook / Journal / Memories: panel screens, only render
-  //     when the corresponding drawerTab is active.
+  //   - Cookbook / Memories: panel screens, only render when the
+  //     corresponding drawerTab is active.
   //   - Settings / Help / Samskara / Intuition: pure modals,
   //     rendered behind a `show*` derived state.
   //
@@ -112,7 +112,6 @@
   // for none of them at boot.
   type AuthComponent = typeof import('./Auth.svelte').default;
   type CookbookComponent = typeof import('./Cookbook.svelte').default;
-  type JournalComponent = typeof import('./Journal.svelte').default;
   type MemoriesComponent = typeof import('./Memories.svelte').default;
   type WikiComponent = typeof import('./Wiki.svelte').default;
   type SettingsComponent = typeof import('./Settings.svelte').default;
@@ -121,7 +120,6 @@
   type IntuitionComponent = typeof import('./Intuition.svelte').default;
   type WikiChangelogComponent = typeof import('./WikiChangelog.svelte').default;
   import RecipeList from '../components/RecipeList.svelte';
-  import JournalList from '../components/JournalList.svelte';
   import MemoryList from '../components/MemoryList.svelte';
   import WikiList from '../components/WikiList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
@@ -130,11 +128,6 @@
     loadRecipes,
   } from '$lib/cookbook-store.svelte';
   import { onCookbookChange } from '$lib/cookbook-events';
-  import {
-    journal,
-    loadJournalEntries,
-  } from '$lib/journal-store.svelte';
-  import { onJournalChange } from '$lib/journal-events';
   import {
     memoriesStore,
     runMemoriesSearch,
@@ -145,7 +138,6 @@
   } from '$lib/wiki-store.svelte';
   import { onWikiChange } from '$lib/wiki-events';
   import { wikiLibrarianRunner } from '$lib/agents/wiki-librarian/runner.svelte';
-  import { todayInZone, shiftDay } from '$lib/journal-day';
   import { moodState } from '$lib/samskara/mood.svelte';
   import { bandIndexFor, columnFor } from '$lib/samskara/events';
   import {
@@ -206,7 +198,6 @@
   let LogsDrawerComp: LogsDrawerComponent | null = $state(null);
   let AuthComp: AuthComponent | null = $state(null);
   let CookbookComp: CookbookComponent | null = $state(null);
-  let JournalComp: JournalComponent | null = $state(null);
   let MemoriesComp: MemoriesComponent | null = $state(null);
   let WikiComp: WikiComponent | null = $state(null);
   let SettingsComp: SettingsComponent | null = $state(null);
@@ -236,11 +227,6 @@
   $effect(() => {
     if (drawerTab === 'recipes' && !CookbookComp) {
       void import('./Cookbook.svelte').then((m) => (CookbookComp = m.default));
-    }
-  });
-  $effect(() => {
-    if (drawerTab === 'journal' && !JournalComp) {
-      void import('./Journal.svelte').then((m) => (JournalComp = m.default));
     }
   });
   $effect(() => {
@@ -280,32 +266,26 @@
       void import('./Intuition.svelte').then((m) => (IntuitionComp = m.default));
     }
   });
-  // Trigger flags for the recipe and journal "new" top-bar buttons.
-  // Chat.svelte sets these to true; the panel component resets them
-  // via the $bindable prop after handling the event.
+  // Trigger flag for the recipe "new" top-bar button. Chat.svelte
+  // sets this to true; the panel component resets it via the
+  // $bindable prop after handling the event.
   let cookbookTriggerNew = $state(false);
-  let journalTriggerNew = $state(false);
   // Trigger flag for the wiki "Run librarian now" top-bar button.
-  // Same $bindable pattern as cookbook/journal: Chat.svelte flips it
-  // to true on click, Wiki.svelte opens its confirmation strip and
-  // resets the flag.
+  // Same $bindable pattern: Chat.svelte flips it to true on click,
+  // Wiki.svelte opens its confirmation strip and resets the flag.
   let wikiLibrarianTrigger = $state(false);
-  // Focused date for the journal top-bar navigation. Derived from the
-  // route so back/forward keeps the header in sync with the panel.
-  const journalToday = $derived(todayInZone(app.journalTimezone || null));
-  const journalFocusedDate = $derived(route.journal_date ?? journalToday);
   /**
    * Sidebar drawer tab. Backed by `route.drawer` - absent in the URL
-   * means "chats" (the default). 'recipes', 'journal', and 'memories'
-   * render their own list in place of the thread list. Tab switches
-   * use replaceState so a tab flip doesn't fill history with
-   * UI-chrome entries.
+   * means "chats" (the default). 'recipes' and 'memories' render
+   * their own list in place of the thread list. Tab switches use
+   * replaceState so a tab flip doesn't fill history with UI-chrome
+   * entries.
    */
-  const drawerTab = $derived<'chats' | 'recipes' | 'journal' | 'memories' | 'wiki'>(
+  const drawerTab = $derived<'chats' | 'recipes' | 'memories' | 'wiki'>(
     route.drawer ?? 'chats'
   );
-  // Recipe, journal, and memory search/listing state has moved to the
-  // RecipeList / JournalList / MemoryList sidebar components.
+  // Recipe and memory search/listing state has moved to the
+  // RecipeList / MemoryList sidebar components.
 
   function onPickRecipesTab(): void {
     navigate({ drawer: 'recipes' }, { replace: true });
@@ -315,16 +295,6 @@
     // listener registered in onMount below.
     if (app.supabase && cookbook.recipes.length === 0 && !cookbook.loading) {
       void loadRecipes(app.supabase);
-    }
-  }
-
-  // Journal drawer tab. Same shape as onPickRecipesTab - the list
-  // is lazy-loaded the first time the tab is opened, and the store
-  // keeps itself fresh via JOURNAL_CHANGE_EVENT.
-  function onPickJournalTab(): void {
-    navigate({ drawer: 'journal' }, { replace: true });
-    if (app.supabase && !journal.loaded && !journal.loading) {
-      void loadJournalEntries(app.supabase, { limit: 200 });
     }
   }
 
@@ -360,22 +330,10 @@
     void loadRecipes(app.supabase);
   });
 
-  // Parallel for the journal tab. Gates on `journal.loaded` rather
-  // than `journal.entries.length === 0` - an account with zero entries
-  // would otherwise re-fire this effect every time the load resolves
-  // empty (loading flips false, deps trip, effect runs, loads again,
-  // forever). The spinner never stops and the modal that shares the
-  // store sees the same flicker.
-  $effect(() => {
-    if (route.drawer !== 'journal') return;
-    if (!app.supabase) return;
-    if (journal.loaded || journal.loading) return;
-    void loadJournalEntries(app.supabase, { limit: 200 });
-  });
-
-  // Parallel for the memories tab. Same `loaded`-gate rationale as
-  // journal: an account with zero memories would re-fire the load
-  // forever otherwise.
+  // Parallel for the memories tab. `loaded`-gate prevents a re-fire
+  // loop: an account with zero memories would otherwise re-fire the
+  // load every time the empty result resolved (loading flips false,
+  // deps trip, effect runs, loads again, forever).
   $effect(() => {
     if (route.drawer !== 'memories') return;
     if (!app.supabase) return;
@@ -401,15 +359,6 @@
     if (!app.supabase) return;
     if (!wikiStore.loaded) return;
     void runWikiSearch(app.supabase, app.venice);
-  }
-
-  function onJournalStoreChanged(): void {
-    // Any journal write (tool path, worker path, modal compose save)
-    // invalidates the list - only reload if we've already loaded it,
-    // so an unused drawer / modal stays lazy.
-    if (!app.supabase) return;
-    if (!journal.loaded) return;
-    void loadJournalEntries(app.supabase, { limit: 200 });
   }
 
   function onCookbookStoreChanged(): void {
@@ -1254,7 +1203,7 @@
   });
 
   // Sibling to the focus-on-selectThread call: when the user flips the
-  // drawer tab from recipes/journal/memories back to chats, the composer
+  // drawer tab from recipes/memories/wiki back to chats, the composer
   // remounts but selectThread doesn't fire (the active thread didn't
   // change), so we'd otherwise leave the user staring at an unfocused
   // textarea. Track the previous tab and focus on the chats edge.
@@ -1513,18 +1462,16 @@
       await tick();
       composerEl?.focus();
     });
-    // Cookbook + journal change listeners. Fire when a recipe_* /
-    // journal_* tool call succeeds, so the drawer tab's list reflects
-    // a model-driven save without the user having to reopen the tab.
+    // Cookbook + wiki change listeners. Fire when a recipe_* or
+    // wiki_* tool call succeeds, so the drawer tab's list reflects a
+    // model-driven save without the user having to reopen the tab.
     // We only reload when we've already loaded at least once - a
     // fresh unlock that never opened those tabs stays lazy.
     const offCookbook = onCookbookChange(onCookbookStoreChanged);
-    const offJournal = onJournalChange(onJournalStoreChanged);
     const offWiki = onWikiChange(onWikiStoreChanged);
     return () => {
       unsubscribe();
       offCookbook();
-      offJournal();
       offWiki();
     };
   });
@@ -2621,7 +2568,7 @@
           emphasisMarkdown: ctx.sendEmphasis,
           userName: ctx.sendUserName,
           userLocation: ctx.sendUserLocation,
-          journalTimezone: app.journalTimezone || null,
+          displayTimezone: app.displayTimezone || null,
           lastAssistantTimestamp: findLastAssistantTimestamp(),
           intuitionModelId: agentModel('intuition').id,
           intuitionMood: intuitionMoodArg,
@@ -3355,7 +3302,7 @@
     drawerOpen = !drawerOpen;
   }
   // On mobile the drawer is a modal overlay, so picking a row from it
-  // (thread, recipe, or journal day) should dismiss it once the main
+  // (thread, recipe, memory, or wiki article) should dismiss it once the main
   // panel has navigated. On desktop the sidebar is a persistent column,
   // so leave it alone. Idempotent on desktop too - drawerOpen stays
   // true when the viewport is wide.
@@ -4282,16 +4229,6 @@
               type="button"
               role="tab"
               class="thread grow"
-              class:active={drawerTab === 'journal'}
-              aria-selected={drawerTab === 'journal'}
-              onclick={() => onPickJournalTab()}
-            >Journal</button>
-          </div>
-          <div class="row thread-row">
-            <button
-              type="button"
-              role="tab"
-              class="thread grow"
               class:active={drawerTab === 'memories'}
               aria-selected={drawerTab === 'memories'}
               onclick={() => onPickMemoriesTab()}
@@ -4313,9 +4250,9 @@
       <div class="thread-list">
         <!-- Conversation search lives below the tab nav and above the
              thread list, mirroring the search position inside
-             RecipeList / JournalList / MemoryList. The wrapper carries
-             the divider border so the four tabs all read the same:
-             tabs, hr, search, list. The topbar's `.new-thread-mini`
+             RecipeList / MemoryList. The wrapper carries the divider
+             border so the four tabs all read the same: tabs, hr,
+             search, list. The topbar's `.new-thread-mini`
              icon (visible on every viewport, not just mobile) is the
              primary new-thread affordance. -->
         <div class="thread-list-controls">
@@ -4410,7 +4347,7 @@
                Escape or clearing the input returns to the list view.
                An in-flight search renders a Scanner in place of any
                prior result list - the spinner-replaces-entries idiom
-               that the wiki / recipe / journal sidebars also use, so
+               that the wiki / recipe sidebars also use, so
                every search surface in the app gives the same kind of
                progress feedback. -->
           {#if searchBusy}
@@ -4514,11 +4451,6 @@
              panel (no modal). onSelect closes the mobile drawer so the
              newly-navigated panel is visible without a second tap. -->
         <RecipeList onSelect={closeDrawerOnMobile} />
-      {:else if drawerTab === 'journal'}
-        <!-- Journal tab. JournalList owns the search and date rows.
-             Clicking a date navigates to that day in the main panel.
-             onSelect mirrors the recipe + thread flow on mobile. -->
-        <JournalList onSelect={closeDrawerOnMobile} />
       {:else if drawerTab === 'memories'}
         <!-- Memories tab. MemoryList owns the search and label rows.
              Clicking a label scrolls the panel-side card into view.
@@ -4555,7 +4487,7 @@
           <!-- Memories used to live behind a footer bookmark icon
                (and a Settings button). Both went away when memories
                graduated to a sibling drawer tab next to chats /
-               recipes / journal - the Memories tab IS the entry
+               recipes - the Memories tab IS the entry
                point now. The Cookbook icon below stays because it's
                a one-tap affordance to the Recipes tab from any
                panel; the Memories tab covers that role itself. -->
@@ -4702,50 +4634,6 @@
             <span class="title-btn panel-section-label">Recipes</span>
           </div>
 
-        {:else if drawerTab === 'journal'}
-          <!-- Journal top-bar: new-entry + day navigation. Nav order is
-               [<] [Today] [>] so the primary forward/back symmetry is
-               unbroken with Today nestled in between as the "home" action.
-               Date display moved into Journal.svelte's body as a heading. -->
-          <button
-            class="secondary icon-btn new-thread-mini"
-            onclick={() => (journalTriggerNew = true)}
-            title="New journal entry"
-            aria-label="New journal entry"
-          >
-            <!-- Feather "book-open" — open book reads as journal/diary. -->
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
-              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
-            </svg>
-          </button>
-          <div class="journal-topbar-nav">
-            <button
-              type="button"
-              class="secondary"
-              onclick={() => navigate({ journal_date: shiftDay(journalFocusedDate, -1) })}
-              aria-label="Previous day"
-              title="Previous day"
-            >‹</button>
-            {#if journalFocusedDate !== journalToday}
-              <button
-                type="button"
-                class="secondary"
-                onclick={() => navigate({ journal_date: journalToday })}
-                title="Jump to today"
-              >Today</button>
-            {/if}
-            <button
-              type="button"
-              class="secondary"
-              onclick={() => navigate({ journal_date: shiftDay(journalFocusedDate, 1) })}
-              aria-label="Next day"
-              title="Next day"
-              disabled={journalFocusedDate >= journalToday}
-            >›</button>
-          </div>
-          <div class="title-wrap"></div>
         {:else if drawerTab === 'memories'}
           <!-- Memories top-bar. No new-row affordance (memories are
                written by the reflection agent and the assistant's
@@ -4817,7 +4705,7 @@
         {/if}
         <!-- Logs drawer toggle. Lives outside the per-tab branches so it
              appears as the trailing top-bar action on chats, recipes,
-             journal, and memories alike - the in-app log viewer is a
+             memories, and wiki alike - the in-app log viewer is a
              cross-cutting tool, not chat-specific. Document-glyph icon
              reads as "open the reading panel" rather than "new document".
              Wired to the logsDrawer rune singleton; the LogsDrawer
@@ -5757,16 +5645,8 @@
             onDeselect={openDrawerOnMobile}
           />
         {/if}
-      {:else if drawerTab === 'journal'}
-        <!-- Journal panel. Journal.svelte now renders inline - no modal
-             wrapper, no header. Date navigation in the top-bar drives
-             route.journal_date, which the panel reads. The triggerNewEntry
-             prop wires the top-bar book button to the compose flow. -->
-        {#if JournalComp}
-          <JournalComp bind:triggerNewEntry={journalTriggerNew} />
-        {/if}
       {:else if drawerTab === 'memories'}
-        <!-- Memories panel. Same shape as Cookbook / Journal: inline,
+        <!-- Memories panel. Same shape as Cookbook: inline,
              no modal chrome. The sidebar MemoryList shares the same
              `memoriesStore` so a search keystroke filters this list
              too. Editing happens inline on the cards. -->
@@ -5838,7 +5718,7 @@
   {#if showWikiChangelog && WikiChangelogComp}
     <WikiChangelogComp onClose={() => navigate({ modal: null })} />
   {/if}
-  <!-- Cookbook, Journal, and Memories now render inline in the main
-       panel (drawerTab === 'recipes' / 'journal' / 'memories') rather
+  <!-- Cookbook, Memories, and Wiki now render inline in the main
+       panel (drawerTab === 'recipes' / 'memories' / 'wiki') rather
        than as modals. -->
 {/if}

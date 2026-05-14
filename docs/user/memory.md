@@ -96,7 +96,7 @@ per invocation, at most.
 ## Browsing memories directly
 
 The **Memories** tab in the left drawer is the entry point - same
-row of tabs as Chats, Recipes, and Journal. Pick it and the
+row of tabs as Chats, Recipes, and Wiki. Pick it and the
 sidebar fills with every memory on your account, most recent
 first; the main panel waits for you to pick one.
 
@@ -109,7 +109,7 @@ main panel - one card at a time, with the full body, confidence
 tag, last-touched timestamp, relations, and the inline edit /
 delete / reaffirm / doubt / + Relate controls.
 
-Switching to a different drawer tab (Chats, Recipes, Journal)
+Switching to a different drawer tab (Chats, Recipes, Wiki)
 and back keeps your selection - the picked memory is on the URL,
 so a refresh or a back button lands you on the same card.
 

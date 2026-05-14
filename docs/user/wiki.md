@@ -7,9 +7,8 @@ titled article in encyclopedic third-person prose. There's no
 nesting; everything sits at the same level and the drawer lists
 articles alphabetically.
 
-The wiki is a peer to Memory and Journal. Memories are atomic facts
-the assistant references inline. Journal entries are dated reflections
-about how a conversation went. Wiki articles are the longer-form
+The wiki is a peer to Memory. Memories are atomic facts the
+assistant references inline. Wiki articles are the longer-form
 topical pages that cover what something IS - "the recipe project",
 "Maya", "Lisbon trip planning". An article sits across many
 conversations.
@@ -291,12 +290,10 @@ about yourself - a project, a person, a place, a habit - the
 assistant will call `wiki_search` to pull the relevant article so its
 reply is grounded rather than guessing.
 
-This is the deliberate split between the three knowledge surfaces:
+This is the deliberate split between the two knowledge surfaces:
 
 - **Memory** - atomic facts, may be primed inline at the start of a
   conversation.
-- **Journal** - dated reflections; today's automatic entry is included
-  in the system prompt on the first turn.
 - **Wiki** - encyclopedic articles, never auto-included. Always
   retrieved on demand.
 
@@ -320,5 +317,5 @@ reset button:
 - **Librarian** - whether the periodic librarian agent runs in the
   background to consolidate and fact-check.
 
-Both toggles are on by default. The wiki uses the same day
-boundary timezone you set on the Journal pane.
+Both toggles are on by default. The wiki uses the display timezone
+you set under Settings -> AI -> About you.

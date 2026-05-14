@@ -4,7 +4,7 @@
  * has no per-thread queue.
  *
  *   - Lease partition is `'wiki-librarian'` (distinct from `'wiki'`,
- *     `'journal'`, etc.) so the librarian can run alongside the
+ *     `'reflection'`, etc.) so the librarian can run alongside the
  *     other workers without contention.
  *   - The loop's `minIntervalSeconds` defaults to 12h; the idle
  *     nap defaults to 1h so a device that woke up too-soon checks

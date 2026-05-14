@@ -30,22 +30,22 @@
    * The `busy` flag is shared across forms so double-submits during an
    * in-flight save are harmless.
    *
-   * Convention: AI / Journal / Appearance controls auto-apply on
-   * change. No Save buttons. Each handler does an optimistic in-memory
-   * flip + setter, then writes through to Supabase via
-   * `updateSettings`, then rolls back the in-memory state if the write
-   * throws. Radios and selects fire on `change`, checkboxes on
-   * `change`, free-form text inputs on the input's `change` event
-   * (blur or Enter, only when the value differs) so a half-typed
-   * value doesn't fire a roundtrip per keystroke. The Keys and
-   * Security panes are deliberate exceptions - they re-encrypt the
-   * config blob and need a deliberate Save gesture so a typo can't
-   * lock the user out. The Journal -> Day boundary timezone field
-   * is also deliberate: IANA-zone validation needs a commit gesture
-   * so a half-typed zone (e.g. "America/") doesn't keep erroring on
-   * every keystroke. Those three are the only Save buttons in the
-   * modal; if you find yourself adding another one, the convention
-   * says you probably want auto-apply with rollback instead.
+   * Convention: AI / Appearance controls auto-apply on change. No
+   * Save buttons. Each handler does an optimistic in-memory flip +
+   * setter, then writes through to Supabase via `updateSettings`,
+   * then rolls back the in-memory state if the write throws. Radios
+   * and selects fire on `change`, checkboxes on `change`, free-form
+   * text inputs on the input's `change` event (blur or Enter, only
+   * when the value differs) so a half-typed value doesn't fire a
+   * roundtrip per keystroke. The Keys and Security panes are
+   * deliberate exceptions - they re-encrypt the config blob and need
+   * a deliberate Save gesture so a typo can't lock the user out.
+   * The Timezone field inside About you is also deliberate:
+   * IANA-zone validation needs a commit gesture so a half-typed zone
+   * (e.g. "America/") doesn't keep erroring on every keystroke.
+   * Those three are the only Save buttons in the modal; if you find
+   * yourself adding another one, the convention says you probably
+   * want auto-apply with rollback instead.
    */
   import { changePassword, saveConfig, toExportedConfig } from '$lib/config';
   import {
@@ -57,18 +57,15 @@
     persistDefaultLogLevel,
     persistEmphasisMarkdown,
     persistNotifyOnComplete,
-    persistJournalAutomaticEnabled,
     persistWikiAutomaticEnabled,
     persistWikiLibrarianEnabled,
-    persistJournalTimezone,
+    persistDisplayTimezone,
     persistSystemPrompts,
     persistTheme,
     persistUserName,
     persistUserLocation,
   } from '$lib/state.svelte';
-  import { detectTimezone, normalizeTimezone } from '$lib/journal-day';
-  import { downloadFullArchive } from '$lib/journal-export';
-  import { resetAllJournalData } from '$lib/journal-store.svelte';
+  import { detectTimezone, normalizeTimezone } from '$lib/timezone';
   import { resetAllWikiData } from '$lib/wiki-store.svelte';
   import { isSupported as notificationsSupported, requestPermission } from '$lib/notifications.svelte';
   import { LOG_LEVELS, LOG_LEVEL_LABELS, type LogLevel } from '$lib/logger.svelte';
@@ -116,7 +113,6 @@
   type Group =
     | 'keys'
     | 'ai'
-    | 'journal'
     | 'wiki'
     | 'appearance'
     | 'usage'
@@ -124,7 +120,6 @@
     | 'about';
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'ai', label: 'AI' },
-    { id: 'journal', label: 'Journal' },
     { id: 'wiki', label: 'Wiki' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'usage', label: 'Usage' },
@@ -178,25 +173,17 @@
   let modelError = $state<string | null>(null);
   let modelInfo = $state<string | null>(null);
 
-  // --- Journal pane ---
-  // Journal toggle + timezone. Both pass through state.svelte so the
-  // journaling worker starts/stops and switches day-bucket zones in
-  // real time. Persisted on `profiles.settings.journalAutomaticEnabled`
-  // / `profiles.settings.journalTimezone`.
-  let journalAutomaticEnabled = $state<boolean>(app.journalAutomaticEnabled);
-  let journalTimezone = $state<string>(app.journalTimezone || detectTimezone());
-  let journalError = $state<string | null>(null);
-  let journalInfo = $state<string | null>(null);
-  let journalExportBusy = $state(false);
-  let journalResetBusy = $state(false);
+  // Display timezone. Lives in the AI -> About you section because
+  // the model uses it to reason about "what time is it for the user"
+  // in the per-turn metadata system message; the wiki agent reads it
+  // too to bucket day-eligible threads. Persisted on
+  // `profiles.settings.displayTimezone`.
+  let displayTimezone = $state<string>(app.displayTimezone || detectTimezone());
 
   // --- Wiki pane ---
-  // Toggle for the autonomous wiki agent. Mirrors the journal pane's
-  // shape - the toggle pushes through state.svelte.ts so the worker
-  // starts/stops in real time, and persists on
-  // `profiles.settings.wikiAutomaticEnabled`. The wiki shares the
-  // journal pane's timezone preference (one user-tz covers both
-  // background subsystems), so this pane is just the toggle.
+  // Toggle for the autonomous wiki agent. The toggle pushes through
+  // state.svelte.ts so the worker starts/stops in real time, and
+  // persists on `profiles.settings.wikiAutomaticEnabled`.
   let wikiAutomaticEnabled = $state<boolean>(app.wikiAutomaticEnabled);
   let wikiLibrarianEnabled = $state<boolean>(app.wikiLibrarianEnabled);
   let wikiError = $state<string | null>(null);
@@ -953,22 +940,6 @@
     }
   }
 
-  async function onToggleJournalAutomatic(next: boolean): Promise<void> {
-    journalError = null;
-    journalInfo = null;
-    const prev = journalAutomaticEnabled;
-    journalAutomaticEnabled = next;
-    try {
-      await persistJournalAutomaticEnabled(next);
-      journalInfo = next
-        ? 'Automatic journal enabled.'
-        : 'Automatic journal disabled. Your own entries are unaffected.';
-    } catch (err) {
-      journalAutomaticEnabled = prev;
-      journalError = err instanceof Error ? err.message : String(err);
-    }
-  }
-
   async function onToggleWikiAutomatic(next: boolean): Promise<void> {
     wikiError = null;
     wikiInfo = null;
@@ -1001,78 +972,32 @@
     }
   }
 
-  async function onChangeJournalTimezone(next: string): Promise<void> {
-    journalError = null;
-    journalInfo = null;
+  async function onChangeDisplayTimezone(next: string): Promise<void> {
+    modelError = null;
+    modelInfo = null;
     // Input parsing stays here; it's a UI concern about what the user
     // typed rather than a property of the data being saved.
     const normalized = normalizeTimezone(next);
     if (!normalized) {
-      journalError = `"${next}" is not a recognized IANA timezone.`;
+      modelError = `"${next}" is not a recognized IANA timezone.`;
       return;
     }
-    const prev = journalTimezone;
-    journalTimezone = normalized;
+    const prev = displayTimezone;
+    displayTimezone = normalized;
     try {
-      await persistJournalTimezone(normalized);
-      journalInfo = `Journal day boundary set to ${normalized}.`;
+      await persistDisplayTimezone(normalized);
+      modelInfo = `Display timezone set to ${normalized}.`;
     } catch (err) {
-      journalTimezone = prev;
-      journalError = err instanceof Error ? err.message : String(err);
+      displayTimezone = prev;
+      modelError = err instanceof Error ? err.message : String(err);
     }
   }
 
-  async function onExportJournalArchive(): Promise<void> {
-    if (!app.supabase) return;
-    journalError = null;
-    journalInfo = null;
-    journalExportBusy = true;
-    try {
-      await downloadFullArchive(app.supabase);
-      journalInfo = 'Journal archive downloaded.';
-    } catch (err) {
-      journalError = err instanceof Error ? err.message : String(err);
-    } finally {
-      journalExportBusy = false;
-    }
-  }
 
-  // Settings -> Journal -> Reset. Confirmed-irreversible nuke of every
-  // journal entry plus the per-thread journal pipeline state. Resetting
-  // does NOT change the auto-journal toggle - if it's on, the worker
-  // will start rebuilding entries on its next sweep. The confirm copy
-  // names that side effect so the user can flip the toggle off first
-  // if they want a permanent wipe.
-  async function onResetJournalData(): Promise<void> {
-    if (!app.supabase) return;
-    if (journalResetBusy) return;
-    const ok = window.confirm(
-      'Reset all journal data?\n\n' +
-        'This permanently deletes every journal entry (automatic and your own) ' +
-        'and clears the per-conversation journaling state so the worker ' +
-        're-evaluates your threads from scratch.\n\n' +
-        'This cannot be undone. Consider exporting your journal first.\n\n' +
-        'If automatic entries are still enabled, the journaler will begin ' +
-        'rewriting entries on its next sweep.'
-    );
-    if (!ok) return;
-    journalError = null;
-    journalInfo = null;
-    journalResetBusy = true;
-    try {
-      await resetAllJournalData(app.supabase);
-      journalInfo = 'Journal data reset.';
-    } catch (err) {
-      journalError = err instanceof Error ? err.message : String(err);
-    } finally {
-      journalResetBusy = false;
-    }
-  }
-
-  // Settings -> Wiki -> Reset. Mirrors onResetJournalData for the wiki
-  // subsystem. Same caveat about the toggle: leaving auto-articles on
-  // means the agent will rebuild articles from scratch over the next
-  // sweep.
+  // Settings -> Wiki -> Reset. Confirmed-irreversible nuke of every
+  // wiki article plus the per-thread wiki pipeline state. Resetting
+  // does NOT change the auto-articles toggle - if it's on, the agent
+  // will start rebuilding articles on its next sweep.
   async function onResetWikiData(): Promise<void> {
     if (!app.supabase) return;
     if (wikiResetBusy) return;
@@ -1302,6 +1227,49 @@
               onSaveUserLocation((e.currentTarget as HTMLInputElement).value)}
           />
         </div>
+        <p class="subtle" style="font-size:0.85rem">
+          IANA timezone the model uses when reasoning about "what
+          time is it for you" in the system prompt. Browser detected:
+          <code>{detectTimezone()}</code>. Save commits the value
+          (zones go through validation, so a half-typed name doesn't
+          fire an error on every keystroke).
+        </p>
+        <div class="form-row">
+          <label for="display-timezone">Timezone</label>
+          <input
+            id="display-timezone"
+            type="text"
+            bind:value={displayTimezone}
+            placeholder="America/Los_Angeles"
+            list="display-timezone-options"
+            spellcheck="false"
+            autocomplete="off"
+          />
+          <datalist id="display-timezone-options">
+            <option value="UTC"></option>
+            <option value="America/Los_Angeles"></option>
+            <option value="America/Denver"></option>
+            <option value="America/Chicago"></option>
+            <option value="America/New_York"></option>
+            <option value="America/Sao_Paulo"></option>
+            <option value="Europe/London"></option>
+            <option value="Europe/Paris"></option>
+            <option value="Europe/Berlin"></option>
+            <option value="Europe/Moscow"></option>
+            <option value="Africa/Johannesburg"></option>
+            <option value="Asia/Dubai"></option>
+            <option value="Asia/Kolkata"></option>
+            <option value="Asia/Shanghai"></option>
+            <option value="Asia/Tokyo"></option>
+            <option value="Australia/Sydney"></option>
+            <option value="Pacific/Auckland"></option>
+          </datalist>
+          <button
+            type="button"
+            class="secondary"
+            onclick={() => onChangeDisplayTimezone(displayTimezone)}
+          >Save</button>
+        </div>
 
         <h3 class="pane-section">Default model</h3>
         <p class="subtle">
@@ -1505,100 +1473,6 @@
           </div>
         </div>
         {#if promptsError}<p class="error">{promptsError}</p>{/if}
-      {:else if group === 'journal'}
-        <h2>Journal</h2>
-        <p class="subtle">
-          The Journal is a daily diary Nak keeps alongside you. The
-          automatic journaler writes an entry for each day based on your
-          conversations; your own entries sit next to them. Both are
-          searchable and exportable. See the Help modal's Journal
-          page for the full flow.
-        </p>
-
-        <h3 class="pane-section">Automatic entries</h3>
-        <label class="form-row toggle-row">
-          <input
-            type="checkbox"
-            checked={journalAutomaticEnabled}
-            onchange={(e) => onToggleJournalAutomatic(e.currentTarget.checked)}
-          />
-          <span>
-            Let Nak write an automatic entry each day from your
-            conversations. Turning this off stops the background
-            journaler; your own entries and any existing automatic
-            entries are untouched.
-          </span>
-        </label>
-        <p class="subtle" style="font-size:0.85rem">
-          Permanently delete every journal entry (automatic and your own)
-          and clear the per-conversation journaling state so the worker
-          re-evaluates your threads from scratch. Irreversible.
-        </p>
-        <button
-          type="button"
-          class="danger"
-          onclick={onResetJournalData}
-          disabled={journalResetBusy}
-        >{journalResetBusy ? 'Resetting…' : 'Reset journal data'}</button>
-
-        <h3 class="pane-section">Day boundary</h3>
-        <p class="subtle" style="font-size:0.85rem">
-          Journal entries are bucketed by date in this IANA timezone, so a
-          late-night conversation lands on the day you experienced
-          rather than wherever the server is. Browser detected:
-          <code>{detectTimezone()}</code>.
-        </p>
-        <div class="form-row">
-          <label for="journal-timezone">Timezone</label>
-          <input
-            id="journal-timezone"
-            type="text"
-            bind:value={journalTimezone}
-            placeholder="America/Los_Angeles"
-            list="journal-timezone-options"
-            spellcheck="false"
-            autocomplete="off"
-          />
-          <datalist id="journal-timezone-options">
-            <option value="UTC"></option>
-            <option value="America/Los_Angeles"></option>
-            <option value="America/Denver"></option>
-            <option value="America/Chicago"></option>
-            <option value="America/New_York"></option>
-            <option value="America/Sao_Paulo"></option>
-            <option value="Europe/London"></option>
-            <option value="Europe/Paris"></option>
-            <option value="Europe/Berlin"></option>
-            <option value="Europe/Moscow"></option>
-            <option value="Africa/Johannesburg"></option>
-            <option value="Asia/Dubai"></option>
-            <option value="Asia/Kolkata"></option>
-            <option value="Asia/Shanghai"></option>
-            <option value="Asia/Tokyo"></option>
-            <option value="Australia/Sydney"></option>
-            <option value="Pacific/Auckland"></option>
-          </datalist>
-          <button
-            type="button"
-            class="secondary"
-            onclick={() => onChangeJournalTimezone(journalTimezone)}
-          >Save</button>
-        </div>
-
-        <h3 class="pane-section">Export</h3>
-        <p class="subtle" style="font-size:0.85rem">
-          Download every journal entry as a ZIP of Markdown files, one per
-          day. Single-day exports live on each entry card inside the
-          Journal modal.
-        </p>
-        <button
-          type="button"
-          onclick={onExportJournalArchive}
-          disabled={journalExportBusy}
-        >{journalExportBusy ? 'Preparing…' : 'Export all (.zip)'}</button>
-
-        {#if journalError}<p class="error">{journalError}</p>{/if}
-        {#if journalInfo}<p class="subtle">{journalInfo}</p>{/if}
       {:else if group === 'wiki'}
         <h2>Wiki</h2>
         <p class="subtle">
@@ -1656,8 +1530,8 @@
         </label>
 
         <p class="subtle" style="font-size:0.85rem">
-          The wiki uses the same day boundary you set on the Journal
-          pane.
+          The wiki uses the display timezone you set under
+          Settings -> AI -> About you to bucket day-eligible threads.
         </p>
 
         {#if wikiError}<p class="error">{wikiError}</p>{/if}

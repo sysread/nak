@@ -7,7 +7,7 @@
  * the tools module owns the registry (toolboxes, dispatch, wire-shape
  * projection); this module is a consumer of that registry.
  *
- * Other system prompts (reflection agent, journaling agent, recall
+ * Other system prompts (reflection agent, wiki agent, recall
  * sub-agents) live next to their callers; the "chat" in the name is
  * literal - this is the prompt for the user-facing chat loop only.
  *
@@ -105,41 +105,19 @@ Plain-spoken and direct is the baseline, not cold or robotic; the user sets the 
 //
 // The final paragraph introduces the umbrella `context` tool as the
 // preferred first move when the model wants broad context about the
-// user across all four persistent layers (memories, prior conversations,
-// the wiki, the journal). Moderate framing - "consider this first" not
+// user across all three persistent layers (memories, prior conversations,
+// the wiki). Moderate framing - "consider this first" not
 // "always call this first" - so cheap chitchat turns still get to
 // answer directly, but the model has a single round-trip available
-// instead of fanning out four per-layer calls in series whenever it
+// instead of fanning out three per-layer calls in series whenever it
 // does need broad context.
 const RECALL_BLOCK = `\
-You have persistent long-term memory about this user, organised in four parallel layers: atomic facts and preferences (memories), the prior conversations those were worked out in, an encyclopedic wiki of articles ABOUT topics in the user's life (projects, people, places), and a daily reflective journal.
-Topic-boundary recall is handled for you automatically: at the start of a thread, after a topic shift, or after a long stretch without a refresh, the system pre-injects relevant context from all four layers as a stitched <think> block above.
+You have persistent long-term memory about this user, organised in three parallel layers: atomic facts and preferences (memories), the prior conversations those were worked out in, and an encyclopedic wiki of articles ABOUT topics in the user's life (projects, people, places).
+Topic-boundary recall is handled for you automatically: at the start of a thread, after a topic shift, or after a long stretch without a refresh, the system pre-injects relevant context from all three layers as a stitched <think> block above.
 That auto-injection is a topic-relevance projection, not a full inventory of what is stored: it surfaces what looks relevant to the live conversation, not everything the persistent stores contain.
-When you want broad context about the user, their past, their projects, or what you have worked through together, consider calling \`context\` first - it fans out all four recall agents in parallel and returns one stitched paragraph. One round-trip beats four sequential ones.
-For targeted drill-downs on a single layer use memory_recall, conversation_recall, wiki_recall, or journal_recall - especially when the auto-injected context is stale at a topic shift or you only need one layer refreshed. For raw lookups by phrase (including "what do you remember about me?", "when did I last write about X?", "what does my wiki say about Y?") use memory_search, conversation_search, journal_search, or wiki_search to read the actual store rather than answering from the projection.
+When you want broad context about the user, their past, their projects, or what you have worked through together, consider calling \`context\` first - it fans out all three recall agents in parallel and returns one stitched paragraph. One round-trip beats three sequential ones.
+For targeted drill-downs on a single layer use memory_recall, conversation_recall, or wiki_recall - especially when the auto-injected context is stale at a topic shift or you only need one layer refreshed. For raw lookups by phrase (including "what do you remember about me?", "what does my wiki say about Y?") use memory_search, conversation_search, or wiki_search to read the actual store rather than answering from the projection.
 Cheap conversational turns (small talk, "what time is it?", a quick code question) do not need persistent context - skip the recall step entirely on those.
-`;
-
-// Journal framing plus reflective-conversation guidance. Two jobs in one
-// block: (1) tell the model that the application generates a daily journal
-// summarising reflective topics, and that the `journal` toolbox has a
-// `journal_search` for pulling related prior entries; (2) shape the model's
-// behaviour when the user is in a reflective headspace - prefer
-// exploration / contextualisation over solution-mode, lean on
-// soteriological-detachment traditions (Stoic / Buddhist / Yogic) rather
-// than ad-hoc psychology, articulate feelings clearly, surface boundaries
-// and assumptions, and do NOT hallucinate concepts that have no grounding
-// in actual traditions or research. The reflective-conversation guidance
-// is load-bearing: it's the lever that turns the journal from a passive
-// archive into an active companion.
-const JOURNAL_BLOCK = `\
-The application harness automatically generates a daily journal for the user, summarising any particularly reflective topics that came up in conversation.
-If the user is being reflective (venting, processing, self-examining) or brings up an older emotional thread, the journal toolbox has journal_search to pull related prior entries so you can help them build on what they already worked through rather than starting from scratch.
-When the user is being reflective, focus on helping them explore and contextualize their feelings and thoughts, rather than trying to solve or fix things without being prompted to do so explicitly.
-Guide the user, based on soteriological detachment traditions (Stoic, Buddhist, Yogic), toward self-knowledge and self-contextualization rather than external problem-solving, when the user is in a reflective headspace.
-Help the user articulate their feelings and thoughts clearly and specifically.
-Explore their boundaries and assumptions.
-Do NOT hallucinate or invent psychological concepts or insights that have no basis in science or established philosophical traditions.
 `;
 
 // Wiki framing. The user maintains a flat encyclopedia ABOUT THEMSELVES
@@ -150,25 +128,23 @@ Do NOT hallucinate or invent psychological concepts or insights that have no bas
 // this layer. The scope is intentionally NOT a general encyclopedia of
 // topics that came up - external topics referenced inside a user-centric
 // article are linked (Wikipedia conventionally), not given their own
-// pages. Distinct from memory (atomic facts) and journal (dated
-// reflections): the wiki carries curated topical articles centered on
-// the user, that span many conversations.
+// pages. Distinct from memory (atomic facts): the wiki carries curated
+// topical articles centered on the user, that span many conversations.
 const WIKI_BLOCK = `\
 The application also maintains a user wiki: a flat collection of titled articles ABOUT THE USER - their projects, the people in their life, places they care about, things they are learning or reading, work, hobbies, experiments. Not a general encyclopedia of topics that came up.
 Articles are NEVER auto-injected into the chat - call wiki_search whenever the user references one of their own projects, a person they know, a place in their life, or a topic they have personally invested in, to retrieve the relevant article.
-The wiki is the right surface for "what is X (in the user's life)" lookups against the user's own knowledge graph; memories carry atomic facts, the journal carries dated reflections, and the wiki carries the longer-form topical entries on the user-centric subjects.
+The wiki is the right surface for "what is X (in the user's life)" lookups against the user's own knowledge graph; memories carry atomic facts and the wiki carries the longer-form topical entries on the user-centric subjects.
 `;
 
 // Toolbox framing. The model sees the catalog below with (on)/(off) marks
 // on the gated toolboxes; always-on tools (every read path, plus web search,
-// update_title, analyze_image, the umbrella `context` tool, the four
+// update_title, analyze_image, the umbrella `context` tool, the three
 // per-layer recall tools, and the toggle meta-tool) ride for free with no
 // toggle. The gated toolboxes carry only writes -
-// memories, cookbook recipes, journal entries - so the model has to think
-// before mutating user data, but can read freely without paying a toggle
-// round-trip. An earlier shape gated the read tools too and the model
-// would skip them rather than flip a toolbox; this version makes reads
-// the cheap default.
+// memories, cookbook recipes - so the model has to think before mutating
+// user data, but can read freely without paying a toggle round-trip. An
+// earlier shape gated the read tools too and the model would skip them
+// rather than flip a toolbox; this version makes reads the cheap default.
 const TOOLBOX_FRAMING_BLOCK = `\
 The catalog below lists every tool you can call. Always-on tools fire freely; gated toolboxes (writes only) start (off) and have to be enabled before their tools will accept a call.
 
@@ -248,21 +224,16 @@ function buildCatalog(enabled: ReadonlySet<string>): string {
  * **Ambient context channels.** Tells the model how the chat-loop's
  * automatic priming layer feeds it context outside the model's
  * control. The recall block introduces the long-term memory loop
- * across four layers (memories, prior conversations, wiki, journal),
+ * across three layers (memories, prior conversations, wiki),
  * explains that the chat-loop's context-recall pipeline auto-
- * injects a stitched first-person note from all four as a
+ * injects a stitched first-person note from all three as a
  * `<think>` block at topic boundaries, and points the model at the
  * umbrella `context` tool as the preferred first step when it wants
  * broad context on the user across every layer. Per-layer recall
- * tools (`memory_recall`, `conversation_recall`, `wiki_recall`,
- * `journal_recall`) stay available as targeted drill-downs; the
- * search tools (`memory_search`, `conversation_search`,
- * `wiki_search`, `journal_search`) remain the path for direct
- * lookups by phrase. The journal block frames the daily-journal
- * feature as a behavioural lever: pull entries via `journal_search`
- * when the user is reflective, prefer exploration over solution-mode
- * in those moments, and ground any advice in soteriological-
- * detachment traditions rather than ad-hoc psychology.
+ * tools (`memory_recall`, `conversation_recall`, `wiki_recall`)
+ * stay available as targeted drill-downs; the search tools
+ * (`memory_search`, `conversation_search`, `wiki_search`) remain
+ * the path for direct lookups by phrase.
  *
  * **Tool surface.** The toggle_toolbox gating policy lifted out of
  * the tool's own description, the activity-parameter narration rule
@@ -287,7 +258,6 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     IDENTITY_BLOCK,
     VOICE_BLOCK,
     RECALL_BLOCK,
-    JOURNAL_BLOCK,
     WIKI_BLOCK,
     TOOLBOX_FRAMING_BLOCK,
     ACTIVITY_BLOCK,

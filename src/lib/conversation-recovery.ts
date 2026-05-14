@@ -2,7 +2,7 @@
  * Conversation-recovery synthesis. When a thread's persisted history
  * lands in a wire-format-invalid shape — typically because a tool-using
  * exchange was interrupted before the assistant could reply to the
- * tool result — readers (the chat UI, the summary worker, the journal
+ * tool result — readers (the chat UI, the summary worker, the wiki
  * worker, the reflection worker, the recall agents) would otherwise
  * hand the broken sequence to the provider and get a 400 back. Two
  * provider errors drove this module:

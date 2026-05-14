@@ -6,8 +6,8 @@
  * string into a usable args object (parseToolArguments). No other
  * dependencies, so anyone touching tool-call wire data - the chat
  * loop, the headless agent loop in `./run.ts`, every agent that
- * replays a stored thread (reflection, journal, recall,
- * conversation_recall, summary) - can call in without dragging
+ * replays a stored thread (reflection, recall, conversation_recall,
+ * summary) - can call in without dragging
  * chat-loop along. Keeping the helpers here means a fix or extension
  * lands in one place rather than five copies.
  */
@@ -21,7 +21,7 @@ import type { OpenAIToolCall } from './types';
  * A-Z, 0-9, with a length of 9" when an id violates this - including
  * ids of the shape `call_a031` that those same backends generate. The
  * mismatch shows up most often on the headless agent loops (reflection,
- * journal, summary) and on the main chat-loop's multi-round tool
+ * wiki, summary) and on the main chat-loop's multi-round tool
  * dispatch, where a sanitised id has to be paired across the assistant
  * `tool_calls[].id` slot and the matching tool message's
  * `tool_call_id` slot.
@@ -108,7 +108,7 @@ export function sanitizeToolCallIdForWire(id: string): string {
  *   - chat-loop.ts (toVeniceMessage + the in-loop history push)
  *   - tools/run.ts (the headless agent loop's in-loop history push)
  *   - every agent's messageToVenice helper that projects a stored
- *     Message onto a VeniceMessage (reflection, journal, recall,
+ *     Message onto a VeniceMessage (reflection, recall,
  *     conversation_recall, summary).
  */
 export function sanitizeToolCallsForWire(

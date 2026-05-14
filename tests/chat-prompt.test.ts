@@ -133,7 +133,6 @@ describe('buildSystemPrompt', () => {
     // Gated section carries the writes.
     expect(gatedSection).toMatch(/- memory_create /);
     expect(gatedSection).toMatch(/- recipe_save /);
-    expect(gatedSection).toMatch(/- journal_delete /);
     expect(gatedSection).not.toMatch(/- memory_search /);
     expect(gatedSection).not.toMatch(/- recipe_list /);
 
@@ -142,7 +141,6 @@ describe('buildSystemPrompt', () => {
     // toolboxes were dropped (their only tools are now always-on).
     expect(gatedSection).toMatch(/\(off\) cooking : /);
     expect(gatedSection).toMatch(/\(off\) memories : /);
-    expect(gatedSection).toMatch(/\(off\) journal : /);
     expect(gatedSection).not.toMatch(/\(off\) conversations : /);
     expect(gatedSection).not.toMatch(/\(off\) research : /);
   });
@@ -155,17 +153,16 @@ describe('buildSystemPrompt', () => {
     // the checkbox shape was misread as "unchecked = unavailable"
     // and the model was skipping over gated tools rather than
     // enabling their toolboxes.
-    const prompt = buildSystemPrompt({ enabledToolboxes: ['cooking', 'journal'] });
+    const prompt = buildSystemPrompt({ enabledToolboxes: ['cooking'] });
     expect(prompt).toMatch(/\(on\) cooking : /);
     expect(prompt).toMatch(/\(off\) memories : /);
-    expect(prompt).toMatch(/\(on\) journal : /);
   });
 
-  it('carries the recall framing: long-term memory across four layers, priming is a projection not a full inventory, tools used when stale or for explicit lookups', () => {
+  it('carries the recall framing: long-term memory across three layers, priming is a projection not a full inventory, tools used when stale or for explicit lookups', () => {
     // The recall block has five load-bearing beats:
-    //   (1) introduce long-term memory across four parallel layers
-    //       (memories, prior conversations, wiki, daily journal) so
-    //       the model knows what kinds of persistent state exist;
+    //   (1) introduce long-term memory across three parallel layers
+    //       (memories, prior conversations, wiki) so the model knows
+    //       what kinds of persistent state exist;
     //   (2) tell the model that topic-boundary recall is auto-
     //       injected as a <think> block by the chat-loop's context-
     //       recall pipeline (see src/lib/context-recall/);
@@ -175,25 +172,22 @@ describe('buildSystemPrompt', () => {
     //       pre-injected" as "nothing is stored" and answers "I don't
     //       remember anything specific" while the store is full;
     //   (4) frame the umbrella `context` tool as the preferred first
-    //       step for broad lookups - one round-trip across all four
-    //       layers instead of four sequential per-layer calls;
+    //       step for broad lookups - one round-trip across all three
+    //       layers instead of three sequential per-layer calls;
     //   (5) route explicit "what do you remember" lookups to the
     //       *_search tools (memory_search, conversation_search,
-    //       wiki_search, journal_search) rather than the *_recall
-    //       tools.
+    //       wiki_search) rather than the *_recall tools.
     const prompt = buildSystemPrompt();
     expect(prompt).toMatch(/long-term memory/i);
     // Every per-layer recall tool and the umbrella context tool.
     expect(prompt).toMatch(/memory_recall/);
     expect(prompt).toMatch(/conversation_recall/);
     expect(prompt).toMatch(/wiki_recall/);
-    expect(prompt).toMatch(/journal_recall/);
     expect(prompt).toMatch(/`context`/);
     // Every direct-search counterpart.
     expect(prompt).toMatch(/memory_search/);
     expect(prompt).toMatch(/conversation_search/);
     expect(prompt).toMatch(/wiki_search/);
-    expect(prompt).toMatch(/journal_search/);
     expect(prompt).toMatch(/handled.*automatically/i);
     expect(prompt).toMatch(/<think>/);
     expect(prompt).toMatch(/stale/i);

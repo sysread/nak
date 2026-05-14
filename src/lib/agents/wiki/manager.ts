@@ -1,12 +1,11 @@
 /**
- * Main-thread supervisor for the wiki Web Worker. Mirrors
- * `../journal/manager.ts`. Lifecycle (cross-tab lock, start/stop,
- * log routing, auth bridging) lives in `BaseWorkerManager`; this
- * file carries only the wiki-specific bits:
+ * Main-thread supervisor for the wiki Web Worker. Lifecycle
+ * (cross-tab lock, start/stop, log routing, auth bridging) lives in
+ * `BaseWorkerManager`; this file carries only the wiki-specific bits:
  *
  *   - lock name `nak:wiki-worker`
- *   - StartOpts add `timezone` (re-uses the journal preference per
- *     the spec - one user-tz preference covers both)
+ *   - StartOpts add `timezone` (the user's display timezone, used
+ *     to bucket day-eligible threads)
  *   - `progress: 'processed'` bubbles up to `emitWikiChange()` so an
  *     open Wiki drawer / panel refetches when the worker writes
  *
@@ -35,9 +34,9 @@ export interface WikiStartOpts extends BaseStartOpts {
 }
 
 /**
- * Same timing defaults as the journal/reflection workers. Wiki-
- * eligible threads appear at roughly the same rate (one calendar
- * day after a settled conversation) so identical knobs are fine.
+ * Same timing defaults as the reflection worker. Wiki-eligible
+ * threads appear at roughly the same rate (one calendar day after a
+ * settled conversation) so identical knobs are fine.
  */
 const WORKER_DEFAULTS = {
   leaseTtlSeconds: 45,
@@ -88,9 +87,9 @@ class WikiManager extends BaseWorkerManager<WikiStartOpts> {
 
   /**
    * Live-update the worker's timezone without a restart. Called by
-   * state.svelte.ts when `setJournalTimezone` runs (the wiki worker
-   * shares the journal tz preference). No-op when the worker isn't
-   * running; the next `start()` picks the new value off StartOpts.
+   * state.svelte.ts when `setDisplayTimezone` runs. No-op when the
+   * worker isn't running; the next `start()` picks the new value
+   * off StartOpts.
    */
   setTimezone(timezone: string | null): void {
     if (!this.worker) return;
@@ -99,9 +98,8 @@ class WikiManager extends BaseWorkerManager<WikiStartOpts> {
 
   /**
    * Live-update the worker's user-profile fields without a restart.
-   * Mirrors the journal manager's `setProfile` - the user editing
-   * their name or location in Settings reaches the next cycle
-   * without tearing the worker down.
+   * The user editing their name or location in Settings reaches the
+   * next cycle without tearing the worker down.
    */
   setProfile(userName: string, userLocation: string): void {
     if (!this.worker) return;

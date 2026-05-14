@@ -51,9 +51,6 @@ changing a contract that other features depend on.
   executors (chat-side and headless-agent-side).
 - [Memory](./memory.md) — `memories` store + reflection
   agent + memory recall.
-- [Journal](./journal.md) — daily automatic +
-  user journal entries, the journaling agent, the
-  `journal_*` tools, and the Journal modal.
 - [Wiki](./wiki.md) — flat encyclopedic articles about
   the user, the autonomous wiki agent, the per-article
   manual update flow, the `wiki_*` tools, and the Wiki

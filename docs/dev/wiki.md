@@ -1,7 +1,7 @@
 # Wiki
 
-Flat encyclopedic articles about the user. A fourth peer to chats,
-memories, and journal entries. The user authors articles directly
+Flat encyclopedic articles about the user. A peer to chats and
+memories. The user authors articles directly
 through the Wiki drawer tab; two distinct background agents keep them
 healthy:
 
@@ -19,20 +19,17 @@ Both agents share the encyclopedic-third-person voice and the
 
 ## Role
 
-Three knowledge surfaces with deliberately different shapes:
+Two knowledge surfaces with deliberately different shapes:
 
 - **Memory** (`docs/dev/memory.md`) - atomic labelled facts, surfaced
-  inline by the chat-loop's opening recall.
-- **Journal** (`docs/dev/journal.md`) - dated reflective prose, with
-  today's automatic entry included in the opening-turn system prompt.
+  inline by the chat-loop's recall pipeline.
 - **Wiki** (this doc) - longer-form encyclopedic articles, **never
   auto-injected** into the chat. The main LLM reaches them only
   through the always-on `wiki_search` tool.
 
 Articles are titled, single-level (no nesting), and unique per
 `(user_id, title)`. The voice is encyclopedic third-person prose -
-intentionally different from chat-style or journal-reflective
-registers.
+intentionally different from chat-style or first-person registers.
 
 ## Files
 
@@ -417,12 +414,13 @@ JSON).
   worker pattern are clones of memories. Both feature docs
   reference the canonical adapter contract in
   `embeddings.md`.
-- **Journal** (`docs/dev/journal.md`) - the wiki's manager,
-  worker, loop, and `wikiAutomaticEnabled` setting all clone
-  the journal subsystem's shape. The eligibility predicate
-  in `claim_next_thread_for_wiki` is the deliberate
-  divergence; the rest is parallel structure. Both share the
-  user's `journalTimezone` preference.
+- **Reflection** (`docs/dev/memory.md`) - the wiki's
+  manager, worker, and loop borrow shape from the reflection
+  subsystem (cross-tab Web Lock, claim cursor on threads,
+  skip-locked fairness in the claim RPC). The eligibility
+  predicate in `claim_next_thread_for_wiki` is the deliberate
+  divergence. The wiki reads `displayTimezone` from
+  `profiles.settings` to bucket day-eligible threads.
 - **Embeddings** (`docs/dev/embeddings.md`) - the generic
   worker now polls four (now five) sources in round-robin:
   memories, threads, samskara substrate, journal entries,

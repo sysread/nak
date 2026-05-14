@@ -102,10 +102,7 @@
  */
 /**
  * The user's name + location from Settings -> AI -> About you. Both
- * fields optional; null means "not set". Same shape the journal agent
- * uses (`JournalUserProfile`); duplicated here rather than imported so
- * the wiki agent doesn't reach sideways into the journal module's
- * surface for a two-field interface that's stable.
+ * fields optional; null means "not set".
  */
 export interface WikiUserProfile {
   name: string | null;
@@ -116,9 +113,7 @@ export interface WikiUserProfile {
  * Render the "About the user" block embedded in both autonomous and
  * librarian prompts. Returns the empty string when the profile is null
  * or both fields are empty - a fresh account that hasn't filled the
- * Settings form pays zero tokens for the section. Matches the
- * journal's `buildUserProfileNote` shape so the voice stays consistent
- * across surfaces.
+ * Settings form pays zero tokens for the section.
  *
  * Two distinct rules around the name, both load-bearing:
  *

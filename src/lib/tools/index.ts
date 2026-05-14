@@ -4,12 +4,12 @@
  * boxes into wire-shaped payloads.
  *
  * Responsibility split:
- *   - Each tool file (./toggle_tools.ts, ./memory_*.ts, ./conversation_*.ts,
+ * *   - Each tool file (./toggle_tools.ts, ./memory_*.ts, ./conversation_*.ts,
  *     ...) exports a single ToolDef describing what it does and how to
  *     run it.
  *   - This file composes them into named toolboxes (cooking, memories,
- *     journal, always_on), resolves names to defs, and projects
- *     them into the OpenAI / Venice request shape.
+ *     always_on), resolves names to defs, and projects them into
+ *     the OpenAI / Venice request shape.
  *   - The main-chat system prompt is assembled in `../chat-prompt.ts`,
  *     which imports the registry from here to render the dynamic tool
  *     catalog. Prose blocks and the catalog renderer live there, not
@@ -21,12 +21,12 @@
  * Toolbox model: the always_on toolbox rides with every request and
  * carries every read-only surface (the recall pair, web search,
  * search/list/read tools across memories / conversations / cookbook /
- * journal / app docs, the update_title convenience, the
- * analyze_image vision sub-call, and the toggle_toolbox meta-tool
- * itself). Gated toolboxes carry only writes (memory_create through
- * memory_unrelate, recipe_save through recipe_photo_label_set,
- * journal_delete) and are included only when their name is listed in
- * the thread's `toolboxes_enabled` array. The LLM flips gating via
+ * wiki / app docs, the update_title convenience, the analyze_image
+ * vision sub-call, and the toggle_toolbox meta-tool itself). Gated
+ * toolboxes carry only writes (memory_create through memory_unrelate,
+ * recipe_save through recipe_photo_label_set) and are included only
+ * when their name is listed in the thread's `toolboxes_enabled`
+ * array. The LLM flips gating via
  * the `toggle_toolbox` meta-tool; the user flips gating via the
  * composer toolbox popover. Both paths write through to the same
  * column. Rationale: read tools were getting passed over because the
@@ -59,7 +59,7 @@ import type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from '.
 // analyze_image when the user attaches an image). The cold-start
 // chunk-fetch tax is not acceptable there, so they stay eager. The
 // other always-on tools (search/list/read across memories,
-// conversations, recipes, journal, wiki, app docs) are still
+// conversations, recipes, wiki, app docs) are still
 // always-on but lazy-imported via the lazyTool wrappers below - they
 // fire on demand, not on every turn, so the schema rides eagerly
 // while the impl module loads on first dispatch.
@@ -67,7 +67,6 @@ import { toggleToolbox } from './toggle_tools';
 import { memoryRecall } from './memory_recall';
 import { conversationRecall } from './conversation_recall';
 import { wikiRecall } from './wiki_recall';
-import { journalRecall } from './journal_recall';
 import { contextTool } from './context';
 import { webSearch } from './web_search';
 import { updateTitle } from './update_title';
@@ -100,10 +99,6 @@ import { recipePhotosRemoveSchema } from './recipe_photos_remove.schema';
 import { recipePhotosReorderSchema } from './recipe_photos_reorder.schema';
 import { recipePhotoLabelSetSchema } from './recipe_photo_label_set.schema';
 import { researchDocsSchema } from './research_docs.schema';
-import { journalListSchema } from './journal_list.schema';
-import { journalReadSchema } from './journal_read.schema';
-import { journalSearchSchema } from './journal_search.schema';
-import { journalDeleteSchema } from './journal_delete.schema';
 import { wikiSearchSchema } from './wiki_search.schema';
 
 // Agent-only toolbox re-exports moved to the bottom of the file
@@ -115,10 +110,10 @@ import { wikiSearchSchema } from './wiki_search.schema';
 
 // `lazyTool` lives in `./lazy.ts` so the agent-toolbox files
 // (`./memory_toolbox`, `./recall_toolbox`,
-// `./conversation_recall_toolbox`, `./wiki_recall_toolbox`,
-// `./journal_recall_toolbox`) can use it too. With every consumer
-// going through the lazy path, Vite emits one chunk per impl module
-// regardless of which toolbox dispatches into it.
+// `./conversation_recall_toolbox`, `./wiki_recall_toolbox`) can use
+// it too. With every consumer going through the lazy path, Vite
+// emits one chunk per impl module regardless of which toolbox
+// dispatches into it.
 import { lazyTool } from './lazy';
 
 // --- Gated tool wrappers --------------------------------------------
@@ -220,26 +215,6 @@ const researchDocs = lazyTool(
   () => import('./research_docs'),
   'researchDocs'
 );
-const journalList = lazyTool(
-  journalListSchema,
-  () => import('./journal_list'),
-  'journalList'
-);
-const journalRead = lazyTool(
-  journalReadSchema,
-  () => import('./journal_read'),
-  'journalRead'
-);
-const journalSearch = lazyTool(
-  journalSearchSchema,
-  () => import('./journal_search'),
-  'journalSearch'
-);
-const journalDelete = lazyTool(
-  journalDeleteSchema,
-  () => import('./journal_delete'),
-  'journalDelete'
-);
 const wikiSearch = lazyTool(
   wikiSearchSchema,
   () => import('./wiki_search'),
@@ -253,34 +228,30 @@ const wikiSearch = lazyTool(
  * The principle: every read-only surface lives here. Reads are
  * idempotent and cheap; gating them was forcing the model to weigh
  * "do I need this badly enough to flip a toolbox?" and frequently
- * answering wrong - in particular passing over memory_search /
- * journal_search in favour of answering from training data, even
- * when the user had explicitly asked what Nak remembered. Writes
- * still gate (see `cookingToolbox`, `memoriesToolbox`,
- * `journalToolbox` below) because an autonomous tool turn can
- * scribble over user data and the user-or-model gate is the
- * structural backstop.
+ * answering wrong - in particular passing over memory_search in
+ * favour of answering from training data, even when the user had
+ * explicitly asked what Nak remembered. Writes still gate (see
+ * `cookingToolbox`, `memoriesToolbox` below) because an autonomous
+ * tool turn can scribble over user data and the user-or-model gate
+ * is the structural backstop.
  *
  * Members in catalog order:
  *   - `toggle_toolbox` - the gating mechanism for the write boxes.
  *   - `context` - the umbrella recall tool that fans out across all
- *     four persistent layers (memories, prior conversations, wiki,
- *     journal) in parallel and returns one stitched first-person
- *     note. PREFERRED first step when the model wants broad context
- *     on the user; the per-layer recall tools below stay as
- *     targeted drill-downs.
- *   - `memory_recall`, `conversation_recall`, `wiki_recall`,
- *     `journal_recall` - per-layer recall passes, each returning a
- *     structured note from one store. Drill-downs after `context`,
- *     or first-line picks when the model already knows which layer
- *     it wants. Toolboxes are read-only.
+ *     three persistent layers (memories, prior conversations, wiki)
+ *     in parallel and returns one stitched first-person note.
+ *     PREFERRED first step when the model wants broad context on the
+ *     user; the per-layer recall tools below stay as targeted
+ *     drill-downs.
+ *   - `memory_recall`, `conversation_recall`, `wiki_recall` -
+ *     per-layer recall passes, each returning a structured note from
+ *     one store. Drill-downs after `context`, or first-line picks
+ *     when the model already knows which layer it wants.
  *   - `memory_search` - direct semantic search over the user's
  *     long-term memories. Returns rows with ids so the model can
  *     hand them to the gated write tools.
  *   - `conversation_search` - direct semantic search over prior
  *     conversation titles + summaries.
- *   - `journal_list` / `journal_read` / `journal_search` - date-
- *     based and meaning-based reads over the user's daily journal.
  *   - `wiki_search` - semantic search over the user's flat wiki
  *     (encyclopedic articles about topics in their life). Articles
  *     are never auto-injected; this is the only path to reach them.
@@ -300,9 +271,9 @@ export const alwaysOnToolbox: Toolbox = {
   name: 'always_on',
   description:
     'Reflex-level tools that ride every request without being ' +
-    'toggled. The umbrella `context` recall, the four per-layer ' +
-    'recall tools, and read-only surfaces (search, list, read across ' +
-    'memories / conversations / journal / wiki / cookbook / app docs) ' +
+    'toggled. The umbrella `context` recall, the three per-layer ' +
+    'recall tools, and read-only surfaces (search across ' +
+    'memories / conversations / wiki / cookbook / app docs) ' +
     'plus web search, update_title, analyze_image, and the ' +
     'toggle_toolbox meta-tool.',
   tools: [
@@ -311,12 +282,8 @@ export const alwaysOnToolbox: Toolbox = {
     memoryRecall,
     conversationRecall,
     wikiRecall,
-    journalRecall,
     memorySearch,
     conversationSearch,
-    journalList,
-    journalRead,
-    journalSearch,
     wikiSearch,
     recipeList,
     recipeGet,
@@ -386,25 +353,6 @@ export const memoriesToolbox: Toolbox = {
 };
 
 /**
- * Journal write tools. Reads (`journal_list`, `journal_read`,
- * `journal_search`) live in the always-on set; this toolbox carries
- * the only chat-callable write, `journal_delete`, which removes a
- * journal entry and (for automatic entries) marks the source thread
- * as excluded so the background worker won't regenerate it. Creating
- * automatic entries is the background journaling agent's job, not
- * the model's.
- */
-export const journalToolbox: Toolbox = {
-  name: 'journal',
-  description:
-    "Delete journal entries the user no longer wants. Read tools " +
-    '(journal_list, journal_read, journal_search) are always-on; ' +
-    'this toolbox carries the delete write. Automatic entry creation ' +
-    'is handled by the background worker, not this toolbox.',
-  tools: [journalDelete],
-};
-
-/**
  * The canonical ordered list of toolboxes exposed to the main chat.
  * Order is visible to the model (system-prompt catalog) and to the
  * user (popover list). Always-on goes first so the model reads the
@@ -417,7 +365,6 @@ export const TOOLBOXES: readonly Toolbox[] = [
   alwaysOnToolbox,
   cookingToolbox,
   memoriesToolbox,
-  journalToolbox,
 ];
 
 /**
@@ -548,7 +495,6 @@ export { memoryToolbox } from './memory_toolbox';
 export { recallToolbox } from './recall_toolbox';
 export { conversationRecallToolbox } from './conversation_recall_toolbox';
 export { wikiRecallToolbox } from './wiki_recall_toolbox';
-export { journalRecallToolbox } from './journal_recall_toolbox';
 
 export { toOpenAIToolDef, buildToolboxWireList, executeToolboxCall };
 export { toggleToolbox, updateTitle };

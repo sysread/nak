@@ -103,8 +103,7 @@ describe('AGENT_MODELS (background agents)', () => {
     }
   });
   it('groups roles by model id as expected', () => {
-    // Three deepseek slots: journal, reflection, web search, research docs.
-    expect(AGENT_MODELS.journal).toBe('deepseek-v4-flash');
+    // Three deepseek slots: reflection, web search, research docs.
     expect(AGENT_MODELS.reflection).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.webSearch).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.researchDocs).toBe('deepseek-v4-flash');

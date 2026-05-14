@@ -1,6 +1,6 @@
 /**
  * Shared semantic-search pipeline for the user wiki. Parallel to
- * `src/lib/memories.ts` and `src/lib/journal-events.ts` family - the
+ * `src/lib/memories.ts` - the
  * UI (`src/components/WikiList.svelte`, `src/screens/Wiki.svelte`) and
  * the LLM-facing tool (`src/lib/tools/wiki_search.ts`) both call
  * `searchWikiArticlesSemantic` so the user finds what the assistant
@@ -36,10 +36,9 @@ export interface SearchWikiDeps {
 export const MAX_WIKI_TITLE_CHARS = 200;
 
 /**
- * Length ceiling on the article body. Mirrors the journal's
- * `MAX_JOURNAL_CONTENT_CHARS = 16000`. The embedding source includes
- * title + content so the cap also protects the embedding input from
- * blowing past the embedding model's window.
+ * Length ceiling on the article body (16000 chars). The embedding
+ * source includes title + content so the cap also protects the
+ * embedding input from blowing past the embedding model's window.
  */
 export const MAX_WIKI_CONTENT_CHARS = 16000;
 

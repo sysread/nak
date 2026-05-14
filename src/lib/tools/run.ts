@@ -44,9 +44,9 @@ import type { ReasoningEffort } from '../models';
  * Upper bound on rounds a headless run can take. Acts as a coarse
  * backstop, not a per-task cap - real protection against a runaway
  * agent-spawning chain comes from MAX_AGENT_DEPTH below. Set high
- * enough that a legitimately tool-heavy agent (the journal agent
+ * enough that a legitimately tool-heavy agent (the wiki agent
  * sometimes wants several memory_search + conversation_search rounds
- * before settling on a JSON entry) doesn't bump into it under normal
+ * before settling on a wiki update) doesn't bump into it under normal
  * use; if a run actually hits this, something is misbehaving.
  */
 const DEFAULT_MAX_ROUNDS = 20;
@@ -61,9 +61,9 @@ const DEFAULT_MAX_ROUNDS = 20;
  *
  * In practice the registered toolboxes today don't expose a path that
  * recurses this deep (recall agents only get `*_search` tools, the
- * journal agent only gets `*_search`, the reflection agent gets the
- * memory CRUD tools without `memory_recall`). The cap exists as a
- * defensive backstop so a future toolbox change that accidentally
+ * reflection agent gets the memory CRUD tools without
+ * `memory_recall`). The cap exists as a defensive backstop so a
+ * future toolbox change that accidentally
  * grants an agent a recursive tool can't hang the worker / chat tab.
  */
 export const MAX_AGENT_DEPTH = 3;
@@ -155,10 +155,8 @@ export interface HeadlessToolLoopOptions {
    * every round. Omitted by default so callers that don't want to
    * spend reasoning budget get whatever default the model's provider
    * applies. Only honored on reasoning-capable models; non-reasoning
-   * tiers silently ignore. The journaling agent sets this to 'medium'
-   * because emotional-arc parsing benefits from the extra think time;
-   * the memory-reflection agent leaves it unset and lets the fast
-   * tier default.
+   * tiers silently ignore. The memory-reflection agent leaves it
+   * unset and lets the fast tier default.
    */
   reasoningEffort?: ReasoningEffort;
   /**
@@ -170,9 +168,7 @@ export interface HeadlessToolLoopOptions {
    * disable it. Used by background agents whose task is bounded
    * synthesis on a reasoning-capable model where the default CoT
    * preamble would just add latency without changing the answer
-   * quality. The journaling agent sets this so a Venice GLM-4.7
-   * variant doesn't burn its first few hundred tokens on internal
-   * deliberation before emitting the structured JSON entry.
+   * quality.
    */
   disableThinking?: boolean;
 }

@@ -56,7 +56,7 @@ export interface AgentRunRequest<Req = unknown> {
    * passes its own `ctx.depth` (from the ToolContext it received) so
    * the agent's `runHeadlessToolLoop` can compute the next depth
    * level and enforce `MAX_AGENT_DEPTH`. Worker entrypoints
-   * (reflection, journal) leave it undefined - they have no parent
+   * (reflection, wiki) leave it undefined - they have no parent
    * tool, so they start at depth 0 and their internal loop runs
    * at depth 1. Optional/undefined behaves the same as 0.
    */

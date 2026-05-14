@@ -63,7 +63,7 @@ import {
   recordSubstrateStub,
   type FireResult,
 } from './samskara';
-import { detectTimezone } from './journal-day';
+import { detectTimezone } from './timezone';
 import {
   buildIntuitionThinkMessage,
   countUserRounds,
@@ -317,7 +317,7 @@ function buildDatetimeParagraph(
 interface MetadataSystemMessageOptions {
   userName?: string | null;
   userLocation?: string | null;
-  journalTimezone?: string | null;
+  displayTimezone?: string | null;
   lastAssistantTimestamp?: string | null;
   attachmentSummaries: ThreadAttachmentSummary[];
   emphasisMarkdown?: boolean;
@@ -371,7 +371,7 @@ function buildMetadataSystemMessage(
   if (profile !== null) sections.push(profile);
 
   sections.push(
-    buildDatetimeParagraph(opts.journalTimezone, opts.lastAssistantTimestamp),
+    buildDatetimeParagraph(opts.displayTimezone, opts.lastAssistantTimestamp),
   );
 
   const attachments = buildThreadAttachmentsBlock(opts.attachmentSummaries);
@@ -785,7 +785,7 @@ export interface ChatLoopOptions {
    * own). A wrong value here surfaces as the model giving the user
    * the wrong wall-clock time.
    */
-  journalTimezone?: string | null;
+  displayTimezone?: string | null;
   /**
    * ISO 8601 `created_at` of the most recent persisted assistant
    * message on the thread, used to compute the "about X since your
@@ -1028,7 +1028,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     disableThinking,
     verbosity,
     emphasisMarkdown,
-    journalTimezone,
+    displayTimezone,
     lastAssistantTimestamp,
     userMessageId,
     userName,
@@ -1111,13 +1111,10 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // user turn. Cold-start threads (no formation rows yet) produce
   // both-null and skip the pushes entirely.
   //
-  // The old opening-recall pipeline and today's-journal auto-injection
-  // both used to ride alongside this bundle on the opening turn.
-  // Context-recall now covers the cold-start memory-pull job
-  // (memory_recall, conversation_recall, wiki_recall, journal_recall
-  // children stitched into one note), and the journal auto-injection
-  // was retired in favour of the model reaching for journal_search
-  // when reflective topics come up. Both former entries leave the
+  // The old opening-recall pipeline used to ride alongside this
+  // bundle on the opening turn. Context-recall now covers the
+  // cold-start memory-pull job (memory_recall, conversation_recall,
+  // wiki_recall children stitched into one note), leaving the
   // priming bundle smaller and the wire shape simpler.
   interface PrimingBundle {
     compoundThink: string | null;
@@ -1278,11 +1275,11 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // the model reads its own internal layers, from broadest to most
   // turn-specific:
   //
-  //   1. Context-recall - stitched first-person note across the four
-  //      persistent layers (memories, prior conversations, wiki,
-  //      journal). Covers cold-start memory pull as well as mid-thread
-  //      topic shifts; the old opening-recall pipeline retired in favor
-  //      of letting context-recall handle the opening turn too.
+  //   1. Context-recall - stitched first-person note across the three
+  //      persistent layers (memories, prior conversations, wiki).
+  //      Covers cold-start memory pull as well as mid-thread topic
+  //      shifts; the old opening-recall pipeline retired in favor of
+  //      letting context-recall handle the opening turn too.
   //   2. Samskara compound prose - the "current model of the user"
   //      summary the formation worker maintains across turns.
   //   3. Samskara situational fire - top-k predictions for THIS user
@@ -1358,7 +1355,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     const metadataMessage = buildMetadataSystemMessage({
       userName,
       userLocation,
-      journalTimezone,
+      displayTimezone,
       lastAssistantTimestamp,
       attachmentSummaries,
       emphasisMarkdown,
