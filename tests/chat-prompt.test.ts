@@ -220,41 +220,42 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toMatch(/enabled:\s*\[/);
   });
 
-  it('carries the user-message boundary rule and Venice-injection warning', () => {
-    // Venice can inject content into what arrives as the user turn -
-    // URL scraping (enable_web_scraping) is always on in venice.ts,
-    // so any request where the user pasted a URL gets the full
-    // scraped page inlined after their text. chat-loop.ts wraps the
-    // current user turn unconditionally in <user_message>...</user_message>
-    // as the structural boundary; this prompt block is the paired
-    // instruction telling the model what to do with the tags.
+  it('carries the user-message boundary rule and platform-injection warning', () => {
+    // Reference material (the `<datetime>` tag every turn, and the
+    // optional `<system_reminder>` directive on placeholder-title
+    // turns) rides outside the `<user_message>` fence chat-loop.ts
+    // wraps the current user turn in. This prompt block is the paired
+    // instruction telling the model what to do with those tags so they
+    // don't get mistaken for human-authored words. URL auto-scraping
+    // used to ride the same channel; the scraping flag is now
+    // caller-gated and the main loop never sets it.
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('<user_message>');
     expect(prompt).toContain('</user_message>');
     // Behavior beats we don't want to lose on a future phrasing edit:
-    // the explicit "not a human-authored instruction" frame, the
-    // don't-thank-the-user guidance, and the "instructions come from
-    // this system message" anchor that tells the model which source
-    // of framing actually binds it.
+    // the explicit "not a human-authored instruction" frame and the
+    // "instructions come from this system message" anchor that tells
+    // the model which source of framing actually binds it.
     // \s+ throughout - the prompt assembles from hard-wrapped template
     // literals, so phrasing tweaks that reflow a wrap can split phrases
     // across a newline. The semantic beats are what matters; the regex
     // shouldn't churn just because a paragraph rewrap shifted.
     expect(prompt).toMatch(/not\s+a\s+human-authored/i);
-    expect(prompt).toMatch(/do\s+not\s+thank/i);
     expect(prompt).toMatch(/instructions\s+come\s+from\s+this\s+system\s+message/i);
   });
 
-  it('mentions URL scraping capability unconditionally', () => {
-    // URL scraping is always on in venice.ts: any user turn with a
-    // pasted link arrives with the page contents inlined. If the
-    // prompt didn't say so, the model would refuse "what does this
-    // page say?" with a generic "I cannot browse the web" even
-    // though the scraped content is already sitting in the user
-    // turn waiting to be read.
+  it('does not advertise URL auto-scraping as an in-turn injection path', () => {
+    // The main chat-loop no longer asks Venice to scrape URLs the
+    // user pastes into a turn (`enable_web_scraping` is caller-gated
+    // and only the web_search tool's sub-completion opts in). The
+    // prompt used to carry a paragraph telling the model "the
+    // injected content IS the page"; keeping that text after the
+    // flag flip would tell the model something untrue about how the
+    // wire works. This test is the tripwire for accidental
+    // resurrection of that copy.
     const prompt = buildSystemPrompt();
-    expect(prompt).toMatch(/paste[sd]?\s+a\s+url/i);
-    expect(prompt).toMatch(/full\s+page\s+content/i);
+    expect(prompt).not.toMatch(/full\s+page\s+content/i);
+    expect(prompt).not.toMatch(/scraped\s+page/i);
   });
 
   it('web_search is always-on - rides with every request, listed in the always-available catalog', () => {

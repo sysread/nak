@@ -835,12 +835,14 @@ describe('runChatLoop', () => {
   });
 
   it('wraps the last user message unconditionally', async () => {
-    // Wrapping is unconditional because `enable_web_scraping` is
-    // always on in venice.ts — any user message that contains a URL
-    // gets the full scraped page inlined regardless of web-search
-    // state. The <user_message> boundary gives the model a single
-    // invariant for telling its own words from platform-injected
-    // reference material.
+    // Wrapping is unconditional so the model has a single invariant
+    // for telling the user's typed words from the platform-injected
+    // reference material that rides outside the fence (`<datetime>`
+    // every turn, optional `<system_reminder>` on placeholder-title
+    // turns). URL auto-scraping used to be the main reason for the
+    // fence; the scraping flag is now caller-gated and the main loop
+    // never sets it, but datetime + system_reminder still need the
+    // boundary.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {

@@ -279,34 +279,34 @@ A chat turn goes:
   before being materialized, the realtime `INSERT` handler sees a
   thread it doesn't have, and the list gets out of order. The
   `isDraft` flag gates this; don't remove it.
-- **Venice can inject content into the user turn.** The
-  `enable_web_scraping` flag is always on in `venice.ts`, so
-  whenever the user's latest message contains a URL, Venice
-  fetches the full page content via Firecrawl and inlines it
-  after the user's prose. Baseline cost when no URLs are present
-  is zero; when a URL is there, the user nearly always wants it
-  read. Happens server-side — we never see or forward the
-  injected content, so there is nothing to strip on our side.
+- **The main chat loop no longer asks Venice to auto-inject
+  reference material into the user turn.** Both
+  `enable_web_scraping` and `enable_web_search` are caller-gated
+  in `venice.ts` and neither is set on the main loop's request.
+  Live web search flows through the `web_search` tool (see
+  `./tools.md`), which runs its own one-shot sub-completion with
+  `enable_web_search: 'on'` + `enable_web_citations: true` +
+  `enable_web_scraping: true` (so a research query that quotes
+  a URL can still pull the page content) and returns
+  `{answer, citations}`. The chat loop harvests those citations
+  into a turn-scoped list and persists them on the terminal
+  assistant row so the `CitationsPanel` + `^N^` superscript
+  rendering the old always-on path fed keeps working.
 
-  The other injection path, `enable_web_search`, is no longer
-  set by the main chat loop. Live web search now flows through
-  the `web_search` tool (see `./tools.md`), which runs its own
-  one-shot sub-completion with `enable_web_search: 'on'` +
-  `enable_web_citations: true` and returns `{answer, citations}`.
-  The chat loop harvests those citations into a turn-scoped list
-  and persists them on the terminal assistant row so the
-  `CitationsPanel` + `^N^` superscript rendering the old always-
-  on path fed keeps working.
-
-  Without help, the model misreads scraped content as user-
-  authored (observed: thanking the user for links they never
-  sent, quoting snippets back as their words). Mitigation is
-  two-part and unconditional: the system prompt's boundary block
-  calls out the non-user origin, and `runChatLoop` always wraps
-  the current turn's user text in `<user_message>...</user_message>`
-  via `tagLastUserMessage`. The tags are request-time only,
-  never persisted. If you add another place that constructs wire
-  messages for any Venice call, apply the same wrap.
+  Historical context: scraping was unconditional on every
+  completion, which auto-inlined any URL the user pasted into
+  the user turn. The model misread that content as
+  user-authored (observed: thanking the user for links they
+  never sent, quoting snippets back as their words). The
+  mitigation was structural - the system prompt's boundary
+  block calling out non-user origin, plus an unconditional
+  `<user_message>...</user_message>` wrap on the current turn
+  via `tagLastUserMessage`. The fence is still load-bearing
+  for the `<datetime>` tag and the optional
+  `<system_reminder>` directive that ride outside it. If you
+  add another place that constructs wire messages for any
+  Venice call where reference material could ride outside the
+  user's typed words, apply the same wrap.
 
   The same projection also prepends a per-turn `<datetime
   local="..." utc="..." zone="..." />` tag outside the

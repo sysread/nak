@@ -149,6 +149,13 @@ export const webSearch: ToolDef = {
         signal: ctx.signal,
         webSearch: 'on',
         webCitations: true,
+        // The main chat loop no longer asks Venice to auto-scrape URLs
+        // pasted into user turns - that injection path was retired in
+        // favor of routing URL handling through this tool. We still
+        // want scraping ON for the sub-completion so a research query
+        // that quotes a URL (e.g. "summarize https://example.com/...")
+        // pulls the page content as part of resolving the query.
+        webScraping: true,
         disableThinking: true,
         maxTokens: 8196,
       });

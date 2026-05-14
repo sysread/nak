@@ -1562,15 +1562,17 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // framing stays in force.
     //
     // The current user turn is ALWAYS wrapped in <user_message>
-    // boundary tags (see tagLastUserMessage above). Venice's
-    // `enable_web_scraping` is always on in venice.ts, so any URL the
-    // user pastes lands inlined in the user turn alongside whatever
-    // they typed. Wrapping unconditionally keeps the boundary
-    // reliable; the ~10 tokens per user turn are a cheap price for a
-    // signal the model can anchor on every time. Live web search,
-    // previously also an `enable_web_search` injection on every
-    // request, now flows through the `web_search` tool instead - the
-    // main chat loop never sets those Venice parameters.
+    // boundary tags (see tagLastUserMessage above). The fence used to
+    // also cover Venice's auto-scraped URL content (`enable_web_scraping`
+    // was unconditional in venice.ts), and that was its original
+    // load-bearing job. URL handling has moved to the `web_search` tool
+    // now, but the fence is kept because the `<datetime>` tag (always
+    // present) and the optional `<system_reminder>` directive both
+    // still need to ride outside it. The ~10 tokens per user turn are
+    // a cheap price for a signal the model can anchor on every time.
+    // Live web search, previously also an `enable_web_search`
+    // injection on every request, flows through the `web_search` tool
+    // - the main chat loop never sets those Venice parameters.
     //
     // The same projection also prepends a `<datetime>` tag (outside
     // the user_message fence) carrying current local + UTC time. The
