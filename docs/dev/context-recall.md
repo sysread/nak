@@ -3,18 +3,18 @@
 A topic-boundary recall pipeline that runs alongside intuition: at
 the start of a thread, after a title shift, after a mood shift, or
 after a long stretch without a refresh, the chat-loop fans out to
-four recall agents in parallel (memory, conversation, wiki,
-journal), stitches their first-person notes into one short
-paragraph, and injects the result as a synthetic `<think>` assistant
-turn that the conscious response sees as its own prior thought.
+three recall agents in parallel (memory, conversation, wiki),
+stitches their first-person notes into one short paragraph, and
+injects the result as a synthetic `<think>` assistant turn that
+the conscious response sees as its own prior thought.
 
 The same fan-out plus stitch is also exposed to the main model as
 the umbrella `context` tool - the preferred first step when the
 model wants broad persistent context about the user across every
-layer. One round-trip in place of four sequential per-layer recall
+layer. One round-trip in place of three sequential per-layer recall
 calls. The per-layer recall tools (`memory_recall`,
-`conversation_recall`, `wiki_recall`, `journal_recall`) and the
-underlying search tools stay available as targeted drill-downs.
+`conversation_recall`, `wiki_recall`) and the underlying search
+tools stay available as targeted drill-downs.
 
 The motivation is the same as opening-recall ([./memory.md](./memory.md))
 generalised to every topic boundary, plus a calibration drive that
@@ -34,13 +34,11 @@ table; nothing substitutes for any of the others.
 | Memory | `memories` | Atomic facts and preferences ("Maya is the user's sister", "the user prefers tabs") | The model needs standing facts that don't change turn to turn |
 | Conversation | `threads` (titles + summaries) | What was worked through in prior threads ("we landed on async/await for the parser pipeline") | The model wants to pick up an arc the user has iterated on before |
 | Wiki | `wiki_articles` | Encyclopedic prose ABOUT topics in the user's life (projects, people, places) | The model wants the synthesised "what is X in the user's life" view that spans many conversations |
-| Journal | `journal_entries` | Dated reflective summaries plus user-written entries with mood / topics / people facets | The user is reflective, revisiting an emotional thread, processing again |
 
 Memory carries the densest signal per row but the narrowest view;
 the wiki carries the longest-form synthesis but only on topics the
 user has invested in; conversation carries the topical arcs they
-were worked out in; the journal carries the temporal / emotional
-arc through time. The umbrella `context` tool collapses the four
+were worked out in. The umbrella `context` tool collapses the three
 into one tool result; the auto-injected `<think>` block does the
 same on every topic boundary without the model having to ask.
 
@@ -61,8 +59,8 @@ When both pipelines fire on the same trigger evaluation (e.g.
 cold-start on a fresh thread; mid-turn title shift after the model
 renamed the thread), they run in parallel via `Promise.all`. Wall-
 clock cost is `max(intuition, context_recall) + persist`, not
-additive. The four child agents (memory-recall, conversation-recall,
-wiki-recall, journal-recall) inside `runContextRecallPipeline`
+additive. The three child agents (memory-recall, conversation-recall,
+wiki-recall) inside `runContextRecallPipeline`
 likewise run in parallel via `runRecallFanOut`.
 
 ## Triggers
@@ -108,9 +106,9 @@ again via the title trigger.
   and `runRecallFanOut` (the parallel-agent helper it delegates to,
   also reused by the umbrella `context` tool in
   `src/lib/tools/context.ts`). Fans out `RecallAgent`,
-  `ConversationRecallAgent`, `WikiRecallAgent`, and
-  `JournalRecallAgent` in parallel via `Promise.all`, stitches their
-  notes via `stitchRecallNotes`, returns a cache-ready payload.
+  `ConversationRecallAgent`, and `WikiRecallAgent` in parallel via
+  `Promise.all`, stitches their notes via `stitchRecallNotes`,
+  returns a cache-ready payload.
   Every child already collapses its own errors to `{kind: 'none'}`,
   so a child failure surfaces as the empty signal we stitch over.
 - `src/lib/context-recall/cache.ts` - `readContextRecallCache` /
@@ -129,31 +127,28 @@ again via the title trigger.
 
 ## Stitching
 
-`stitchRecallNotes` is a pure function over the four-layer fan-out
+`stitchRecallNotes` is a pure function over the three-layer fan-out
 result. Three rules cover the cross-product:
 
-- **All four notes empty** -> empty string (cached negative result).
+- **All three notes empty** -> empty string (cached negative result).
 - **Exactly one non-empty note** -> that note verbatim, no hinge.
   The note's own first-person voice carries the framing on its own.
 - **Two or more non-empty notes** -> walked in layer order (memory,
-  conversation, wiki, journal). The first non-empty is emitted
-  verbatim (the anchor); each subsequent non-empty gets its layer
-  hinge prepended:
+  conversation, wiki). The first non-empty is emitted verbatim (the
+  anchor); each subsequent non-empty gets its layer hinge prepended:
 
   | Layer | Hinge |
   |---|---|
   | memory | (none; anchor) |
   | conversation | `From earlier conversations,` |
   | wiki | `From the wiki,` |
-  | journal | `From the journal,` |
 
   The hinges are short on purpose: memory anchors on standing facts
   ("I remember the user prefers X"), conversation on prior threads
-  ("last time this came up, we landed on Y"), wiki on the
-  encyclopedic articles ("we have a detailed entry on Z"), and
-  journal on dated reflective entries ("the user worked through W
-  in April"). Without distinct hinges the four notes read as one
-  undifferentiated recollection; with them, the consuming model can
+  ("last time this came up, we landed on Y"), and wiki on the
+  encyclopedic articles ("we have a detailed entry on Z"). Without
+  distinct hinges the three notes read as one undifferentiated
+  recollection; with them, the consuming model can
   tell which kind of context each clause carries.
 
 The walk order is fixed: memory leads when present because it is
@@ -170,10 +165,9 @@ the stitch handles the happy paths cleanly.
 
 ## Calibration drive on the children
 
-All four child prompts (`src/lib/agents/recall/prompt.ts`,
-`src/lib/agents/conversation_recall/prompt.ts`,
-`src/lib/agents/wiki_recall/prompt.ts`, and
-`src/lib/agents/journal_recall/prompt.ts`) carry a two-channel
+All three child prompts (`src/lib/agents/recall/prompt.ts`,
+`src/lib/agents/conversation_recall/prompt.ts`, and
+`src/lib/agents/wiki_recall/prompt.ts`) carry a two-channel
 contract:
 
 1. **FACTS / DETAILS** the main model needs but doesn't already
@@ -304,25 +298,21 @@ model already knows which layer it wants.
   read-only `wiki_search` toolbox. The autonomous wiki agent and
   wiki-librarian keep article mutation owned by background work;
   recall is reader-only.
-- **Journal ([./journal.md](./journal.md))** - same shape:
-  `JournalRecallAgent` uses a read-only `journal_search` toolbox.
-  The background journaling worker stays in charge of writing /
-  regenerating entries.
-- **Tools ([./tools.md](./tools.md))** - the four per-layer recall
-  tools (`memory_recall`, `conversation_recall`, `wiki_recall`,
-  `journal_recall`) and the umbrella `context` tool are all
-  registered in the always-on toolbox. The system prompt's recall
-  cadence block was rewritten: topic-boundary recall is described
-  as "handled for you automatically", the umbrella `context` tool
-  is framed as the preferred first step for broad lookups, and the
-  per-layer recall + search tools are framed as drill-downs.
+- **Tools ([./tools.md](./tools.md))** - the three per-layer recall
+  tools (`memory_recall`, `conversation_recall`, `wiki_recall`)
+  and the umbrella `context` tool are all registered in the
+  always-on toolbox. The system prompt's recall cadence block was
+  rewritten: topic-boundary recall is described as "handled for you
+  automatically", the umbrella `context` tool is framed as the
+  preferred first step for broad lookups, and the per-layer recall
+  and search tools are framed as drill-downs.
 - **Logging ([./logging.md](./logging.md))** - uses
   `createLogger('context-recall')`. Pipeline start and complete
   log lines mirror the intuition pipeline's, with `memoryKind`,
-  `conversationKind`, `wikiKind`, and `journalKind` ('note' /
-  'none') so a debug eye can see which sides carried signal on a
-  given run. The umbrella tool logs under
-  `createLogger('context-tool')` with the same four kinds plus
+  `conversationKind`, and `wikiKind` ('note' / 'none') so a debug
+  eye can see which sides carried signal on a given run. The
+  umbrella tool logs under
+  `createLogger('context-tool')` with the same three kinds plus
   total elapsed time.
 
 ## Gotchas

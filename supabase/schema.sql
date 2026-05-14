@@ -1028,8 +1028,7 @@ create policy "recipe_versions are self-insertable"
 -- Backfill: every recipe that predates the versioning rollout gets one
 -- "Initial version" row so the History panel is non-empty on day one.
 -- Idempotent via `not exists` - re-running `mise run sync` does not
--- duplicate. Runs as the sync role, which bypasses RLS by design (same
--- posture as the journal-spam-stats backfills).
+-- duplicate. Runs as the sync role, which bypasses RLS by design.
 insert into public.recipe_versions
   (recipe_id, user_id, title, source, source_url, cooklang, rating,
    change_message, created_at)
@@ -2009,13 +2008,13 @@ end $$;
 -- (the model already knows what title it just wrote), but the drawer's
 -- recipe search is a human-facing surface where "fluffy potato side"
 -- should find "Mashed Potatoes with Olive Oil." The sidebar wires
--- through the same embed-then-merge pipeline wiki and journal use, so
--- a column + the standard claim/save/search RPC trio joins recipes
+-- through the same embed-then-merge pipeline the wiki uses, so a
+-- column + the standard claim/save/search RPC trio joins recipes
 -- without disturbing the existing recipe_*_with_version RPCs.
 --
--- Same 2048-padded vector storage as memories / journal_entries / wiki
--- so the single embeddings worker can share a pool and no per-source
--- dim plumbing is needed.
+-- Same 2048-padded vector storage as memories / wiki so the single
+-- embeddings worker can share a pool and no per-source dim plumbing
+-- is needed.
 alter table public.recipes
   add column if not exists embedding vector(2048);
 alter table public.recipes
@@ -2052,8 +2051,8 @@ create trigger clear_recipe_embedding_on_change
 
 -- Claim the next recipe whose embedding is null or whose prior claim
 -- has expired. Same skip-locked fairness and claim shape as the wiki
--- and journal pipelines. Returns (id, title, source, cooklang) so the
--- worker can build the embedding input without a second round-trip.
+-- pipeline. Returns (id, title, source, cooklang) so the worker can
+-- build the embedding input without a second round-trip.
 drop function if exists public.claim_next_pending_recipe(text, int);
 create or replace function public.claim_next_pending_recipe(
   p_holder_id text,
@@ -4367,889 +4366,52 @@ begin
   return v_collapsed;
 end $$;
 
--- Journal (Reflections feature) -----------------------------------------
+-- Journal feature removed -------------------------------------------------
 --
--- Daily-journal surface for the user's reflective content. A background
--- worker (src/lib/agents/journal/) processes threads that have accrued
--- new terminal assistant messages and extracts reflective content into
--- one automatic entry per user per day. The user can also author their
--- own user-sourced entry for the same day; both render together in the
--- daily-view UI. Semantic search is backed by the same embeddings
--- pipeline as memories/threads.
---
--- "Reflections" is the public feature name; the internal code uses
--- `journal` because the existing `reflection` subtree is the memory-
--- extraction agent and the naming would collide.
-
-create table if not exists public.journal_entries (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade,
-  -- Day this entry belongs to, in the user's local timezone. Stored as
-  -- a plain DATE so queries can range-scan without timezone math. For
-  -- automatic entries this is the day the source conversation started
-  -- on (NOT the day the worker happened to process it - those drift
-  -- when the worker runs idle past midnight or processes a backlog).
-  -- For user entries it's whatever date the user picked when composing.
-  entry_date date not null,
-  -- Who wrote it. 'automatic' rows are owned by the background worker
-  -- and are read-only from the UI; 'user' rows are composed by the
-  -- signed-in human.
-  source text not null check (source in ('automatic', 'user')),
-  content text not null,
-  -- Free-text topic chips. Array rather than a separate table because
-  -- topics are purely presentational; we don't query across users by
-  -- topic and the LLM is free to invent new ones per-entry.
-  topics text[] not null default array[]::text[],
-  -- Single dominant mood/tone for the entry ("anxious", "hopeful",
-  -- "frustrated", "reflective"). Nullable because not every entry
-  -- carries a clear dominant tone.
-  mood text,
-  -- First names / identifiers of people mentioned. Same rationale as
-  -- topics - no cross-user joins, chips only.
-  people text[] not null default array[]::text[],
-  -- Source conversation for an automatic entry. NULL for user-authored
-  -- entries (they're not pinned to any specific conversation). The
-  -- partial-unique index below pins one automatic entry per (user,
-  -- thread) so the worker re-running on a thread extends an existing
-  -- entry rather than creating duplicates. The journal-delete path
-  -- reads this to populate journal_thread_excludes so a deleted
-  -- automatic entry doesn't get regenerated from the same conversation.
-  thread_id uuid references public.threads(id) on delete set null,
-  embedding vector(2048),
-  embedding_model text,
-  embedding_claim_holder text,
-  embedding_claim_expires timestamptz,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
--- Idempotent migration off the older shape (where each automatic entry
--- merged multiple threads into one row keyed by date). The thread_id
--- column moved inline in the table definition above for fresh
--- installs; existing tables get the same column added here.
-alter table public.journal_entries
-  add column if not exists thread_id uuid references public.threads(id) on delete set null;
-
--- Drop the old "one automatic and one user row per day per user"
--- constraint. We now allow multiple automatic entries per day (one per
--- thread the user had a conversation on) and don't constrain user
--- entries either. Per-thread uniqueness for automatic entries lives in
--- the partial-unique index that follows.
-alter table public.journal_entries
-  drop constraint if exists journal_entries_user_id_entry_date_source_key;
-
--- One automatic entry per (user, thread). Enforces the worker's
--- "extend a thread's existing entry rather than create a duplicate"
--- contract. The upsert RPC checks `thread_id IS NOT NULL` upstream
--- via a `raise exception`, so the partial-unique predicate stays at
--- just `source = 'automatic'` - matching the ON CONFLICT clause's
--- predicate exactly. Postgres requires the constraint's predicate
--- and the on-conflict clause's predicate to be identical, otherwise
--- it raises "no unique or exclusion constraint matching the ON
--- CONFLICT specification". Drop-and-recreate (idempotent on fresh
--- installs since the drop is `if exists`) so a database that synced
--- the earlier `... and thread_id is not null` predicate gets the
--- corrected one without manual intervention.
-drop index if exists public.journal_entries_user_thread_unique;
-create unique index if not exists journal_entries_user_thread_unique
-  on public.journal_entries (user_id, thread_id)
-  where source = 'automatic';
-
--- Older databases carry a `source_thread_ids uuid[]` column from the
--- one-entry-per-day era. The column has no consumer after the schema
--- moves to per-thread entries, so drop it. `if exists` keeps fresh
--- installs (which never had the column) green.
-alter table public.journal_entries
-  drop column if exists source_thread_ids;
-
-create index if not exists journal_entries_user_date_idx
-  on public.journal_entries (user_id, entry_date desc);
-
--- Invalidate the embedding whenever the text that produced it changes.
--- Matches the memories pattern: pending = `embedding is null`, claim
--- columns nulled so an in-flight worker save won't land a stale vector
--- (its guard checks `claim_holder = $me and claim_expires > now()` and
--- both fields would otherwise still match).
-create or replace function public.clear_journal_embedding_on_change()
-  returns trigger language plpgsql as $$
-begin
-  if new.content is distinct from old.content
-     or new.topics  is distinct from old.topics
-     or new.mood    is distinct from old.mood then
-    new.embedding := null;
-    new.embedding_model := null;
-    new.embedding_claim_holder := null;
-    new.embedding_claim_expires := null;
-  end if;
-  return new;
-end $$;
-
-drop trigger if exists clear_journal_embedding_on_change on public.journal_entries;
-create trigger clear_journal_embedding_on_change
-  before update on public.journal_entries
-  for each row execute function public.clear_journal_embedding_on_change();
-
-alter table public.journal_entries enable row level security;
-
-drop policy if exists "journal_entries are self-selectable" on public.journal_entries;
-create policy "journal_entries are self-selectable" on public.journal_entries
-  for select using (auth.uid() = user_id);
-
-drop policy if exists "journal_entries are self-insertable" on public.journal_entries;
-create policy "journal_entries are self-insertable" on public.journal_entries
-  for insert with check (auth.uid() = user_id);
-
-drop policy if exists "journal_entries are self-updatable" on public.journal_entries;
-create policy "journal_entries are self-updatable" on public.journal_entries
-  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
-drop policy if exists "journal_entries are self-deletable" on public.journal_entries;
-create policy "journal_entries are self-deletable" on public.journal_entries
-  for delete using (auth.uid() = user_id);
-
--- Per-user set of threads the journaling worker should skip. Populated
--- whenever the user (via the chat-side journal_delete tool) removes an
--- automatic entry - we add the entry's source_thread_ids here so the
--- next worker cycle doesn't regenerate what the user just deleted.
--- Hard-deleting the row from this table (e.g. from an admin surface) is
--- the only way to re-enroll a thread; we deliberately don't expose a
--- user-facing "clear excludes" button because the delete action is
--- meant to be durable.
-create table if not exists public.journal_thread_excludes (
-  user_id uuid not null references auth.users(id) on delete cascade,
-  thread_id uuid not null references public.threads(id) on delete cascade,
-  created_at timestamptz not null default now(),
-  primary key (user_id, thread_id)
-);
-
-alter table public.journal_thread_excludes enable row level security;
-
-drop policy if exists "journal_thread_excludes are self-selectable" on public.journal_thread_excludes;
-create policy "journal_thread_excludes are self-selectable" on public.journal_thread_excludes
-  for select using (auth.uid() = user_id);
-
-drop policy if exists "journal_thread_excludes are self-insertable" on public.journal_thread_excludes;
-create policy "journal_thread_excludes are self-insertable" on public.journal_thread_excludes
-  for insert with check (auth.uid() = user_id);
-
-drop policy if exists "journal_thread_excludes are self-deletable" on public.journal_thread_excludes;
-create policy "journal_thread_excludes are self-deletable" on public.journal_thread_excludes
-  for delete using (auth.uid() = user_id);
-
--- Threads carry a pointer + per-row claim for the journaling worker,
--- independent of the memory-extraction pipeline's last_reflected_msg_id.
--- Both can run concurrently against the same thread; the two pointers
--- advance independently.
-alter table public.threads
-  add column if not exists last_journaled_msg_id uuid references public.messages(id) on delete set null,
-  add column if not exists journal_claim_holder text,
-  add column if not exists journal_claim_expires_at timestamptz;
-
--- The standalone `upsert_journal_automatic_entry` RPC has been
--- replaced by the atomic `upsert_journal_entry_and_mark_thread`
--- below (entry write + pointer-advance in one transaction). Drop
--- the old signatures so a project that synced an earlier shape of
--- the schema doesn't carry a stale function around.
-drop function if exists public.upsert_journal_automatic_entry(date, text, text[], text, text[], uuid[]);
-drop function if exists public.upsert_journal_automatic_entry(uuid, date, text, text[], text, text[]);
-
--- Claim the oldest thread that needs journaling. Parallels
--- `claim_next_thread_for_reflection`; the predicate is "terminal
--- assistant message newer than last_journaled_msg_id, not in the
--- user's excludes, has at least two user messages, no activity
--- today in the user's timezone, not currently claimed". The
--- excludes filter is the per-thread "do not journal" switch the
--- delete path writes to. The same-day gate gives the user a
--- chance to keep talking before the journaler grabs the thread -
--- a conversation still receiving turns today is not a settled
--- conversation, and journaling it mid-flow produces an entry
--- that the next cycle has to extend rather than write fresh.
--- threads.updated_at is bumped on every message insert (see
--- supabase.ts:addMessage), so it tracks "most recent activity"
--- without a separate column or correlated subquery.
-drop function if exists public.claim_next_thread_for_journal(text, int);
-drop function if exists public.claim_next_thread_for_journal(text, int, text);
-create or replace function public.claim_next_thread_for_journal(
-  p_holder_id text,
-  p_ttl_seconds int,
-  -- IANA timezone the user has chosen for journaling (Settings ->
-  -- Journal -> Day boundary). The cooldown gate buckets activity
-  -- against this zone so a conversation last touched at 11pm in
-  -- Los Angeles isn't held over by the worker until UTC's clock
-  -- agrees. Defaults to UTC so a worker still on the old client
-  -- bundle (between schema sync and asset deploy) resolves the
-  -- function and degrades to UTC-day cooldown rather than
-  -- erroring on "function does not exist".
-  p_timezone text default 'UTC'
-) returns table (
-  thread_id uuid,
-  terminal_msg_id uuid,
-  title text,
-  -- Conversation-start timestamp. The worker converts this into the
-  -- user's local timezone and uses it as the entry_date, so an entry
-  -- lands on the day the conversation actually happened on - NOT the
-  -- day the worker happens to be processing it. Worker idle past
-  -- midnight or processing a backlog would otherwise stamp every
-  -- entry with the current run-day and clobber prior entries via the
-  -- per-thread upsert.
-  thread_created_at timestamptz,
-  -- Cached context-recall payload (jsonb) at claim time. The journal
-  -- agent dropped its own memory_search / conversation_search tool
-  -- loop in favour of the same context-recall pipeline the chat-loop
-  -- uses; projecting the cached payload here means we can hand it to
-  -- the agent without a second round trip. Null when the chat-loop
-  -- has never run a recall on this thread (legitimate cold case);
-  -- the agent runs the pipeline fresh on null and writes the result
-  -- back so the next chat turn benefits.
-  context_recall_payload jsonb
-)
-language sql security invoker as $$
-  with candidate as (
-    select
-      t.id as thread_id,
-      term.msg_id as terminal_msg_id,
-      t.title as title,
-      t.created_at as thread_created_at,
-      t.context_recall_payload as context_recall_payload
-      from public.threads t
-      cross join lateral (
-        select m.id as msg_id
-          from public.messages m
-         where m.thread_id = t.id
-           and m.role = 'assistant'
-           and (m.tool_calls is null
-                or jsonb_typeof(m.tool_calls) <> 'array'
-                or jsonb_array_length(m.tool_calls) = 0)
-           and m.content is not null
-           and length(m.content) > 0
-         order by m.created_at desc
-         limit 1
-      ) term
-     where t.user_id = auth.uid()
-       and term.msg_id is distinct from t.last_journaled_msg_id
-       and (t.journal_claim_expires_at is null
-            or t.journal_claim_expires_at < now())
-       and not exists (
-         select 1 from public.journal_thread_excludes e
-          where e.user_id = t.user_id
-            and e.thread_id = t.id
-       )
-       and (
-         -- Same depth guard as reflection: skip threads that haven't
-         -- seen a follow-up user message yet. A one-shot Q&A isn't
-         -- enough material to warrant a daily-journal entry.
-         select count(*)
-           from public.messages m2
-          where m2.thread_id = t.id
-            and m2.role = 'user'
-       ) >= 2
-       -- Same-day cooldown. Skip threads whose most recent activity
-       -- (any message insert bumps t.updated_at) lands on today's
-       -- date in the user's tz. Effect: a thread is eligible to
-       -- journal only after it's been quiet for at least one full
-       -- calendar day in the user's timezone, which both gives an
-       -- in-progress conversation room to finish AND prevents a
-       -- thread that keeps getting new turns from being
-       -- continuously re-journaled mid-day. Re-journals on later
-       -- days still happen via the existing terminal_msg_id !=
-       -- last_journaled_msg_id predicate.
-       and (t.updated_at at time zone p_timezone)::date
-           < (now() at time zone p_timezone)::date
-     order by t.updated_at asc
-     limit 1
-     for update of t skip locked
-  )
-  update public.threads t
-     set journal_claim_holder = p_holder_id,
-         journal_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
-    from candidate c
-   where t.id = c.thread_id
-  returning t.id as thread_id, c.terminal_msg_id, c.title, c.thread_created_at, c.context_recall_payload;
-$$;
-
--- Mark the thread journaled IF our claim is still ours. Returns false
--- on claim-lost; caller drops the cycle (any upsert side-effect already
--- landed and will be reconciled by the agent reading the existing
--- automatic row on the next cycle).
-drop function if exists public.mark_thread_journaled_if_claimed(uuid, text, uuid);
-create or replace function public.mark_thread_journaled_if_claimed(
-  p_thread_id uuid,
-  p_holder_id text,
-  p_msg_id uuid
-) returns boolean
-language plpgsql security invoker as $$
-declare
-  updated int;
-begin
-  update public.threads
-     set last_journaled_msg_id = p_msg_id,
-         journal_claim_holder = null,
-         journal_claim_expires_at = null
-   where id = p_thread_id
-     and user_id = auth.uid()
-     and journal_claim_holder = p_holder_id
-     and journal_claim_expires_at > now();
-  get diagnostics updated = row_count;
-  return updated > 0;
-end $$;
-
--- User-driven "this snapshot was reviewed; nothing worth journaling" pointer
--- advance. Runs from the regenerate-modal's "Save" button when the user
--- accepts a worthy=false decline (the journaler examined the conversation
--- and decided no inner-life material; user agrees). Distinct from the
--- worker-side mark above in three ways:
---   (1) No claim / holder check - the user is in the UI and is authenticated
---       via the session; RLS gates by user_id = auth.uid() so they can only
---       advance pointers on their own threads.
---   (2) Computes the current terminal message id internally (same logic as
---       claim_next_thread_for_journal's lateral) instead of taking it as a
---       parameter, so the caller doesn't have to round-trip to find it.
---   (3) Distinct from journal_thread_excludes - this advances the pointer
---       on the CURRENT terminal so the worker won't re-process this
---       snapshot, but new turns after now make the thread eligible again.
---       The user wants "I've decided this snapshot wasn't worth journaling,
---       but if more conversation happens, take another look" rather than
---       the permanent-exclude semantic the thumbs-down button has.
--- Returns the message id we advanced to, or null when no eligible
--- terminal exists (thread empty, or all assistant rows are tool-call-only).
-drop function if exists public.mark_thread_journaled_for_user(uuid);
-create or replace function public.mark_thread_journaled_for_user(
-  p_thread_id uuid
-) returns uuid
-language plpgsql security invoker as $$
-declare
-  v_msg_id uuid;
-  v_updated int;
-begin
-  -- Same terminal-msg-finder as the claim RPC: latest assistant row
-  -- whose tool_calls is empty/null and whose content is non-empty.
-  select m.id into v_msg_id
-    from public.messages m
-   where m.thread_id = p_thread_id
-     and m.role = 'assistant'
-     and (m.tool_calls is null
-          or jsonb_typeof(m.tool_calls) <> 'array'
-          or jsonb_array_length(m.tool_calls) = 0)
-     and m.content is not null
-     and length(m.content) > 0
-   order by m.created_at desc
-   limit 1;
-  if v_msg_id is null then
-    return null;
-  end if;
-  update public.threads
-     set last_journaled_msg_id = v_msg_id
-   where id = p_thread_id
-     and user_id = auth.uid();
-  get diagnostics v_updated = row_count;
-  if v_updated = 0 then
-    return null;
-  end if;
-  return v_msg_id;
-end $$;
-
--- Atomic write+mark for a worthy worker run. The journaling worker
--- needs the entry's existence and the thread's pointer-advance to
--- happen in lockstep: a successful entry write that fails to advance
--- the pointer would re-process the same conversation next cycle (and
--- write the same entry idempotently, but waste a Venice call); a
--- pointer advance without a successful entry write would orphan the
--- conversation (no row stored, but the worker thinks it's done). An
--- earlier shape of this pipeline split the upsert and the mark into
--- two RPCs which the worker called in sequence, leaving a window
--- between them where one could succeed and the other fail.
---
--- This function does both in a single plpgsql transaction. Postgres
--- runs every function body as a transaction by default; raising any
--- exception (including the explicit one below for claim-lost) rolls
--- back BOTH the upsert and the mark. The result: if the function
--- returns successfully the entry exists AND the pointer advanced;
--- if it raises the entry doesn't exist (rolled back) AND the
--- pointer didn't advance.
---
--- Claim-lost handling: if the mark UPDATE matched zero rows (TTL
--- expired, another holder grabbed the row, the user cleared the
--- claim) we raise an exception so the upsert rolls back. Without
--- this, the agent's content would land in a row owned by whoever
--- holds the claim now, and the original worker would think it
--- succeeded. The other holder will rewrite the entry on its own
--- cycle from its own model run; we don't want this worker's draft
--- to outlive its lease.
-drop function if exists public.upsert_journal_entry_and_mark_thread(uuid, text, uuid, date, text, text[], text, text[]);
-create or replace function public.upsert_journal_entry_and_mark_thread(
-  p_thread_id uuid,
-  p_holder_id text,
-  p_msg_id uuid,
-  p_entry_date date,
-  p_content text,
-  p_topics text[],
-  p_mood text,
-  p_people text[]
-) returns table (
-  id uuid,
-  thread_id uuid,
-  entry_date date,
-  source text,
-  content text,
-  topics text[],
-  mood text,
-  people text[],
-  created_at timestamptz,
-  updated_at timestamptz
-)
-language plpgsql security invoker as $$
-#variable_conflict use_column
-declare
-  v_uid uuid := auth.uid();
-  v_marked int;
-begin
-  if v_uid is null then
-    raise exception 'not authenticated';
-  end if;
-  if p_thread_id is null then
-    raise exception 'thread_id is required for automatic entries';
-  end if;
-
-  -- Step 1: upsert the entry. Same shape as
-  -- upsert_journal_automatic_entry; kept inline here so the function
-  -- body is one self-contained transaction (a SELECT against another
-  -- function would still be in the same transaction, but inlining
-  -- removes the round-trip-through-CTE shape).
-  return query
-  insert into public.journal_entries (
-    user_id, thread_id, entry_date, source, content, topics, mood, people
-  ) values (
-    v_uid, p_thread_id, p_entry_date, 'automatic', p_content,
-    coalesce(p_topics, array[]::text[]),
-    p_mood,
-    coalesce(p_people, array[]::text[])
-  )
-  on conflict (user_id, thread_id) where source = 'automatic' do update
-     set content = excluded.content,
-         topics  = excluded.topics,
-         mood    = excluded.mood,
-         people  = excluded.people,
-         updated_at = now()
-  returning
-    public.journal_entries.id,
-    public.journal_entries.thread_id,
-    public.journal_entries.entry_date,
-    public.journal_entries.source,
-    public.journal_entries.content,
-    public.journal_entries.topics,
-    public.journal_entries.mood,
-    public.journal_entries.people,
-    public.journal_entries.created_at,
-    public.journal_entries.updated_at;
-
-  -- Step 2: advance the thread pointer IF our claim is still ours.
-  -- Same predicate as `mark_thread_journaled_if_claimed`.
-  update public.threads
-     set last_journaled_msg_id = p_msg_id,
-         journal_claim_holder = null,
-         journal_claim_expires_at = null
-   where id = p_thread_id
-     and user_id = v_uid
-     and journal_claim_holder = p_holder_id
-     and journal_claim_expires_at > now();
-  get diagnostics v_marked = row_count;
-  if v_marked = 0 then
-    raise exception
-      'claim lost on thread % during atomic upsert; rolling back',
-      p_thread_id;
-  end if;
-end $$;
-
--- Embeddings pipeline RPCs for journal entries. Same claim/save
--- semantics as memories, same 2048-dim padded vectors, same
--- "security invoker" posture letting RLS enforce user scoping.
-drop function if exists public.claim_next_pending_journal_entry(text, int);
-create or replace function public.claim_next_pending_journal_entry(
-  p_holder_id text,
-  p_ttl_seconds int
-) returns table (id uuid, entry_date date, content text, topics text[], mood text)
-language sql security invoker as $$
-  with candidate as (
-    select je.id
-      from public.journal_entries je
-     where je.user_id = auth.uid()
-       and je.embedding is null
-       and (je.embedding_claim_expires is null
-            or je.embedding_claim_expires < now())
-     order by je.updated_at desc
-     limit 1
-     for update skip locked
-  )
-  update public.journal_entries je
-     set embedding_claim_holder = p_holder_id,
-         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
-    from candidate c
-   where je.id = c.id
-  returning je.id, je.entry_date, je.content, je.topics, je.mood;
-$$;
-
-drop function if exists public.save_journal_entry_embedding_if_claimed(uuid, text, vector, text);
-create or replace function public.save_journal_entry_embedding_if_claimed(
-  p_id uuid,
-  p_holder_id text,
-  p_embedding vector(2048),
-  p_embedding_model text
-) returns boolean
-language plpgsql security invoker as $$
-declare
-  updated int;
-begin
-  update public.journal_entries
-     set embedding = p_embedding,
-         embedding_model = p_embedding_model,
-         embedding_claim_holder = null,
-         embedding_claim_expires = null
-   where id = p_id
-     and user_id = auth.uid()
-     and embedding_claim_holder = p_holder_id
-     and embedding_claim_expires > now();
-  get diagnostics updated = row_count;
-  return updated > 0;
-end $$;
-
--- Similarity search RPC. No confidence boost (journal entries don't
--- carry a confidence scalar; they're direct human/agent assertions
--- rather than probabilistic memories). Plain cosine ranking, scoped
--- by RLS + an explicit user_id guard.
-drop function if exists public.search_journal_entries_by_embedding(vector, int);
-create or replace function public.search_journal_entries_by_embedding(
-  query_embedding vector(2048),
-  match_limit int
-) returns table (
-  id uuid,
-  entry_date date,
-  source text,
-  content text,
-  topics text[],
-  mood text,
-  people text[],
-  thread_id uuid,
-  created_at timestamptz,
-  updated_at timestamptz,
-  similarity real
-)
-language sql stable security invoker as $$
-  select id, entry_date, source, content, topics, mood, people, thread_id,
-         created_at, updated_at,
-         (1 - (embedding <=> query_embedding))::real as similarity
-    from public.journal_entries
-   where user_id = auth.uid()
-     and embedding is not null
-   order by embedding <=> query_embedding asc
-   limit match_limit
-$$;
-
--- Journal spam filter ----------------------------------------------------
---
--- Naive Bayes classifier over the source conversation text, used as a
--- soft hint to the journal agent's worthiness decision. Two signals
--- feed it:
---
---   - Delete on an automatic entry (existing journal_delete tool path)
---     trains the source thread's tokens as `spam`. The thread is
---     already prevented from re-journaling via journal_thread_excludes,
---     so spam training is naturally one-shot per thread.
---   - The ham button on an automatic entry (Journal.svelte) trains the
---     source thread's tokens as `ham`. Ham idempotency is enforced by
---     `journal_entries.ham_marked_at` - once set, the UI disables the
---     button. We do NOT remove ham training when an entry is later
---     deleted; the user said it was a good entry at the moment of
---     marking, and a later delete doesn't retroactively make that wrong.
---
--- The classifier itself runs in the journal worker and main thread (for
--- training). Tokens are pre-stemmed (Snowball English) before storage
--- so the same word in different inflections shares a row. The model is
--- per-user, RLS-scoped.
-
-create table if not exists public.journal_spam_tokens (
-  user_id uuid not null references auth.users(id) on delete cascade,
-  -- Lowercased + stemmed token. The stemmer must match between train
-  -- and score paths or rows will never join with new conversations.
-  token text not null,
-  ham_count int not null default 0,
-  spam_count int not null default 0,
-  primary key (user_id, token)
-);
-
-alter table public.journal_spam_tokens enable row level security;
-
-drop policy if exists "journal_spam_tokens are self-selectable" on public.journal_spam_tokens;
-create policy "journal_spam_tokens are self-selectable" on public.journal_spam_tokens
-  for select using (auth.uid() = user_id);
-
--- Writes go through the train_journal_spam RPC (which uses
--- auth.uid()), so insert/update policies just enforce the same
--- self-scoping the RPC already imposes.
-drop policy if exists "journal_spam_tokens are self-insertable" on public.journal_spam_tokens;
-create policy "journal_spam_tokens are self-insertable" on public.journal_spam_tokens
-  for insert with check (auth.uid() = user_id);
-
-drop policy if exists "journal_spam_tokens are self-updatable" on public.journal_spam_tokens;
-create policy "journal_spam_tokens are self-updatable" on public.journal_spam_tokens
-  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
--- Required by untrain_journal_spam's GC step, which deletes token
--- rows that lost their last evidence (ham_count = 0 AND spam_count
--- = 0). Without this policy, RLS suppressed the DELETE silently
--- and zero-count rows accumulated forever - storage bloat, no leak.
-drop policy if exists "journal_spam_tokens are self-deletable" on public.journal_spam_tokens;
-create policy "journal_spam_tokens are self-deletable" on public.journal_spam_tokens
-  for delete using (auth.uid() = user_id);
-
--- Per-user totals. Used as Naive Bayes priors and as the cold-start
--- gate (worker suppresses the hint while either total is below
--- threshold so the LLM doesn't try to interpret meaningless scores).
-create table if not exists public.journal_spam_stats (
-  user_id uuid primary key references auth.users(id) on delete cascade,
-  -- Number of conversations the user has marked as ham (good entry).
-  ham_total int not null default 0,
-  -- Number of conversations the user has marked as spam (deleted entry).
-  spam_total int not null default 0,
-  updated_at timestamptz not null default now()
-);
-
-alter table public.journal_spam_stats enable row level security;
-
-drop policy if exists "journal_spam_stats are self-selectable" on public.journal_spam_stats;
-create policy "journal_spam_stats are self-selectable" on public.journal_spam_stats
-  for select using (auth.uid() = user_id);
-
-drop policy if exists "journal_spam_stats are self-insertable" on public.journal_spam_stats;
-create policy "journal_spam_stats are self-insertable" on public.journal_spam_stats
-  for insert with check (auth.uid() = user_id);
-
-drop policy if exists "journal_spam_stats are self-updatable" on public.journal_spam_stats;
-create policy "journal_spam_stats are self-updatable" on public.journal_spam_stats
-  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
-
--- No live caller deletes from this table today. Added for parity
--- with journal_spam_tokens above so a future "wipe spam model" path
--- (Settings -> Reset, an admin tool) can remove the totals row in
--- the same call as the per-token rows without a hidden RLS-suppress.
-drop policy if exists "journal_spam_stats are self-deletable" on public.journal_spam_stats;
-create policy "journal_spam_stats are self-deletable" on public.journal_spam_stats
-  for delete using (auth.uid() = user_id);
-
--- Idempotency marker for the ham button. Set once when the user
--- marks an automatic entry as appropriate; the UI hides the button
--- after the first click. Nullable - most entries never get marked.
-alter table public.journal_entries
-  add column if not exists ham_marked_at timestamptz null;
-
--- Train the per-user Bayesian model. Atomic across the token rows
--- and the totals row - both updates land in the same transaction so
--- a partial training failure leaves the model untouched. Tokens are
--- expected pre-stemmed and lowercased; the function does no
--- normalization of its own.
-drop function if exists public.train_journal_spam(text[], text);
-create or replace function public.train_journal_spam(
-  p_tokens text[],
-  p_label text
-) returns void
-language plpgsql security invoker as $$
-declare
-  v_user_id uuid := auth.uid();
-  v_ham int := case when p_label = 'ham' then 1 else 0 end;
-  v_spam int := case when p_label = 'spam' then 1 else 0 end;
-begin
-  if v_user_id is null then
-    raise exception 'not authenticated';
-  end if;
-  if p_label not in ('ham', 'spam') then
-    raise exception 'invalid label: %', p_label;
-  end if;
-  if p_tokens is null or array_length(p_tokens, 1) is null then
-    -- Empty token list: still bump the stats row so the prior
-    -- shifts correctly even if the conversation tokenized to nothing.
-    insert into public.journal_spam_stats (user_id, ham_total, spam_total, updated_at)
-    values (v_user_id, v_ham, v_spam, now())
-    on conflict (user_id) do update set
-      ham_total = public.journal_spam_stats.ham_total + v_ham,
-      spam_total = public.journal_spam_stats.spam_total + v_spam,
-      updated_at = now();
-    return;
-  end if;
-
-  insert into public.journal_spam_tokens as t (user_id, token, ham_count, spam_count)
-  select v_user_id, tk, v_ham, v_spam
-    from unnest(p_tokens) as tk
-  on conflict (user_id, token) do update set
-    ham_count = t.ham_count + v_ham,
-    spam_count = t.spam_count + v_spam;
-
-  insert into public.journal_spam_stats (user_id, ham_total, spam_total, updated_at)
-  values (v_user_id, v_ham, v_spam, now())
-  on conflict (user_id) do update set
-    ham_total = public.journal_spam_stats.ham_total + v_ham,
-    spam_total = public.journal_spam_stats.spam_total + v_spam,
-    updated_at = now();
-end $$;
-
--- Reverse a previous train_journal_spam call. Decrements the per-
--- token counts AND the per-user totals row, floored at zero so an
--- imbalance (caller untrains a label that wasn't trained, a token
--- count that's already zero) can't push the numbers negative.
---
--- Why this exists: the user can mark an automatic entry as ham
--- (the "Looks good" button) and then later delete it. Without an
--- untrain step, the same conversation's tokens would contribute
--- +1 ham AND +1 spam, polluting both sides of the model. The
--- delete path calls untrain(ham) before train(spam) so the net
--- effect is a clean -ham/+spam shift on the conversation's
--- vocabulary.
-drop function if exists public.untrain_journal_spam(text[], text);
-create or replace function public.untrain_journal_spam(
-  p_tokens text[],
-  p_label text
-) returns void
-language plpgsql security invoker as $$
-declare
-  v_user_id uuid := auth.uid();
-  v_ham int := case when p_label = 'ham' then 1 else 0 end;
-  v_spam int := case when p_label = 'spam' then 1 else 0 end;
-begin
-  if v_user_id is null then
-    raise exception 'not authenticated';
-  end if;
-  if p_label not in ('ham', 'spam') then
-    raise exception 'invalid label: %', p_label;
-  end if;
-
-  if p_tokens is not null and array_length(p_tokens, 1) is not null then
-    update public.journal_spam_tokens
-       set ham_count = greatest(0, ham_count - v_ham),
-           spam_count = greatest(0, spam_count - v_spam)
-     where user_id = v_user_id
-       and token = any(p_tokens);
-
-    -- Garbage-collect rows that lost their last evidence in either
-    -- class. Otherwise the table accumulates zero-rows for every
-    -- token the user once labeled and later untrained. Doesn't
-    -- touch rows that still carry evidence in the OTHER class -
-    -- those are still load-bearing for scoring.
-    delete from public.journal_spam_tokens
-     where user_id = v_user_id
-       and token = any(p_tokens)
-       and ham_count = 0
-       and spam_count = 0;
-  end if;
-
-  update public.journal_spam_stats
-     set ham_total = greatest(0, ham_total - v_ham),
-         spam_total = greatest(0, spam_total - v_spam),
-         updated_at = now()
-   where user_id = v_user_id;
-end $$;
-
--- Score lookup. Returns one row per matched token plus the user's
--- totals (replicated on every row, since callers compute Naive Bayes
--- in JS and need both pieces). Empty result means either no tokens
--- matched the user's vocabulary or the user has no training data
--- yet - the caller distinguishes via the totals.
-drop function if exists public.score_journal_spam(text[]);
-create or replace function public.score_journal_spam(
-  p_tokens text[]
-) returns table (
-  token text,
-  ham_count int,
-  spam_count int,
-  ham_total int,
-  spam_total int
-)
-language sql stable security invoker as $$
-  with stats as (
-    select coalesce(s.ham_total, 0) as ham_total,
-           coalesce(s.spam_total, 0) as spam_total
-      from (select 1) d
-      left join public.journal_spam_stats s on s.user_id = auth.uid()
-  )
-  select t.token, t.ham_count, t.spam_count, stats.ham_total, stats.spam_total
-    from public.journal_spam_tokens t, stats
-   where t.user_id = auth.uid()
-     and t.token = any(p_tokens)
-$$;
-
--- Standalone stats lookup. Used by the worker to apply the
--- cold-start gate before bothering to tokenize and call
--- score_journal_spam (saves a round-trip when the model is empty)
--- and by the UI if it ever wants to surface "trained on N
--- conversations" copy.
-drop function if exists public.get_journal_spam_stats();
-create or replace function public.get_journal_spam_stats()
-returns table (ham_total int, spam_total int)
-language sql stable security invoker as $$
-  select coalesce(s.ham_total, 0)::int, coalesce(s.spam_total, 0)::int
-    from (select 1) d
-    left join public.journal_spam_stats s on s.user_id = auth.uid()
-$$;
-
--- Wipe-and-rewind for the journal subsystem. Called from Settings ->
--- Journal -> Reset. Three side effects, all scoped to auth.uid() via
--- RLS (security invoker):
---
---   1. Delete every journal entry the user owns (automatic AND user
---      sources). The unique-per-(user, thread) index on automatic
---      entries gets cleared as part of the delete, so subsequent
---      worker runs can write fresh entries against the same threads.
---   2. Delete every journal_thread_excludes row for the user. Without
---      this step, threads the user had previously thumbs-down'd would
---      stay permanently excluded from the worker, which is the
---      opposite of "reset"; the user wants the worker to evaluate
---      everything from scratch.
---   3. Null out the per-thread journal pointer and claim columns on
---      every thread the user owns. Clearing last_journaled_msg_id is
---      what makes the worker actually re-process the conversations -
---      without it the worker would skip threads it had already
---      pointer-advanced past, even though the entry rows are gone.
---      The claim columns are nulled defensively in case a worker
---      cycle is mid-flight; an in-flight upsert with an expired claim
---      will simply lose its mark step and roll back.
---
--- The three side effects run in a single plpgsql transaction so the
--- user can't end up half-reset (entries gone but pointers still
--- advanced, which would leave the journal permanently empty).
---
--- Idempotent: calling this on an already-empty journal is a no-op
--- on the deletes and a vacuous update on the pointers.
+-- The daily-journal subsystem (entries, spam-filter classifier, thread
+-- claim cursor, worker-leases partition) used to live here. The feature
+-- was removed because the wiki absorbed the long-term reflective-content
+-- role and the spam-filter ham/spam labelling never converged. Idempotent
+-- teardown so databases that synced the old schema drop their journal
+-- footprint on the next apply.
 drop function if exists public.reset_journal_data();
-create or replace function public.reset_journal_data()
-returns void
-language plpgsql security invoker as $$
-declare
-  v_user uuid := auth.uid();
-begin
-  if v_user is null then
-    raise exception 'reset_journal_data: not authenticated'
-      using errcode = '28000';
-  end if;
-  delete from public.journal_entries where user_id = v_user;
-  delete from public.journal_thread_excludes where user_id = v_user;
-  update public.threads
-     set last_journaled_msg_id = null,
-         journal_claim_holder = null,
-         journal_claim_expires_at = null
-   where user_id = v_user;
-end $$;
+drop function if exists public.score_journal_spam(text[]);
+drop function if exists public.untrain_journal_spam(text[], text);
+drop function if exists public.train_journal_spam(text[], text);
+drop function if exists public.get_journal_spam_stats();
+drop function if exists public.save_journal_entry_embedding_if_claimed(uuid, text, vector, text);
+drop function if exists public.claim_next_pending_journal_entry(text, int);
+drop function if exists public.search_journal_entries_by_embedding(vector, int);
+drop function if exists public.mark_thread_journaled_for_user(uuid);
+drop function if exists public.mark_thread_journaled_if_claimed(uuid, text, uuid);
+drop function if exists public.upsert_journal_entry_and_mark_thread(uuid, text, uuid, date, text, text[], text, text[]);
+drop function if exists public.claim_next_thread_for_journal(text, int, text);
+drop function if exists public.clear_journal_embedding_on_change() cascade;
+drop table if exists public.journal_spam_tokens cascade;
+drop table if exists public.journal_spam_stats cascade;
+drop table if exists public.journal_thread_excludes cascade;
+drop table if exists public.journal_entries cascade;
+alter table public.threads
+  drop column if exists last_journaled_msg_id,
+  drop column if exists journal_claim_holder,
+  drop column if exists journal_claim_expires_at;
+-- Drop any lingering worker_leases rows so a tab that hasn't reloaded
+-- yet doesn't keep heartbeating a partition that no longer exists.
+delete from public.worker_leases where worker_kind = 'journal';
 
 -- User Wiki ---------------------------------------------------------------
 --
--- Flat (no nesting) encyclopedia-style articles a fourth peer to chats,
--- memories, and journal entries. A background worker
--- (src/lib/agents/wiki/) reads conversations the day after they settle
--- and either updates an existing article or creates a new one. The user
--- can also search, view, edit, add, delete, and ask an agent to rewrite
--- a single article with explicit instructions.
+-- Flat (no nesting) encyclopedia-style articles peer to chats and
+-- memories. A background worker (src/lib/agents/wiki/) reads
+-- conversations the day after they settle and either updates an
+-- existing article or creates a new one. The user can also search,
+-- view, edit, add, delete, and ask an agent to rewrite a single
+-- article with explicit instructions.
 --
 -- Article voice is wiki-style third-person prose. Articles are NEVER
 -- auto-injected into the chat; the main LLM reaches them only through
 -- the always-on `wiki_search` tool. This is the deliberate split from
--- memory (atomic facts surfaced inline) and journal (dated reflections
--- the chat-loop primes on the opening turn).
+-- memory (atomic facts surfaced inline by the recall layer).
 --
 -- title is the alphabetical sort key the drawer renders; (user_id,
 -- title) is unique so the autonomous agent's `wiki_create` can hit
@@ -5268,8 +4430,7 @@ create table if not exists public.wiki_articles (
   embedding vector(2048),
   embedding_model text,
   embedding_claim_holder text,
-  -- No _at suffix to match the convention from memories /
-  -- journal_entries.
+  -- No _at suffix to match the convention from memories.
   embedding_claim_expires timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -5279,7 +4440,7 @@ create table if not exists public.wiki_articles (
 create index if not exists wiki_articles_user_title_idx
   on public.wiki_articles (user_id, lower(title) asc);
 
--- Same invariant as memories / journal_entries: when the text that
+-- Same invariant as memories: when the text that
 -- produced the embedding changes, null the embedding so the worker re-
 -- embeds on its next poll. Null the claim columns too so an in-flight
 -- worker save (which guards on holder + expires > now()) cannot land a
@@ -5321,16 +4482,16 @@ create policy "wiki_articles are self-deletable" on public.wiki_articles
   for delete using (auth.uid() = user_id);
 
 -- Per-thread pointer + claim columns for the autonomous wiki agent.
--- Independent of last_journaled_msg_id and last_reflected_msg_id so all
--- three workers can run concurrently against the same thread without
--- crowding each other's pointers.
+-- Independent of last_reflected_msg_id so both workers can run
+-- concurrently against the same thread without crowding each
+-- other's pointers.
 alter table public.threads
   add column if not exists last_wiki_processed_msg_id uuid references public.messages(id) on delete set null,
   add column if not exists wiki_claim_holder text,
   add column if not exists wiki_claim_expires_at timestamptz;
 
--- Claim the next thread eligible for wiki processing. Differs from
--- claim_next_thread_for_journal in two specific ways:
+-- Claim the next thread eligible for wiki processing. Two notable
+-- shape choices:
 --   (1) Eligibility uses the NEWEST message's created_at (read off a
 --       second lateral) rather than threads.updated_at. Both columns
 --       move on every insert, but reading the timestamp from messages
@@ -5345,16 +4506,14 @@ alter table public.threads
 --       newest msg lands on Wednesday and the inequality fails again
 --       until Thursday. This is the user's "settles for at least one
 --       full day boundary" rule.
--- Same depth guard (>= 2 user messages) and skip-locked fairness as
--- the journal RPC.
+-- Depth guard (>= 2 user messages) and skip-locked fairness.
 drop function if exists public.claim_next_thread_for_wiki(text, int);
 drop function if exists public.claim_next_thread_for_wiki(text, int, text);
 create or replace function public.claim_next_thread_for_wiki(
   p_holder_id text,
   p_ttl_seconds int,
-  -- Same Settings -> Journal -> Day boundary timezone the journal
-  -- claim RPC reads. Wiki and journal share the user's preference;
-  -- there is no separate wiki-tz setting.
+  -- User's display timezone from Settings -> AI -> About you;
+  -- determines the calendar day the eligibility gate buckets on.
   p_timezone text default 'UTC'
 ) returns table (
   thread_id uuid,
@@ -5371,8 +4530,8 @@ language sql security invoker as $$
       newest.created_at as newest_msg_at
       from public.threads t
       cross join lateral (
-        -- Same terminal-msg lateral as the journal RPC: latest
-        -- assistant row whose tool_calls is empty/null and whose
+        -- Terminal-msg lateral: latest assistant row whose
+        -- tool_calls is empty/null and whose
         -- content is non-empty. The id is what we stamp into
         -- last_wiki_processed_msg_id when the agent finishes.
         select m.id as msg_id
@@ -5411,9 +4570,8 @@ language sql security invoker as $$
           where m3.thread_id = t.id
             and m3.role = 'user'
        ) >= 2
-       -- Next-day eligibility (the difference from journal). Newest
-       -- message must land on a calendar day strictly before today
-       -- in the user's tz.
+       -- Next-day eligibility. Newest message must land on a
+       -- calendar day strictly before today in the user's tz.
        and (newest.created_at at time zone p_timezone)::date
            < (now() at time zone p_timezone)::date
      order by newest.created_at asc
@@ -5457,7 +4615,7 @@ begin
 end $$;
 
 -- Embeddings pipeline RPCs for wiki articles. Same claim/save shape
--- as memories and journal entries, same 2048-dim padded vectors,
+-- as memories, same 2048-dim padded vectors,
 -- same security invoker posture letting RLS enforce user scoping.
 drop function if exists public.claim_next_pending_wiki_article(text, int);
 create or replace function public.claim_next_pending_wiki_article(
@@ -5817,13 +4975,12 @@ begin
 end $$;
 
 -- Wipe-and-rewind for the wiki subsystem. Called from Settings ->
--- Wiki -> Reset. Mirrors reset_journal_data but with the wiki-side
--- column names. Two side effects under RLS scoping:
+-- Wiki -> Reset. Two side effects under RLS scoping:
 --
---   1. Delete every wiki article the user owns. Unlike the journal,
---      the wiki has no per-thread exclude table - articles are
---      aggregated across many threads, so there's no "permanently
---      exclude this thread" semantic to undo.
+--   1. Delete every wiki article the user owns. The wiki has no
+--      per-thread exclude table - articles are aggregated across
+--      many threads, so there's no "permanently exclude this
+--      thread" semantic to undo.
 --   2. Null out the per-thread wiki pointer + claim columns on every
 --      thread the user owns. Clearing last_wiki_processed_msg_id is
 --      what re-eligibilizes the threads for the next worker sweep;

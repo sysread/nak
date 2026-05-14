@@ -5,9 +5,9 @@
  * than title-substring alone.
  *
  * Thin wrapper over two SupabaseService RPCs (`claimNextPendingRecipe`
- * and `saveRecipeEmbedding`); same shape as the wiki and journal
- * adapters. The generic loop in `../loop.ts` drives every source the
- * worker registers.
+ * and `saveRecipeEmbedding`); same shape as the wiki adapter. The
+ * generic loop in `../loop.ts` drives every source the worker
+ * registers.
  */
 import type { SupabaseService } from '../../supabase';
 import type { EmbeddingSource, PendingItem } from '../types';
@@ -19,7 +19,7 @@ import type { EmbeddingSource, PendingItem } from '../types';
  * `recipes` table has no application-side length cap of its own
  * (cooklang is the source of truth and can run several kilobytes),
  * so the truncation lives here instead. Matches the order of
- * magnitude the journal and wiki adapters cap at.
+ * magnitude the wiki adapter caps at.
  */
 const MAX_RECIPE_EMBED_CHARS = 16000;
 

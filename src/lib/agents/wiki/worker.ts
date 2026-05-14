@@ -1,14 +1,13 @@
 /**
- * Wiki Web Worker entry point. Mirrors `../journal/worker.ts` and
- * `../reflection/worker.ts`: build clients from the `start` message,
- * instantiate WikiAgent, drive `runOneCycle` until abort.
+ * Wiki Web Worker entry point. Mirrors `../reflection/worker.ts`:
+ * build clients from the `start` message, instantiate WikiAgent,
+ * drive `runOneCycle` until abort.
  *
- *   - Lease partition is `'wiki'` (distinct from 'journal',
- *     'reflection', 'embedding') so a single device can hold every
- *     lease at once.
- *   - Carries the user's timezone through (re-using the
- *     `journalTimezone` setting per the spec) so the next-day
- *     eligibility predicate buckets against the user's calendar.
+ *   - Lease partition is `'wiki'` (distinct from 'reflection',
+ *     'embedding') so a single device can hold every lease at once.
+ *   - Carries the user's `displayTimezone` setting through so the
+ *     next-day eligibility predicate buckets against the user's
+ *     calendar.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { VeniceClient } from '../../venice';
@@ -105,8 +104,7 @@ const tzHolder: { value: string | null } = { value: null };
 // Captures the agent built by `runWorker` so the message handler can
 // call `setUserProfile` on it when a profile-update message arrives.
 // Cleared in the worker's `finally` so a stale pointer can't be
-// dereferenced after teardown. Same shape as the journal worker's
-// `activeAgent` holder.
+// dereferenced after teardown.
 let activeAgent: WikiAgent | null = null;
 
 /**

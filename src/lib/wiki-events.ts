@@ -1,6 +1,6 @@
 /**
  * Window-level event bus for cross-surface notification of wiki
- * writes. Parallel to `journal-events.ts`. Fired whenever a wiki
+ * writes. Parallel to `cookbook-events.ts`. Fired whenever a wiki
  * article is created/updated/deleted - by the user via Wiki.svelte,
  * by the LLM via the wiki_create/_update/_delete tools, or by the
  * autonomous wiki agent. The drawer listing and the open article

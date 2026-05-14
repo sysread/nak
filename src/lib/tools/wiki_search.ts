@@ -1,8 +1,8 @@
 /**
  * Semantic + substring search over the user's wiki articles. Same
- * shape as `journal_search` and `memory_search`: embed the query via
- * Venice, run vector cosine search against the stored embeddings,
- * merge with an ILIKE fallback so freshly-written articles still
+ * shape as `memory_search`: embed the query via Venice, run vector
+ * cosine search against the stored embeddings, merge with an ILIKE
+ * fallback so freshly-written articles still
  * participate before the embedding worker reaches them.
  *
  * Wiki articles are NEVER auto-injected into the chat - this tool is

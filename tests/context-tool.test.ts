@@ -1,7 +1,7 @@
 /**
  * Unit coverage for the umbrella `context` tool. Tests its registry
  * presence, that it is excluded from every agent-only toolbox, and
- * that execute() fans out across the four recall agents and returns
+ * that execute() fans out across the three recall agents and returns
  * a stitched note (or the synthesised empty signal when every layer
  * is silent).
  *
@@ -17,7 +17,6 @@ import {
   recallToolbox,
   conversationRecallToolbox,
   wikiRecallToolbox,
-  journalRecallToolbox,
   type ToolContext,
   type ToolDef,
 } from '../src/lib/tools';
@@ -81,8 +80,6 @@ function recallSupabase(messages: Message[]): SupabaseService {
     searchConversationsByText: vi.fn(async () => []),
     searchWikiArticlesByEmbedding: vi.fn(async () => []),
     searchWikiArticlesByText: vi.fn(async () => []),
-    searchJournalEntriesByEmbedding: vi.fn(async () => []),
-    searchJournalEntriesByText: vi.fn(async () => []),
   } as unknown as SupabaseService;
 }
 
@@ -97,7 +94,6 @@ describe('context - registry scoping', () => {
       recallToolbox,
       conversationRecallToolbox,
       wikiRecallToolbox,
-      journalRecallToolbox,
     ]) {
       expect(tb.tools.map((t) => t.name)).not.toContain('context');
     }
@@ -115,7 +111,6 @@ describe('context - registry scoping', () => {
     expect(contextTool.description.toLowerCase()).toContain('memor');
     expect(contextTool.description.toLowerCase()).toContain('conversation');
     expect(contextTool.description.toLowerCase()).toContain('wiki');
-    expect(contextTool.description.toLowerCase()).toContain('journal');
   });
 
   it('accepts an optional topic argument and nothing else', () => {
@@ -132,7 +127,7 @@ describe('context - registry scoping', () => {
   });
 });
 
-describe('context - execute() fans out across the four recall agents', () => {
+describe('context - execute() fans out across the three recall agents', () => {
   it('returns a stitched note when at least one layer carries signal', async () => {
     const messages: Message[] = [
       {
@@ -144,8 +139,8 @@ describe('context - execute() fans out across the four recall agents', () => {
       } as Message,
     ];
     const venice = fakeVeniceForRecall((lastUser) => {
-      // Two layers carry signal; the other two return the empty
-      // signal so we can verify the stitch composes them correctly.
+      // Two layers carry signal; the third returns the empty signal
+      // so we can verify the stitch composes them correctly.
       if (lastUser.includes('memory_search')) {
         return { kind: 'note', note: 'I remember the user grows basil.' };
       }
@@ -188,9 +183,6 @@ describe('context - execute() fans out across the four recall agents', () => {
       if (lastUser.includes('wiki_search')) {
         return { kind: 'none', reason: 'no relevant articles' };
       }
-      if (lastUser.includes('journal_search')) {
-        return { kind: 'none', reason: 'operational topic, no signal' };
-      }
       return { kind: 'none', reason: 'unknown' };
     });
     const svc = recallSupabase(messages);
@@ -207,27 +199,23 @@ describe('context - execute() fans out across the four recall agents', () => {
       expect(result.reason).toContain('memory: no memories matched');
       expect(result.reason).toContain('conversation: no prior threads');
       expect(result.reason).toContain('wiki: no relevant articles');
-      expect(result.reason).toContain('journal: operational topic, no signal');
     }
   });
 
   it('forwards the topic hint to the layers that accept one', async () => {
-    // Memory has no topic field by contract; the other three append
+    // Memory has no topic field by contract; the other two append
     // "The main assistant flagged this topic specifically: <topic>"
     // to the prompt when one is passed.
     const seenTopicForLayer: Record<string, boolean> = {
       memory: false,
       conversation: false,
       wiki: false,
-      journal: false,
     };
     const venice = fakeVeniceForRecall((lastUser) => {
-      let layer: 'memory' | 'conversation' | 'wiki' | 'journal' | 'unknown' =
-        'unknown';
+      let layer: 'memory' | 'conversation' | 'wiki' | 'unknown' = 'unknown';
       if (lastUser.includes('memory_search')) layer = 'memory';
       else if (lastUser.includes('conversation_search')) layer = 'conversation';
       else if (lastUser.includes('wiki_search')) layer = 'wiki';
-      else if (lastUser.includes('journal_search')) layer = 'journal';
       if (layer !== 'unknown') {
         seenTopicForLayer[layer] =
           lastUser.includes('flagged this topic specifically: my dad');
@@ -249,6 +237,5 @@ describe('context - execute() fans out across the four recall agents', () => {
     expect(seenTopicForLayer.memory).toBe(false);
     expect(seenTopicForLayer.conversation).toBe(true);
     expect(seenTopicForLayer.wiki).toBe(true);
-    expect(seenTopicForLayer.journal).toBe(true);
   });
 });

@@ -28,9 +28,7 @@ export interface LegacyModelSpec {
  * Every Venice id Nak has ever pinned that is no longer active. Grouped
  * by the role the id used to fill - the comment block above each group
  * is the only documentation those ids get. If an id pulled multiple
- * shifts (e.g. arcee-trinity-large-thinking served as Balanced and
- * later as the Journal agent) the comment captures the longest-lived
- * role.
+ * shifts, the comment captures the longest-lived role.
  */
 export const LEGACY_MODELS: Readonly<Record<string, LegacyModelSpec>> = {
   // Retired Smart-tier ids.
@@ -53,11 +51,10 @@ export const LEGACY_MODELS: Readonly<Record<string, LegacyModelSpec>> = {
   'grok-41-fast':                      { id: 'grok-41-fast', contextWindow: 1_000_000 },
   'zai-org-glm-4.7':                   { id: 'zai-org-glm-4.7', contextWindow: 198_000 },
 
-  // Retired Journal-agent ids. Never fronted a user-facing tier; the
-  // ring will only resolve them on assistant rows the user could see
-  // if a journal pin ever wrote out an `assistant.model` value, which
-  // it currently does not. Kept here for completeness and so a future
-  // re-pin has the row already wired into the legacy registry.
+  // Retired background-agent ids from the now-deleted journal feature.
+  // Never fronted a user-facing tier, but kept here for completeness
+  // and so a future re-pin has the row already wired into the legacy
+  // registry.
   'minimax-m25':                       { id: 'minimax-m25', contextWindow: 198_000 },
   'qwen3-235b-a22b-instruct-2507':     { id: 'qwen3-235b-a22b-instruct-2507', contextWindow: 128_000 },
   'zai-org-glm-4.7-flash':             { id: 'zai-org-glm-4.7-flash', contextWindow: 128_000 },

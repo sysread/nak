@@ -30,7 +30,6 @@ import type { EmbeddingSource } from './types';
 import { createMemoriesSource } from './sources/memories';
 import { createThreadsSource } from './sources/threads';
 import { createSamskaraSubstrateSource } from './sources/samskara-substrate';
-import { createJournalSource } from './sources/journal';
 import { createWikiSource } from './sources/wiki';
 import { createRecipesSource } from './sources/recipes';
 import { LeaseCoordinator } from './lease';
@@ -176,7 +175,6 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     createMemoriesSource(supabase),
     createThreadsSource(supabase),
     createSamskaraSubstrateSource(supabase),
-    createJournalSource(supabase),
     createWikiSource(supabase),
     createRecipesSource(supabase),
   ];

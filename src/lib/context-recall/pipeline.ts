@@ -3,11 +3,10 @@
  * fired on the same trigger machinery (cold-start, mid-turn title
  * change, mood-band shift, stale fuse) but doing different work:
  *
- *   1. Fan out the four recall agents in parallel:
+ *   1. Fan out the three recall agents in parallel:
  *        - RecallAgent             (memories          / memory_search)
  *        - ConversationRecallAgent (prior threads     / conversation_search)
  *        - WikiRecallAgent         (wiki articles     / wiki_search)
- *        - JournalRecallAgent      (daily journal     / journal_search)
  *      Each agent reads the live thread, runs its own dedicated
  *      search rounds against its own table, and returns a structured
  *      first-person note (or the empty signal).
@@ -23,14 +22,14 @@
  * start / title shift / stale-fuse fire.
  *
  * Per-layer recall tools (memory_recall, conversation_recall,
- * wiki_recall, journal_recall) and the umbrella `context` tool
- * remain available as explicit lookup surfaces - the model uses
- * those when it wants a targeted on-demand pull rather than the
- * topic-relevance projection the pipeline produces reflexively.
- * The umbrella tool reuses `runRecallFanOut` + `stitchRecallNotes`
- * below so both paths walk the same assembly logic.
+ * wiki_recall) and the umbrella `context` tool remain available as
+ * explicit lookup surfaces - the model uses those when it wants a
+ * targeted on-demand pull rather than the topic-relevance projection
+ * the pipeline produces reflexively. The umbrella tool reuses
+ * `runRecallFanOut` + `stitchRecallNotes` below so both paths walk
+ * the same assembly logic.
  *
- * Why stitch (not synthesize): the four child agents already emit
+ * Why stitch (not synthesize): the three child agents already emit
  * first-person notes in the same voice with the same character cap.
  * A stitch is a literal concat with layer hinge words; an LLM-based
  * synthesizer would add latency and cost without earning its keep
@@ -73,7 +72,7 @@ const log = createLogger('context-recall');
  * note is emitted verbatim; subsequent non-empty notes get their
  * layer hinge prepended).
  */
-export type RecallLayer = 'memory' | 'conversation' | 'wiki' | 'journal';
+export type RecallLayer = 'memory' | 'conversation' | 'wiki';
 
 /**
  * Per-layer hinge words. The first non-empty note in the stitch is
@@ -103,17 +102,11 @@ export type RecallLayer = 'memory' | 'conversation' | 'wiki' | 'journal';
  *                  consuming model treats the clause as "what we have
  *                  written down about X" rather than "what we talked
  *                  about with X."
- *
- *   - journal      "From the journal,". The journal child writes
- *                  notes anchored on dated reflective entries. Distinct
- *                  hinge to keep the temporal / emotional framing
- *                  separate from the encyclopedic wiki framing.
  */
 export const RECALL_HINGES: Record<RecallLayer, string> = {
   memory: '',
   conversation: 'From earlier conversations,',
   wiki: 'From the wiki,',
-  journal: 'From the journal,',
 };
 
 /**
@@ -125,11 +118,10 @@ export interface RecallFanOutResult {
   memory: RecallNote;
   conversation: RecallNote;
   wiki: RecallNote;
-  journal: RecallNote;
 }
 
 /**
- * Stitch the four recall-agent notes into a single first-person
+ * Stitch the three recall-agent notes into a single first-person
  * paragraph. Exported for unit testing and for the umbrella `context`
  * tool, which uses the same assembly logic to produce its on-demand
  * tool result.
@@ -143,19 +135,19 @@ export interface RecallFanOutResult {
  *                                        note's own first-person voice
  *                                        carries the framing.
  *   - Two or more non-empty notes     -> walked in layer order
- *                                        (memory, conversation, wiki,
- *                                        journal). The first non-empty
- *                                        is emitted verbatim; each
+ *                                        (memory, conversation, wiki).
+ *                                        The first non-empty is
+ *                                        emitted verbatim; each
  *                                        subsequent non-empty gets its
  *                                        layer hinge prepended with a
  *                                        space separator.
  *
  * The walk order is fixed: memory leads when present because it is
- * the densest layer of standing facts; conversation, wiki, and
- * journal follow with their hinges. If memory is empty and
- * conversation is the first non-empty, conversation goes verbatim
- * (no hinge) and subsequent layers follow with theirs - the
- * unprefixed slot is always the first non-empty in layer order.
+ * the densest layer of standing facts; conversation and wiki follow
+ * with their hinges. If memory is empty and conversation is the
+ * first non-empty, conversation goes verbatim (no hinge) and
+ * subsequent layers follow with theirs - the unprefixed slot is
+ * always the first non-empty in layer order.
  *
  * Whitespace-only notes are treated as empty for the cross-product
  * so a child that emits a stray space-padded note does not corrupt
@@ -166,7 +158,6 @@ export function stitchRecallNotes(result: RecallFanOutResult): string {
     'memory',
     'conversation',
     'wiki',
-    'journal',
   ];
 
   const cleaned: { layer: RecallLayer; text: string }[] = [];
@@ -219,15 +210,14 @@ export interface RecallFanOutInputs {
   /** Optional topic hint. The pipeline does not pass one (the agents
    *  infer from the live thread); the umbrella `context` tool may
    *  pass one through when the main model called it with an explicit
-   *  topic. Only the conversation, wiki, and journal agents consume
-   *  the topic - the memory child has no topic field by contract
-   *  (its prompt is keyed on the conversation itself, not an
-   *  injected phrase). */
+   *  topic. Only the conversation and wiki agents consume the topic
+   *  - the memory child has no topic field by contract (its prompt is
+   *  keyed on the conversation itself, not an injected phrase). */
   topic?: string | null;
 }
 
 /**
- * Run the four recall agents in parallel and return their notes
+ * Run the three recall agents in parallel and return their notes
  * keyed by layer. Each child already collapses its own errors to
  * `{kind:'none'}`, so a single failed agent does not reject this
  * Promise.all - it surfaces as the empty signal for that layer.
@@ -241,33 +231,30 @@ export async function runRecallFanOut(
 ): Promise<RecallFanOutResult> {
   const { venice, supabase, threadId, userId, signal, depth, topic } = inputs;
 
-  // Fire all four agent-module fetches in parallel so the
-  // chunk-load cost is one network round-trip rather than four.
+  // Fire all three agent-module fetches in parallel so the
+  // chunk-load cost is one network round-trip rather than three.
   // Each module sits in its own lazy chunk; the dynamic imports
   // are what keep them out of the main bundle.
   const [
     { RecallAgent },
     { ConversationRecallAgent },
     { WikiRecallAgent },
-    { JournalRecallAgent },
   ] = await Promise.all([
     import('../agents/recall/agent'),
     import('../agents/conversation_recall/agent'),
     import('../agents/wiki_recall/agent'),
-    import('../agents/journal_recall/agent'),
   ]);
 
   const memoryAgent = new RecallAgent(venice, supabase);
   const conversationAgent = new ConversationRecallAgent(venice, supabase);
   const wikiAgent = new WikiRecallAgent(venice, supabase);
-  const journalAgent = new JournalRecallAgent(venice, supabase);
 
   const cleanTopic =
     typeof topic === 'string' && topic.trim().length > 0
       ? topic.trim()
       : null;
 
-  const [memoryResult, conversationResult, wikiResult, journalResult] =
+  const [memoryResult, conversationResult, wikiResult] =
     await Promise.all([
       memoryAgent.run({
         input: { threadId },
@@ -290,20 +277,12 @@ export async function runRecallFanOut(
         signal,
         depth,
       }),
-      journalAgent.run({
-        input: { threadId, topic: cleanTopic },
-        userId,
-        threadId,
-        signal,
-        depth,
-      }),
     ]);
 
   return {
     memory: memoryResult.output.note,
     conversation: conversationResult.output.note,
     wiki: wikiResult.output.note,
-    journal: journalResult.output.note,
   };
 }
 
@@ -377,7 +356,7 @@ export async function runContextRecallPipeline(
     trigger,
   };
 
-  // Mirrors the intuition pipeline's "complete" log line. The four
+  // Mirrors the intuition pipeline's "complete" log line. The three
   // child kinds tell a debugging eye which layers carried signal on
   // a given thread - useful for "why is wiki recall always silent
   // here?" investigations without per-tool timing instrumentation.
@@ -387,7 +366,6 @@ export async function runContextRecallPipeline(
     memoryKind: fanOut.memory.kind,
     conversationKind: fanOut.conversation.kind,
     wikiKind: fanOut.wiki.kind,
-    journalKind: fanOut.journal.kind,
     noteLength: note.length,
     elapsedMs: Date.now() - startedAt,
   });

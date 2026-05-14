@@ -25,7 +25,7 @@ import { SupabaseService, type SystemPrompt, type UserSettings } from './supabas
 import { VeniceClient } from './venice';
 import { saveSession, clearSession } from './session';
 import { startUsagePolling, stopUsagePolling } from './usage-store.svelte';
-import { detectTimezone } from './journal-day';
+import { detectTimezone } from './timezone';
 import {
   DEFAULT_REASONING_EFFORT,
   DEFAULT_TIER,
@@ -58,7 +58,7 @@ import { DEFAULT_LOG_LEVEL, type LogLevel } from './logger.svelte';
  * still run the teardown whenever the module finally lands.
  *
  * `whenLoaded(fn)` is the escape hatch for live-update calls (e.g.
- * the journal worker's `setProfile` / `setTimezone`). It's a no-op
+ * the wiki worker's `setProfile` / `setTimezone`). It's a no-op
  * if start() never fired - which matches the old direct-call
  * semantics, since the manager's own setProfile was a no-op when
  * the worker hadn't spawned.
@@ -112,9 +112,6 @@ const attachmentExpiry = lazyManager(() =>
 );
 const samskara = lazyManager(() =>
   import('./agents/samskara/manager').then((m) => m.samskaraManager)
-);
-const journal = lazyManager(() =>
-  import('./agents/journal/manager').then((m) => m.journalManager)
 );
 const wiki = lazyManager(() =>
   import('./agents/wiki/manager').then((m) => m.wikiManager)
@@ -187,18 +184,10 @@ interface AppState {
    */
   notifyOnComplete: boolean;
   /**
-   * Journal feature: background journaling worker runs unless this
-   * is explicitly false. Seeded to true on activate() so a brand-new
-   * account gets journaling out of the box; overwritten from Supabase
-   * `profiles.settings.journalAutomaticEnabled` on unlock.
-   */
-  journalAutomaticEnabled: boolean;
-  /**
    * User wiki feature: background wiki worker runs unless this is
-   * explicitly false. Same default-on semantics and persistence
-   * shape as `journalAutomaticEnabled`. Seeded to true on
-   * activate(); overwritten from Supabase
-   * `profiles.settings.wikiAutomaticEnabled` on unlock.
+   * explicitly false. Seeded to true on activate() so a brand-new
+   * account gets wiki entries out of the box; overwritten from
+   * Supabase `profiles.settings.wikiAutomaticEnabled` on unlock.
    */
   wikiAutomaticEnabled: boolean;
   /**
@@ -210,14 +199,14 @@ interface AppState {
    */
   wikiLibrarianEnabled: boolean;
   /**
-   * IANA timezone used by the journaling feature to bucket entries.
-   * Seeded from the browser's detected zone on activate() so a
-   * first-time user lands on sensible defaults; overwritten from
-   * Supabase `profiles.settings.journalTimezone` on unlock. Passed
-   * into the chat-loop's per-turn "today's journal" appendix
-   * computation and into the journaling worker's start message.
+   * IANA timezone the model sees when reasoning about "what time is
+   * it for the user" in the per-turn metadata system message; also
+   * used by the wiki worker to bucket day-eligible threads. Seeded
+   * from the browser's detected zone on activate() so a first-time
+   * user lands on sensible defaults; overwritten from Supabase
+   * `profiles.settings.displayTimezone` on unlock.
    */
-  journalTimezone: string;
+  displayTimezone: string;
   /**
    * Free-form display name the user entered in Settings -> AI ->
    * About you. Empty string means "not set"; chat-loop reads both
@@ -255,10 +244,9 @@ export const app = $state<AppState>({
   systemPrompts: [],
   emphasisMarkdown: false,
   notifyOnComplete: false,
-  journalAutomaticEnabled: true,
   wikiAutomaticEnabled: true,
   wikiLibrarianEnabled: true,
-  journalTimezone: detectTimezone(),
+  displayTimezone: detectTimezone(),
   userName: '',
   userLocation: '',
   error: null,
@@ -302,88 +290,53 @@ function setNotifyOnComplete(enabled: boolean): void {
 }
 
 /**
- * Apply the display name in memory and live-update the journal
- * worker so the next background entry uses the new name without a
- * worker restart. Empty string is "not set" - the chat-loop's
- * per-turn appendix builder treats it the same as absent. The
- * worker's prompt builder injects an "About the user" block when
- * at least one field is set; setting either side here is what
- * makes new automatic entries refer to the user by name rather
- * than as the generic "User".
+ * Apply the display name in memory and live-update the wiki workers
+ * so the next background article uses the new name without a worker
+ * restart. Empty string is "not set" - the chat-loop's per-turn
+ * metadata builder treats it the same as absent. The prompt builder
+ * suppresses the "About the user" block when both this and
+ * userLocation are empty.
  *
- * Does NOT persist. The settings-load path in Chat.svelte uses
- * this directly (the value just came back from Supabase, so
- * persisting it again would be redundant). User-driven changes
- * from Settings.svelte route through `persistUserName` instead.
+ * Does NOT persist. The settings-load path uses this directly (the
+ * value just came back from Supabase, so persisting it again would
+ * be redundant). User-driven changes from Settings.svelte route
+ * through `persistUserName` instead.
  */
 function setUserName(name: string): void {
   app.userName = name;
-  journal.whenLoaded((m) => m.setProfile(name, app.userLocation));
-  // Forward to both wiki workers so a Settings edit reaches their
-  // next cycle without a restart. Both share the same profile
-  // shape; both run independently of journal.
   wiki.whenLoaded((m) => m.setProfile(name, app.userLocation));
   wikiLibrarian.whenLoaded((m) => m.setProfile(name, app.userLocation));
 }
 
 /**
- * Apply the user's location in memory and live-update the journal
- * worker. Empty string is "not set". Does NOT persist - same split
+ * Apply the user's location in memory and live-update the wiki
+ * workers. Empty string is "not set". Does NOT persist - same split
  * as `setUserName`: the settings-load path uses this directly,
  * user-driven changes route through `persistUserLocation`.
  */
 function setUserLocation(location: string): void {
   app.userLocation = location;
-  journal.whenLoaded((m) => m.setProfile(app.userName, location));
   wiki.whenLoaded((m) => m.setProfile(app.userName, location));
   wikiLibrarian.whenLoaded((m) => m.setProfile(app.userName, location));
 }
 
 /**
- * Flip the background journaling worker on/off in the current session.
- * Starts or stops the journal manager to match - the toggle is the
- * live switch, not a passive preference. Does NOT persist; the
- * settings-load path in Chat.svelte uses this directly, user-driven
- * changes from Settings.svelte route through
- * `persistJournalAutomaticEnabled` so the choice survives reloads.
+ * Apply the display timezone in memory and push the new zone to the
+ * wiki worker so it starts bucketing on the right days immediately.
+ * Does NOT persist; user-driven changes route through
+ * `persistDisplayTimezone`. Caller is responsible for normalizing
+ * user-supplied input to a valid IANA name first.
  */
-function setJournalAutomaticEnabled(enabled: boolean): void {
-  app.journalAutomaticEnabled = enabled;
-  if (!app.supabase || !app.config) return;
-  if (enabled) {
-    journal.start({
-      supabase: app.supabase,
-      config: app.config,
-      timezone: app.journalTimezone || null,
-      userName: app.userName,
-      userLocation: app.userLocation,
-    });
-  } else {
-    journal.stop();
-  }
-}
-
-/**
- * Apply the journal timezone in memory and push the new zone to the
- * journaling and wiki workers so they start bucketing on the right
- * days immediately. Both background workers share this preference
- * (per the wiki spec: one user-tz preference covers both). Does NOT
- * persist; user-driven changes route through `persistJournalTimezone`.
- * Caller is responsible for normalizing user-supplied input to a
- * valid IANA name first.
- */
-function setJournalTimezone(tz: string): void {
-  app.journalTimezone = tz;
-  journal.whenLoaded((m) => m.setTimezone(tz || null));
+function setDisplayTimezone(tz: string): void {
+  app.displayTimezone = tz;
   wiki.whenLoaded((m) => m.setTimezone(tz || null));
 }
 
 /**
  * Flip the background wiki worker on/off in the current session.
- * Mirrors `setJournalAutomaticEnabled` - the toggle is the live
- * switch, not a passive preference. Does NOT persist; user-driven
- * changes from Settings.svelte route through
- * `persistWikiAutomaticEnabled`.
+ * The toggle is the live switch, not a passive preference. Does
+ * NOT persist; user-driven changes from Settings.svelte route
+ * through `persistWikiAutomaticEnabled`.
  */
 function setWikiAutomaticEnabled(enabled: boolean): void {
   app.wikiAutomaticEnabled = enabled;
@@ -392,7 +345,7 @@ function setWikiAutomaticEnabled(enabled: boolean): void {
     wiki.start({
       supabase: app.supabase,
       config: app.config,
-      timezone: app.journalTimezone || null,
+      timezone: app.displayTimezone || null,
       userName: app.userName,
       userLocation: app.userLocation,
     });
@@ -571,18 +524,6 @@ export async function persistUserLocation(next: string): Promise<string> {
   }
 }
 
-export async function persistJournalAutomaticEnabled(enabled: boolean): Promise<void> {
-  if (!app.supabase) throw new Error(NOT_CONNECTED);
-  const prev = app.journalAutomaticEnabled;
-  setJournalAutomaticEnabled(enabled);
-  try {
-    await app.supabase.updateSettings({ journalAutomaticEnabled: enabled });
-  } catch (err) {
-    setJournalAutomaticEnabled(prev);
-    throw err;
-  }
-}
-
 export async function persistWikiAutomaticEnabled(enabled: boolean): Promise<void> {
   if (!app.supabase) throw new Error(NOT_CONNECTED);
   const prev = app.wikiAutomaticEnabled;
@@ -608,19 +549,19 @@ export async function persistWikiLibrarianEnabled(enabled: boolean): Promise<voi
 }
 
 /**
- * Save the journal-day timezone. Caller is responsible for
- * normalizing user input to a valid IANA name before calling -
- * the helper trusts what it's given so the error surface stays
- * focused on the persist path, not input parsing.
+ * Save the display timezone. Caller is responsible for normalizing
+ * user input to a valid IANA name before calling - the helper trusts
+ * what it's given so the error surface stays focused on the persist
+ * path, not input parsing.
  */
-export async function persistJournalTimezone(tz: string): Promise<void> {
+export async function persistDisplayTimezone(tz: string): Promise<void> {
   if (!app.supabase) throw new Error(NOT_CONNECTED);
-  const prev = app.journalTimezone;
-  setJournalTimezone(tz);
+  const prev = app.displayTimezone;
+  setDisplayTimezone(tz);
   try {
-    await app.supabase.updateSettings({ journalTimezone: tz });
+    await app.supabase.updateSettings({ displayTimezone: tz });
   } catch (err) {
-    setJournalTimezone(prev);
+    setDisplayTimezone(prev);
     throw err;
   }
 }
@@ -682,13 +623,12 @@ export function applyServerSettings(s: UserSettings): void {
   // through to the setter.
   setEmphasisMarkdown(s.emphasisMarkdown ?? false);
   setNotifyOnComplete(s.notifyOnComplete ?? false);
-  // Journal opt-in defaults to true for new accounts. Explicit
-  // false in the blob disables; absent key falls through to the
-  // seed (also true).
-  setJournalAutomaticEnabled(s.journalAutomaticEnabled ?? true);
+  // Wiki opt-in defaults to true for new accounts. Explicit false in
+  // the blob disables; absent key falls through to the seed (also
+  // true).
   setWikiAutomaticEnabled(s.wikiAutomaticEnabled ?? true);
   setWikiLibrarianEnabled(s.wikiLibrarianEnabled ?? true);
-  if (s.journalTimezone) setJournalTimezone(s.journalTimezone);
+  if (s.displayTimezone) setDisplayTimezone(s.displayTimezone);
   // Profile: empty string is the "not set" sentinel; always
   // assign so explicit absence in the blob clears any value
   // carried over from a prior unlock or another tab.
@@ -725,7 +665,7 @@ function startBackgroundWorkers(config: AppConfig): void {
   // The workers run concurrently and partition the shared
   // `worker_leases` table on `worker_kind` ('embedding' /
   // 'reflection' / 'summary' / 'attachment_expiry' / 'samskara' /
-  // 'journal') so one device can hold every lease simultaneously
+  // 'wiki') so one device can hold every lease simultaneously
   // without contention. The summary worker feeds the drawer's
   // search feature - it writes `threads.summary`, which the
   // embeddings worker then picks up to build the searchable
@@ -738,20 +678,11 @@ function startBackgroundWorkers(config: AppConfig): void {
   summary.start({ supabase: app.supabase, config });
   attachmentExpiry.start({ supabase: app.supabase, config });
   samskara.start({ supabase: app.supabase, config });
-  if (app.journalAutomaticEnabled) {
-    journal.start({
-      supabase: app.supabase,
-      config,
-      timezone: app.journalTimezone || null,
-      userName: app.userName,
-      userLocation: app.userLocation,
-    });
-  }
   if (app.wikiAutomaticEnabled) {
     wiki.start({
       supabase: app.supabase,
       config,
-      timezone: app.journalTimezone || null,
+      timezone: app.displayTimezone || null,
       userName: app.userName,
       userLocation: app.userLocation,
     });
@@ -778,9 +709,9 @@ function startBackgroundWorkers(config: AppConfig): void {
  * with the seed values set synchronously below - same posture as before
  * this race fix landed, so a degraded Supabase doesn't gate worker boot.
  * The race that was open before: workers were started immediately with
- * seed values (browser timezone, generic profile, default-on journal
- * toggle), and could write a journal entry with the wrong values during
- * the few hundred ms before Chat.svelte's settings fetch corrected them.
+ * seed values (browser timezone, generic profile, default-on toggle),
+ * and could write a wiki article with the wrong values during the few
+ * hundred ms before Chat.svelte's settings fetch corrected them.
  */
 export function activate(config: AppConfig, opts: { persist?: boolean } = {}): void {
   app.config = config;
@@ -795,10 +726,9 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
   app.emphasisMarkdown = false;
   app.notifyOnComplete = false;
-  app.journalAutomaticEnabled = true;
   app.wikiAutomaticEnabled = true;
   app.wikiLibrarianEnabled = true;
-  app.journalTimezone = detectTimezone();
+  app.displayTimezone = detectTimezone();
   app.userName = '';
   app.userLocation = '';
   app.phase = 'unlocked';
@@ -807,7 +737,11 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   // Fire-and-forget settings-then-workers chain. Workers don't start
   // until settings have either loaded successfully or failed, which
   // closes the race where a worker would briefly run on seeds before
-  // the user's actual config arrived.
+  // the user's actual config arrived. The race that was open before
+  // the fix landed: workers were started immediately with seed
+  // values (browser timezone, generic profile, default-on toggle),
+  // and could write an article with the wrong values during the few
+  // hundred ms before Chat.svelte's settings fetch corrected them.
   void loadSettingsThenStartWorkers(config);
   // Usage polling has no settings dependency, so it can start
   // immediately. The poller fires once now and re-fires hourly;
@@ -849,7 +783,6 @@ function stopBackgroundWorkers(): void {
   summary.stop();
   attachmentExpiry.stop();
   samskara.stop();
-  journal.stop();
   wiki.stop();
   wikiLibrarian.stop();
   stopUsagePolling();
@@ -886,13 +819,12 @@ export function lock(): void {
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
   app.emphasisMarkdown = false;
   app.notifyOnComplete = false;
-  // Journal: reset both fields so a subsequent unlock re-seeds
-  // them from the new account's Supabase settings rather than
-  // inheriting the previous account's choices.
-  app.journalAutomaticEnabled = true;
+  // Wiki + display TZ: reset so a subsequent unlock re-seeds them
+  // from the new account's Supabase settings rather than inheriting
+  // the previous account's choices.
   app.wikiAutomaticEnabled = true;
   app.wikiLibrarianEnabled = true;
-  app.journalTimezone = detectTimezone();
+  app.displayTimezone = detectTimezone();
   // Profile: same rationale - never leak the previous account's
   // name/location across a lock-then-unlock-as-someone-else flow.
   app.userName = '';

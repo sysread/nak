@@ -47,12 +47,10 @@ You can reach these pages two ways:
 - [Intuition](./intuition.md) — the subconscious read Nak forms of
   each conversation: how the brain icon next to the mood emoji works,
   and what the inline cards mean.
-- [Journal](./journal.md) — a daily diary Nak keeps for you
-  alongside your conversations, plus space for your own entries.
 - [Cookbook](./cookbook.md) — a personal store for Cooklang recipes,
   with a dedicated modal and a tab in the conversation drawer.
-- [Search](./search.md) — finding a thread, recipe, journal day, or
-  wiki article by meaning across your history.
+- [Search](./search.md) — finding a thread, recipe, or wiki article
+  by meaning across your history.
 - [Keyboard shortcuts](./shortcuts.md) — the keys that save you the
   most time.
 

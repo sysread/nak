@@ -14,7 +14,7 @@
  *      same Venice id still feel different.
  *
  *   3. AGENT_MODELS - one-line-per-role mapping from background-agent
- *      roles (journal, reflection, intuition, ...) to a registered
+ *      roles (reflection, wiki, intuition, ...) to a registered
  *      Venice id. Swapping an agent's model is a single edit; the
  *      rationale per slot lives in the docblock on AGENT_MODELS itself
  *      rather than scattered across the agent files.
@@ -140,11 +140,10 @@ export interface ModelSpec {
   readonly supportsVision: boolean;
   /**
    * True when the id accepts `response_format: {type:'json_object'}`.
-   * Background agents that pin structured output (journal, both recall
+   * Background agents that pin structured output (the three recall
    * agents) gate on this when picking a model id - some Venice models
-   * 4xx on the field (minimax-m25 was a real bug; see the docblock on
-   * AGENT_MODELS.journal). Currently documentation only; no call site
-   * reads it programmatically yet.
+   * 4xx on the field (minimax-m25 was a real bug). Currently
+   * documentation only; no call site reads it programmatically yet.
    */
   readonly supportsResponseFormat: boolean;
 }
@@ -303,7 +302,6 @@ export const DEFAULT_TIER: ModelTier = 'balanced';
  * call site to `agentModel('<role>').id`.
  */
 export type AgentRole =
-  | 'journal'
   | 'reflection'
   | 'wiki'
   | 'wikiLibrarian'
@@ -316,7 +314,6 @@ export type AgentRole =
   | 'recall'
   | 'conversationRecall'
   | 'wikiRecall'
-  | 'journalRecall'
   | 'visionAnalysis';
 
 /**
@@ -329,71 +326,18 @@ export type AgentRole =
  * Per-slot rationale (kept here rather than at call sites so the
  * decision context lives next to the swap):
  *
- *   journal - deepseek-v4-flash. The journaler walks every settled
- *     conversation in the background, and the 1M-token window swallows
- *     even long threads without a summariser layer. Hard constraint
- *     on any pin: the id MUST accept `response_format: {type:
- *     'json_object'}` - the prompt's prose schema covers "right
- *     intent, wrong shape" but not "ignored the JSON instruction
- *     entirely."
+ *   reflection - deepseek-v4-flash. Read the thread, make some
+ *     judgments, call the memory tools. Big-window model is the win -
+ *     the entire conversation is the context.
  *
  *     NOTE on capacity: as of the deepseek-v4-flash tier swap, all
  *     three foreground tiers (Smart / Balanced / Fast) ALSO front
  *     this id. The earlier policy of "background agents must not
  *     share capacity with foreground tiers" has been deliberately
- *     relaxed - the Pro variant shipped with no visible reasoning
- *     stream from Venice, so we're back on Flash everywhere. If
- *     overload errors return under the shared-capacity shape, the
- *     next move is repointing the background agents (journal,
- *     reflection, wiki, wikiLibrarian, webSearch, researchDocs) to
+ *     relaxed. If overload errors return under the shared-capacity
+ *     shape, the next move is repointing the background agents
+ *     (reflection, wiki, wikiLibrarian, webSearch, researchDocs) to
  *     a non-foreground id, NOT downgrading the foreground tiers.
- *
- *     Predecessors and why they were dropped:
- *       - The balanced profile (GLM-5) hit overload errors -
- *         foreground tier sharing capacity.
- *       - `nvidia-nemotron-cascade-2-30b-a3b` was tried twice.
- *         First pass produced visibly weak entries, but the agent
- *         at the time was carrying a tool loop with
- *         `reasoning_effort: 'medium'`, so the failure mode could
- *         plausibly have been small-model tool fumbling rather
- *         than baseline writing quality. The second pin under the
- *         no-tools, no-thinking shape was reverted before it
- *         gathered data.
- *       - `zai-org-glm-4.7-flash` overloaded under the background
- *         load, suggesting it shares capacity with the Fast tier
- *         in practice despite the lower price.
- *       - `minimax-m25` 4xx'd on the `response_format` field. The
- *         wire-level JSON pin is load-bearing.
- *       - `qwen3-235b-a22b-instruct-2507` with thinking disabled
- *         held the JSON shape fine but couldn't hold the prose-
- *         discipline constraints simultaneously - entries
- *         interpreted every utterance as load-bearing and padded
- *         philosophical framing with imported topical knowledge.
- *       - `qwen3-5-35b-a3b` with reasoning at 'low'. Smaller and
- *         cheaper, with a thinking budget for the dense constraint
- *         set, but the same Qwen failure modes persisted
- *         (attribution slips, context imports, over-
- *         interpretation). Three Qwen variants in a row failing
- *         the same way looked like Qwen's known constraint
- *         amnesia on long instruction stacks and motivated the
- *         family swap to Trinity.
- *       - `arcee-trinity-large-thinking` with `reasoning_effort:
- *         'low'`. Non-Qwen reasoning model, 256k context. Held the
- *         prose-discipline constraints the Qwen pins kept dropping,
- *         confirming the bottleneck was the model family rather
- *         than the prompt. Slower and more expensive than the
- *         deepseek-v4-flash trial that replaced it; revert here
- *         if deepseek's entry quality lags.
- *
- *     If the prompt's dense constraint set defeats yet another
- *     model family, the next move is the two-stage architecture
- *     (separate clinical-analyst and narrative passes, each with
- *     a focused subset of the constraints) rather than another
- *     single-model swap.
- *
- *   reflection - deepseek-v4-flash. Same shape as journal: read the
- *     thread, make some judgments, call the memory tools. Big-window
- *     model is the win - the entire conversation is the context.
  *
  *   wiki - deepseek-v4-flash. Autonomous wiki agent: read a settled
  *     thread the day after, decide which topics warrant a new article
@@ -403,7 +347,7 @@ export type AgentRole =
  *     from the per-article UI (single completion, response_format
  *     pinned to JSON, no tool loop). Same rationale as reflection -
  *     big window swallows the conversation and the JSON pin works
- *     on the manual path. See the journal entry above for the
+ *     on the manual path. See the reflection entry above for the
  *     shared-capacity-with-foreground note.
  *
  *   wikiLibrarian - deepseek-v4-flash. The wiki agent's bigger
@@ -457,11 +401,6 @@ export type AgentRole =
  *     recall / conversationRecall; distinct slot so the three recall
  *     surfaces can be tuned independently if one regresses.
  *
- *   journalRecall - qwen3-5-35b-a3b. Journal-recall agent: read the
- *     live conversation, search the user's daily journal entries,
- *     produce a short first-person note. Same shape and rationale as
- *     the other recall slots.
- *
  *   visionAnalysis - e2ee-qwen3-5-122b-a10b. Vision sub-completion
  *     for the analyze_image tool. Decoupled from any user-facing
  *     tier so a tier retarget doesn't silently break image
@@ -483,7 +422,6 @@ export type AgentRole =
  *     matches the e2ee-served capacity tier.
  */
 export const AGENT_MODELS = {
-  journal:            'deepseek-v4-flash',
   reflection:         'deepseek-v4-flash',
   wiki:               'deepseek-v4-flash',
   wikiLibrarian:      'deepseek-v4-flash',
@@ -495,7 +433,6 @@ export const AGENT_MODELS = {
   recall:             'qwen3-5-35b-a3b',
   conversationRecall: 'qwen3-5-35b-a3b',
   wikiRecall:         'qwen3-5-35b-a3b',
-  journalRecall:      'qwen3-5-35b-a3b',
   visionAnalysis:     'e2ee-qwen3-5-122b-a10b',
   autoTitle:          'e2ee-gpt-oss-20b-p',
 } as const satisfies Record<AgentRole, ModelId>;

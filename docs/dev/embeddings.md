@@ -155,18 +155,13 @@ extension.
 - **Conversation recall** — `conversation_search` vector path
   reads `threads.embedding`. ILIKE-on-title fallback covers
   unembedded rows. See `./conversation-recall.md`.
-- **Reflection / summary / journal workers** — share the
+- **Reflection / summary / wiki workers** — share the
   `lease.ts` coordinator and the worker-leases table.
   Separate `worker_kind` values (`'reflection'`,
-  `'summary'`, `'embedding'`, `'journal'`,
+  `'summary'`, `'embedding'`, `'wiki'`,
   `'attachment_expiry'`, `'samskara'`) so a device can
   hold every lease concurrently. See `./memory.md`,
-  `./summaries.md`, `./journal.md`.
-- **Journal** — `journal_entries` is a registered source
-  alongside memories / threads / samskara substrate. The
-  `clear_journal_embedding_on_change` trigger fires when
-  `content | topics | mood` change so an edit reselects
-  the row. See `./journal.md`.
+  `./summaries.md`, `./wiki.md`.
 - **Cookbook** — `recipes` joined the registered-source list
   so the drawer's recipe search can rank by meaning. The
   `clear_recipe_embedding_on_change` trigger fires when

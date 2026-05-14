@@ -42,7 +42,7 @@ export interface WikiLibrarianOutput {
    * (e.g. "Merged the two Maya articles; left 'Maya' and 'household'
    * separate because they cover different subjects."). The loop trims
    * and inlines this as `reasoning="..."` on the librarian-finished
-   * log line, matching the shape the journal and wiki workers use.
+   * log line, matching the shape the wiki worker uses.
    */
   finalText: string;
   /** Number of articles in the snapshot. Surface for observability. */

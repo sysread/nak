@@ -1441,12 +1441,11 @@ h1 {
 
 /* Drawer header. Holds only the tab nav now; the per-tab search
    input lives in the listing area below (.thread-list-controls /
-   .recipe-list-controls / .memory-list-controls / JournalList's
-   .journal-list-search) so all four tabs read consistently:
-   tabs at top, hr-line, search, list. Each *-controls wrapper
-   carries the divider via its own `border-bottom`, which is why the
-   header itself doesn't draw one - doubling the line read as noisy
-   chrome. */
+   .recipe-list-controls / .memory-list-controls) so every tab reads
+   consistently: tabs at top, hr-line, search, list. Each *-controls
+   wrapper carries the divider via its own `border-bottom`, which is
+   why the header itself doesn't draw one - doubling the line read
+   as noisy chrome. */
 .sidebar-header {
   padding: 0.55rem 0.6rem;
 }
@@ -2018,13 +2017,12 @@ h1 {
 
 /* Same visual contract as .msg.disabled / .msg.fading-out, applied
    to non-chat surfaces (wiki articles during the "Ask agent to
-   update" flow, journal cards during regenerate-with-preview). The
-   chat version sits on .msg because the bubble structure is
-   chat-specific; .regen-target rides on whichever container element
-   represents "the thing that's about to be replaced" - the wiki
-   article, the journal automatic card, etc. Reuses the
-   msg-fade-out keyframe above so the fade timing is identical
-   across surfaces; tweaking the duration there propagates here. */
+   update" flow). The chat version sits on .msg because the bubble
+   structure is chat-specific; .regen-target rides on whichever
+   container element represents "the thing that's about to be
+   replaced". Reuses the msg-fade-out keyframe above so the fade
+   timing is identical across surfaces; tweaking the duration there
+   propagates here. */
 .regen-target {
   opacity: 0.55;
   outline: 1px solid var(--danger);
@@ -2886,7 +2884,6 @@ h1 {
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--border);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
-  /* Required for .journal-topbar-nav absolute centering. */
   position: relative;
 }
 
@@ -2895,7 +2892,7 @@ h1 {
   min-width: 0;
 }
 
-/* Non-interactive section label used in the recipes and journal top-bar.
+/* Non-interactive section label used in the recipes top-bar.
    Inherits the .title-btn shape so the label occupies the same slot as
    the conversation title without behaving like a button. */
 .panel-section-label {
@@ -2907,19 +2904,6 @@ h1 {
 .panel-section-label:hover {
   background: transparent;
   border-color: transparent;
-}
-
-/* Journal date-navigation cluster in the top-bar. Centered within the
-   bar via absolute positioning so the hamburger + new-entry buttons can
-   stay left-aligned without displacing the nav. The empty .title-wrap
-   after it keeps the flex layout from collapsing. */
-.journal-topbar-nav {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 0.3rem;
-  align-items: center;
 }
 
 .title-btn {
@@ -3443,18 +3427,16 @@ h1 {
 }
 
 /* ---------- Shared modal layering ----------
-   The four `.center`-wrapped modals (Journal, Help, Memories, Settings)
+   The `.center`-wrapped modals (Help, Memories, Settings, WikiChangelog)
    inherit .center's `position: static` defaults, which leaves them at
    `z-index: auto` and lets fixed-position siblings paint over them.
    In particular the SamskaraToasts mood pill (position: fixed,
-   z-index: 25) was rendering on top of these modals - on the Journal
-   modal that put the pill directly over the top-right close button,
-   blocking dismiss. Lift each backdrop into its own stacking context
+   z-index: 25) was rendering on top of these modals, blocking
+   dismiss controls. Lift each backdrop into its own stacking context
    above the toast (z-index 25) but below Cookbook (40) and Samskara
    (50), matching the "modals: 30" convention documented on the
    .update-banner block above. Cookbook and Samskara already declare
    their own `position: fixed; inset: 0` backdrops and aren't affected. */
-.journal-backdrop,
 .help-backdrop,
 .memories-backdrop,
 .settings-backdrop,
@@ -3465,7 +3447,7 @@ h1 {
 }
 
 /* ---------- Shared modal full-bleed (mobile) ----------
-   The four `.center`-wrapped modals sit inside .center's 2rem gutter,
+   The `.center`-wrapped modals sit inside .center's 2rem gutter,
    which on a ~375px phone leaves the shell roughly two thirds of the
    viewport wide - cramped enough that prose lines visibly truncate and
    chip rows clip on the right. Drop the gutter, shed the rounded
@@ -3476,14 +3458,12 @@ h1 {
    top, the others in their components) - same cascade trap the .msg
    mobile override sidesteps. */
 @media (max-width: 720px) {
-  .journal-backdrop,
   .help-backdrop,
   .memories-backdrop,
   .settings-backdrop,
   .wiki-changelog-backdrop {
     padding: 0;
   }
-  .journal-shell,
   .help-shell,
   .memories-shell,
   .settings-shell,

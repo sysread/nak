@@ -400,118 +400,6 @@ function splitPhotoInputs(photos: RecipePhotoInput[]): {
 }
 
 /**
- * One journal-entry row. The Journal feature lets a date have any
- * number of entries; the UI groups them by `entry_date` and assembles
- * a compound day view per click.
- *
- * Each automatic entry pins to one source `thread_id`; per-thread
- * uniqueness is enforced by a partial-unique index in the schema, so
- * the worker re-running on a thread extends the existing entry rather
- * than creating duplicates. User entries leave `thread_id` null - they
- * aren't tied to any specific conversation.
- *
- * `thread_title` rides on rows produced by `listJournalEntries` and
- * `getJournalEntriesForDate` (PostgREST embedded select); null on
- * rows that came back from a path without the embed (the upsert
- * RPC's RETURNING list, e.g.) and on rows whose source thread was
- * deleted (the FK is `on delete set null`).
- *
- * `similarity` is attached on rows that came out of the semantic-
- * search RPC - undefined on direct reads.
- */
-export type JournalSource = 'automatic' | 'user';
-
-export interface JournalEntry {
-  id: string;
-  entry_date: string;
-  source: JournalSource;
-  content: string;
-  topics: string[];
-  mood: string | null;
-  people: string[];
-  thread_id: string | null;
-  thread_title: string | null;
-  /**
-   * Source thread's start timestamp (ISO 8601). Embedded from
-   * `threads.created_at` on read paths that include the thread join;
-   * null on rows whose thread was deleted (FK on delete set null) or
-   * whose source path didn't fetch the embed (the upsert RPC return,
-   * the semantic-search RPC). Used by the daily-view UI to order
-   * multiple automatic entries on the same date by the time the
-   * underlying conversation actually started.
-   */
-  thread_created_at: string | null;
-  /**
-   * Set the first time the user marks an automatic entry as appropriate
-   * (the "ham" button in the journal modal). Idempotency marker for the
-   * spam-filter training path - the UI hides the button once non-null,
-   * the supabase service rejects ham training that would double-count.
-   * Always null on user-source entries (the button only shows on
-   * automatic ones) and on rows fetched via search RPCs that don't
-   * project the column.
-   */
-  ham_marked_at: string | null;
-  created_at: string;
-  updated_at: string;
-  /** Populated only by `searchJournalEntriesByEmbedding`. */
-  similarity?: number;
-}
-
-function coerceJournalEntry(raw: Record<string, unknown>): JournalEntry {
-  const source: JournalSource =
-    raw.source === 'automatic' || raw.source === 'user' ? raw.source : 'user';
-  const topics = Array.isArray(raw.topics)
-    ? (raw.topics as unknown[]).filter((t): t is string => typeof t === 'string')
-    : [];
-  const people = Array.isArray(raw.people)
-    ? (raw.people as unknown[]).filter((p): p is string => typeof p === 'string')
-    : [];
-  const threadId =
-    typeof raw.thread_id === 'string' && raw.thread_id.length > 0
-      ? raw.thread_id
-      : null;
-  // PostgREST embedded select shapes the joined row as
-  // `thread: { title, created_at } | null`. The nested object
-  // disappears when the referenced thread was deleted (FK
-  // `on delete set null` nulls thread_id, the embed has nothing to
-  // attach to). Coerce to flat `thread_title` / `thread_created_at`
-  // fields so the UI doesn't have to know about the nesting shape.
-  const threadEmbed = raw.thread;
-  const threadObj =
-    threadEmbed && typeof threadEmbed === 'object' && !Array.isArray(threadEmbed)
-      ? (threadEmbed as Record<string, unknown>)
-      : null;
-  const threadTitle =
-    threadObj && typeof threadObj.title === 'string' && threadObj.title.length > 0
-      ? (threadObj.title as string)
-      : null;
-  const threadCreatedAt =
-    threadObj && typeof threadObj.created_at === 'string' && threadObj.created_at.length > 0
-      ? (threadObj.created_at as string)
-      : null;
-  return {
-    id: String(raw.id),
-    entry_date: String(raw.entry_date),
-    source,
-    content: typeof raw.content === 'string' ? raw.content : '',
-    topics,
-    mood: typeof raw.mood === 'string' ? raw.mood : null,
-    people,
-    thread_id: threadId,
-    thread_title: threadTitle,
-    thread_created_at: threadCreatedAt,
-    ham_marked_at:
-      typeof raw.ham_marked_at === 'string' && raw.ham_marked_at.length > 0
-        ? (raw.ham_marked_at as string)
-        : null,
-    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
-    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
-    similarity:
-      typeof raw.similarity === 'number' ? (raw.similarity as number) : undefined,
-  };
-}
-
-/**
  * One topical article in the user's wiki. Flat list (no nesting), one
  * article per `(user_id, title)` (the schema enforces uniqueness so the
  * autonomous agent's `wiki_create` can fall through to `wiki_update` on
@@ -820,38 +708,29 @@ export interface UserSettings {
    */
   notifyOnComplete?: boolean;
   /**
-   * Journal feature: when true, the background journaling
-   * agent processes threads as they accrue terminal assistant messages
-   * and writes/updates today's automatic entry. Absent/true is the
-   * default-on semantics decided with the user - a brand-new account
-   * opts in automatically, and the setting only has to be present when
-   * the user explicitly disables. False means the manager does not
-   * start the worker at unlock time (and stops it when flipped
-   * mid-session). User-authored entries are unaffected by this flag.
-   */
-  journalAutomaticEnabled?: boolean;
-  /**
-   * IANA timezone name used by the journaling feature to bucket
-   * entries into per-day rows. "America/New_York", "Europe/London",
-   * etc. Seeded on first Settings visit from
-   * `Intl.DateTimeFormat().resolvedOptions().timeZone`; user can
-   * override from the Journal settings pane. Absent means "fall
+   * IANA timezone the model sees when reasoning about "what time is
+   * it for the user" in the per-turn metadata system message, and
+   * the zone the wiki worker uses to bucket day-eligible threads.
+   * "America/New_York", "Europe/London", etc. Seeded on first
+   * Settings visit from
+   * `Intl.DateTimeFormat().resolvedOptions().timeZone`; the user
+   * overrides from Settings -> AI -> About you. Absent means "fall
    * back to the browser's current zone at read time"; callers must
-   * handle `undefined` rather than assume a server default so a user
-   * roaming across time zones never silently lands entries on the
-   * wrong day.
+   * handle `undefined` rather than assume a server default so a
+   * user roaming across time zones never silently lands entries on
+   * the wrong day.
    */
-  journalTimezone?: string;
+  displayTimezone?: string;
   /**
    * User wiki feature: when true, the background wiki agent processes
    * settled threads (one calendar day after the newest message in the
    * user's tz) and updates / creates encyclopedic articles about
-   * topics the conversation surfaced. Same default-on semantics as
-   * `journalAutomaticEnabled` - absent means on; only present when the
-   * user has explicitly disabled. False stops the manager from
-   * starting the worker at unlock and stops it mid-session when
-   * flipped. Manual edits and the per-article "ask agent to update"
-   * button are unaffected by this flag.
+   * topics the conversation surfaced. Default-on semantics: absent
+   * means on; only present when the user has explicitly disabled.
+   * False stops the manager from starting the worker at unlock and
+   * stops it mid-session when flipped. Manual edits and the
+   * per-article "ask agent to update" button are unaffected by this
+   * flag.
    */
   wikiAutomaticEnabled?: boolean;
   /**
@@ -952,25 +831,29 @@ export function coerceSettings(raw: unknown): UserSettings {
   if (typeof r.notifyOnComplete === 'boolean') {
     out.notifyOnComplete = r.notifyOnComplete;
   }
-  if (typeof r.journalAutomaticEnabled === 'boolean') {
-    out.journalAutomaticEnabled = r.journalAutomaticEnabled;
-  }
   if (typeof r.wikiAutomaticEnabled === 'boolean') {
     out.wikiAutomaticEnabled = r.wikiAutomaticEnabled;
   }
   if (typeof r.wikiLibrarianEnabled === 'boolean') {
     out.wikiLibrarianEnabled = r.wikiLibrarianEnabled;
   }
-  if (
-    typeof r.journalTimezone === 'string' &&
-    r.journalTimezone.length > 0 &&
-    r.journalTimezone.length < 128
-  ) {
+  // displayTimezone is the canonical key. We also read the legacy
+  // `journalTimezone` key so a profile written before the rename
+  // lands keeps its setting on first read; the next updateSettings
+  // call writes the new key and the legacy one falls out of the
+  // blob naturally because nothing writes it any more.
+  const tzCandidate =
+    typeof r.displayTimezone === 'string' && r.displayTimezone.length > 0
+      ? r.displayTimezone
+      : typeof r.journalTimezone === 'string' && r.journalTimezone.length > 0
+        ? r.journalTimezone
+        : null;
+  if (tzCandidate !== null && tzCandidate.length < 128) {
     // Character set loose on purpose - IANA zones are
     // `Continent/City` plus aliases, and we don't want to re-implement
     // the zone list client-side. The 128-char ceiling is a defensive
     // cap so a malformed blob can't balloon.
-    out.journalTimezone = r.journalTimezone;
+    out.displayTimezone = tzCandidate;
   }
   // userName / userLocation: free-form opt-in profile strings. Empty
   // string is treated as absent so the prompt builder doesn't have to
@@ -1161,13 +1044,6 @@ export class SupabaseService {
         merged.notifyOnComplete = patch.notifyOnComplete;
       }
     }
-    if ('journalAutomaticEnabled' in patch) {
-      if (patch.journalAutomaticEnabled === undefined) {
-        delete merged.journalAutomaticEnabled;
-      } else if (typeof patch.journalAutomaticEnabled === 'boolean') {
-        merged.journalAutomaticEnabled = patch.journalAutomaticEnabled;
-      }
-    }
     if ('wikiAutomaticEnabled' in patch) {
       if (patch.wikiAutomaticEnabled === undefined) {
         delete merged.wikiAutomaticEnabled;
@@ -1182,15 +1058,19 @@ export class SupabaseService {
         merged.wikiLibrarianEnabled = patch.wikiLibrarianEnabled;
       }
     }
-    if ('journalTimezone' in patch) {
-      if (patch.journalTimezone === undefined) delete merged.journalTimezone;
+    if ('displayTimezone' in patch) {
+      if (patch.displayTimezone === undefined) delete merged.displayTimezone;
       else if (
-        typeof patch.journalTimezone === 'string' &&
-        patch.journalTimezone.length > 0 &&
-        patch.journalTimezone.length < 128
+        typeof patch.displayTimezone === 'string' &&
+        patch.displayTimezone.length > 0 &&
+        patch.displayTimezone.length < 128
       ) {
-        merged.journalTimezone = patch.journalTimezone;
+        merged.displayTimezone = patch.displayTimezone;
       }
+      // Clear the legacy key in the same merge so a profile written
+      // before the rename doesn't keep ghosting the old value
+      // alongside the canonical one.
+      delete (merged as { journalTimezone?: string }).journalTimezone;
     }
     // Profile strings: an empty string from the patch means "clear
     // it" (the user blanked the input and hit save), so we delete
@@ -1780,7 +1660,7 @@ export class SupabaseService {
   // but the human-facing drawer search (`RecipeList.svelte`) wires
   // through the shared embeddings worker so a fuzzy query ("fluffy
   // potato side") can find a recipe by meaning rather than title
-  // substring. Same claim/save/search RPC trio as wiki/journal.
+  // substring. Same claim/save/search RPC trio as the wiki source.
 
   /**
    * List recipes, optionally filtered by a case-insensitive `title`
@@ -1839,8 +1719,8 @@ export class SupabaseService {
 
   /**
    * Semantic + substring search over recipes. Same merge contract as
-   * `searchWikiArticles` and `searchJournalEntries`: vector hits first
-   * (RPC, ordered by cosine similarity), then ILIKE hits the vector
+   * `searchWikiArticles`: vector hits first (RPC, ordered by cosine
+   * similarity), then ILIKE hits the vector
    * pass missed, deduped by id and capped at `limit`. Empty `query`
    * falls back to `listRecipes` (most-recently-updated first) so
    * callers don't need to special-case the no-query branch.
@@ -2441,585 +2321,13 @@ export class SupabaseService {
     }));
   }
 
-  // journal_entries (Journal) ---------------------------------------
-  //
-  // User-scoped via RLS. Every read filters to the signed-in user; every
-  // write either goes through the upsert RPC (automatic rows) or
-  // explicit user-id tagging on direct inserts (user rows).
-
-  /**
-   * List journal entries newest-day-first. Pulls a bounded window;
-   * callers that want full history should paginate via `from`/`to`
-   * filters on `entry_date`. Used by the Journal list view and
-   * export.
-   *
-   * Embeds the source thread's `title` via PostgREST's relation
-   * resolution so the daily view can render a centered conversation
-   * title above each automatic entry without a second round trip.
-   * Embed shape lands on `raw.thread = {title} | null`; the coercer
-   * flattens it to `thread_title`. The embed evaluates to null when
-   * the source thread was deleted (FK is `on delete set null`), so
-   * `coerceJournalEntry` tolerates either path.
-   */
-  async listJournalEntries(opts: {
-    limit?: number;
-    from?: string;
-    to?: string;
-  } = {}): Promise<JournalEntry[]> {
-    let q = this.client
-      .from('journal_entries')
-      .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
-      )
-      .order('entry_date', { ascending: false })
-      .order('source', { ascending: true })
-      .order('created_at', { ascending: true })
-      .limit(opts.limit ?? 500);
-    if (opts.from) q = q.gte('entry_date', opts.from);
-    if (opts.to) q = q.lte('entry_date', opts.to);
-    const { data, error } = await q;
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []).map((row) => coerceJournalEntry(row as Record<string, unknown>));
-  }
-
-  /**
-   * Look up all entries for a specific day. With per-thread automatic
-   * entries the result can have any number of rows: at most one user
-   * row plus one automatic row per conversation that started that
-   * day. Used by the Journal daily view (which assembles them into a
-   * compound display) and by chat-loop's "today's journal" appendix.
-   * Embeds `thread.title` for the same reason `listJournalEntries`
-   * does.
-   */
-  async getJournalEntriesForDate(entryDate: string): Promise<JournalEntry[]> {
-    const { data, error } = await this.client
-      .from('journal_entries')
-      .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
-      )
-      .eq('entry_date', entryDate)
-      .order('source', { ascending: true })
-      .order('created_at', { ascending: true });
-    if (error) throw new SupabaseError(error.message);
-    return (data ?? []).map((row) => coerceJournalEntry(row as Record<string, unknown>));
-  }
-
-  /**
-   * Atomic upsert + thread-pointer-advance for the journaling
-   * worker. The schema RPC runs both in a single Postgres
-   * transaction so the entry's existence and the thread's
-   * pointer-advance can't disagree:
-   *
-   *   - Successful return: entry is in the DB AND
-   *     `last_journaled_msg_id` advanced to `msgId`.
-   *   - Throw: entry was rolled back AND pointer didn't advance.
-   *
-   * Throws on claim-lost (the schema function raises an exception
-   * when the claim TTL expired or another holder took over). The
-   * worker logs the failure and returns the cycle as 'error', and
-   * the thread stays in the queue for the next cycle - the next
-   * holder will redo the work.
-   */
-  async upsertJournalEntryAndMarkThread(args: {
-    threadId: string;
-    holderId: string;
-    msgId: string;
-    entryDate: string;
-    content: string;
-    topics: string[];
-    mood: string | null;
-    people: string[];
-  }): Promise<JournalEntry> {
-    const { data, error } = await this.client.rpc(
-      'upsert_journal_entry_and_mark_thread',
-      {
-        p_thread_id: args.threadId,
-        p_holder_id: args.holderId,
-        p_msg_id: args.msgId,
-        p_entry_date: args.entryDate,
-        p_content: args.content,
-        p_topics: args.topics,
-        p_mood: args.mood,
-        p_people: args.people,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as Record<string, unknown>[];
-    if (rows.length === 0) throw new SupabaseError('Atomic upsert returned no row.');
-    return coerceJournalEntry(rows[0]);
-  }
-
-  /**
-   * Look up the automatic entry the worker has previously written for
-   * this thread, if any. Returns null when the thread doesn't have an
-   * entry yet (first cycle for the thread, or the user deleted the
-   * prior entry and the thread was re-included after the exclude was
-   * cleared). The agent passes the result into `buildJournalPrompt`
-   * so the model extends the existing narrative rather than starting
-   * from scratch.
-   */
-  async getJournalEntryForThread(threadId: string): Promise<JournalEntry | null> {
-    const { data, error } = await this.client
-      .from('journal_entries')
-      .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
-      )
-      .eq('thread_id', threadId)
-      .eq('source', 'automatic')
-      .maybeSingle();
-    if (error) throw new SupabaseError(error.message);
-    if (!data) return null;
-    return coerceJournalEntry(data as Record<string, unknown>);
-  }
-
-  /**
-   * Create a user-sourced entry for the given date. Multiple per day
-   * are allowed at the schema level, but the UI's compose flow keeps
-   * to one (edits the existing one when present); this method is the
-   * write path for both new and additional user entries.
-   */
-  async createUserJournalEntry(args: {
-    entryDate: string;
-    content: string;
-    topics: string[];
-    mood: string | null;
-    people: string[];
-  }): Promise<JournalEntry> {
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const { data, error } = await this.client
-      .from('journal_entries')
-      .insert({
-        user_id: session.user.id,
-        entry_date: args.entryDate,
-        source: 'user',
-        content: args.content,
-        topics: args.topics,
-        mood: args.mood,
-        people: args.people,
-      })
-      .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
-      )
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    return coerceJournalEntry(data as Record<string, unknown>);
-  }
-
-  /**
-   * Patch an entry's content/topics/mood/people. Used on user-sourced
-   * rows by the compose-form Edit flow, and on automatic rows by the
-   * Regenerate flow when the user accepts a proposed replacement.
-   * RLS allows the user to update either source; thread/source/date
-   * columns are intentionally not patchable here (a regenerated
-   * automatic entry stays pinned to its original thread and day).
-   * Bumps updated_at; the trigger on the table nulls the embedding
-   * if content/topics/mood changed so the worker re-embeds.
-   */
-  async updateJournalEntry(
-    id: string,
-    patch: {
-      content?: string;
-      topics?: string[];
-      mood?: string | null;
-      people?: string[];
-    }
-  ): Promise<JournalEntry> {
-    const { data, error } = await this.client
-      .from('journal_entries')
-      .update({ ...patch, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
-      )
-      .single();
-    if (error) throw new SupabaseError(error.message);
-    return coerceJournalEntry(data as Record<string, unknown>);
-  }
-
-  /**
-   * Delete a journal entry by id. If the caller passes non-empty
-   * `excludeThreadIds`, those threads are upserted into
-   * journal_thread_excludes in the same round so the worker doesn't
-   * regenerate the entry from the same conversation. Caller builds
-   * the list from the entry's own `thread_id` (singular, post-restructure)
-   * before deleting; the row disappears as part of this call so we
-   * read-then-delete in the tool layer rather than inside Supabase.
-   */
-  async deleteJournalEntry(
-    id: string,
-    excludeThreadIds: readonly string[] = []
-  ): Promise<void> {
-    const { error } = await this.client.from('journal_entries').delete().eq('id', id);
-    if (error) throw new SupabaseError(error.message);
-    if (excludeThreadIds.length === 0) return;
-    const session = await this.getSession();
-    if (!session) return; // best-effort on cleanup
-    const rows = excludeThreadIds.map((threadId) => ({
-      user_id: session.user.id,
-      thread_id: threadId,
-    }));
-    // onConflict ignore so idempotent re-calls are no-ops.
-    const { error: err2 } = await this.client
-      .from('journal_thread_excludes')
-      .upsert(rows, { onConflict: 'user_id,thread_id', ignoreDuplicates: true });
-    if (err2) throw new SupabaseError(err2.message);
-  }
-
-  /**
-   * Stamp `ham_marked_at = now()` on an automatic entry. The UI guards
-   * the call (button hidden when the column is already non-null) but
-   * we re-check the predicate in the WHERE clause so a double-click
-   * race or a stale tab can't double-train. Returns the updated entry,
-   * or null when the row was already marked or doesn't exist - the
-   * caller skips training in that case.
-   */
-  async markJournalEntryHam(id: string): Promise<JournalEntry | null> {
-    const nowIso = new Date().toISOString();
-    const { data, error } = await this.client
-      .from('journal_entries')
-      .update({ ham_marked_at: nowIso })
-      .eq('id', id)
-      .is('ham_marked_at', null)
-      .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
-      )
-      .maybeSingle();
-    if (error) throw new SupabaseError(error.message);
-    if (!data) return null;
-    return coerceJournalEntry(data as Record<string, unknown>);
-  }
-
-  /**
-   * Train the per-user spam filter. Tokens are expected pre-stemmed
-   * and lowercased (see `tokenizeConversation` in
-   * src/lib/agents/journal/spam_filter.ts). The RPC bumps token
-   * counts and the per-user totals row in one transaction.
-   */
-  async trainJournalSpam(
-    tokens: readonly string[],
-    label: 'ham' | 'spam'
-  ): Promise<void> {
-    const { error } = await this.client.rpc('train_journal_spam', {
-      p_tokens: tokens as string[],
-      p_label: label,
-    });
-    if (error) throw new SupabaseError(error.message);
-  }
-
-  /**
-   * Reverse a previous `trainJournalSpam` call. Used when the user
-   * deletes an automatic entry they had previously marked as ham:
-   * we rescind the ham vote before training spam, so the
-   * conversation's tokens don't end up double-counted (one row in
-   * each class). Counts and totals floor at zero - calling this
-   * with no prior train is a no-op rather than an underflow.
-   */
-  async untrainJournalSpam(
-    tokens: readonly string[],
-    label: 'ham' | 'spam'
-  ): Promise<void> {
-    const { error } = await this.client.rpc('untrain_journal_spam', {
-      p_tokens: tokens as string[],
-      p_label: label,
-    });
-    if (error) throw new SupabaseError(error.message);
-  }
-
-  /**
-   * Read the per-user totals (number of conversations labeled ham vs
-   * spam). Used as the cold-start gate in the worker - the score is
-   * suppressed entirely while either total is below threshold so the
-   * LLM doesn't try to interpret a noisy posterior.
-   */
-  async getJournalSpamStats(): Promise<{ hamTotal: number; spamTotal: number }> {
-    const { data, error } = await this.client.rpc('get_journal_spam_stats');
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as Record<string, unknown>[];
-    if (rows.length === 0) return { hamTotal: 0, spamTotal: 0 };
-    const r = rows[0];
-    return {
-      hamTotal: typeof r.ham_total === 'number' ? r.ham_total : 0,
-      spamTotal: typeof r.spam_total === 'number' ? r.spam_total : 0,
-    };
-  }
-
-  /**
-   * Look up token rows for scoring. Returns one row per token that
-   * exists in the user's vocabulary; tokens never seen are silently
-   * dropped (the Naive Bayes formula treats them as no-evidence).
-   * The RPC also returns the user's totals replicated on every row;
-   * callers that need totals separately should use
-   * `getJournalSpamStats` instead - this method strips them.
-   */
-  async scoreJournalSpamTokens(
-    tokens: readonly string[]
-  ): Promise<{ token: string; hamCount: number; spamCount: number }[]> {
-    if (tokens.length === 0) return [];
-    const { data, error } = await this.client.rpc('score_journal_spam', {
-      p_tokens: tokens as string[],
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as Record<string, unknown>[];
-    return rows.map((r) => ({
-      token: String(r.token ?? ''),
-      hamCount: typeof r.ham_count === 'number' ? r.ham_count : 0,
-      spamCount: typeof r.spam_count === 'number' ? r.spam_count : 0,
-    }));
-  }
-
-  /**
-   * Semantic + substring search over journal entries. Parallels
-   * `searchMemoriesSemantic` in src/lib/memories.ts but lives here on
-   * the service so the reflection-side toolbox can reuse it without
-   * hauling in the memories helper's ILIKE-fallback contract.
-   *
-   * `queryEmbedding` may be null - callers without Venice get ILIKE
-   * results only. Merges vector hits first (RPC), then unembedded
-   * ILIKE hits, deduped by id. Empty `query` returns most-recent-first
-   * without embedding.
-   */
-  async searchJournalEntries(opts: {
-    query: string;
-    queryEmbedding: number[] | null;
-    limit?: number;
-  }): Promise<JournalEntry[]> {
-    const query = opts.query.trim();
-    const limit = opts.limit ?? 20;
-    if (query.length === 0) return this.listJournalEntries({ limit });
-
-    const safe = query.replace(/([,()])/g, '\\$1');
-    const pattern = `%${safe}%`;
-
-    const ilikePromise = this.client
-      .from('journal_entries')
-      .select(
-        'id, entry_date, source, content, topics, mood, people, thread_id, ham_marked_at, created_at, updated_at, thread:threads(title, created_at)'
-      )
-      .or(`content.ilike.${pattern},mood.ilike.${pattern}`)
-      .order('entry_date', { ascending: false })
-      .limit(limit);
-
-    const semanticPromise = opts.queryEmbedding
-      ? this.client.rpc('search_journal_entries_by_embedding', {
-          query_embedding: opts.queryEmbedding,
-          match_limit: limit,
-        })
-      : Promise.resolve({ data: [] as unknown[], error: null });
-
-    const [ilikeRes, semRes] = await Promise.all([ilikePromise, semanticPromise]);
-    if (ilikeRes.error) throw new SupabaseError(ilikeRes.error.message);
-    const ilikeRows = (ilikeRes.data ?? []).map((row) =>
-      coerceJournalEntry(row as Record<string, unknown>)
-    );
-    const semanticRows =
-      semRes.error !== null
-        ? []
-        : ((semRes.data ?? []) as unknown[]).map((row) =>
-            coerceJournalEntry(row as Record<string, unknown>)
-          );
-
-    const out: JournalEntry[] = [];
-    const seen = new Set<string>();
-    // Semantic first - a meaning match ranks above a substring match.
-    for (const e of semanticRows) {
-      if (seen.has(e.id)) continue;
-      seen.add(e.id);
-      out.push(e);
-      if (out.length >= limit) return out;
-    }
-    for (const e of ilikeRows) {
-      if (seen.has(e.id)) continue;
-      seen.add(e.id);
-      out.push(e);
-      if (out.length >= limit) return out;
-    }
-    return out;
-  }
-
-  // Journal background pipeline ------------------------------------------
-
-  /**
-   * Claim the oldest thread that needs journaling. Returns null when
-   * the queue is empty. Mirrors `claimNextThreadForReflection` but for
-   * the journal worker's partition.
-   */
-  async claimNextThreadForJournal(
-    holderId: string,
-    ttlSeconds: number,
-    timezone: string | null
-  ): Promise<{
-    threadId: string;
-    terminalMsgId: string;
-    /** Thread title at claim time. Null when the auto-titler hasn't filled it in yet. */
-    title: string | null;
-    /**
-     * Conversation start timestamp (ISO 8601 string from PostgREST).
-     * The worker converts this to a YYYY-MM-DD key in the user's IANA
-     * timezone via `dateInZone` and uses it as the entry_date - so an
-     * automatic entry lands on the day the conversation actually
-     * happened on, not the day the worker is processing it.
-     */
-    threadCreatedAt: string;
-    /**
-     * Cached context-recall payload at claim time, projected straight
-     * off the thread row's `context_recall_payload` jsonb. The journal
-     * agent runs `coerceContextRecallPayload` on this to either reuse
-     * the cached note or fan out the recall pipeline fresh when the
-     * cache is missing or drifting. Unknown shape rather than the
-     * typed payload because `claim_next_thread_for_journal` returns
-     * jsonb verbatim - the journal layer owns the coerce, not this
-     * wrapper.
-     */
-    contextRecallPayload: unknown;
-  } | null> {
-    const { data, error } = await this.client.rpc('claim_next_thread_for_journal', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-      // The RPC has a UTC default for graceful degradation against
-      // an old client bundle, but PostgREST doesn't fall back to
-      // SQL defaults on an explicit null - `at time zone null`
-      // returns null, which would make every candidate row fall
-      // out of the WHERE. Coerce null to 'UTC' here so the gate
-      // still buckets on a real zone. Settings -> normalizeTimezone
-      // makes this null path rare in practice.
-      p_timezone: timezone ?? 'UTC',
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as {
-      thread_id: string;
-      terminal_msg_id: string;
-      title: string | null;
-      thread_created_at: string;
-      context_recall_payload: unknown;
-    }[];
-    if (rows.length === 0) return null;
-    return {
-      threadId: rows[0].thread_id,
-      terminalMsgId: rows[0].terminal_msg_id,
-      title: rows[0].title ?? null,
-      threadCreatedAt: rows[0].thread_created_at,
-      contextRecallPayload: rows[0].context_recall_payload ?? null,
-    };
-  }
-
-  async markThreadJournaledIfClaimed(
-    threadId: string,
-    holderId: string,
-    msgId: string
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('mark_thread_journaled_if_claimed', {
-      p_thread_id: threadId,
-      p_holder_id: holderId,
-      p_msg_id: msgId,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * User-driven "this snapshot was reviewed; nothing worth journaling"
-   * pointer advance. Called from the regenerate-modal's Save button
-   * when the user accepts a worthy=false decline. The RPC computes
-   * the current terminal message id internally (no holder claim, no
-   * msg id parameter) and advances `threads.last_journaled_msg_id`
-   * to it under RLS scoping. Returns the msg id it advanced to, or
-   * null when the thread has no eligible terminal (empty thread, or
-   * all assistant rows are tool-call-only). Distinct from
-   * `markThreadJournaledIfClaimed` (which is the worker-side path
-   * with claim verification) and from the thumbs-down delete path
-   * (which adds to journal_thread_excludes and trains the spam
-   * filter); this just advances the pointer for the CURRENT
-   * terminal, leaving the thread eligible again if new turns arrive.
-   */
-  async markThreadJournaledForUser(threadId: string): Promise<string | null> {
-    const { data, error } = await this.client.rpc('mark_thread_journaled_for_user', {
-      p_thread_id: threadId,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return typeof data === 'string' && data.length > 0 ? data : null;
-  }
-
-  async claimNextPendingJournalEntry(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<
-    | {
-        id: string;
-        entry_date: string;
-        content: string;
-        topics: string[];
-        mood: string | null;
-      }
-    | null
-  > {
-    const { data, error } = await this.client.rpc('claim_next_pending_journal_entry', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as {
-      id: string;
-      entry_date: string;
-      content: string;
-      topics: string[] | null;
-      mood: string | null;
-    }[];
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    return {
-      id: row.id,
-      entry_date: row.entry_date,
-      content: row.content,
-      topics: Array.isArray(row.topics) ? row.topics : [],
-      mood: row.mood,
-    };
-  }
-
-  async saveJournalEntryEmbedding(
-    id: string,
-    holderId: string,
-    embedding: number[],
-    model: string
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc(
-      'save_journal_entry_embedding_if_claimed',
-      {
-        p_id: id,
-        p_holder_id: holderId,
-        p_embedding: embedding,
-        p_embedding_model: model,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
-   * Nuke the journal subsystem for the current user. Deletes every
-   * `journal_entries` row (automatic and user-authored), drops every
-   * `journal_thread_excludes` row so the worker re-evaluates from
-   * scratch, and nulls `last_journaled_msg_id` + the journal claim
-   * columns on the user's threads. Wraps three statements in a single
-   * server-side transaction (see `reset_journal_data` in schema.sql)
-   * so a failure can't leave the journal half-cleared with stale
-   * thread pointers.
-   *
-   * Callers (Settings -> Journal -> Reset) MUST gate this behind an
-   * explicit user confirmation - it's irreversible.
-   */
-  async resetJournalData(): Promise<void> {
-    const { error } = await this.client.rpc('reset_journal_data');
-    if (error) throw new SupabaseError(error.message);
-  }
-
   // User wiki -------------------------------------------------------------
 
   /**
    * Alphabetical listing of every wiki article for the current user.
    * Sort key is `lower(title)` so case differences ("Apple" vs
-   * "apple") fold together. Limit defaults to 500, matching journal
-   * and memories - a single user is unlikely to author thousands of
+   * "apple") fold together. Limit defaults to 500, matching memories
+   * - a single user is unlikely to author thousands of
    * encyclopedic articles, and pagination would complicate the
    * client-side store filtering pattern.
    */
@@ -3295,11 +2603,11 @@ export class SupabaseService {
   }
 
   /**
-   * Semantic + substring search over wiki articles. Same shape as
-   * `searchJournalEntries`: vector hits first (RPC), then unembedded
-   * ILIKE hits, deduped by id. Empty `query` returns the alphabetical
-   * listing without embedding. `queryEmbedding` may be null - callers
-   * without Venice get ILIKE-only results.
+   * Semantic + substring search over wiki articles. Vector hits first
+   * (RPC), then unembedded ILIKE hits, deduped by id. Empty `query`
+   * returns the alphabetical listing without embedding.
+   * `queryEmbedding` may be null - callers without Venice get
+   * ILIKE-only results.
    */
   async searchWikiArticles(opts: {
     query: string;
@@ -3388,8 +2696,7 @@ export class SupabaseService {
   }
 
   /**
-   * Claim the oldest thread eligible for the wiki agent. Differs from
-   * `claimNextThreadForJournal` in two ways:
+   * Claim the oldest thread eligible for the wiki agent.
    *   (1) The eligibility predicate gates on the newest message's
    *       calendar day in the user's tz being strictly before today
    *       (the "next-day" rule the spec asks for).
@@ -3413,9 +2720,9 @@ export class SupabaseService {
     const { data, error } = await this.client.rpc('claim_next_thread_for_wiki', {
       p_holder_id: holderId,
       p_ttl_seconds: ttlSeconds,
-      // Same null-coerce as the journal claim - PostgREST passes
-      // explicit nulls through, and `at time zone null` returns null
-      // which would null out the WHERE predicate.
+      // Null-coerce - PostgREST passes explicit nulls through, and
+      // `at time zone null` returns null which would null out the
+      // WHERE predicate.
       p_timezone: timezone ?? 'UTC',
     });
     if (error) throw new SupabaseError(error.message);
@@ -3997,8 +3304,8 @@ export class SupabaseService {
       }
     }
     // Repair an interrupted-exchange tail in memory so every reader -
-    // chat UI, summary worker, journal worker, reflection worker,
-    // recall agents, samskara worker - sees a wire-format-valid
+    // chat UI, summary worker, reflection worker, recall agents,
+    // samskara worker, wiki worker - sees a wire-format-valid
     // sequence. The synthesized rows ride through the wire projection
     // like normal rows; the chat-loop's send path persists them ahead
     // of the next user turn so the DB heals on revisit. See

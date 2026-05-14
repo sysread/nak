@@ -26,8 +26,7 @@ export interface WikiOutput {
    * summary of what it did and why (e.g. "Updated the Nak article
    * with March 2026 logo details." / "No edits - generic Q&A with no
    * user-centric subject."). The loop trims and inlines this as
-   * `reasoning="..."` on the finished-thread log line, matching the
-   * shape the journal worker uses.
+   * `reasoning="..."` on the finished-thread log line.
    */
   finalText: string;
   /**

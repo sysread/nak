@@ -5,7 +5,7 @@
  * filters the panel's list and a panel-side mutation (edit, delete,
  * relate) updates the sidebar without a refetch.
  *
- * Parallel to `cookbook-store.svelte.ts` and `journal-store.svelte.ts`,
+ * Parallel to `cookbook-store.svelte.ts` and `wiki-store.svelte.ts`,
  * minus the change-event channel - the volitional memory tools
  * (`memory_create`, `memory_update`, etc.) already invalidate via the
  * UI-side write paths that go through this store. If a future tool

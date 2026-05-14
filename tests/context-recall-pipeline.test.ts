@@ -55,7 +55,6 @@ function fanOut(
     memory: partial.memory ?? NONE,
     conversation: partial.conversation ?? NONE,
     wiki: partial.wiki ?? NONE,
-    journal: partial.journal ?? NONE,
   };
 }
 
@@ -90,16 +89,6 @@ describe('stitchRecallNotes', () => {
     ).toBe('the gardening article lists basil and thyme.');
   });
 
-  it('passes through the journal note verbatim when it is the only non-empty', () => {
-    expect(
-      stitchRecallNotes(
-        fanOut({
-          journal: note('the user worked through this in April; tentative mood.'),
-        })
-      )
-    ).toBe('the user worked through this in April; tentative mood.');
-  });
-
   it('joins memory + conversation with the conversation hinge', () => {
     expect(
       stitchRecallNotes(
@@ -128,18 +117,17 @@ describe('stitchRecallNotes', () => {
     );
   });
 
-  it('stitches all four layers in fixed order with their hinges', () => {
+  it('stitches all three layers in fixed order with their hinges', () => {
     expect(
       stitchRecallNotes(
         fanOut({
           memory: note('I remember the user is past the introduction here.'),
           conversation: note('we worked through this in March.'),
           wiki: note('the article tracks the long arc on this topic.'),
-          journal: note('the entries from that week carried hesitant mood.'),
         })
       )
     ).toBe(
-      'I remember the user is past the introduction here. From earlier conversations, we worked through this in March. From the wiki, the article tracks the long arc on this topic. From the journal, the entries from that week carried hesitant mood.'
+      'I remember the user is past the introduction here. From earlier conversations, we worked through this in March. From the wiki, the article tracks the long arc on this topic.'
     );
   });
 
@@ -161,7 +149,6 @@ describe('stitchRecallNotes', () => {
           memory: note('   '),
           conversation: note('\n'),
           wiki: note(' \t '),
-          journal: note(''),
         })
       )
     ).toBe('');
@@ -222,8 +209,6 @@ function recallSupabase(messages: Message[]): SupabaseService {
     searchConversationsByText: vi.fn(async () => []),
     searchWikiArticlesByEmbedding: vi.fn(async () => []),
     searchWikiArticlesByText: vi.fn(async () => []),
-    searchJournalEntriesByEmbedding: vi.fn(async () => []),
-    searchJournalEntriesByText: vi.fn(async () => []),
   } as unknown as SupabaseService;
 }
 
@@ -238,20 +223,19 @@ function userTurn(content: string, n: number): Message {
 }
 
 /**
- * The four recall prompts each contain a distinctive phrase
+ * The three recall prompts each contain a distinctive phrase
  * referencing their target search tool (`memory_search`,
- * `conversation_search`, `wiki_search`, `journal_search`). The fake
- * Venice in these tests routes responses by sniffing those phrases
- * out of the last user turn (which is the prompt itself). Keep this
- * list in sync if the prompts ever change.
+ * `conversation_search`, `wiki_search`). The fake Venice in these
+ * tests routes responses by sniffing those phrases out of the last
+ * user turn (which is the prompt itself). Keep this list in sync if
+ * the prompts ever change.
  */
 function classifyLayer(
   lastUser: string
-): 'memory' | 'conversation' | 'wiki' | 'journal' | 'unknown' {
+): 'memory' | 'conversation' | 'wiki' | 'unknown' {
   if (lastUser.includes('memory_search')) return 'memory';
   if (lastUser.includes('conversation_search')) return 'conversation';
   if (lastUser.includes('wiki_search')) return 'wiki';
-  if (lastUser.includes('journal_search')) return 'journal';
   return 'unknown';
 }
 
@@ -276,9 +260,6 @@ describe('runContextRecallPipeline', () => {
       if (layer === 'wiki') {
         return note('the Haskell article notes a parser project in progress.');
       }
-      if (layer === 'journal') {
-        return note('entries from that week carried curious mood.');
-      }
       return NONE;
     });
     const supabase = recallSupabase([userTurn('how do I write a parser?', 1)]);
@@ -295,7 +276,7 @@ describe('runContextRecallPipeline', () => {
     expect(out).not.toBeNull();
     expect(out!.v).toBe(1);
     expect(out!.note).toBe(
-      'I remember the user is past the introduction on Haskell. From earlier conversations, we have already worked through monad transformers together. From the wiki, the Haskell article notes a parser project in progress. From the journal, entries from that week carried curious mood.'
+      'I remember the user is past the introduction on Haskell. From earlier conversations, we have already worked through monad transformers together. From the wiki, the Haskell article notes a parser project in progress.'
     );
     expect(out!.computed_at_round).toBe(1);
     expect(out!.computed_at_band).toBe(2);
@@ -422,8 +403,8 @@ describe('runContextRecallPipeline', () => {
             finishReason: 'stop',
           };
         }
-        // Wiki and journal return empty; we don't need them to gate
-        // anything for this parallelism check.
+        // Wiki returns empty; we don't need it to gate anything for
+        // this parallelism check.
         return {
           text: '{"kind":"none"}',
           reasoning: '',
@@ -462,16 +443,15 @@ describe('runRecallFanOut', () => {
 
   it('forwards an optional topic hint to the per-layer agents that accept one', async () => {
     // Memory recall has no topic field by contract (its prompt is
-    // keyed on the conversation itself). Conversation, wiki, and
-    // journal accept one as an optional input. We verify the hint
-    // arrives by sniffing the last user-turn content the fake
-    // Venice sees: the per-layer prompts append "The main assistant
-    // flagged this topic specifically: <topic>" when one is passed.
+    // keyed on the conversation itself). Conversation and wiki accept
+    // one as an optional input. We verify the hint arrives by
+    // sniffing the last user-turn content the fake Venice sees: the
+    // per-layer prompts append "The main assistant flagged this topic
+    // specifically: <topic>" when one is passed.
     const seenTopicForLayer: Record<string, boolean> = {
       memory: false,
       conversation: false,
       wiki: false,
-      journal: false,
     };
     const venice = fakeVeniceForRecall((lastUser) => {
       const layer = classifyLayer(lastUser);
@@ -493,9 +473,8 @@ describe('runRecallFanOut', () => {
     // Memory prompt does NOT carry the hint - it's the no-topic
     // recall agent.
     expect(seenTopicForLayer.memory).toBe(false);
-    // The other three DO.
+    // The other two DO.
     expect(seenTopicForLayer.conversation).toBe(true);
     expect(seenTopicForLayer.wiki).toBe(true);
-    expect(seenTopicForLayer.journal).toBe(true);
   });
 });

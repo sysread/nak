@@ -3,18 +3,18 @@
  * state that survives a refresh lives in the query string:
  *
  *   cid     = active thread id
- *   drawer  = 'chats' | 'recipes' | 'journal' | 'memories'  (sidebar tab; absent = 'chats')
+ *   drawer  = 'chats' | 'recipes' | 'memories' | 'wiki'  (sidebar tab; absent = 'chats')
  *   modal   = 'settings' | 'help' | 'samskara' | 'intuition' | 'wiki-changelog'  (utility overlays)
  *   recipe  = recipe id; selecting one switches the main panel to the recipe detail
  *   doc     = docs/user/ path when modal=help
- *   journal_date = YYYY-MM-DD; selecting one switches the main panel to that day
  *
- * recipe and journal_date are primary content selectors, not sub-params of modal.
- * Recipes, journal entries, and memories open inline in the main panel (not as
- * modal overlays). Settings, Help, and Samskara remain as modal overlays.
+ * recipe is a primary content selector, not a sub-param of modal.
+ * Recipes, memories, and wiki articles open inline in the main panel
+ * (not as modal overlays). Settings, Help, and Samskara remain as
+ * modal overlays.
  *
- * Memories used to be a modal. It moved to a drawer tab so the four
- * primary content surfaces (chats, recipes, journal, memories) all
+ * Memories used to be a modal. It moved to a drawer tab so the
+ * primary content surfaces (chats, recipes, memories, wiki) all
  * read as siblings - same tab nav, same sidebar layout, same inline
  * panel pattern. The Memories tab carries `memory` as its per-row
  * routing key (parallel to `recipe` for cookbook): the panel renders
@@ -48,7 +48,7 @@
  */
 
 export type Modal = 'settings' | 'help' | 'samskara' | 'intuition' | 'wiki-changelog';
-export type DrawerTab = 'chats' | 'recipes' | 'journal' | 'memories' | 'wiki';
+export type DrawerTab = 'chats' | 'recipes' | 'memories' | 'wiki';
 
 export interface Route {
   cid: string | null;
@@ -56,11 +56,6 @@ export interface Route {
   modal: Modal | null;
   recipe: string | null;
   doc: string | null;
-  /**
-   * YYYY-MM-DD for the focused Journal day. Selecting a date switches
-   * the main panel to that day's view. Absent defaults to today.
-   */
-  journal_date: string | null;
   /**
    * Memory id for the focused memory card. Absent means the panel
    * shows an empty-state hint and the sidebar list is the only surface
@@ -83,7 +78,6 @@ const ROUTED_KEYS = [
   'modal',
   'recipe',
   'doc',
-  'journal_date',
   'memory',
   'wiki_article_id',
 ] as const;
@@ -97,7 +91,6 @@ const MODAL_VALUES: readonly Modal[] = [
 const DRAWER_VALUES: readonly DrawerTab[] = [
   'chats',
   'recipes',
-  'journal',
   'memories',
   'wiki',
 ];
@@ -108,7 +101,6 @@ export const route = $state<Route>({
   modal: null,
   recipe: null,
   doc: null,
-  journal_date: null,
   memory: null,
   wiki_article_id: null,
 });
@@ -136,7 +128,6 @@ export function parseUrl(search: string = typeof location !== 'undefined' ? loca
     modal: readEnum(params, 'modal', MODAL_VALUES),
     recipe: readString(params, 'recipe'),
     doc: readString(params, 'doc'),
-    journal_date: readString(params, 'journal_date'),
     memory: readString(params, 'memory'),
     wiki_article_id: readString(params, 'wiki_article_id'),
   };
@@ -159,7 +150,6 @@ export function buildSearch(
   if (r.modal) params.set('modal', r.modal);
   if (r.recipe) params.set('recipe', r.recipe);
   if (r.doc) params.set('doc', r.doc);
-  if (r.journal_date) params.set('journal_date', r.journal_date);
   if (r.memory) params.set('memory', r.memory);
   if (r.wiki_article_id) params.set('wiki_article_id', r.wiki_article_id);
   const s = params.toString();
@@ -196,13 +186,6 @@ function applyPatch(patch: Partial<Route>): boolean {
   }
   if (patch.doc !== undefined && patch.doc !== route.doc) {
     route.doc = patch.doc;
-    changed = true;
-  }
-  if (
-    patch.journal_date !== undefined &&
-    patch.journal_date !== route.journal_date
-  ) {
-    route.journal_date = patch.journal_date;
     changed = true;
   }
   if (patch.memory !== undefined && patch.memory !== route.memory) {
@@ -279,7 +262,6 @@ export const __test = {
     route.modal = null;
     route.recipe = null;
     route.doc = null;
-    route.journal_date = null;
     route.memory = null;
     route.wiki_article_id = null;
   },

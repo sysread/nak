@@ -192,7 +192,7 @@ the conversation reads coherently from there.
 
 The document-shaped button at the right end of the top bar opens
 the **log drawer** on the right side of the screen. The button is
-present on every section - Chats, Recipes, Journal, and Memories -
+present on every section - Chats, Recipes, Memories, and Wiki -
 so you can pop the drawer open without first switching back to a
 chat. The drawer is a live feed of everything Nak writes to its
 internal logs - service-worker updates, reflection / summary /
@@ -223,7 +223,7 @@ Controls inside the drawer:
 - **Search box** - case-insensitive substring match against the
   source tag, the message, and any structured details attached to
   the entry. Whitespace splits the input into independent tokens, so
-  `journal write=true` searches for two needles, not one literal
+  `wiki write=true` searches for two needles, not one literal
   phrase. The **Any / All** dropdown next to the box decides whether
   an entry has to hit at least one token (Any, the default) or every
   token (All).

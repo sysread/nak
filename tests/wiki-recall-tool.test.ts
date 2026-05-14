@@ -20,7 +20,6 @@ import {
   recallToolbox,
   conversationRecallToolbox,
   wikiRecallToolbox,
-  journalRecallToolbox,
   type ToolContext,
   type ToolDef,
 } from '../src/lib/tools';
@@ -71,8 +70,8 @@ describe('wiki_recall - registry scoping', () => {
   });
 
   it('is absent from every agent-only toolbox - recall agents must not recurse', () => {
-    // The recall agents (memory, conversation, wiki, journal) each get
-    // a read-only toolbox carrying ONLY the matching *_search tool.
+    // The recall agents (memory, conversation, wiki) each get a
+    // read-only toolbox carrying ONLY the matching *_search tool.
     // Calling wiki_recall from any of those would be recursion for no
     // purpose; the toolboxes exclude it at the registry level rather
     // than relying on prompt discipline.
@@ -81,7 +80,6 @@ describe('wiki_recall - registry scoping', () => {
       recallToolbox,
       conversationRecallToolbox,
       wikiRecallToolbox,
-      journalRecallToolbox,
     ]) {
       expect(tb.tools.map((t) => t.name)).not.toContain('wiki_recall');
     }

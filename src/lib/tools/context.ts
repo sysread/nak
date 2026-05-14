@@ -1,27 +1,27 @@
 /**
  * Umbrella `context` tool - the single point of entry for broad
- * lookups of persistent RAG about the user. Fans out the four
- * recall agents in parallel (memory, conversation, wiki, journal)
- * and stitches their first-person notes into one paragraph the main
+ * lookups of persistent RAG about the user. Fans out the three
+ * recall agents in parallel (memory, conversation, wiki) and
+ * stitches their first-person notes into one paragraph the main
  * model reads as its own recollection.
  *
  * Why a tool rather than always-on injection: the chat-loop's
  * context-recall pipeline ALREADY auto-injects a stitched note on
  * topic boundaries (cold-start, title shift, mood shift, stale
  * fuse). That auto-injection is a topic-relevance projection - what
- * the four recall agents thought was worth surfacing for the live
+ * the three recall agents thought was worth surfacing for the live
  * conversation. The `context` tool is the explicit, model-driven
  * counterpart: when the main model wants to look up broad context
  * about the user (not just what's relevant to the current topic
  * boundary), it calls this tool with an optional topic hint and
  * gets the same kind of stitched paragraph synchronously.
  *
- * Why an umbrella rather than four separate tool calls: round-trips
- * compound. The four per-layer recall tools (memory_recall,
- * conversation_recall, wiki_recall, journal_recall) each fire one
- * sub-agent and wait. Calling all four in series is four sequential
- * waits; calling them in parallel is what this tool does internally
- * (`Promise.all` across the agents). The umbrella collapses four
+ * Why an umbrella rather than three separate tool calls: round-trips
+ * compound. The three per-layer recall tools (memory_recall,
+ * conversation_recall, wiki_recall) each fire one sub-agent and
+ * wait. Calling all three in series is three sequential waits;
+ * calling them in parallel is what this tool does internally
+ * (`Promise.all` across the agents). The umbrella collapses three
  * round-trips at the main-model level into one tool result.
  *
  * The per-layer recall tools stay available as targeted drill-downs.
@@ -32,14 +32,14 @@
  *
  * Toolbox scoping: lives in the main chat's TOOLS list. NOT
  * available in any of the agent-only toolboxes - background agents
- * have no business calling a four-way umbrella recall, and the
+ * have no business calling a three-way umbrella recall, and the
  * recall agents themselves must never recurse.
  *
  * Return shape mirrors the per-layer recall tools so the main model
  * can use the same handling pattern across them: either
  * `{kind:"none", reason?:"..."}` or `{kind:"note", note:"..."}`.
  * When every layer returns the empty signal, this tool returns the
- * empty signal with a synthesised reason naming all four layers'
+ * empty signal with a synthesised reason naming all three layers'
  * silence; otherwise the stitched paragraph is the note.
  *
  * Schema lives in `./context.schema.ts`.
@@ -85,12 +85,12 @@ export const contextTool: ToolDef = {
     log.info(
       `finished thread ${ctx.threadId} ` +
         `(memory=${fanOut.memory.kind}, conversation=${fanOut.conversation.kind}, ` +
-        `wiki=${fanOut.wiki.kind}, journal=${fanOut.journal.kind}, ` +
+        `wiki=${fanOut.wiki.kind}, ` +
         `noteLength=${noteText.length}, elapsedMs=${Date.now() - startedAt})`
     );
 
     if (noteText.length === 0) {
-      // Every layer returned the empty signal. Surface ALL four
+      // Every layer returned the empty signal. Surface ALL three
       // reasons in one concatenated diagnostic so the main model
       // can tell whether "nothing relevant" was uniform across
       // surfaces or whether one layer is broken / always silent.
@@ -99,7 +99,6 @@ export const contextTool: ToolDef = {
         ['memory', fanOut.memory],
         ['conversation', fanOut.conversation],
         ['wiki', fanOut.wiki],
-        ['journal', fanOut.journal],
       ] as const) {
         if (note.kind === 'none' && note.reason) {
           reasons.push(`${layer}: ${note.reason}`);

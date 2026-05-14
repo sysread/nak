@@ -36,7 +36,7 @@
   for a quick peek without a click, and screen readers read the same
   summary via `aria-label`.
 
-  Timezone: timestamps render in `app.journalTimezone`, which is the
+  Timezone: timestamps render in `app.displayTimezone`, which is the
   user's setting from Supabase profiles when present and the
   browser-detected zone otherwise (state.svelte.ts seeds it via
   detectTimezone() on activate, before any unlock). Either way the
@@ -116,7 +116,7 @@
       return new Intl.DateTimeFormat(undefined, {
         dateStyle: 'medium',
         timeStyle: 'short',
-        timeZone: app.journalTimezone,
+        timeZone: app.displayTimezone,
       }).format(ts);
     } catch {
       // Bad zone string - fall back to the browser default rather

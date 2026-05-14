@@ -126,7 +126,7 @@
     align-items: center;
     padding: 0.4rem 0.6rem;
     /* Space below the divider so the first memory row doesn't crowd
-       the search input. Mirrors the chats / recipes / journal tabs. */
+       the search input. Mirrors the chats / recipes / wiki tabs. */
     margin-bottom: 0.5rem;
     border-bottom: 1px solid var(--border);
   }

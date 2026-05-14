@@ -5,8 +5,7 @@
  * the drawer listing and a panel-side mutation (create / edit /
  * delete) updates the drawer without a refetch.
  *
- * Parallel to `memories-store.svelte.ts` and
- * `journal-store.svelte.ts`. Search semantics call
+ * Parallel to `memories-store.svelte.ts`. Search semantics call
  * `searchWikiArticlesSemantic` so the drawer matches the assistant's
  * `wiki_search` tool exactly.
  */

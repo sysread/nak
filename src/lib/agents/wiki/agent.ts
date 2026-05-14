@@ -135,9 +135,8 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
   /**
    * Mutable user profile (Settings -> AI -> About you). Read on
    * every `run()` / `updateOne()` so the worker can live-update it
-   * via `setUserProfile` without a restart - mirrors the journal
-   * agent's pattern. Null (or both fields empty) suppresses the
-   * "About the user" block entirely.
+   * via `setUserProfile` without a restart. Null (or both fields
+   * empty) suppresses the "About the user" block entirely.
    */
   private userProfile: WikiUserProfile | null = null;
 

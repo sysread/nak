@@ -1,6 +1,6 @@
 /**
  * Single-cycle driver for the wiki librarian worker. Different shape
- * from the per-conversation wiki / journal / reflection loops:
+ * from the per-conversation wiki / reflection loops:
  *
  *   - No per-thread claim. The librarian operates on the wiki as a
  *     whole, not on a queue of threads.
