@@ -195,6 +195,18 @@ export const MODELS = {
     supportsVision: true,
     supportsResponseFormat: true,
   },
+  'e2ee-gpt-oss-20b-p': {
+    id: 'e2ee-gpt-oss-20b-p',
+    contextWindow: 128_000,
+    // The reasoning model is available but the auto-title call site
+    // sets `disableThinking: true` so the model emits the title
+    // directly rather than burning the budget on chain-of-thought.
+    supportsReasoning: true,
+    supportsVision: false,
+    // No function-calling support; the auto-title call is a single-shot
+    // text completion with no tools.
+    supportsResponseFormat: true,
+  },
 } as const satisfies Record<string, ModelSpec>;
 
 export type ModelId = keyof typeof MODELS;
@@ -297,6 +309,7 @@ export type AgentRole =
   | 'wikiLibrarian'
   | 'webSearch'
   | 'researchDocs'
+  | 'autoTitle'
   | 'intuition'
   | 'summary'
   | 'samskara'
@@ -455,6 +468,19 @@ export type AgentRole =
  *     analysis. Switched here from mistral-small-2603 after that
  *     model consistently missed detail on dense or text-heavy
  *     images.
+ *
+ *   autoTitle - e2ee-gpt-oss-20b-p. Background title-generation
+ *     completion that fires from Chat.svelte in parallel with the
+ *     main chat-loop on the opening user turn. Single-shot text
+ *     completion with a tiny system prompt and the user's typed
+ *     text as the prompt; no tools, no priming, no history. Pinned
+ *     to a cheap small model because the task is bounded ("3-6
+ *     word title for this message") and the call runs on every
+ *     fresh thread. The reasoning capability is suppressed on the
+ *     wire with `disableThinking: true` so the model emits the
+ *     title directly rather than burning the budget on chain-of-
+ *     thought. The 128k context is overkill for the task but
+ *     matches the e2ee-served capacity tier.
  */
 export const AGENT_MODELS = {
   journal:            'deepseek-v4-flash',
@@ -471,6 +497,7 @@ export const AGENT_MODELS = {
   wikiRecall:         'qwen3-5-35b-a3b',
   journalRecall:      'qwen3-5-35b-a3b',
   visionAnalysis:     'e2ee-qwen3-5-122b-a10b',
+  autoTitle:          'e2ee-gpt-oss-20b-p',
 } as const satisfies Record<AgentRole, ModelId>;
 
 /**
