@@ -114,7 +114,7 @@ describe('web_search — execute() shape', () => {
     ).rejects.toThrow(/non-empty.*query/i);
   });
 
-  it('fires a sub-completion with webSearch=on, webCitations=true, fast-tier model', async () => {
+  it('fires a sub-completion with webSearch=on, webCitations=true, webScraping=true, fast-tier model', async () => {
     const { venice, seen } = mkVenice(() =>
       makeCompletion('bitcoin is at ~$70k today^1^.', [
         { index: 1, url: 'https://example.com/btc', title: 'BTC price' },
@@ -126,6 +126,13 @@ describe('web_search — execute() shape', () => {
     expect(req.model).toBe(agentModel('webSearch').id);
     expect(req.webSearch).toBe('on');
     expect(req.webCitations).toBe(true);
+    // webScraping is load-bearing here too: the main chat loop no
+    // longer auto-scrapes URLs the user pastes, so when the model
+    // passes a URL through this tool ("summarize https://...") the
+    // sub-completion still needs scraping on to pull the page
+    // content. Without this flag the sub-agent would see the bare
+    // URL and have nothing to summarize.
+    expect(req.webScraping).toBe(true);
     // disableThinking is load-bearing: agentModel('webSearch').id
     // tracks the fast tier, which currently routes to a reasoning
     // model (GLM-4.7) that emits its chain-of-thought through

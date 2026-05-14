@@ -58,14 +58,12 @@ import {
 } from './tools/wire';
 import {
   fireSamskaras,
-  formatPriming,
+  formatPrimingThinks,
   getCompoundSummary,
   recordSubstrateStub,
   type FireResult,
 } from './samskara';
-import { recallOpeningMemories } from './opening-recall';
-import { detectTimezone, todayInZone } from './journal-day';
-import type { JournalEntry } from './supabase';
+import { detectTimezone } from './journal-day';
 import {
   buildIntuitionThinkMessage,
   countUserRounds,
@@ -106,221 +104,11 @@ export const MAX_ROUNDS = 20;
  */
 const SAMSKARA_PRIMING_TIMEOUT_MS = 1500;
 
-/**
- * Boundary markers we splice around the current turn's user text when
- * Venice web search is active. Venice inlines its search payload plus
- * a framing instruction ("you can use this real time information to
- * answer the user's query above") into the user's turn server-side,
- * before the model ever sees it — and without a structural boundary
- * the model confuses the Venice injection for user-authored input
- * (observed: it started thanking the user for links they never sent
- * and quoting snippets back as if they were the user's words, with
- * the reasoning trace literally saying 'and the user says: "..."').
- *
- * Wrapping the user's real message gives the model an unambiguous
- * signal. The system prompt's web-search block (see buildSystemPrompt
- * in ./tools/index.ts) tells the model that only the text inside
- * these tags is from the human; anything outside — even though it
- * rides inside role=user on the wire — is platform-injected
- * reference material.
- */
-const USER_MSG_OPEN = '<user_message>';
-const USER_MSG_CLOSE = '</user_message>';
-
 /** Placeholder string threads ship with from schema.sql + draft creation. */
 const DEFAULT_THREAD_TITLE = 'New conversation';
 
 /**
- * Low-urgency topic-drift nudge fed to the model via the system-prompt
- * appendix. Fires only on threads that already have a real,
- * model-picked title and where the user has not manually committed to
- * one - i.e. the case where renaming is a maybe rather than a must.
- * Kept terse because it rides every non-placeholder, non-manual turn
- * and is almost always a no-op; we don't want to pay tokens or prompt
- * weight for what amounts to a passive reminder that the tool exists.
- *
- * The placeholder case is NOT handled here - it lands as a separate
- * post-user system message via `buildTitleReminderMessage` below.
- * Putting an imperative "you must do X this turn" directive into the
- * baseline system prompt buries it above every later message in
- * `history`, and the model's instruction-following weakens with
- * distance from the generation point. A trailing system message lands
- * after the user's actual turn (and after any tool-result rows on
- * later rounds), which is the strongest position available.
- *
- * Returns null when the user has manually renamed the thread (so the
- * model never gets prompted to clobber a deliberate user choice) and
- * also when the title is still the placeholder (the post-user
- * reminder covers that case instead).
- */
-function buildTitleAppendixNote(thread: Thread): string | null {
-  if (thread.title_manually_set) return null;
-  if (thread.title === DEFAULT_THREAD_TITLE) return null;
-  return [
-    `Current conversation title: "${thread.title}". If the topic has`,
-    'meaningfully shifted, call `update_title` with a better 3-6 word',
-    'title. Cosmetic drift is not a reason to rename.',
-  ].join('\n');
-}
-
-/**
- * Build the per-turn placeholder-title nag. Returns the inner
- * directive content; the wrapping `<system_reminder>...</system_reminder>`
- * tags are added by `tagLastUserMessage` when it folds this string
- * into the latest user turn's content (outside the `<user_message>`
- * boundary). Returns null on placeholder-free threads (nothing to nag
- * about) and on manually-named threads (user already committed; the
- * model must not clobber their choice).
- *
- * Why fold this into the user turn rather than send it as a trailing
- * `role: 'system'` message: the trailing-system placement was the
- * design before this, and the model still missed it. Two plausible
- * causes - Venice / the underlying model collapsing consecutive
- * `role: 'system'` rows into the leading prompt, and "system goes at
- * index 0" being a strong enough training prior that a trailing system
- * row gets weighted poorly. Both are fixed by riding inside the user
- * turn: the user-role content is the position the model is guaranteed
- * to attend to, and the `<system_reminder>` tag combined with the
- * boundary rule in the system prompt keeps the directive distinct
- * from user-authored text.
- *
- * The inner block uses a markdown `##` header. The tag form was
- * considered and rejected for the inner content: a user typing
- * `</system_reminder>` would escape early and inject instructions. The
- * outer `<system_reminder>` wrapper has the same theoretical
- * vulnerability, but a user would have to type both `</user_message>`
- * AND a fake `<system_reminder>` block to inject - the same
- * pre-existing escape vector that already exists for `<datetime>`.
- */
-function buildTitleReminderMessage(thread: Thread): string | null {
-  if (thread.title_manually_set) return null;
-  if (thread.title !== DEFAULT_THREAD_TITLE) return null;
-  return [
-    '## Required this turn: title this conversation',
-    '',
-    `The thread title is still the "${DEFAULT_THREAD_TITLE}"`,
-    'placeholder. Before generating any reply to the user, call the',
-    '`update_title` tool with a concise 3-6 word title describing',
-    'what the user is actually asking about. If the opening message',
-    'is a greeting or pleasantry, look past it to the real topic of',
-    'the conversation - infer it from their message and from the',
-    'reply you are about to write.',
-    '',
-    'This is not optional. Until you call `update_title`, the thread',
-    "stays labelled as the placeholder in the user's conversation",
-    'drawer - which is a visible bug. No trailing punctuation, no',
-    'quotes, plain text.',
-  ].join('\n');
-}
-
-/**
- * Opt-in formatting nudge for the model. When the user has the
- * "Emphasis markdown" setting on (Settings -> AI), chat-loop folds
- * this block into the per-turn system-prompt appendix so every
- * reply this turn carries the same instruction. The goal is a
- * bionic-style scan aid: bold on terms the reader should fix on,
- * italics on phrases that orient them, sparsity calibrated so the
- * emphasis rewards skimming instead of competing with it.
- *
- * Editing this copy changes model behaviour on every turn of every
- * user who has the toggle on - treat it as a voice-tuning change,
- * not a typo fix. Kept in a named function so the prompt text sits
- * next to the rules that shaped it rather than buried inline in
- * the appendix-build block.
- */
-/**
- * Render the User profile block from the user's name + location
- * settings, or null when both are empty. Sits at the top of the
- * per-turn appendix so the model sees the user's identity before any
- * of the other ambient context (samskara priming, today's journal,
- * formatting nudges) - the framing rule for the rest of the appendix
- * is "this is who you're talking to," and that needs to land first.
- *
- * Both fields are free-form. We pass them through verbatim rather
- * than imposing a label/format so a user who wrote "they/them, based
- * in Lisbon" gets exactly that string rendered. The block is plain
- * text with a leading "## User profile" header so it visually
- * separates from the prose blocks that follow without competing
- * with them. Returns null when both fields are empty so a fresh
- * account that hasn't filled the form pays zero tokens.
- *
- * Editing this copy changes model behaviour on every turn of every
- * user who has either field set - treat it as a voice-tuning change.
- */
-function buildUserProfileNote(
-  name: string | null | undefined,
-  location: string | null | undefined
-): string | null {
-  const trimmedName = (name ?? '').trim();
-  const trimmedLocation = (location ?? '').trim();
-  if (trimmedName.length === 0 && trimmedLocation.length === 0) return null;
-  const lines: string[] = ['## User profile', ''];
-  if (trimmedName.length > 0) lines.push(`Name: ${trimmedName}`);
-  if (trimmedLocation.length > 0) lines.push(`Location: ${trimmedLocation}`);
-  lines.push(
-    '',
-    'The user supplied this in Settings so you can address them',
-    'naturally and ground location-specific answers (weather, local',
-    'time, regional context) without asking back. Use it when it',
-    "helps; don't recite it back at them or treat it as instruction."
-  );
-  return lines.join('\n');
-}
-
-function buildEmphasisNote(): string {
-  return [
-    'Formatting: when the reply runs more than a sentence or two,',
-    'use light Markdown emphasis as scan-points so the reader can',
-    'skim. Bold (`**term**`) meaningful single words, proper nouns,',
-    'and identifiers - things the reader should fix on. Italicise',
-    '(`*phrase*`) short phrases, transitional clauses, or compound',
-    'noun phrases that orient the reader. Either style works for a',
-    'single or compound word; pick bold for terms worth fixing on,',
-    'italics for phrases that set up what comes next. Aim for',
-    'roughly one emphasised span per sentence in prose; less in',
-    'code-heavy, list-heavy, or tabular passages. Do not emphasise',
-    'whole sentences, filler adjectives, or boilerplate - the',
-    'emphasis should reward skimming, not compete with it. Skip',
-    "emphasis on short replies where skimming wouldn't help.",
-  ].join('\n');
-}
-
-/**
- * Render today's automatic journal entry as a short appendix block for
- * the system prompt. Returns null when there's no entry yet today or
- * when the caller passed no entry (mid-thread turns, the priming
- * timeout fell through, etc.).
- *
- * Design intent: the block is context, not instruction. The baseline
- * prompt already explains what the Journal is and how to use it -
- * this block just ships the actual content so the model can weave
- * continuity in. Kept compact: date header + topics/mood line + body.
- * No `###` heavy formatting because the appendix as a whole is
- * already framed as per-turn reference material, not an essay.
- */
-function buildJournalNote(entry: JournalEntry | null): string | null {
-  if (!entry) return null;
-  const tags: string[] = [];
-  if (entry.topics.length > 0) {
-    tags.push(`topics: ${entry.topics.join(', ')}`);
-  }
-  if (entry.mood) tags.push(`mood: ${entry.mood}`);
-  if (entry.people.length > 0) {
-    tags.push(`people: ${entry.people.join(', ')}`);
-  }
-  const lines: string[] = [
-    `## Today's journal (${entry.entry_date})`,
-    '',
-  ];
-  if (tags.length > 0) {
-    lines.push(`_${tags.join(' / ')}_`, '');
-  }
-  lines.push(entry.content);
-  return lines.join('\n');
-}
-
-/**
- * Render the `<thread_attachments>` per-turn appendix block listing
+ * Render the `<thread_attachments>` per-turn metadata block listing
  * every file attachment that has appeared in this conversation. Three
  * sections, each shown only when non-empty:
  *
@@ -436,58 +224,35 @@ function formatRelativeDuration(elapsedMs: number): string {
 }
 
 /**
- * Build the per-turn `<datetime>` tag that gets prepended to the
- * latest user turn (outside the `<user_message>` boundary, see
- * `tagLastUserMessage` below). The tag carries the wall-clock time
- * at request-build time in three forms:
+ * Render the wall-clock paragraph that opens the per-turn metadata
+ * system message. Inlines local + UTC + IANA-zone in one prose
+ * sentence rather than the prior `<datetime>` tag, and tacks on a
+ * "since your last reply" sentence when the chat-loop's caller
+ * supplied a `lastAssistantTimestamp` for the elapsed-bucket helper.
  *
- *   - `local`: ISO 8601 with offset, computed in the user's
- *     `journalTimezone` (or the runtime's reported zone if the
- *     setting is unset). Friendly enough that the model can answer
- *     "what time is it?" or "what day of the week is it?" without
- *     guessing - it can read the offset, the date, and (via the
- *     date) the day of week directly.
- *   - `utc`: ISO 8601 Z form. Unambiguous reference time, included
- *     so the model has a fallback if it doesn't trust the local
- *     interpretation.
- *   - `zone`: the IANA zone name itself, so the model can name the
- *     timezone in replies ("it's 3pm in America/Los_Angeles") and
- *     so the value is self-describing if surfaced in logs.
- *   - `since_last_response`: coarse human-friendly elapsed time
- *     since the last persisted assistant message, e.g. "about 22
- *     hours" or "yesterday". OMITTED on the opening turn of a
- *     thread (no prior assistant message to anchor against) and on
- *     any call that doesn't supply `lastAssistantTimestamp` - so a
- *     fresh thread doesn't carry a meaningless "just now" and older
- *     test fixtures keep matching their datetime regexes.
+ * The opening turn of a thread has no prior assistant message to
+ * anchor against, so callers pass null/undefined and the second
+ * sentence is dropped - the model gets the absolute clock but no
+ * "just now" noise. Computed fresh per round so multi-tool turns
+ * stretching past a minute don't carry a stale wall-clock value.
  *
- * This exists because LLMs have no clock - the model was trained
- * months ago, and without an injected datetime it either refuses
- * "what year is it?" or hallucinates a stale answer. The tag rides
- * outside `<user_message>` so the boundary contract from the system
- * prompt applies: anything outside the tags is platform-injected
- * metadata, not human input the model should echo or thank the
- * user for. The `since_last_response` attribute extends that
- * contract to "how long since you last replied?" - the model can
- * calibrate register (resume vs. greet, refresh context vs. assume
- * shared state) without the user having to spell it out.
- *
- * Computed fresh per round in the chat-loop, not once at send-time.
- * Multi-round tool loops can take 30+ seconds; recomputing every
- * round keeps the value honest if the model asks the user "what
- * time is it now?" mid-tool-loop on a long-running turn.
+ * Why a prose paragraph rather than the prior `<datetime>` XML tag:
+ * the tag form was a workaround for needing a structural boundary
+ * inside the user role (so platform-injected reference material
+ * could ride alongside the user's words). Putting the datetime in a
+ * dedicated system message removes that requirement; prose reads
+ * more naturally and the model still answers "what time is it?"
+ * correctly because the value is right there.
  */
-function buildDatetimeTag(
+function buildDatetimeParagraph(
   tz: string | null | undefined,
   lastAssistantTimestamp: string | null | undefined,
 ): string {
   const now = new Date();
-  // Drop sub-second precision: noisy in the prompt and the model
-  // doesn't use millisecond resolution for anything.
   const utc = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
   const zone = typeof tz === 'string' && tz.length > 0 ? tz : detectTimezone();
   let local = utc;
-  let zoneAttr = zone;
+  let zoneLabel = zone;
   try {
     const parts = new Intl.DateTimeFormat('en-CA', {
       timeZone: zone,
@@ -517,109 +282,183 @@ function buildDatetimeTag(
     // unfamiliar IANA names). Fall back to UTC for both forms - the
     // model still gets a usable timestamp, it just loses the local
     // calibration.
-    zoneAttr = 'UTC';
+    zoneLabel = 'UTC';
   }
-  let sinceAttr = '';
+  const lines: string[] = [
+    `Current local time: ${local} (zone ${zoneLabel}; UTC ${utc}).`,
+  ];
   if (typeof lastAssistantTimestamp === 'string' && lastAssistantTimestamp.length > 0) {
     const anchor = Date.parse(lastAssistantTimestamp);
     // Date.parse returns NaN for an unparseable input (corrupt row,
-    // legacy timestamp shape). Skip the attribute rather than ship a
-    // garbage value - the boundary contract still holds without it.
+    // legacy timestamp shape). Skip the sentence rather than ship a
+    // garbage value.
     if (Number.isFinite(anchor)) {
-      sinceAttr = ` since_last_response="${formatRelativeDuration(now.getTime() - anchor)}"`;
+      const bucket = formatRelativeDuration(now.getTime() - anchor);
+      // The formatter returns either an absolute reference
+      // ('yesterday', 'just now') or a duration ('a few minutes',
+      // 'about 22 hours', 'over a year'). Durations want a trailing
+      // 'ago' to read naturally; absolute references don't.
+      const ago = bucket === 'just now' || bucket === 'yesterday' ? '' : ' ago';
+      lines.push(`Your last reply on this thread was ${bucket}${ago}.`);
     }
   }
-  return `<datetime local="${local}" utc="${utc}" zone="${zoneAttr}"${sinceAttr} />`;
+  return lines.join('\n');
 }
 
 /**
- * Return a shallow copy of `messages` with the last role='user'
- * message's content wrapped in the <user_message> boundary tags, a
- * `<datetime>` tag prepended outside that boundary, and an optional
- * `<system_reminder>` block appended outside the boundary on the
- * trailing side. The input messages are not mutated - we allocate a
- * fresh message object (and fresh content array, when the content is
- * multimodal) so that the caller's history stays untouched across the
- * chat loop's rounds.
- *
- * Scope is deliberately "last user turn only": that's the one Venice
- * augments on the current round, and that's where the freshest
- * datetime belongs. Earlier user turns in history were already
- * processed on prior rounds with their own then-current datetime;
- * re-tagging them with "now" would falsely imply the user said those
- * older words right now. Tagging every user turn in the request
- * would also bloat the wire and could confuse the model into
- * thinking the boundary tags carry per-turn semantics beyond "this
- * is where the human's words are."
- *
- * The `<datetime>` and `<system_reminder>` tags both sit OUTSIDE the
- * `<user_message>` fence on purpose: the system prompt's boundary
- * block tells the model that anything outside the fence is
- * platform-injected, which is exactly the role both tags play
- * (datetime is reference material; system_reminder is an actionable
- * platform directive - the system prompt teaches the distinction).
- * Putting either inside would make the model treat the tag text as
- * user-typed input.
- *
- * `trailingReminder` is the `buildTitleReminderMessage` output (or
- * any future per-turn directive that needs to land where the model
- * actually attends to it). Null on turns with nothing to nag about
- * (real model-set title, manually-named thread); the function then
- * skips the trailing tag entirely so non-placeholder turns don't pay
- * the token cost. Folding this into the user turn replaced an earlier
- * design that pushed it as a trailing `role: 'system'` message - that
- * placement was getting silently dropped or de-weighted on the wire,
- * leaving placeholder threads parked on "New conversation" across
- * many turns despite the directive being marked "not optional".
+ * Options bag for {@link buildMetadataSystemMessage}. The chat-loop
+ * fills this fresh per round so the resulting message reflects the
+ * latest wall-clock, the live thread title, and the current
+ * attachments inventory. Every field is optional - a fresh account
+ * with no profile, no attachments, no emphasis toggle, and a
+ * non-placeholder title produces a metadata message carrying nothing
+ * but the datetime paragraph.
  */
-function tagLastUserMessage(
+interface MetadataSystemMessageOptions {
+  userName?: string | null;
+  userLocation?: string | null;
+  journalTimezone?: string | null;
+  lastAssistantTimestamp?: string | null;
+  attachmentSummaries: ThreadAttachmentSummary[];
+  emphasisMarkdown?: boolean;
+  threadTitle: string;
+  titleManuallySet: boolean;
+  /**
+   * 1-based count of user messages in this thread including the
+   * current one. Title nudges are skipped on round 1 - the background
+   * title-gen pipeline (see `src/lib/title-gen.ts`) handles the
+   * opening turn; the metadata-message nudges only fire from round 2
+   * onward.
+   */
+  currentUserRound: number;
+}
+
+/**
+ * Compose the per-turn metadata system message. Returns one
+ * VeniceMessage with `role: 'system'` whose body stitches the
+ * applicable sections together with blank lines:
+ *
+ *   1. User profile (name / location), when either is set.
+ *   2. Datetime paragraph (always present).
+ *   3. Thread attachments inventory, when there are any.
+ *   4. Emphasis-markdown formatting nudge, when the toggle is on.
+ *   5. Title nudge, from round 2 onward: the loud placeholder nag
+ *      when the title is still the schema default, the soft
+ *      topic-drift hint when the title is model-set and not pinned
+ *      by the user. Round 1 is silent here - the background title-gen
+ *      pipeline owns naming on the opening turn.
+ *
+ * The chat-loop inserts this message AFTER the user-configured
+ * system prompts and BEFORE the user turn, so the model reads it
+ * just before reading the user's words. Each round rebuilds the
+ * message so wall-clock + attachments + title state stay live across
+ * multi-tool rounds.
+ */
+function buildMetadataSystemMessage(
+  opts: MetadataSystemMessageOptions
+): VeniceMessage {
+  const sections: string[] = [];
+
+  const profile = (() => {
+    const name = (opts.userName ?? '').trim();
+    const location = (opts.userLocation ?? '').trim();
+    if (name.length === 0 && location.length === 0) return null;
+    const lines: string[] = [];
+    if (name.length > 0) lines.push(`User's name: ${name}`);
+    if (location.length > 0) lines.push(`User's location: ${location}`);
+    return lines.join('\n');
+  })();
+  if (profile !== null) sections.push(profile);
+
+  sections.push(
+    buildDatetimeParagraph(opts.journalTimezone, opts.lastAssistantTimestamp),
+  );
+
+  const attachments = buildThreadAttachmentsBlock(opts.attachmentSummaries);
+  if (attachments !== null) sections.push(attachments);
+
+  if (opts.emphasisMarkdown) {
+    sections.push(
+      [
+        'Formatting: when the reply runs more than a sentence or two,',
+        'use light Markdown emphasis as scan-points so the reader can',
+        'skim. Bold (`**term**`) meaningful single words, proper nouns,',
+        'and identifiers - things the reader should fix on. Italicise',
+        '(`*phrase*`) short phrases, transitional clauses, or compound',
+        'noun phrases that orient the reader. Either style works for a',
+        'single or compound word; pick bold for terms worth fixing on,',
+        'italics for phrases that set up what comes next. Aim for',
+        'roughly one emphasised span per sentence in prose; less in',
+        'code-heavy, list-heavy, or tabular passages. Do not emphasise',
+        'whole sentences, filler adjectives, or boilerplate - the',
+        'emphasis should reward skimming, not compete with it. Skip',
+        "emphasis on short replies where skimming wouldn't help.",
+      ].join('\n'),
+    );
+  }
+
+  // Title nudges are silent on round 1 - the background title-gen
+  // pipeline (Chat.svelte sends it in parallel with runChatLoop on
+  // the opening turn) handles naming there. From round 2 on, if the
+  // background pipeline never landed (network blip, model timeout)
+  // the loud nag below fires to recover; if a model-set title is
+  // already in place but the topic may have drifted, the soft
+  // drift hint fires instead. Manually-named threads suppress both
+  // nudges - the user committed and we don't clobber that.
+  if (opts.currentUserRound >= 2 && !opts.titleManuallySet) {
+    if (opts.threadTitle === DEFAULT_THREAD_TITLE) {
+      sections.push(
+        [
+          'This thread is still labelled with the default placeholder',
+          `("${DEFAULT_THREAD_TITLE}") in the conversation drawer. Before`,
+          'replying, call `update_title` with a concise 3-6 word title',
+          'describing what the user is actually asking about. Plain',
+          'text, no quotes, no trailing punctuation.',
+        ].join('\n'),
+      );
+    } else {
+      sections.push(
+        [
+          `Current conversation title: "${opts.threadTitle}". If the topic`,
+          'has meaningfully shifted, call `update_title` with a better',
+          '3-6 word title. Cosmetic drift is not a reason to rename.',
+        ].join('\n'),
+      );
+    }
+  }
+
+  return { role: 'system', content: sections.join('\n\n') };
+}
+
+/**
+ * Split a history array into the leading user-configured system
+ * messages and the conversation that follows. Used by the chat-loop
+ * to insert the per-turn metadata system message between the two -
+ * baseline system prompt first, then the user's enabled system
+ * prompts (voice / persona tuning), then the metadata block (ambient
+ * context the model should read just before the user turn), then
+ * the actual conversation.
+ *
+ * Stops collecting system messages at the first non-system row. A
+ * legitimate `role: 'system'` row that arrives after the first
+ * user/assistant pair would land in the conversation half, but no
+ * current caller produces that shape - system rows ride at the head.
+ */
+function splitSystemPreamble(
   messages: VeniceMessage[],
-  datetimeTag: string,
-  trailingReminder: string | null,
-): VeniceMessage[] {
-  // Walk from the end so we find the most recent user message even
-  // when tool-result rows follow it on a mid-loop round.
-  let lastUserIdx = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') {
-      lastUserIdx = i;
-      break;
+): { userSystem: VeniceMessage[]; conversation: VeniceMessage[] } {
+  const userSystem: VeniceMessage[] = [];
+  const conversation: VeniceMessage[] = [];
+  let inPreamble = true;
+  for (const m of messages) {
+    if (inPreamble && m.role === 'system') {
+      userSystem.push(m);
+    } else {
+      inPreamble = false;
+      conversation.push(m);
     }
   }
-  if (lastUserIdx === -1) return messages;
-  const out = messages.slice();
-  const orig = out[lastUserIdx];
-  // Empty string when the caller passed null so the template
-  // concatenations stay simple. The leading newline only lands when
-  // the reminder is non-null, so non-placeholder turns don't pay a
-  // stray blank line at the end of their user content.
-  const reminderTrailer = trailingReminder
-    ? `\n<system_reminder>\n${trailingReminder}\n</system_reminder>`
-    : '';
-  if (typeof orig.content === 'string') {
-    out[lastUserIdx] = {
-      ...orig,
-      content: `${datetimeTag}\n${USER_MSG_OPEN}${orig.content}${USER_MSG_CLOSE}${reminderTrailer}`,
-    };
-  } else {
-    // Vision/multimodal: prepend the datetime tag + opening-tag text
-    // part and append a closing-tag text part so images and
-    // extracted-text prelude blocks all sit *inside* the user-message
-    // boundary while the datetime sits outside. Allocating a fresh
-    // array so we don't mutate the caller's content. The trailing
-    // reminder rides as another text part after the close tag, again
-    // outside the boundary.
-    const parts: typeof orig.content = [
-      { type: 'text', text: `${datetimeTag}\n${USER_MSG_OPEN}` },
-      ...orig.content,
-      { type: 'text', text: USER_MSG_CLOSE },
-    ];
-    if (trailingReminder) {
-      parts.push({ type: 'text', text: reminderTrailer });
-    }
-    out[lastUserIdx] = { ...orig, content: parts };
-  }
-  return out;
+  return { userSystem, conversation };
 }
 
 /**
@@ -914,52 +753,52 @@ export interface ChatLoopOptions {
    */
   verbosity?: Verbosity;
   /**
-   * When true, append a short formatting-nudge block to the per-turn
-   * system-prompt appendix asking the model to sprinkle light
-   * Markdown emphasis (bold terms, italic phrases) through its reply
-   * as scan-points. Opt-in; the block is skipped when false/absent
-   * so the baseline prompt stays free of formatting hints for users
-   * who didn't ask for them. See `buildEmphasisNote` below for the
-   * exact wording - modifying it changes model behaviour on every
-   * turn of every user who has the toggle on.
+   * When true, the per-turn metadata system message carries a short
+   * formatting nudge asking the model to sprinkle light Markdown
+   * emphasis (bold terms, italic phrases) through its reply as
+   * scan-points. Opt-in; the block is skipped when false/absent so
+   * users who didn't ask for it never see formatting hints. See
+   * `buildMetadataSystemMessage` for the exact wording - modifying
+   * it changes model behaviour on every turn of every user who has
+   * the toggle on.
    */
   emphasisMarkdown?: boolean;
   /**
    * Optional free-form display name + location the user entered in
-   * Settings -> AI -> About you. When either is non-empty, chat-loop
-   * folds a short "User profile" block into the per-turn system-
-   * prompt appendix so every reply this turn sees the identity
-   * context. Both empty / absent skips the block entirely so a fresh
-   * account pays zero tokens. See `buildUserProfileNote` for the
-   * exact rendered shape - editing that wording changes model
-   * behaviour on every turn of every user who has filled the form.
+   * Settings -> AI -> About you. When either is non-empty, the
+   * per-turn metadata system message opens with a short identity
+   * paragraph so the model can address the user naturally and
+   * ground location-specific answers (weather, local time, regional
+   * context). Both empty / absent skips the block entirely so a
+   * fresh account pays zero tokens. See `buildMetadataSystemMessage`
+   * for the exact rendered shape - editing that wording changes
+   * model behaviour on every turn of every user who has filled the
+   * form.
    */
   userName?: string | null;
   userLocation?: string | null;
   /**
-   * IANA timezone used to compute "today" for the Journal
-   * appendix and the per-turn `<datetime>` tag prepended to the
-   * latest user message (see `buildDatetimeTag`). When
-   * null/undefined both paths fall back to the runtime's reported
-   * zone (typically the browser's own). The journal use is
-   * indirect (calendar-day bucketing); the datetime use is direct -
-   * the model reads the local time off this zone, so a wrong value
-   * here will surface as the model giving the user the wrong wall-
-   * clock time.
+   * IANA timezone used to format the wall-clock paragraph the
+   * per-turn metadata system message opens with (see
+   * `buildDatetimeParagraph`). When null / undefined the helper falls
+   * back to the runtime's reported zone (typically the browser's
+   * own). A wrong value here surfaces as the model giving the user
+   * the wrong wall-clock time.
    */
   journalTimezone?: string | null;
   /**
    * ISO 8601 `created_at` of the most recent persisted assistant
-   * message on the thread, used to compute the `since_last_response`
-   * attribute on the per-turn `<datetime>` tag. Null / undefined on
-   * the opening turn of a thread (no prior assistant message); the
-   * datetime tag then omits the attribute rather than shipping a
-   * meaningless "just now". Caller (Chat.svelte) walks its
-   * `messages` array for the latest role==='assistant' row -
-   * synthetic ephemeral injections (intuition / context-recall
-   * <think> blocks) are not persisted and therefore not eligible
-   * anchors, which is the correct semantic: "how long since your
-   * last actual reply to the user?".
+   * message on the thread, used to compute the "about X since your
+   * last reply" sentence in the per-turn metadata system message.
+   * Null / undefined on the opening turn of a thread (no prior
+   * assistant message); the metadata message then omits the elapsed
+   * sentence rather than shipping a meaningless "just now". Caller
+   * (Chat.svelte) walks its `messages` array for the latest
+   * role==='assistant' row - synthetic ephemeral injections
+   * (intuition / context-recall / samskara `<think>` blocks) are
+   * not persisted and therefore not eligible anchors, which is the
+   * correct semantic: "how long since your last actual reply to the
+   * user?".
    */
   lastAssistantTimestamp?: string | null;
   /**
@@ -1265,101 +1104,47 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // count includes the current user message because history's last
   // element is that message at this point in the loop.
   const currentUserRound = countUserRounds(history);
-  // "Opening turn" = no assistant messages in history yet. A fresh
-  // thread on turn 1 matches; a thread where the user edited their
-  // first message before any reply also matches (correctly - the
-  // model still hasn't seen anything). Later turns fall through to
-  // the model's own memory_recall cadence.
-  const isOpeningTurn = history.every((m) => m.role !== 'assistant');
+  // Samskara priming bundle: compound summary (always-on across
+  // turns) + situational fire (top-k for THIS user text). Both
+  // resolve to potentially-null `<think>` block bodies; the chat-loop
+  // pushes them as separate assistant <think> messages after the
+  // user turn. Cold-start threads (no formation rows yet) produce
+  // both-null and skip the pushes entirely.
+  //
+  // The old opening-recall pipeline and today's-journal auto-injection
+  // both used to ride alongside this bundle on the opening turn.
+  // Context-recall now covers the cold-start memory-pull job
+  // (memory_recall, conversation_recall, wiki_recall, journal_recall
+  // children stitched into one note), and the journal auto-injection
+  // was retired in favour of the model reaching for journal_search
+  // when reflective topics come up. Both former entries leave the
+  // priming bundle smaller and the wire shape simpler.
   interface PrimingBundle {
-    samskaraAppendix: string;
-    openingRecallBlock: string | null;
-    /**
-     * Today's automatic journal entry for the signed-in user, if one
-     * exists. Injected as an appendix block on opening turns so the
-     * model can weave continuity in without a tool call. Null when
-     * there's no entry yet today, or when this isn't the opening
-     * turn (mid-thread turns pay no tax).
-     */
-    journalEntry: JournalEntry | null;
+    compoundThink: string | null;
+    fireThink: string | null;
   }
-  // Pre-compute today's date in the user's timezone so the journal
-  // lookup (a tiny indexed SELECT) can race alongside the samskara
-  // bundle. Bucketing is cheap; both feeds run under the same
-  // SAMSKARA_PRIMING_TIMEOUT_MS cap.
-  const journalToday = todayInZone(journalTimezone ?? null);
   const primingWork = (async (): Promise<PrimingBundle> => {
-    const [compoundSummary, fireResult, openingRecallBlock, journalRows] =
-      await Promise.all([
-        getCompoundSummary(supabase),
-        fireSamskaras(supabase, venice, thread.id, currentUserRound, userText, signal),
-        isOpeningTurn
-          ? recallOpeningMemories(supabase, venice, userText, signal)
-          : Promise.resolve<string | null>(null),
-        // Only pull the journal row on the opening turn - the same
-        // reason we only do opening-recall there. Mid-thread turns
-        // would rebuild the same appendix every round with no benefit.
-        // Degrades silently: an error here just means "no journal
-        // block this turn."
-        isOpeningTurn
-          ? supabase.getJournalEntriesForDate(journalToday).catch(() => [])
-          : Promise.resolve([]),
-      ]);
-    const automatic =
-      journalRows.find((e) => e.source === 'automatic') ?? null;
-    return {
-      samskaraAppendix: formatPriming({
-        compoundSummary,
-        fire: fireResult as FireResult | null,
-      }),
-      openingRecallBlock,
-      journalEntry: automatic,
-    };
+    const [compoundSummary, fireResult] = await Promise.all([
+      getCompoundSummary(supabase),
+      fireSamskaras(supabase, venice, thread.id, currentUserRound, userText, signal),
+    ]);
+    const { compound, fire } = formatPrimingThinks({
+      compoundSummary,
+      fire: fireResult as FireResult | null,
+    });
+    return { compoundThink: compound, fireThink: fire };
   })();
   const priming = await Promise.race<PrimingBundle>([
     primingWork,
     new Promise<PrimingBundle>((resolve) =>
       setTimeout(
-        () =>
-          resolve({
-            samskaraAppendix: '',
-            openingRecallBlock: null,
-            journalEntry: null,
-          }),
-        SAMSKARA_PRIMING_TIMEOUT_MS
-      )
+        () => resolve({ compoundThink: null, fireThink: null }),
+        SAMSKARA_PRIMING_TIMEOUT_MS,
+      ),
     ),
   ]);
-  // The title appendix note is the soft "rename if the topic shifted"
-  // one-liner for threads that already carry a real title. It sits in
-  // the system prompt as the lowest-priority block. The placeholder
-  // case (loud "required this turn" directive) is handled separately
-  // as a `role: 'system'` message appended after the user turn in the
-  // round loop below - that position is closer to the generation point
-  // than anything in the appendix can be. Null on placeholder + on
-  // manually-named threads.
-  const titleNote = buildTitleAppendixNote(thread);
-  // Pre-compute the placeholder reminder once. It rides every round
-  // until the chat loop returns - including rounds after the model
-  // already called `update_title` - matching the same persist-across-
-  // rounds behaviour the appendix-based directive had before.
-  const titleReminder = buildTitleReminderMessage(thread);
-  // Emphasis blurb slots between samskara priming and the title
-  // note: ambient voice tuning, less urgent than the title nag.
-  // Null when the setting is off so the filter below skips it cleanly.
-  const emphasisNote = emphasisMarkdown ? buildEmphasisNote() : null;
-  // Today's Journal block sits between the samskara priming and the
-  // emphasis/title nudges: user-specific context (belongs with
-  // samskara) but not urgent. Null on mid-thread turns or when no
-  // automatic entry exists yet.
-  const journalNote = buildJournalNote(priming.journalEntry);
-  // User profile block: rendered first in the appendix so the model
-  // sees who it's talking to before any of the ambient priming
-  // blocks. Null when both fields are empty so a fresh account
-  // pays zero tokens.
-  const userProfileNote = buildUserProfileNote(userName, userLocation);
 
-  // Per-turn thread-attachments block. Lists every file attached
+  // Per-turn thread-attachments inventory. Lists every file attached
   // anywhere in the conversation by category (live images, live
   // documents, expired) so the model has a holistic view rather than
   // having to scan every prior user turn for inline notes. The query
@@ -1371,32 +1156,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   const attachmentSummaries: ThreadAttachmentSummary[] = await supabase
     .listAttachmentSummariesForThread(thread.id)
     .catch(() => []);
-  const threadAttachmentsBlock = buildThreadAttachmentsBlock(attachmentSummaries);
-
-  const appendixParts = [
-    userProfileNote,
-    priming.samskaraAppendix,
-    journalNote,
-    threadAttachmentsBlock,
-    emphasisNote,
-    titleNote,
-  ].filter((s): s is string => typeof s === 'string' && s.length > 0);
-  const promptAppendix = appendixParts.join('\n\n');
-
-  // Push the opening-recall <think> block onto local history as an
-  // ephemeral assistant turn. Not persisted - the round loop only
-  // writes assistant rows that the model itself generated; this
-  // synthetic turn lives only for the duration of this chat-loop
-  // call, same contract as the <user_message> tag wrapping. Strict
-  // role alternation is broken here (user -> assistant-think ->
-  // assistant-reply), but Venice tolerates that on the wire and the
-  // model reads the <think> block as its own prior recollection.
-  if (priming.openingRecallBlock !== null) {
-    history.push({
-      role: 'assistant',
-      content: priming.openingRecallBlock,
-    });
-  }
 
   // Subconscious-priming layer: two parallel pipelines, fired on the
   // same trigger machinery (cold-start, mid-turn title shift, mood
@@ -1515,22 +1274,45 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       handlers?.onContextRecallUpdate?.(freshContextRecall);
   }
 
-  // Inject synthetic <think> blocks. Order matters for how the model
-  // reads its own priming chain: opening-recall (raw memory hits) was
-  // already pushed above; context-recall (assimilated note - facts
-  // not already in-thread plus calibration about what the user knows)
-  // goes next; intuition (synthesised drive read on top of all of it)
-  // goes last so the conscious response factors in the most-processed
-  // layer most recently. A context-recall payload with empty `note`
-  // resolves to null from buildContextRecallThinkMessage and is
-  // skipped - we cache the negative result for debounce but don't
-  // burn tokens on an empty <think> block.
+  // Inject the synthetic `<think>` priming chain. Order matters for how
+  // the model reads its own internal layers, from broadest to most
+  // turn-specific:
+  //
+  //   1. Context-recall - stitched first-person note across the four
+  //      persistent layers (memories, prior conversations, wiki,
+  //      journal). Covers cold-start memory pull as well as mid-thread
+  //      topic shifts; the old opening-recall pipeline retired in favor
+  //      of letting context-recall handle the opening turn too.
+  //   2. Samskara compound prose - the "current model of the user"
+  //      summary the formation worker maintains across turns.
+  //   3. Samskara situational fire - top-k predictions for THIS user
+  //      turn, rendered as first-person observations with
+  //      parenthetical confidence hedges.
+  //   4. Intuition synthesis - the most-processed layer (perception +
+  //      5 drives + synthesis), reads cleanly when it lands last.
+  //
+  // Each push is conditional: an empty-note context-recall, a
+  // cold-start thread with no compound summary, a turn where the fire
+  // top-k came back empty, an intuition-disabled thread - any of those
+  // skips its push so we never burn tokens on an empty `<think>` block.
   if (contextRecallCache) {
     const msg = buildContextRecallThinkMessage(contextRecallCache);
     if (msg !== null) {
       history.push(msg);
       contextRecallMessageIdx = history.length - 1;
     }
+  }
+  if (priming.compoundThink !== null) {
+    history.push({
+      role: 'assistant',
+      content: `<think>\n${priming.compoundThink}\n</think>`,
+    });
+  }
+  if (priming.fireThink !== null) {
+    history.push({
+      role: 'assistant',
+      content: `<think>\n${priming.fireThink}\n</think>`,
+    });
   }
   if (intuitionCache) {
     history.push(buildIntuitionThinkMessage(intuitionCache));
@@ -1552,45 +1334,38 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     }
     roundsRun++;
 
-    // Prepend the baseline system prompt every round. It's not stored
-    // in the DB — it's derived from the registry at request-time, so
-    // adding a tool automatically updates what the model knows about,
-    // and editing the identity copy takes effect for the next turn
-    // with no migration. User-configured system prompts from Settings
-    // ride AFTER this in `history`, which means a custom "you are a
-    // pirate" prompt still wins on voice while the baseline tool
-    // framing stays in force.
+    // Three-layer system-prompt assembly. The baseline prompt
+    // (identity, voice, recall framing, toolbox catalog) leads;
+    // user-configured system prompts from Settings ride next so a
+    // custom "you are a pirate" prompt still wins on voice while the
+    // baseline tool framing stays in force; the per-turn metadata
+    // system message comes last among the system rows so the model
+    // reads ambient context (datetime, attachments inventory, title
+    // and emphasis nudges) immediately before the user turn. The
+    // user message itself rides bare - no `<user_message>` fence,
+    // no `<datetime>` tag, no `<system_reminder>` directive folded
+    // in. The role:user / role:system boundary is the structural
+    // signal now; the in-content tags were a workaround for the
+    // URL-scraping auto-injection that's no longer in play.
     //
-    // The current user turn is ALWAYS wrapped in <user_message>
-    // boundary tags (see tagLastUserMessage above). Venice's
-    // `enable_web_scraping` is always on in venice.ts, so any URL the
-    // user pastes lands inlined in the user turn alongside whatever
-    // they typed. Wrapping unconditionally keeps the boundary
-    // reliable; the ~10 tokens per user turn are a cheap price for a
-    // signal the model can anchor on every time. Live web search,
-    // previously also an `enable_web_search` injection on every
-    // request, now flows through the `web_search` tool instead - the
-    // main chat loop never sets those Venice parameters.
-    //
-    // The same projection also prepends a `<datetime>` tag (outside
-    // the user_message fence) carrying current local + UTC time. The
-    // model otherwise has no clock and either refuses or hallucinates
-    // when asked "what time is it?". Recomputed every round so a
-    // long multi-tool loop reflects actual elapsed time rather than
-    // a stale send-time snapshot.
-    //
-    // The placeholder-title directive (when present) rides as a
-    // `<system_reminder>` block APPENDED to the user turn, outside
-    // the user_message fence. Earlier shapes - putting the directive
-    // in the system-prompt appendix, then pushing it as a trailing
-    // `role: 'system'` message - both let the model skip the rename
-    // for many turns; the wire ends up dropping or de-weighting
-    // trailing system rows on this provider, and a system-prompt
-    // appendix gets buried above a long `history`. Riding inside the
-    // user-role content is the position the model is guaranteed to
-    // attend to.
-    const datetimeTag = buildDatetimeTag(journalTimezone, lastAssistantTimestamp);
-    const projectedHistory = tagLastUserMessage(history, datetimeTag, titleReminder);
+    // The metadata message is rebuilt every round so wall-clock,
+    // since-last-reply, and live title state stay current across
+    // multi-tool turns that span tens of seconds. The split between
+    // baseline + user-system + metadata + conversation lets a
+    // single Venice request pass them through with no extra
+    // pre/post-processing.
+    const { userSystem, conversation } = splitSystemPreamble(history);
+    const metadataMessage = buildMetadataSystemMessage({
+      userName,
+      userLocation,
+      journalTimezone,
+      lastAssistantTimestamp,
+      attachmentSummaries,
+      emphasisMarkdown,
+      threadTitle: thread.title,
+      titleManuallySet: thread.title_manually_set,
+      currentUserRound,
+    });
     const requestMessages: VeniceMessage[] = [
       {
         role: 'system',
@@ -1599,19 +1374,11 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           // catalog block renders [x]/[ ] marks that match what the
           // model will actually see on the wire this round.
           enabledToolboxes: toolboxesEnabled,
-          // Per-turn appendix - pre-computed before the round loop so
-          // every round sees the same block. Carries low-urgency
-          // ambient context (user profile, samskara priming, today's
-          // journal, attachments, emphasis nudge, topic-drift title
-          // hint). Empty string when none apply (cold-start manually-
-          // named thread, priming timeout). The placeholder title
-          // directive is NOT here - it rides inside the latest user
-          // turn as a `<system_reminder>` block, outside the
-          // user_message fence (see tagLastUserMessage above).
-          promptAppendix: promptAppendix,
         }),
       },
-      ...projectedHistory,
+      ...userSystem,
+      metadataMessage,
+      ...conversation,
     ];
 
     // streamChatWithRateLimitRetry transparently retries on Venice 429s,

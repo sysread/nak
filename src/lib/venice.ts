@@ -205,6 +205,24 @@ export interface ChatRequest {
    */
   webCitations?: boolean;
   /**
+   * Whether to set `venice_parameters.enable_web_scraping` on the
+   * request. When true, Venice fetches (via Firecrawl) any URL the
+   * latest user message contains and inlines the page content into
+   * the user turn before the model sees it. Independent of
+   * `webSearch` per Venice's docs.
+   *
+   * Caller scoping: the main chat loop deliberately leaves this
+   * unset. Auto-inlining scraped content into the user turn made it
+   * harder for the model to tell its own anchor (the user's actual
+   * words) from platform-injected reference material, and made URL
+   * handling implicit rather than tool-driven. The sole caller that
+   * sets this now is the `web_search` tool's sub-completion - if the
+   * caller passes a URL through as part of a research query, the
+   * sub-agent can still read it. The main turn routes URL handling
+   * through the `web_search` tool explicitly instead.
+   */
+  webScraping?: boolean;
+  /**
    * OpenAI-style reasoning_effort knob ('low' | 'medium' | 'high').
    * Forwarded as the top-level `reasoning_effort` body field; omitted
    * entirely when unset so models that don't recognize the field
@@ -728,22 +746,27 @@ export class VeniceClient {
     // self-sufficient; none of them benefit from a Venice generic
     // preamble landing on top.
     //
-    // `enable_web_scraping` (also always on): tells Venice to fetch
-    // the full content of any URL the user pastes into their latest
-    // message, via Firecrawl on Venice's side. Independent of
-    // `enable_web_search` per Venice's docs — search augments the
-    // turn with results from a query, scraping reads URLs the user
-    // explicitly provided. Baseline cost is zero when the message
-    // has no URLs, so there's no reason to gate it; when a user
-    // drops a link, they nearly always want it read. The scraped
-    // content lands inlined in the user turn the same way search
-    // results do, so the attribution guard in `buildSystemPrompt`
-    // plus the `<user_message>` wrapping in chat-loop.ts cover
-    // both injection paths uniformly.
+    // `enable_web_scraping` (caller-gated, off by default): tells
+    // Venice to fetch the full content of any URL the user pastes
+    // into their latest message, via Firecrawl on Venice's side.
+    // Independent of `enable_web_search` per Venice's docs - search
+    // augments the turn with results from a query, scraping reads
+    // URLs the user explicitly provided. The main chat loop leaves
+    // this unset: implicit URL-inlining made it hard for the model
+    // to tell its own anchor (the user's actual typed words) apart
+    // from platform-injected reference material, and required
+    // structural workarounds (`<user_message>` fences, attribution
+    // guards in the system prompt) just to keep the boundary
+    // legible. URL handling goes through the `web_search` tool now,
+    // which still sets `webScraping: true` on its sub-completion
+    // so a research query that quotes a URL can pull the page
+    // content as part of resolving the query.
     const veniceParams: Record<string, unknown> = {
       include_venice_system_prompt: false,
-      enable_web_scraping: true,
     };
+    if (req.webScraping) {
+      veniceParams.enable_web_scraping = true;
+    }
     // Venice-specific reasoning kill switch. Only forwarded when the
     // caller explicitly opted in; an unset field leaves Venice's
     // server-side default ("thinking on" for reasoning models) in

@@ -206,13 +206,13 @@ A chat turn goes:
   chat loop creates that assistant message; the workers
   pick it up on their next poll. See `./summaries.md`,
   `./memory.md`, `./journal.md`.
-- **Journal** — `chat-loop.ts` also reads
-  today's automatic journal entry on the opening turn of
-  each conversation (via
-  `supabase.getJournalEntriesForDate(todayInZone(tz))`)
-  and appends a `## Today's journal` block to the
-  appendix so the main model has same-day reflective
-  context without an explicit tool call. The Journal
+- **Journal** — the model reaches for `journal_search` when
+  reflective topics come up. The chat-loop used to auto-inject
+  today's automatic journal entry on the opening turn of each
+  conversation, but that path was retired with the wire-shape
+  refactor; the always-on toolbox now carries `journal_search`,
+  `journal_list`, and `journal_read` so the model can pull the
+  same content on demand when it actually helps. The Journal
   modal + drawer tab + Settings pane are parallel to the
   Cookbook surfaces. See `./journal.md`.
 - **Settings** — `Chat.svelte` reads `app.defaultModel`,
@@ -279,70 +279,86 @@ A chat turn goes:
   before being materialized, the realtime `INSERT` handler sees a
   thread it doesn't have, and the list gets out of order. The
   `isDraft` flag gates this; don't remove it.
-- **Venice can inject content into the user turn.** The
-  `enable_web_scraping` flag is always on in `venice.ts`, so
-  whenever the user's latest message contains a URL, Venice
-  fetches the full page content via Firecrawl and inlines it
-  after the user's prose. Baseline cost when no URLs are present
-  is zero; when a URL is there, the user nearly always wants it
-  read. Happens server-side — we never see or forward the
-  injected content, so there is nothing to strip on our side.
+- **The main chat loop no longer asks Venice to auto-inject
+  reference material into the user turn.** Both
+  `enable_web_scraping` and `enable_web_search` are caller-gated
+  in `venice.ts` and neither is set on the main loop's request.
+  Live web search flows through the `web_search` tool (see
+  `./tools.md`), which runs its own one-shot sub-completion with
+  `enable_web_search: 'on'` + `enable_web_citations: true` +
+  `enable_web_scraping: true` (so a research query that quotes
+  a URL can still pull the page content) and returns
+  `{answer, citations}`. The chat loop harvests those citations
+  into a turn-scoped list and persists them on the terminal
+  assistant row so the `CitationsPanel` + `^N^` superscript
+  rendering the old always-on path fed keeps working.
 
-  The other injection path, `enable_web_search`, is no longer
-  set by the main chat loop. Live web search now flows through
-  the `web_search` tool (see `./tools.md`), which runs its own
-  one-shot sub-completion with `enable_web_search: 'on'` +
-  `enable_web_citations: true` and returns `{answer, citations}`.
-  The chat loop harvests those citations into a turn-scoped list
-  and persists them on the terminal assistant row so the
-  `CitationsPanel` + `^N^` superscript rendering the old always-
-  on path fed keeps working.
+  Historical context: scraping was unconditional on every
+  completion, which auto-inlined any URL the user pasted into
+  the user turn. The model misread that content as
+  user-authored (observed: thanking the user for links they
+  never sent, quoting snippets back as their words). The
+  mitigation at the time was structural - a system-prompt
+  boundary block plus an unconditional `<user_message>` fence
+  around the current turn, with a `<datetime>` tag and an
+  optional `<system_reminder>` directive riding outside the
+  fence. With the URL-scraping flag flipped off, the fence
+  came off too: the user message rides bare, datetime and
+  title nudges moved into a dedicated per-turn metadata system
+  message (see "Wire shape" below).
 
-  Without help, the model misreads scraped content as user-
-  authored (observed: thanking the user for links they never
-  sent, quoting snippets back as their words). Mitigation is
-  two-part and unconditional: the system prompt's boundary block
-  calls out the non-user origin, and `runChatLoop` always wraps
-  the current turn's user text in `<user_message>...</user_message>`
-  via `tagLastUserMessage`. The tags are request-time only,
-  never persisted. If you add another place that constructs wire
-  messages for any Venice call, apply the same wrap.
+- **Wire shape (rounds inside `runChatLoop`).** Every round
+  rebuilds the request from four layers:
 
-  The same projection also prepends a per-turn `<datetime
-  local="..." utc="..." zone="..." />` tag outside the
-  user_message fence. LLMs have no clock - asked "what year is
-  it?" the model either refuses or hallucinates from training-
-  cutoff data. `buildDatetimeTag` formats the current wall-clock
-  time in ISO 8601 (local with offset, UTC Z form) using the
-  user's `journalTimezone` (falling back to the runtime's
-  reported zone), and the system prompt's boundary block tells
-  the model the tag is authoritative. The tag is recomputed
-  every round of the loop, not once at send-time, so a long
-  multi-tool turn reflects actual elapsed time.
+  1. **Baseline system prompt** (`buildSystemPrompt`) -
+     identity, voice, recall framing, journal/wiki framing,
+     toolbox framing, activity-narration rule, dynamic
+     catalog. Stable across rounds except for the catalog's
+     `(on)`/`(off)` marks tracking the current toolbox state.
+  2. **User-configured system prompts** - whatever's enabled
+     in Settings -> Prompts for this thread, in order.
+     `Chat.svelte` ships them at the head of `history`; the
+     chat-loop walks the preamble in `splitSystemPreamble`
+     and re-emits them between the baseline and the metadata
+     message.
+  3. **Per-turn metadata system message** (`buildMetadataSystemMessage`) -
+     a single system row composed fresh each round carrying
+     identity facts (user name + location when set), a
+     wall-clock prose paragraph (local ISO 8601 + IANA zone +
+     UTC + a "since your last reply" sentence on mid-thread
+     turns), the thread-attachments inventory, the
+     emphasis-markdown nudge when the toggle is on, and the
+     title nudge from round 2 onward (loud nag when the
+     title is still the schema placeholder, soft drift hint
+     when a model-set title might need refreshing). The
+     opening turn is silent on the title - the background
+     title-gen pipeline in `Chat.svelte` owns naming there.
+  4. **Conversation** - the user/assistant/tool rows the chat
+     loop is responding to, plus synthetic ephemeral
+     `<think>` blocks pushed after the user turn in the
+     priming chain: context-recall (stitched four-layer
+     note), samskara compound prose, samskara situational
+     fire (with parenthetical confidence hedges keyed off
+     the score), and intuition synthesis. Each push is
+     skipped when its source has nothing to say so we never
+     burn tokens on empty `<think>` blocks.
 
-  On mid-thread turns the same tag also carries
-  `since_last_response="..."` (e.g. "about 22 hours",
-  "yesterday", "about 3 days"). The chat-loop receives the
-  most recent persisted assistant message's `created_at` via
-  the `lastAssistantTimestamp` option (Chat.svelte walks its
-  messages array for the latest role==='assistant' row that
-  isn't in `pendingDeleteSet`), and `formatRelativeDuration`
-  buckets the wall-clock delta into a coarse human-friendly
-  string. The model uses it to calibrate register - resume
-  vs. re-orient - on a thread the user revived hours or days
-  later. The attribute is OMITTED on the opening turn (no
-  prior assistant to anchor against) and when the supplied
-  timestamp doesn't parse, so a fresh thread never carries
-  a misleading "just now". Synthetic ephemeral injections
-  (intuition / context-recall `<think>` blocks) aren't
-  persisted and therefore not eligible anchors - the semantic
-  is "how long since you last actually replied to the user?",
-  not "since any assistant-role row appeared on the wire."
-
-  The system prompt unconditionally mentions URL scraping so the
-  model doesn't refuse "what does this page say?" with a generic
-  "I can't browse the web" when a scraped page is sitting in the
-  user turn ready to read.
+  `buildDatetimeParagraph` formats the wall-clock paragraph in
+  ISO 8601 (local with offset, UTC Z form, IANA zone label).
+  The "Your last reply on this thread was ..." sentence rides
+  only on mid-thread turns where `lastAssistantTimestamp` is
+  set - `Chat.svelte` walks its `messages` array for the
+  latest persisted `role==='assistant'` row that isn't in
+  `pendingDeleteSet`, and `formatRelativeDuration` buckets the
+  wall-clock delta into a coarse human-friendly string. The
+  sentence is OMITTED on the opening turn (no prior assistant
+  to anchor against) and when the supplied timestamp doesn't
+  parse, so a fresh thread never carries a misleading "just
+  now". Synthetic ephemeral injections (intuition /
+  context-recall / samskara `<think>` blocks) aren't persisted
+  and therefore not eligible anchors - the semantic is "how
+  long since you last actually replied to the user?", not
+  "since any assistant-role row appeared on the wire."
 
 ## Where to go next
 

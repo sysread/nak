@@ -117,6 +117,9 @@ describe('AGENT_MODELS (background agents)', () => {
     expect(AGENT_MODELS.conversationRecall).toBe('qwen3-5-35b-a3b');
     // Vision sub-call.
     expect(AGENT_MODELS.visionAnalysis).toBe('e2ee-qwen3-5-122b-a10b');
+    // Auto-title: Chat.svelte's parallel background completion that
+    // names a fresh thread before the main reply finishes streaming.
+    expect(AGENT_MODELS.autoTitle).toBe('e2ee-gpt-oss-20b-p');
   });
 });
 
