@@ -580,14 +580,18 @@ describe('runChatLoop', () => {
     expect(seenRequests[0].reasoningEffort).toBeUndefined();
   });
 
-  it('appends the emphasis-markdown blurb to the system prompt when emphasisMarkdown=true', async () => {
-    // When the user has the "Emphasis markdown" toggle on, chat-loop
-    // folds a short formatting instruction into the per-turn system-
-    // prompt appendix. The blurb tells the model to sprinkle light
-    // Markdown emphasis through its reply so long answers skim
-    // better. We assert on a distinctive phrase from the blurb so a
-    // later wording tweak surfaces here and gets a deliberate review
+  it('puts the emphasis-markdown blurb in the metadata system message when emphasisMarkdown=true', async () => {
+    // When the user has the "Emphasis markdown" toggle on, the
+    // per-turn metadata system message carries a short formatting
+    // instruction telling the model to sprinkle light Markdown
+    // emphasis through its reply so long answers skim better. We
+    // assert on a distinctive phrase from the blurb so a later
+    // wording tweak surfaces here and gets a deliberate review
     // rather than silently changing user-visible model behaviour.
+    //
+    // The metadata message is the second system message in the wire
+    // (baseline at [0], metadata at [1] when no user-configured
+    // system prompts are active).
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -606,17 +610,20 @@ describe('runChatLoop', () => {
       signal: new AbortController().signal,
       emphasisMarkdown: true,
     });
-    const sys = seenRequests[0].messages[0];
-    expect(sys.role).toBe('system');
-    expect(typeof sys.content).toBe('string');
-    expect(sys.content as string).toContain('scan-points');
+    const meta = seenRequests[0].messages[1];
+    expect(meta.role).toBe('system');
+    expect(typeof meta.content).toBe('string');
+    expect(meta.content as string).toContain('scan-points');
+    // The baseline at messages[0] must stay free of the nudge so
+    // users without the toggle never see it.
+    expect(seenRequests[0].messages[0].content as string).not.toContain('scan-points');
   });
 
   it('omits the emphasis-markdown blurb when the flag is false or absent', async () => {
-    // Opt-in: the baseline prompt stays free of the formatting nudge
-    // for users who haven't turned it on. Two sub-cases both matter -
-    // explicit false (user flipped it off) and absent (older caller
-    // or test that predates the option).
+    // Opt-in: the metadata system message stays free of the formatting
+    // nudge for users who haven't turned it on. Two sub-cases both
+    // matter - explicit false (user flipped it off) and absent (older
+    // caller or test that predates the option).
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -647,16 +654,20 @@ describe('runChatLoop', () => {
     });
     expect(seenRequests).toHaveLength(2);
     for (const req of seenRequests) {
-      expect(req.messages[0].role).toBe('system');
-      expect(req.messages[0].content as string).not.toContain('scan-points');
+      // Neither the baseline nor the metadata message should carry
+      // the formatting nudge when the toggle is off / absent.
+      for (const m of req.messages) {
+        if (m.role !== 'system') continue;
+        expect(m.content as string).not.toContain('scan-points');
+      }
     }
   });
 
-  it('renders the User profile block when userName / userLocation is set', async () => {
-    // The profile fields ride along with every reply this account
-    // sends, in a "User profile" block at the top of the per-turn
-    // appendix. Both values are passed through verbatim - the
-    // chat-loop treats them as free-form prose, not a schema.
+  it('renders the user profile in the metadata system message when userName / userLocation is set', async () => {
+    // Profile fields ride along with every reply this account sends,
+    // as the lead paragraph of the per-turn metadata system message.
+    // Both values are passed through verbatim - the chat-loop treats
+    // them as free-form prose, not a schema.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -676,13 +687,12 @@ describe('runChatLoop', () => {
       userName: 'Ada',
       userLocation: 'Lisbon',
     });
-    const sys = seenRequests[0].messages[0];
-    expect(sys.role).toBe('system');
-    expect(typeof sys.content).toBe('string');
-    const content = sys.content as string;
-    expect(content).toContain('## User profile');
-    expect(content).toContain('Name: Ada');
-    expect(content).toContain('Location: Lisbon');
+    const meta = seenRequests[0].messages[1];
+    expect(meta.role).toBe('system');
+    expect(typeof meta.content).toBe('string');
+    const content = meta.content as string;
+    expect(content).toContain("User's name: Ada");
+    expect(content).toContain("User's location: Lisbon");
   });
 
   it('renders only the populated profile field when one is empty', async () => {
@@ -709,16 +719,16 @@ describe('runChatLoop', () => {
       userName: 'Ada',
       userLocation: '',
     });
-    const content = seenRequests[0].messages[0].content as string;
-    expect(content).toContain('## User profile');
-    expect(content).toContain('Name: Ada');
-    expect(content).not.toContain('Location:');
+    const content = seenRequests[0].messages[1].content as string;
+    expect(content).toContain("User's name: Ada");
+    expect(content).not.toContain("User's location");
   });
 
-  it('omits the User profile block when both fields are blank or absent', async () => {
+  it('omits the user profile paragraph from the metadata system message when both fields are blank or absent', async () => {
     // Fresh-account / opted-out path. Both empty strings and an
-    // outright omission of the option keys must skip the block so
-    // the baseline prompt stays free of an empty header.
+    // outright omission of the option keys must skip the profile
+    // sentences so the metadata message opens directly with the
+    // wall-clock paragraph.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -751,22 +761,24 @@ describe('runChatLoop', () => {
     });
     expect(seenRequests).toHaveLength(2);
     for (const req of seenRequests) {
-      expect(req.messages[0].content as string).not.toContain('## User profile');
+      const meta = req.messages[1].content as string;
+      expect(meta).not.toContain("User's name");
+      expect(meta).not.toContain("User's location");
     }
   });
 
-  it('wraps the last user message in <user_message> tags when web search is active', async () => {
-    // Venice's server-side web search inlines the search payload plus
-    // its own framing ("you can use this real time information to
-    // answer the user's query above") into what arrives as the user's
-    // turn, before the model ever sees it. Without a structural
-    // boundary the model misreads the Venice injection as a user
-    // instruction — observed live on the "Web Tool Test Request"
-    // thread. chat-loop.ts wraps the current user turn in
-    // <user_message>...</user_message> to give the model an
-    // unambiguous "here is where the human's words end" signal; the
-    // system prompt's attribution warning ties the tags back to the
-    // non-user origin.
+  it('passes every user turn through bare - no <user_message> fence, no embedded datetime tag', async () => {
+    // Earlier shapes wrapped the current user turn in
+    // <user_message>...</user_message> with a `<datetime>` tag prepended
+    // outside the fence. That structural workaround existed because
+    // Venice's auto-URL-scraping (`enable_web_scraping`, always-on at
+    // the time) inlined reference material alongside the user's typed
+    // words, and the model needed a fence to tell its anchor apart
+    // from the injection. URL handling now routes through the
+    // `web_search` tool and the scraping flag is gated, so the fence
+    // came off: the user message rides bare, the role:user boundary
+    // is the signal, and platform context lives in a dedicated
+    // metadata system message at messages[1].
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -789,22 +801,19 @@ describe('runChatLoop', () => {
       signal: new AbortController().signal,
     });
     const msgs = seenRequests[0].messages;
-    // System message rides first; the two user turns follow, only the
-    // most recent of which should be wrapped. An older user turn that
-    // Venice already processed on its own round doesn't need re-tagging
-    // and tagging it would just bloat the wire.
     expect(msgs[0].role).toBe('system');
     const users = msgs.filter((m) => m.role === 'user');
     expect(users).toHaveLength(2);
     expect(users[0].content).toBe('older turn');
-    // The current turn ships with a `<datetime>` tag prepended outside
-    // the user_message fence (see buildDatetimeTag in chat-loop). The
-    // exact tag content is wall-clock-dependent so we match the shape
-    // and assert the user_message wrapping is intact around the user's
-    // actual words.
-    expect(users[1].content).toMatch(
-      /^<datetime local="[^"]+" utc="[^"]+" zone="[^"]+" \/>\n<user_message>look up X<\/user_message>$/,
-    );
+    expect(users[1].content).toBe('look up X');
+    // No fence or datetime XML tag should appear anywhere in the
+    // request, even on the metadata system message (where datetime
+    // now rides as a prose sentence, not a tag).
+    for (const m of msgs) {
+      const text = typeof m.content === 'string' ? m.content : '';
+      expect(text).not.toContain('<user_message>');
+      expect(text).not.toContain('<datetime ');
+    }
   });
 
   it('never sets webSearch or webCitations on the outer stream request', async () => {
@@ -834,44 +843,13 @@ describe('runChatLoop', () => {
     expect(seenRequests[0].webCitations).toBeUndefined();
   });
 
-  it('wraps the last user message unconditionally', async () => {
-    // Wrapping is unconditional so the model has a single invariant
-    // for telling the user's typed words from the platform-injected
-    // reference material that rides outside the fence (`<datetime>`
-    // every turn, optional `<system_reminder>` on placeholder-title
-    // turns). URL auto-scraping used to be the main reason for the
-    // fence; the scraping flag is now caller-gated and the main loop
-    // never sets it, but datetime + system_reminder still need the
-    // boundary.
-    const seenRequests: ChatRequest[] = [];
-    const venice = {
-      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
-        seenRequests.push(req);
-        yield { type: 'text', delta: 'ok' };
-      },
-    } as unknown as VeniceClient;
-    const { svc } = mockSupabase();
-    await runChatLoop({
-      venice,
-      supabase: svc,
-      thread: mkThread(),
-      userId: 'u-1',
-      modelId: 'm',
-      history: [{ role: 'user', content: 'hi' }],
-      signal: new AbortController().signal,
-    });
-    const users = seenRequests[0].messages.filter((m) => m.role === 'user');
-    expect(users[0].content).toMatch(
-      /^<datetime local="[^"]+" utc="[^"]+" zone="[^"]+" \/>\n<user_message>hi<\/user_message>$/,
-    );
-  });
-
-  it('does not mutate the caller-supplied history when wrapping', async () => {
-    // The loop rebuilds requestMessages every round, so wrapping has
-    // to be a projection over a fresh array, not an in-place edit of
-    // the caller's VeniceMessage objects. If we mutated, a second
-    // runChatLoop invocation — or the caller reusing the history
-    // array — would see the tags already baked in and double-wrap.
+  it('does not mutate the caller-supplied history', async () => {
+    // The loop rebuilds requestMessages every round (with the metadata
+    // system message and synthetic <think> blocks projected in), so
+    // history projection has to allocate fresh arrays rather than
+    // edit the caller's VeniceMessage objects in place. If we
+    // mutated, a second runChatLoop invocation - or the caller
+    // reusing the history array - would see leftover edits.
     const venice = {
       async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
         yield { type: 'text', delta: 'ok' };
@@ -891,12 +869,13 @@ describe('runChatLoop', () => {
     expect(history[0].content).toBe('look up X');
   });
 
-  it('wraps multimodal user content by bracketing the ContentPart array', async () => {
+  it('passes multimodal user content through unchanged - no fence around the ContentPart array', async () => {
     // Vision-capable user turns ride as `[{type:'text',text:'...'},
-    // {type:'image_url', image_url:{url:'...'}}]`. The boundary tags
-    // need to enclose *everything* the user actually sent — including
-    // images and any extracted-text prelude blocks — so the whole
-    // user-authored payload sits inside the <user_message> fence.
+    // {type:'image_url', image_url:{url:'...'}}]`. The old fence
+    // bracketed the array with `<user_message>` text parts; the new
+    // shape leaves the user's content intact and lets the role:user
+    // boundary do the work. Platform context (datetime, attachments
+    // inventory) rides in the metadata system message instead.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -924,32 +903,19 @@ describe('runChatLoop', () => {
     });
     const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
     expect(Array.isArray(userMsg?.content)).toBe(true);
-    const parts = userMsg!.content as Array<{ type: string; text?: string }>;
-    // The opening text part fuses the per-turn `<datetime>` tag with
-    // the `<user_message>` open tag (the datetime sits outside the
-    // boundary, the open tag opens the boundary). Match the shape
-    // rather than exact contents - the datetime is wall-clock dependent.
-    expect(parts[0].type).toBe('text');
-    expect(parts[0].text).toMatch(
-      /^<datetime local="[^"]+" utc="[^"]+" zone="[^"]+" \/>\n<user_message>$/,
-    );
-    expect(parts[parts.length - 1]).toEqual({
-      type: 'text',
-      text: '</user_message>',
-    });
-    // Original parts sit between the opening and closing tag parts.
-    expect(parts).toHaveLength(4);
-    expect(parts[1]).toEqual({ type: 'text', text: 'what is in this image?' });
+    const parts = userMsg!.content as Array<{ type: string; text?: string; image_url?: unknown }>;
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toEqual({ type: 'text', text: 'what is in this image?' });
+    expect(parts[1].type).toBe('image_url');
   });
 
-  it('prepends a <datetime> tag with local + utc + zone outside the user_message fence', async () => {
-    // The model has no clock without an injected timestamp - asked
-    // "what year is it?" it would either refuse or hallucinate from
-    // training-cutoff knowledge. The chat-loop builds a `<datetime>`
-    // tag every round and prepends it to the latest user turn,
-    // outside the `<user_message>` boundary so the system prompt's
-    // boundary contract treats it as platform-injected metadata
-    // rather than user input.
+  it('puts the wall-clock paragraph in the metadata system message with local + UTC + IANA zone', async () => {
+    // The model has no clock without an injected timestamp. The
+    // per-turn metadata system message opens with a wall-clock prose
+    // paragraph (local ISO 8601 with offset, IANA zone label, UTC
+    // form) so "what year is it?" and "what time is it?" land
+    // correctly without the model falling back to training-cutoff
+    // knowledge.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -968,21 +934,20 @@ describe('runChatLoop', () => {
       journalTimezone: 'America/Los_Angeles',
       signal: new AbortController().signal,
     });
-    const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
-    const content = userMsg?.content as string;
-    // ISO 8601 local with offset (e.g. '2026-04-24T15:30:00-07:00' or
-    // '2026-04-24T15:30:00-08:00' depending on DST), UTC Z form, and
-    // the IANA zone name verbatim.
-    expect(content).toMatch(
-      /^<datetime local="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}" utc="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z" zone="America\/Los_Angeles" \/>\n<user_message>what time is it\?<\/user_message>$/,
+    const meta = seenRequests[0].messages[1].content as string;
+    // Local ISO 8601 with offset (e.g. '2026-04-24T15:30:00-07:00' or
+    // -08:00 depending on DST), the IANA zone label verbatim, and
+    // the UTC Z form all sit in one sentence.
+    expect(meta).toMatch(
+      /Current local time: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2} \(zone America\/Los_Angeles; UTC \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\)\./,
     );
   });
 
-  it('uses UTC zone in the datetime tag when journalTimezone is null', async () => {
+  it('falls back to a usable zone label when journalTimezone is null', async () => {
     // No configured timezone falls back to the runtime's reported
-    // zone; in the Vitest environment that's typically UTC, but the
-    // important contract is that `zone` is non-empty and well-formed
-    // and `local` includes a parseable ISO offset.
+    // zone; in the Vitest environment that's typically UTC. The
+    // important contract is that the wall-clock paragraph lands with
+    // a non-empty zone label and a parseable local ISO offset.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1000,22 +965,20 @@ describe('runChatLoop', () => {
       history: [{ role: 'user', content: 'hi' }],
       signal: new AbortController().signal,
     });
-    const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
-    const content = userMsg?.content as string;
-    const m = /^<datetime local="([^"]+)" utc="([^"]+)" zone="([^"]+)" \/>/.exec(content);
+    const meta = seenRequests[0].messages[1].content as string;
+    const m = /Current local time: ([^ ]+) \(zone ([^;]+); UTC ([^)]+)\)\./.exec(meta);
     expect(m).not.toBeNull();
-    const [, local, utc, zone] = m!;
+    const [, local, zone, utc] = m!;
     expect(local).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}([+-]\d{2}:\d{2}|Z)$/);
     expect(utc).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
     expect(zone.length).toBeGreaterThan(0);
   });
 
-  it('omits since_last_response from the datetime tag on the opening turn', async () => {
-    // Opening turn = no prior assistant message to anchor against, so
-    // the caller passes lastAssistantTimestamp=null (or omits it).
-    // Shipping "just now" or any other value here would be a lie -
-    // there is no prior reply. Match the tag with an immediate `/>`
-    // closer to assert the attribute is absent.
+  it('omits the since-last-reply sentence on the opening turn', async () => {
+    // Opening turn = no prior assistant message to anchor against,
+    // so the caller passes lastAssistantTimestamp=null (or omits it).
+    // The metadata message ships only the wall-clock paragraph, no
+    // "About X since your last reply" trailing sentence.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1034,20 +997,17 @@ describe('runChatLoop', () => {
       lastAssistantTimestamp: null,
       signal: new AbortController().signal,
     });
-    const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
-    const content = userMsg?.content as string;
-    expect(content).toMatch(
-      /^<datetime local="[^"]+" utc="[^"]+" zone="[^"]+" \/>\n<user_message>hi<\/user_message>$/,
-    );
-    expect(content.includes('since_last_response')).toBe(false);
+    const meta = seenRequests[0].messages[1].content as string;
+    expect(meta).toContain('Current local time:');
+    expect(meta).not.toContain('since your last reply');
   });
 
-  it('includes since_last_response in the datetime tag when lastAssistantTimestamp is supplied', async () => {
+  it('includes the since-last-reply sentence when lastAssistantTimestamp is supplied', async () => {
     // Mid-thread turns carry a coarse human-friendly elapsed string
     // so the model can calibrate register ("you just answered" vs
-    // "it's been a few days"). We assert the attribute lands with a
-    // sensible bucket - exact wording is the formatter's job and is
-    // covered separately.
+    // "it's been a few days"). The elapsed bucket is "about 22
+    // hours" for a 22-hour-old anchor; exact wording is the
+    // formatter's job and is covered separately.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1068,18 +1028,15 @@ describe('runChatLoop', () => {
       lastAssistantTimestamp: anchor,
       signal: new AbortController().signal,
     });
-    const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
-    const content = userMsg?.content as string;
-    expect(content).toMatch(
-      /^<datetime local="[^"]+" utc="[^"]+" zone="[^"]+" since_last_response="about 22 hours" \/>\n<user_message>hi<\/user_message>$/,
-    );
+    const meta = seenRequests[0].messages[1].content as string;
+    expect(meta).toContain('Your last reply on this thread was about 22 hours ago.');
   });
 
-  it('omits since_last_response when lastAssistantTimestamp is unparseable', async () => {
+  it('omits the since-last-reply sentence when lastAssistantTimestamp is unparseable', async () => {
     // A corrupt / unexpected timestamp string (Date.parse returns NaN)
     // is treated as "no anchor available" rather than emitting a
-    // garbage value. The rest of the datetime tag still rides; only
-    // the elapsed attribute is dropped.
+    // garbage value. The wall-clock paragraph still rides; only the
+    // elapsed sentence is dropped.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1098,9 +1055,9 @@ describe('runChatLoop', () => {
       lastAssistantTimestamp: 'not-a-date',
       signal: new AbortController().signal,
     });
-    const userMsg = seenRequests[0].messages.find((m) => m.role === 'user');
-    const content = userMsg?.content as string;
-    expect(content.includes('since_last_response')).toBe(false);
+    const meta = seenRequests[0].messages[1].content as string;
+    expect(meta).toContain('Current local time:');
+    expect(meta).not.toContain('since your last reply');
   });
 
   it('persists a plain text response in one round', async () => {
@@ -1787,50 +1744,54 @@ describe('runChatLoop', () => {
   // ---------------------------------------------------------------
   // Title-rename directives.
   //
-  // The chat loop nags the model to call `update_title` in two shapes,
-  // weighted very differently and delivered through different
-  // channels:
+  // The chat loop nudges the model to call `update_title` through the
+  // per-turn metadata system message (the second system row in the
+  // wire shape, immediately before the user turn). Two shapes:
   //
-  //   - Placeholder ("New conversation"): a `<system_reminder>` block
-  //     APPENDED to the latest user turn's content, outside the
-  //     `<user_message>` boundary tags. Riding inside the user-role
-  //     content puts the directive where the model is guaranteed to
-  //     attend to it. Earlier shapes (system-prompt appendix; trailing
-  //     `role: 'system'` message after the user turn) both let the
-  //     model skip the rename for many turns - the appendix got buried
-  //     above a long `history`, and the trailing system row was
-  //     getting silently dropped or de-weighted on the wire.
+  //   - Placeholder ("New conversation"): a paragraph telling the
+  //     model to call `update_title` with a 3-6 word topic title
+  //     before replying. Fires from round 2 onward only - on the
+  //     opening turn the background title-gen pipeline owns naming
+  //     (see Chat.svelte), so the metadata nudge stays silent there
+  //     to avoid double-titling.
   //   - Real model-set title: a terse "rename if the topic shifted"
-  //     one-liner in the system-prompt appendix. Low urgency, low
-  //     positional weight - fires every non-placeholder turn and is
-  //     almost always a no-op.
-  //   - Manually-set title: nothing on either channel. Once the user
-  //     commits to a title, the model must not clobber their choice.
+  //     one-liner. Same round-2+ gate; cosmetic drift on a fresh
+  //     thread is not the metadata message's job.
+  //   - Manually-set title: nothing. Once the user commits to a
+  //     title, the model must not clobber their choice on any
+  //     round.
   //
-  // Observed failure that motivated the inside-the-user-turn
-  // placement: on placeholder-title threads the model often answered
-  // the user directly without renaming, leaving the drawer labelled
-  // "New conversation" despite clear topics being introduced. The
-  // model's own introspection ("I only see one system message")
-  // matched a wire shape where Venice / the underlying model was
-  // collapsing the trailing system message into the leading prompt or
-  // dropping it outright.
+  // Both nudges sit in the metadata system message (NOT in the
+  // baseline prompt, NOT in the user turn). The user message rides
+  // bare in the new wire shape - no <system_reminder> fence, no
+  // user_message tags.
   // ---------------------------------------------------------------
 
-  function firstSystemPrompt(seen: ChatRequest[]): string {
-    const sys = seen[0].messages.find((m) => m.role === 'system');
-    if (!sys || typeof sys.content !== 'string') {
-      throw new Error('expected a string system message on the request');
+  function metadataMessage(seen: ChatRequest[]): string {
+    // The per-turn metadata system message is the LAST system row
+    // before any user/assistant message. With no user-configured
+    // system prompts in the test fixtures, that's messages[1].
+    const msgs = seen[0].messages;
+    let lastSystemIdx = -1;
+    for (let i = 0; i < msgs.length; i++) {
+      if (msgs[i].role === 'system') lastSystemIdx = i;
+      else break;
     }
-    return sys.content;
+    if (lastSystemIdx < 1) {
+      throw new Error('expected a metadata system message after the baseline');
+    }
+    const content = msgs[lastSystemIdx].content;
+    if (typeof content !== 'string') {
+      throw new Error('metadata system message content must be a string');
+    }
+    return content;
   }
 
   /**
-   * Stringified content of the last `role: 'user'` message in the
-   * first captured request. The placeholder reminder rides inside
-   * this string (string content) or the joined text parts (multimodal
-   * content), so callers run includes() / not.toContain() against the
-   * return value.
+   * Joined text content of the last `role: 'user'` message in the
+   * first captured request. Multimodal content's text parts are
+   * concatenated so a single includes() / not.toContain() assertion
+   * can scan across them.
    */
   function lastUserContent(seen: ChatRequest[]): string {
     const msgs = seen[0].messages;
@@ -1838,11 +1799,6 @@ describe('runChatLoop', () => {
       const m = msgs[i];
       if (m.role !== 'user') continue;
       if (typeof m.content === 'string') return m.content;
-      // Multimodal content: join the text parts so includes() can scan
-      // across them. Image parts have no `text` field, so they
-      // contribute the empty string; the boundary wrapping always
-      // lives in adjacent text parts so the joined string still has
-      // every tag the assertion cares about.
       return m.content
         .map((p) => (p.type === 'text' ? p.text : ''))
         .join('\n');
@@ -1850,7 +1806,13 @@ describe('runChatLoop', () => {
     throw new Error('expected a user message in the request');
   }
 
-  it('folds a required-this-turn title reminder into the latest user turn when the thread is still the placeholder', async () => {
+  it('keeps the metadata message silent about titles on the opening turn even when the thread is still the placeholder', async () => {
+    // Round 1: the background title-gen pipeline in Chat.svelte fires
+    // a parallel completion to name the thread. The chat-loop's
+    // metadata nudge would just compete and risk double-titling, so
+    // it stays silent on this round. Placeholder threads only see
+    // the chat-loop's nag from round 2 on (if the background pipeline
+    // somehow didn't land a title).
     const seen: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1868,47 +1830,53 @@ describe('runChatLoop', () => {
       history: [{ role: 'user', content: 'help me with python decorators' }],
       signal: new AbortController().signal,
     });
-    // The reminder must NOT live in the baseline system prompt - the
-    // appendix placement was the first design and the position this
-    // moves away from. Burying the directive ahead of `history` let
-    // the model skip the rename on long threads.
-    const prompt = firstSystemPrompt(seen);
-    expect(prompt).not.toContain('Required this turn: title this conversation');
-
-    // The reminder must NOT ride as a trailing `role: 'system'`
-    // message either. That was the second design; the wire shape this
-    // produced ("placeholder-titled thread, two system messages, one
-    // at index 0 and one at the end") got the trailing one collapsed
-    // or dropped on this provider.
-    const msgs = seen[0].messages;
-    const lastMsg = msgs[msgs.length - 1];
-    expect(lastMsg.role).toBe('user');
-
-    // The reminder rides INSIDE the latest user turn's content, in a
-    // `<system_reminder>` block sitting outside the `<user_message>`
-    // fence on the trailing side. The `<user_message>` opener is
-    // present (every user turn carries it; see tagLastUserMessage),
-    // and the reminder content shows up after the close tag.
+    const meta = metadataMessage(seen);
+    expect(meta).not.toContain('update_title');
+    expect(meta).not.toContain('New conversation');
+    // The user turn ships bare in the new wire shape.
     const userText = lastUserContent(seen);
-    expect(userText).toContain('<user_message>help me with python decorators</user_message>');
-    expect(userText).toContain('<system_reminder>');
-    expect(userText).toContain('</system_reminder>');
-    expect(userText).toContain('## Required this turn: title this conversation');
-    expect(userText).toContain('`update_title`');
-    expect(userText).toContain('New conversation');
-    // The instruction has to land as mandatory, not a suggestion -
-    // earlier "before responding, call the tool..." phrasing produced
-    // a skip rate high enough that threads routinely stayed on the
-    // placeholder for several turns.
-    expect(userText).toContain('This is not optional');
-    // Order check: the system_reminder block sits AFTER the
-    // user_message close, not before the open. The boundary rule in
-    // the system prompt depends on this layout - the reminder is
-    // platform-injected, not user-typed.
-    const closeIdx = userText.indexOf('</user_message>');
-    const reminderIdx = userText.indexOf('<system_reminder>');
-    expect(closeIdx).toBeGreaterThan(-1);
-    expect(reminderIdx).toBeGreaterThan(closeIdx);
+    expect(userText).toBe('help me with python decorators');
+  });
+
+  it('puts the placeholder title nag in the metadata system message from round 2 onward', async () => {
+    // Round 2+ with a placeholder title: the background title-gen
+    // pipeline didn't land a title (network blip, model timeout,
+    // user manually reset to the placeholder), so the chat-loop's
+    // metadata nudge fires the loud nag. The directive lives in the
+    // metadata system message at messages[1] (last system row before
+    // the user turn); the user message itself stays bare.
+    const seen: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seen.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread({ title: 'New conversation', title_manually_set: false }),
+      userId: 'u-1',
+      modelId: 'm',
+      // round 2: prior user/assistant turn already in history.
+      history: [
+        { role: 'user', content: 'first message' },
+        { role: 'assistant', content: 'first reply' },
+        { role: 'user', content: 'help me with python decorators' },
+      ],
+      signal: new AbortController().signal,
+    });
+    const meta = metadataMessage(seen);
+    expect(meta).toContain('update_title');
+    expect(meta).toContain('placeholder');
+    expect(meta).toContain('New conversation');
+    // Nothing should ride inside the user turn - the fence and
+    // <system_reminder> shape went away with the wire-shape refactor.
+    const userText = lastUserContent(seen);
+    expect(userText).toBe('help me with python decorators');
+    expect(userText).not.toContain('<system_reminder>');
+    expect(userText).not.toContain('<user_message>');
   });
 
   it('omits the title directives entirely when the user has manually named the thread', async () => {
@@ -1917,9 +1885,8 @@ describe('runChatLoop', () => {
     // chat loop must stop asking the model to rename it - otherwise
     // the model could clobber the user's choice. The `update_title`
     // tool stays in the always-on catalog (no harm; model won't call
-    // it without the instruction), but suppressing both prompt
-    // channels (the appendix one-liner AND the user-turn reminder)
-    // is the real gate.
+    // it without the instruction), but the metadata message must
+    // not nudge.
     const seen: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1934,39 +1901,36 @@ describe('runChatLoop', () => {
       thread: mkThread({ title: 'Python decorators', title_manually_set: true }),
       userId: 'u-1',
       modelId: 'm',
-      history: [{ role: 'user', content: 'another question' }],
+      // Round 2 setup to exercise the round-gate: if the metadata
+      // message ever fires title nudges, this is the round that
+      // would surface them. They must stay silent on a manually-named
+      // thread regardless of round.
+      history: [
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'reply' },
+        { role: 'user', content: 'another question' },
+      ],
       signal: new AbortController().signal,
     });
-    const prompt = firstSystemPrompt(seen);
-    // The per-turn rename directives must be gone - neither the
-    // placeholder-case "required this turn" block nor the non-
-    // placeholder "call update_title if the topic shifted" line
-    // should reach the model on a manually-named thread, on either
-    // channel.
-    expect(prompt).not.toContain('Required this turn');
-    expect(prompt).not.toContain('meaningfully shifted');
-    expect(prompt).not.toContain('Current conversation title');
-    // The current title itself must not appear - the model has no
-    // business even knowing what it is for the purpose of renaming.
-    expect(prompt).not.toContain('Python decorators');
-    // The user-turn reminder channel must also stay silent: no
-    // <system_reminder> block, and none of the placeholder copy.
+    const meta = metadataMessage(seen);
+    expect(meta).not.toContain('update_title');
+    expect(meta).not.toContain('meaningfully shifted');
+    expect(meta).not.toContain('Current conversation title');
+    // The current title itself must not appear in the metadata
+    // message - the model has no business knowing it for the
+    // purpose of renaming.
+    expect(meta).not.toContain('Python decorators');
     const userText = lastUserContent(seen);
+    expect(userText).toBe('another question');
     expect(userText).not.toContain('<system_reminder>');
-    expect(userText).not.toContain('Required this turn');
-    // The `update_title` tool name still appears in the always-on
-    // catalog listing (we leave the tool available; cheap no-op if
-    // the model calls it), so don't assert on the bare tool name.
   });
 
-  it('injects the short topic-shift note in the system-prompt appendix when the thread already has a model-set title', async () => {
-    // Non-placeholder + not-manually-set: a title the model already
-    // picked. The appendix keeps a terse one-liner so the model can
-    // rename on a real topic shift, but deliberately low-weight - it
-    // fires on every turn and we don't want to pay tokens or prompt
-    // pressure for what is almost always a no-op. This case does NOT
-    // get a `<system_reminder>` block on the user turn; only the
-    // placeholder case earns that.
+  it('puts the topic-shift hint in the metadata system message when the thread already has a model-set title (round 2+)', async () => {
+    // Non-placeholder + not-manually-set + round 2+: the model
+    // already picked a title; this is the low-urgency "rename if
+    // the topic shifted" hint. Lives in the metadata system message
+    // alongside the placeholder nag; round 1 stays silent because
+    // the background title-gen pipeline owns naming there.
     const seen: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1981,20 +1945,22 @@ describe('runChatLoop', () => {
       thread: mkThread({ title: 'Python decorators', title_manually_set: false }),
       userId: 'u-1',
       modelId: 'm',
-      history: [{ role: 'user', content: 'follow up question' }],
+      history: [
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'reply' },
+        { role: 'user', content: 'follow up question' },
+      ],
       signal: new AbortController().signal,
     });
-    const prompt = firstSystemPrompt(seen);
-    expect(prompt).toContain('Python decorators');
-    expect(prompt).toContain('update_title');
-    expect(prompt).toContain('meaningfully shifted');
-    // The "required this turn" block is only for the placeholder
-    // case; non-placeholder turns must not carry it - on either
-    // channel.
-    expect(prompt).not.toContain('Required this turn');
+    const meta = metadataMessage(seen);
+    expect(meta).toContain('Python decorators');
+    expect(meta).toContain('update_title');
+    expect(meta).toContain('meaningfully shifted');
+    // Soft hint, not the loud placeholder nag.
+    expect(meta).not.toContain('placeholder');
     const userText = lastUserContent(seen);
+    expect(userText).toBe('follow up question');
     expect(userText).not.toContain('<system_reminder>');
-    expect(userText).not.toContain('Required this turn');
   });
 
   describe('intuition wiring', () => {

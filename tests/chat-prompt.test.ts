@@ -220,28 +220,18 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toMatch(/enabled:\s*\[/);
   });
 
-  it('carries the user-message boundary rule and platform-injection warning', () => {
-    // Reference material (the `<datetime>` tag every turn, and the
-    // optional `<system_reminder>` directive on placeholder-title
-    // turns) rides outside the `<user_message>` fence chat-loop.ts
-    // wraps the current user turn in. This prompt block is the paired
-    // instruction telling the model what to do with those tags so they
-    // don't get mistaken for human-authored words. URL auto-scraping
-    // used to ride the same channel; the scraping flag is now
-    // caller-gated and the main loop never sets it.
+  it('no longer advertises the user_message fence, datetime tag, or system_reminder channels', () => {
+    // The wire-shape refactor retired all three: the user message now
+    // rides bare (role:user is the boundary), datetime moved into a
+    // prose paragraph in the per-turn metadata system message
+    // (chat-loop.ts), and the placeholder/topic-drift title nudges
+    // moved into that same metadata system message. Keeping any of
+    // the old framing in the baseline would teach the model to look
+    // for tags it will never see.
     const prompt = buildSystemPrompt();
-    expect(prompt).toContain('<user_message>');
-    expect(prompt).toContain('</user_message>');
-    // Behavior beats we don't want to lose on a future phrasing edit:
-    // the explicit "not a human-authored instruction" frame and the
-    // "instructions come from this system message" anchor that tells
-    // the model which source of framing actually binds it.
-    // \s+ throughout - the prompt assembles from hard-wrapped template
-    // literals, so phrasing tweaks that reflow a wrap can split phrases
-    // across a newline. The semantic beats are what matters; the regex
-    // shouldn't churn just because a paragraph rewrap shifted.
-    expect(prompt).toMatch(/not\s+a\s+human-authored/i);
-    expect(prompt).toMatch(/instructions\s+come\s+from\s+this\s+system\s+message/i);
+    expect(prompt).not.toContain('<user_message>');
+    expect(prompt).not.toContain('<datetime ');
+    expect(prompt).not.toContain('<system_reminder>');
   });
 
   it('does not advertise URL auto-scraping as an in-turn injection path', () => {

@@ -20,7 +20,12 @@
  *     of the formation worker enriches it later; this call is fast
  *     and LLM-free.
  *
- * Plus `formatPriming` which is pure (no IO) and lives in `./format`.
+ * Plus `formatPrimingThinks` which is pure (no IO) and lives in
+ * `./format`. It projects the compound summary + situational fire
+ * into two `<think>` block bodies (one for each signal); the chat-loop
+ * wraps the non-null bodies in `<think>` tags and pushes them as
+ * separate assistant messages alongside the context-recall and
+ * intuition synthetic turns.
  *
  * The module is deliberately small: anything more complex (the
  * formation pipeline, the agent prompts, the worker loop) lives
@@ -41,7 +46,8 @@ import { createLogger } from '../logger.svelte';
 const log = createLogger('samskara');
 
 export type { FireResult } from './types';
-export { formatPriming } from './format';
+export { formatPrimingThinks } from './format';
+export type { PrimingThinks } from './format';
 
 /**
  * Read the cached compound summary. Returns null when the row is

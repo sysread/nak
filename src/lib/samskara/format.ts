@@ -1,104 +1,146 @@
 /**
- * Priming-block formatter for the samskara feature.
+ * Samskara priming formatter.
  *
- * Two simultaneous signals get assembled into the per-turn appendix
- * the chat loop appends to the system prompt:
+ * Two signals get rendered as two separate assistant `<think>` block
+ * bodies that the chat-loop pushes into history after the user turn
+ * (alongside the context-recall and intuition `<think>` blocks):
  *
- *   1. The compound prose summary (always-on across turns) — a few
- *      hundred tokens of "current best model of the user." Rendered
- *      as a leading paragraph.
- *   2. The situational fire from this specific turn — top-k samskaras
+ *   1. The compound prose summary - "current best model of the user."
+ *      Rendered as the body of one `<think>` block. Always-on across
+ *      turns; missing on cold-start threads where the formation
+ *      worker hasn't run yet.
+ *   2. The situational fire from this specific turn - top-k samskaras
  *      ranked by cosine^1.3 * sqrt(health * confidence) * sample-size
- *      bonus. Rendered as a bullet list, weakest-but-relevant ones
- *      rendered in shortened form when budget tightens so the long
- *      tail stays present without dominating.
+ *      bonus. Rendered as a first-person bulleted observation list
+ *      with parenthetical confidence hedges instead of explicit score
+ *      prefixes, so the bullets read as the assistant's own
+ *      recollection rather than a scored telemetry dump.
  *
- * Either signal may be empty (cold start has neither; a turn where
- * cosine fire returned nothing has only the compound). An entirely
- * empty input produces an empty string and the chat-loop appends
- * nothing.
+ * Either signal may be null - cold-start has neither, a turn where
+ * fire returned nothing has only the compound. The chat-loop skips
+ * the corresponding `<think>` push when a body is null.
  *
- * The block is opaque to the user — it lives in the system prompt and
- * never surfaces in the rendered conversation. It is also opaque to
- * the chat model in the sense that it's framed as plain context, not
- * as flagged "this might be wrong" caveats. The user explicitly chose
- * absorption over disclaimer in the design discussion.
+ * The blocks are opaque to the user: they ride on the wire as
+ * synthetic assistant turns and never surface in the rendered
+ * conversation. They are also opaque to the chat model in the sense
+ * that they're framed as the assistant's own prior thought, not as
+ * flagged caveats - the user explicitly chose absorption over
+ * disclaimer in the design discussion.
  */
-import type { FireResult, PrimingInput } from './types';
+import type { FireResult, FiredSamskara, PrimingInput } from './types';
 import { PRIMING_CHAR_BUDGET } from './types';
 
 /**
- * Render a fire row's bullet line. Score is shown to two decimals so
- * the model has a sense of "this one fired strong vs this one was
- * marginal" without a precision war. Inner voice is prepended in
- * parens when present and short enough; truncated aggressively past
- * 80 chars (it's secondary signal at best, and a long inner-voice
- * fragment crowds the main prediction).
+ * Render a parenthetical confidence hedge keyed off the fire score
+ * (cosine^1.3 * sqrt(health * confidence) * sample-size bonus).
+ * Score lives roughly in [0, ~1.5] with a long tail past 1 - the
+ * bands below were picked so a "confident" hedge corresponds to the
+ * top quartile in practice, not the absolute scale top.
+ *
+ * Each hedge leads with a first-person pronoun so the bullet reads
+ * as the assistant's own observation about the user rather than a
+ * scored telemetry row.
  */
-function renderFireBullet(
-  fire: FireResult['fired'][number],
-  abbreviated: boolean
-): string {
-  const score = fire.score.toFixed(2);
-  if (abbreviated) {
-    // Abbreviated form: just score + prediction, no inner voice. Used
-    // for long-tail entries when the budget is tight.
-    return `- [${score}] ${fire.prediction}`;
-  }
-  const voice =
-    fire.innerVoice && fire.innerVoice.length > 0 && fire.innerVoice.length <= 80
-      ? ` (${fire.innerVoice})`
-      : '';
-  return `- [${score}] ${fire.prediction}${voice}`;
+function hedgeFor(score: number): string {
+  if (score >= 1.0) return "I'm pretty sure";
+  if (score >= 0.7) return "fairly confident";
+  if (score >= 0.45) return "I think";
+  return "just a hunch";
 }
 
 /**
- * Build the priming block. Returns the empty string when there's
- * nothing to emit so the chat-loop knows to skip the appendix
- * entirely.
- *
- * Budget enforcement is two-stage. First pass renders every fire
- * row in full form; if total length is over budget, abbreviated
- * form is used for all rows except the top three. The compound
- * summary is never trimmed — if it alone exceeds budget, we render
- * it in full and emit just the top fire, on the theory that the
- * compound is the higher-signal part and a recently-regenerated
- * summary deserves to land intact.
+ * Render a fire row as one bullet. Drops the explicit score prefix
+ * the appendix-era format used (`- [0.82] ...`) in favor of a
+ * parenthetical confidence hedge after the prediction. Inner voice
+ * still rides in parens when present and short enough; truncated
+ * aggressively past 80 chars (it's secondary signal and a long inner
+ * fragment crowds the prediction).
  */
-export function formatPriming(input: PrimingInput): string {
-  const sections: string[] = [];
+function renderFireBullet(fire: FiredSamskara, abbreviated: boolean): string {
+  const hedge = hedgeFor(fire.score);
+  if (abbreviated) {
+    return `- ${fire.prediction} (${hedge})`;
+  }
+  const voice =
+    fire.innerVoice && fire.innerVoice.length > 0 && fire.innerVoice.length <= 80
+      ? ` - inner voice: "${fire.innerVoice}"`
+      : '';
+  return `- ${fire.prediction} (${hedge})${voice}`;
+}
+
+/**
+ * Build the bullet body for the fire `<think>` block. Returns null
+ * when there's nothing to render (no fire result, or a result with an
+ * empty `fired` array). Budget enforcement is two-stage and mirrors
+ * the prior `formatPriming`: full-form rows first, then abbreviate
+ * everything past the top three when over budget, then drop the
+ * lowest-scoring tail entries one at a time until the body fits.
+ */
+function buildFireBody(fire: FireResult | null): string | null {
+  const fired = fire?.fired ?? [];
+  if (fired.length === 0) return null;
+
+  let bullets = fired.map((f) => renderFireBullet(f, false));
+  let body = bullets.join('\n');
+  if (body.length > PRIMING_CHAR_BUDGET) {
+    bullets = fired.map((f, i) => renderFireBullet(f, i >= 3));
+    body = bullets.join('\n');
+  }
+  while (bullets.length > 1 && body.length > PRIMING_CHAR_BUDGET) {
+    bullets.pop();
+    body = bullets.join('\n');
+  }
+  return body;
+}
+
+/**
+ * Output of {@link formatPrimingThinks}. Each field is the inner
+ * content of its corresponding `<think>` block (no `<think>` tags)
+ * or null when the chat-loop should skip pushing that block this
+ * turn. The chat-loop wraps the non-null bodies with `<think>` /
+ * `</think>` at push time, same as it does for context-recall and
+ * intuition.
+ */
+export interface PrimingThinks {
+  /** Body of the compound-summary `<think>` block, or null. */
+  compound: string | null;
+  /**
+   * Body of the situational-fire `<think>` block, or null. Includes
+   * its own leading orientation sentence so the bullets read in
+   * voice rather than as a bare list.
+   */
+  fire: string | null;
+}
+
+/**
+ * Project a {@link PrimingInput} into two separate `<think>` block
+ * bodies. Both fields default to null when their respective signals
+ * are absent - the chat-loop treats null as "skip the push" so a
+ * cold-start thread with neither signal produces no samskara
+ * `<think>` blocks at all.
+ *
+ * The compound body is whitespace-trimmed but otherwise pass-through:
+ * the formation worker emits prose intended to read in first person,
+ * and any framing belongs in the prompt, not here. The fire body
+ * carries a short orientation sentence so the bullets read as
+ * observations the assistant is recalling rather than a bare list.
+ */
+export function formatPrimingThinks(input: PrimingInput): PrimingThinks {
   const summary = input.compoundSummary?.trim() ?? '';
-  if (summary.length > 0) {
-    sections.push('## Calibration', summary);
+  const compound = summary.length > 0 ? summary : null;
+
+  const fireBody = buildFireBody(input.fire ?? null);
+  let fire: string | null = null;
+  if (fireBody !== null) {
+    fire = [
+      "Some things I've come to expect about this user, given the shape of",
+      'this turn:',
+      '',
+      fireBody,
+    ].join('\n');
   }
 
-  const fired = input.fire?.fired ?? [];
-  if (fired.length > 0) {
-    // Full form first; downgrade to abbreviated if we're over budget.
-    let bullets = fired.map((f) => renderFireBullet(f, false));
-    let body = bullets.join('\n');
-    const overheadEstimate = sections.join('\n\n').length + 40;
-    if (overheadEstimate + body.length > PRIMING_CHAR_BUDGET) {
-      // Keep the top three in full form; abbreviate the rest. This
-      // preserves headline detail on what mattered most while
-      // leaving the long-tail signals visible to the model.
-      bullets = fired.map((f, i) => renderFireBullet(f, i >= 3));
-      body = bullets.join('\n');
-    }
-    // If still over budget, drop the lowest-scoring tail entries one
-    // by one until we fit. The fire list is already sorted by score
-    // descending so .pop() removes the weakest.
-    while (
-      bullets.length > 1 &&
-      overheadEstimate + body.length > PRIMING_CHAR_BUDGET
-    ) {
-      bullets.pop();
-      body = bullets.join('\n');
-    }
-    sections.push('## Fired this turn', body);
-  }
-
-  return sections.join('\n\n');
+  return { compound, fire };
 }
 
 /**

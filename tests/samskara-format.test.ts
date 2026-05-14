@@ -4,7 +4,7 @@
  * structs the helpers expect.
  */
 import { describe, it, expect } from 'vitest';
-import { formatPriming, topKForCorpusSize } from '../src/lib/samskara/format';
+import { formatPrimingThinks, topKForCorpusSize } from '../src/lib/samskara/format';
 import { K_BASE, PRIMING_CHAR_BUDGET } from '../src/lib/samskara/types';
 import type { FiredSamskara } from '../src/lib/samskara/types';
 
@@ -20,82 +20,123 @@ function fakeFire(score: number, prediction: string, voice?: string): FiredSamsk
   };
 }
 
-describe('formatPriming', () => {
-  it('returns empty string when there is nothing to inject', () => {
-    expect(formatPriming({ compoundSummary: null, fire: null })).toBe('');
-    expect(formatPriming({ compoundSummary: '', fire: null })).toBe('');
+describe('formatPrimingThinks', () => {
+  it('returns both fields null when there is nothing to inject', () => {
+    expect(formatPrimingThinks({ compoundSummary: null, fire: null })).toEqual({
+      compound: null,
+      fire: null,
+    });
+    expect(formatPrimingThinks({ compoundSummary: '', fire: null })).toEqual({
+      compound: null,
+      fire: null,
+    });
     expect(
-      formatPriming({ compoundSummary: '   ', fire: { cohortId: 'c', fired: [] } })
-    ).toBe('');
+      formatPrimingThinks({ compoundSummary: '   ', fire: { cohortId: 'c', fired: [] } }),
+    ).toEqual({ compound: null, fire: null });
   });
 
-  it('renders only the calibration block when fire is empty', () => {
-    const out = formatPriming({
+  it('returns just the compound body when fire is empty', () => {
+    const out = formatPrimingThinks({
       compoundSummary: 'The user prefers terse replies.',
       fire: null,
     });
-    expect(out).toContain('## Calibration');
-    expect(out).toContain('The user prefers terse replies.');
-    expect(out).not.toContain('## Fired this turn');
+    expect(out.compound).toBe('The user prefers terse replies.');
+    expect(out.fire).toBeNull();
   });
 
-  it('renders only the fire block when there is no compound summary', () => {
-    const out = formatPriming({
+  it('returns just the fire body when there is no compound summary', () => {
+    const out = formatPrimingThinks({
       compoundSummary: null,
-      fire: { cohortId: 'c', fired: [fakeFire(0.5, 'p1')] },
+      fire: { cohortId: 'c', fired: [fakeFire(0.5, 'wants brevity')] },
     });
-    expect(out).not.toContain('## Calibration');
-    expect(out).toContain('## Fired this turn');
-    expect(out).toContain('p1');
+    expect(out.compound).toBeNull();
+    expect(out.fire).not.toBeNull();
+    // The fire body opens with a short orientation sentence so the
+    // bullets read as observations the assistant is recalling.
+    expect(out.fire).toMatch(/come to expect/);
+    expect(out.fire).toContain('- wants brevity');
   });
 
-  it('shows the score with two decimals and includes the inner voice when short', () => {
-    const out = formatPriming({
+  it('keys the parenthetical confidence hedge off the score', () => {
+    // Four score bands map to four hedges. Each hedge leads with a
+    // first-person pronoun or fragment so the bullet reads in voice.
+    const high = formatPrimingThinks({
       compoundSummary: null,
-      fire: { cohortId: 'c', fired: [fakeFire(0.7, 'wants brevity', 'do not pad')] },
+      fire: { cohortId: 'c', fired: [fakeFire(1.1, 'is decisive')] },
     });
-    expect(out).toContain('[0.70]');
-    expect(out).toContain('wants brevity');
-    expect(out).toContain('(do not pad)');
+    expect(high.fire).toContain("(I'm pretty sure)");
+
+    const mid = formatPrimingThinks({
+      compoundSummary: null,
+      fire: { cohortId: 'c', fired: [fakeFire(0.8, 'plans carefully')] },
+    });
+    expect(mid.fire).toContain('(fairly confident)');
+
+    const lower = formatPrimingThinks({
+      compoundSummary: null,
+      fire: { cohortId: 'c', fired: [fakeFire(0.5, 'wants brevity')] },
+    });
+    expect(lower.fire).toContain('(I think)');
+
+    const hunch = formatPrimingThinks({
+      compoundSummary: null,
+      fire: { cohortId: 'c', fired: [fakeFire(0.2, 'might agree')] },
+    });
+    expect(hunch.fire).toContain('(just a hunch)');
   });
 
-  it('drops the inner voice when it would push past the abbreviated boundary', () => {
+  it('quotes the inner voice when it is short, drops it when long', () => {
+    const short = formatPrimingThinks({
+      compoundSummary: null,
+      fire: { cohortId: 'c', fired: [fakeFire(0.5, 'wants brevity', 'do not pad')] },
+    });
+    expect(short.fire).toContain('inner voice: "do not pad"');
+
     const longVoice = 'x'.repeat(120);
-    const out = formatPriming({
+    const long = formatPrimingThinks({
       compoundSummary: null,
       fire: { cohortId: 'c', fired: [fakeFire(0.5, 'p', longVoice)] },
     });
-    expect(out).not.toContain(longVoice);
+    expect(long.fire).not.toContain(longVoice);
+    expect(long.fire).not.toContain('inner voice:');
   });
 
   it('abbreviates long-tail entries when over the char budget', () => {
     // Build many fires with long predictions so the unabbreviated form
     // exceeds PRIMING_CHAR_BUDGET. Top three should still carry the
-    // inner_voice; the rest should be the abbreviated `[score] text` form.
+    // inner voice; the rest should be the abbreviated form (no inner
+    // voice clause).
     const longPred = 'a long prediction that takes a lot of room'.repeat(8);
     const fires = Array.from({ length: 12 }, (_, i) =>
-      fakeFire(1 - i * 0.05, longPred, 'voice')
+      fakeFire(1 - i * 0.05, longPred, 'voice'),
     );
-    const out = formatPriming({
+    const out = formatPrimingThinks({
       compoundSummary: 'a short calibration',
       fire: { cohortId: 'c', fired: fires },
     });
-    // Even abbreviated, the formatter is allowed to be over-budget when
-    // the compound block itself dominates - but it should at least
-    // attempt the abbreviation pass. Check that at least one row uses
-    // the abbreviated shape (no parens for inner voice).
-    const lines = out.split('\n').filter((l) => l.startsWith('- ['));
-    const hasAbbreviated = lines.some((l) => !l.includes('('));
+    expect(out.fire).not.toBeNull();
+    // Find lines starting with the bullet marker and check that at
+    // least one row landed in the abbreviated shape (no inner-voice
+    // clause).
+    const lines = out.fire!.split('\n').filter((l) => l.startsWith('- '));
+    const hasAbbreviated = lines.some((l) => !l.includes('inner voice:'));
     expect(hasAbbreviated).toBe(true);
   });
 
   it('drops the lowest-scoring fires when even abbreviation is not enough', () => {
     const longPred = 'x'.repeat(400);
     const fires = Array.from({ length: 20 }, (_, i) =>
-      fakeFire(1 - i * 0.04, longPred)
+      fakeFire(1 - i * 0.04, longPred),
     );
-    const out = formatPriming({ compoundSummary: null, fire: { cohortId: 'c', fired: fires } });
-    expect(out.length).toBeLessThanOrEqual(PRIMING_CHAR_BUDGET + 200);
+    const out = formatPrimingThinks({
+      compoundSummary: null,
+      fire: { cohortId: 'c', fired: fires },
+    });
+    expect(out.fire).not.toBeNull();
+    // The body lives inside an orientation paragraph; the budget
+    // applies to the bullet body itself. Allow a small overhead
+    // tolerance for the orientation lines.
+    expect(out.fire!.length).toBeLessThanOrEqual(PRIMING_CHAR_BUDGET + 300);
   });
 });
 
