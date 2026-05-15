@@ -1594,6 +1594,12 @@
        rather than as a child list. The bullets carry the "list
        item" signal on their own. */
     padding-left: 1rem;
+    /* em (not rem) so each nested level compounds against its
+       parent - L2 is 92% of L1, L3 is 92% of L2, etc. Gives a
+       clear visual hierarchy without per-level rules. The bullet
+       ::before above uses 0.85em, which scales down alongside the
+       text at each level. */
+    font-size: 0.92em;
   }
   .wiki-toc a {
     color: var(--accent, var(--text));
