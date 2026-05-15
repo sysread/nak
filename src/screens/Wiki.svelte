@@ -1554,23 +1554,48 @@
     letter-spacing: 0.05em;
   }
   /* Top-level list flush with the heading; nested lists indent to
-     visualise the outline. The CSS variable lets us tighten the
-     indent slightly under each branch without re-declaring values. */
+     visualise the outline. Bullets are drawn via ::before so we
+     control the gutter independently of the browser's list-style
+     default - on mobile the limited width makes the difference
+     between a 1rem and a 1.5rem left gutter material. */
   .wiki-toc ul {
     list-style: none;
     margin: 0;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
+    gap: 0.35rem;
+  }
+  /* Each row carries a small bullet at the left edge. The hanging
+     indent (padding-left + absolutely-positioned bullet at left:0)
+     means wrapped lines align with the link text, not under the
+     bullet - without that, a wrapped entry on a narrow viewport
+     reads as a paragraph rather than as a list item. */
+  .wiki-toc li {
+    position: relative;
+    padding-left: 0.85rem;
+  }
+  .wiki-toc li::before {
+    content: '\2022'; /* U+2022 BULLET */
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: var(--muted);
+    line-height: 1.4;
+    /* The bullet glyph reads slightly heavy at body font-size;
+       trim it down so it's a marker, not a competing focal point. */
+    font-size: 0.85em;
   }
   .wiki-toc ul ul {
-    margin-top: 0.15rem;
-    padding-left: 1.1rem;
+    margin-top: 0.35rem;
+    /* Tighter nested indent on mobile - 0.85rem is enough to read
+       as "child of the above" without burning horizontal space at
+       deeper levels. */
+    padding-left: 0.85rem;
     /* Faint guide line under each nested branch so the visual outline
        reads even when entries wrap to two lines. */
     border-left: 1px solid var(--border);
-    margin-left: 0.4rem;
+    margin-left: 0.35rem;
     padding-top: 0.05rem;
   }
   .wiki-toc a {
