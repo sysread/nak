@@ -23,6 +23,7 @@
   import Markdown from '../components/Markdown.svelte';
   import Scanner from '../components/Scanner.svelte';
   import { hasDoc, isExternalHref, loadDoc, resolveDocPath } from '$lib/docs';
+  import { uniqueSlug } from '$lib/markdown';
   import { route, navigate } from '$lib/routing.svelte';
 
   interface Props {
@@ -143,28 +144,6 @@
       contentEl.scrollTo({ top: 0, left: 0 });
     }
   });
-
-  // Slugify heading text the same way most markdown renderers do: lower-
-  // case, collapse non-word runs to single dashes, strip leading/trailing
-  // dashes. Empty output falls back to `section` so headings with only
-  // punctuation still get a stable id.
-  function slugify(text: string): string {
-    return text
-      .toLowerCase()
-      .trim()
-      .replace(/[^\w\s-]+/g, '')
-      .replace(/[\s_-]+/g, '-')
-      .replace(/^-+|-+$/g, '');
-  }
-
-  function uniqueSlug(text: string, used: Set<string>): string {
-    const base = slugify(text) || 'section';
-    let slug = base;
-    let n = 2;
-    while (used.has(slug)) slug = `${base}-${n++}`;
-    used.add(slug);
-    return slug;
-  }
 
   function navigateToDoc(path: string, hash: string): void {
     // Clicking a link to the page you're already on should just

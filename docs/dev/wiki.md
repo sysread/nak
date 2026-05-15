@@ -208,6 +208,17 @@ UI:
   in the wiki changelog after the mutation. The "ask agent to
   update" preview surfaces the agent's `reason` field as the
   changelog entry it would write; Accept passes it through.
+  Renders a nested **table of contents** at the top of the
+  article (between the title header and the body) for articles
+  with two or more Markdown headings. ToC entries link to
+  `#slug` anchors; a post-render effect walks `.wiki-content
+  h1..h6` and assigns matching ids using `uniqueSlug` from
+  `$lib/markdown` so the anchors resolve. Clicks on `#anchor`
+  hrefs are intercepted by `onArticleClick` and smooth-scroll
+  the heading into view within the `.wiki-body` scroll
+  container instead of letting the browser append the fragment
+  to the page URL. Heading extraction shares the slug helpers
+  with `Help.svelte` (see `$lib/markdown` § Heading slugger).
 - `src/screens/WikiChangelog.svelte` - the changelog modal
   itself. Cursor-paged list (`listWikiChangelog`); kind chips
   (Added/Edited/Deleted), per-entry article link when the

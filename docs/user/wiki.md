@@ -119,6 +119,19 @@ Saving an article nulls its embedding - the background embedding
 worker will re-compute on its next poll (within ~30 seconds). Search
 falls back to substring matches in the meantime.
 
+## Table of contents
+
+Articles with two or more Markdown headings get a **Contents** outline
+at the top of the panel, just below the title. Each entry is a link
+to its heading in the body, with nested headings indented under their
+parent. Clicking an entry smooth-scrolls the heading into view without
+disturbing the surrounding chrome.
+
+The outline is built from the article's own Markdown headings (`#`,
+`##`, etc.) so it stays in sync with edits automatically - rewrite a
+heading and the entry updates the next render. Articles with no
+headings, or with only a single heading, skip the section entirely.
+
 ## Deleting
 
 Click **Delete** on the open article. A confirmation strip appears

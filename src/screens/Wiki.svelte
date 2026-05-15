@@ -36,6 +36,7 @@
     WikiArticleSource,
     WikiArticleRelated,
   } from '$lib/supabase';
+  import { extractHeadings, uniqueSlug, type HeadingEntry } from '$lib/markdown';
   import Markdown from '../components/Markdown.svelte';
 
   interface Props {
@@ -715,6 +716,13 @@
    * routed keys in src/lib/routing.svelte.ts (e.g. `?wiki_article_id=...`,
    * `?recipe=...`).
    *
+   * Also intercepts `#anchor` clicks - these come from the in-article
+   * ToC at the top of the panel or from any `[link](#heading)` the
+   * agents might emit. Default browser behaviour would append the
+   * fragment to the page URL and scroll the whole window; we want a
+   * smooth scroll WITHIN the .wiki-body scroll container instead, so
+   * the surrounding chrome stays put.
+   *
    * Without interception the browser does a full same-origin
    * navigation when the user clicks one of these links - which
    * works functionally (the fresh load reads the new search params
@@ -722,10 +730,9 @@
    * preventDefaults the click, parses the href's search params,
    * and calls `navigate()` for a soft in-app navigation instead.
    *
-   * Only `?...` hrefs are intercepted. Absolute / external links
-   * still flow through the markdown component's link-hardening
-   * (target="_blank" etc.). Anchors without an href (icons, etc.)
-   * are ignored.
+   * Absolute / external links still flow through the markdown
+   * component's link-hardening (target="_blank" etc.). Anchors without
+   * an href (icons, etc.) are ignored.
    */
   function onArticleClick(event: MouseEvent): void {
     const target = event.target as HTMLElement | null;
@@ -733,10 +740,26 @@
     const anchor = target.closest('a') as HTMLAnchorElement | null;
     if (!anchor) return;
     const href = anchor.getAttribute('href');
-    if (!href || !href.startsWith('?')) return;
+    if (!href) return;
     if (event.defaultPrevented) return;
     if (event.button !== 0) return; // let middle-click open a new tab
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+    if (href.startsWith('#')) {
+      // ToC click or in-article hash link. Resolve against the
+      // currently-rendered article body (`articleEl`); the body lives
+      // inside a scroll container so .scrollIntoView is enough to
+      // bring the heading into view without scrolling the page.
+      const id = href.slice(1);
+      if (!id || !articleEl) return;
+      const heading = articleEl.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
+      if (!heading) return;
+      event.preventDefault();
+      heading.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      return;
+    }
+
+    if (!href.startsWith('?')) return;
     event.preventDefault();
     const params = new URLSearchParams(href);
     // Build the navigate patch from whichever routed keys appear.
@@ -757,6 +780,84 @@
     if (Object.keys(patch).length === 0) return;
     navigate(patch);
   }
+
+  // --- Table of contents ------------------------------------------------
+  //
+  // Articles get a ToC at the top of the panel listing the headings in
+  // document order, nested by level. Two pieces wire it up:
+  //
+  //   1. `tocItems` - a nested tree built off `extractHeadings(content)`.
+  //      Same slug algorithm as the post-render id assignment below, so
+  //      each `<a href="#slug">` in the ToC always matches an `<h*>`
+  //      in the rendered body.
+  //   2. The post-render effect on `articleEl` walks `.md h1..h6` and
+  //      assigns those same slugs as `id` attributes. The renderer
+  //      itself does not emit ids (see markdown.ts § Heading slugger
+  //      for the rationale).
+  //
+  // The ToC hides for short articles (<2 headings) - a one-item outline
+  // is noise.
+
+  interface TocNode extends HeadingEntry {
+    children: TocNode[];
+  }
+
+  /**
+   * Stack-based flat-to-tree fold. Each new heading hangs off the
+   * nearest preceding heading with a strictly lower level; jumps in
+   * the document outline (H1 -> H3 directly, no H2 between) attach
+   * to whichever ancestor is closest rather than synthesising a
+   * placeholder, which keeps the UI honest about the source.
+   */
+  function nestHeadings(items: HeadingEntry[]): TocNode[] {
+    const root: TocNode = { level: 0, text: '', slug: '', children: [] };
+    const stack: TocNode[] = [root];
+    for (const h of items) {
+      while (stack.length > 1 && stack[stack.length - 1].level >= h.level) {
+        stack.pop();
+      }
+      const node: TocNode = { ...h, children: [] };
+      stack[stack.length - 1].children.push(node);
+      stack.push(node);
+    }
+    return root.children;
+  }
+
+  const tocHeadings = $derived<HeadingEntry[]>(
+    selectedArticle ? extractHeadings(selectedArticle.content) : [],
+  );
+  // Nested for rendering; flat count drives the >=2 visibility gate.
+  // A single-entry outline is more visual chrome than navigation.
+  const tocItems = $derived<TocNode[]>(nestHeadings(tocHeadings));
+
+  // `bind:this` target for the rendered article. Used by:
+  //   - the post-render effect below, to attach heading ids;
+  //   - `onArticleClick`, to resolve `#anchor` clicks back to the
+  //     matching heading inside this same article.
+  let articleEl: HTMLElement | undefined = $state();
+
+  // Post-render: assign ids to the rendered headings using the same
+  // slug algorithm the ToC used so each `#slug` link resolves. Runs
+  // after `{@html}` commits - `articleEl` is bound by the <article>
+  // element below, which only mounts when an article is selected.
+  $effect(() => {
+    if (!selectedArticle) return;
+    // Track content so a manual-update accept (which patches the row
+    // in place) re-runs this effect with the new headings.
+    void selectedArticle.content;
+    if (!articleEl) return;
+    const used = new Set<string>();
+    for (const h of articleEl.querySelectorAll<HTMLElement>(
+      '.wiki-content h1, .wiki-content h2, .wiki-content h3, ' +
+      '.wiki-content h4, .wiki-content h5, .wiki-content h6',
+    )) {
+      // Match the cleaning step in extractHeadings so slug lookup
+      // works for headings that carried inline `*` / `_` / `` ` ``
+      // markers in the source.
+      const text = (h.textContent ?? '').replace(/[*_`~]/g, '').trim();
+      h.id = uniqueSlug(text, used);
+    }
+  });
 </script>
 
 <section class="wiki-panel" aria-label="Wiki">
@@ -1115,10 +1216,22 @@
           chat regenerate flow (.msg.disabled / .msg.fading-out) so
           the language reads consistently across surfaces.
         -->
+        <!--
+          The onclick here is delegation only: it catches anchor clicks
+          inside the article so `#slug` ToC links and `?cid=` source
+          links can be intercepted for in-app navigation. The article
+          element itself is never the interactive target; the actual
+          interactive surfaces inside (buttons, anchors) carry their
+          own keyboard handling.
+        -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
         <article
+          bind:this={articleEl}
           class="wiki-article"
           class:regen-target={manualTargetId === a.id}
           class:fading-out={fadingArticleId === a.id}
+          onclick={onArticleClick}
         >
           <header class="wiki-header">
             <h1 class="wiki-title">{a.title}</h1>
@@ -1132,11 +1245,22 @@
               </button>
             </div>
           </header>
-          <div
-            class="wiki-content"
-            role="presentation"
-            onclick={onArticleClick}
-          >
+          {#if tocHeadings.length >= 2}
+            <!--
+              Table of contents. Rendered before the article body so the
+              reader sees the outline first; clicking an entry scrolls
+              the corresponding heading into view within .wiki-body via
+              onArticleClick (which sits on the surrounding <article>
+              and intercepts both `#anchor` and `?cid=` links).
+              Headings nest by level via nestHeadings(); a flat-with-
+              one-heading article skips the section entirely.
+            -->
+            <nav class="wiki-toc" aria-label="Table of contents">
+              <h2>Contents</h2>
+              {@render tocList(tocItems)}
+            </nav>
+          {/if}
+          <div class="wiki-content">
             <Markdown content={a.content} />
           </div>
 
@@ -1233,6 +1357,27 @@
     {/if}
   </div>
 </section>
+
+<!--
+  Recursive snippet for the ToC. Svelte 5 snippets carry their own
+  scope and can self-reference cleanly, so a nested outline (H2 with
+  H3 children, etc.) renders as nested <ul>s without a separate
+  component. Anchors carry `href="#slug"`; the click handler on the
+  surrounding <article> intercepts and smooth-scrolls within the
+  body so the surrounding chrome stays put.
+-->
+{#snippet tocList(items: TocNode[])}
+  <ul>
+    {#each items as item (item.slug)}
+      <li>
+        <a href="#{item.slug}">{item.text}</a>
+        {#if item.children.length > 0}
+          {@render tocList(item.children)}
+        {/if}
+      </li>
+    {/each}
+  </ul>
+{/snippet}
 
 <style>
   .wiki-panel {
@@ -1388,5 +1533,53 @@
   .wiki-link-gone {
     color: var(--muted);
     font-style: italic;
+  }
+
+  /* Article ToC. Sits between the title header and the body. Shares
+     the small-uppercase-label visual contract with Sources / See also
+     so the three article sub-sections read as a family. */
+  .wiki-toc {
+    margin: 0 0 1.5rem 0;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--bg-2);
+  }
+  .wiki-toc h2 {
+    margin: 0 0 0.4rem 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  /* Top-level list flush with the heading; nested lists indent to
+     visualise the outline. The CSS variable lets us tighten the
+     indent slightly under each branch without re-declaring values. */
+  .wiki-toc ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .wiki-toc ul ul {
+    margin-top: 0.15rem;
+    padding-left: 1.1rem;
+    /* Faint guide line under each nested branch so the visual outline
+       reads even when entries wrap to two lines. */
+    border-left: 1px solid var(--border);
+    margin-left: 0.4rem;
+    padding-top: 0.05rem;
+  }
+  .wiki-toc a {
+    color: var(--accent, var(--text));
+    text-decoration: none;
+    line-height: 1.4;
+  }
+  .wiki-toc a:hover,
+  .wiki-toc a:focus-visible {
+    text-decoration: underline;
   }
 </style>
