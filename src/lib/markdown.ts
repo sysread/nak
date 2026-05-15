@@ -393,3 +393,94 @@ function escapeHtml(s: string): string {
 function escapeAttr(s: string): string {
   return s.replace(/[^a-zA-Z0-9_\-+]/g, '');
 }
+
+// ---------------------------------------------------------------------------
+// Heading slugger
+// ---------------------------------------------------------------------------
+//
+// Used by surfaces that want anchor IDs on rendered headings - currently
+// the Help modal (in-doc `#hash` links) and the Wiki article view (ToC at
+// the top of each article). The renderer itself does NOT emit `id`
+// attributes; the consumer post-processes the DOM after `{@html}` commits.
+//
+// Two reasons for that split: (1) DOMPurify's ALLOWED_ATTR list above
+// would have to grow to include `id`, which broadens the surface for any
+// model-emitted raw HTML to plant arbitrary ids; (2) producing stable,
+// collision-free slugs needs per-render state that doesn't compose
+// cleanly with marked's stateless renderer overrides.
+//
+// `slugify` and `uniqueSlug` together produce the same ids the post-
+// render effect in Help.svelte / Wiki.svelte assigns to actual <h*>
+// elements, so a ToC computed off `extractHeadings` lines up with the
+// rendered DOM byte-for-byte.
+
+/**
+ * Lower-case, collapse non-word runs to single dashes, strip leading /
+ * trailing dashes. Matches the convention most markdown renderers
+ * (GitHub, GitLab) use. Empty output falls back to `section` so
+ * headings consisting only of punctuation still get a stable id.
+ */
+export function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]+/g, '')
+    .replace(/[\s_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Slug for `text` with `-2`, `-3`, ... suffixes appended on collision.
+ * Mutates `used` so consecutive calls within one render coordinate.
+ */
+export function uniqueSlug(text: string, used: Set<string>): string {
+  const base = slugify(text) || 'section';
+  let slug = base;
+  let n = 2;
+  while (used.has(slug)) slug = `${base}-${n++}`;
+  used.add(slug);
+  return slug;
+}
+
+export interface HeadingEntry {
+  /** 1..6 - matches the `<h*>` level marked will emit. */
+  level: number;
+  /** Display text. Markdown formatting characters are stripped. */
+  text: string;
+  /** Slug produced by `uniqueSlug` in document order. */
+  slug: string;
+}
+
+/**
+ * Extract top-level ATX / Setext headings from a markdown source. Walks
+ * marked's token stream so headings nested inside lists / blockquotes
+ * (which marked tokenises as paragraphs, not headings) are correctly
+ * skipped. The returned list is in document order with slugs that match
+ * what `uniqueSlug` would assign on a fresh `used` set - so the post-
+ * render effect that walks `.md h1..h6` and assigns ids using the same
+ * algorithm produces the same id sequence.
+ */
+export function extractHeadings(content: string): HeadingEntry[] {
+  if (typeof content !== 'string' || content.length === 0) return [];
+  // Same trim as renderMarkdown above - keep heading detection aligned
+  // with what actually gets rendered.
+  const tokens = marked.lexer(content.trim());
+  const used = new Set<string>();
+  const out: HeadingEntry[] = [];
+  for (const tok of tokens) {
+    if (tok.type !== 'heading') continue;
+    const h = tok as Tokens.Heading;
+    // `tok.text` preserves the raw source including inline markdown
+    // chars (`**bold**`, `` `code` ``, etc.). Strip the formatting
+    // characters so the ToC reads as plain prose. Slug generation
+    // runs on the same cleaned string so the anchor target matches
+    // what a manual `#slug` link to that heading would produce.
+    const text = h.text.replace(/[*_`~]/g, '').trim();
+    out.push({
+      level: h.depth,
+      text,
+      slug: uniqueSlug(text, used),
+    });
+  }
+  return out;
+}

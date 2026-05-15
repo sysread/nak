@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { renderMarkdown, prewarmHighlight, prewarmKatex } from '../src/lib/markdown';
+import {
+  extractHeadings,
+  renderMarkdown,
+  prewarmHighlight,
+  prewarmKatex,
+  slugify,
+  uniqueSlug,
+} from '../src/lib/markdown';
 import { canLoad, ensureLanguage, isSupported } from '../src/lib/highlight';
 
 // `markdown.ts` no longer statically imports `./highlight` or
@@ -273,5 +280,75 @@ describe('renderMarkdown — dynamic language loading', () => {
 
   it('ensureLanguage for a truly unknown language resolves to false', async () => {
     expect(await ensureLanguage('not-a-real-language-xyz')).toBe(false);
+  });
+});
+
+describe('slugify / uniqueSlug', () => {
+  it('lowercases and dashes spaces', () => {
+    expect(slugify('Hello World')).toBe('hello-world');
+  });
+
+  it('strips punctuation and collapses runs', () => {
+    expect(slugify("What's New?!")).toBe('whats-new');
+    expect(slugify('A — B — C')).toBe('a-b-c');
+  });
+
+  it('falls back to "section" for all-punctuation input', () => {
+    // uniqueSlug guards the empty case; slugify itself returns "".
+    expect(slugify('!!!')).toBe('');
+    const used = new Set<string>();
+    expect(uniqueSlug('!!!', used)).toBe('section');
+  });
+
+  it('appends -2, -3 on collision', () => {
+    const used = new Set<string>();
+    expect(uniqueSlug('Intro', used)).toBe('intro');
+    expect(uniqueSlug('Intro', used)).toBe('intro-2');
+    expect(uniqueSlug('Intro', used)).toBe('intro-3');
+  });
+});
+
+describe('extractHeadings', () => {
+  it('returns an empty list for empty or non-string input', () => {
+    expect(extractHeadings('')).toEqual([]);
+    expect(extractHeadings(undefined as unknown as string)).toEqual([]);
+  });
+
+  it('captures ATX headings with their levels in document order', () => {
+    const out = extractHeadings('# One\n\n## Two\n\n### Three');
+    expect(out).toEqual([
+      { level: 1, text: 'One', slug: 'one' },
+      { level: 2, text: 'Two', slug: 'two' },
+      { level: 3, text: 'Three', slug: 'three' },
+    ]);
+  });
+
+  it('captures Setext headings (=== and ---) as h1/h2', () => {
+    const out = extractHeadings('Title\n=====\n\nSubtitle\n--------');
+    expect(out).toEqual([
+      { level: 1, text: 'Title', slug: 'title' },
+      { level: 2, text: 'Subtitle', slug: 'subtitle' },
+    ]);
+  });
+
+  it('strips inline markdown formatting from displayed text and slug', () => {
+    const out = extractHeadings('# *Bold* and `code` heading');
+    expect(out).toEqual([
+      { level: 1, text: 'Bold and code heading', slug: 'bold-and-code-heading' },
+    ]);
+  });
+
+  it('appends -2 on collision so duplicate titles still resolve', () => {
+    const out = extractHeadings('## Notes\n\n## Notes');
+    expect(out.map((h) => h.slug)).toEqual(['notes', 'notes-2']);
+  });
+
+  it('ignores headings nested inside lists or blockquotes', () => {
+    // marked tokenises these as paragraphs / blockquote children, not
+    // top-level heading tokens, so they correctly stay out of the ToC.
+    const src = '- # not a heading\n\n> # also not\n\n# Yes';
+    expect(extractHeadings(src)).toEqual([
+      { level: 1, text: 'Yes', slug: 'yes' },
+    ]);
   });
 });
