@@ -46,8 +46,8 @@ File: `src/components/Scanner.svelte`.
 
 K.I.T.T.-style five-dot left-to-right-and-back pulse. Used anywhere
 the app is waiting and has no meaningful progress signal yet — the
-composer's pre-first-token gap, the auto-title round-trip, the
-Help modal's inter-doc transition.
+composer's pre-first-token gap, the conversation-search round-trip,
+the Help modal's inter-doc transition.
 
 ```ts
 interface Props {

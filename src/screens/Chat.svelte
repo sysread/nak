@@ -54,7 +54,6 @@
     type SamskaraSubstrateDiagnosticRow,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
-  import { generateThreadTitle } from '$lib/title-gen';
   import { isRecoveryMessage } from '$lib/conversation-recovery';
   import {
     saveDraft,
@@ -2461,67 +2460,15 @@
     // flight. Best-effort: absence of the lock is not fatal.
     await acquireWakeLock();
 
-    // Opening-turn auto-title pipeline. Fires in parallel with the
-    // main chat-loop against a small fast model (e2ee-gpt-oss-20b-p
-    // via Venice) so the thread picks up a topical title without the
-    // main model carrying a rename nag. The metadata system message
-    // the chat-loop builds is silent about titles on round 1
-    // precisely because this pipeline owns naming there - if both
-    // ran, the model would sometimes call `update_title` first and
-    // sometimes we would, racing each other to write the same row.
-    //
-    // Gated on the same conditions the metadata-message nag would
-    // have used: thread is still on the schema placeholder title, the
-    // user has not manually pinned a title, and there are no prior
-    // assistant rows (the opening turn condition). Mid-thread sends,
-    // already-titled threads, and manually-named threads all skip the
-    // pipeline entirely.
-    //
-    // Best-effort: a network failure / 4xx / abort resolves null and
-    // we log once. The chat-loop's metadata message will fire the
-    // fallback rename nag on the NEXT user turn if the title is
-    // still the placeholder by then, so a failed title-gen just
-    // delays the rename by one round at worst.
-    const isOpeningTurn = !messages.some(
-      (m) => m.role === 'assistant' && !pendingDeleteSet.has(m.id),
-    );
-    const shouldAutoTitle =
-      isOpeningTurn &&
-      freshThread.title === DEFAULT_TITLE &&
-      !freshThread.title_manually_set;
-    if (shouldAutoTitle) {
-      const titleSignal = abortCtl.signal;
-      const threadIdForTitle = ctx.threadId;
-      void generateThreadTitle(app.venice!, ctx.originalText, titleSignal)
-        .then(async (title) => {
-          if (title === null) return;
-          // Re-check the live thread row before writing: between
-          // firing the pipeline and getting its answer back, the
-          // user could have renamed manually, or the main model
-          // could have called `update_title` itself (still possible
-          // in degenerate cases - the metadata message gates the
-          // nag, not the tool's availability). Skip the write if
-          // someone else got there first.
-          const live = findThread(threadIdForTitle);
-          if (!live) return;
-          if (live.title_manually_set) return;
-          if (live.title !== DEFAULT_TITLE) return;
-          try {
-            await app.supabase!.renameThread(threadIdForTitle, title);
-            rebucketThread({
-              ...live,
-              title,
-              updated_at: new Date().toISOString(),
-            });
-          } catch {
-            // Swallowed by design - the renameThread failure surfaces
-            // via the rate-limit / network handlers if it's a real
-            // outage, and a transient write hiccup just leaves the
-            // thread on the placeholder until the chat-loop's
-            // round-2+ nag picks it up.
-          }
-        });
-    }
+    // Auto-titling no longer fires from here. The auto-title worker
+    // (src/lib/agents/auto_title/*) polls the threads table for rows
+    // still on the 'New conversation' placeholder and titles them in
+    // the background, surviving page closes / refreshes that the
+    // old in-Chat fire-and-forget pipeline lost work to. The chat-
+    // loop's metadata message stays silent about titles on round 1
+    // (the worker owns naming there) and falls back to the loud nag
+    // on round 2+ if the worker hasn't landed yet. See
+    // docs/dev/auto-title.md for the full pipeline.
 
     try {
       let loopResult;

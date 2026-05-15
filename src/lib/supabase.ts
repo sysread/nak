@@ -3039,6 +3039,65 @@ export class SupabaseService {
   }
 
   /**
+   * Atomically claim the oldest thread that's still on the placeholder
+   * title and hasn't been manually pinned. Returns null when nothing
+   * qualifies. The returned `userText` is the first user message on the
+   * thread - the worker passes it straight to title-gen without a
+   * follow-up SELECT.
+   */
+  async claimNextThreadForAutoTitle(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{ threadId: string; userText: string } | null> {
+    const { data, error } = await this.client.rpc('claim_next_thread_for_auto_title', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as { thread_id: string; user_text: string }[];
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return { threadId: row.thread_id, userText: row.user_text };
+  }
+
+  /**
+   * Save the generated title IF the row is still eligible AND our claim
+   * is still valid. The RPC's predicate also re-checks that the title
+   * is still the default and the user hasn't manually pinned one mid-
+   * flight, so a manual rename or model-driven update_title beats us
+   * silently rather than clobbering. False return = a race; caller
+   * drops the work and the next cycle simply skips the row.
+   */
+  async saveThreadTitleIfClaimed(
+    threadId: string,
+    holderId: string,
+    title: string
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('save_thread_title_if_claimed', {
+      p_thread_id: threadId,
+      p_holder_id: holderId,
+      p_title: title,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Release the auto-title claim without writing a title. Used when
+   * title-gen returned null (model emitted whitespace, abort fired) so
+   * the row goes back to the queue immediately rather than waiting for
+   * the per-thread claim TTL to expire. Best-effort; the TTL is the
+   * authority on stuck claims.
+   */
+  async clearAutoTitleClaim(threadId: string, holderId: string): Promise<void> {
+    const { error } = await this.client.rpc('clear_auto_title_claim', {
+      p_thread_id: threadId,
+      p_holder_id: holderId,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
    * Claim the next thread awaiting a title+summary embedding. Same
    * shape as `claimNextPendingMemory` but against threads. Rows with
    * the placeholder title AND no summary yet are deliberately skipped

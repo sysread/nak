@@ -325,10 +325,10 @@ interface MetadataSystemMessageOptions {
   titleManuallySet: boolean;
   /**
    * 1-based count of user messages in this thread including the
-   * current one. Title nudges are skipped on round 1 - the background
-   * title-gen pipeline (see `src/lib/title-gen.ts`) handles the
-   * opening turn; the metadata-message nudges only fire from round 2
-   * onward.
+   * current one. Title nudges are skipped on round 1 - the auto-title
+   * worker (see `src/lib/agents/auto_title/`) handles naming there;
+   * the metadata-message nudges only fire from round 2 onward as a
+   * safety net for the case where the worker hasn't polled yet.
    */
   currentUserRound: number;
 }
@@ -345,8 +345,8 @@ interface MetadataSystemMessageOptions {
  *   5. Title nudge, from round 2 onward: the loud placeholder nag
  *      when the title is still the schema default, the soft
  *      topic-drift hint when the title is model-set and not pinned
- *      by the user. Round 1 is silent here - the background title-gen
- *      pipeline owns naming on the opening turn.
+ *      by the user. Round 1 is silent here - the auto-title worker
+ *      owns naming on the opening turn.
  *
  * The chat-loop inserts this message AFTER the user-configured
  * system prompts and BEFORE the user turn, so the model reads it
@@ -397,14 +397,16 @@ function buildMetadataSystemMessage(
     );
   }
 
-  // Title nudges are silent on round 1 - the background title-gen
-  // pipeline (Chat.svelte sends it in parallel with runChatLoop on
-  // the opening turn) handles naming there. From round 2 on, if the
-  // background pipeline never landed (network blip, model timeout)
-  // the loud nag below fires to recover; if a model-set title is
-  // already in place but the topic may have drifted, the soft
-  // drift hint fires instead. Manually-named threads suppress both
-  // nudges - the user committed and we don't clobber that.
+  // Title nudges are silent on round 1 - the auto-title worker
+  // (src/lib/agents/auto_title/*) polls the threads table for rows
+  // still on the placeholder and titles them in the background, so
+  // the model never has to. From round 2 on, if the worker hasn't
+  // landed yet (it may not have polled, or the user is on a brand-
+  // new device that hasn't taken the lease) the loud nag below
+  // fires to recover; if a model-set title is already in place but
+  // the topic may have drifted, the soft drift hint fires instead.
+  // Manually-named threads suppress both nudges - the user
+  // committed and we don't clobber that.
   if (opts.currentUserRound >= 2 && !opts.titleManuallySet) {
     if (opts.threadTitle === DEFAULT_THREAD_TITLE) {
       sections.push(

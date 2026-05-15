@@ -20,11 +20,12 @@ A chat turn goes:
    first, then one `role='tool'` row per call) before looping.
 4. Terminal assistant message (no tool_calls) ends the loop; the
    composer re-enables.
-5. `autoTitle` fires in the background for any thread still
-   carrying the placeholder title — the gate is `title ===
-   DEFAULT_TITLE`, not "first exchange", so a previous failed
-   attempt recovers on the next send. Realtime subscriptions
-   keep the sidebar in sync across tabs and devices.
+5. The auto-title worker (separate background loop, not driven
+   from `Chat.svelte` any more) polls for threads still on the
+   `'New conversation'` placeholder and fills them in. Survives
+   page closes / refreshes that the old in-Chat fire-and-forget
+   trigger lost work to. Realtime subscriptions keep the sidebar
+   in sync across tabs and devices. See [./auto-title.md](./auto-title.md).
 
 ## Files
 
@@ -247,15 +248,18 @@ A chat turn goes:
   realtime echo lands). If you add a second write path that
   doesn't pipe through the same `Message.id`, you get a
   duplicate render.
-- **`autoTitle` uses `UTILITY_TIER`, not the thread's tier.**
-  Titling a thread with the Smart tier would be silly; the fast
-  tier is always adequate for "3-6 words summarizing the first
-  message." Silent failure keeps the placeholder — and because
-  the gate is `title === DEFAULT_TITLE` (not "first exchange"),
-  the next send on that thread retries automatically. The seed
-  passed in is the *opening* user turn, not the current one, so
-  a retry titles the conversation's original topic rather than
-  whatever follow-up triggered the retry.
+- **Auto-titling runs in a background worker, not from
+  `Chat.svelte`.** The worker (`src/lib/agents/auto_title/`)
+  polls the threads table for rows still on the `'New
+  conversation'` placeholder and titles them via the same
+  small fast model the in-Chat trigger used to call. Surviving
+  page closes / refreshes is the whole point - the old in-Chat
+  fire-and-forget call lost work whenever the user closed the
+  tab before the single Venice call resolved. The seed is
+  always the *opening* user message (fetched in the same RPC
+  that claims the row), so a retry titles the conversation's
+  original topic rather than whatever follow-up triggered the
+  retry. See [./auto-title.md](./auto-title.md).
 - **`toggle_toolbox` is the only tool that mutates the loop's
   gated-toolbox set in-flight.** Its return value is inspected
   specifically (`call.function.name === toggleToolbox.name`) to
@@ -321,8 +325,10 @@ A chat turn goes:
      title nudge from round 2 onward (loud nag when the
      title is still the schema placeholder, soft drift hint
      when a model-set title might need refreshing). The
-     opening turn is silent on the title - the background
-     title-gen pipeline in `Chat.svelte` owns naming there.
+     opening turn is silent on the title - the auto-title
+     worker owns naming there. With a reliable worker the
+     loud nag rarely fires; it's the safety net for the
+     case where the worker hasn't polled the row yet.
   4. **Conversation** - the user/assistant/tool rows the chat
      loop is responding to, plus synthetic ephemeral
      `<think>` blocks pushed after the user turn in the

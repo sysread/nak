@@ -1,8 +1,11 @@
 /**
- * Background title-generation pipeline. Runs in parallel with the main
- * chat-loop on the opening turn of a fresh thread so the conversation
- * picks up a topical title before the model is done streaming its
- * reply.
+ * Single-shot title generator. Used by the auto-title worker (see
+ * `src/lib/agents/auto_title/`) to name threads still on the
+ * `'New conversation'` placeholder. Previously called fire-and-
+ * forget from `Chat.svelte`'s send() on the opening turn; that path
+ * lost work whenever the user closed or refreshed the tab before the
+ * single Venice call resolved, so titling moved into a polling
+ * worker that retries until the row is named.
  *
  * Why not let the main model do this through `update_title`: the main
  * chat-loop's metadata system message used to nag the model to rename
@@ -27,10 +30,11 @@
  *
  * Failure model: best-effort. A network failure, a Venice 4xx, an
  * abort - any of these resolve `null` and the caller logs once and
- * moves on. The main chat-loop's metadata message will fire the
- * fallback nag on round 2 if the title is still the placeholder by
- * then, so a failed background completion just delays the rename by
- * one round at worst.
+ * moves on. The auto-title worker treats a null return as 'no-title',
+ * releases the per-thread claim so the row goes back to the queue,
+ * and the next cycle retries. The chat-loop's round-2+ metadata-
+ * message nag is a further fallback when the worker hasn't yet
+ * polled the row.
  */
 import type { VeniceClient } from './venice';
 import { agentModel } from './models';

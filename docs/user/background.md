@@ -14,17 +14,20 @@ and key you entered during [getting started](./getting-started.md).
 
 ## Auto-titling
 
-After the first user+assistant exchange in a new thread, Nak asks the
-fast model for a 3-6 word title and swaps it in for the
-`New conversation` placeholder. The request is best-effort: if it
-fails, the thread keeps the placeholder and nothing else breaks.
+A background worker watches for threads still on the `New
+conversation` placeholder, asks the fast model for a 3-6 word title
+based on your first message, and swaps it in. If the call fails (a
+network blip, a Venice 4xx) the worker retries on its next cycle, so
+a closed tab or a refresh mid-titling no longer leaves the thread
+permanently blank.
 
 What you see: the sidebar entry for the thread flips from
-`New conversation` to a real title a second or two after your first
-reply arrives. You can always click the title bar to rename manually;
-the auto-title only seeds the first value.
+`New conversation` to a real title within a few seconds of your
+first send. You can always click the title bar to rename manually;
+the auto-title only seeds the first value, and a manual rename
+takes over for good.
 
-Cost: one short fast-tier call per new thread (24 output tokens max).
+Cost: one short fast-tier call per new thread (64 output tokens max).
 
 No toggle. The call is cheap enough that exposing a switch would be
 more friction than it saves.

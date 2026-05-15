@@ -634,6 +634,28 @@ create index if not exists threads_embedding_claim_idx
   on public.threads (embedding_claim_expires)
   where embedding_claim_holder is not null;
 
+-- Auto-title pipeline ---------------------------------------------------
+--
+-- The auto-title worker (src/lib/agents/auto_title/*) names threads that
+-- are still on the `'New conversation'` placeholder. Per-thread claim
+-- columns mirror the reflection / summary pair exactly; the singleton
+-- lease is a separate `worker_kind` ('auto_title') so a device can hold
+-- it concurrently with the others. Title generation is a single fast-
+-- model completion against the opening user message - shape is one
+-- non-streaming Venice call per thread, so 60s of claim TTL is plenty.
+--
+-- The eligibility predicate is "title still default AND user did not
+-- pin a title manually AND there is at least one user message to title
+-- from". The save RPC re-checks all of those before writing so a manual
+-- rename or a model-driven `update_title` mid-poll wins the race.
+alter table public.threads
+  add column if not exists auto_title_claim_holder text,
+  add column if not exists auto_title_claim_expires timestamptz;
+
+create index if not exists threads_auto_title_claim_idx
+  on public.threads (auto_title_claim_expires)
+  where auto_title_claim_holder is not null;
+
 -- Invalidate the embedding whenever its inputs change. Pending =
 -- `embedding is null`, so the embeddings worker will re-embed on its
 -- next poll. We null the claim columns too — an in-flight worker save
@@ -2606,6 +2628,119 @@ begin
      and summary_claim_expires > now();
   get diagnostics updated = row_count;
   return updated > 0;
+end $$;
+
+-- Auto-title pipeline RPCs ----------------------------------------------
+--
+-- Background worker that fills in titles for threads still on the
+-- 'New conversation' placeholder. Replaces the in-Chat fire-and-forget
+-- title-gen pipeline that lost work whenever the user closed the tab
+-- (or refreshed) before the single Venice call resolved. The worker
+-- lives in src/lib/agents/auto_title/* and uses the same lease + claim
+-- pattern as reflection / summary.
+--
+-- The eligibility predicate matches the gate the in-Chat trigger used
+-- to apply: title still default, title_manually_set still false, AND
+-- at least one user message exists to title from. Returning the first
+-- user message's text in the same round trip avoids a second SELECT
+-- before the Venice call - the worker reuses the same tight system
+-- prompt that title-gen.ts has always used.
+drop function if exists public.claim_next_thread_for_auto_title(text, int);
+create or replace function public.claim_next_thread_for_auto_title(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, user_text text)
+language sql security invoker as $$
+  with candidate as (
+    -- Oldest still-default-title thread (by updated_at ascending) that
+    -- has at least one user message and isn't currently claimed. The
+    -- first-user-message lookup is a lateral join so we get both the
+    -- thread row AND the text to title from in one round trip - the
+    -- worker can call Venice without a follow-up SELECT.
+    select t.id as thread_id, first_user.text as user_text
+      from public.threads t
+      cross join lateral (
+        select m.content as text
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'user'
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at asc
+         limit 1
+      ) first_user
+     where t.user_id = auth.uid()
+       and t.title = 'New conversation'
+       and t.title_manually_set = false
+       and (t.auto_title_claim_expires is null
+            or t.auto_title_claim_expires < now())
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  )
+  update public.threads t
+     set auto_title_claim_holder = p_holder_id,
+         auto_title_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.user_text;
+$$;
+
+-- Save the generated title IF our claim is still valid AND the row is
+-- still eligible. Three races guard against:
+--   1. Claim was stolen (different holder OR our TTL expired).
+--   2. The user manually renamed the thread mid-flight (title_manually_set
+--      flipped true).
+--   3. The model called update_title via the round-2+ nag mid-flight
+--      (title is no longer the placeholder).
+-- Returns true on a successful write, false on any race - caller drops
+-- the work; the next cycle will skip this row because the predicates no
+-- longer match. We also clear the claim on a winning write so the
+-- partial index immediately drops the row from its live-claims set.
+-- Doesn't bump updated_at - the title write is a side-effect of the
+-- conversation; bumping would re-promote the thread in the sidebar.
+drop function if exists public.save_thread_title_if_claimed(uuid, text, text);
+create or replace function public.save_thread_title_if_claimed(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_title text
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.threads
+     set title = p_title,
+         auto_title_claim_holder = null,
+         auto_title_claim_expires = null
+   where id = p_thread_id
+     and user_id = auth.uid()
+     and auto_title_claim_holder = p_holder_id
+     and auto_title_claim_expires > now()
+     and title = 'New conversation'
+     and title_manually_set = false;
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Explicit claim release - used by the worker when the title-gen call
+-- produced no usable output (model emitted whitespace, abort fired) so
+-- another cycle can re-pick the row immediately rather than waiting for
+-- the TTL. Guarded on holder so a stale call from a displaced worker
+-- can't clear the live claim. Returns void.
+drop function if exists public.clear_auto_title_claim(uuid, text);
+create or replace function public.clear_auto_title_claim(
+  p_thread_id uuid,
+  p_holder_id text
+) returns void
+language plpgsql security invoker as $$
+begin
+  update public.threads
+     set auto_title_claim_holder = null,
+         auto_title_claim_expires = null
+   where id = p_thread_id
+     and user_id = auth.uid()
+     and auto_title_claim_holder = p_holder_id;
 end $$;
 
 -- Thread embedding pipeline RPCs ----------------------------------------
