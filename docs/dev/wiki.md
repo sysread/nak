@@ -155,7 +155,9 @@ Librarian:
 - `src/lib/agents/wiki-librarian/prompt.ts` - `buildWikiLibrarianPrompt`
   takes the rendered article list and embeds it into a system
   prompt that frames the agent as a librarian (consolidate,
-  fact-check, tighten boundaries; no wiki_create access).
+  fact-check, tighten boundaries, re-title drifted articles whose
+  content has broadened past the original title; no wiki_create
+  access).
 - `src/lib/agents/wiki-librarian/agent.ts` - the
   `WikiLibrarianAgent` class. `run()` reads the snapshot from
   input, builds the prompt, runs `runHeadlessToolLoop` against

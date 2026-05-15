@@ -221,12 +221,24 @@ coherent. It can:
   other (a "Maya" article and a "household" article both covering
   the same person), the librarian rewrites both so the split is
   cleaner.
+- **Re-title articles whose content has drifted.** Articles
+  accumulate facts over time, and an article's title (chosen when
+  the article was narrow) can stop describing what the article is
+  mostly about once the body has broadened across many updates.
+  The per-conversation agent deliberately leaves titles alone, so
+  the librarian is the place where titles get re-checked against
+  current content. When the drift is large enough that the title
+  is actively misleading, the librarian renames the article and
+  notes the rename in the [changelog](#changelog). Small drift is
+  left alone - the bar for a rename is "a reader scanning the
+  title list would not realise the article covers what it does".
 
 The librarian is intentionally constrained: it cannot create new
 articles, only consolidate or update existing ones. New articles
 flow from the per-conversation agent or from your direct edits. And
 it's conservative - if it isn't confident two articles overlap
-enough to merge, it leaves them alone.
+enough to merge, or that a title has drifted far enough to need a
+rename, it leaves them alone.
 
 The 12-hour minimum interval is enforced atomically across devices
 (via a Postgres claim); only one run happens per cycle even if you
