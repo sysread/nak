@@ -45,6 +45,25 @@
  * section so every wiki_update path respects it, not just the
  * fact-checking step.
  *
+ * Workflow step 6 (title-content drift) is the third known
+ * recovery surface for a per-conversation agent design decision.
+ * The per-conv agent's prompt instructs it to leave titles alone
+ * unless the user explicitly asks for a rename (see
+ * `../wiki/prompt.ts`, "Title is editable but discouraged"). That
+ * rule is reasonable for a per-conversation edit - renaming on
+ * every nudge would make articles unfindable - but it means titles
+ * drift behind content as articles broaden across many
+ * conversations. An article that started as "Maya" can end up 70%
+ * about the household; a "Nak auto-title" article can broaden to
+ * cover the whole worker architecture. The librarian gets the
+ * wiki-wide vantage point: after the other passes have stabilised
+ * what each article actually contains, step 6 asks whether the
+ * title still describes the body and renames when the drift is
+ * large enough to be misleading. Step 6 runs last because it
+ * depends on content placement decided by step 2 (consolidation)
+ * and step 5 (boundary-tightening) - renaming first and then
+ * shifting content around produces incoherent titles.
+ *
  * Voice and "preserve facts" discipline are shared with the per-
  * conversation agent's prompt - same encyclopedic third-person
  * register, same "do not fabricate / do not discard facts" rules.
@@ -379,6 +398,53 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    for which facts and wiki_update both to clarify the split.
    Do not delete in this case - both articles still have a
    reason to exist; you just made the boundary cleaner.
+6. **Check titles against current content.** Articles
+   accumulate facts over many per-conversation updates, and a
+   title chosen when an article was narrow can become
+   misleading once content has broadened. The per-conversation
+   agent deliberately leaves titles alone (its rule is "rename
+   only on explicit user request"), so wiki-wide title drift is
+   yours to clean up. Run this step LAST - after steps 2 and 5
+   have stabilised what each article actually contains.
+
+   Read the body of any article whose excerpt suggests broader
+   coverage than the title promises. Ask: would a reader
+   skimming the title list correctly guess what this article
+   is mostly about? An article titled "Maya" whose body is now
+   majority about the household as a whole (siblings, family
+   finances, the apartment) has drifted - the title narrows
+   the article's findability. An article titled "Nak auto-
+   title" whose body now covers every background worker has
+   broadened past its title in the same way.
+
+   The fix is wiki_update with a new title that captures the
+   actual scope, content unchanged. The changelog message
+   names the rename and the reason ("Rename 'Maya' -> 'Maya
+   and household'; content broadened to cover household
+   finances and the apartment across recent updates").
+
+   Apply restraint. Small drift (the article is ~80% the title
+   topic, ~20% adjacent context) is not a renaming case - the
+   title is still the article's centre of mass. Renames are
+   warranted only when the title is actively misleading: a
+   reader scanning the title list would not realise the
+   article covers what it does. When in doubt, leave the title
+   alone - a slightly-narrow title costs less than a confident
+   wrong rename.
+
+   Watch for collisions. wiki_update enforces title uniqueness
+   per user; if the title you want is already taken, that is
+   itself a signal the two articles overlap and step 2
+   (consolidate duplicates) is the right tool, not step 6.
+   Pick a different title or merge instead.
+
+   Watch for outbound references. If another article
+   references the renamed one by its old title (a Markdown
+   link, a "see X for details" line in the prose),
+   wiki_update the referring article to point at the new
+   title. The wiki has no automatic backref - stale title
+   text becomes a dangling reference that no later cycle will
+   fix on its own.
 
 ${WIKI_LIBRARIAN_DISCIPLINE_BLOCK}
 
