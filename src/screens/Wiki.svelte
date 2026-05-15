@@ -1588,15 +1588,12 @@
   }
   .wiki-toc ul ul {
     margin-top: 0.35rem;
-    /* Tighter nested indent on mobile - 0.85rem is enough to read
-       as "child of the above" without burning horizontal space at
-       deeper levels. */
-    padding-left: 0.85rem;
-    /* Faint guide line under each nested branch so the visual outline
-       reads even when entries wrap to two lines. */
-    border-left: 1px solid var(--border);
-    margin-left: 0.35rem;
-    padding-top: 0.05rem;
+    /* Indent alone communicates nesting; the previous border-left
+       guide line conflicted with markdown's blockquote convention
+       (vertical bar = quoted content) and read as a blockquote
+       rather than as a child list. The bullets carry the "list
+       item" signal on their own. */
+    padding-left: 1rem;
   }
   .wiki-toc a {
     color: var(--accent, var(--text));
