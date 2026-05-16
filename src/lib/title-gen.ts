@@ -95,11 +95,18 @@ export async function generateThreadTitle(
       // text directly. Same discipline the web_search and
       // research_docs tools use against reasoning models.
       disableThinking: true,
-      // Tight budget. A 3-6 word title can't exceed 80 chars after
-      // sanitisation (TITLE_MAX_CHARS); 64 raw tokens covers that
-      // with headroom for the model emitting a slightly longer
-      // string the sanitiser then trims.
-      maxTokens: 64,
+      // Project-wide 2048 floor for agent sub-calls (see commit
+      // 21d990d). The earlier 64-token cap here was a regression: it
+      // assumed the "3-6 word" prompt + disable_thinking would fully
+      // bound the output, but gpt-oss-20b sometimes emits a CoT
+      // preamble or ignores the length instruction, and the cap got
+      // hit mid-word - threads landed with titles like "troubleshooting
+      // the" instead of "Troubleshooting the refrigerator". The prompt
+      // is what controls answer length; sanitizeTitle's first-line
+      // + 80-char slice is what enforces it on the storage side. The
+      // wire cap just needs enough headroom that finish_reason
+      // doesn't become 'length' on a chatty completion.
+      maxTokens: 2048,
     });
     const title = sanitizeTitle(result.text);
     if (title.length === 0) {
