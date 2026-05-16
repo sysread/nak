@@ -64,7 +64,8 @@ export interface CycleContext {
    * `claim_next_thread_for_auto_title`. Title generation is one
    * non-streaming Venice call against the fast model, so 60s is
    * plenty with margin - the summary loop uses 120s because its
-   * model has more to chew on; titles are 64 max-tokens.
+   * model has more to chew on; titles target a 3-6 word answer
+   * (the wire cap is 2048 just for headroom).
    */
   threadClaimTtlSeconds: number;
   signal: AbortSignal;
