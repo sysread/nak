@@ -299,6 +299,22 @@ export interface Recipe {
    * from a hypothetical zero (which the schema rejects).
    */
   rating: number | null;
+  /**
+   * Workflow flag - true when the user has marked this recipe as one
+   * they plan to make during the current grocery-shopping cycle. Drives
+   * the "Upcoming" section at the top of the drawer listing. Not
+   * versioned (toggling does not write a recipe_versions row) and does
+   * not bump `updated_at` so the recency sort stays stable.
+   */
+  upcoming: boolean;
+  /**
+   * Long-lived bookmark for recipes the user loves and wants one
+   * click away. Independent of `upcoming` - a recipe can be either,
+   * both, or neither. Drives the "Favorites" section just below
+   * Upcoming in the drawer listing. Same non-versioned, non-
+   * `updated_at`-bumping semantics as `upcoming`.
+   */
+  favorite: boolean;
   created_at: string;
   updated_at: string;
   /** Populated only by `search_recipes_by_embedding`. */
@@ -1682,7 +1698,7 @@ export class SupabaseService {
     let q = this.client
       .from('recipes')
       .select(
-        'id, title, source, source_url, cooklang, rating, created_at, updated_at'
+        'id, title, source, source_url, cooklang, rating, upcoming, favorite, created_at, updated_at'
       )
       .limit(limit);
     if (sort === 'rating') {
@@ -1709,7 +1725,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('recipes')
       .select(
-        'id, title, source, source_url, cooklang, rating, created_at, updated_at'
+        'id, title, source, source_url, cooklang, rating, upcoming, favorite, created_at, updated_at'
       )
       .eq('id', id)
       .maybeSingle();
@@ -1747,7 +1763,7 @@ export class SupabaseService {
     const ilikePromise = this.client
       .from('recipes')
       .select(
-        'id, title, source, source_url, cooklang, rating, created_at, updated_at'
+        'id, title, source, source_url, cooklang, rating, upcoming, favorite, created_at, updated_at'
       )
       .ilike('title', pattern)
       .order('updated_at', { ascending: false })
@@ -1949,6 +1965,36 @@ export class SupabaseService {
       throw new SupabaseError('update returned no row');
     }
     return rows[0]!;
+  }
+
+  /**
+   * Toggle the workflow `upcoming` flag. Direct table update on
+   * purpose - upcoming is not recipe content, so it bypasses the
+   * version-writing RPC. We intentionally do not touch `updated_at`
+   * either: marking a recipe as upcoming should not bump it to the
+   * top of the recency sort, because the user is bookmarking it for
+   * a near-future cook, not editing it.
+   */
+  async setRecipeUpcoming(id: string, upcoming: boolean): Promise<void> {
+    const { error } = await this.client
+      .from('recipes')
+      .update({ upcoming })
+      .eq('id', id);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Toggle the `favorite` flag. Same non-versioned, non-`updated_at`-
+   * bumping semantics as `setRecipeUpcoming` - favorite is a personal
+   * bookmark, not recipe content, so it skips `recipe_versions` and
+   * does not reshuffle the recency sort.
+   */
+  async setRecipeFavorite(id: string, favorite: boolean): Promise<void> {
+    const { error } = await this.client
+      .from('recipes')
+      .update({ favorite })
+      .eq('id', id);
+    if (error) throw new SupabaseError(error.message);
   }
 
   async deleteRecipe(id: string): Promise<void> {

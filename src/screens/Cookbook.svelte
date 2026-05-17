@@ -560,6 +560,48 @@
     }
   }
 
+  // Toggle the recipe's "upcoming" bookmark - the user's mark for the
+  // current grocery-shopping cycle. Goes through the dedicated
+  // setRecipeUpcoming path so the update bypasses recipe_versions
+  // (workflow state, not content) and leaves updated_at alone (a
+  // toggle shouldn't bump the recipe to the top of the recency sort).
+  // We refresh the cookbook store afterward so the drawer's Upcoming
+  // section and the row's cart glyph reflect the new state on the
+  // next animation frame.
+  async function onToggleUpcoming(): Promise<void> {
+    if (!app.supabase || !activeId) return;
+    const r = activeRecipe;
+    if (!r) return;
+    try {
+      await app.supabase.setRecipeUpcoming(activeId, !r.upcoming);
+      await refresh();
+    } catch (err) {
+      // Same surface as the rating-row failure path: the editor's
+      // banner is the only error slot wired up in detail mode, and
+      // showing it there means the user sees the message the next
+      // time they open Edit. The next refresh reconciles whichever
+      // state actually landed.
+      editError = errMsg(err);
+    }
+  }
+
+  // Toggle the recipe's "favorite" bookmark. Parallel to upcoming:
+  // bypasses recipe_versions and leaves updated_at alone so a toggle
+  // does not reshuffle the recency sort. Drives the Favorites
+  // section in the drawer listing and the thumbs-up glyph next to
+  // the row's title.
+  async function onToggleFavorite(): Promise<void> {
+    if (!app.supabase || !activeId) return;
+    const r = activeRecipe;
+    if (!r) return;
+    try {
+      await app.supabase.setRecipeFavorite(activeId, !r.favorite);
+      await refresh();
+    } catch (err) {
+      editError = errMsg(err);
+    }
+  }
+
   async function onDelete(id: string): Promise<void> {
     if (!app.supabase) return;
     // Confirm before destructive action — the tool-side delete has
@@ -854,6 +896,72 @@
                  Delete from the copy group so a misclick is less
                  likely. -->
             <div class="cookbook-actions">
+              <!-- Upcoming toggle. Marks/unmarks the recipe for the
+                   current grocery-shopping cycle. Active state (cart
+                   filled + accent tint) means the recipe is in the
+                   "Upcoming" section at the top of the drawer
+                   listing; clicking removes it from that section
+                   without otherwise touching the recipe. -->
+              <button
+                type="button"
+                class="secondary icon-btn cookbook-action-upcoming"
+                class:active={r!.upcoming}
+                onclick={onToggleUpcoming}
+                title={r!.upcoming ? 'Remove from upcoming' : 'Mark as upcoming'}
+                aria-label={r!.upcoming ? 'Remove from upcoming' : 'Mark as upcoming'}
+                aria-pressed={r!.upcoming}
+              >
+                {#if r!.upcoming}
+                  <!-- Filled cart: solid body so the active state reads
+                       loudly even at 16px. -->
+                  <svg width="16" height="16" viewBox="0 0 24 24"
+                       fill="currentColor" stroke="currentColor"
+                       stroke-width="1.5" stroke-linecap="round"
+                       stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="9" cy="21" r="1.5" />
+                    <circle cx="20" cy="21" r="1.5" />
+                    <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"
+                          fill="none" />
+                    <path d="M7 7h15l-1.5 7h-12z" />
+                  </svg>
+                {:else}
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="9" cy="21" r="1" />
+                    <circle cx="20" cy="21" r="1" />
+                    <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+                  </svg>
+                {/if}
+              </button>
+              <!-- Favorite toggle. Same active-state pattern as the
+                   upcoming cart: thumbs-up with filled palm when on,
+                   outlined when off. Drives the Favorites section in
+                   the drawer listing. -->
+              <button
+                type="button"
+                class="secondary icon-btn cookbook-action-favorite"
+                class:active={r!.favorite}
+                onclick={onToggleFavorite}
+                title={r!.favorite ? 'Remove from favorites' : 'Mark as favorite'}
+                aria-label={r!.favorite ? 'Remove from favorites' : 'Mark as favorite'}
+                aria-pressed={r!.favorite}
+              >
+                {#if r!.favorite}
+                  <svg width="16" height="16" viewBox="0 0 24 24"
+                       fill="currentColor" stroke="currentColor"
+                       stroke-width="1.5" stroke-linecap="round"
+                       stroke-linejoin="round" aria-hidden="true">
+                    <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z" />
+                    <path d="M7 11l4-7a2 2 0 0 1 4 0v4h5a2 2 0 0 1 2 2.4l-2 7A2 2 0 0 1 18 20H7z" />
+                  </svg>
+                {:else}
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z" />
+                    <path d="M7 11l4-7a2 2 0 0 1 4 0v4h5a2 2 0 0 1 2 2.4l-2 7A2 2 0 0 1 18 20H7z" />
+                  </svg>
+                {/if}
+              </button>
               <button
                 type="button"
                 class="secondary icon-btn"
@@ -1391,6 +1499,17 @@
     background: var(--bg-2);
     color: var(--warn, #c0392b);
     border-color: var(--warn, #c0392b);
+  }
+  /* Active state for the Upcoming toggle: accent wash + accent border
+     so the on/off distinction reads at a glance against the rest of
+     the icon row, which all share the --bg-2 resting tile. Selector
+     mirrors the danger override above so it wins on specificity
+     against the .cookbook-actions :global(button.icon-btn) rule. */
+  .cookbook-actions :global(button.icon-btn.cookbook-action-upcoming.active),
+  .cookbook-actions :global(button.icon-btn.cookbook-action-favorite.active) {
+    background: var(--accent-weak);
+    border-color: var(--accent);
+    color: var(--accent);
   }
   /* Reserve a slot for the "Copied." flash so the button row stays
      stable when the message appears and vanishes. The empty-state
