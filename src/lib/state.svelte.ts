@@ -116,6 +116,9 @@ const autoTitle = lazyManager(() =>
 const samskara = lazyManager(() =>
   import('./agents/samskara/manager').then((m) => m.samskaraManager)
 );
+const bias = lazyManager(() =>
+  import('./agents/bias/manager').then((m) => m.biasManager)
+);
 const wiki = lazyManager(() =>
   import('./agents/wiki/manager').then((m) => m.wikiManager)
 );
@@ -684,6 +687,12 @@ function startBackgroundWorkers(config: AppConfig): void {
   attachmentExpiry.start({ supabase: app.supabase, config });
   autoTitle.start({ supabase: app.supabase, config });
   samskara.start({ supabase: app.supabase, config });
+  // Bias-observer worker silently analyzes processed conversations
+  // for cognitive-bias / System-1-heuristic evidence; the aggregated
+  // posterior feeds the system-prompt "User profile - observed
+  // patterns" block when biases clear a tier. See
+  // docs/dev/bias-profile.md.
+  bias.start({ supabase: app.supabase, config });
   if (app.wikiAutomaticEnabled) {
     wiki.start({
       supabase: app.supabase,
@@ -790,6 +799,7 @@ function stopBackgroundWorkers(): void {
   attachmentExpiry.stop();
   autoTitle.stop();
   samskara.stop();
+  bias.stop();
   wiki.stop();
   wikiLibrarian.stop();
   stopUsagePolling();

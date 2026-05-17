@@ -311,6 +311,7 @@ export type AgentRole =
   | 'intuition'
   | 'summary'
   | 'samskara'
+  | 'bias'
   | 'recall'
   | 'conversationRecall'
   | 'wikiRecall'
@@ -430,6 +431,7 @@ export const AGENT_MODELS = {
   intuition:          'mistral-small-3-2-24b-instruct',
   summary:            'mistral-small-3-2-24b-instruct',
   samskara:           'mistral-small-3-2-24b-instruct',
+  bias:               'mistral-small-3-2-24b-instruct',
   recall:             'qwen3-5-35b-a3b',
   conversationRecall: 'qwen3-5-35b-a3b',
   wikiRecall:         'qwen3-5-35b-a3b',
