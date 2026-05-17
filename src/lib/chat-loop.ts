@@ -63,6 +63,7 @@ import {
   recordSubstrateStub,
   type FireResult,
 } from './samskara';
+import { getBiasProfileBlock, notifyBiasNewUserMessage } from './bias';
 import { detectTimezone } from './timezone';
 import {
   buildIntuitionThinkMessage,
@@ -1156,6 +1157,26 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     .listAttachmentSummariesForThread(thread.id)
     .catch(() => []);
 
+  // Bias-profile block. One cached SELECT against bias_summary; null
+  // on cold start (no observations yet) or when no row clears the
+  // elided tier. The block rides at the end of the baseline system
+  // prompt rather than as a per-turn ambient context message because
+  // the profile is a slowly-changing structural claim about the user,
+  // not turn-specific weather. Read once at turn entry; reused across
+  // every round of this turn. Errors are swallowed inside
+  // getBiasProfileBlock.
+  const biasProfileBlock = await getBiasProfileBlock(supabase);
+
+  // Bias-profile invalidation. Each chat-loop invocation corresponds
+  // to one new user message on this thread. If the thread had been
+  // processed by the bias worker before, the worker's prior
+  // observations are now based on a stale view of the conversation;
+  // clear them. The RPC is a no-op when the thread was never
+  // processed, so calling unconditionally is correct and cheap.
+  // Fire-and-forget: bias worker plumbing must never block a chat
+  // turn.
+  void notifyBiasNewUserMessage(supabase, thread.id);
+
   // Subconscious-priming layer: two parallel pipelines, fired on the
   // same trigger machinery (cold-start, mid-turn title shift, mood
   // shift, stale fuse) but writing to independent caches and producing
@@ -1373,6 +1394,11 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           // catalog block renders [x]/[ ] marks that match what the
           // model will actually see on the wire this round.
           enabledToolboxes: toolboxesEnabled,
+          // Pre-rendered bias-profile block read once at turn entry
+          // (see `biasProfileBlock` above); reused across every
+          // round of this turn since it doesn't change inside a
+          // single user-message exchange.
+          biasProfile: biasProfileBlock,
         }),
       },
       ...userSystem,

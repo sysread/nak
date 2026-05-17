@@ -38,7 +38,7 @@
    */
   import { onMount, tick } from 'svelte';
   import type { Session } from '@supabase/supabase-js';
-  import { app, lock, applyServerSettings } from '$lib/state.svelte';
+  import { app, lock, applyServerSettings, notifyBiasActiveConvIds } from '$lib/state.svelte';
   import { notifications, notifyTurnComplete, markThreadRead } from '$lib/notifications.svelte';
   import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
   import { route, navigate, buildSearch } from '$lib/routing.svelte';
@@ -117,11 +117,13 @@
   type HelpComponent = typeof import('./Help.svelte').default;
   type SamskaraComponent = typeof import('./Samskara.svelte').default;
   type IntuitionComponent = typeof import('./Intuition.svelte').default;
+  type BiasProfileComponent = typeof import('./BiasProfile.svelte').default;
   type WikiChangelogComponent = typeof import('./WikiChangelog.svelte').default;
   import RecipeList from '../components/RecipeList.svelte';
   import MemoryList from '../components/MemoryList.svelte';
   import WikiList from '../components/WikiList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
+  import BiasPill from '../components/BiasPill.svelte';
   import {
     cookbook,
     loadRecipes,
@@ -185,6 +187,7 @@
   const showHelp = $derived(route.modal === 'help');
   const showSamskara = $derived(route.modal === 'samskara');
   const showIntuition = $derived(route.modal === 'intuition');
+  const showBiasProfile = $derived(route.modal === 'bias-profile');
   const showWikiChangelog = $derived(route.modal === 'wiki-changelog');
 
   // Lazy components. Each holds the loaded constructor in $state
@@ -203,6 +206,7 @@
   let HelpComp: HelpComponent | null = $state(null);
   let SamskaraComp: SamskaraComponent | null = $state(null);
   let IntuitionComp: IntuitionComponent | null = $state(null);
+  let BiasProfileComp: BiasProfileComponent | null = $state(null);
   let WikiChangelogComp: WikiChangelogComponent | null = $state(null);
   $effect(() => {
     if (sessionLoaded && !session && !AuthComp) {
@@ -263,6 +267,11 @@
   $effect(() => {
     if (showIntuition && !IntuitionComp) {
       void import('./Intuition.svelte').then((m) => (IntuitionComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (showBiasProfile && !BiasProfileComp) {
+      void import('./BiasProfile.svelte').then((m) => (BiasProfileComp = m.default));
     }
   });
   // Trigger flag for the recipe "new" top-bar button. Chat.svelte
@@ -379,6 +388,16 @@
   $effect(() => {
     if (route.cid === activeThreadId) return;
     void selectThread(route.cid);
+  });
+  // Forward the open-thread set to the bias worker so it skips
+  // analyzing conversations the user might still be typing in.
+  // Empty array when no thread is open (the new-chat screen) so the
+  // worker is free to process everything else; one-element array
+  // when a thread is selected. This is per-tab; the cross-tab
+  // singleton coordination already lives in the worker_leases
+  // layer.
+  $effect(() => {
+    notifyBiasActiveConvIds(activeThreadId ? [activeThreadId] : []);
   });
   let messages = $state<Message[]>([]);
 
@@ -1790,6 +1809,37 @@
   const currentIntuitionPayload = $derived<IntuitionPayload | null>(
     currentThread ? coerceIntuitionPayload(currentThread.intuition_payload) : null
   );
+
+  // Bias-profile row count drives the visibility of BiasPill. We
+  // only read once per session boot (after `activate()` lands a
+  // supabase client) and once after each post-turn refresh - the
+  // worker is the only writer, so polling is unnecessary. A non-zero
+  // row count means at least one conversation has been analyzed and
+  // the user has a debug surface worth opening; zero means the pill
+  // would lead to an empty modal. The aggregate cache rows include
+  // 'elided' tier entries that have no system-prompt effect, so a
+  // non-zero count is the right cold-start gate (it means the worker
+  // has done work, not that biases are firing into the prompt).
+  let biasSummaryRowCount = $state(0);
+  $effect(() => {
+    const supabase = app.supabase;
+    if (!supabase) {
+      biasSummaryRowCount = 0;
+      return;
+    }
+    let cancelled = false;
+    void supabase
+      .biasListSummary()
+      .then((rows) => {
+        if (!cancelled) biasSummaryRowCount = rows.length;
+      })
+      .catch(() => {
+        if (!cancelled) biasSummaryRowCount = 0;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
 
   const defaultTier = $derived<ModelTier>(app.defaultModel ?? DEFAULT_TIER);
   const currentTier = $derived<ModelTier>(
@@ -5112,6 +5162,7 @@
              gracefully on cold threads. -->
         <SamskaraToasts />
         <IntuitionPill payload={currentIntuitionPayload} />
+        <BiasPill rowCount={biasSummaryRowCount} />
       </div>
       {#if error}
         <div class="error-bar">
@@ -5661,6 +5712,9 @@
       onClose={() => navigate({ modal: null })}
       threads={loadedThreads}
     />
+  {/if}
+  {#if showBiasProfile && BiasProfileComp}
+    <BiasProfileComp onClose={() => navigate({ modal: null })} />
   {/if}
   {#if showWikiChangelog && WikiChangelogComp}
     <WikiChangelogComp onClose={() => navigate({ modal: null })} />

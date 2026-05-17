@@ -221,6 +221,13 @@ demand.
   inflight registries are sibling-but-separate. The shared
   `RoundCacheSnapshot` type in `triggers.ts` is what lets the
   evaluator read either cache without a cast.
+- **Bias profile ([./bias-profile.md](./bias-profile.md))** -
+  sibling cross-conversation pattern, no data flow. Intuition
+  fires per-thread on trigger events and produces a `<think>`
+  block; bias profile fires across conversations in the
+  background and produces a system-prompt section. Both
+  surface as bottom-right pills (bias stacks above intuition)
+  and open into their own diagnostics modal.
 - **Logging ([./logging.md](./logging.md))** - the pipeline
   uses `createLogger('intuition')`. The `FNORD_DEBUG_INTUITION`
   env var from the source module is intentionally NOT carried

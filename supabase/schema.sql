@@ -5297,13 +5297,400 @@ begin
 end;
 $$;
 
--- Realtime subscriptions --------------------------------------------------
+-- Bias profile ----------------------------------------------------------
 --
--- The client subscribes to INSERTs on `messages` (filtered by thread_id)
--- and all CUD on `threads` (filtered by user_id) so a conversation open
--- on two devices stays in sync without polling. Supabase ships with the
--- `supabase_realtime` publication pre-created; we just opt in the two
--- tables that carry conversation state.
+-- Per-conversation observations of cognitive biases / System-1
+-- heuristics in the user's behavior, written by a background worker
+-- agent. Aggregated by the same worker into a per-user, per-bias
+-- credible-interval summary (`bias_summary`); the chat-loop reads
+-- only the summary cache to inject a "user profile - observed
+-- patterns" block into the system prompt when bias evidence clears
+-- a tier.
+--
+-- See docs/dev/bias-profile.md for the math (Beta-Binomial posterior
+-- with exponential recency decay, exact 90% one-sided credible
+-- interval lower bound) and the surfacing rule. The catalog of bias
+-- names is closed and lives in src/lib/bias/catalog.ts; the schema
+-- carries `bias text` without an enum check so adding a catalog
+-- entry doesn't require a schema change. RLS on every row;
+-- everything self-scoped by user_id.
+
+-- Two columns on `threads` carry the worker's processed-state.
+-- `bias_processed_at` is when the worker last analyzed this thread;
+-- `bias_processed_msg_count` is the user-message count it saw, used
+-- as an optimistic-concurrency token (the chat-loop clears these on
+-- any new user-message insert, so a stale save from a still-running
+-- analysis cycle gets rejected).
+alter table public.threads
+  add column if not exists bias_processed_at timestamptz;
+
+alter table public.threads
+  add column if not exists bias_processed_msg_count int;
+
+-- Per-row claim columns so the worker can lock a thread for the
+-- duration of its analysis without preventing other workers (e.g.
+-- samskara) from operating on the same thread for their own
+-- purposes.
+alter table public.threads
+  add column if not exists bias_claim_holder text;
+
+alter table public.threads
+  add column if not exists bias_claim_expires timestamptz;
+
+create table if not exists public.bias_observations (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  thread_id uuid not null references public.threads(id) on delete cascade,
+  -- Catalog key from src/lib/bias/catalog.ts (e.g. 'confirmation_bias').
+  -- No DB-side enum check: the catalog is the source of truth and
+  -- adding an entry there is a code change, not a schema change.
+  -- The TypeScript ingest validates against the catalog before
+  -- insert; an unknown string here would be a code bug, not a data
+  -- integrity threat.
+  bias text not null,
+  -- Post-floor, post-cap. The TypeScript clamp drops sub-floor
+  -- observations entirely (the agent's "I am not sure" channel) and
+  -- pulls supra-cap observations down to the cap before insert, so
+  -- every row that lands satisfies the [0.40, 0.85] range.
+  confidence real not null check (confidence between 0.40 and 0.85),
+  reasoning text not null,
+  -- Soft pointer back to the user message the agent cited. Nullable
+  -- because messages can be deleted while observations survive; if
+  -- the user removes the cited message we keep the observation
+  -- text but lose the deep link.
+  evidence_message_id uuid references public.messages(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists bias_observations_thread_idx
+  on public.bias_observations (thread_id);
+
+create index if not exists bias_observations_user_bias_idx
+  on public.bias_observations (user_id, bias);
+
+alter table public.bias_observations enable row level security;
+
+drop policy if exists "bias observations self-selectable" on public.bias_observations;
+create policy "bias observations self-selectable" on public.bias_observations
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "bias observations self-insertable" on public.bias_observations;
+create policy "bias observations self-insertable" on public.bias_observations
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "bias observations self-deletable" on public.bias_observations;
+create policy "bias observations self-deletable" on public.bias_observations
+  for delete using (auth.uid() = user_id);
+
+-- Auto-populate user_id from the session so chat-loop and worker
+-- inserts don't need to thread it through. Same pattern as
+-- samskara_associations / samskaras.
+alter table public.bias_observations
+  alter column user_id set default auth.uid();
+
+-- Per-user, per-bias aggregate cache. The worker's aggregate phase
+-- recomputes this from the underlying observations + thread
+-- metadata; the chat-loop side reads it directly. Eventual
+-- consistency: the chat-loop may briefly see a stale row after a
+-- new observation lands or a thread's observations get cleared on
+-- a new user message - the worker catches up on its next rotation.
+create table if not exists public.bias_summary (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  bias text not null,
+  effective_n real not null,
+  posterior_alpha real not null,
+  posterior_beta real not null,
+  posterior_mean real not null,
+  ci_lower real not null,
+  tier text not null check (tier in ('elided', 'soft', 'strong')),
+  computed_at timestamptz not null default now(),
+  primary key (user_id, bias)
+);
+
+alter table public.bias_summary enable row level security;
+
+drop policy if exists "bias summary self-selectable" on public.bias_summary;
+create policy "bias summary self-selectable" on public.bias_summary
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "bias summary self-insertable" on public.bias_summary;
+create policy "bias summary self-insertable" on public.bias_summary
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "bias summary self-updatable" on public.bias_summary;
+create policy "bias summary self-updatable" on public.bias_summary
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "bias summary self-deletable" on public.bias_summary;
+create policy "bias summary self-deletable" on public.bias_summary
+  for delete using (auth.uid() = user_id);
+
+alter table public.bias_summary
+  alter column user_id set default auth.uid();
+
+-- Bias-profile RPCs ------------------------------------------------------
+--
+-- security invoker throughout - RLS still applies, and the explicit
+-- `user_id = auth.uid()` guards inside each function's body keep the
+-- intent obvious at the call site.
+
+-- Drop pre-existing signatures before recreating: return-type changes
+-- break a plain `create or replace function`.
+drop function if exists public.bias_claim_next_thread(text, int, uuid[], timestamptz, int);
+drop function if exists public.bias_save_observations(uuid, text, int, jsonb);
+drop function if exists public.bias_clear_thread(uuid);
+drop function if exists public.bias_processed_threads_for_bias(text);
+
+-- Claim the next eligible thread for bias analysis. Eligibility is
+-- the full filter list from docs/dev/bias-profile.md:
+--   - belongs to the calling user
+--   - has at least p_min_user_messages user messages (default 2)
+--   - either never processed, or processed before the thread's most
+--     recent update (a new user message bumps threads.updated_at,
+--     and chat-loop also clears bias_processed_at directly)
+--   - threads.updated_at is BEFORE p_today_start - the caller passes
+--     midnight-local-time-today as a UTC instant, so "today" excludes
+--     conversations the user might still be actively chatting in
+--   - id is not in p_exclude_ids (the worker's "currently open in
+--     this app instance" list, gathered by the manager from main-
+--     thread messages)
+--   - no live claim (claim_holder NULL, or expired, or already ours)
+--
+-- Atomic claim via update-returning so two workers polling the same
+-- candidate set never both win. Returns one row or empty.
+create or replace function public.bias_claim_next_thread(
+  p_holder_id text,
+  p_ttl_seconds int,
+  p_exclude_ids uuid[],
+  p_today_start timestamptz,
+  p_min_user_messages int
+)
+returns table (
+  thread_id uuid,
+  user_message_count int
+)
+security invoker
+language plpgsql
+as $$
+declare
+  v_id uuid;
+  v_msg_count int;
+begin
+  if auth.uid() is null then
+    return;
+  end if;
+
+  -- Pick a candidate. We could combine the SELECT and UPDATE via
+  -- `update ... where id = (select ...)` but the two-step makes the
+  -- "what we picked" debuggable in a SQL editor session.
+  select t.id, (
+    select count(*)::int from public.messages m
+      where m.thread_id = t.id and m.role = 'user'
+  )
+    into v_id, v_msg_count
+    from public.threads t
+    where t.user_id = auth.uid()
+      and t.updated_at < p_today_start
+      and (
+        t.bias_processed_at is null
+        or t.bias_processed_at < t.updated_at
+      )
+      and (
+        t.bias_claim_holder is null
+        or t.bias_claim_expires < now()
+        or t.bias_claim_holder = p_holder_id
+      )
+      and (
+        p_exclude_ids is null
+        or not (t.id = any(p_exclude_ids))
+      )
+    -- Defer the user-message count check to a HAVING-style filter
+    -- below; computing it inline keeps the index-friendly filters
+    -- doing the heavy work.
+    order by t.updated_at asc
+    limit 1
+    for update skip locked;
+
+  if v_id is null then
+    return;
+  end if;
+  if v_msg_count < p_min_user_messages then
+    return;
+  end if;
+
+  update public.threads
+    set bias_claim_holder = p_holder_id,
+        bias_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    where id = v_id;
+
+  thread_id := v_id;
+  user_message_count := v_msg_count;
+  return next;
+end;
+$$;
+
+-- Save the agent's observations for a thread. Three guards:
+--   - claim is still ours (someone else didn't steal it after TTL)
+--   - the user-message count we expected matches what's there now
+--     (no new user message landed during analysis - if it did, the
+--     observations are based on stale state and we drop them)
+--   - the thread still belongs to the calling user (RLS would catch
+--     this anyway, but the explicit check keeps the failure path
+--     deterministic instead of relying on a 0-row update)
+--
+-- Returns true on success, false if any guard fails. Caller treats
+-- false as 'work was wasted, drain to next cycle'.
+create or replace function public.bias_save_observations(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_expected_msg_count int,
+  p_observations jsonb
+)
+returns boolean
+security invoker
+language plpgsql
+as $$
+declare
+  v_actual_count int;
+  v_obs jsonb;
+begin
+  if auth.uid() is null then
+    return false;
+  end if;
+
+  -- Claim + ownership + message-count guard, all in one statement.
+  -- If any condition fails the SELECT returns no row and we exit.
+  perform 1 from public.threads
+    where id = p_thread_id
+      and user_id = auth.uid()
+      and bias_claim_holder = p_holder_id
+      and (bias_claim_expires is null or bias_claim_expires > now());
+  if not found then
+    return false;
+  end if;
+
+  select count(*)::int into v_actual_count
+    from public.messages
+    where thread_id = p_thread_id and role = 'user';
+  if v_actual_count <> p_expected_msg_count then
+    -- A new user message landed during analysis. The observations
+    -- we have are based on a now-stale view of the conversation;
+    -- drop them and release the claim so the worker picks the
+    -- thread up again on its next scan with the fresh state.
+    update public.threads
+      set bias_claim_holder = null, bias_claim_expires = null
+      where id = p_thread_id;
+    return false;
+  end if;
+
+  -- Delete any pre-existing observations for this thread. A
+  -- previous analysis cycle's writes get fully replaced; we don't
+  -- merge in case the catalog has changed or the agent changed its
+  -- mind about the same conversation.
+  delete from public.bias_observations
+    where thread_id = p_thread_id;
+
+  -- Insert the new observations, if any. Empty array is a valid
+  -- save - it means "the agent processed this thread and found
+  -- nothing", which is the correct answer most of the time.
+  if jsonb_array_length(p_observations) > 0 then
+    for v_obs in select * from jsonb_array_elements(p_observations) loop
+      insert into public.bias_observations
+        (thread_id, bias, confidence, reasoning, evidence_message_id)
+      values (
+        p_thread_id,
+        v_obs->>'bias',
+        (v_obs->>'confidence')::real,
+        v_obs->>'reasoning',
+        nullif(v_obs->>'evidence_message_id', '')::uuid
+      );
+    end loop;
+  end if;
+
+  update public.threads
+    set bias_processed_at = now(),
+        bias_processed_msg_count = p_expected_msg_count,
+        bias_claim_holder = null,
+        bias_claim_expires = null
+    where id = p_thread_id;
+
+  return true;
+end;
+$$;
+
+-- Clear a thread's bias-processed state. Called from the chat loop
+-- when a new user message lands on a thread that was previously
+-- processed: the conversation has new content the worker hasn't
+-- seen, so the prior observations are stale. We delete the
+-- observations outright (cheaper than tracking "stale" flags) and
+-- clear the processed-at so the worker's next scan picks the
+-- thread up.
+create or replace function public.bias_clear_thread(p_thread_id uuid)
+returns void
+security invoker
+language plpgsql
+as $$
+begin
+  if auth.uid() is null then
+    return;
+  end if;
+  -- Guard ownership before deleting; RLS would too, but the explicit
+  -- check keeps the failure path clear.
+  delete from public.bias_observations
+    where thread_id = p_thread_id and user_id = auth.uid();
+  update public.threads
+    set bias_processed_at = null,
+        bias_processed_msg_count = null,
+        bias_claim_holder = null,
+        bias_claim_expires = null
+    where id = p_thread_id and user_id = auth.uid();
+end;
+$$;
+
+-- List processed threads for the aggregation pass. Per-bias caller
+-- gets (thread_id, processed_at, p_conv) where p_conv is the
+-- within-conversation noisy-OR-collapsed confidence for the
+-- specified bias on that thread. The denominator (all processed
+-- threads) is the full row set; threads with no observation for
+-- this bias get p_conv = 0 so the beta side of the posterior
+-- accumulates correctly. The TypeScript side runs the math on this
+-- row set - keeps the math in one place (math.ts), with the SQL
+-- doing only the grouping and the timestamp join.
+create or replace function public.bias_processed_threads_for_bias(p_bias text)
+returns table (
+  thread_id uuid,
+  processed_at timestamptz,
+  p_conv real
+)
+security invoker
+language plpgsql
+as $$
+begin
+  if auth.uid() is null then
+    return;
+  end if;
+  return query
+    with hits as (
+      -- Noisy-OR collapse of multiple same-bias observations on
+      -- the same thread: 1 - prod(1 - c_i). The cap to the per-
+      -- conversation ceiling happens on the TS side so the cap
+      -- value lives in one place; the SQL just emits the raw
+      -- noisy-OR.
+      select o.thread_id,
+             (1.0 - exp(sum(ln(greatest(1.0 - o.confidence, 1e-9))))) ::real as p_conv
+        from public.bias_observations o
+        where o.user_id = auth.uid() and o.bias = p_bias
+        group by o.thread_id
+    )
+    select t.id, t.bias_processed_at, coalesce(h.p_conv, 0.0)::real
+      from public.threads t
+      left join hits h on h.thread_id = t.id
+      where t.user_id = auth.uid()
+        and t.bias_processed_at is not null;
+end;
+$$;
+
+
 --
 -- Guarded so re-running the script doesn't error on tables that are
 -- already members — `alter publication ... add table` has no built-in

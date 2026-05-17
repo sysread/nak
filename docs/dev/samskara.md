@@ -661,6 +661,16 @@ summarizer reads samskaras to feed the agent.
   and writes memories; the samskara assimilator reads
   individual exchanges and writes substrate. Separate workers
   with separate leases. See `./memory.md`.
+- **Bias profile** - sibling background worker, no data flow.
+  Bias profile aggregates cognitive-bias observations across
+  conversations into a per-turn system-prompt section;
+  samskara aggregates emergent predictive claims into the
+  compound summary `<think>` block. Both ride in every turn
+  but in different parts of the prompt - bias at the end of
+  the baseline system prompt, samskara as a `<think>` block
+  after the user turn - so they don't conflict. Both use the
+  LeaseCoordinator pattern with separate `worker_kind`
+  partitions. See `./bias-profile.md`.
 - **Reflection / summary workers** - peer workers, separate
   `worker_kind` values, separate leases. Samskara assimilation
   looks at one exchange at a time and writes substrate;
