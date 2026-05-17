@@ -3032,44 +3032,77 @@ h1 {
      rectangles, not pill shapes. */
   border-radius: 0.06em;
   background: currentColor;
-  box-shadow: 0 0 0.5em currentColor;
+  /* Layered glow simulates CRT phosphor / incandescent halation:
+     a tight inner halo for the sharp pixel core, a wider diffuse
+     ring that bleeds into adjacent cells. Combined width (~0.7em)
+     exceeds the inter-bar gap (0.2em), so the neighbours pick up
+     ambient light from a lit bar - matches both the look of old
+     EGA/CGA phosphor and the incandescent bulbs on K.I.T.T.'s
+     light bar in the show. */
+  box-shadow:
+    0 0 0.25em currentColor,
+    0 0 0.7em currentColor;
   opacity: 0.2;
   animation-duration: 1.4s;
   animation-iteration-count: infinite;
-  animation-timing-function: ease-in-out;
+  /* ease-out gives a fast initial move and a slow tail. For the
+     rise (0.2 -> 1) that reads as the bar "snapping on" then
+     settling; for the fall (1 -> 0.2) it reads as phosphor decay -
+     drops to mid-brightness almost immediately, then crawls the
+     rest of the way toward dim. Asymmetric pulse widths (5% rise,
+     10% fall) extend the visible tail into the next bar's hold
+     window, producing the trailing afterglow. */
+  animation-timing-function: ease-out;
 }
 
 /* Per-bar keyframes. Within a 1.4s round trip each bar has a "hold"
-   window at full opacity, surrounded by 5%-of-cycle ramp transitions
-   on each side. End bars (1, 5) hold for 12% of the cycle - twice as
-   long as middle bars (6%) - so the visual rhythm doesn't appear to
-   "speed up" at the bounce points (where there's no neighbour bar
-   to share the timing with). During each 5% transition the previous
-   bar fades from 1 to 0.2 while the next bar rises from 0.2 to 1, so
-   adjacent bars cross at 0.6 / 0.6 (with ease-in-out softening the
-   curve). That overlap reads as a smooth handoff rather than the
-   previous bar snapping fully dark before the next lights up.
+   window at full opacity, surrounded by a 5%-of-cycle rise on its
+   leading edge and a 10%-of-cycle fall on its trailing edge. The
+   asymmetry is the phosphor effect: a bar lights up in 5% (70ms)
+   when the highlight arrives, but takes 10% (140ms) to decay back
+   to baseline after the highlight has moved on. Since the next bar
+   only needs 5% to reach its own peak, the previous bar's tail
+   extends roughly 5% INTO the next bar's hold window - so at any
+   given moment up to two adjacent bars can be glowing: the current
+   one at full brightness, and the previous one trailing at ~0.36
+   half-way through its decay (ease-out collapses fast at first).
 
-   Phase layout (cycle = 100%, edge hold 12%, middle hold 6%, trans 5%):
+   End bars (1, 5) hold for 12% of cycle - twice as long as middle
+   bars (6%) - so the visual rhythm doesn't appear to "speed up" at
+   the bounce points where there's no neighbour to share timing
+   with.
 
-     bar 1 hold: 94% -> 6%   (wraps the cycle boundary)
-     trans:      6% -> 11%   (bar 1 fades, bar 2 rises)
-     bar 2 hold: 11% -> 17%
-     trans:      17% -> 22%
-     bar 3 hold: 22% -> 28%
-     trans:      28% -> 33%
-     bar 4 hold: 33% -> 39%
-     trans:      39% -> 44%
-     bar 5 hold: 44% -> 56%
-     trans:      56% -> 61%
-     bar 4 hold: 61% -> 67%
-     trans:      67% -> 72%
-     bar 3 hold: 72% -> 78%
-     trans:      78% -> 83%
-     bar 2 hold: 83% -> 89%
-     trans:      89% -> 94%
+   Phase layout (cycle = 100%, edge hold 12%, middle hold 6%,
+   rise 5%, fall 10% - the fall overlaps the next hold so it does
+   not consume cycle time):
 
-   Total: 2*12 + 6*6 + 8*5 = 100. */
+     bar 1 hold:  94% -> 6%   (wraps the cycle boundary)
+     bar 2 rise:  6%  -> 11%
+     bar 1 fall:  6%  -> 16%  (afterglow extends into bar 2's hold)
+     bar 2 hold:  11% -> 17%
+     bar 3 rise:  17% -> 22%
+     bar 2 fall:  17% -> 27%
+     bar 3 hold:  22% -> 28%
+     bar 4 rise:  28% -> 33%
+     bar 3 fall:  28% -> 38%
+     bar 4 hold:  33% -> 39%
+     bar 5 rise:  39% -> 44%
+     bar 4 fall:  39% -> 49%
+     bar 5 hold:  44% -> 56%
+     bar 4 rise:  56% -> 61%
+     bar 5 fall:  56% -> 66%
+     bar 4 hold:  61% -> 67%
+     bar 3 rise:  67% -> 72%
+     bar 4 fall:  67% -> 77%
+     bar 3 hold:  72% -> 78%
+     bar 2 rise:  78% -> 83%
+     bar 3 fall:  78% -> 88%
+     bar 2 hold:  83% -> 89%
+     bar 1 rise:  89% -> 94%
+     bar 2 fall:  89% -> 99%
+
+   Cycle math (only holds + rises count, since falls overlap):
+   2*12 + 6*6 + 8*5 = 100. */
 .scanner > span:not(.sr-only):nth-child(1) { animation-name: kitt-bar-1; }
 .scanner > span:not(.sr-only):nth-child(2) { animation-name: kitt-bar-2; }
 .scanner > span:not(.sr-only):nth-child(3) { animation-name: kitt-bar-3; }
@@ -3078,38 +3111,38 @@ h1 {
 
 @keyframes kitt-bar-1 {
   0%, 6%        { opacity: 1; }
-  11%, 89%      { opacity: 0.2; }
+  16%, 89%      { opacity: 0.2; }
   94%, 100%     { opacity: 1; }
 }
 
 @keyframes kitt-bar-2 {
   0%, 6%        { opacity: 0.2; }
   11%, 17%      { opacity: 1; }
-  22%, 78%      { opacity: 0.2; }
+  27%, 78%      { opacity: 0.2; }
   83%, 89%      { opacity: 1; }
-  94%, 100%     { opacity: 0.2; }
+  99%, 100%     { opacity: 0.2; }
 }
 
 @keyframes kitt-bar-3 {
   0%, 17%       { opacity: 0.2; }
   22%, 28%      { opacity: 1; }
-  33%, 67%      { opacity: 0.2; }
+  38%, 67%      { opacity: 0.2; }
   72%, 78%      { opacity: 1; }
-  83%, 100%     { opacity: 0.2; }
+  88%, 100%     { opacity: 0.2; }
 }
 
 @keyframes kitt-bar-4 {
   0%, 28%       { opacity: 0.2; }
   33%, 39%      { opacity: 1; }
-  44%, 56%      { opacity: 0.2; }
+  49%, 56%      { opacity: 0.2; }
   61%, 67%      { opacity: 1; }
-  72%, 100%     { opacity: 0.2; }
+  77%, 100%     { opacity: 0.2; }
 }
 
 @keyframes kitt-bar-5 {
   0%, 39%       { opacity: 0.2; }
   44%, 56%      { opacity: 1; }
-  61%, 100%     { opacity: 0.2; }
+  66%, 100%     { opacity: 0.2; }
 }
 
 @media (prefers-reduced-motion: reduce) {
