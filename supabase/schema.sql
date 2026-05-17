@@ -957,6 +957,22 @@ end $$;
 create index if not exists recipes_user_updated_idx
   on public.recipes (user_id, updated_at desc);
 
+-- "Upcoming" flag - workflow state, not recipe content. The user marks
+-- recipes they plan to cook during the current grocery-shopping cycle
+-- and they surface in a section at the top of the drawer listing. Not
+-- part of recipe_versions on purpose - this is a transient bookmark,
+-- not something to roll back through history. Toggling does NOT bump
+-- updated_at (see setRecipeUpcoming in the client) so the recency
+-- sort stays stable across toggles.
+alter table public.recipes
+  add column if not exists upcoming boolean not null default false;
+
+-- Partial index: at any moment only a handful of recipes are upcoming,
+-- so the index footprint stays tiny while still accelerating the
+-- listing query that filters on `upcoming = true`.
+create index if not exists recipes_user_upcoming_idx
+  on public.recipes (user_id) where upcoming;
+
 alter table public.recipes enable row level security;
 
 drop policy if exists "recipes are self-selectable" on public.recipes;
@@ -1317,6 +1333,7 @@ create or replace function public.recipe_create_with_version(
   source_url text,
   cooklang text,
   rating smallint,
+  upcoming boolean,
   created_at timestamptz,
   updated_at timestamptz
 )
@@ -1400,7 +1417,7 @@ begin
 
   return query
     select r.id, r.title, r.source, r.source_url, r.cooklang, r.rating,
-           r.created_at, r.updated_at
+           r.upcoming, r.created_at, r.updated_at
       from public.recipes r where r.id = v_recipe_id;
 end $$;
 
@@ -1442,6 +1459,7 @@ create or replace function public.recipe_update_with_version(
   source_url text,
   cooklang text,
   rating smallint,
+  upcoming boolean,
   created_at timestamptz,
   updated_at timestamptz
 )
@@ -1585,7 +1603,7 @@ begin
 
   return query
     select r.id, r.title, r.source, r.source_url, r.cooklang, r.rating,
-           r.created_at, r.updated_at
+           r.upcoming, r.created_at, r.updated_at
       from public.recipes r where r.id = p_id;
 end $$;
 
@@ -2138,12 +2156,13 @@ create or replace function public.search_recipes_by_embedding(
   source_url text,
   cooklang text,
   rating smallint,
+  upcoming boolean,
   created_at timestamptz,
   updated_at timestamptz,
   similarity real
 )
 language sql stable security invoker as $$
-  select id, title, source, source_url, cooklang, rating,
+  select id, title, source, source_url, cooklang, rating, upcoming,
          created_at, updated_at,
          (1 - (embedding <=> query_embedding))::real as similarity
     from public.recipes

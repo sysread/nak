@@ -128,6 +128,25 @@
     }
     return cookbook.recipes;
   });
+
+  // Upcoming recipes surface in a section at the top regardless of the
+  // active sort, then ALSO continue to appear in their natural position
+  // in the main listing below. The duplication is intentional - the
+  // user wants "what's coming up this shopping cycle" as a quick read
+  // without losing the recipe from its normal spot. Hidden during a
+  // search because the relevance ranking is what the user asked for
+  // and a bucket above it would just visually fight the result order.
+  // Sort within the section by updated_at desc so the most recently
+  // edited upcoming recipe sits first - matches the "Recent" bucket in
+  // the conversations drawer.
+  const upcomingRecipes = $derived.by<Recipe[]>(() => {
+    if (isSearching) return [];
+    return cookbook.recipes
+      .filter((r) => r.upcoming)
+      .sort((a, b) =>
+        (b.updated_at ?? '').localeCompare(a.updated_at ?? '')
+      );
+  });
 </script>
 
 <div class="recipe-drawer-list">
@@ -184,8 +203,12 @@
       {/if}
     </p>
   {:else}
-    {#each visibleRecipes as r (r.id)}
-      <div class="row thread-row" data-recipe-id={r.id}>
+    {#snippet recipeRow(r: Recipe, opts?: { keyPrefix?: string })}
+      <div
+        class="row thread-row"
+        data-recipe-id={r.id}
+        data-recipe-key={opts?.keyPrefix ? `${opts.keyPrefix}:${r.id}` : r.id}
+      >
         <button
           class="thread grow recipe-list-row"
           class:active={route.recipe === r.id}
@@ -196,7 +219,29 @@
           }}
           title={r.title}
         >
-          <span class="recipe-list-title">{r.title}</span>
+          <span class="recipe-list-title">
+            {#if r.upcoming}
+              <!-- Cart glyph: the user marked this for the current
+                   grocery-shopping cycle. Shown in BOTH the Upcoming
+                   section above AND the row's natural spot in the
+                   main list, so the user can tell at a glance which
+                   "regular" rows are also in the bookmark set. -->
+              <span
+                class="recipe-list-upcoming-mark"
+                aria-label="Upcoming"
+                title="Upcoming"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="9" cy="21" r="1" />
+                  <circle cx="20" cy="21" r="1" />
+                  <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+                </svg>
+              </span>
+            {/if}
+            {r.title}
+          </span>
           {#if r.rating !== null && r.rating !== undefined}
             <span class="recipe-list-rating">
               <RecipeRating value={r.rating} size={12} />
@@ -204,6 +249,23 @@
           {/if}
         </button>
       </div>
+    {/snippet}
+
+    {#if upcomingRecipes.length > 0}
+      <h3 class="bucket-header">Upcoming</h3>
+      {#each upcomingRecipes as r (`upcoming:${r.id}`)}
+        {@render recipeRow(r, { keyPrefix: 'upcoming' })}
+      {/each}
+      <!-- Divider between the Upcoming section and the main listing.
+           Without a header on the main section the second list would
+           visually run into the first; the "All recipes" header makes
+           the split explicit. Only shown when the Upcoming bucket has
+           content - otherwise the main list is the whole listing and
+           a header would just be noise. -->
+      <h3 class="bucket-header">All recipes</h3>
+    {/if}
+    {#each visibleRecipes as r (r.id)}
+      {@render recipeRow(r)}
     {/each}
   {/if}
 </div>
@@ -253,6 +315,18 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 100%;
+  }
+  /* Inline cart glyph that prefixes the title of any upcoming recipe.
+     Tinted with --accent so it reads as a "marked" affordance against
+     the rest of the row. The mark appears on the row in BOTH the
+     Upcoming section above and the main listing below so the user
+     can spot at a glance which "regular" rows are also bookmarked. */
+  .recipe-list-upcoming-mark {
+    display: inline-flex;
+    align-items: center;
+    color: var(--accent);
+    margin-right: 0.3rem;
+    vertical-align: -0.1em;
   }
   .recipe-list-rating {
     opacity: 0.8;

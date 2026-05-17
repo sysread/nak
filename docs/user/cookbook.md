@@ -169,6 +169,38 @@ Cookbook list pane. Highest-rated recipes appear first, ties broken
 by most-recent edit; unrated recipes sink to the bottom so the
 sort is honest about which recipes you've actually tried.
 
+## Marking recipes as "upcoming"
+
+When you're planning the next grocery run, you can mark recipes as
+**upcoming** - a bookmark for the things you intend to cook during
+the current shopping cycle. Upcoming recipes appear in an **Upcoming**
+section at the top of the Recipes listing so you can scan "what's on
+deck" without scrolling.
+
+- **To mark a recipe**: open it in the detail pane and click the cart
+  icon in the action bar (left of the pencil). The icon fills in and
+  tints to your accent colour to show the recipe is now bookmarked.
+- **To unmark**: click the cart again. The recipe stays where it was
+  in the list; only the bookmark goes away.
+- **Where they show up**: in the **Upcoming** section at the top of
+  the Recipes drawer tab, AND in their natural spot in the main list
+  below. The duplication is intentional - you can see "what's coming
+  up" at a glance without losing the recipe from its usual position.
+  A small cart glyph appears next to upcoming recipes' titles in
+  the main list too, so you can tell at a glance which of the
+  regular entries are also bookmarked.
+- **Stable sort**: toggling the upcoming flag does NOT bump the
+  recipe to the top of the recency sort - the flag is a workflow
+  bookmark, not an edit. The recipe stays in whatever spot the
+  "Recent" or "Rating" sort puts it.
+- **Manual clear**: the flag stays on until you turn it off. There
+  is no automatic "reset at end of week" - turn upcoming off when
+  you've shopped (or cooked) the recipe.
+
+The upcoming flag is yours - it does not appear in the recipe's edit
+history and the model does not toggle it on its own. It's a personal
+"do not forget this for this shopping trip" marker.
+
 ## Photos
 
 Each recipe can carry up to 12 photos that show as thumbnails at the
