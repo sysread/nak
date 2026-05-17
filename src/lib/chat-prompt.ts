@@ -57,6 +57,20 @@ const GATED_TOOLBOXES: readonly Toolbox[] = TOOLBOXES.filter(
 export interface SystemPromptOptions {
   /** The gated toolbox names active for this turn. Omit for "none". */
   enabledToolboxes?: readonly string[];
+  /**
+   * Pre-rendered "User profile - observed cognitive patterns" block
+   * from the bias-profile feature. When non-null it rides at the
+   * end of the baseline system prompt as a structural fact about
+   * the user (parallel to identity / voice / recall framing); when
+   * null the section is absent entirely - no placeholder text. See
+   * src/lib/bias/format.ts for the renderer and
+   * docs/dev/bias-profile.md for the rationale on putting this in
+   * the baseline rather than as a per-turn ambient context
+   * message: the bias profile is a slowly-changing structural
+   * claim about the user, not turn-specific weather like datetime
+   * or attachments.
+   */
+  biasProfile?: string | null;
 }
 
 // Identity. Has to be present every turn, even when the user has stacked
@@ -263,5 +277,12 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     ACTIVITY_BLOCK,
     buildCatalog(enabled),
   ];
+  // Bias profile rides at the end of the baseline. Conditional so a
+  // cold-start user (no row in bias_summary clears soft/strong)
+  // sees no block at all - cleaner than rendering "(no patterns
+  // observed)" placeholder copy.
+  if (opts.biasProfile && opts.biasProfile.length > 0) {
+    sections.push(opts.biasProfile);
+  }
   return sections.join('\n\n');
 }

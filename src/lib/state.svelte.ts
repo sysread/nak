@@ -825,6 +825,18 @@ export function haltBackgroundWork(): void {
   stopBackgroundWorkers();
 }
 
+/**
+ * Forward the set of "currently open" conversation ids to the
+ * bias-observer worker so it skips analyzing threads the user
+ * might still be typing in. Called from Chat.svelte whenever
+ * the active thread changes (opens, closes, or switches). Safe
+ * to call before the worker is loaded; the manager caches the
+ * value and folds it into the next start payload.
+ */
+export function notifyBiasActiveConvIds(ids: readonly string[]): void {
+  bias.whenLoaded((m) => m.setActiveConvIds(ids));
+}
+
 export function lock(): void {
   stopBackgroundWorkers();
   app.config = null;

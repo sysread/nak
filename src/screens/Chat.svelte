@@ -38,7 +38,7 @@
    */
   import { onMount, tick } from 'svelte';
   import type { Session } from '@supabase/supabase-js';
-  import { app, lock, applyServerSettings } from '$lib/state.svelte';
+  import { app, lock, applyServerSettings, notifyBiasActiveConvIds } from '$lib/state.svelte';
   import { notifications, notifyTurnComplete, markThreadRead } from '$lib/notifications.svelte';
   import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
   import { route, navigate, buildSearch } from '$lib/routing.svelte';
@@ -379,6 +379,16 @@
   $effect(() => {
     if (route.cid === activeThreadId) return;
     void selectThread(route.cid);
+  });
+  // Forward the open-thread set to the bias worker so it skips
+  // analyzing conversations the user might still be typing in.
+  // Empty array when no thread is open (the new-chat screen) so the
+  // worker is free to process everything else; one-element array
+  // when a thread is selected. This is per-tab; the cross-tab
+  // singleton coordination already lives in the worker_leases
+  // layer.
+  $effect(() => {
+    notifyBiasActiveConvIds(activeThreadId ? [activeThreadId] : []);
   });
   let messages = $state<Message[]>([]);
 
