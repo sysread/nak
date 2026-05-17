@@ -7,49 +7,45 @@
    * This pill sits at the top of the column, above the intuition
    * brain.
    *
-   * Visible only when at least one bias has been observed (the
-   * cache has at least one row regardless of tier). On a cold-start
-   * user the pill renders nothing - same rule the intuition pill
-   * uses, since revealing "we are forming a model of you" before
-   * there is any model to inspect is just noise.
+   * ALWAYS visible regardless of cache state. Unlike IntuitionPill
+   * (which hides on cold threads) and SamskaraToasts (which seeds
+   * from history), the bias modal carries useful chrome even when
+   * the worker hasn't observed anything yet: the per-bias table
+   * still shows all 19 catalog entries with their elided-tier
+   * prior, the current-conversation section explains why this
+   * thread is excluded from analysis, and the math footer
+   * documents the constants. A persistently-visible affordance
+   * makes the worker's presence legible without revealing its
+   * verdict.
    *
-   * Icon is U+1F4C8 CHART INCREASING (a single emoji glyph that
-   * reads as "patterns / trends"). Stays static regardless of how
-   * many biases are soft/strong - the debug modal is where the
-   * tier picture lives. The icon being constant is deliberate per
-   * the design: a tier-reflective glyph would tell the user that
-   * something is currently shaping the system prompt, which we
-   * specifically do NOT want them reasoning about turn-by-turn
-   * (same "absorption over disclaimer" framing samskara takes).
+   * Icon is U+1F4C8 CHART INCREASING. Stays static regardless of
+   * how many biases are soft/strong - the debug modal is where
+   * the tier picture lives. A tier-reflective glyph would tell
+   * the user that something is currently shaping the system
+   * prompt, which we specifically do NOT want them reasoning
+   * about turn-by-turn (same "absorption over disclaimer"
+   * framing samskara takes).
    */
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { navigate } from '$lib/routing.svelte';
-
-  interface Props {
-    /** Number of rows in bias_summary. Zero hides the pill. */
-    rowCount: number;
-  }
-  let { rowCount }: Props = $props();
 
   const FLY_IN_MS = 220;
   const FLY_OUT_MS = 320;
 </script>
 
 <div class="bias-pill-wrap" aria-live="polite" aria-atomic="true">
-  {#if rowCount > 0}
-    <button
-      type="button"
-      class="bias-pill"
-      title="View bias profile - observed patterns across conversations"
-      aria-label="Open bias profile diagnostics"
-      onclick={() => navigate({ modal: 'bias-profile' })}
-      in:fly={{ x: 24, duration: FLY_IN_MS, easing: cubicOut }}
-      out:fly={{ x: 24, duration: FLY_OUT_MS, easing: cubicOut }}
-    >
-      <span class="emoji" aria-hidden="true">&#x1F4C8;</span>
-    </button>
-  {/if}
+  <button
+    type="button"
+    class="bias-pill"
+    title="View bias profile - observed patterns across conversations"
+    aria-label="Open bias profile diagnostics"
+    onclick={() => navigate({ modal: 'bias-profile' })}
+    in:fly={{ x: 24, duration: FLY_IN_MS, easing: cubicOut }}
+    out:fly={{ x: 24, duration: FLY_OUT_MS, easing: cubicOut }}
+  >
+    <span class="emoji" aria-hidden="true">&#x1F4C8;</span>
+  </button>
 </div>
 
 <style>

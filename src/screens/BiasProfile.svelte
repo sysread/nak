@@ -9,7 +9,15 @@
    * pill). Opens via `navigate({ modal: 'bias-profile' })` and
    * pulls every row in bias_summary on mount.
    *
-   * Three sections, modelled on Samskara.svelte / Intuition.svelte:
+   * Four sections:
+   *
+   *   - Current conversation. Shows only when a thread is active.
+   *     Lists the soft+strong biases that are currently shaping
+   *     responses on this turn (the same RENDER_CAP-capped set the
+   *     chat-loop injects into the system prompt) plus any
+   *     observations the worker has already recorded for this
+   *     thread (or an explanation of why none exist yet - the
+   *     thread is excluded from analysis while open).
    *
    *   - Per-bias evidence table. One row per catalog entry showing
    *     the tier badge, the credible-interval lower bound, the
@@ -28,6 +36,7 @@
    */
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
+  import { route } from '$lib/routing.svelte';
   import { BIAS_CATALOG, type BiasKey, isBiasKey } from '$lib/bias/catalog';
   import {
     ALPHA_PRIOR,
@@ -74,6 +83,16 @@
   let loading = $state(true);
   let expandedThreadId = $state<string | null>(null);
   let expandedObs = $state<ObservationRow[]>([]);
+  // Observations for the currently-open thread, eagerly loaded on
+  // mount so the "Current conversation" section can render without
+  // the user having to expand the thread row in the processed-
+  // conversations list. Null means "not yet fetched"; empty array
+  // means "fetched and the thread has no observations recorded."
+  let currentThreadObs = $state<ObservationRow[] | null>(null);
+  // Snapshot route.cid at mount so a thread switch behind the modal
+  // doesn't yank the section's data partway through. The user can
+  // close and reopen the modal to see the new thread.
+  const activeThreadId = route.cid;
 
   onMount(async () => {
     const supabase = app.supabase;
@@ -82,12 +101,16 @@
       return;
     }
     try {
-      const [s, p] = await Promise.all([
+      const [s, p, threadObs] = await Promise.all([
         supabase.biasListSummary(),
         supabase.biasListProcessedThreads(30),
+        activeThreadId
+          ? supabase.biasListObservationsForThread(activeThreadId)
+          : Promise.resolve([] as ObservationRow[]),
       ]);
       summary = s;
       processed = p;
+      currentThreadObs = activeThreadId ? threadObs : null;
     } finally {
       loading = false;
     }
@@ -132,13 +155,13 @@
    * shaping responses right now, not just which ones cleared the
    * tier gate.
    */
-  const rendered = $derived.by<Set<string>>(() => {
-    const eligible = summary
+  const renderedRows = $derived.by<SummaryRow[]>(() => {
+    return summary
       .filter((r) => r.tier === 'soft' || r.tier === 'strong')
       .sort((a, b) => b.ciLower - a.ciLower)
       .slice(0, RENDER_CAP);
-    return new Set(eligible.map((r) => r.bias));
   });
+  const rendered = $derived(new Set(renderedRows.map((r) => r.bias)));
 
   function biasLabel(key: string): string {
     if (!isBiasKey(key)) return key;
@@ -148,6 +171,18 @@
   function biasDefinition(key: string): string {
     if (!isBiasKey(key)) return '';
     return BIAS_CATALOG[key as BiasKey].definition;
+  }
+
+  /**
+   * The pre-written compensation guidance string for a bias - the
+   * same text that rides into the chat LLM's system prompt when
+   * the bias clears a tier. Surfaced in the "Current conversation"
+   * section so the user can see what the assistant is being told
+   * about them, not just the bias name.
+   */
+  function biasGuidance(key: string): string {
+    if (!isBiasKey(key)) return '';
+    return BIAS_CATALOG[key as BiasKey].guidance;
   }
 
   function formatTimestamp(iso: string | null): string {
@@ -185,30 +220,92 @@
       title="Close"
     >&times;</button>
 
-    <header class="bias-header">
-      <h1 class="bias-title">Bias profile</h1>
-      <p class="subtle bias-blurb">
-        A background worker silently analyzes past conversations for
-        cognitive biases and System-1 heuristics in your phrasing.
-        Evidence accumulates across conversations via a Bayesian
-        posterior with recency decay; biases that clear the
-        credible-interval gate are injected as compensation guidance
-        in the chat assistant's system prompt. Today's conversations
-        and the one currently open here are excluded.
-      </p>
-    </header>
-
     <div class="bias-body">
+      <!-- Header is INSIDE the scroll surface so the long blurb
+           doesn't pin to the top and eat half the viewport on
+           mobile. The close button stays absolutely positioned
+           against the shell (above), independent of scroll. -->
+      <header class="bias-header">
+        <h1 class="bias-title">Bias profile</h1>
+        <p class="subtle bias-blurb">
+          A background worker silently analyzes past conversations
+          for cognitive biases and System-1 heuristics in your
+          phrasing. Evidence accumulates across conversations via
+          a Bayesian posterior with recency decay; biases that
+          clear the credible-interval gate are injected as
+          compensation guidance in the chat assistant's system
+          prompt. Today's conversations and the one currently open
+          here are excluded.
+        </p>
+      </header>
+
       {#if loading}
         <p class="empty">Loading...</p>
-      {:else if summaryRows.length === 0}
-        <p class="empty">
-          The bias model has not started yet. The worker processes
-          conversations that are not from today and not currently
-          open; once at least one conversation has been analyzed
-          its evidence will show up here.
-        </p>
       {:else}
+        {#if activeThreadId}
+          <section class="block">
+            <h2 class="block-title">Current conversation</h2>
+            <p class="block-blurb subtle">
+              What the bias layer is doing for the thread you have
+              open right now. The conversation itself is excluded
+              from analysis while open in this tab; the worker
+              picks it back up after you close it.
+            </p>
+
+            <h3 class="sub-title">Shaping responses on this turn</h3>
+            {#if renderedRows.length === 0}
+              <p class="empty">
+                No biases currently meet the surfacing threshold.
+                The system prompt for this turn carries no
+                bias-compensation block.
+              </p>
+            {:else}
+              <ul class="bias-list">
+                {#each renderedRows as row (row.bias)}
+                  <li class="bias-row">
+                    <header class="bias-row-header">
+                      <span class="bias-name">{biasLabel(row.bias)}</span>
+                      <span class="tier-badge {row.tier}">{row.tier}</span>
+                    </header>
+                    <p class="bias-def subtle">{biasGuidance(row.bias)}</p>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+
+            <h3 class="sub-title">Observations from this conversation</h3>
+            {#if currentThreadObs === null}
+              <p class="empty">
+                Not yet analyzed. While this conversation is open
+                in this tab the worker excludes it from its scan;
+                once you close it (and the conversation is no
+                longer dated today) the worker will pick it up on
+                its next rotation.
+              </p>
+            {:else if currentThreadObs.length === 0}
+              <p class="empty">
+                Already analyzed - the worker found no clear bias
+                evidence in this conversation. Reporting nothing
+                is the correct answer most of the time.
+              </p>
+            {:else}
+              <div class="obs-list flush">
+                {#each currentThreadObs as o (o.id)}
+                  <div class="obs-card">
+                    <header class="obs-header">
+                      <span class="obs-bias">{biasLabel(o.bias)}</span>
+                      <span class="obs-confidence subtle">
+                        confidence {(o.confidence * 100).toFixed(0)}%
+                      </span>
+                    </header>
+                    <p class="obs-reasoning">{o.reasoning}</p>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </section>
+        {/if}
+
         <section class="block">
           <h2 class="block-title">Per-bias evidence</h2>
           <p class="block-blurb subtle">
@@ -330,9 +427,14 @@
     box-shadow: var(--shadow-modal);
     width: 100%;
     max-width: 52rem;
-    display: grid;
-    grid-template-rows: auto 1fr;
     height: min(48rem, 90vh);
+    /* Body is the sole scroll surface. The header lives inside
+       the body so its content scrolls with everything else - the
+       earlier "fixed header" layout chewed half the viewport on
+       narrow screens, leaving only a sliver for the actual
+       evidence table. Close button remains absolutely positioned
+       at the shell level so it stays reachable regardless of
+       scroll position. */
     overflow: hidden;
   }
 
@@ -361,6 +463,11 @@
   }
 
   .bias-header {
+    /* Bleeds outside the body padding so the bottom border
+       reaches the modal walls; matches the original fixed-header
+       look while sitting inside the scroll surface. The negative
+       horizontal margin pairs with the body's symmetric padding. */
+    margin: -1rem -1.25rem 1rem;
     padding: 1rem 1.25rem 0.75rem;
     border-bottom: 1px solid var(--border);
     background: var(--bg-2);
@@ -380,9 +487,33 @@
   }
 
   .bias-body {
+    height: 100%;
     padding: 1rem 1.25rem;
     overflow-y: auto;
+    /* iOS Safari momentum scrolling on the body so the scroll
+       gesture feels native inside the modal. */
+    -webkit-overflow-scrolling: touch;
     min-width: 0;
+  }
+
+  .sub-title {
+    font-size: 0.85rem;
+    margin: 0.9rem 0 0.4rem;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .sub-title:first-of-type {
+    margin-top: 0.5rem;
+  }
+
+  /* When `.obs-list` rides directly under a sub-title (the
+     "Observations from this conversation" path in the current-
+     conversation section) we don't want the indent the thread-
+     list version inherits. */
+  .obs-list.flush {
+    padding: 0;
   }
 
   .block {
