@@ -4502,6 +4502,270 @@ export class SupabaseService {
       associations: assocR.count ?? 0,
     };
   }
+
+  // --- Bias profile ------------------------------------------------------
+
+  /**
+   * Worker: claim the next thread eligible for bias analysis.
+   * Eligibility filter lives in the RPC body. `excludeIds` is the
+   * set of conversations the caller knows are currently open in
+   * the user's UI (we don't process while they might still be
+   * typing); `todayStartUtc` is midnight at the start of "today"
+   * in the user's local timezone, expressed as a UTC instant, so
+   * threads.updated_at < todayStartUtc means "not today". Returns
+   * null when no thread is eligible.
+   */
+  async biasClaimNextThread(
+    holderId: string,
+    ttlSeconds: number,
+    excludeIds: readonly string[],
+    todayStartUtc: Date,
+    minUserMessages: number
+  ): Promise<{ threadId: string; userMessageCount: number } | null> {
+    const { data, error } = await this.client.rpc('bias_claim_next_thread', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+      p_exclude_ids: excludeIds.length > 0 ? Array.from(excludeIds) : null,
+      p_today_start: todayStartUtc.toISOString(),
+      p_min_user_messages: minUserMessages,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as { thread_id: string; user_message_count: number }[];
+    if (rows.length === 0) return null;
+    return {
+      threadId: rows[0].thread_id,
+      userMessageCount: rows[0].user_message_count,
+    };
+  }
+
+  /**
+   * Worker: write the agent's observations for one thread.
+   * `expectedMsgCount` is the user-message count the worker saw at
+   * claim time; the RPC rejects the save if the count has changed
+   * since (a new user message landed mid-analysis, and the
+   * observations are now based on stale state). `observations` is
+   * a list of `{bias, confidence, reasoning, evidence_message_id}`
+   * - empty list is a valid save meaning "agent looked and found
+   * nothing." Returns true on success, false if any guard fired.
+   */
+  async biasSaveObservations(
+    threadId: string,
+    holderId: string,
+    expectedMsgCount: number,
+    observations: readonly {
+      bias: string;
+      confidence: number;
+      reasoning: string;
+      evidence_message_id: string | null;
+    }[]
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('bias_save_observations', {
+      p_thread_id: threadId,
+      p_holder_id: holderId,
+      p_expected_msg_count: expectedMsgCount,
+      p_observations: observations,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Chat-loop: on a new user message, clear bias-processed state
+   * for the thread and delete its observations. The aggregation
+   * cache (`bias_summary`) is left alone; the worker's next
+   * aggregate pass catches up. Tolerates a missing thread; the
+   * caller is fire-and-forget.
+   */
+  async biasClearThread(threadId: string): Promise<void> {
+    const { error } = await this.client.rpc('bias_clear_thread', {
+      p_thread_id: threadId,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Worker: list every processed thread for the user, with the
+   * within-thread noisy-OR-collapsed probability for the specified
+   * bias. Threads with no observation of this bias contribute
+   * `pConv = 0` - that row still counts as a non-hit in the
+   * denominator, which is what keeps the rate estimate from
+   * collapsing to 1.0.
+   */
+  async biasProcessedThreadsForBias(bias: string): Promise<
+    { threadId: string; processedAt: string; pConv: number }[]
+  > {
+    const { data, error } = await this.client.rpc('bias_processed_threads_for_bias', {
+      p_bias: bias,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      thread_id: string;
+      processed_at: string;
+      p_conv: number;
+    }[];
+    return rows.map((r) => ({
+      threadId: r.thread_id,
+      processedAt: r.processed_at,
+      pConv: r.p_conv,
+    }));
+  }
+
+  /**
+   * Worker: upsert one aggregated row into `bias_summary`. Per-row
+   * primary key is `(user_id, bias)` so `on conflict` lifts the
+   * computed_at and updates the math fields in place. The chat-loop
+   * read uses the table directly via a select.
+   */
+  async biasUpsertSummary(row: {
+    bias: string;
+    effectiveN: number;
+    posteriorAlpha: number;
+    posteriorBeta: number;
+    posteriorMean: number;
+    ciLower: number;
+    tier: 'elided' | 'soft' | 'strong';
+  }): Promise<void> {
+    const { error } = await this.client
+      .from('bias_summary')
+      .upsert(
+        {
+          bias: row.bias,
+          effective_n: row.effectiveN,
+          posterior_alpha: row.posteriorAlpha,
+          posterior_beta: row.posteriorBeta,
+          posterior_mean: row.posteriorMean,
+          ci_lower: row.ciLower,
+          tier: row.tier,
+          computed_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,bias' }
+      );
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Chat-loop: read every cached aggregate for the user. Returns
+   * empty array on cold-start (no row in bias_summary yet) or on
+   * any RPC error - the format pass treats both as "no bias block
+   * this turn", matching samskara's null-on-empty contract.
+   */
+  async biasListSummary(): Promise<
+    {
+      bias: string;
+      effectiveN: number;
+      posteriorAlpha: number;
+      posteriorBeta: number;
+      posteriorMean: number;
+      ciLower: number;
+      tier: 'elided' | 'soft' | 'strong';
+      computedAt: string;
+    }[]
+  > {
+    const { data, error } = await this.client
+      .from('bias_summary')
+      .select(
+        'bias, effective_n, posterior_alpha, posterior_beta, posterior_mean, ci_lower, tier, computed_at'
+      );
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      bias: string;
+      effective_n: number;
+      posterior_alpha: number;
+      posterior_beta: number;
+      posterior_mean: number;
+      ci_lower: number;
+      tier: 'elided' | 'soft' | 'strong';
+      computed_at: string;
+    }[];
+    return rows.map((r) => ({
+      bias: r.bias,
+      effectiveN: r.effective_n,
+      posteriorAlpha: r.posterior_alpha,
+      posteriorBeta: r.posterior_beta,
+      posteriorMean: r.posterior_mean,
+      ciLower: r.ci_lower,
+      tier: r.tier,
+      computedAt: r.computed_at,
+    }));
+  }
+
+  /**
+   * Debug modal: list observations for one thread. Used by the
+   * per-conversation drill-down. Includes the cited message id so
+   * the modal can deep-link back to the original.
+   */
+  async biasListObservationsForThread(threadId: string): Promise<
+    {
+      id: string;
+      bias: string;
+      confidence: number;
+      reasoning: string;
+      evidenceMessageId: string | null;
+      createdAt: string;
+    }[]
+  > {
+    const { data, error } = await this.client
+      .from('bias_observations')
+      .select('id, bias, confidence, reasoning, evidence_message_id, created_at')
+      .eq('thread_id', threadId)
+      .order('created_at', { ascending: true });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      id: string;
+      bias: string;
+      confidence: number;
+      reasoning: string;
+      evidence_message_id: string | null;
+      created_at: string;
+    }[];
+    return rows.map((r) => ({
+      id: r.id,
+      bias: r.bias,
+      confidence: r.confidence,
+      reasoning: r.reasoning,
+      evidenceMessageId: r.evidence_message_id,
+      createdAt: r.created_at,
+    }));
+  }
+
+  /**
+   * Debug modal: list the most-recently-processed threads with
+   * counts of observations and the message-count token. Drives the
+   * "Processed conversations" table on the bias-profile screen.
+   */
+  async biasListProcessedThreads(limit: number = 30): Promise<
+    {
+      threadId: string;
+      title: string;
+      processedAt: string;
+      observationCount: number;
+    }[]
+  > {
+    const { data, error } = await this.client
+      .from('threads')
+      .select(
+        'id, title, bias_processed_at, bias_observations(count)'
+      )
+      .not('bias_processed_at', 'is', null)
+      .order('bias_processed_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      id: string;
+      title: string | null;
+      bias_processed_at: string;
+      // Supabase's `embedded count` returns an array containing
+      // one row with { count: N }; the cast is fragile in the
+      // type system, careful at the boundary.
+      bias_observations: { count: number }[] | null;
+    }[];
+    return rows.map((r) => ({
+      threadId: r.id,
+      title: r.title ?? '',
+      processedAt: r.bias_processed_at,
+      observationCount: r.bias_observations?.[0]?.count ?? 0,
+    }));
+  }
 }
 
 /**
