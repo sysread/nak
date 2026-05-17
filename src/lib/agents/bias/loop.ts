@@ -184,6 +184,22 @@ async function runAnalyzePhase(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
 
+  // Per-observation debug breadcrumbs. Each observation the agent
+  // emitted gets a line with the bias key, the raw confidence the
+  // agent reported (pre-clamp), and the reasoning string. The
+  // logger truncates very long messages naturally; the reasoning
+  // text is two sentences max per the agent's prompt, so the line
+  // stays readable in the drawer.
+  if (result.length === 0) {
+    log.debug(`analyze: agent reported no biases for thread ${claim.threadId}`);
+  } else {
+    for (const obs of result) {
+      log.debug(
+        `analyze: ${obs.bias} (conf ${obs.confidence.toFixed(2)}) - ${obs.reasoning}`
+      );
+    }
+  }
+
   // Clamp confidences before persistence. The DB has a CHECK
   // constraint matching this range, so a missed clamp would surface
   // as a 23514 violation; the floor/cap here also drops sub-floor
