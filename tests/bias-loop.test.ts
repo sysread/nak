@@ -199,7 +199,7 @@ describe('analyze phase', () => {
       listMessages: vi.fn(async () => [
         { id: 'm1', role: 'user', content: 'hello', thread_id: 't-1', created_at: new Date().toISOString() },
         { id: 'm2', role: 'assistant', content: 'hi', thread_id: 't-1', created_at: new Date().toISOString() },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       ] as any),
       biasSaveObservations: vi.fn(async () => true),
     });
@@ -243,7 +243,7 @@ describe('analyze phase', () => {
       })),
       listMessages: vi.fn(async () => [
         { id: 'm1', role: 'user', content: 'hello', thread_id: 't-1', created_at: new Date().toISOString() },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       ] as any),
       biasSaveObservations: vi.fn(async () => false),
     });
@@ -260,7 +260,7 @@ describe('analyze phase', () => {
       })),
       listMessages: vi.fn(async () => [
         { id: 'm1', role: 'user', content: 'hello', thread_id: 't-1', created_at: new Date().toISOString() },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       ] as any),
     });
     const agent = fakeAgent({
