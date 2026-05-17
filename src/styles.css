@@ -2991,20 +2991,20 @@ h1 {
    <Scanner> component (see src/components/Scanner.svelte) for any short-
    lived "working on it" state that has no useful progress signal yet.
 
-   A bright "highlight" walks across five vertical bars at constant
-   pace: bar 1 -> bar 5 -> bar 1 -> bar 5, on a 1.4s round-trip cycle.
+   A bright "highlight" walks across seven vertical bars at constant
+   pace: bar 1 -> bar 7 -> bar 1 -> bar 7, on a 1.4s round-trip cycle.
    Each bar pulses to full opacity exactly when the highlight is on
-   top of it, then dims back. End bars (1, 5) get one peak per cycle
-   (at the bounce points); middle bars (2, 3, 4) get two peaks per
-   cycle, once outbound and once inbound. That requires per-bar
+   top of it, then dims back. End bars (1, 7) get one peak per cycle
+   (at the bounce points); middle bars (2, 3, 4, 5, 6) get two peaks
+   per cycle, once outbound and once inbound. That requires per-bar
    keyframes - a single shared @keyframes with staggered delays
    produces only a left-to-right sweep that visibly restarts from
-   the left, because by the time bar 5 peaks, bar 1 has already
+   the left, because by the time bar 7 peaks, bar 1 has already
    finished a full alternate cycle and is starting over.
 
    Bars stay full height the whole time - only opacity changes - so
    the indicator reads as a fixed grille with light moving across it
-   rather than bars growing and shrinking. The bar shape (tall and
+   rather than bars growing and shrinking. The bar shape (squat and
    narrow, near-square corners) matches the segmented red grille on
    the front of K.I.T.T. in the show; the earlier circular-dot
    rendering was the same animation but read as a row of LEDs rather
@@ -3027,7 +3027,10 @@ h1 {
 .scanner > span:not(.sr-only) {
   display: inline-block;
   width: 0.28em;
-  height: 0.9em;
+  /* Squat profile - bar slightly shorter than its full em line-height
+     reads as a stocky segment rather than an exclamation-mark stroke,
+     and matches the closer aspect ratio of the show's prop cells. */
+  height: 0.675em;
   /* Subtle rounding only - the show's segments are flat-edged
      rectangles, not pill shapes. */
   border-radius: 0.06em;
@@ -3045,104 +3048,136 @@ h1 {
   opacity: 0.2;
   animation-duration: 1.4s;
   animation-iteration-count: infinite;
-  /* ease-out gives a fast initial move and a slow tail. For the
-     rise (0.2 -> 1) that reads as the bar "snapping on" then
-     settling; for the fall (1 -> 0.2) it reads as phosphor decay -
-     drops to mid-brightness almost immediately, then crawls the
-     rest of the way toward dim. Asymmetric pulse widths (5% rise,
-     10% fall) extend the visible tail into the next bar's hold
-     window, producing the trailing afterglow. */
-  animation-timing-function: ease-out;
+  /* Strong ease-out for the phosphor decay: cubic-bezier(0,0,0.2,1)
+     collapses ~88% of the value change into the first half of every
+     transition, then crawls the remaining 12% across the back half.
+     For the rise (0.2 -> 1) that reads as the bar snapping on and
+     settling; for the fall (1 -> 0.2) it reads as exponential
+     phosphor relaxation - drops to ~0.3 almost immediately, then
+     fades toward dim. Asymmetric pulse widths (2.5% rise, 7.5%
+     fall) put the slow back-half of the decay during the next
+     bar's hold window, producing the trailing afterglow. */
+  animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
 }
 
-/* Per-bar keyframes. Within a 1.4s round trip each bar has a "hold"
-   window at full opacity, surrounded by a 5%-of-cycle rise on its
-   leading edge and a 10%-of-cycle fall on its trailing edge. The
-   asymmetry is the phosphor effect: a bar lights up in 5% (70ms)
-   when the highlight arrives, but takes 10% (140ms) to decay back
+/* Per-bar keyframes. Seven bars in a 1.4s round trip means 12
+   visits per cycle (1 each for edges 1/7, 2 each for middles 2-6)
+   and 12 transitions between them. Each bar has a "hold" window at
+   full opacity, surrounded by a 2.5%-of-cycle rise on its leading
+   edge and a 7.5%-of-cycle fall on its trailing edge. The
+   asymmetry is the phosphor effect: a bar lights up in 2.5% (35ms)
+   when the highlight arrives, but takes 7.5% (105ms) to decay back
    to baseline after the highlight has moved on. Since the next bar
-   only needs 5% to reach its own peak, the previous bar's tail
-   extends roughly 5% INTO the next bar's hold window - so at any
-   given moment up to two adjacent bars can be glowing: the current
-   one at full brightness, and the previous one trailing at ~0.36
-   half-way through its decay (ease-out collapses fast at first).
+   only needs 2.5% to reach its peak, the previous bar's tail
+   extends through the entire next bar's hold (5%), so at any given
+   moment up to two adjacent bars can be glowing.
 
-   End bars (1, 5) hold for 12% of cycle - twice as long as middle
-   bars (6%) - so the visual rhythm doesn't appear to "speed up" at
+   End bars (1, 7) hold for 10% of cycle - twice as long as middle
+   bars (5%) - so the visual rhythm doesn't appear to "speed up" at
    the bounce points where there's no neighbour to share timing
    with.
 
-   Phase layout (cycle = 100%, edge hold 12%, middle hold 6%,
-   rise 5%, fall 10% - the fall overlaps the next hold so it does
+   Phase layout (cycle = 100%, edge hold 10%, middle hold 5%, rise
+   2.5%, fall 7.5% - the fall overlaps the next hold so it does
    not consume cycle time):
 
-     bar 1 hold:  94% -> 6%   (wraps the cycle boundary)
-     bar 2 rise:  6%  -> 11%
-     bar 1 fall:  6%  -> 16%  (afterglow extends into bar 2's hold)
-     bar 2 hold:  11% -> 17%
-     bar 3 rise:  17% -> 22%
-     bar 2 fall:  17% -> 27%
-     bar 3 hold:  22% -> 28%
-     bar 4 rise:  28% -> 33%
-     bar 3 fall:  28% -> 38%
-     bar 4 hold:  33% -> 39%
-     bar 5 rise:  39% -> 44%
-     bar 4 fall:  39% -> 49%
-     bar 5 hold:  44% -> 56%
-     bar 4 rise:  56% -> 61%
-     bar 5 fall:  56% -> 66%
-     bar 4 hold:  61% -> 67%
-     bar 3 rise:  67% -> 72%
-     bar 4 fall:  67% -> 77%
-     bar 3 hold:  72% -> 78%
-     bar 2 rise:  78% -> 83%
-     bar 3 fall:  78% -> 88%
-     bar 2 hold:  83% -> 89%
-     bar 1 rise:  89% -> 94%
-     bar 2 fall:  89% -> 99%
+     bar 1 hold:   95%  -> 5%    (wraps the cycle boundary)
+     bar 2 rise:   5%   -> 7.5%
+     bar 1 fall:   5%   -> 12.5% (afterglow into bar 2's hold)
+     bar 2 hold:   7.5% -> 12.5%
+     bar 3 rise:   12.5% -> 15%
+     bar 2 fall:   12.5% -> 20%
+     bar 3 hold:   15%  -> 20%
+     bar 4 rise:   20%  -> 22.5%
+     bar 3 fall:   20%  -> 27.5%
+     bar 4 hold:   22.5% -> 27.5%
+     bar 5 rise:   27.5% -> 30%
+     bar 4 fall:   27.5% -> 35%
+     bar 5 hold:   30%  -> 35%
+     bar 6 rise:   35%  -> 37.5%
+     bar 5 fall:   35%  -> 42.5%
+     bar 6 hold:   37.5% -> 42.5%
+     bar 7 rise:   42.5% -> 45%
+     bar 6 fall:   42.5% -> 50%
+     bar 7 hold:   45%  -> 55%
+     bar 6 rise:   55%  -> 57.5%
+     bar 7 fall:   55%  -> 62.5%
+     bar 6 hold:   57.5% -> 62.5%
+     bar 5 rise:   62.5% -> 65%
+     bar 6 fall:   62.5% -> 70%
+     bar 5 hold:   65%  -> 70%
+     bar 4 rise:   70%  -> 72.5%
+     bar 5 fall:   70%  -> 77.5%
+     bar 4 hold:   72.5% -> 77.5%
+     bar 3 rise:   77.5% -> 80%
+     bar 4 fall:   77.5% -> 85%
+     bar 3 hold:   80%  -> 85%
+     bar 2 rise:   85%  -> 87.5%
+     bar 3 fall:   85%  -> 92.5%
+     bar 2 hold:   87.5% -> 92.5%
+     bar 1 rise:   92.5% -> 95%
+     bar 2 fall:   92.5% -> 100%
 
    Cycle math (only holds + rises count, since falls overlap):
-   2*12 + 6*6 + 8*5 = 100. */
+   2*10 + 10*5 + 12*2.5 = 100. */
 .scanner > span:not(.sr-only):nth-child(1) { animation-name: kitt-bar-1; }
 .scanner > span:not(.sr-only):nth-child(2) { animation-name: kitt-bar-2; }
 .scanner > span:not(.sr-only):nth-child(3) { animation-name: kitt-bar-3; }
 .scanner > span:not(.sr-only):nth-child(4) { animation-name: kitt-bar-4; }
 .scanner > span:not(.sr-only):nth-child(5) { animation-name: kitt-bar-5; }
+.scanner > span:not(.sr-only):nth-child(6) { animation-name: kitt-bar-6; }
+.scanner > span:not(.sr-only):nth-child(7) { animation-name: kitt-bar-7; }
 
 @keyframes kitt-bar-1 {
-  0%, 6%        { opacity: 1; }
-  16%, 89%      { opacity: 0.2; }
-  94%, 100%     { opacity: 1; }
+  0%, 5%        { opacity: 1; }
+  12.5%, 92.5%  { opacity: 0.2; }
+  95%, 100%     { opacity: 1; }
 }
 
 @keyframes kitt-bar-2 {
-  0%, 6%        { opacity: 0.2; }
-  11%, 17%      { opacity: 1; }
-  27%, 78%      { opacity: 0.2; }
-  83%, 89%      { opacity: 1; }
-  99%, 100%     { opacity: 0.2; }
+  0%, 5%        { opacity: 0.2; }
+  7.5%, 12.5%   { opacity: 1; }
+  20%, 85%      { opacity: 0.2; }
+  87.5%, 92.5%  { opacity: 1; }
+  100%          { opacity: 0.2; }
 }
 
 @keyframes kitt-bar-3 {
-  0%, 17%       { opacity: 0.2; }
-  22%, 28%      { opacity: 1; }
-  38%, 67%      { opacity: 0.2; }
-  72%, 78%      { opacity: 1; }
-  88%, 100%     { opacity: 0.2; }
+  0%, 12.5%     { opacity: 0.2; }
+  15%, 20%      { opacity: 1; }
+  27.5%, 77.5%  { opacity: 0.2; }
+  80%, 85%      { opacity: 1; }
+  92.5%, 100%   { opacity: 0.2; }
 }
 
 @keyframes kitt-bar-4 {
-  0%, 28%       { opacity: 0.2; }
-  33%, 39%      { opacity: 1; }
-  49%, 56%      { opacity: 0.2; }
-  61%, 67%      { opacity: 1; }
-  77%, 100%     { opacity: 0.2; }
+  0%, 20%       { opacity: 0.2; }
+  22.5%, 27.5%  { opacity: 1; }
+  35%, 70%      { opacity: 0.2; }
+  72.5%, 77.5%  { opacity: 1; }
+  85%, 100%     { opacity: 0.2; }
 }
 
 @keyframes kitt-bar-5 {
-  0%, 39%       { opacity: 0.2; }
-  44%, 56%      { opacity: 1; }
-  66%, 100%     { opacity: 0.2; }
+  0%, 27.5%     { opacity: 0.2; }
+  30%, 35%      { opacity: 1; }
+  42.5%, 62.5%  { opacity: 0.2; }
+  65%, 70%      { opacity: 1; }
+  77.5%, 100%   { opacity: 0.2; }
+}
+
+@keyframes kitt-bar-6 {
+  0%, 35%       { opacity: 0.2; }
+  37.5%, 42.5%  { opacity: 1; }
+  50%, 55%      { opacity: 0.2; }
+  57.5%, 62.5%  { opacity: 1; }
+  70%, 100%     { opacity: 0.2; }
+}
+
+@keyframes kitt-bar-7 {
+  0%, 42.5%     { opacity: 0.2; }
+  45%, 55%      { opacity: 1; }
+  62.5%, 100%   { opacity: 0.2; }
 }
 
 @media (prefers-reduced-motion: reduce) {
