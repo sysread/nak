@@ -444,19 +444,44 @@ When the work for the task is done:
 
 When the user has explicitly green-lit merging this branch to `main`:
 
-1. `git fetch origin main && git checkout main && git pull --ff-only origin main`
-2. `git checkout <feature-branch> && git rebase main` (resolve conflicts;
-   stop and ask if they're non-trivial)
-3. `git checkout main`; if the feature branch has a single commit, fast-forward
-   (`git merge --ff-only <feature-branch>`); if it has multiple commits, squash
-   (`git merge --squash <feature-branch> && git commit`) with a single narrative
-   message covering the whole change
-4. `git push origin main`
-5. Delete the feature branch locally (`git branch -d <feature-branch>`).
+**In the cloud environment, "merge to main" ALWAYS means "merge the
+PR."** The cloud session interacts with GitHub through the MCP server,
+not the `gh` CLI (which isn't installed). The user's review surface is
+the PR itself - that's where they leave comments, ask for changes, or
+hit the merge button. Even if `git push origin main` directly happens
+to succeed (branch protection may or may not be enforcing in any given
+moment), do NOT take that path. The PR is the record of review; the
+merge button is the record of the change. Bypassing it with a direct
+push leaves the PR open and the audit trail empty.
+
+The mechanic is:
+
+1. `git fetch origin main` and rebase the feature branch onto current
+   `origin/main` if main has moved since the start-of-work rebase
+   (resolve conflicts; stop and ask if non-trivial). Push the rebased
+   branch (`git push --force-with-lease` if the rebase rewrote
+   already-pushed history).
+2. If a PR for this branch doesn't exist yet, open one with
+   `mcp__github__create_pull_request` against `main`.
+3. Merge the PR with `mcp__github__merge_pull_request`:
+   - single commit on the branch -> fast-forward (or rebase) merge
+   - multiple commits -> squash merge, with the squashed commit
+     message covering the whole change (use the existing narrative
+     commit messages as source material)
+4. `git fetch origin main && git checkout main && git pull --ff-only`
+   so the local tree is on the new `main` for the next task.
+5. Delete the local feature branch (`git branch -d <feature-branch>`).
    Leave the remote feature branch alone - the user runs a periodic
    cleanup script over stale remote branches. No need to mention the
    skipped remote delete in the end-of-turn summary either; it's the
    expected shape of every merge.
+
+If the user says "merge to main" *and* a PR doesn't exist yet, step 2
+(open the PR) is implied by the merge instruction - this is the one
+case where opening a PR doesn't need a separate explicit ask. The
+harness-level rule against creating PRs unbidden still applies to
+end-of-task pushes where the user has only asked you to do the work,
+not to land it; "merge it" is the trigger that flips both.
 
 **Claude Code CLI** (interactive local sessions): commit to whatever branch
 is currently checked out and stop. Do not rebase, do not merge, do not push,
