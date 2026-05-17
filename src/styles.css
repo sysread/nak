@@ -2992,7 +2992,7 @@ h1 {
    lived "working on it" state that has no useful progress signal yet.
 
    A bright "highlight" walks across seven vertical bars at constant
-   pace: bar 1 -> bar 7 -> bar 1 -> bar 7, on a 1.4s round-trip cycle.
+   pace: bar 1 -> bar 7 -> bar 1 -> bar 7, on a 1.7s round-trip cycle.
    Each bar pulses to full opacity exactly when the highlight is on
    top of it, then dims back. End bars (1, 7) get one peak per cycle
    (at the bounce points); middle bars (2, 3, 4, 5, 6) get two peaks
@@ -3046,7 +3046,7 @@ h1 {
     0 0 0.25em currentColor,
     0 0 0.7em currentColor;
   opacity: 0.2;
-  animation-duration: 1.4s;
+  animation-duration: 1.7s;
   animation-iteration-count: infinite;
   /* Strong ease-out for the phosphor decay: cubic-bezier(0,0,0.2,1)
      collapses ~88% of the value change into the first half of every
@@ -3060,13 +3060,13 @@ h1 {
   animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
 }
 
-/* Per-bar keyframes. Seven bars in a 1.4s round trip means 12
+/* Per-bar keyframes. Seven bars in a 1.7s round trip means 12
    visits per cycle (1 each for edges 1/7, 2 each for middles 2-6)
    and 12 transitions between them. Each bar has a "hold" window at
    full opacity, surrounded by a 2.5%-of-cycle rise on its leading
    edge and a 7.5%-of-cycle fall on its trailing edge. The
-   asymmetry is the phosphor effect: a bar lights up in 2.5% (35ms)
-   when the highlight arrives, but takes 7.5% (105ms) to decay back
+   asymmetry is the phosphor effect: a bar lights up in 2.5% (~43ms)
+   when the highlight arrives, but takes 7.5% (~128ms) to decay back
    to baseline after the highlight has moved on. Since the next bar
    only needs 2.5% to reach its peak, the previous bar's tail
    extends through the entire next bar's hold (5%), so at any given
