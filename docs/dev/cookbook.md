@@ -87,28 +87,35 @@ unaffected.
   - `id uuid`, `user_id uuid`, `title text not null`,
     `source text`, `source_url text`, `cooklang text not null`,
     `rating smallint` (null = unrated; check constraint enforces
-    1-5), `upcoming boolean not null default false` (workflow
-    bookmark - see "Upcoming flag" below), `created_at`, `updated_at`.
+    1-5), `upcoming boolean not null default false`,
+    `favorite boolean not null default false` (both are workflow
+    bookmarks - see "Bookmark flags" below), `created_at`,
+    `updated_at`.
   - Indexes: `recipes_user_updated_idx (user_id, updated_at desc)`;
-    partial `recipes_user_upcoming_idx (user_id) where upcoming` to
-    keep the "list upcoming" path cheap while most rows aren't
-    bookmarked.
+    partial `recipes_user_upcoming_idx (user_id) where upcoming` and
+    `recipes_user_favorite_idx (user_id) where favorite` to keep the
+    "list upcoming" / "list favorites" paths cheap while most rows
+    aren't bookmarked.
   - RLS: four self-* policies (select / insert / update / delete),
     same shape as `memories`.
-  - **Upcoming flag**: not in `recipe_versions`. Toggled via
-    `SupabaseService.setRecipeUpcoming(id, upcoming)` which does a
-    direct table update bypassing `recipe_update_with_version` -
-    upcoming is workflow state, not content, so it does not write a
-    version row and does not touch `updated_at` (so the recency sort
-    stays stable across toggles). The drawer's `RecipeList.svelte`
-    renders an "Upcoming" section at the top by filtering
-    `cookbook.recipes` on `r.upcoming === true`; rows then ALSO
-    appear in their natural position in the main list below (the
-    duplication is intentional - the user wants both "what's up
-    next" and "where it lives normally"). The LLM tools do NOT
-    expose a way to toggle upcoming - it's strictly a user-driven
-    UI affordance, surfaced via the cart icon in `Cookbook.svelte`'s
-    detail action bar.
+  - **Bookmark flags** (`upcoming`, `favorite`): not in
+    `recipe_versions`. Toggled via
+    `SupabaseService.setRecipeUpcoming(id, upcoming)` and
+    `setRecipeFavorite(id, favorite)`, which do direct table updates
+    bypassing `recipe_update_with_version` - both are workflow
+    state, not content, so they do not write version rows and do not
+    touch `updated_at` (so the recency sort stays stable across
+    toggles). The two flags are independent. The drawer's
+    `RecipeList.svelte` renders an "Upcoming" section at the top
+    by filtering `cookbook.recipes` on `r.upcoming === true`, then
+    a "Favorites" section below it (filtered on `r.favorite ===
+    true`); rows in either section ALSO appear in their natural
+    position in the main "All recipes" listing below (the
+    duplication is intentional - the user wants both "what's
+    bookmarked" and "where it lives normally"). The LLM tools do
+    NOT expose a way to toggle either flag - both are strictly
+    user-driven UI affordances, surfaced via the cart and
+    thumbs-up icons in `Cookbook.svelte`'s detail action bar.
 - `public.recipe_versions` table (see `supabase/schema.sql`):
   - `id uuid`, `recipe_id uuid` (FK to `recipes`, on-delete cascade),
     `user_id uuid`, `title`, `source`, `source_url`, `cooklang`,

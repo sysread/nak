@@ -201,6 +201,29 @@ The upcoming flag is yours - it does not appear in the recipe's edit
 history and the model does not toggle it on its own. It's a personal
 "do not forget this for this shopping trip" marker.
 
+## Favorites
+
+A favorite is a long-lived bookmark for recipes you love and want
+one click away - independent of "upcoming," which is the
+shopping-cycle bookmark. A recipe can be a favorite, upcoming, both,
+or neither.
+
+- **To favorite a recipe**: open it in the detail pane and click the
+  thumbs-up icon in the action bar (just right of the cart). The
+  icon fills and tints to the accent colour when the recipe is
+  favorited.
+- **To unfavorite**: click the thumbs-up again.
+- **Where they show up**: in a **Favorites** section right below
+  **Upcoming** and above the main listing. As with Upcoming, the
+  favorited row ALSO continues to appear in its natural position in
+  the main list, marked with a small thumbs-up glyph next to the
+  title so you can spot favorites at a glance.
+- **Stable sort**: toggling favorite does not bump the recipe in the
+  recency sort - it's a bookmark, not an edit.
+
+Same as upcoming, the favorite flag is yours and the model does not
+toggle it on its own.
+
 ## Photos
 
 Each recipe can carry up to 12 photos that show as thumbnails at the

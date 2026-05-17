@@ -973,6 +973,22 @@ alter table public.recipes
 create index if not exists recipes_user_upcoming_idx
   on public.recipes (user_id) where upcoming;
 
+-- "Favorite" flag - long-lived bookmark for recipes the user has
+-- decided they love and want one click away. Same versioning and
+-- updated_at semantics as `upcoming` (workflow state, not content),
+-- and the same partial-index strategy. The two flags are independent:
+-- a recipe can be favorited without being upcoming, marked upcoming
+-- without being a favorite, both, or neither. They surface as two
+-- separate sections at the top of the drawer listing (Upcoming above
+-- Favorites above the main list) and a recipe flagged for both
+-- appears in both sections AND in its natural slot below - the
+-- duplication is intentional and matches what the user asked for.
+alter table public.recipes
+  add column if not exists favorite boolean not null default false;
+
+create index if not exists recipes_user_favorite_idx
+  on public.recipes (user_id) where favorite;
+
 alter table public.recipes enable row level security;
 
 drop policy if exists "recipes are self-selectable" on public.recipes;
@@ -1334,6 +1350,7 @@ create or replace function public.recipe_create_with_version(
   cooklang text,
   rating smallint,
   upcoming boolean,
+  favorite boolean,
   created_at timestamptz,
   updated_at timestamptz
 )
@@ -1417,7 +1434,7 @@ begin
 
   return query
     select r.id, r.title, r.source, r.source_url, r.cooklang, r.rating,
-           r.upcoming, r.created_at, r.updated_at
+           r.upcoming, r.favorite, r.created_at, r.updated_at
       from public.recipes r where r.id = v_recipe_id;
 end $$;
 
@@ -1460,6 +1477,7 @@ create or replace function public.recipe_update_with_version(
   cooklang text,
   rating smallint,
   upcoming boolean,
+  favorite boolean,
   created_at timestamptz,
   updated_at timestamptz
 )
@@ -1603,7 +1621,7 @@ begin
 
   return query
     select r.id, r.title, r.source, r.source_url, r.cooklang, r.rating,
-           r.upcoming, r.created_at, r.updated_at
+           r.upcoming, r.favorite, r.created_at, r.updated_at
       from public.recipes r where r.id = p_id;
 end $$;
 
@@ -2157,13 +2175,14 @@ create or replace function public.search_recipes_by_embedding(
   cooklang text,
   rating smallint,
   upcoming boolean,
+  favorite boolean,
   created_at timestamptz,
   updated_at timestamptz,
   similarity real
 )
 language sql stable security invoker as $$
-  select id, title, source, source_url, cooklang, rating, upcoming,
-         created_at, updated_at,
+  select id, title, source, source_url, cooklang, rating,
+         upcoming, favorite, created_at, updated_at,
          (1 - (embedding <=> query_embedding))::real as similarity
     from public.recipes
    where user_id = auth.uid()

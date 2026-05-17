@@ -147,6 +147,20 @@
         (b.updated_at ?? '').localeCompare(a.updated_at ?? '')
       );
   });
+
+  // Favorites section sits between Upcoming and the main "All recipes"
+  // list. Same duplication contract as upcoming: a favorited row also
+  // appears in its natural spot in the main list (and in the Upcoming
+  // section above if it's flagged for both). Hidden during a search
+  // for the same reason - relevance ranking owns the result order.
+  const favoriteRecipes = $derived.by<Recipe[]>(() => {
+    if (isSearching) return [];
+    return cookbook.recipes
+      .filter((r) => r.favorite)
+      .sort((a, b) =>
+        (b.updated_at ?? '').localeCompare(a.updated_at ?? '')
+      );
+  });
 </script>
 
 <div class="recipe-drawer-list">
@@ -240,6 +254,24 @@
                 </svg>
               </span>
             {/if}
+            {#if r.favorite}
+              <!-- Thumbs-up glyph: parallel to the cart - present on
+                   the row in BOTH the Favorites section AND its natural
+                   slot in the main list, so a favorited row in the main
+                   list is visibly marked too. -->
+              <span
+                class="recipe-list-favorite-mark"
+                aria-label="Favorite"
+                title="Favorite"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                     stroke-linejoin="round" aria-hidden="true">
+                  <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z" />
+                  <path d="M7 11l4-7a2 2 0 0 1 4 0v4h5a2 2 0 0 1 2 2.4l-2 7A2 2 0 0 1 18 20H7z" />
+                </svg>
+              </span>
+            {/if}
             {r.title}
           </span>
           {#if r.rating !== null && r.rating !== undefined}
@@ -256,11 +288,18 @@
       {#each upcomingRecipes as r (`upcoming:${r.id}`)}
         {@render recipeRow(r, { keyPrefix: 'upcoming' })}
       {/each}
-      <!-- Divider between the Upcoming section and the main listing.
-           Without a header on the main section the second list would
-           visually run into the first; the "All recipes" header makes
-           the split explicit. Only shown when the Upcoming bucket has
-           content - otherwise the main list is the whole listing and
+    {/if}
+    {#if favoriteRecipes.length > 0}
+      <h3 class="bucket-header">Favorites</h3>
+      {#each favoriteRecipes as r (`favorite:${r.id}`)}
+        {@render recipeRow(r, { keyPrefix: 'favorite' })}
+      {/each}
+    {/if}
+    {#if upcomingRecipes.length > 0 || favoriteRecipes.length > 0}
+      <!-- Divider header for the main listing. Without it, the main
+           list would visually run into whichever section is directly
+           above. Only shown when at least one bucket section is
+           present - otherwise the main list IS the whole listing and
            a header would just be noise. -->
       <h3 class="bucket-header">All recipes</h3>
     {/if}
@@ -322,6 +361,17 @@
      Upcoming section above and the main listing below so the user
      can spot at a glance which "regular" rows are also bookmarked. */
   .recipe-list-upcoming-mark {
+    display: inline-flex;
+    align-items: center;
+    color: var(--accent);
+    margin-right: 0.3rem;
+    vertical-align: -0.1em;
+  }
+  /* Thumbs-up glyph for favorited rows. Parallel to the upcoming
+     mark; sits to the right of it when a row is flagged for both
+     (cart, then thumbs-up, then title). Same accent tint so the row
+     reads as "marked" without picking a competing color. */
+  .recipe-list-favorite-mark {
     display: inline-flex;
     align-items: center;
     color: var(--accent);
