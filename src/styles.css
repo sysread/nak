@@ -2991,16 +2991,24 @@ h1 {
    <Scanner> component (see src/components/Scanner.svelte) for any short-
    lived "working on it" state that has no useful progress signal yet.
 
-   Five vertical bars each pulse (dim -> bright -> dim) on a shared 1.4s
-   cycle with staggered delays. `animation-direction: alternate` reverses
-   the timeline each cycle, so the bright peak walks left->right->left,
-   producing the bounce. Bars stay full height the whole time - only
-   opacity changes - so the indicator reads as a fixed grille with light
-   moving across it rather than bars growing and shrinking. The bar shape
-   (tall and narrow, near-square corners) matches the segmented red grille
-   on the front of K.I.T.T. in the show; the earlier circular-dot
-   rendering was the same animation but read as a row of LEDs rather than
-   the original prop. */
+   A bright "highlight" walks across five vertical bars at constant
+   pace: bar 1 -> bar 5 -> bar 1 -> bar 5, on a 1.4s round-trip cycle.
+   Each bar pulses to full opacity exactly when the highlight is on
+   top of it, then dims back. End bars (1, 5) get one peak per cycle
+   (at the bounce points); middle bars (2, 3, 4) get two peaks per
+   cycle, once outbound and once inbound. That requires per-bar
+   keyframes - a single shared @keyframes with staggered delays
+   produces only a left-to-right sweep that visibly restarts from
+   the left, because by the time bar 5 peaks, bar 1 has already
+   finished a full alternate cycle and is starting over.
+
+   Bars stay full height the whole time - only opacity changes - so
+   the indicator reads as a fixed grille with light moving across it
+   rather than bars growing and shrinking. The bar shape (tall and
+   narrow, near-square corners) matches the segmented red grille on
+   the front of K.I.T.T. in the show; the earlier circular-dot
+   rendering was the same animation but read as a row of LEDs rather
+   than the original prop. */
 .scanner {
   display: inline-flex;
   align-items: center;
@@ -3025,22 +3033,63 @@ h1 {
   border-radius: 0.06em;
   background: currentColor;
   box-shadow: 0 0 0.5em currentColor;
-  opacity: 0.25;
-  animation: knight-pulse 1.4s ease-in-out infinite alternate;
+  opacity: 0.2;
+  animation-duration: 1.4s;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
 }
 
-/* Stagger each dot by 1/4 of the half-cycle so the peak walks across
-   the row. With alternate direction the sequence reverses on every
-   other iteration — hence the back-and-forth sweep. */
-.scanner > span:not(.sr-only):nth-child(1) { animation-delay: 0s; }
-.scanner > span:not(.sr-only):nth-child(2) { animation-delay: 0.175s; }
-.scanner > span:not(.sr-only):nth-child(3) { animation-delay: 0.35s; }
-.scanner > span:not(.sr-only):nth-child(4) { animation-delay: 0.525s; }
-.scanner > span:not(.sr-only):nth-child(5) { animation-delay: 0.7s; }
+/* Per-bar keyframes. Within a 1.4s round trip the highlight is on
+   bar i at the timestamp percentages below:
 
-@keyframes knight-pulse {
-  0%   { opacity: 0.2; }
-  100% { opacity: 1; }
+     bar 1: 0%, 100%       (one peak per cycle, at the left bounce)
+     bar 2: 12.5%, 87.5%
+     bar 3: 25%, 75%
+     bar 4: 37.5%, 62.5%
+     bar 5: 50%            (one peak per cycle, at the right bounce)
+
+   Opacity between peaks linearly drops to 0.2 (the dim baseline)
+   and back. ease-in-out on the timing function softens the rise/
+   fall around each peak so the highlight feels like a smooth glow
+   passing over the bar rather than a hard pulse. */
+.scanner > span:not(.sr-only):nth-child(1) { animation-name: kitt-bar-1; }
+.scanner > span:not(.sr-only):nth-child(2) { animation-name: kitt-bar-2; }
+.scanner > span:not(.sr-only):nth-child(3) { animation-name: kitt-bar-3; }
+.scanner > span:not(.sr-only):nth-child(4) { animation-name: kitt-bar-4; }
+.scanner > span:not(.sr-only):nth-child(5) { animation-name: kitt-bar-5; }
+
+@keyframes kitt-bar-1 {
+  0%, 100%      { opacity: 1; }
+  12.5%, 87.5%  { opacity: 0.2; }
+}
+
+@keyframes kitt-bar-2 {
+  0%, 100%      { opacity: 0.2; }
+  12.5%         { opacity: 1; }
+  25%, 75%      { opacity: 0.2; }
+  87.5%         { opacity: 1; }
+}
+
+@keyframes kitt-bar-3 {
+  0%, 12.5%     { opacity: 0.2; }
+  25%           { opacity: 1; }
+  37.5%, 62.5%  { opacity: 0.2; }
+  75%           { opacity: 1; }
+  87.5%, 100%   { opacity: 0.2; }
+}
+
+@keyframes kitt-bar-4 {
+  0%, 25%       { opacity: 0.2; }
+  37.5%         { opacity: 1; }
+  50%           { opacity: 0.2; }
+  62.5%         { opacity: 1; }
+  75%, 100%     { opacity: 0.2; }
+}
+
+@keyframes kitt-bar-5 {
+  0%, 37.5%     { opacity: 0.2; }
+  50%           { opacity: 1; }
+  62.5%, 100%   { opacity: 0.2; }
 }
 
 @media (prefers-reduced-motion: reduce) {
