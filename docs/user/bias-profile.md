@@ -124,6 +124,34 @@ that, the strongest four by credible-interval lower bound are
 chosen; the rest stay visible in the modal but don't crowd the
 prompt.
 
+## How the system adapts to your reactions
+
+Each time the worker analyzes a conversation it also classifies
+how you reacted to the bias-compensation behavior the assistant
+was instructed to perform. Three outcomes per bias that was
+active during that conversation:
+
+- **Affirmed** - you engaged positively with the compensation
+  (acknowledged the contrary view, thanked the assistant for
+  surfacing the base rate, etc.).
+- **Pushed back** - you explicitly rejected the compensation
+  ("stop hedging", "just answer the question", "I don't need
+  alternatives", etc.).
+- **Neutral** - no clear signal either way.
+
+Those reactions accumulate into a per-bias feedback score that
+shifts the surfacing thresholds slightly: consistently affirming
+biases surface sooner, consistently pushed-back biases surface
+later. The shift is bounded (10 percentage points at the
+extremes) so a single bad day cannot knock a real pattern off
+the map, and the score is dampened by a neutral prior so a single
+strong reaction doesn't dominate.
+
+The reactions for the conversation you have open are visible in
+the diagnostics modal alongside the observations, plus a
+per-bias feedback column in the evidence table. The score also
+appears in the modal footer under the math description.
+
 ## Privacy
 
 The bias profile lives in your own Supabase. The worker only
