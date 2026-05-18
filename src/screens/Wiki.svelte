@@ -79,6 +79,7 @@
   import {
     runManually as runLibrarianManually,
     type RunManuallyResult,
+    type LibrarianProgress,
   } from '$lib/agents/wiki-librarian/runner.svelte';
   import type {
     WikiArticle,
@@ -703,6 +704,67 @@
   let librarianResult = $state<RunManuallyResult | null>(null);
   let librarianTextarea = $state<HTMLTextAreaElement | null>(null);
 
+  // Live step list for the manual librarian run. Each `LibrarianProgress`
+  // event from the runner gets translated into one row here; the
+  // template renders them with the rotating-glyph spinner next to
+  // whichever row is still `pending`, a check on the ones that finished
+  // cleanly, and an X on any that errored. Without this the user sees
+  // nothing but "Working..." for the 10-30 seconds the agent takes,
+  // even though the underlying tool calls each narrate themselves via
+  // the dispatcher-injected `activity` field.
+  interface LibrarianStep {
+    label: string;
+    status: 'pending' | 'ok' | 'error';
+  }
+  let librarianSteps = $state<LibrarianStep[]>([]);
+
+  // Map a runner progress event onto the step list. Each non-`done`
+  // event pushes a new row; before pushing, we resolve whatever row is
+  // still pending (the previous phase just finished by definition).
+  // `done` doesn't push a new row - it just settles the trailing
+  // pending row, so the spinner stops without leaving a stray "Done."
+  // step hanging below the result paragraph.
+  function settleTrailingPending(): void {
+    const last = librarianSteps[librarianSteps.length - 1];
+    if (last && last.status === 'pending') last.status = 'ok';
+  }
+  function pushLibrarianStep(event: LibrarianProgress): void {
+    if (event.kind === 'preparing') {
+      const n = event.articleCount;
+      librarianSteps.push({
+        label: `Loading ${n} article${n === 1 ? '' : 's'}`,
+        status: 'pending',
+      });
+      return;
+    }
+    if (event.kind === 'thinking') {
+      settleTrailingPending();
+      librarianSteps.push({
+        label: `Thinking (round ${event.round})`,
+        status: 'pending',
+      });
+      return;
+    }
+    if (event.kind === 'tool') {
+      settleTrailingPending();
+      // Prefer the model's narration; fall back to the bare tool name
+      // when the model emitted an empty activity (shouldn't happen -
+      // dispatch.ts marks activity required - but be robust to model
+      // misbehaviour rather than rendering an empty row).
+      const label = event.activity.trim() || event.name;
+      librarianSteps.push({
+        label,
+        status: event.ok ? 'ok' : 'error',
+      });
+      return;
+    }
+    // event.kind === 'done'
+    const last = librarianSteps[librarianSteps.length - 1];
+    if (last && last.status === 'pending') {
+      last.status = event.ok ? 'ok' : 'error';
+    }
+  }
+
   // Watch the trigger from the top-bar button. Opens the confirmation
   // strip (and only the strip - the run itself is gated behind the
   // user clicking "Run librarian"). Resets the trigger so the parent
@@ -776,6 +838,7 @@
     librarianBusy = false;
     librarianError = null;
     librarianResult = null;
+    librarianSteps = [];
   }
 
   function cancelLibrarianRun(): void {
@@ -784,6 +847,7 @@
     librarianInstructions = '';
     librarianError = null;
     librarianResult = null;
+    librarianSteps = [];
   }
 
   async function submitLibrarianRun(): Promise<void> {
@@ -792,6 +856,7 @@
     librarianBusy = true;
     librarianError = null;
     librarianResult = null;
+    librarianSteps = [];
     try {
       const session = await app.supabase.getSession();
       if (!session) {
@@ -805,6 +870,7 @@
         userName: app.userName,
         userLocation: app.userLocation,
         customInstructions: librarianInstructions.trim() || null,
+        onProgress: pushLibrarianStep,
       });
       librarianResult = result;
       if (result.kind === 'error') {
@@ -1034,6 +1100,30 @@
           </div>
           {#if librarianError}
             <p class="error">{librarianError}</p>
+          {/if}
+          {#if librarianSteps.length > 0}
+            <!-- Live step list. Each row pairs the rotating-glyph
+                 spinner (pending) or a final glyph (ok/error) with the
+                 model-emitted `activity` narration for tool calls and a
+                 generic phase label for the surrounding phases. Gives
+                 the user visible evidence the run is actually doing
+                 work during the 10-30s the loop runs - the old
+                 "Working..." button alone reads as "hung." -->
+            <ol class="librarian-steps" aria-live="polite">
+              {#each librarianSteps as step, i (i)}
+                <li class="librarian-step status-{step.status}">
+                  <span
+                    class="librarian-step-glyph"
+                    aria-hidden="true"
+                  >{step.status === 'pending'
+                    ? '↻'
+                    : step.status === 'ok'
+                      ? '✓'
+                      : '✗'}</span>
+                  <span class="librarian-step-label">{step.label}</span>
+                </li>
+              {/each}
+            </ol>
           {/if}
           <div class="row">
             <button
@@ -1568,6 +1658,71 @@
     gap: 0.4rem;
     margin-top: 0.5rem;
     flex-wrap: wrap;
+  }
+  /* Live step list shown under the librarian's custom-instructions
+     textarea while a manual run is in flight. The spinner glyph
+     mirrors the chat tool-row pattern - rotate the same Lekton-safe
+     character (used by .tool-status.status-pending in styles.css)
+     rather than swapping sprites. Steps are an <ol> for semantics
+     but rendered without numbering since the labels already imply
+     order. */
+  .librarian-steps {
+    list-style: none;
+    padding: 0;
+    margin: 0.25rem 0 0.75rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.85rem;
+    line-height: 1.35;
+  }
+  .librarian-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  .librarian-step-glyph {
+    display: inline-flex;
+    width: 1.1rem;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 0.95rem;
+    line-height: 1.2;
+    /* Pull up slightly so the glyph optical-aligns to the first
+       baseline of the label even when the label wraps onto two
+       lines. */
+    margin-top: 0.05rem;
+  }
+  .librarian-step-label {
+    flex: 1;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .librarian-step.status-pending .librarian-step-glyph {
+    color: var(--muted);
+    animation: librarian-step-spin 1.1s linear infinite;
+  }
+  .librarian-step.status-ok .librarian-step-glyph {
+    color: var(--ok);
+  }
+  .librarian-step.status-error .librarian-step-glyph {
+    color: var(--danger);
+  }
+  /* Settled steps muted slightly so the pending one (with the
+     spinner) is the visual focus. The pending row keeps the
+     default --text colour for emphasis. */
+  .librarian-step.status-ok .librarian-step-label,
+  .librarian-step.status-error .librarian-step-label {
+    color: var(--muted);
+  }
+  @keyframes librarian-step-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .librarian-step.status-pending .librarian-step-glyph {
+      animation: none;
+    }
   }
   /* button.danger is styled globally in styles.css (solid red fill +
      light text on top). No local override - the previous version
