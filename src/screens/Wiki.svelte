@@ -841,15 +841,6 @@
     librarianSteps = [];
   }
 
-  function cancelLibrarianRun(): void {
-    if (librarianBusy) return;
-    librarianConfirmOpen = false;
-    librarianInstructions = '';
-    librarianError = null;
-    librarianResult = null;
-    librarianSteps = [];
-  }
-
   async function submitLibrarianRun(): Promise<void> {
     if (!app.supabase || !app.venice) return;
     if (librarianBusy) return;
@@ -1066,77 +1057,86 @@
           sweep. This manual run does not reset the schedule for the
           next background run.
         </p>
-        {#if librarianResult && librarianResult.kind === 'ok'}
-          <p>
-            <strong>Done.</strong>
-            {#if librarianResult.finalText.trim().length > 0}
-              {librarianResult.finalText}
-            {:else}
+        <div class="form-row">
+          <label for="wiki-librarian-instructions">
+            Custom instructions (optional)
+          </label>
+          <textarea
+            id="wiki-librarian-instructions"
+            bind:this={librarianTextarea}
+            bind:value={librarianInstructions}
+            disabled={librarianBusy}
+            rows={4}
+            spellcheck="true"
+            placeholder={'e.g. "Delete the article about Kermit protocol; it’s out of scope."'}
+          ></textarea>
+        </div>
+        {#if librarianError}
+          <p class="error">{librarianError}</p>
+        {/if}
+        {#if librarianSteps.length > 0}
+          <!-- Live step list. Each row pairs the rotating-glyph
+               spinner (pending) or a final glyph (ok/error) with the
+               model-emitted `activity` narration for tool calls and a
+               generic phase label for the surrounding phases. Gives
+               the user visible evidence the run is actually doing
+               work during the 10-30s the loop runs - the old
+               "Working..." button alone reads as "hung." Stays
+               visible after the run settles so the user can scan the
+               trail alongside the result card below. -->
+          <ol class="librarian-steps" aria-live="polite">
+            {#each librarianSteps as step, i (i)}
+              <li class="librarian-step status-{step.status}">
+                <span
+                  class="librarian-step-glyph"
+                  aria-hidden="true"
+                >{step.status === 'pending'
+                  ? '↻'
+                  : step.status === 'ok'
+                    ? '✓'
+                    : '✗'}</span>
+                <span class="librarian-step-label">{step.label}</span>
+              </li>
+            {/each}
+          </ol>
+        {/if}
+        <div class="row">
+          <button
+            type="button"
+            class="primary"
+            onclick={submitLibrarianRun}
+            disabled={librarianBusy}
+          >
+            {librarianBusy ? 'Working…' : 'Run librarian'}
+          </button>
+        </div>
+      </div>
+      {#if librarianResult && librarianResult.kind === 'ok'}
+        <!-- Post-run result rendered as a message card below the
+             input rather than swapping the input out for a modal
+             "Done" screen. The user can scan the librarian's summary
+             and immediately type another instruction without
+             round-tripping through a Close button. The summary is
+             markdown (the prompt's "Final reply" block sometimes
+             includes bullet lists or backtick-fenced article titles)
+             so we render through the same `<Markdown>` component the
+             rest of the wiki uses instead of dropping the model's
+             formatting on the floor. -->
+        <div class="wiki-librarian-result" aria-live="polite">
+          {#if librarianResult.finalText.trim().length > 0}
+            <Markdown content={librarianResult.finalText} />
+          {:else}
+            <p class="subtle">
               The librarian completed without any changes.
-            {/if}
-          </p>
-          <p class="subtle">
+            </p>
+          {/if}
+          <p class="subtle wiki-librarian-result-meta">
             {librarianResult.toolCalls} tool call{librarianResult.toolCalls === 1 ? '' : 's'}
             over {librarianResult.articleCount} article{librarianResult.articleCount === 1 ? '' : 's'}.
             See the Logs drawer for the full trace.
           </p>
-          <div class="row">
-            <button type="button" onclick={cancelLibrarianRun}>Close</button>
-          </div>
-        {:else}
-          <div class="form-row">
-            <label for="wiki-librarian-instructions">
-              Custom instructions (optional)
-            </label>
-            <textarea
-              id="wiki-librarian-instructions"
-              bind:this={librarianTextarea}
-              bind:value={librarianInstructions}
-              disabled={librarianBusy}
-              rows={4}
-              spellcheck="true"
-              placeholder={'e.g. "Delete the article about Kermit protocol; it’s out of scope."'}
-            ></textarea>
-          </div>
-          {#if librarianError}
-            <p class="error">{librarianError}</p>
-          {/if}
-          {#if librarianSteps.length > 0}
-            <!-- Live step list. Each row pairs the rotating-glyph
-                 spinner (pending) or a final glyph (ok/error) with the
-                 model-emitted `activity` narration for tool calls and a
-                 generic phase label for the surrounding phases. Gives
-                 the user visible evidence the run is actually doing
-                 work during the 10-30s the loop runs - the old
-                 "Working..." button alone reads as "hung." -->
-            <ol class="librarian-steps" aria-live="polite">
-              {#each librarianSteps as step, i (i)}
-                <li class="librarian-step status-{step.status}">
-                  <span
-                    class="librarian-step-glyph"
-                    aria-hidden="true"
-                  >{step.status === 'pending'
-                    ? '↻'
-                    : step.status === 'ok'
-                      ? '✓'
-                      : '✗'}</span>
-                  <span class="librarian-step-label">{step.label}</span>
-                </li>
-              {/each}
-            </ol>
-          {/if}
-          <div class="row">
-            <button
-              type="button"
-              class="primary"
-              onclick={submitLibrarianRun}
-              disabled={librarianBusy}
-            >
-              {librarianBusy ? 'Working…' : 'Run librarian'}
-            </button>
-          </div>
-        {/if}
-      </div>
+        </div>
+      {/if}
     {:else if !route.wiki_article_id}
       <!-- No-article default. Compose mode wins; otherwise show the
            inline changelog (the wiki's "home page") with a "+ new
@@ -1723,6 +1723,25 @@
     .librarian-step.status-pending .librarian-step-glyph {
       animation: none;
     }
+  }
+  /* Post-run result card. Visually mirrors the chat .msg.assistant
+     bubble (surface bg + hairline + rounded corners) so the librarian
+     reply reads as "a message from the agent" rather than a status
+     panel - but locally scoped to avoid inheriting .msg's 80%-width
+     centering, which would clip the card against the strip above.
+     `min-width: 0` keeps long fenced article titles inside the
+     <Markdown> render from blowing out the column. */
+  .wiki-librarian-result {
+    margin-top: 0.75rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--surface);
+    min-width: 0;
+  }
+  .wiki-librarian-result-meta {
+    margin: 0.5rem 0 0 0;
+    font-size: 0.85rem;
   }
   /* button.danger is styled globally in styles.css (solid red fill +
      light text on top). No local override - the previous version
