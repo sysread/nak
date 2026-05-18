@@ -417,6 +417,16 @@ label {
   max-width: 52rem;
   display: grid;
   grid-template-columns: 12rem 1fr;
+  /* Pin the single grid row to the container's available height
+     (1fr) instead of letting it auto-size to max-content. Without
+     this, the row track grew to fit the pane's content, leaving
+     `.settings-pane`'s `overflow: auto` permanently dormant - the
+     pane's clientHeight equalled its scrollHeight, and the shell's
+     `overflow: hidden` just clipped the bottom of the tab. With
+     1fr the row collapses to (max-height - nav row contribution),
+     `.settings-pane`'s `min-height: 0` lets it shrink below
+     content size, and the pane scrolls as intended. */
+  grid-template-rows: 1fr;
   min-height: 28rem;
   /* Cap the shell at the viewport minus .center's 2rem gutter on each
      side so a tall pane (the AI tab is the canonical offender) never
@@ -502,11 +512,12 @@ label {
   padding: 1.25rem 1.5rem;
   overflow: auto;
   min-width: 0;
-  /* Grid items default to min-height: auto, which sizes to content and
-     prevents `overflow: auto` from kicking in - the pane would push the
-     shell past its max-height instead of scrolling. min-height: 0 lets
-     the grid track collapse to the available row height so the pane's
-     own scrollbar takes over. */
+  /* Grid items default to min-height: auto (their content's min-content
+     size), which would keep the pane at least as tall as its
+     longest unbreakable child even when the shell's 1fr row track
+     is shorter. Force min-height: 0 so the pane can shrink to the
+     row's available height; `overflow: auto` above then engages
+     and the pane scrolls instead of overflowing the clipped shell. */
   min-height: 0;
 }
 
