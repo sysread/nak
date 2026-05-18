@@ -25,8 +25,8 @@
  * `src/lib/bias/math.ts` and `src/lib/agents/bias/` respectively.
  */
 import type { SupabaseService } from '../supabase';
-import { isBiasKey } from './catalog';
-import { formatBiasProfileBlock } from './format';
+import { isBiasKey, type BiasKey } from './catalog';
+import { formatBiasProfileBlock, pickRenderable } from './format';
 import type { BiasSummaryRow, Tier } from './types';
 import { createLogger } from '../logger.svelte';
 
@@ -36,8 +36,21 @@ export { formatBiasProfileBlock } from './format';
 export type { BiasSummaryRow, Tier } from './types';
 
 /**
+ * What `getBiasProfileBlock` resolves with. The string is what
+ * rides in the system prompt; `activeBiases` is the catalog-key
+ * list of biases that actually rendered (post render-cap) so the
+ * chat-loop can snapshot the set into threads.bias_active_at_turn
+ * for the worker's reactor pass to read later. The two come from
+ * one bias_summary read so they cannot drift.
+ */
+export interface BiasProfileResult {
+  block: string | null;
+  activeBiases: BiasKey[];
+}
+
+/**
  * Build the system-prompt block from the cached bias_summary.
- * Returns null when:
+ * Returns `{ block: null, activeBiases: [] }` when:
  *   - the read fails (network blip, RLS rejection) - errors are
  *     swallowed; bias is silent, so a missing block is the right
  *     fallback
@@ -48,17 +61,17 @@ export type { BiasSummaryRow, Tier } from './types';
  */
 export async function getBiasProfileBlock(
   supabase: SupabaseService
-): Promise<string | null> {
+): Promise<BiasProfileResult> {
   let raw;
   try {
     raw = await supabase.biasListSummary();
   } catch (err) {
     log.debug('bias profile read failed', err);
-    return null;
+    return { block: null, activeBiases: [] };
   }
   if (!raw || raw.length === 0) {
     log.debug('bias profile: empty cache (cold start)');
-    return null;
+    return { block: null, activeBiases: [] };
   }
   // Filter to known-catalog rows. An unknown `bias` key in the
   // cache would mean the catalog was edited but the cache is
@@ -79,7 +92,14 @@ export async function getBiasProfileBlock(
       computedAt: r.computedAt,
     });
   }
-  return formatBiasProfileBlock(rows);
+  const block = formatBiasProfileBlock(rows);
+  // Same rule the formatter applies internally; lifted out here so
+  // the chat-loop snapshot writer sees the exact set that just
+  // rendered (post tier filter, post render cap). If the formatter
+  // returns null these are the rows that fell short of soft - the
+  // snapshot is the empty set.
+  const activeBiases = pickRenderable(rows).map((r) => r.bias);
+  return { block, activeBiases };
 }
 
 /**
@@ -98,5 +118,33 @@ export async function notifyBiasNewUserMessage(
     log.debug('bias profile: cleared thread on new user message', { threadId });
   } catch (err) {
     log.debug('bias profile: clear thread failed', err);
+  }
+}
+
+/**
+ * Snapshot the set of bias keys that just rendered into the system
+ * prompt to threads.bias_active_at_turn. The worker reads this
+ * snapshot when claiming the thread for analysis so the merged
+ * observer/reactor agent knows which biases the user's messages
+ * could have been reacting to. Best-effort; errors swallowed so a
+ * failed snapshot does not fail the chat turn - the worker will
+ * see whatever the previous turn wrote (or an empty set on a
+ * fresh thread), which just means "no reactions to classify" -
+ * the feedback EMA stays at 0 and tier thresholds stay at the v1
+ * defaults.
+ */
+export async function snapshotBiasActiveBiases(
+  supabase: SupabaseService,
+  threadId: string,
+  activeBiases: readonly string[]
+): Promise<void> {
+  try {
+    await supabase.biasSnapshotActiveBiases(threadId, activeBiases);
+    log.debug('bias profile: snapshot active biases', {
+      threadId,
+      count: activeBiases.length,
+    });
+  } catch (err) {
+    log.debug('bias profile: snapshot failed', err);
   }
 }
