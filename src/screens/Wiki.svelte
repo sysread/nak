@@ -12,6 +12,12 @@
    * shape from Journal.svelte: textarea for instructions, preview with
    * Accept / Try Again / Cancel.
    *
+   * The librarian confirmation strip is its own page: when open it
+   * fully replaces the article/changelog/compose view rather than
+   * stacking on top, so the three top-bar destinations (read an
+   * article, see the changelog, run the librarian) read as siblings
+   * the way the rest of the app's panels do.
+   *
    * The changelog used to live in a modal (WikiChangelog.svelte)
    * launched from a top-bar clock button. It moved into the empty
    * state so the wiki tab has a useful default surface instead of a
@@ -670,13 +676,16 @@
   });
 
   function openLibrarianConfirm(): void {
-    // Close any open article first so the confirmation strip lands on
-    // the empty-state surface instead of being injected above the
-    // article body. Otherwise the strip pushes the article down and
-    // reads as "the librarian inserted itself into this article."
-    // Also tear down any per-article mid-edit / delete / manual-update
-    // strips that were anchored on the closing article - their state
-    // would otherwise linger after the article unmounts.
+    // The librarian strip is its own page in the template (the
+    // article/changelog/compose conditional is chained as an :else-if
+    // off the librarian conditional), so we don't need to swap views
+    // explicitly here - just tear down per-article mid-edit / delete /
+    // manual-update strips so their state doesn't linger if the user
+    // cancels the librarian and lands back on the article. Also clear
+    // wiki_article_id so cancelling the librarian returns to the
+    // changelog rather than re-mounting the article the user was on -
+    // the librarian's whole reason to exist is wiki-wide operations,
+    // and the changelog is the natural surface to land on after one.
     if (route.wiki_article_id) {
       navigate({ wiki_article_id: null });
       cancelEdit();
@@ -888,9 +897,10 @@
     {/if}
 
     {#if librarianConfirmOpen}
-      <!-- Manual-librarian confirmation strip. Sits at the top of the
-           panel so the user lands on it regardless of which article
-           was last selected. Three layered states:
+      <!-- Manual-librarian confirmation strip. Its own page: mutually
+           exclusive with the article view, the changelog, and the
+           compose form below (chained as :else-if branches off this
+           conditional). Three layered states:
              1. fresh:  textarea + Run / Cancel
              2. busy:   textarea disabled, "Working..." spinner
              3. done:   summary + Close (the run's wiki edits, if any,
@@ -960,9 +970,7 @@
           </div>
         {/if}
       </div>
-    {/if}
-
-    {#if !route.wiki_article_id}
+    {:else if !route.wiki_article_id}
       <!-- No-article default. Compose mode wins; otherwise show the
            inline changelog (the wiki's "home page") with a "+ new
            article" button in its header. -->
