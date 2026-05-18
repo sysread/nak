@@ -2583,6 +2583,15 @@ button.composer-wharf-trigger {
 @media (max-width: 720px) {
   .composer-diag-anchor {
     display: inline-flex;
+    /* Hard-tuck the diag-trigger against the wharf-trigger on its
+       left. Without this, .composer-bar's `justify-content: space-
+       between` distributes the four mobile flex children (grid,
+       diag-anchor, the empty .composer-bar-left, send) evenly across
+       the bar - which drops the diag-trigger in the middle. The auto
+       margin overrides space-between for this item, consuming all
+       free space to its right so the grid+diag cluster packs left
+       and send stays flush at the right edge. */
+    margin-right: auto;
   }
 
   button.composer-diag-trigger.open {
