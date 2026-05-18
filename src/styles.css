@@ -3002,13 +3002,17 @@ h1 {
    the left, because by the time bar 7 peaks, bar 1 has already
    finished a full alternate cycle and is starting over.
 
-   Bars stay full height the whole time - only opacity changes - so
-   the indicator reads as a fixed grille with light moving across it
-   rather than bars growing and shrinking. The bar shape (squat and
-   narrow, near-square corners) matches the segmented red grille on
-   the front of K.I.T.T. in the show; the earlier circular-dot
-   rendering was the same animation but read as a row of LEDs rather
-   than the original prop. */
+   Bars stay at their per-position fixed heights the whole time -
+   only opacity changes - so the indicator reads as a fixed grille
+   with light moving across it rather than bars growing and
+   shrinking. Heights are graded from 0.5em at the edges up to
+   0.8em at the centre (bar 4), giving the row a subtle 3D bulge -
+   the centre bar reads as closest to the viewer, edges as
+   receding. The bar shape (squat and narrow, near-square corners)
+   matches the segmented red grille on the front of K.I.T.T. in
+   the show; the earlier circular-dot rendering was the same
+   animation but read as a row of LEDs rather than the original
+   prop. */
 .scanner {
   display: inline-flex;
   align-items: center;
@@ -3027,10 +3031,12 @@ h1 {
 .scanner > span:not(.sr-only) {
   display: inline-block;
   width: 0.28em;
-  /* Squat profile - bar slightly shorter than its full em line-height
-     reads as a stocky segment rather than an exclamation-mark stroke,
-     and matches the closer aspect ratio of the show's prop cells. */
-  height: 0.675em;
+  /* Height is set per-position below to give the row a tapered
+     profile (tallest in the centre, shortest at the edges) -
+     reads as a subtle 3D bulge with the centre bar closest to the
+     viewer. The parent .scanner uses align-items: center, so the
+     shorter end bars stay vertically centred against the taller
+     centre bar. */
   /* Subtle rounding only - the show's segments are flat-edged
      rectangles, not pill shapes. */
   border-radius: 0.06em;
@@ -3066,6 +3072,24 @@ h1 {
      trailing afterglow. */
   animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
 }
+
+/* Per-position height tapering. Linear gradient from 0.5em at the
+   edges to 0.8em at the centre (0.1em step per position), symmetric
+   about bar 4. Ratio of centre to edge height is 1.6:1 - enough to
+   read as a 3D bulge (centre closest to viewer, edges receding) but
+   not so dramatic that the row stops looking like a grille. The
+   parent .scanner uses align-items: center so the shorter bars stay
+   vertically centred along the row's midline. */
+.scanner > span:not(.sr-only):nth-child(1),
+.scanner > span:not(.sr-only):nth-child(7) { height: 0.5em; }
+
+.scanner > span:not(.sr-only):nth-child(2),
+.scanner > span:not(.sr-only):nth-child(6) { height: 0.6em; }
+
+.scanner > span:not(.sr-only):nth-child(3),
+.scanner > span:not(.sr-only):nth-child(5) { height: 0.7em; }
+
+.scanner > span:not(.sr-only):nth-child(4) { height: 0.8em; }
 
 /* Per-bar keyframes. Seven bars in a 1.7s round trip means 12
    visits per cycle (1 each for edges 1/7, 2 each for middles 2-6)
