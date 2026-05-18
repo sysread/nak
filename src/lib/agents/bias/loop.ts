@@ -42,7 +42,9 @@ import {
 import {
   aggregatePosterior,
   clampConfidence,
+  feedbackEMA,
   type ConversationContribution,
+  type FeedbackContribution,
 } from '../../bias/math';
 import { BIAS_KEYS } from '../../bias/catalog';
 
@@ -173,12 +175,13 @@ async function runAnalyzePhase(ctx: CycleContext): Promise<CycleResult> {
       claim.threadId,
       ctx.holderId,
       claim.userMessageCount,
+      [],
       []
     );
     return ok ? 'progress' : 'save-rejected';
   }
 
-  const result = await ctx.agent.observe(transcript, ctx.signal);
+  const result = await ctx.agent.observe(transcript, claim.activeBiases, ctx.signal);
   if (result === null) {
     log.debug('analyze: agent returned null (parse failure or transient error)');
     return 'error';
@@ -190,13 +193,31 @@ async function runAnalyzePhase(ctx: CycleContext): Promise<CycleResult> {
   // logger truncates very long messages naturally; the reasoning
   // text is two sentences max per the agent's prompt, so the line
   // stays readable in the drawer.
-  if (result.length === 0) {
+  if (result.observations.length === 0) {
     log.debug(`analyze: agent reported no biases for thread ${claim.threadId}`);
   } else {
-    for (const obs of result) {
+    for (const obs of result.observations) {
       log.debug(
         `analyze: ${obs.bias} (conf ${obs.confidence.toFixed(2)}) - ${obs.reasoning}`
       );
+    }
+  }
+  // Per-reaction debug breadcrumbs. The reactor only runs when the
+  // active set is non-empty; on the empty-set path the agent
+  // returns no reactions and we skip the log line.
+  if (claim.activeBiases.length > 0) {
+    if (result.reactions.length === 0) {
+      log.debug(`analyze: agent reported no reactions for thread ${claim.threadId}`);
+    } else {
+      for (const r of result.reactions) {
+        const verdict =
+          r.wasConfirmed === true
+            ? 'confirmed'
+            : r.wasConfirmed === false
+              ? 'disconfirmed'
+              : 'neutral';
+        log.debug(`analyze: reaction ${r.bias} -> ${verdict} - ${r.reasoning}`);
+      }
     }
   }
 
@@ -211,7 +232,7 @@ async function runAnalyzePhase(ctx: CycleContext): Promise<CycleResult> {
     reasoning: string;
     evidence_message_id: string | null;
   }[] = [];
-  for (const obs of result) {
+  for (const obs of result.observations) {
     const c = clampConfidence(obs.confidence, CONFIDENCE_FLOOR, CONFIDENCE_CAP);
     if (c === null) continue;
     cleaned.push({
@@ -221,9 +242,19 @@ async function runAnalyzePhase(ctx: CycleContext): Promise<CycleResult> {
       evidence_message_id: obs.evidenceMessageId,
     });
   }
+  // Reactions don't need a floor/cap - they're three-state, not
+  // numeric. The agent's parser already restricted bias to the
+  // active set and dropped malformed items; the worker passes the
+  // list straight through.
+  const reactions = result.reactions.map((r) => ({
+    bias: r.bias,
+    was_confirmed: r.wasConfirmed,
+    reasoning: r.reasoning,
+  }));
 
   log.info(
-    `analyze: agent emitted ${result.length} raw, ${cleaned.length} after floor/cap ` +
+    `analyze: agent emitted ${result.observations.length} raw obs, ` +
+      `${cleaned.length} after floor/cap; ${result.reactions.length} reaction(s) ` +
       `(thread ${claim.threadId})`
   );
   let saved: boolean;
@@ -232,7 +263,8 @@ async function runAnalyzePhase(ctx: CycleContext): Promise<CycleResult> {
       claim.threadId,
       ctx.holderId,
       claim.userMessageCount,
-      cleaned
+      cleaned,
+      reactions
     );
   } catch (err) {
     log.debug('analyze: save RPC failed', err);
@@ -242,7 +274,10 @@ async function runAnalyzePhase(ctx: CycleContext): Promise<CycleResult> {
     log.debug('analyze: save rejected (claim lost or message count drifted)');
     return 'save-rejected';
   }
-  log.info(`analyze: saved ${cleaned.length} observation(s) for thread ${claim.threadId}`);
+  log.info(
+    `analyze: saved ${cleaned.length} observation(s) and ${reactions.length} reaction(s) ` +
+      `for thread ${claim.threadId}`
+  );
   return 'progress';
 }
 
@@ -267,6 +302,7 @@ async function runAggregatePhase(ctx: CycleContext): Promise<CycleResult> {
   for (const bias of BIAS_KEYS) {
     if (ctx.signal.aborted) return 'progress';
     let contributions: ConversationContribution[];
+    let feedback: FeedbackContribution[] = [];
     try {
       const rows = await ctx.supabase.biasProcessedThreadsForBias(bias);
       const now = Date.now();
@@ -279,7 +315,22 @@ async function runAggregatePhase(ctx: CycleContext): Promise<CycleResult> {
       // Don't fail the whole rotation for one bias; carry on.
       continue;
     }
-    const post = aggregatePosterior(contributions);
+    // Compensation-feedback EMA. A failure here is non-fatal -
+    // we'd rather aggregate with neutral feedback than skip the
+    // bias entirely. Treat any error as "no reactions" and keep
+    // going.
+    try {
+      const reactionRows = await ctx.supabase.biasReactionsForBias(bias);
+      feedback = reactionRows.map((r) => ({
+        wasConfirmed: r.wasConfirmed,
+        ageDays: r.ageDays,
+      }));
+    } catch (err) {
+      log.debug('aggregate: reactions query failed (treating as no signal)', { bias, err });
+      feedback = [];
+    }
+    const feedbackScore = feedbackEMA(feedback);
+    const post = aggregatePosterior(contributions, { feedbackScore });
     try {
       await ctx.supabase.biasUpsertSummary({
         bias,
@@ -288,6 +339,7 @@ async function runAggregatePhase(ctx: CycleContext): Promise<CycleResult> {
         posteriorBeta: post.beta,
         posteriorMean: post.mean,
         ciLower: post.ciLower,
+        feedbackScore,
         tier: post.tier,
       });
       touched += 1;

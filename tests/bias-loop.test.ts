@@ -67,7 +67,7 @@ function buildCoordinator(initiallyHolding = false): {
 
 function fakeAgent(overrides: Partial<BiasObserverAgent> = {}): BiasObserverAgent {
   const defaults: Partial<BiasObserverAgent> = {
-    observe: vi.fn(async () => []),
+    observe: vi.fn(async () => ({ observations: [], reactions: [] })),
   };
   return { ...defaults, ...overrides } as BiasObserverAgent;
 }
@@ -77,6 +77,7 @@ function fakeSupabase(overrides: Partial<SupabaseService> = {}): SupabaseService
     biasClaimNextThread: vi.fn(async () => null),
     biasSaveObservations: vi.fn(async () => true),
     biasProcessedThreadsForBias: vi.fn(async () => []),
+    biasReactionsForBias: vi.fn(async () => []),
     biasUpsertSummary: vi.fn(async () => undefined),
     listMessages: vi.fn(async () => []),
   };
@@ -195,6 +196,7 @@ describe('analyze phase', () => {
       biasClaimNextThread: vi.fn(async () => ({
         threadId: 't-1',
         userMessageCount: 5,
+        activeBiases: [] as string[],
       })),
       listMessages: vi.fn(async () => [
         { id: 'm1', role: 'user', content: 'hello', thread_id: 't-1', created_at: new Date().toISOString() },
@@ -204,33 +206,84 @@ describe('analyze phase', () => {
       biasSaveObservations: vi.fn(async () => true),
     });
     const agent = fakeAgent({
-      observe: vi.fn(async () => [
-        {
-          bias: 'confirmation_bias' as const,
-          confidence: 0.95, // Above cap; should be clamped to 0.85.
-          reasoning: 'short',
-          evidenceMessageId: 'm1' as string | null,
-        },
-        {
-          bias: 'sunk_cost_fallacy' as const,
-          confidence: 0.30, // Below floor; should be dropped.
-          reasoning: 'short',
-          evidenceMessageId: 'm1' as string | null,
-        },
-      ]),
+      observe: vi.fn(async () => ({
+        observations: [
+          {
+            bias: 'confirmation_bias' as const,
+            confidence: 0.95, // Above cap; should be clamped to 0.85.
+            reasoning: 'short',
+            evidenceMessageId: 'm1' as string | null,
+          },
+          {
+            bias: 'sunk_cost_fallacy' as const,
+            confidence: 0.30, // Below floor; should be dropped.
+            reasoning: 'short',
+            evidenceMessageId: 'm1' as string | null,
+          },
+        ],
+        reactions: [],
+      })),
     });
     const { ctx } = buildContext({ phase: 'analyze', supabase, agent });
     const result = await runUntilLeaseHeld(ctx);
     expect(result).toBe('progress');
     const saveCall = (supabase.biasSaveObservations as ReturnType<typeof vi.fn>).mock
       .calls[0];
-    // [threadId, holderId, expectedMsgCount, observations]
+    // [threadId, holderId, expectedMsgCount, observations, reactions]
     expect(saveCall[3]).toEqual([
       {
         bias: 'confirmation_bias',
         confidence: 0.85,
         reasoning: 'short',
         evidence_message_id: 'm1',
+      },
+    ]);
+    // Reactions slot is empty because the agent stub returned no
+    // reactions and the claim had an empty active-bias set. The
+    // dedicated reactor test below exercises the populated path.
+    expect(saveCall[4]).toEqual([]);
+  });
+
+  it('passes activeBiases to the agent and persists the resulting reactions', async () => {
+    const supabase = fakeSupabase({
+      biasClaimNextThread: vi.fn(async () => ({
+        threadId: 't-1',
+        userMessageCount: 5,
+        activeBiases: ['confirmation_bias'] as string[],
+      })),
+      listMessages: vi.fn(async () => [
+        { id: 'm1', role: 'user', content: 'good point', thread_id: 't-1', created_at: new Date().toISOString() },
+      ] as Awaited<ReturnType<SupabaseService['listMessages']>>),
+      biasSaveObservations: vi.fn(async () => true),
+    });
+    const observeSpy = vi.fn(async () => ({
+      observations: [],
+      reactions: [
+        {
+          bias: 'confirmation_bias' as const,
+          wasConfirmed: true as boolean | null,
+          reasoning: 'user said "good point"',
+        },
+      ],
+    }));
+    const agent = fakeAgent({ observe: observeSpy });
+    const { ctx } = buildContext({ phase: 'analyze', supabase, agent });
+    const result = await runUntilLeaseHeld(ctx);
+    expect(result).toBe('progress');
+    // The agent received the active-bias list from the claim.
+    const observeCalls = (observeSpy as unknown as { mock: { calls: unknown[][] } })
+      .mock.calls;
+    // [transcript, activeBiases, signal]
+    expect(observeCalls[0][1]).toEqual(['confirmation_bias']);
+    // The save call carries the reactions in slot 4, mapped to the
+    // wire shape (was_confirmed snake-case).
+    const saveCall = (supabase.biasSaveObservations as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(saveCall[4]).toEqual([
+      {
+        bias: 'confirmation_bias',
+        was_confirmed: true,
+        reasoning: 'user said "good point"',
       },
     ]);
   });
@@ -240,6 +293,7 @@ describe('analyze phase', () => {
       biasClaimNextThread: vi.fn(async () => ({
         threadId: 't-1',
         userMessageCount: 5,
+        activeBiases: [] as string[],
       })),
       listMessages: vi.fn(async () => [
         { id: 'm1', role: 'user', content: 'hello', thread_id: 't-1', created_at: new Date().toISOString() },
@@ -257,6 +311,7 @@ describe('analyze phase', () => {
       biasClaimNextThread: vi.fn(async () => ({
         threadId: 't-1',
         userMessageCount: 5,
+        activeBiases: [] as string[],
       })),
       listMessages: vi.fn(async () => [
         { id: 'm1', role: 'user', content: 'hello', thread_id: 't-1', created_at: new Date().toISOString() },

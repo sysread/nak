@@ -34,10 +34,41 @@ export interface BiasSummaryRow {
   /** 90% one-sided credible interval lower bound from the inverse
    *  regularized incomplete beta. Surfacing gate. */
   ciLower: number;
-  /** Render-time tier from N_eff floor + ciLower thresholds. */
+  /** Compensation-feedback EMA in [-1, +1] from `bias_reactions`.
+   *  +1 = recent compensations consistently affirmed; -1 = recent
+   *  compensations consistently pushed back on; 0 = mixed / no
+   *  signal. Shifts the surfacing gates at tier-evaluation time. */
+  feedbackScore: number;
+  /** Render-time tier, gated on N_eff floor and feedback-adjusted
+   *  ciLower thresholds. */
   tier: Tier;
   /** Wall-clock when this row was last recomputed by the worker. */
   computedAt: string;
+}
+
+/**
+ * One compensation-feedback observation written by the bias-observer
+ * agent when it analyzes a conversation. Mirrors
+ * `public.bias_reactions` rows in camelCase. Recorded only for
+ * biases that were active in the system prompt during the
+ * conversation; biases below the surfacing gate at the time have
+ * no compensation to react to, so they produce no row.
+ */
+export interface BiasReactionRow {
+  bias: BiasKey;
+  /** true = user engaged positively with the assistant's bias-
+   *  compensated phrasing (acknowledged the contrary view, base
+   *  rate, neutral framing, etc.).
+   *  false = user pushed back on the compensation (asked the
+   *  assistant to stop hedging, ignore alternatives, etc.).
+   *  null = no clear signal either way. Stored so we can
+   *  distinguish "agent looked and saw nothing" from "agent did
+   *  not run". */
+  wasConfirmed: boolean | null;
+  reasoning: string;
+  /** Age in days at read time; computed by the caller from
+   *  created_at when consuming for the EMA. */
+  ageDays?: number;
 }
 
 /**
@@ -124,3 +155,37 @@ export const RENDER_CAP = 4;
  * spec.
  */
 export const MIN_USER_MESSAGES = 2;
+
+/**
+ * Compensation-feedback tunables (v2 calibration layer).
+ *
+ * Each time the worker analyzes a conversation it also asks the
+ * agent whether the user affirmed or pushed back on the bias-
+ * compensation behavior that was active during the conversation
+ * (see `bias_reactions` in supabase/schema.sql). Those signals
+ * accumulate into a per-(user, bias) EMA in [-1, +1] which shifts
+ * the surfacing-tier gates: affirming users see more sensitive
+ * thresholds (more biases surface), pushing-back users see less
+ * sensitive thresholds (fewer biases surface).
+ *
+ *   FEEDBACK_HALF_LIFE_DAYS — recency decay for reactions. Shorter
+ *   than the observation half-life because feedback should
+ *   respond faster: if the user's preference shifts, we want the
+ *   render gate to follow within a couple of weeks rather than two
+ *   months.
+ *
+ *   FEEDBACK_THRESHOLD_DELTA — max absolute shift of the CI gates,
+ *   reached at feedback_score = +/- 1. 0.10 keeps the override
+ *   bounded - the math kernel still owns the tier decision; the
+ *   feedback EMA just nudges it. With CI_LB_SOFT=0.15 and
+ *   FEEDBACK_THRESHOLD_DELTA=0.10 the soft gate moves in
+ *   [0.05, 0.25]; the strong gate moves in [0.20, 0.40].
+ *
+ *   FEEDBACK_PRIOR_WEIGHT — pseudo-count of neutral reactions
+ *   seeded into the EMA so a single early disconfirm cannot peg
+ *   the score at -1. With weight 3, a single confirm at age 0
+ *   gives EMA = 1/4 = 0.25; the gate shifts by 0.025.
+ */
+export const FEEDBACK_HALF_LIFE_DAYS = 30;
+export const FEEDBACK_THRESHOLD_DELTA = 0.10;
+export const FEEDBACK_PRIOR_WEIGHT = 3;

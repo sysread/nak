@@ -4574,7 +4574,15 @@ export class SupabaseService {
     excludeIds: readonly string[],
     todayStartUtc: Date,
     minUserMessages: number
-  ): Promise<{ threadId: string; userMessageCount: number } | null> {
+  ): Promise<{
+    threadId: string;
+    userMessageCount: number;
+    /** Snapshot of bias keys that were rendered into the system
+     *  prompt on the most recent chat-loop turn for this thread.
+     *  Empty array means no biases were active; the merged
+     *  observer/reactor agent skips its reaction-classify pass. */
+    activeBiases: string[];
+  } | null> {
     const { data, error } = await this.client.rpc('bias_claim_next_thread', {
       p_holder_id: holderId,
       p_ttl_seconds: ttlSeconds,
@@ -4583,23 +4591,35 @@ export class SupabaseService {
       p_min_user_messages: minUserMessages,
     });
     if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as { thread_id: string; user_message_count: number }[];
+    const rows = (data ?? []) as {
+      thread_id: string;
+      user_message_count: number;
+      active_biases: string[] | null;
+    }[];
     if (rows.length === 0) return null;
     return {
       threadId: rows[0].thread_id,
       userMessageCount: rows[0].user_message_count,
+      activeBiases: rows[0].active_biases ?? [],
     };
   }
 
   /**
-   * Worker: write the agent's observations for one thread.
-   * `expectedMsgCount` is the user-message count the worker saw at
-   * claim time; the RPC rejects the save if the count has changed
-   * since (a new user message landed mid-analysis, and the
-   * observations are now based on stale state). `observations` is
-   * a list of `{bias, confidence, reasoning, evidence_message_id}`
-   * - empty list is a valid save meaning "agent looked and found
-   * nothing." Returns true on success, false if any guard fired.
+   * Worker: write the agent's observations AND reactions for one
+   * thread in a single RPC. `expectedMsgCount` is the user-message
+   * count the worker saw at claim time; the RPC rejects the save
+   * if the count has changed since (a new user message landed
+   * mid-analysis, and the work is based on stale state).
+   *
+   * `observations` is a list of `{bias, confidence, reasoning,
+   * evidence_message_id}` - empty list is a valid save meaning
+   * "agent looked and found nothing." `reactions` is a list of
+   * `{bias, was_confirmed, reasoning}` - empty list means "no
+   * biases were active or no signal" and is also a valid save.
+   * The two arrays are independent at the wire level even though
+   * they come from the same merged-agent LLM call.
+   *
+   * Returns true on success, false if any guard fired.
    */
   async biasSaveObservations(
     threadId: string,
@@ -4610,6 +4630,11 @@ export class SupabaseService {
       confidence: number;
       reasoning: string;
       evidence_message_id: string | null;
+    }[],
+    reactions: readonly {
+      bias: string;
+      was_confirmed: boolean | null;
+      reasoning: string;
     }[]
   ): Promise<boolean> {
     const { data, error } = await this.client.rpc('bias_save_observations', {
@@ -4617,9 +4642,64 @@ export class SupabaseService {
       p_holder_id: holderId,
       p_expected_msg_count: expectedMsgCount,
       p_observations: observations,
+      p_reactions: reactions,
     });
     if (error) throw new SupabaseError(error.message);
     return data === true;
+  }
+
+  /**
+   * Worker: list every reaction row for one bias with its age in
+   * days. Feeds the per-(user, bias) feedback EMA in the aggregate
+   * phase. Includes the reasoning so the worker logs can show what
+   * the agent saw without a second round-trip.
+   */
+  async biasReactionsForBias(bias: string): Promise<
+    {
+      threadId: string;
+      wasConfirmed: boolean | null;
+      ageDays: number;
+      createdAt: string;
+      reasoning: string;
+    }[]
+  > {
+    const { data, error } = await this.client.rpc('bias_reactions_for_bias', {
+      p_bias: bias,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      thread_id: string;
+      was_confirmed: boolean | null;
+      age_days: number;
+      created_at: string;
+      reasoning: string;
+    }[];
+    return rows.map((r) => ({
+      threadId: r.thread_id,
+      wasConfirmed: r.was_confirmed,
+      ageDays: r.age_days,
+      createdAt: r.created_at,
+      reasoning: r.reasoning,
+    }));
+  }
+
+  /**
+   * Chat-loop: snapshot the set of bias keys that just got
+   * rendered into the system prompt. Written per chat-loop turn so
+   * the worker's claim RPC can hand the active set to the merged
+   * observer/reactor agent. RLS handles ownership; the update is
+   * a no-op when the thread doesn't belong to the calling user.
+   * Fire-and-forget; errors swallowed by the caller.
+   */
+  async biasSnapshotActiveBiases(
+    threadId: string,
+    biases: readonly string[]
+  ): Promise<void> {
+    const { error } = await this.client
+      .from('threads')
+      .update({ bias_active_at_turn: Array.from(biases) })
+      .eq('id', threadId);
+    if (error) throw new SupabaseError(error.message);
   }
 
   /**
@@ -4676,6 +4756,7 @@ export class SupabaseService {
     posteriorBeta: number;
     posteriorMean: number;
     ciLower: number;
+    feedbackScore: number;
     tier: 'elided' | 'soft' | 'strong';
   }): Promise<void> {
     const { error } = await this.client
@@ -4688,6 +4769,7 @@ export class SupabaseService {
           posterior_beta: row.posteriorBeta,
           posterior_mean: row.posteriorMean,
           ci_lower: row.ciLower,
+          feedback_score: row.feedbackScore,
           tier: row.tier,
           computed_at: new Date().toISOString(),
         },
@@ -4710,6 +4792,7 @@ export class SupabaseService {
       posteriorBeta: number;
       posteriorMean: number;
       ciLower: number;
+      feedbackScore: number;
       tier: 'elided' | 'soft' | 'strong';
       computedAt: string;
     }[]
@@ -4717,7 +4800,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('bias_summary')
       .select(
-        'bias, effective_n, posterior_alpha, posterior_beta, posterior_mean, ci_lower, tier, computed_at'
+        'bias, effective_n, posterior_alpha, posterior_beta, posterior_mean, ci_lower, feedback_score, tier, computed_at'
       );
     if (error) throw new SupabaseError(error.message);
     const rows = (data ?? []) as {
@@ -4727,6 +4810,7 @@ export class SupabaseService {
       posterior_beta: number;
       posterior_mean: number;
       ci_lower: number;
+      feedback_score: number | null;
       tier: 'elided' | 'soft' | 'strong';
       computed_at: string;
     }[];
@@ -4737,8 +4821,48 @@ export class SupabaseService {
       posteriorBeta: r.posterior_beta,
       posteriorMean: r.posterior_mean,
       ciLower: r.ci_lower,
+      // feedback_score column was added in v2; pre-v2 rows return
+      // null which we treat as the neutral 0.
+      feedbackScore: r.feedback_score ?? 0,
       tier: r.tier,
       computedAt: r.computed_at,
+    }));
+  }
+
+  /**
+   * Debug modal: list per-conversation reactions for one thread.
+   * The current-conversation section uses this to surface "did the
+   * user affirm or push back on the compensation for X here?"
+   * alongside the observations for the same thread.
+   */
+  async biasListReactionsForThread(threadId: string): Promise<
+    {
+      id: string;
+      bias: string;
+      wasConfirmed: boolean | null;
+      reasoning: string;
+      createdAt: string;
+    }[]
+  > {
+    const { data, error } = await this.client
+      .from('bias_reactions')
+      .select('id, bias, was_confirmed, reasoning, created_at')
+      .eq('thread_id', threadId)
+      .order('created_at', { ascending: true });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      id: string;
+      bias: string;
+      was_confirmed: boolean | null;
+      reasoning: string;
+      created_at: string;
+    }[];
+    return rows.map((r) => ({
+      id: r.id,
+      bias: r.bias,
+      wasConfirmed: r.was_confirmed,
+      reasoning: r.reasoning,
+      createdAt: r.created_at,
     }));
   }
 

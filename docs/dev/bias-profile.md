@@ -8,11 +8,18 @@ via a Bayesian Beta-Binomial posterior with recency decay, and
 injects compensation guidance into the main chat LLM's system
 prompt when a bias clears a credible-interval gate.
 
+A v2 calibration loop watches how the user reacts to the
+assistant's compensation behavior across conversations and shifts
+the surfacing thresholds per bias: consistent affirmation lowers
+the bar for that bias to surface, consistent pushback raises it.
+The shift is bounded so a single bad reaction cannot knock a
+genuine pattern off the map.
+
 The user never sees raw observations in normal conversation -
 compensation is silent. A debug modal (chart-pill in the bottom-
-right column) shows the per-bias evidence, the recently
-processed conversations, and the per-observation drill-down for
-the curious.
+right column) shows the per-bias evidence, the per-bias feedback
+EMA, the recently processed conversations, and the per-observation
+plus per-reaction drill-downs for the curious.
 
 ## Role in the app
 
@@ -229,35 +236,81 @@ Per-(user, bias) aggregate cache. The chat-loop's only read.
   display.
 - `ci_lower real` - 90% one-sided credible interval lower
   bound. The surfacing gate.
+- `feedback_score real default 0` (v2) - EMA in [-1, +1] from
+  `bias_reactions` for this (user, bias). Shifts the surfacing
+  gates at tier-evaluation time. Default 0 so v1-aggregated rows
+  behave identically.
 - `tier text check (tier in ('elided', 'soft', 'strong'))`.
 - `computed_at timestamptz`.
+
+### `bias_reactions` (v2)
+
+Per-conversation per-bias compensation-feedback signal. One row
+per (user, thread, bias) where the bias was active in the system
+prompt during the conversation. The merged observer/reactor
+agent emits these from the same LLM call as observations so the
+two stay in sync.
+
+- `(user_id, thread_id, bias)` unique constraint.
+- `was_confirmed boolean` - true (user affirmed), false (user
+  pushed back), null (neutral / no clear signal). The three-state
+  is load-bearing: null means "the agent looked and saw nothing
+  for this bias" distinct from "the agent never ran for this
+  bias" (absence of row).
+- `reasoning text not null` - one to two sentences from the
+  agent citing what the user said or did.
+- `created_at timestamptz`.
+
+Re-analyzing a thread (which happens whenever a new user
+message lands; see bias_clear_thread) replaces the prior
+reactions via the unique-key upsert in bias_save_observations,
+matching the observations table's "fully replace on re-analyze"
+contract.
+
+### `threads.bias_active_at_turn` (v2)
+
+`text[]` column, default `{}`. Snapshot of bias keys that
+rendered into the system prompt on the most recent chat-loop
+turn for this thread. The chat-loop writes per turn; the worker
+reads via `bias_claim_next_thread` so the reactor knows which
+biases the user's messages could have been reacting to. Empty
+array means no biases were active and the reactor pass produces
+zero rows.
 
 ### RPCs
 
 - `bias_claim_next_thread(holder, ttl, exclude_ids, today_start,
-  min_user_messages)` - returns `(thread_id, user_message_count)`
-  for the next eligible thread or empty. Atomic
+  min_user_messages)` - returns `(thread_id, user_message_count,
+  active_biases)` for the next eligible thread or empty. Atomic
   update-returning. Eligibility = at least `min_user_messages`
   user messages, never processed or processed before the
   thread's most recent update, `updated_at` before
-  `today_start`, id not in `exclude_ids`, no live claim.
+  `today_start`, id not in `exclude_ids`, no live claim. v2:
+  `active_biases` is the snapshot from
+  `threads.bias_active_at_turn` so the agent knows what
+  compensation was on the wire during this conversation.
 - `bias_save_observations(thread_id, holder, expected_count,
-  observations)` - in a transaction, verify claim plus
-  ownership plus user-message-count, delete prior observations
-  for the thread, insert the new ones (empty array is a valid
-  save), set `bias_processed_at = now()` and
-  `bias_processed_msg_count = expected_count`, release claim.
-  Returns false if any guard fired.
-- `bias_clear_thread(thread_id)` - delete observations for the
-  thread and clear `bias_processed_at`,
-  `bias_processed_msg_count`, and the claim columns. Called
-  from the chat-loop on every user-message send. Idempotent
-  and cheap.
+  observations, reactions)` - in a transaction, verify claim
+  plus ownership plus user-message-count, delete prior
+  observations and reactions for the thread, insert the new ones
+  (empty arrays are valid saves), set `bias_processed_at =
+  now()` and `bias_processed_msg_count = expected_count`,
+  release claim. Returns false if any guard fired. v2:
+  observations and reactions persist atomically in one
+  transaction so the two sides of the merged-agent output cannot
+  drift.
+- `bias_clear_thread(thread_id)` - delete observations AND
+  reactions for the thread, clear `bias_processed_at`,
+  `bias_processed_msg_count`, the claim columns, and
+  `bias_active_at_turn`. Called from the chat-loop on every
+  user-message send. Idempotent and cheap.
 - `bias_processed_threads_for_bias(bias)` - aggregation input.
   Joins every processed thread against the per-thread noisy-OR-
   collapsed probability for the specified bias. Returns
   `pConv = 0` for threads with no observation of this bias so
   the denominator stays the full processed set.
+- `bias_reactions_for_bias(bias)` (v2) - aggregation input for
+  the feedback EMA. One row per reaction with age in days.
 
 ### Lease
 
@@ -269,14 +322,20 @@ heartbeat numbers as samskara (45s / 20s).
 
 ### Chat-loop side (synchronous, no LLM)
 
-- `getBiasProfileBlock(supabase): Promise<string | null>` -
+- `getBiasProfileBlock(supabase): Promise<{block, activeBiases}>` -
   reads `bias_summary`, filters to soft+strong, renders. Returns
-  null on cold start, on no clearing rows, or on any read
-  error. Errors are swallowed; bias must never fail a chat
-  turn.
+  `{block: null, activeBiases: []}` on cold start, on no
+  clearing rows, or on any read error. The `activeBiases` set
+  is post tier-filter and post render-cap so the chat-loop's
+  snapshot reflects what was on the wire, not the broader pool.
+  Errors are swallowed; bias must never fail a chat turn.
 - `notifyBiasNewUserMessage(supabase, threadId): Promise<void>` -
   fire-and-forget. Calls `bias_clear_thread`; no-op when the
   thread was never processed.
+- `snapshotBiasActiveBiases(supabase, threadId, biases):
+  Promise<void>` (v2) - fire-and-forget. Writes the active set
+  to `threads.bias_active_at_turn` so the worker's reactor can
+  read it via the claim RPC. Empty array is a valid write.
 - `formatBiasProfileBlock(rows): string | null` - pure. Used by
   the modal preview and by tests. The chat-loop reader's
   internal call.
@@ -288,16 +347,21 @@ Two phases per rotation:
 - **Aggregate** - `runOneCycle({phase: 'aggregate'})` walks
   `BIAS_KEYS` and upserts one summary row per catalog entry.
   Cheap; runs every rotation so the chat-loop read stays warm
-  even when nothing was analyzed. Cold start (no observations
-  for any bias) still emits N upserts, all rendering as
-  `tier='elided'` on the prior alone.
+  even when nothing was analyzed. v2: also reads reactions and
+  computes the feedback EMA per bias, threading it into the
+  feedback-aware `tier()` call so the persisted tier reflects
+  the shifted gates. Cold start (no observations, no reactions)
+  still emits N upserts, all rendering as `tier='elided'` on
+  the prior alone with `feedback_score=0`.
 - **Analyze** - `runOneCycle({phase: 'analyze'})` claims the
   next eligible thread, fetches its transcript via
-  `listMessages`, calls `BiasObserverAgent.observe`, clamps
-  confidences through `clampConfidence`, and saves under the
-  message-count guard. The save-rejected outcome (claim lost or
-  count drifted) is not an error - the thread becomes
-  re-eligible on the next rotation with fresh state.
+  `listMessages`, calls `BiasObserverAgent.observe` with the
+  claim's `activeBiases` set, clamps confidences through
+  `clampConfidence`, and saves both observations and reactions
+  in one RPC under the message-count guard. The save-rejected
+  outcome (claim lost or count drifted) is not an error - the
+  thread becomes re-eligible on the next rotation with fresh
+  state.
 
 Phase rotation order is `[aggregate, analyze]` deliberately:
 aggregate first so the chat-loop cache stays warm on rotations
@@ -306,16 +370,19 @@ rotation's aggregate sees the new write.
 
 ### Math contract
 
-Math constants live in `src/lib/bias/types.ts`. The five tunables
+Math constants live in `src/lib/bias/types.ts`. The eight tunables
 that change feature behavior:
 
 ```text
-ALPHA_PRIOR = 2          # prior alpha
-BETA_PRIOR  = 8          # prior beta (mean 0.2, weight 10)
-HALF_LIFE_DAYS = 60      # recency decay
-CI_LB_SOFT  = 0.15       # soft-tier gate on CI lower bound
-CI_LB_STRONG = 0.30      # strong-tier gate
-N_EFF_FLOOR = 5          # min effective N for any non-elided
+ALPHA_PRIOR = 2                    # prior alpha
+BETA_PRIOR  = 8                    # prior beta (mean 0.2, weight 10)
+HALF_LIFE_DAYS = 60                # observation recency decay
+CI_LB_SOFT  = 0.15                 # soft-tier gate on CI lower bound
+CI_LB_STRONG = 0.30                # strong-tier gate
+N_EFF_FLOOR = 5                    # min effective N for any non-elided
+FEEDBACK_HALF_LIFE_DAYS = 30       # reaction recency decay (v2)
+FEEDBACK_THRESHOLD_DELTA = 0.10    # max gate shift at +/- 1 feedback
+FEEDBACK_PRIOR_WEIGHT = 3          # neutral pseudo-count on EMA
 ```
 
 If a user complains "you're calling out a bias I'm not actually
@@ -331,6 +398,39 @@ uncertainty (5-30%), which would silently suppress real signal.
 At very large samples (alpha + beta > ~200) the normal
 approximation becomes accurate enough to swap in for speed -
 not worth doing until then.
+
+### Feedback-aware tier (v2)
+
+The compensation-feedback calibration layer is the v2 addition.
+Each conversation analysis classifies, for each bias that was
+active in the system prompt during the conversation, whether the
+user affirmed the compensation (was_confirmed=true), pushed back
+(was_confirmed=false), or showed no clear signal (null). Those
+reactions accumulate into a per-(user, bias) EMA in [-1, +1]:
+
+```text
+feedback_score(B) = sum(w_i * (was_confirmed_i ? +1 : -1))
+                  / (FEEDBACK_PRIOR_WEIGHT + sum(w_i))
+```
+
+where `w_i` is the recency weight at FEEDBACK_HALF_LIFE_DAYS.
+Neutrals are skipped; the prior pseudo-count carries the
+no-signal mass so a single early disconfirm cannot peg the score
+at -1.
+
+The EMA shifts both CI gates symmetrically:
+
+```text
+softGate_eff   = CI_LB_SOFT   - FEEDBACK_THRESHOLD_DELTA * feedback_score
+strongGate_eff = CI_LB_STRONG - FEEDBACK_THRESHOLD_DELTA * feedback_score
+```
+
+Affirming users (feedback approaching +1) see gates drop by up to
+0.10; pushing-back users see gates rise by up to 0.10. The math
+kernel does not touch the underlying posterior - the EMA only
+nudges where the gate sits. The N_eff floor is independent of
+feedback so no amount of positive feedback can lift a bias out of
+elided before the small-N gate is cleared.
 
 ### Render contract
 
@@ -480,11 +580,33 @@ closes the block.
 - **No co-occurrence modeling.** Per-bias posteriors are
   independent. confirmation_bias and overconfidence
   statistically co-occur in real users, but the math treats
-  them as separate facts. A v2 enhancement would replace the
-  bag of Beta-Binomials with a logistic-normal multivariate
+  them as separate facts. A future enhancement would replace
+  the bag of Beta-Binomials with a logistic-normal multivariate
   prior over the catalog. Manageable size (19x19 correlation
-  matrix); deferred until we have field data to fit it
-  against.
+  matrix); deferred until we have field data to fit it against.
+- **Feedback shifts thresholds, not the posterior.** The v2
+  EMA only nudges where the surfacing gates sit; the
+  underlying alpha/beta values don't change based on user
+  reactions. This is deliberate - the evidence record is what
+  the observer saw, and a separate signal (the reaction)
+  decides how to interpret that evidence. Future variations
+  could instead decay posterior_alpha on disconfirm or weight
+  observations by subsequent confirm/disconfirm; both were
+  considered and rejected because they entangle "what
+  happened" with "how the user feels about us calling it out."
+- **Reactions are scoped to the active set.** The reactor only
+  classifies reactions for biases that were in
+  `bias_active_at_turn` when the conversation happened. A
+  reaction for a non-active bias is dropped at agent parse time
+  - no compensation was on the wire to react to. If the
+  chat-loop's snapshot write fails silently the worker sees an
+  empty active set and produces no reactions, which is the
+  correct fallback (no false feedback signal generated).
+- **Three-state was_confirmed.** true / false / null. Null
+  means "agent looked and saw no clear signal", distinct from
+  the absence of a row which means "agent never ran for this
+  bias on this conversation". The EMA skips nulls; the modal
+  shows them so the user can see what the agent looked at.
 
 ## Where to go next
 

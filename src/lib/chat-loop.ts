@@ -63,7 +63,11 @@ import {
   recordSubstrateStub,
   type FireResult,
 } from './samskara';
-import { getBiasProfileBlock, notifyBiasNewUserMessage } from './bias';
+import {
+  getBiasProfileBlock,
+  notifyBiasNewUserMessage,
+  snapshotBiasActiveBiases,
+} from './bias';
 import { detectTimezone } from './timezone';
 import {
   buildIntuitionThinkMessage,
@@ -1164,8 +1168,11 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // the profile is a slowly-changing structural claim about the user,
   // not turn-specific weather. Read once at turn entry; reused across
   // every round of this turn. Errors are swallowed inside
-  // getBiasProfileBlock.
-  const biasProfileBlock = await getBiasProfileBlock(supabase);
+  // getBiasProfileBlock; `activeBiases` is the set that actually
+  // rendered (post tier filter, post render cap) and feeds the v2
+  // snapshot write below.
+  const { block: biasProfileBlock, activeBiases: biasActiveBiases } =
+    await getBiasProfileBlock(supabase);
 
   // Bias-profile invalidation. Each chat-loop invocation corresponds
   // to one new user message on this thread. If the thread had been
@@ -1176,6 +1183,16 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // Fire-and-forget: bias worker plumbing must never block a chat
   // turn.
   void notifyBiasNewUserMessage(supabase, thread.id);
+
+  // Bias-profile active-set snapshot (v2). Persist the bias keys
+  // that just rendered into the system prompt to
+  // threads.bias_active_at_turn so the worker's reactor pass knows
+  // which biases the user's messages on this turn could have been
+  // reacting to. Empty array is a valid write and means "no
+  // compensation guidance was active this turn" - the reactor
+  // pass produces zero rows and the feedback EMA stays unchanged.
+  // Fire-and-forget; errors swallowed inside the helper.
+  void snapshotBiasActiveBiases(supabase, thread.id, biasActiveBiases);
 
   // Subconscious-priming layer: two parallel pipelines, fired on the
   // same trigger machinery (cold-start, mid-turn title shift, mood
