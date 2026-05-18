@@ -2195,6 +2195,24 @@
       return;
     }
 
+    // Claim the sending flag synchronously, before any await. The button
+    // and keyboard handler already short-circuit on `sending`, but they
+    // read it from outside this function - a second invocation that
+    // sneaks in while the first is awaiting createThread / materializeIfDraft
+    // (200ms+ network round-trip on the draft-materialization path)
+    // would otherwise both pass the outer guard, both call
+    // materializeIfDraft on the same draft object (which still has
+    // isDraft=true because the array filter and activeThreadId swap happen
+    // after the await), and both insert thread rows. Symptom: two thread
+    // rows in the drawer, each with their own copy of the first user
+    // message and an independently-generated assistant response, titled
+    // by whichever of {update_title tool, auto-title worker} won the
+    // race on each row. Owning the flag synchronously here closes the
+    // window; the existing pre-exchange error paths still clear it on
+    // their way out, and runExchange takes over the flag once we reach it.
+    if (sending) return;
+    sending = true;
+
     let threadId: string;
     if (!active) {
       // No thread selected - create one on the fly.
@@ -2220,7 +2238,6 @@
     const sendAttachments = readyAttachments;
     composer = '';
     pendingAttachments = [];
-    sending = true;
     // Sending is an explicit "pay attention to the bottom" signal — even
     // if the user had scrolled up before hitting send, we want their new
     // message (and the impending streaming response) in view.
