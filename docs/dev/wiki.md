@@ -155,9 +155,12 @@ Librarian:
 - `src/lib/agents/wiki-librarian/prompt.ts` - `buildWikiLibrarianPrompt`
   takes the rendered article list and embeds it into a system
   prompt that frames the agent as a librarian (consolidate,
-  fact-check, tighten boundaries, re-title drifted articles whose
-  content has broadened past the original title; no wiki_create
-  access).
+  fact-check, tighten boundaries, and - in workflow step 6 - run
+  the global "from-scratch reorganisation" pass that distills the
+  master list of subjects the wiki is actually tracking and
+  applies renames / content reorderings / cross-article moves
+  where the from-scratch ideal differs meaningfully from the
+  current state; no wiki_create access).
 - `src/lib/agents/wiki-librarian/agent.ts` - the
   `WikiLibrarianAgent` class. `run()` reads the snapshot from
   input, builds the prompt, runs `runHeadlessToolLoop` against

@@ -196,6 +196,16 @@ specifics:
   unless the conversation directly contradicts it. The wiki accretes
   rather than churns.
 
+The agent treats the wiki as **ongoing documentation**, not a
+snapshot. It listens for what the latest conversation advances
+about a subject the wiki is already tracking - a new tweak to a
+recipe you're iterating on, a finished chapter of a book you're
+working through, a new PR on a hobby you practice, a milestone on
+a project, a job change, a family update - and appends a fresh
+dated entry to the relevant article rather than rewriting it.
+Articles accumulate as a development log of their subject; reading
+one in a year shows the trajectory, not just where things landed.
+
 You can disable the autonomous agent in **Settings -> Wiki**. Manual
 edits and the per-article "Ask agent to update" flow keep working
 when it's off.
@@ -221,17 +231,29 @@ coherent. It can:
   other (a "Maya" article and a "household" article both covering
   the same person), the librarian rewrites both so the split is
   cleaner.
-- **Re-title articles whose content has drifted.** Articles
-  accumulate facts over time, and an article's title (chosen when
-  the article was narrow) can stop describing what the article is
-  mostly about once the body has broadened across many updates.
-  The per-conversation agent deliberately leaves titles alone, so
-  the librarian is the place where titles get re-checked against
-  current content. When the drift is large enough that the title
-  is actively misleading, the librarian renames the article and
-  notes the rename in the [changelog](#changelog). Small drift is
-  left alone - the bar for a rename is "a reader scanning the
-  title list would not realise the article covers what it does".
+- **Reorganize as if from scratch.** Periodically the librarian
+  steps back from the per-article view and asks the from-scratch
+  question: "if I had to track the same information about the
+  user with no organizational baggage - no titles to preserve, no
+  paragraph order to respect - how would I organize it? What
+  would each article be titled, and what order would the content
+  inside each article be in?" The point is that the per-
+  conversation agent picks an article's title from the first
+  conversation that introduced the subject (and orders content by
+  the chronology of conversations), and both can drift over time
+  - an article titled "Jeff's first sourdough loaf" whose body has
+  broadened into a general sourdough-project entry, or an article
+  whose lead paragraph is "the latest thing the user mentioned"
+  rather than the natural overview of the subject. When the gap
+  between the from-scratch ideal and the current state is large
+  enough to matter, the librarian renames the article, reorders
+  its content, or moves sections between articles to match the
+  subject the article actually covers. Small drift is left alone -
+  the bar for a change is "the current organization is actively
+  misleading or makes information hard to find". Every dated fact
+  is preserved through the reorganization; the historical record
+  in the article body is what gives the article its longitudinal
+  value.
 
 The librarian is intentionally constrained: it cannot create new
 articles, only consolidate or update existing ones. New articles

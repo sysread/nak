@@ -80,6 +80,23 @@
  *     returned nothing on at least two different angles AND the
  *     subject is one the user is genuinely likely to look up
  *     later.
+ *   - **Longitudinal framing.** The wiki is ongoing documentation
+ *     of the user's life - recipes they iterate on, hobbies they
+ *     practise, projects that advance through phases, learning
+ *     that accumulates, career and family that develop over time.
+ *     The prompt names a concrete list of iteration signals the
+ *     agent should listen for (a new PR on an existing recipe, a
+ *     completed chapter of a book, a promotion, a hobby
+ *     milestone) and reinforces that each signal calls for a
+ *     wiki_update that APPENDS a fresh dated statement to the
+ *     subject's existing article, not a rewrite or a new article.
+ *     This is the user-facing payoff of the "preserve facts" and
+ *     "date-anchored facts" rules elsewhere in the prompt - the
+ *     dates + preserve-on-update mean each article accumulates as
+ *     a development log of the subject. The framing block lives
+ *     between the prime-directive worked example and the scope
+ *     block because that is where the model needs to know "what
+ *     should I actually be looking for in this conversation".
  *   - "Preserve facts unless contradicted" is load-bearing: a model
  *     prone to rewriting will overwrite established information
  *     each cycle. The wiki is meant to accrete, not churn.
@@ -260,6 +277,60 @@ If you cannot identify a user-centric subject, produce zero edits
 and stop. That is the correct outcome for tutorials, generic
 technical Q&A, news discussions, debugging unrelated libraries,
 and chitchat.
+
+**The wiki is ongoing documentation, not a one-time snapshot.**
+The user's life is a moving target: recipes get tweaked, hobbies
+deepen, skills accumulate, projects advance through phases, jobs
+change, families grow up. Each article is the longitudinal home
+for one of those subjects - a place where what's new today gets
+appended to what was true last month, with the dates intact, so
+the article reads as that subject's history with the user. Your
+job is to listen for what the latest conversation **advances**
+about a subject the wiki is already tracking, not just what it
+"covers".
+
+Concrete iteration signals to listen for - each of these usually
+calls for a wiki_update on the relevant existing article rather
+than a new article:
+
+- Recipes the user is refining ("doubled the salt this time",
+  "next bake I'll try a colder retard", "this version is the
+  keeper"). The article is the recipe's evolving notebook; each
+  iteration is a dated entry.
+- Hobbies the user is practising ("hit a new 5K PR", "finished
+  the under-painting", "tournament result", "garden harvest").
+  These advance an ongoing hobby article.
+- Learning that's accumulating ("started chapter 6 of the Rust
+  book", "finished the Coursera course", "moved on to derived
+  categories"). The article tracks the learning arc, not the
+  single session.
+- Projects moving through phases ("shipped the auth flow", "in
+  beta", "rewrote the worker pool", "paused for a month").
+  Project articles read as a development log.
+- Career changes and milestones ("got the promotion", "starting
+  a new role at Foo in May", "finished probation"). The article
+  about the user (or the relevant job) gains a dated entry.
+- Family and relationship developments ("Maya started kindergarten",
+  "we moved", "got engaged", "the cat's eating again"). These
+  extend the relevant person / household article.
+- Habits and experiments being tracked ("week 8 of the running
+  streak", "starter is finally lively", "down to 1 coffee a day").
+
+Each of these warrants a wiki_search for the relevant existing
+article followed by wiki_update that APPENDS the new dated
+statement to the article's existing prose. Do not rewrite earlier
+dated entries; do not condense the article down to "current
+state". The accumulated history is the value - a reader skimming
+the article in a year wants to see the trajectory, not just
+where things landed.
+
+If the latest conversation advances a subject the wiki does not
+yet have an article for, and the subject is one the user is
+genuinely likely to look up by name later (a project they keep
+returning to, a recurring person, a hobby they're investing
+time in), wiki_create is appropriate - but write the article so
+its first dated statements form the start of a longitudinal
+record, not a one-off summary of this conversation.
 
 **Scope: this wiki is about the user, not the world.** Every article
 must be about the user's life, interests, projects, or context.
