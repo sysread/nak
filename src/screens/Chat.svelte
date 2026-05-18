@@ -1664,7 +1664,12 @@
       draft.model,
       draft.reasoning_effort,
       draft.verbosity,
-      titleManuallySet
+      titleManuallySet,
+      // Pass the draft's toolbox selections through. The composer
+      // toolbox button is live on drafts (see toggleToolboxManually),
+      // so a user may have enabled one or more toolboxes before the
+      // first send - they need to survive the draft-to-row swap.
+      draft.toolboxes_enabled
     );
     // Swap the draft for the real thread: remove from drafts, insert
     // into Recent (a freshly-created thread always lands inside the
@@ -1845,6 +1850,14 @@
   // `text.verbosity` silently ignore it, so it's always safe to surface.
   const currentVerbosity = $derived<Verbosity>(
     resolveVerbosity(currentThread?.verbosity ?? null, defaultVerbosity)
+  );
+  // Resolved gated-toolbox set for the current thread. The composer
+  // toolbox button renders unconditionally (mirroring the model /
+  // reasoning / verbosity pickers), so it needs a sensible default
+  // when no thread is active or the thread is a draft - empty array,
+  // since there's no user-level "default toolboxes" concept.
+  const currentToolboxesEnabled = $derived<string[]>(
+    currentThread?.toolboxes_enabled ?? []
   );
 
   async function startRename(): Promise<void> {
@@ -3868,11 +3881,22 @@
    * meta-tool's LLM path. Flips the named gated toolbox on or off in
    * the current thread's `toolboxes_enabled` array, writes through
    * to Supabase, and reverts on failure so the UI can't lie about
-   * server state. Only meaningful on a real (non-draft) thread;
-   * drafts don't exist server-side until they materialize on send.
+   * server state.
+   *
+   * Same fresh-session / draft pattern as setTier: with no active
+   * thread, auto-create a draft so the choice has somewhere to land.
+   * On a draft, the toggle rides along in memory and gets persisted
+   * when the draft materializes (see `materializeIfDraft`, which
+   * passes `toolboxes_enabled` through to the inserted row). Without
+   * the auto-create + draft-local path, the toolbox button had no
+   * useful behaviour on fresh sessions or new conversations.
    */
   async function toggleToolboxManually(toolboxName: string): Promise<void> {
-    if (!app.supabase || !currentThread || currentThread.isDraft) return;
+    if (!app.supabase) return;
+    if (!currentThread) {
+      await newThread();
+      if (!currentThread) return;
+    }
     const threadId = currentThread.id;
     const current = currentThread.toolboxes_enabled;
     const next = current.includes(toolboxName)
@@ -3880,6 +3904,10 @@
       : [...current, toolboxName];
     // Optimistic: update locally first so the checkbox feels instant.
     patchThread(threadId, { toolboxes_enabled: next });
+    // For drafts, the choice rides in memory and gets persisted on
+    // materialization. Don't create a Supabase row just to record a
+    // toolbox flip.
+    if (currentThread.isDraft) return;
     try {
       await app.supabase.setThreadToolboxesEnabled(threadId, next);
     } catch (err) {
@@ -5305,44 +5333,54 @@
                    Pulses on LLM-initiated flips via .flash (see CSS).
                    Sits first in the row because toolbox choice is the
                    most load-bearing decision on this toolbar - cost and
-                   capability pivot on it. -->
-              {#if currentThread && !currentThread.isDraft}
-                <button
-                  type="button"
-                  class="secondary toolbox-btn"
-                  class:on={currentThread.toolboxes_enabled.length > 0}
-                  class:flash={toolboxFlash}
-                  onclick={() => {
-                    modelMenuOpen = false;
-                    reasoningMenuOpen = false;
-                    verbosityMenuOpen = false;
-                    promptsMenuOpen = false;
-                    composerWharfOpen = false;
-                    toolboxMenuOpen = !toolboxMenuOpen;
-                  }}
-                  title={currentThread.toolboxes_enabled.length > 0
-                    ? `Toolboxes: ${currentThread.toolboxes_enabled.join(', ')}`
-                    : 'No toolboxes enabled - click to enable one'}
-                  aria-label="Toolboxes"
-                  aria-haspopup="true"
-                  aria-expanded={toolboxMenuOpen}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                       stroke="currentColor" stroke-width="2"
-                       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
-                    <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    <line x1="3" y1="12" x2="21" y2="12" />
-                    <line x1="10" y1="12" x2="10" y2="14" />
-                    <line x1="14" y1="12" x2="14" y2="14" />
-                  </svg>
-                  {#if currentThread.toolboxes_enabled.length > 0}
-                    <span class="badge" aria-hidden="true"
-                      >{currentThread.toolboxes_enabled.length}</span
-                    >
-                  {/if}
-                </button>
-              {/if}
+                   capability pivot on it. Renders unconditionally - even
+                   with no active thread, or on a draft, the user can
+                   pre-enable toolboxes for the conversation they're
+                   about to start. `toggleToolboxManually` auto-creates
+                   a draft on first toggle so the choice has somewhere
+                   to land; the draft carries `toolboxes_enabled` through
+                   `materializeIfDraft` to the persisted row on first
+                   send. Same pattern as the model / reasoning /
+                   verbosity pickers below. Gating on
+                   `currentThread && !currentThread.isDraft` previously
+                   hid the button on any fresh session or new
+                   conversation, leaving no entry point to the toolbox
+                   surface on desktop. -->
+              <button
+                type="button"
+                class="secondary toolbox-btn"
+                class:on={currentToolboxesEnabled.length > 0}
+                class:flash={toolboxFlash}
+                onclick={() => {
+                  modelMenuOpen = false;
+                  reasoningMenuOpen = false;
+                  verbosityMenuOpen = false;
+                  promptsMenuOpen = false;
+                  composerWharfOpen = false;
+                  toolboxMenuOpen = !toolboxMenuOpen;
+                }}
+                title={currentToolboxesEnabled.length > 0
+                  ? `Toolboxes: ${currentToolboxesEnabled.join(', ')}`
+                  : 'No toolboxes enabled - click to enable one'}
+                aria-label="Toolboxes"
+                aria-haspopup="true"
+                aria-expanded={toolboxMenuOpen}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+                  <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  <line x1="3" y1="12" x2="21" y2="12" />
+                  <line x1="10" y1="12" x2="10" y2="14" />
+                  <line x1="14" y1="12" x2="14" y2="14" />
+                </svg>
+                {#if currentToolboxesEnabled.length > 0}
+                  <span class="badge" aria-hidden="true"
+                    >{currentToolboxesEnabled.length}</span
+                  >
+                {/if}
+              </button>
 
               <!-- File picker: opens a native file chooser; selected
                    files become pendingAttachments chips above the
@@ -5652,14 +5690,14 @@
               {/if}
             </button>
 
-            {#if toolboxMenuOpen && currentThread && !currentThread.isDraft}
+            {#if toolboxMenuOpen}
               <div class="composer-menu composer-menu-left" role="menu">
                 <div class="menu-header">Toolboxes for this conversation</div>
                 {#each GATED_TOOLBOX_META as tb (tb.name)}
                   <label class="menu-item">
                     <input
                       type="checkbox"
-                      checked={currentThread.toolboxes_enabled.includes(tb.name)}
+                      checked={(currentThread?.toolboxes_enabled ?? []).includes(tb.name)}
                       onchange={() => void toggleToolboxManually(tb.name)}
                     />
                     <span class="menu-item-label">
