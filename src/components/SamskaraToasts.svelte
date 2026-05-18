@@ -241,7 +241,24 @@
   aria-atomic="true"
   aria-label="Samskara formation activity"
 >
-  {#if current && route.cid !== null}
+  <!-- Always-rendered. On the brand-new-chat screen (route.cid is
+       null) there's no conversation context to predict against, so
+       there's no mood to show; the pill renders disabled / grayed
+       with the 💤 placeholder emoji. As soon as a thread is active
+       the pill enables and seeds from history; the {#key} block
+       drives the fly transition when the emoji swaps to a fresh
+       mint. -->
+  {#if current === null}
+    <button
+      type="button"
+      class="mood-pill is-disabled"
+      disabled
+      title="Samskara diagnostics - no conversation selected"
+      aria-label="Samskara diagnostics (no conversation selected)"
+    >
+      <span class="emoji" aria-hidden="true">{DEFAULT_EMOJI}</span>
+    </button>
+  {:else}
     {#key current.id}
       <button
         type="button"
@@ -313,6 +330,21 @@
   .mood-pill:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+  }
+
+  /* Disabled state. Same shape as IntuitionPill / BiasPill's disabled
+     style - faded contents, cursor signaling non-interactivity. The
+     pill still shows so the user knows the feature exists; clicks
+     are blocked by the disabled attribute. */
+  .mood-pill:disabled,
+  .mood-pill.is-disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .mood-pill:disabled:hover,
+  .mood-pill.is-disabled:hover {
+    border-color: color-mix(in srgb, var(--border) 80%, transparent);
   }
 
   /* Tier-2 reserved hook - lands when compound-of-compounds minting
