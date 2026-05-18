@@ -49,7 +49,12 @@ Two jobs, one module:
    as `ExtractedTextDrawer`; in practice only one of the two is
    open at a time, so simultaneous-stack layout is tolerated but
    not optimized for) and renders the buffer with level
-   filtering, substring search, and a clear button.
+   filtering, source-tag filtering, substring search, and a
+   clear button. The source-tag dropdown is built dynamically
+   from the tags present in the buffer (sorted, deduped), so it
+   stays in sync with whatever subsystems have actually emitted -
+   no separate registration step when adding a new `createLogger`
+   call site.
 
 ## Files
 
