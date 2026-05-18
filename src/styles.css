@@ -1280,6 +1280,16 @@ h1 {
   min-width: 0;
 }
 
+/* Topic-filter wrapper. Sits below the search row and above the
+   thread list. The negative side margins match `.thread-list-controls`
+   so the dropdown trigger spans the same edge-to-edge gutter as the
+   search input above; the bottom margin separates the pill row from
+   the first conversation entry. */
+.thread-list-topics {
+  margin: -0.3rem 0.35rem 0.5rem;
+  flex-shrink: 0;
+}
+
 .thread {
   padding: 0.55rem 0.7rem;
   border-radius: var(--radius);

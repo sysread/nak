@@ -33,6 +33,31 @@ matters to you.
 
 ## Deleting a thread
 
+## Filtering by topic
+
+The conversation drawer has a **Topics** button between the search
+box and the thread list. Open it to see a checkbox list of every
+topic Nak has assigned across your conversations - check one or
+more to narrow the list to only threads tagged with any of those
+topics. Selections are joined with OR, so checking `baking` and
+`bread` shows everything tagged with either.
+
+Each active filter shows up as a pill below the dropdown. Click the
+**×** on a pill to remove that one topic from the filter without
+reopening the dropdown; **clear** removes all of them at once. The
+filter applies to the date-sorted list AND to search results -
+typing in the search box while a filter is active gives you "search
+within these topics".
+
+A special `untagged` row at the top of the dropdown filters to
+threads the background agent hasn't reached yet, or threads where
+the agent decided no topic fit. It's useful when you want to see
+the backlog draining.
+
+Topics are assigned automatically by a background agent - see
+[What runs in the background](./background.md) for what it does and
+how the vocabulary stays consistent.
+
 ## Where to go next
 
 - [Search](./search.md) — find a specific thread.

@@ -206,6 +206,14 @@ A chat turn goes:
   `last_reflected_msg_id`. The chat loop creates that
   assistant message; the workers pick it up on their next
   poll. See `./summaries.md`, `./memory.md`.
+- **Topics** — `Chat.svelte` owns the `selectedTopics` /
+  `topicsVocabulary` state for the drawer's topic-filter
+  dropdown and threads `selectedTopics` through the three
+  bucket fetches + search + window-fetch. The realtime
+  `onUpdate` handler refreshes the vocabulary when a row's
+  topics column changes. The topics background worker
+  populates `threads.topics`; the chat loop has no direct
+  call path to it. See `./topics.md`.
 - **Settings** — `Chat.svelte` reads `app.defaultModel`,
   `app.defaultReasoningEffort`, `app.defaultVerbosity`,
   `app.systemPrompts` from the state store. Settings writes
