@@ -662,6 +662,19 @@
   });
 
   function openLibrarianConfirm(): void {
+    // Close any open article first so the confirmation strip lands on
+    // the empty-state surface instead of being injected above the
+    // article body. Otherwise the strip pushes the article down and
+    // reads as "the librarian inserted itself into this article."
+    // Also tear down any per-article mid-edit / delete / manual-update
+    // strips that were anchored on the closing article - their state
+    // would otherwise linger after the article unmounts.
+    if (route.wiki_article_id) {
+      navigate({ wiki_article_id: null });
+      cancelEdit();
+      cancelDelete();
+      cancelManualUpdate();
+    }
     librarianConfirmOpen = true;
     librarianInstructions = '';
     librarianBusy = false;
