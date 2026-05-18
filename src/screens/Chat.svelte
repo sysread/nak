@@ -3576,14 +3576,15 @@
   // CSS hides the trigger above 720px.
   let composerWharfOpen = $state(false);
 
-  // Mobile-only diagnostic tray. A sibling wharf on the RIGHT side
-  // of the composer-bar that carries the three diagnostic pill
-  // buttons (intuition / samskara mood / bias profile). On desktop
-  // those pills live in the bottom-right column inside .messages-wrap;
-  // on mobile that column collides with the assistant response and
-  // burns reading space, so they move into this drop-up instead.
-  // The CSS mirrors the existing left wharf - hidden above 720px,
-  // rendered as a vertical icon column when open below it.
+  // Mobile-only diagnostic tray. A sibling wharf docked next to the
+  // composer-wharf-trigger on the left of the composer-bar, carrying
+  // the three diagnostic pill buttons (intuition / samskara mood /
+  // bias profile). On desktop those pills live in the bottom-right
+  // column inside .messages-wrap; on mobile that column collides with
+  // the assistant response and burns reading space, so they move into
+  // this drop-up instead. The CSS mirrors the existing left wharf -
+  // hidden above 720px, rendered as a vertical icon column when open
+  // above its trigger.
   let composerDiagWharfOpen = $state(false);
 
   // IDs of system prompts active for the current thread. Seeded from
@@ -5325,7 +5326,14 @@
               type="button"
               class="secondary icon-btn composer-wharf-trigger"
               class:open={composerWharfOpen}
-              onclick={() => (composerWharfOpen = !composerWharfOpen)}
+              onclick={() => {
+                // Close any other open menu before toggling - the diag
+                // wharf now opens above its trigger right next to this
+                // one, and we want at most one drop-up on screen.
+                const next = !composerWharfOpen;
+                closeMenus();
+                composerWharfOpen = next;
+              }}
               title="Composer menu"
               aria-label="Composer menu"
               aria-haspopup="true"
@@ -5344,6 +5352,111 @@
                 <circle cx="19" cy="19" r="1.8" />
               </svg>
             </button>
+            <!-- Mobile-only diagnostic wharf, docked right next to the
+                 composer-wharf-trigger so both drop-ups originate from
+                 the same neighborhood on the left. The .composer-diag-
+                 anchor wrapper is a local positioning context so the
+                 .composer-diag-wharf panel pops up directly above its
+                 trigger; without the wrapper the panel would anchor to
+                 .composer-bar and float off-center. Hidden on desktop -
+                 the pills live in the bottom-right column inside
+                 .messages-wrap there - and on mobile that column
+                 collides with readability so the pills move here. -->
+            <div class="composer-diag-anchor">
+              <button
+                type="button"
+                class="secondary icon-btn composer-diag-trigger"
+                class:open={composerDiagWharfOpen}
+                onclick={() => {
+                  const next = !composerDiagWharfOpen;
+                  closeMenus();
+                  composerDiagWharfOpen = next;
+                }}
+                title="Diagnostics menu"
+                aria-label="Diagnostics menu"
+                aria-haspopup="true"
+                aria-expanded={composerDiagWharfOpen}
+                aria-controls="composer-diag-wharf"
+              >
+                <!-- Three vertical dots, distinct from the adjacent
+                     wharf's 3x3 grid so the two affordances read as
+                     separate concerns at a glance. -->
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"
+                     aria-hidden="true">
+                  <circle cx="12" cy="5" r="1.8" />
+                  <circle cx="12" cy="12" r="1.8" />
+                  <circle cx="12" cy="19" r="1.8" />
+                </svg>
+              </button>
+
+              <!-- Drop-up panel with the three diagnostic buttons.
+                   Hidden when the wharf is closed (CSS gates on
+                   .wharf-open); rendered as a vertical column
+                   anchored above the trigger via the .composer-diag-
+                   anchor positioning context. Buttons close the wharf
+                   on click via the shared closeMenus helper. -->
+              <div
+                id="composer-diag-wharf"
+                class="composer-diag-wharf"
+                class:wharf-open={composerDiagWharfOpen}
+              >
+                <button
+                  type="button"
+                  class="diag-tile"
+                  disabled={currentIntuitionPayload === null}
+                  title={currentIntuitionPayload !== null
+                    ? 'Intuition - perception, drives, synthesis'
+                    : 'Intuition - no data for this conversation yet'}
+                  aria-label={currentIntuitionPayload !== null
+                    ? 'Open intuition diagnostics'
+                    : 'Intuition diagnostics (no data yet)'}
+                  onclick={() => {
+                    closeMenus();
+                    if (currentIntuitionPayload !== null) {
+                      navigate({ modal: 'intuition' });
+                    }
+                  }}
+                >
+                  <span class="emoji" aria-hidden="true">&#x1F9E0;</span>
+                </button>
+                <button
+                  type="button"
+                  class="diag-tile"
+                  disabled={route.cid === null}
+                  title={route.cid !== null
+                    ? (moodState.current
+                        ? `feelin' ${valenceToMoodLabel(moodState.current.valence, moodState.current.confidence)} - open Samskara diagnostics`
+                        : 'Samskara diagnostics - no mood data yet')
+                    : 'Samskara - no conversation selected'}
+                  aria-label={route.cid !== null
+                    ? 'Open Samskara diagnostics'
+                    : 'Samskara diagnostics (no conversation selected)'}
+                  onclick={() => {
+                    closeMenus();
+                    if (route.cid !== null) navigate({ modal: 'samskara' });
+                  }}
+                >
+                  <span class="emoji" aria-hidden="true">
+                    {moodState.current
+                      ? valenceToEmoji(moodState.current.valence, moodState.current.confidence)
+                      : '\u{1F4A4}'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  class="diag-tile"
+                  title="Bias profile - patterns observed across past conversations"
+                  aria-label="Open bias profile diagnostics"
+                  onclick={() => {
+                    closeMenus();
+                    navigate({ modal: 'bias-profile' });
+                  }}
+                >
+                  <span class="emoji" aria-hidden="true">&#x1F4C8;</span>
+                </button>
+              </div>
+            </div>
+
             <div class="composer-bar-left" id="composer-wharf" class:wharf-open={composerWharfOpen}>
               <!-- Toolbox popover: each gated toolbox is an independent
                    on/off. Badge shows how many are on for this thread.
@@ -5567,108 +5680,6 @@
                   verbosityMenuOpen = false;
                 }}
               />
-            </div>
-
-            <!-- Mobile-only diagnostic wharf trigger. Mirror of the
-                 left-side composer-wharf-trigger but on the right -
-                 opens a vertical drop-up panel containing the three
-                 diagnostic pill buttons (intuition / samskara /
-                 bias). On desktop the pills live in the bottom-right
-                 column inside .messages-wrap and this trigger is
-                 hidden; on mobile that column collides with
-                 readability so the pills move into this drop-up
-                 instead. -->
-            <button
-              type="button"
-              class="secondary icon-btn composer-diag-trigger"
-              class:open={composerDiagWharfOpen}
-              onclick={() => {
-                const next = !composerDiagWharfOpen;
-                closeMenus();
-                composerDiagWharfOpen = next;
-              }}
-              title="Diagnostics menu"
-              aria-label="Diagnostics menu"
-              aria-haspopup="true"
-              aria-expanded={composerDiagWharfOpen}
-              aria-controls="composer-diag-wharf"
-            >
-              <!-- Three vertical dots, distinct from the existing
-                   wharf's 3x3 grid so the two affordances read as
-                   separate concerns at a glance. -->
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"
-                   aria-hidden="true">
-                <circle cx="12" cy="5" r="1.8" />
-                <circle cx="12" cy="12" r="1.8" />
-                <circle cx="12" cy="19" r="1.8" />
-              </svg>
-            </button>
-
-            <!-- Drop-up panel with the three diagnostic buttons.
-                 Hidden when the wharf is closed (CSS gates on
-                 .wharf-open); rendered as a vertical column
-                 anchored above-right of the trigger when open.
-                 Buttons close the wharf on click via the shared
-                 closeMenus helper. -->
-            <div
-              id="composer-diag-wharf"
-              class="composer-diag-wharf"
-              class:wharf-open={composerDiagWharfOpen}
-            >
-              <button
-                type="button"
-                class="diag-tile"
-                disabled={currentIntuitionPayload === null}
-                title={currentIntuitionPayload !== null
-                  ? 'Intuition - perception, drives, synthesis'
-                  : 'Intuition - no data for this conversation yet'}
-                aria-label={currentIntuitionPayload !== null
-                  ? 'Open intuition diagnostics'
-                  : 'Intuition diagnostics (no data yet)'}
-                onclick={() => {
-                  closeMenus();
-                  if (currentIntuitionPayload !== null) {
-                    navigate({ modal: 'intuition' });
-                  }
-                }}
-              >
-                <span class="emoji" aria-hidden="true">&#x1F9E0;</span>
-              </button>
-              <button
-                type="button"
-                class="diag-tile"
-                disabled={route.cid === null}
-                title={route.cid !== null
-                  ? (moodState.current
-                      ? `feelin' ${valenceToMoodLabel(moodState.current.valence, moodState.current.confidence)} - open Samskara diagnostics`
-                      : 'Samskara diagnostics - no mood data yet')
-                  : 'Samskara - no conversation selected'}
-                aria-label={route.cid !== null
-                  ? 'Open Samskara diagnostics'
-                  : 'Samskara diagnostics (no conversation selected)'}
-                onclick={() => {
-                  closeMenus();
-                  if (route.cid !== null) navigate({ modal: 'samskara' });
-                }}
-              >
-                <span class="emoji" aria-hidden="true">
-                  {moodState.current
-                    ? valenceToEmoji(moodState.current.valence, moodState.current.confidence)
-                    : '\u{1F4A4}'}
-                </span>
-              </button>
-              <button
-                type="button"
-                class="diag-tile"
-                title="Bias profile - patterns observed across past conversations"
-                aria-label="Open bias profile diagnostics"
-                onclick={() => {
-                  closeMenus();
-                  navigate({ modal: 'bias-profile' });
-                }}
-              >
-                <span class="emoji" aria-hidden="true">&#x1F4C8;</span>
-              </button>
             </div>
 
             <!-- Dual-purpose button: sends when idle, stops the in-
