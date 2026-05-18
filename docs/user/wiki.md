@@ -91,12 +91,12 @@ Clearing the search returns the alphabetical listing.
 
 ## Adding an article
 
-Click the empty-state link **add a new one**, or click **Wiki** in the
-drawer with no article selected. The inline form takes a title,
-content, and a one-line **change message** (a git-style summary of
-why you're adding the article - lands in the [changelog](#changelog)).
-**Save** persists immediately and surfaces the new article in the
-panel.
+Open the **Wiki** tab with no article selected (the default view is
+the [changelog](#changelog)) and click **+ New article** in the
+changelog header. The inline form takes a title, content, and a
+one-line **change message** (a git-style summary of why you're
+adding the article - lands in the [changelog](#changelog)). **Save**
+persists immediately and surfaces the new article in the panel.
 
 Titles are unique per user. If you try to create an article with a
 title that already exists you get a clear error and can either rename
@@ -278,8 +278,11 @@ flight - the two paths never write to the wiki at the same time.
 
 Every change to the wiki - article added, edited, deleted, by you or
 by either agent - is recorded as a one-line entry in the **wiki
-changelog**. The Wiki top bar has a **clock** button next to the
-sparkles librarian button; click it to open the changelog modal.
+changelog**. The changelog is the Wiki tab's default view - open the
+**Wiki** tab with no article selected and it fills the panel. While
+reading an article, the **clock** button in the Wiki top bar (next
+to the sparkles librarian button) clears the selection and lands you
+back on the changelog.
 
 Each entry shows:
 
@@ -297,8 +300,8 @@ Each entry shows:
   before the change lands.
 
 Entries are newest-first. The list pages in chunks of 50; a **Load
-more** button at the bottom fetches the next chunk. Reopening the
-modal always fetches a fresh first page.
+more** button at the bottom fetches the next chunk. Switching away
+from the Wiki tab and back fetches a fresh first page.
 
 The changelog is per-user and read-only - entries cannot be edited
 or removed individually. The only way to wipe it is **Settings ->

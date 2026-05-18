@@ -4,7 +4,7 @@
  *
  *   cid     = active thread id
  *   drawer  = 'chats' | 'recipes' | 'memories' | 'wiki'  (sidebar tab; absent = 'chats')
- *   modal   = 'settings' | 'help' | 'samskara' | 'intuition' | 'bias-profile' | 'wiki-changelog'  (utility overlays)
+ *   modal   = 'settings' | 'help' | 'samskara' | 'intuition' | 'bias-profile'  (utility overlays)
  *   recipe  = recipe id; selecting one switches the main panel to the recipe detail
  *   doc     = docs/user/ path when modal=help
  *
@@ -47,7 +47,7 @@
  * owns.
  */
 
-export type Modal = 'settings' | 'help' | 'samskara' | 'intuition' | 'bias-profile' | 'wiki-changelog';
+export type Modal = 'settings' | 'help' | 'samskara' | 'intuition' | 'bias-profile';
 export type DrawerTab = 'chats' | 'recipes' | 'memories' | 'wiki';
 
 export interface Route {
@@ -87,7 +87,6 @@ const MODAL_VALUES: readonly Modal[] = [
   'samskara',
   'intuition',
   'bias-profile',
-  'wiki-changelog',
 ];
 const DRAWER_VALUES: readonly DrawerTab[] = [
   'chats',
