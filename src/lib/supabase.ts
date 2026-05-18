@@ -1398,7 +1398,8 @@ export class SupabaseService {
     model: ModelTier | null = null,
     reasoningEffort: ReasoningEffort | null = null,
     verbosity: Verbosity | null = null,
-    titleManuallySet = false
+    titleManuallySet = false,
+    toolboxesEnabled: string[] = []
   ): Promise<Thread> {
     const session = await this.getSession();
     if (!session) throw new SupabaseError('Not authenticated.');
@@ -1411,6 +1412,12 @@ export class SupabaseService {
         reasoning_effort: reasoningEffort,
         verbosity,
         title_manually_set: titleManuallySet,
+        // Carries the draft's toolbox selections through to the
+        // persisted row. The composer toolbox button is available
+        // before a draft materializes, so a user may have enabled
+        // toolboxes before the first send - without this passthrough
+        // those flips would silently reset to [] on materialization.
+        toolboxes_enabled: toolboxesEnabled,
       })
       .select()
       .single();
