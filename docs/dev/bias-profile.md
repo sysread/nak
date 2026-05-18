@@ -608,6 +608,85 @@ closes the block.
   bias on this conversation". The EMA skips nulls; the modal
   shows them so the user can see what the agent looked at.
 
+## Future work
+
+Parked ideas, in rough priority order. None of these are blocked
+by anything in v2; they're deferred because v2 needs field data
+to settle before the next round of iteration.
+
+### Co-occurrence modeling
+
+Replace the bag of independent Beta-Binomials with a logistic-
+normal multivariate prior over the 19-entry catalog so
+statistically correlated biases update each other. confirmation_
+bias and overconfidence co-occur in real users, as do anchoring
+and availability_heuristic; the current math treats every
+catalog entry as an independent fact. A 19x19 correlation matrix
+is manageable to store and update. The blocker is the prior -
+without field data to fit the off-diagonal entries against, any
+correlation structure we hand-code is just another opinion. Wait
+until v2 has produced enough cross-bias observations across
+enough users to estimate the entries empirically.
+
+### Time-series view in the diagnostics modal
+
+The modal currently shows a snapshot: per-bias evidence as of the
+last aggregate pass, plus the per-bias feedback_score. There's no
+view of how the feedback EMA has moved over time. A small
+sparkline per bias (or one combined chart filtered to a single
+bias) would answer "why did this bias stop surfacing?" or "did my
+recent pushback actually shift the gate?" Stack: read all
+`bias_reactions` rows for the user filtered to one bias, project
+the EMA at each historical timestamp, plot. Cheap; the rows are
+already indexed by `(user_id, bias)`. Debug-only - not a v1
+user-facing feature.
+
+### Mark-a-reaction-as-wrong control
+
+The reactor agent's classification quality is currently
+unmeasured. A small control on each reaction card in the modal
+(thumb-down or "this isn't a fair read") that writes a
+`reactor_disagreement` flag against the row would give us a
+ground-truth signal to evaluate the reactor's calibration
+against. The flagged rows could either be excluded from the EMA
+or weighted lower; the simpler version excludes. This pairs
+naturally with the time-series view since "I marked the last
+three as wrong" should visibly correct the EMA trajectory.
+
+### Per-tier guidance differentiation under feedback
+
+Currently soft and strong tiers render different phrasing
+("occasional" vs "consistent"); the feedback EMA shifts whether a
+bias clears each tier but doesn't change the rendered text inside
+a tier. A high-positive-feedback bias still gets standard
+"occasional" framing even though the user has signaled they want
+direct engagement. Worth exploring whether the EMA should also
+drive a phrasing variant within a tier - softer for "I push back
+on hedging" users, more direct for "I appreciate the surfacing"
+users. Risk: every additional rendered-text variant is another
+surface for the underlying LLM to misinterpret, and the
+compensation guidance is already tuned conservatively.
+
+### Adaptive FEEDBACK_THRESHOLD_DELTA per bias
+
+The threshold-shift envelope is a single global constant (0.10).
+Some biases (overconfidence, hindsight_bias) might warrant a
+larger envelope because the compensation is more intrusive when
+unwanted; others (base_rate_neglect, planning_fallacy) might
+warrant a smaller envelope because the compensation rides quietly
+in normal estimation language. Per-bias deltas in the catalog
+would let the calibration loop respond more proportionately. Wait
+until we have enough field data to know which biases get
+disproportionate pushback before sizing the per-entry deltas.
+
+### Reaction half-life sensitivity sweep
+
+FEEDBACK_HALF_LIFE_DAYS = 30 is a guess (half the observation
+half-life). Real preference shifts may move faster or slower; a
+sensitivity analysis once we have a few hundred reactions per
+user would tell us whether 30 is too sticky or too jumpy. Cheap
+to retune; one constant edit.
+
 ## Where to go next
 
 - `./chat.md` - the seam where the bias-profile block plugs
