@@ -43,6 +43,8 @@
     BETA_PRIOR,
     CI_LB_SOFT,
     CI_LB_STRONG,
+    FEEDBACK_HALF_LIFE_DAYS,
+    FEEDBACK_THRESHOLD_DELTA,
     HALF_LIFE_DAYS,
     N_EFF_FLOOR,
     RENDER_CAP,
@@ -58,6 +60,7 @@
     effectiveN: number;
     posteriorMean: number;
     ciLower: number;
+    feedbackScore: number;
     tier: 'elided' | 'soft' | 'strong';
     computedAt: string;
   }
@@ -78,17 +81,31 @@
     createdAt: string;
   }
 
+  /** One row of `bias_reactions`, surfaced in the per-thread
+   *  drill-down sections. The three-state was_confirmed matches
+   *  the agent's classification: true = affirmed, false = pushed
+   *  back, null = neutral / no signal. */
+  interface ReactionRow {
+    id: string;
+    bias: string;
+    wasConfirmed: boolean | null;
+    reasoning: string;
+    createdAt: string;
+  }
+
   let summary = $state<SummaryRow[]>([]);
   let processed = $state<ProcessedThreadRow[]>([]);
   let loading = $state(true);
   let expandedThreadId = $state<string | null>(null);
   let expandedObs = $state<ObservationRow[]>([]);
-  // Observations for the currently-open thread, eagerly loaded on
-  // mount so the "Current conversation" section can render without
-  // the user having to expand the thread row in the processed-
-  // conversations list. Null means "not yet fetched"; empty array
-  // means "fetched and the thread has no observations recorded."
+  let expandedReactions = $state<ReactionRow[]>([]);
+  // Observations + reactions for the currently-open thread,
+  // eagerly loaded on mount so the "Current conversation" section
+  // can render without the user having to expand the thread row in
+  // the processed-conversations list. Null means "not yet fetched";
+  // empty array means "fetched and nothing recorded."
   let currentThreadObs = $state<ObservationRow[] | null>(null);
+  let currentThreadReactions = $state<ReactionRow[] | null>(null);
   // Snapshot route.cid at mount so a thread switch behind the modal
   // doesn't yank the section's data partway through. The user can
   // close and reopen the modal to see the new thread.
@@ -101,16 +118,20 @@
       return;
     }
     try {
-      const [s, p, threadObs] = await Promise.all([
+      const [s, p, threadObs, threadReactions] = await Promise.all([
         supabase.biasListSummary(),
         supabase.biasListProcessedThreads(30),
         activeThreadId
           ? supabase.biasListObservationsForThread(activeThreadId)
           : Promise.resolve([] as ObservationRow[]),
+        activeThreadId
+          ? supabase.biasListReactionsForThread(activeThreadId)
+          : Promise.resolve([] as ReactionRow[]),
       ]);
       summary = s;
       processed = p;
       currentThreadObs = activeThreadId ? threadObs : null;
+      currentThreadReactions = activeThreadId ? threadReactions : null;
     } finally {
       loading = false;
     }
@@ -120,16 +141,24 @@
     if (expandedThreadId === threadId) {
       expandedThreadId = null;
       expandedObs = [];
+      expandedReactions = [];
       return;
     }
     expandedThreadId = threadId;
     expandedObs = [];
+    expandedReactions = [];
     const supabase = app.supabase;
     if (!supabase) return;
     try {
-      expandedObs = await supabase.biasListObservationsForThread(threadId);
+      const [obs, reactions] = await Promise.all([
+        supabase.biasListObservationsForThread(threadId),
+        supabase.biasListReactionsForThread(threadId),
+      ]);
+      expandedObs = obs;
+      expandedReactions = reactions;
     } catch {
       expandedObs = [];
+      expandedReactions = [];
     }
   }
 
@@ -200,6 +229,27 @@
 
   function formatEffectiveN(n: number): string {
     return n.toFixed(1);
+  }
+
+  /**
+   * Feedback score is signed in [-1, +1]. Render with an explicit
+   * sign so the polarity reads at a glance; +0.00 / -0.00 also
+   * collapse to the neutral 0.00.
+   */
+  function formatFeedback(n: number): string {
+    const abs = Math.abs(n);
+    if (abs < 0.005) return '0.00';
+    const sign = n > 0 ? '+' : '-';
+    return `${sign}${abs.toFixed(2)}`;
+  }
+
+  /**
+   * Render-time tag for a reaction's three-state was_confirmed.
+   */
+  function reactionVerdict(wasConfirmed: boolean | null): string {
+    if (wasConfirmed === true) return 'affirmed';
+    if (wasConfirmed === false) return 'pushed back';
+    return 'neutral';
   }
 </script>
 
@@ -303,6 +353,40 @@
                 {/each}
               </div>
             {/if}
+
+            <h3 class="sub-title">Reactions to compensation on this conversation</h3>
+            {#if currentThreadReactions === null || currentThreadReactions.length === 0}
+              <p class="empty">
+                {#if currentThreadReactions === null}
+                  Not yet analyzed. Reactions are recorded for the
+                  biases that were active in the system prompt while
+                  the conversation happened; the worker classifies
+                  them after you close the conversation.
+                {:else if renderedRows.length === 0}
+                  No biases were active in the system prompt during
+                  this conversation, so there was nothing for you
+                  to react to.
+                {:else}
+                  Already analyzed - the agent did not see a clear
+                  affirmation or pushback signal for the active
+                  biases on this conversation.
+                {/if}
+              </p>
+            {:else}
+              <div class="obs-list flush">
+                {#each currentThreadReactions as r (r.id)}
+                  <div class="obs-card">
+                    <header class="obs-header">
+                      <span class="obs-bias">{biasLabel(r.bias)}</span>
+                      <span class="reaction-verdict {r.wasConfirmed === true ? 'affirmed' : r.wasConfirmed === false ? 'pushed' : 'neutral'}">
+                        {reactionVerdict(r.wasConfirmed)}
+                      </span>
+                    </header>
+                    <p class="obs-reasoning">{r.reasoning}</p>
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </section>
         {/if}
 
@@ -333,6 +417,7 @@
                   <div><dt>CI lower (90%)</dt><dd>{formatProbability(row.ciLower)}</dd></div>
                   <div><dt>posterior mean</dt><dd>{formatProbability(row.posteriorMean)}</dd></div>
                   <div><dt>effective N</dt><dd>{formatEffectiveN(row.effectiveN)}</dd></div>
+                  <div title="EMA of compensation-reaction feedback in [-1, +1]. Positive = user has affirmed compensation; negative = user has pushed back. Shifts the surfacing gates by up to {FEEDBACK_THRESHOLD_DELTA.toFixed(2)} at the extremes."><dt>feedback</dt><dd>{formatFeedback(row.feedbackScore)}</dd></div>
                 </dl>
               </li>
             {/each}
@@ -381,6 +466,20 @@
                           </div>
                         {/each}
                       {/if}
+                      {#if expandedReactions.length > 0}
+                        <p class="sub-list-label subtle">Reactions</p>
+                        {#each expandedReactions as r (r.id)}
+                          <div class="obs-card">
+                            <header class="obs-header">
+                              <span class="obs-bias">{biasLabel(r.bias)}</span>
+                              <span class="reaction-verdict {r.wasConfirmed === true ? 'affirmed' : r.wasConfirmed === false ? 'pushed' : 'neutral'}">
+                                {reactionVerdict(r.wasConfirmed)}
+                              </span>
+                            </header>
+                            <p class="obs-reasoning">{r.reasoning}</p>
+                          </div>
+                        {/each}
+                      {/if}
                     </div>
                   {/if}
                 </li>
@@ -397,6 +496,13 @@
           Beta({ALPHA_PRIOR}, {BETA_PRIOR}), effective-N floor of
           {N_EFF_FLOOR}, 90% one-sided credible interval lower bound
           as the surfacing gate.
+        </p>
+        <p>
+          Compensation-feedback EMA (half-life {FEEDBACK_HALF_LIFE_DAYS}
+          days) shifts both surfacing gates symmetrically by up to
+          {FEEDBACK_THRESHOLD_DELTA.toFixed(2)} at the extremes:
+          consistent affirmation surfaces biases sooner, consistent
+          pushback raises the bar.
         </p>
         <p>
           See <code>docs/dev/bias-profile.md</code> for the full
@@ -732,4 +838,37 @@
     color: color-mix(in srgb, var(--text) 65%, transparent);
   }
 
+  /* Reaction verdict pill. Three colorways for the three-state
+     was_confirmed: affirmed (accent-tinted), pushed back (danger-
+     tinted), neutral (subtle gray). Same shape as the tier
+     badge - small, lowercase, pill-bordered - so the two read as
+     part of the same vocabulary. */
+  .reaction-verdict {
+    border: 1px solid var(--border);
+    border-radius: 9999px;
+    padding: 0.05rem 0.5rem;
+    font-size: 0.72rem;
+    text-transform: lowercase;
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  .reaction-verdict.affirmed {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  }
+
+  .reaction-verdict.pushed {
+    background: color-mix(in srgb, var(--danger) 18%, transparent);
+    border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  }
+
+  /* Sub-list separator label that appears between observations
+     and reactions inside the expanded thread drill-down so the
+     two cards-of-the-same-shape are distinguishable at a glance. */
+  .sub-list-label {
+    margin: 0.5rem 0 0.25rem;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
 </style>
