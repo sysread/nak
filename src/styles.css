@@ -2553,25 +2553,27 @@ button.composer-wharf-trigger {
   }
 }
 
-/* Mobile-only diagnostic wharf - mirror of the left-side composer
-   wharf but anchored to the right side of the composer-bar, opens
-   upward as a vertical column of pill buttons (intuition / samskara
-   mood / bias profile). On desktop the diagnostics live in the
-   bottom-right pill column inside .messages-wrap and this trigger is
-   hidden entirely; on mobile the column would crash against the
+/* Mobile-only diagnostic wharf - sibling of the left-side composer
+   wharf, docked right next to the composer-wharf-trigger so both
+   drop-ups originate from the same neighborhood on the left edge.
+   Opens upward as a vertical column of pill buttons (intuition /
+   samskara mood / bias profile). On desktop the diagnostics live in
+   the bottom-right pill column inside .messages-wrap and the whole
+   anchor is hidden; on mobile that column would crash against the
    visible response so we move it into this drop-up instead.
 
-   Default state: trigger hidden everywhere. The mobile media query
+   Default state: anchor hidden everywhere. The mobile media query
    below flips it visible at <= 720px and styles the drop-up panel.
-
-   The `button.` prefix on the trigger selector is load-bearing -
-   `button.icon-btn { display: inline-flex }` earlier in this file
-   has specificity (0,0,1,1) and would otherwise override a bare
-   `.composer-diag-trigger { display: none }` rule (specificity
-   (0,0,1,0)). Matching the tag-plus-class shape lets source-order
-   carry the override. */
-button.composer-diag-trigger {
+   Visibility is gated on the wrapper rather than the trigger button
+   so we don't have to fight the `button.icon-btn { display: inline-
+   flex }` specificity that would otherwise leak the trigger onto
+   desktop. The wrapper also creates a local positioning context for
+   the absolutely-positioned drop-up - without it the panel would
+   anchor to .composer-bar and float off-center now that the trigger
+   no longer sits at the bar's right edge. */
+.composer-diag-anchor {
   display: none;
+  position: relative;
 }
 
 .composer-diag-wharf {
@@ -2579,7 +2581,7 @@ button.composer-diag-trigger {
 }
 
 @media (max-width: 720px) {
-  button.composer-diag-trigger {
+  .composer-diag-anchor {
     display: inline-flex;
   }
 
@@ -2591,17 +2593,19 @@ button.composer-diag-trigger {
   }
 
   /* Drop-up panel: only renders when .wharf-open is set. Anchored
-     to the right of the composer-bar via position:absolute (relative
-     to .composer-bar's positioning context). Same beveled-tile
-     styling as the left wharf so the two affordances feel like
-     parts of the same machinery. */
+     to the trigger via the .composer-diag-anchor wrapper's
+     positioning context, so the panel rises directly above the
+     three-dot button regardless of where the wrapper sits in the
+     composer-bar flex row. Same beveled-tile styling as the left
+     wharf so the two affordances feel like parts of the same
+     machinery. */
   .composer-diag-wharf.wharf-open {
     display: flex;
     flex-direction: column;
     gap: 2px;
     padding: 3px;
     position: absolute;
-    right: 0.2rem;
+    left: 0;
     bottom: calc(100% + 0.35rem);
     background: var(--bg-2);
     border-radius: 0;
