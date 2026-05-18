@@ -888,156 +888,169 @@
             {:else}
             <!-- Icon-only action bar. Each button carries a `title` +
                  `aria-label` so the purpose stays discoverable without
-                 the visual weight of text labels — the four actions
-                 are common enough that the pencil / clipboard /
-                 code / trash glyphs read at a glance, especially on
-                 mobile where the text-label version wrapped to a
-                 second row. A thin rule separates the destructive
-                 Delete from the copy group so a misclick is less
-                 likely. -->
+                 the visual weight of text labels - the seven actions
+                 are common enough that the clipboard / cart /
+                 thumbs-up / pencil / trash glyphs read at a glance,
+                 especially on mobile where the text-label version
+                 wrapped to a second row.
+
+                 Buttons are split into three behavior groups: copy
+                 actions, bookmark toggles, edit/delete. Each group
+                 is a `.cookbook-action-group` (Bootstrap-style merged
+                 buttons: no gap inside, square inner corners, shared
+                 border via -1px overlap), and the groups themselves
+                 sit with the normal 0.35rem gap between them. On a
+                 narrow viewport the whole GROUPS wrap as units
+                 instead of individual icons, so a wrap point never
+                 splits "copy plain" from "copy markdown" mid-action. -->
             <div class="cookbook-actions">
-              <!-- Upcoming toggle. Marks/unmarks the recipe for the
-                   current grocery-shopping cycle. Active state (cart
-                   filled + accent tint) means the recipe is in the
-                   "Upcoming" section at the top of the drawer
-                   listing; clicking removes it from that section
-                   without otherwise touching the recipe. -->
-              <button
-                type="button"
-                class="secondary icon-btn cookbook-action-upcoming"
-                class:active={r!.upcoming}
-                onclick={onToggleUpcoming}
-                title={r!.upcoming ? 'Remove from upcoming' : 'Mark as upcoming'}
-                aria-label={r!.upcoming ? 'Remove from upcoming' : 'Mark as upcoming'}
-                aria-pressed={r!.upcoming}
-              >
-                {#if r!.upcoming}
-                  <!-- Filled cart: solid body so the active state reads
-                       loudly even at 16px. -->
-                  <svg width="16" height="16" viewBox="0 0 24 24"
-                       fill="currentColor" stroke="currentColor"
-                       stroke-width="1.5" stroke-linecap="round"
-                       stroke-linejoin="round" aria-hidden="true">
-                    <circle cx="9" cy="21" r="1.5" />
-                    <circle cx="20" cy="21" r="1.5" />
-                    <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"
-                          fill="none" />
-                    <path d="M7 7h15l-1.5 7h-12z" />
-                  </svg>
-                {:else}
+              <!-- Copy group: plain text, Markdown, raw Cooklang. -->
+              <div class="cookbook-action-group" role="group" aria-label="Copy actions">
+                <button
+                  type="button"
+                  class="secondary icon-btn"
+                  onclick={onCopyPlain}
+                  title="Copy as plain text (AnyList-friendly)"
+                  aria-label="Copy as plain text"
+                >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <circle cx="9" cy="21" r="1" />
-                    <circle cx="20" cy="21" r="1" />
-                    <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
                   </svg>
-                {/if}
-              </button>
-              <!-- Favorite toggle. Same active-state pattern as the
-                   upcoming cart: thumbs-up with filled palm when on,
-                   outlined when off. Drives the Favorites section in
-                   the drawer listing. -->
-              <button
-                type="button"
-                class="secondary icon-btn cookbook-action-favorite"
-                class:active={r!.favorite}
-                onclick={onToggleFavorite}
-                title={r!.favorite ? 'Remove from favorites' : 'Mark as favorite'}
-                aria-label={r!.favorite ? 'Remove from favorites' : 'Mark as favorite'}
-                aria-pressed={r!.favorite}
-              >
-                {#if r!.favorite}
-                  <svg width="16" height="16" viewBox="0 0 24 24"
-                       fill="currentColor" stroke="currentColor"
-                       stroke-width="1.5" stroke-linecap="round"
-                       stroke-linejoin="round" aria-hidden="true">
-                    <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z" />
-                    <path d="M7 11l4-7a2 2 0 0 1 4 0v4h5a2 2 0 0 1 2 2.4l-2 7A2 2 0 0 1 18 20H7z" />
-                  </svg>
-                {:else}
+                </button>
+                <!-- Markdown copy. The glyph is the canonical Markdown
+                     logo shape - rounded rect with an "M" stroke on
+                     the left and a down-arrow on the right -
+                     simplified to stroke-only so it matches the rest
+                     of the icon bar's weight. The "M" is two
+                     diagonals + a baseline, the arrow is a vertical
+                     with two chevron strokes. -->
+                <button
+                  type="button"
+                  class="secondary icon-btn"
+                  onclick={onCopyMarkdown}
+                  title="Copy as Markdown"
+                  aria-label="Copy as Markdown"
+                >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z" />
-                    <path d="M7 11l4-7a2 2 0 0 1 4 0v4h5a2 2 0 0 1 2 2.4l-2 7A2 2 0 0 1 18 20H7z" />
+                    <rect x="2" y="6" width="20" height="12" rx="2" ry="2" />
+                    <path d="M6 15V9l2.5 3L11 9v6" />
+                    <path d="M16 9v6" />
+                    <path d="M14 13l2 2 2-2" />
                   </svg>
-                {/if}
-              </button>
-              <button
-                type="button"
-                class="secondary icon-btn"
-                onclick={openEdit}
-                title="Edit recipe"
-                aria-label="Edit recipe"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M12 20h9" />
-                  <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                class="secondary icon-btn"
-                onclick={onCopyPlain}
-                title="Copy as plain text (AnyList-friendly)"
-                aria-label="Copy as plain text"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                </svg>
-              </button>
-              <!-- Markdown copy. The glyph is the canonical Markdown
-                   logo shape - rounded rect with an "M" stroke on the
-                   left and a down-arrow on the right - simplified to
-                   stroke-only so it matches the rest of the icon bar's
-                   weight. The "M" is two diagonals + a baseline, the
-                   arrow is a vertical with two chevron strokes. -->
-              <button
-                type="button"
-                class="secondary icon-btn"
-                onclick={onCopyMarkdown}
-                title="Copy as Markdown"
-                aria-label="Copy as Markdown"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect x="2" y="6" width="20" height="12" rx="2" ry="2" />
-                  <path d="M6 15V9l2.5 3L11 9v6" />
-                  <path d="M16 9v6" />
-                  <path d="M14 13l2 2 2-2" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                class="secondary icon-btn"
-                onclick={onCopyCooklang}
-                title="Copy Cooklang source"
-                aria-label="Copy Cooklang source"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <polyline points="16 18 22 12 16 6" />
-                  <polyline points="8 6 2 12 8 18" />
-                </svg>
-              </button>
-              <span class="cookbook-action-sep" aria-hidden="true"></span>
-              <button
-                type="button"
-                class="secondary icon-btn cookbook-action-danger"
-                onclick={() => onDelete(r!.id)}
-                title="Delete recipe"
-                aria-label="Delete recipe"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <polyline points="3 6 5 6 21 6" />
-                  <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6" />
-                  <path d="M10 11v6M14 11v6" />
-                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                </svg>
-              </button>
+                </button>
+                <button
+                  type="button"
+                  class="secondary icon-btn"
+                  onclick={onCopyCooklang}
+                  title="Copy Cooklang source"
+                  aria-label="Copy Cooklang source"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="16 18 22 12 16 6" />
+                    <polyline points="8 6 2 12 8 18" />
+                  </svg>
+                </button>
+              </div>
+              <!-- Bookmark group: upcoming + favorite. The two flags
+                   that surface as drawer sections (Upcoming /
+                   Favorites at the top of the listing). Active state
+                   = filled glyph + accent border, set per-button on
+                   `.cookbook-action-upcoming.active` /
+                   `.cookbook-action-favorite.active`. -->
+              <div class="cookbook-action-group" role="group" aria-label="Bookmark toggles">
+                <button
+                  type="button"
+                  class="secondary icon-btn cookbook-action-upcoming"
+                  class:active={r!.upcoming}
+                  onclick={onToggleUpcoming}
+                  title={r!.upcoming ? 'Remove from upcoming' : 'Mark as upcoming'}
+                  aria-label={r!.upcoming ? 'Remove from upcoming' : 'Mark as upcoming'}
+                  aria-pressed={r!.upcoming}
+                >
+                  {#if r!.upcoming}
+                    <!-- Filled cart: solid body so the active state
+                         reads loudly even at 16px. -->
+                    <svg width="16" height="16" viewBox="0 0 24 24"
+                         fill="currentColor" stroke="currentColor"
+                         stroke-width="1.5" stroke-linecap="round"
+                         stroke-linejoin="round" aria-hidden="true">
+                      <circle cx="9" cy="21" r="1.5" />
+                      <circle cx="20" cy="21" r="1.5" />
+                      <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"
+                            fill="none" />
+                      <path d="M7 7h15l-1.5 7h-12z" />
+                    </svg>
+                  {:else}
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <circle cx="9" cy="21" r="1" />
+                      <circle cx="20" cy="21" r="1" />
+                      <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+                    </svg>
+                  {/if}
+                </button>
+                <button
+                  type="button"
+                  class="secondary icon-btn cookbook-action-favorite"
+                  class:active={r!.favorite}
+                  onclick={onToggleFavorite}
+                  title={r!.favorite ? 'Remove from favorites' : 'Mark as favorite'}
+                  aria-label={r!.favorite ? 'Remove from favorites' : 'Mark as favorite'}
+                  aria-pressed={r!.favorite}
+                >
+                  {#if r!.favorite}
+                    <svg width="16" height="16" viewBox="0 0 24 24"
+                         fill="currentColor" stroke="currentColor"
+                         stroke-width="1.5" stroke-linecap="round"
+                         stroke-linejoin="round" aria-hidden="true">
+                      <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z" />
+                      <path d="M7 11l4-7a2 2 0 0 1 4 0v4h5a2 2 0 0 1 2 2.4l-2 7A2 2 0 0 1 18 20H7z" />
+                    </svg>
+                  {:else}
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z" />
+                      <path d="M7 11l4-7a2 2 0 0 1 4 0v4h5a2 2 0 0 1 2 2.4l-2 7A2 2 0 0 1 18 20H7z" />
+                    </svg>
+                  {/if}
+                </button>
+              </div>
+              <!-- Modify group: edit and delete. Delete keeps its
+                   warn-stroke hover via `.cookbook-action-danger`. -->
+              <div class="cookbook-action-group" role="group" aria-label="Modify actions">
+                <button
+                  type="button"
+                  class="secondary icon-btn"
+                  onclick={openEdit}
+                  title="Edit recipe"
+                  aria-label="Edit recipe"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  class="secondary icon-btn cookbook-action-danger"
+                  onclick={() => onDelete(r!.id)}
+                  title="Delete recipe"
+                  aria-label="Delete recipe"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6" />
+                    <path d="M10 11v6M14 11v6" />
+                    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                  </svg>
+                </button>
+              </div>
               <!-- aria-live so screen readers hear the "Copied." flash.
                    Reserves its grid slot when empty so the button row
                    doesn't jump when the message appears and fades. -->
@@ -1461,6 +1474,38 @@
     margin: 0.75rem 0;
     flex-wrap: wrap;
   }
+  /* Bootstrap-style merged button group. Buttons inside touch each
+     other with a -1px left margin on every non-first child so adjacent
+     borders overlap into a single 1px seam instead of doubling up;
+     the inner corners square off and only the outer corners stay
+     rounded, so the group reads as one unit. The OUTER .cookbook-
+     actions container keeps its 0.35rem gap, so groups wrap as units
+     on narrow viewports - the actual fix for the mobile wrap problem
+     this commit is about. */
+  .cookbook-action-group {
+    display: inline-flex;
+    gap: 0;
+  }
+  .cookbook-actions :global(.cookbook-action-group > button.icon-btn:not(:first-child)) {
+    margin-left: -1px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+  .cookbook-actions :global(.cookbook-action-group > button.icon-btn:not(:last-child)) {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  /* Bring the hovered / focused / active button above its siblings so
+     its accent (or warn) border shows across the full perimeter
+     instead of being clipped by the next button's left border at the
+     seam. Without z-index the later sibling's static border would
+     stack on top regardless of which one was hovered. */
+  .cookbook-actions :global(.cookbook-action-group > button.icon-btn:hover),
+  .cookbook-actions :global(.cookbook-action-group > button.icon-btn:focus-visible),
+  .cookbook-actions :global(.cookbook-action-group > button.icon-btn.active) {
+    position: relative;
+    z-index: 1;
+  }
   /* Scoped fill for the recipe-detail action strip (edit / copy /
      copy-source / trash). The global `.icon-btn` stays transparent so
      other icon buttons in the app (drawer header, composer, …) are
@@ -1475,16 +1520,6 @@
   .cookbook-actions :global(button.icon-btn:focus-visible) {
     background: var(--accent-weak);
     border-color: var(--accent);
-  }
-  /* Thin vertical rule between the copy group and the destructive
-     Delete. Renders as a 1px column the height of the button row —
-     purely decorative, so `aria-hidden` in the markup keeps screen
-     readers from announcing it. */
-  .cookbook-action-sep {
-    width: 1px;
-    align-self: stretch;
-    background: var(--border);
-    margin: 0.15rem 0.15rem;
   }
   /* Danger tint on Delete — only the stroke shifts to the warn color
      on hover / focus so the button's resting state matches its
