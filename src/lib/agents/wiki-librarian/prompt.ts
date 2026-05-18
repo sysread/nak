@@ -45,24 +45,46 @@
  * section so every wiki_update path respects it, not just the
  * fact-checking step.
  *
- * Workflow step 6 (title-content drift) is the third known
- * recovery surface for a per-conversation agent design decision.
- * The per-conv agent's prompt instructs it to leave titles alone
- * unless the user explicitly asks for a rename (see
- * `../wiki/prompt.ts`, "Title is editable but discouraged"). That
- * rule is reasonable for a per-conversation edit - renaming on
- * every nudge would make articles unfindable - but it means titles
- * drift behind content as articles broaden across many
- * conversations. An article that started as "Maya" can end up 70%
- * about the household; a "Nak auto-title" article can broaden to
- * cover the whole worker architecture. The librarian gets the
- * wiki-wide vantage point: after the other passes have stabilised
- * what each article actually contains, step 6 asks whether the
- * title still describes the body and renames when the drift is
- * large enough to be misleading. Step 6 runs last because it
- * depends on content placement decided by step 2 (consolidation)
- * and step 5 (boundary-tightening) - renaming first and then
- * shifting content around produces incoherent titles.
+ * Workflow step 6 (from-scratch reorganisation) is the librarian's
+ * global pass. The previous five steps are all local - scope
+ * cleanup operates per-article, dedup operates per-pair, the
+ * user-name fix is per-mention, the date-marker check is per-fact,
+ * the boundary-tightening is per-pair. Step 6 is the place the
+ * librarian asks a wiki-wide question: distil the master list of
+ * subjects the wiki is actually tracking about the user (read
+ * BODIES, not just titles - the whole reason this step exists is
+ * that titles can drift away from their subjects), then imagine
+ * reorganising from scratch with no friction - what would each
+ * article be titled, what order would its content sit in - and
+ * apply changes where the gap is meaningful.
+ *
+ * This replaced an earlier "check titles against current content"
+ * step that was per-article. Two failure modes were visible to the
+ * user with the per-article framing:
+ *   1. Titles got pinned to the conversation that introduced the
+ *      subject ("Jeff's first sourdough loaf") and stayed even when
+ *      the body had broadened past that framing into a general
+ *      sourdough-project entry. A per-article "does the title match
+ *      the body" check could catch this but only when the agent
+ *      happened to notice; from a global vantage the user-centric
+ *      subject is more legible.
+ *   2. Content ordering inside an article tracked the chronology of
+ *      conversations rather than the natural shape of the subject.
+ *      A per-article title check did nothing about ordering at all.
+ * The from-scratch question covers both - titles AND content order
+ * AND distribution of content across articles - by anchoring the
+ * librarian's decisions to what the ideal organisation would look
+ * like rather than to per-article inspection.
+ *
+ * Step 6 runs LAST because the from-scratch question is meaningful
+ * only after the other passes have stabilised what each article
+ * actually contains - reorganising first and then discovering a
+ * duplicate or out-of-scope article wastes the reorganisation
+ * work. Restraint guidance ("small drift is not a rename case",
+ * "do not rename and reorder the same article in the same cycle
+ * if evidence is weak") is load-bearing - the step is the
+ * librarian's broadest write license and the easiest one to
+ * over-apply.
  *
  * Voice and "preserve facts" discipline are shared with the per-
  * conversation agent's prompt - same encyclopedic third-person
@@ -398,53 +420,141 @@ ${WIKI_LIBRARIAN_TOOLS_BLOCK}
    for which facts and wiki_update both to clarify the split.
    Do not delete in this case - both articles still have a
    reason to exist; you just made the boundary cleaner.
-6. **Check titles against current content.** Articles
-   accumulate facts over many per-conversation updates, and a
-   title chosen when an article was narrow can become
-   misleading once content has broadened. The per-conversation
-   agent deliberately leaves titles alone (its rule is "rename
-   only on explicit user request"), so wiki-wide title drift is
-   yours to clean up. Run this step LAST - after steps 2 and 5
+6. **Step back and ask the from-scratch question.** The
+   previous steps were local - per-article scope, pair-wise
+   duplicates, individual fact freshness, neighbouring
+   boundary. This step is global, and runs LAST so the
+   organisation question is asked after the local passes
    have stabilised what each article actually contains.
 
-   Read the body of any article whose excerpt suggests broader
-   coverage than the title promises. Ask: would a reader
-   skimming the title list correctly guess what this article
-   is mostly about? An article titled "Maya" whose body is now
-   majority about the household as a whole (siblings, family
-   finances, the apartment) has drifted - the title narrows
-   the article's findability. An article titled "Nak auto-
-   title" whose body now covers every background worker has
-   broadened past its title in the same way.
+   The failure mode this step exists to catch: the per-
+   conversation agent picks an article's title from the first
+   conversation that introduced the subject, and that title
+   stays even after dozens of later conversations have
+   broadened the body well past the original framing. It does
+   the same with content ordering - what was "the latest
+   thing the user mentioned" becomes the article's lead
+   paragraph and stays there as the lead even when later
+   updates would naturally be a postscript. The per-conv
+   agent has no wiki-wide vantage; it sees one article at a
+   time and an instruction to "rename only on explicit user
+   request". That instruction is correct for its scope and
+   wrong for yours. Titles and orderings that read as
+   reasonable conversation-by-conversation can read as
+   strange when the wiki is viewed as a whole.
 
-   The fix is wiki_update with a new title that captures the
-   actual scope, content unchanged. The changelog message
-   names the rename and the reason ("Rename 'Maya' -> 'Maya
-   and household'; content broadened to cover household
-   finances and the apartment across recent updates").
+   How to run this step:
 
-   Apply restraint. Small drift (the article is ~80% the title
-   topic, ~20% adjacent context) is not a renaming case - the
-   title is still the article's centre of mass. Renames are
-   warranted only when the title is actively misleading: a
-   reader scanning the title list would not realise the
-   article covers what it does. When in doubt, leave the title
-   alone - a slightly-narrow title costs less than a confident
-   wrong rename.
+   (a) **Distil the master list of subjects.** Read the
+       article TITLES and the article BODIES together and
+       derive the list of subjects the wiki is actually
+       tracking about the user - "Jeff's sourdough project",
+       "Maya and the household", "the Nak app", "Jeff's
+       piano practice", "Jeff's career", "the move to
+       Lisbon". The titles are not the source of truth here;
+       the bodies are. The whole point is that a title can
+       have drifted away from the subject it covers.
+   (b) **Run the from-scratch thought experiment.** Imagine
+       you had no organisational baggage - no existing
+       titles to preserve, no existing paragraph order to
+       respect, no friction at all to reorganise. Given the
+       same information about the user, **how would you
+       organise it? What would each article be titled? What
+       order would the content inside each article be in?**
+       Be honest. A from-scratch view will usually title an
+       article by its subject ("Jeff's sourdough project"),
+       not by the conversation that surfaced it ("Jeff's
+       first sourdough loaf"), and will usually order the
+       content by the natural shape of the subject (overview,
+       sub-topics, recent developments) rather than by the
+       chronology of the conversations that contributed to
+       it.
+   (c) **Compare ideal to actual.** Where the from-scratch
+       view and the current state meaningfully diverge, the
+       gap is what this step exists to close.
 
-   Watch for collisions. wiki_update enforces title uniqueness
-   per user; if the title you want is already taken, that is
-   itself a signal the two articles overlap and step 2
-   (consolidate duplicates) is the right tool, not step 6.
-   Pick a different title or merge instead.
+   Apply changes:
+
+   - **Rename** an article whose title is overly specific to
+     the conversation that birthed it, when the body has
+     broadened past that original framing. Use
+     wiki_update with the new title; content unchanged. The
+     changelog message names the rename and the reason
+     ("Rename 'Jeff's first sourdough loaf' -> 'Jeff's
+     sourdough project'; content broadened to cover starter
+     care, technique notes, and a dozen bakes across recent
+     conversations").
+   - **Reorder** the content inside an article when the
+     existing order reflects the chronology of conversations
+     (the most recently-added paragraph at the top,
+     unrelated to its importance) rather than the natural
+     shape of the subject. Reorder so the from-scratch
+     reader gets an overview first, sub-topics in a sensible
+     order after, and the dated history of recent
+     developments in their natural place. **This is rewriting
+     the prose order, not rewriting the prose itself.** A
+     statement dated "as of March 2026" that you move from
+     paragraph 4 to paragraph 2 still reads "as of March
+     2026" verbatim - preserve every word of every dated
+     statement, only change where it sits.
+   - **Move** a section out of one article and into
+     another when the from-scratch view files it under a
+     different subject than it currently sits under. Both
+     wiki_updates carry the same fact through - never lose
+     content in transit.
+   - **Split** an article when the from-scratch view treats
+     two of its sections as separate subjects with separate
+     findability needs. The librarian has no wiki_create, so
+     you cannot literally split an article in half - what
+     you CAN do is wiki_update the existing article to focus
+     on subject A and leave subject B intact and ready for
+     the per-conversation agent to land as its own article
+     on the next relevant cycle (note this in your final
+     reply so the user knows the split is in progress).
+
+   Apply restraint, same as step 5:
+
+   - Small organisational drift - the article is ~80% the
+     subject the from-scratch view would pick, ordering is
+     mostly reasonable - is NOT a rename or reorder case.
+     The title is still the article's centre of mass and
+     the prose is still readable; a confident wrong rename
+     is more harmful than a slightly-narrow title.
+   - Renames and reorderings are warranted only when the
+     current organisation is **actively misleading or makes
+     information hard to find**. A reader scanning the title
+     list would not realise the article covers what it does;
+     a reader opening the article gets the wrong impression
+     from the lead paragraph. When in doubt, leave it alone.
+   - Do not rename and reorder the same article in the same
+     cycle if you only have weak evidence for one of them.
+     Pick the higher-confidence change, land it, and let
+     the next cycle catch the rest.
+
+   Watch for collisions. wiki_update enforces title
+   uniqueness per user; if the from-scratch title you would
+   pick is already taken by another article, that is itself
+   a signal the two articles overlap and step 2 (consolidate
+   duplicates) is the right tool, not step 6. Pick a
+   different title or merge instead.
 
    Watch for outbound references. If another article
    references the renamed one by its old title (a Markdown
    link, a "see X for details" line in the prose),
    wiki_update the referring article to point at the new
-   title. The wiki has no automatic backref - stale title
-   text becomes a dangling reference that no later cycle will
+   title. The wiki has no automatic backref - a stale title
+   reference becomes dangling text that no later cycle will
    fix on its own.
+
+   Preserve facts and dates through every reorganisation.
+   Renaming changes the title, not the body; reordering
+   moves prose around without rewriting it; moving and
+   splitting carry every dated statement across to its new
+   home verbatim. Do not collapse multiple dated entries
+   into a single "current state" summary - the dated history
+   is what gives the article its longitudinal value, and the
+   per-conversation agent depends on it for the freshness
+   signal it uses on the next pass.
 
 ${WIKI_LIBRARIAN_DISCIPLINE_BLOCK}
 
