@@ -2375,8 +2375,18 @@ h1 {
 
 /* Wharf trigger: hidden on desktop; the mobile media query below
    re-enables it. Declared here (before the @media block) so source
-   order lets the mobile rule win when the viewport matches. */
-.composer-wharf-trigger {
+   order lets the mobile rule win when the viewport matches.
+
+   The `button.` prefix is load-bearing - `button.icon-btn { display:
+   inline-flex }` earlier in this file has specificity (0,0,1,1) and
+   would otherwise override a bare `.composer-wharf-trigger { display:
+   none }` (specificity (0,0,1,0)). Matching the tag-plus-class shape
+   ties the rules at (0,0,1,1) so source order carries the override.
+   Without this the trigger was silently leaking onto desktop, wedged
+   at the left edge of the picker row where its 9-dot icon blended in
+   with the other buttons - same bug the new diag-trigger surfaced
+   more visibly because it sits next to the send button. */
+button.composer-wharf-trigger {
   display: none;
 }
 
@@ -2396,15 +2406,18 @@ h1 {
      when the wharf is closed. Tapping it toggles `.wharf-open` on
      the sibling button row, which CSS below restyles as a vertical
      icon column rising above the bar. Desktop hides this button
-     entirely (see the block below the media query). */
-  .composer-wharf-trigger {
+     entirely (see the block below the media query). `button.`
+     prefix matches the desktop hide rule's specificity so source
+     order carries the override - see the comment on the desktop
+     rule above the media query. */
+  button.composer-wharf-trigger {
     display: inline-flex;
   }
 
   /* Pressed/inverted bevel while the wharf is open - same contract
      as the column tiles below, but with hi/lo swapped so the
      trigger reads as "held down". */
-  .composer-wharf-trigger.open {
+  button.composer-wharf-trigger.open {
     box-shadow:
       inset 1px 1px 0 var(--bevel-lo),
       inset -1px -1px 0 var(--bevel-hi);
@@ -2549,8 +2562,15 @@ h1 {
    visible response so we move it into this drop-up instead.
 
    Default state: trigger hidden everywhere. The mobile media query
-   below flips it visible at <= 720px and styles the drop-up panel. */
-.composer-diag-trigger {
+   below flips it visible at <= 720px and styles the drop-up panel.
+
+   The `button.` prefix on the trigger selector is load-bearing -
+   `button.icon-btn { display: inline-flex }` earlier in this file
+   has specificity (0,0,1,1) and would otherwise override a bare
+   `.composer-diag-trigger { display: none }` rule (specificity
+   (0,0,1,0)). Matching the tag-plus-class shape lets source-order
+   carry the override. */
+button.composer-diag-trigger {
   display: none;
 }
 
@@ -2559,11 +2579,11 @@ h1 {
 }
 
 @media (max-width: 720px) {
-  .composer-diag-trigger {
+  button.composer-diag-trigger {
     display: inline-flex;
   }
 
-  .composer-diag-trigger.open {
+  button.composer-diag-trigger.open {
     box-shadow:
       inset 1px 1px 0 var(--bevel-lo),
       inset -1px -1px 0 var(--bevel-hi);
