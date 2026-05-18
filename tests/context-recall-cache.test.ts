@@ -47,6 +47,7 @@ function mkThread(payload: unknown): Thread {
     title_manually_set: false,
     intuition_payload: null,
     context_recall_payload: payload,
+    topics: [],
     created_at: 'now',
     updated_at: 'now',
   };

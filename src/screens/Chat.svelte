@@ -123,6 +123,7 @@
   import WikiList from '../components/WikiList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
   import BiasPill from '../components/BiasPill.svelte';
+  import TopicsFilter from '../components/TopicsFilter.svelte';
   import {
     cookbook,
     loadRecipes,
@@ -661,6 +662,19 @@
   // second. Recomputed whenever we do a full `refreshThreads` (which is
   // already an explicit "reload" moment from the user's perspective).
   let recentCutoff = $state<string>(new Date(Date.now() - RECENT_THREAD_CUTOFF_MS).toISOString());
+
+  // Topic-filter state. `selectedTopics` carries the user's current
+  // checkbox selections in the drawer's topic dropdown - including the
+  // `(untagged)` sentinel when active. `topicsVocabulary` is the
+  // distinct list the background topics agent has assembled across
+  // the user's threads; refreshed on drawer mount and after we see
+  // the realtime subscription fire on a thread row (which is the
+  // proxy we use for "the agent just tagged something"). Both start
+  // empty - a brand-new account has nothing selected and an empty
+  // vocabulary, and the dropdown still functions (it offers only
+  // the sentinel until the worker catches up).
+  let selectedTopics = $state<string[]>([]);
+  let topicsVocabulary = $state<string[]>([]);
 
   /** All threads currently loaded into any bucket, drafts included. */
   const loadedThreads = $derived<Thread[]>([
@@ -1407,7 +1421,19 @@
         // row in Supabase).
         const existing = findThread(t.id);
         if (existing?.isDraft) return; // shouldn't happen — drafts aren't in Supabase
+        // If the topics column changed, the dropdown vocabulary may
+        // need a refresh - the background topics agent just landed
+        // a new tag on this thread, and it might be a new entry to
+        // the per-user vocabulary. Compare arrays elementwise rather
+        // than identity-wise because every realtime update materializes
+        // a fresh array.
+        const prevTopics = existing?.topics ?? [];
+        const nextTopics = t.topics;
+        const topicsChanged =
+          prevTopics.length !== nextTopics.length ||
+          prevTopics.some((p, i) => p !== nextTopics[i]);
         rebucketThread(t);
+        if (topicsChanged) void refreshTopicsVocabulary();
       },
       onDelete: (id) => {
         removeThread(id);
@@ -1437,11 +1463,14 @@
       if (s) {
         void refreshThreads();
         void refreshSettings();
+        void refreshTopicsVocabulary();
       } else {
         drafts = [];
         recentThreads = [];
         olderThreads = [];
         archivedPage = [];
+        topicsVocabulary = [];
+        selectedTopics = [];
       }
     });
     void app.supabase.getSession().then((s) => {
@@ -1450,6 +1479,7 @@
       if (s) {
         void refreshThreads();
         void refreshSettings();
+        void refreshTopicsVocabulary();
       }
     });
     // Web Share Target drain. The service worker (src/sw.ts) stashes
@@ -1535,10 +1565,24 @@
     try {
       const cutoff = new Date(Date.now() - RECENT_THREAD_CUTOFF_MS).toISOString();
       recentCutoff = cutoff;
+      // Snapshot the topic filter at the start of the fetch so a
+      // concurrent dropdown change doesn't land mid-flight. The
+      // refetch-on-change $effect (below) will re-call us with the
+      // new selection if that happens.
+      const topicsAtFetch = [...selectedTopics];
       const [recent, older, archived] = await Promise.all([
-        app.supabase.listRecentThreads(cutoff),
-        app.supabase.listOlderThreads({ cutoff, cursor: null, pageSize: DEFAULT_THREAD_PAGE_SIZE }),
-        app.supabase.listArchivedThreads({ cursor: null, pageSize: DEFAULT_THREAD_PAGE_SIZE }),
+        app.supabase.listRecentThreads(cutoff, topicsAtFetch),
+        app.supabase.listOlderThreads({
+          cutoff,
+          cursor: null,
+          pageSize: DEFAULT_THREAD_PAGE_SIZE,
+          selectedTopics: topicsAtFetch,
+        }),
+        app.supabase.listArchivedThreads({
+          cursor: null,
+          pageSize: DEFAULT_THREAD_PAGE_SIZE,
+          selectedTopics: topicsAtFetch,
+        }),
       ]);
       // Preserve a fresher in-memory intuition_payload over the
       // server snapshot. The chat-loop awaits writeIntuitionCache
@@ -1613,6 +1657,7 @@
         cutoff: recentCutoff,
         cursor: olderCursor,
         pageSize: DEFAULT_THREAD_PAGE_SIZE,
+        selectedTopics,
       });
       olderThreads = mergeByUpdatedAtDesc(olderThreads, page.rows);
       olderCursor = page.nextCursor;
@@ -1634,6 +1679,7 @@
       const page = await app.supabase.listArchivedThreads({
         cursor: archivedCursor,
         pageSize: DEFAULT_THREAD_PAGE_SIZE,
+        selectedTopics,
       });
       archivedPage = mergeByUpdatedAtDesc(archivedPage, page.rows);
       archivedCursor = page.nextCursor;
@@ -1644,6 +1690,44 @@
       archivedLoading = false;
     }
   }
+
+  /**
+   * Refresh the topic-filter dropdown vocabulary. Fired on drawer
+   * mount (via the chats-tab activation $effect) and after a
+   * realtime thread update lands - the agent's tagging shows up as
+   * an UPDATE row, and that's enough signal that the vocabulary
+   * might have grown by one. Best-effort: a failure leaves the
+   * dropdown showing whatever vocabulary we had last; the user can
+   * still filter and the next mount/event will retry.
+   */
+  async function refreshTopicsVocabulary(): Promise<void> {
+    if (!app.supabase) return;
+    try {
+      topicsVocabulary = await app.supabase.listUserTopics();
+    } catch {
+      // see above
+    }
+  }
+
+  /**
+   * Refetch all three thread buckets when the topic filter changes.
+   * Cursors are reset because the predicate now matches a different
+   * row set - paginating from a cursor recorded against the prior
+   * filter would skip rows that should appear at the top. Drops the
+   * old cursors and lets the user re-scroll if they want more.
+   *
+   * Reading `selectedTopics` reactively is enough; `refreshThreads`
+   * itself doesn't appear in the dependency graph (its identity is
+   * stable) so this won't trigger on every other state change.
+   */
+  $effect(() => {
+    // Track the dependency. Reading length + every entry is what
+    // makes Svelte rerun on either a topic added or removed.
+    const _trigger = selectedTopics.length + selectedTopics.join('|').length;
+    void _trigger;
+    if (!app.supabase) return;
+    void refreshThreads();
+  });
 
   /**
    * Turn an in-memory draft thread into a real Supabase row. Returns the
@@ -2016,6 +2100,7 @@
       title_manually_set: false,
       intuition_payload: null,
       context_recall_payload: null,
+      topics: [],
       created_at: now,
       updated_at: now,
       isDraft: true,
@@ -4069,6 +4154,7 @@
         query,
         queryEmbedding,
         limit: 50,
+        selectedTopics,
       });
       if (ctl.signal.aborted) return;
       searchResults = hits;
@@ -4106,6 +4192,7 @@
           target: { updated_at: t.updated_at, id: t.id },
           archived: false,
           cutoff: recentCutoff,
+          selectedTopics,
         });
         olderThreads = mergeByUpdatedAtDesc(olderThreads, rows);
         const last = rows[rows.length - 1];
@@ -4117,6 +4204,7 @@
             target: { updated_at: t.updated_at, id: t.id },
             archived: true,
             cutoff: null,
+            selectedTopics,
           });
           archivedPage = mergeByUpdatedAtDesc(archivedPage, rows);
           const last = rows[rows.length - 1];
@@ -4355,6 +4443,19 @@
             aria-label="Search conversations"
             bind:value={searchQuery}
             onkeydown={onSearchKey}
+          />
+        </div>
+        <!-- Topic-filter row. Sits below the search input + the divider
+             so the search box's bottom-border still reads as the
+             separator between the controls strip and the list. The
+             pill row inside TopicsFilter grows downward on multi-
+             selections, pushing the conversation rows down rather than
+             overflowing. -->
+        <div class="thread-list-topics">
+          <TopicsFilter
+            topics={topicsVocabulary}
+            selected={selectedTopics}
+            onChange={(next) => (selectedTopics = next)}
           />
         </div>
         {#snippet threadRow(t: Thread)}

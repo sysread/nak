@@ -656,6 +656,41 @@ create index if not exists threads_auto_title_claim_idx
   on public.threads (auto_title_claim_expires)
   where auto_title_claim_holder is not null;
 
+-- Topic-tagging pipeline ------------------------------------------------
+--
+-- The topics worker (src/lib/agents/topics/*) tags each thread with a
+-- short flat set of topic strings ('baking', 'sourdough', 'programming',
+-- etc.) so the conversation drawer can offer a topic filter alongside
+-- the default date-sorted list. The agent reads the conversation, the
+-- existing per-user topic vocabulary, and asks the fast model to pick
+-- 1-4 topics - reusing existing names when they fit so the vocabulary
+-- doesn't sprawl into near-duplicates over time. Per-thread claim
+-- columns mirror summary / auto_title exactly; the singleton lease is a
+-- separate `worker_kind` ('topics') so a device can hold it concurrently
+-- with the others.
+--
+-- `topics` defaults to '{}' (empty array) so existing rows match
+-- "untagged" without a backfill. `last_topics_msg_id` is the terminal
+-- assistant message we tagged up to; a new round on the thread re-
+-- qualifies it for the next cycle the same way `last_summarised_msg_id`
+-- does for the summary worker.
+--
+-- The GIN index on `topics` supports the `&&` (array overlap) predicate
+-- the drawer uses when the user filters by one or more topics. It's
+-- per-user-implicit because RLS scopes every read to auth.uid().
+alter table public.threads
+  add column if not exists topics text[] not null default '{}',
+  add column if not exists last_topics_msg_id uuid references public.messages(id) on delete set null,
+  add column if not exists topics_claim_holder text,
+  add column if not exists topics_claim_expires timestamptz;
+
+create index if not exists threads_topics_gin_idx
+  on public.threads using gin (topics);
+
+create index if not exists threads_topics_claim_idx
+  on public.threads (topics_claim_expires)
+  where topics_claim_holder is not null;
+
 -- Invalidate the embedding whenever its inputs change. Pending =
 -- `embedding is null`, so the embeddings worker will re-embed on its
 -- next poll. We null the claim columns too — an in-flight worker save
@@ -2780,6 +2815,144 @@ begin
      and user_id = auth.uid()
      and auto_title_claim_holder = p_holder_id;
 end $$;
+
+-- Topic-tagging pipeline RPCs -------------------------------------------
+--
+-- The topics worker (src/lib/agents/topics/*) tags threads with a short
+-- flat set of topic strings. Shape mirrors the summary RPCs: claim by
+-- terminal-assistant-message id, save guarded by holder + TTL +
+-- terminal_msg_id stamp so a thread that grew mid-tagging simply re-
+-- qualifies on the next cycle. The extra wrinkle vs summary: the claim
+-- also returns the user's existing topic vocabulary in the same round
+-- trip, so the worker can prompt the model with "reuse these names if
+-- they fit" without a second SELECT. Saves one RPC per cycle and keeps
+-- the vocabulary as fresh as the claim that consumed it.
+--
+-- Eligibility predicate: thread has at least one assistant message with
+-- non-empty content (same shape as summary), AND that terminal message
+-- is distinct from `last_topics_msg_id` (so re-tagging only runs when
+-- the conversation has materially grown). Drafts and brand-new threads
+-- without any assistant turn are skipped - tagging "hi" with topics is
+-- noise. Threads with the placeholder title are also excluded so
+-- auto-title gets first crack at the row; once auto-title lands a real
+-- title the topics worker picks the row up on its next poll.
+drop function if exists public.claim_next_thread_for_topics(text, int);
+create or replace function public.claim_next_thread_for_topics(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (thread_id uuid, terminal_msg_id uuid, existing_topics text[])
+language sql security invoker as $$
+  with candidate as (
+    select t.id as thread_id, term.msg_id as terminal_msg_id
+      from public.threads t
+      cross join lateral (
+        select m.id as msg_id
+          from public.messages m
+         where m.thread_id = t.id
+           and m.role = 'assistant'
+           and (m.tool_calls is null
+                or jsonb_typeof(m.tool_calls) <> 'array'
+                or jsonb_array_length(m.tool_calls) = 0)
+           and m.content is not null
+           and length(m.content) > 0
+         order by m.created_at desc
+         limit 1
+      ) term
+     where t.user_id = auth.uid()
+       and t.title <> 'New conversation'
+       and term.msg_id is distinct from t.last_topics_msg_id
+       and (t.topics_claim_expires is null
+            or t.topics_claim_expires < now())
+     order by t.updated_at asc
+     limit 1
+     for update of t skip locked
+  ),
+  vocab as (
+    -- One-shot read of the user's current topic vocabulary. The worker
+    -- passes this to the model as a "reuse these names if they fit"
+    -- list so the dropdown doesn't sprawl with near-duplicates. Empty
+    -- array on a brand-new account is fine - the model gets free rein
+    -- on the first few threads, then the vocabulary self-seeds.
+    select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
+      from public.threads t, unnest(t.topics) as topic
+     where t.user_id = auth.uid()
+       and t.topics <> '{}'::text[]
+  )
+  update public.threads t
+     set topics_claim_holder = p_holder_id,
+         topics_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c, vocab v
+   where t.id = c.thread_id
+  returning t.id as thread_id, c.terminal_msg_id, v.topics as existing_topics;
+$$;
+
+-- Save the agent-produced topics IF our claim is still valid. The stamped
+-- msg_id is what we tagged against; a new terminal message after that
+-- re-qualifies the thread on the next poll. Returns false when the claim
+-- expired or was stolen - the worker drops the work. Doesn't bump
+-- updated_at: tagging is a side-effect of the conversation, and a bump
+-- would re-promote the thread to the top of the drawer.
+drop function if exists public.save_thread_topics_if_claimed(uuid, text, text[], uuid);
+create or replace function public.save_thread_topics_if_claimed(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_topics text[],
+  p_msg_id uuid
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.threads
+     set topics = p_topics,
+         last_topics_msg_id = p_msg_id,
+         topics_claim_holder = null,
+         topics_claim_expires = null
+   where id = p_thread_id
+     and user_id = auth.uid()
+     and topics_claim_holder = p_holder_id
+     and topics_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Explicit claim release - used by the worker when the agent returned
+-- no usable topics (model emitted garbage, abort fired) so another cycle
+-- can re-pick the row immediately rather than waiting for the TTL.
+-- Guarded on holder so a stale call from a displaced worker can't clear
+-- the live claim. Returns void.
+drop function if exists public.clear_topics_claim(uuid, text);
+create or replace function public.clear_topics_claim(
+  p_thread_id uuid,
+  p_holder_id text
+) returns void
+language plpgsql security invoker as $$
+begin
+  update public.threads
+     set topics_claim_holder = null,
+         topics_claim_expires = null
+   where id = p_thread_id
+     and user_id = auth.uid()
+     and topics_claim_holder = p_holder_id;
+end $$;
+
+-- Distinct topic vocabulary for the current user. Used by the drawer's
+-- topic-filter dropdown on mount and after a tagging event. The
+-- aggregate is cheap per user (a few hundred rows at most, each with
+-- 1-4 short strings); no need for materialisation. Returns an empty
+-- list on a brand-new account. The "(untagged)" pseudo-topic the UI
+-- offers separately is NOT in this list - the UI synthesises it from
+-- a "rows where topics = '{}' exist" predicate (which the existing
+-- listRecentThreads call already establishes, no extra query needed).
+drop function if exists public.list_user_topics();
+create or replace function public.list_user_topics()
+returns text[]
+language sql security invoker as $$
+  select coalesce(array_agg(distinct topic order by topic), '{}'::text[])
+    from public.threads t, unnest(t.topics) as topic
+   where t.user_id = auth.uid()
+     and t.topics <> '{}'::text[];
+$$;
 
 -- Thread embedding pipeline RPCs ----------------------------------------
 --

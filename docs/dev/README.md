@@ -67,6 +67,8 @@ changing a contract that other features depend on.
   `<think>`-tagged priming block.
 - [Summaries](./summaries.md) — background thread-summary
   worker.
+- [Topics](./topics.md) — background tagging worker plus the
+  drawer's topic-filter dropdown.
 - [Auto-title](./auto-title.md) — background worker that fills
   in titles for threads still on the placeholder. Replaces the
   in-Chat fire-and-forget call site.

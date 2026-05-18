@@ -107,6 +107,9 @@ const reflection = lazyManager(() =>
 const summary = lazyManager(() =>
   import('./agents/summary/manager').then((m) => m.summaryManager)
 );
+const topics = lazyManager(() =>
+  import('./agents/topics/manager').then((m) => m.topicsManager)
+);
 const attachmentExpiry = lazyManager(() =>
   import('./agents/attachment_expiry/manager').then((m) => m.attachmentExpiryManager)
 );
@@ -670,12 +673,14 @@ function startBackgroundWorkers(config: AppConfig): void {
   //
   // The workers run concurrently and partition the shared
   // `worker_leases` table on `worker_kind` ('embedding' /
-  // 'reflection' / 'summary' / 'attachment_expiry' / 'auto_title' /
-  // 'samskara' / 'wiki') so one device can hold every lease
-  // simultaneously without contention. The summary worker feeds
+  // 'reflection' / 'summary' / 'topics' / 'attachment_expiry' /
+  // 'auto_title' / 'samskara' / 'wiki') so one device can hold every
+  // lease simultaneously without contention. The summary worker feeds
   // the drawer's search feature - it writes `threads.summary`,
   // which the embeddings worker then picks up to build the
-  // searchable vector. The attachment-expiry worker reclaims
+  // searchable vector. The topics worker writes `threads.topics`
+  // which the drawer reads to populate the topic-filter dropdown;
+  // see docs/dev/topics.md. The attachment-expiry worker reclaims
   // binaries from attachments on threads quieter than 30 days. The
   // auto-title worker fills in titles for threads still on the
   // 'New conversation' placeholder; see docs/dev/auto-title.md.
@@ -684,6 +689,7 @@ function startBackgroundWorkers(config: AppConfig): void {
   embeddings.start({ supabase: app.supabase, config });
   reflection.start({ supabase: app.supabase, config });
   summary.start({ supabase: app.supabase, config });
+  topics.start({ supabase: app.supabase, config });
   attachmentExpiry.start({ supabase: app.supabase, config });
   autoTitle.start({ supabase: app.supabase, config });
   samskara.start({ supabase: app.supabase, config });

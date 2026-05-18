@@ -52,6 +52,30 @@ cost stays roughly constant.
 
 No toggle.
 
+## Topic tagging
+
+A separate background worker reads each thread and picks 1-4 short
+topic tags for it (`baking`, `sourdough`, `programming`, etc.). The
+tags drive the **Topics** filter dropdown in the conversation
+drawer - see [Threads](./threads.md) for how to use it.
+
+The agent reads your existing topic vocabulary on every cycle and
+reuses tag names that fit, so the dropdown stays a small stable
+list instead of sprawling into near-duplicates. New conversations
+seed new topics; the same conversation gets re-tagged after
+several more turns so the tags stay current with how the thread
+evolved.
+
+What you see: nothing while it runs. After the worker tags a
+thread, that thread starts matching the corresponding filters in
+the Topics dropdown.
+
+Cost: one fast-tier call per thread, with a re-tag after a thread
+materially grows. Long threads get condensed the same way summaries
+do.
+
+No toggle.
+
 ## Memory reflection and recall
 
 Two background loops — **reflection** (writes long-term memories

@@ -228,3 +228,84 @@ describe('pagination cursors', () => {
     expect(page.nextCursor).toBeNull();
   });
 });
+
+describe('topic filter clause threading', () => {
+  // The listing functions accept selectedTopics and add an `or(...)`
+  // clause to the underlying query. These tests pin the clause shape
+  // so a future refactor doesn't accidentally widen or narrow the
+  // predicate. The stub captures the LAST args passed to each chain
+  // method - so when both the cursor `or()` and the topics `or()`
+  // run, we only see the topics one. That's fine for the topics
+  // assertions; the cursor coverage already lives in the pagination
+  // block above.
+
+  function captured() {
+    const c: { lastFromCall: Record<string, unknown[]> } = { lastFromCall: {} };
+    return c;
+  }
+
+  it('listRecentThreads with one real topic emits `topics.ov.{a}`', async () => {
+    const cap = captured();
+    const client = makeClient({ fromData: [], captured: cap });
+    const svc = makeService(client);
+    await svc.listRecentThreads('2026-04-20T00:00:00Z', ['baking']);
+    expect(cap.lastFromCall.or).toEqual(['topics.ov.{baking}']);
+  });
+
+  it('listRecentThreads with two real topics emits ov over both', async () => {
+    const cap = captured();
+    const client = makeClient({ fromData: [], captured: cap });
+    const svc = makeService(client);
+    await svc.listRecentThreads('2026-04-20T00:00:00Z', ['baking', 'bread']);
+    expect(cap.lastFromCall.or).toEqual(['topics.ov.{baking,bread}']);
+  });
+
+  it('listRecentThreads with only the untagged sentinel emits `topics.eq.{}`', async () => {
+    const cap = captured();
+    const client = makeClient({ fromData: [], captured: cap });
+    const svc = makeService(client);
+    await svc.listRecentThreads('2026-04-20T00:00:00Z', ['(untagged)']);
+    expect(cap.lastFromCall.or).toEqual(['topics.eq.{}']);
+  });
+
+  it('listRecentThreads with sentinel + real topics ORs the two halves', async () => {
+    const cap = captured();
+    const client = makeClient({ fromData: [], captured: cap });
+    const svc = makeService(client);
+    await svc.listRecentThreads('2026-04-20T00:00:00Z', ['(untagged)', 'baking']);
+    expect(cap.lastFromCall.or).toEqual(['topics.ov.{baking},topics.eq.{}']);
+  });
+
+  it('listRecentThreads with no filter skips the or() builder', async () => {
+    const cap = captured();
+    const client = makeClient({ fromData: [], captured: cap });
+    const svc = makeService(client);
+    await svc.listRecentThreads('2026-04-20T00:00:00Z', []);
+    expect(cap.lastFromCall.or).toBeUndefined();
+  });
+
+  it('listOlderThreads threads selectedTopics through pageThreads', async () => {
+    const cap = captured();
+    const client = makeClient({ fromData: [], captured: cap });
+    const svc = makeService(client);
+    await svc.listOlderThreads({
+      cutoff: '2026-04-20T00:00:00Z',
+      cursor: null,
+      pageSize: 25,
+      selectedTopics: ['bread'],
+    });
+    expect(cap.lastFromCall.or).toEqual(['topics.ov.{bread}']);
+  });
+
+  it('listArchivedThreads threads selectedTopics through pageThreads', async () => {
+    const cap = captured();
+    const client = makeClient({ fromData: [], captured: cap });
+    const svc = makeService(client);
+    await svc.listArchivedThreads({
+      cursor: null,
+      pageSize: 25,
+      selectedTopics: ['(untagged)'],
+    });
+    expect(cap.lastFromCall.or).toEqual(['topics.eq.{}']);
+  });
+});

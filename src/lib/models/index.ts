@@ -310,6 +310,7 @@ export type AgentRole =
   | 'autoTitle'
   | 'intuition'
   | 'summary'
+  | 'topics'
   | 'samskara'
   | 'bias'
   | 'recall'
@@ -382,6 +383,11 @@ export type AgentRole =
  *     write 2-3 sentences" - cheap, bounded, output goes into a
  *     single embedding vector. No reasoning required.
  *
+ *   topics - mistral-small-3-2-24b-instruct. "Read the conversation,
+ *     pick 1-4 short topic tags from this existing vocabulary if any
+ *     fit, otherwise mint new ones." Bounded JSON output, same
+ *     reasoning profile as summary. No tools.
+ *
  *   samskara - mistral-small-3-2-24b-instruct. Five short JSON-out
  *     phases (assimilate, relate, mint, classify, compound summary)
  *     with maxTokens 200-500 per phase. Structured output on bounded
@@ -430,6 +436,7 @@ export const AGENT_MODELS = {
   researchDocs:       'deepseek-v4-flash',
   intuition:          'mistral-small-3-2-24b-instruct',
   summary:            'mistral-small-3-2-24b-instruct',
+  topics:             'mistral-small-3-2-24b-instruct',
   samskara:           'mistral-small-3-2-24b-instruct',
   bias:               'mistral-small-3-2-24b-instruct',
   recall:             'qwen3-5-35b-a3b',

@@ -116,6 +116,15 @@ export interface Thread {
    */
   context_recall_payload: unknown;
   /**
+   * Topic tags assigned by the background topics worker
+   * (src/lib/agents/topics/*). Flat list; the drawer's topic-filter
+   * dropdown uses these to narrow the conversation list by `topics &&`
+   * predicate. Empty array means "untagged" - either the worker hasn't
+   * reached this thread yet, or it ran and chose to emit no topics.
+   * The UI treats the two cases the same: filterable as "(untagged)".
+   */
+  topics: string[];
+  /**
    * App-local flag: true when this thread exists only in memory (the user
    * clicked "new thread" but hasn't sent a message or renamed it yet).
    * Drafts are never sent to Supabase — they materialize on first save.
@@ -140,6 +149,14 @@ function coerceThread(row: Record<string, unknown>): Thread {
   const toolboxes_enabled = Array.isArray(row.toolboxes_enabled)
     ? row.toolboxes_enabled.filter((v): v is string => typeof v === 'string')
     : [];
+  // Drift-tolerant: a row predating the topics column (or one a drift-
+  // injected non-array got into) shows up as "untagged" rather than
+  // crashing the drawer. The save path is parameterised through the
+  // RPC so non-string elements can't reach here from us; the filter is
+  // a belt-and-suspenders against an out-of-band write.
+  const topics = Array.isArray(row.topics)
+    ? row.topics.filter((v): v is string => typeof v === 'string')
+    : [];
   return {
     id: String(row.id),
     user_id: String(row.user_id),
@@ -161,6 +178,7 @@ function coerceThread(row: Record<string, unknown>): Thread {
     // the expected shape is treated as "no cache" there and a fresh
     // refresh runs on the next trigger.
     context_recall_payload: row.context_recall_payload ?? null,
+    topics,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
@@ -626,6 +644,83 @@ export interface ThreadPage {
    * — the caller shouldn't synthesise cursors themselves.
    */
   nextCursor: ThreadCursor | null;
+}
+
+/**
+ * Sentinel value the drawer's topic-filter dropdown uses to mean "rows
+ * whose `topics` column is empty." It's not a real topic - the worker
+ * never emits this string - but threading it through the selectedTopics
+ * array lets the OR-of-checkboxes UI stay one shape (a list of strings)
+ * instead of growing a second "untagged also?" boolean. The pageThreads
+ * / search builders treat the sentinel specially and turn it into
+ * `topics = '{}'` rather than an `&&` membership test.
+ *
+ * The leading "(" is illegal in any real topic (the worker prompt forbids
+ * it and the agent's parse strips punctuation anyway), so the sentinel
+ * can never collide with a model-emitted topic.
+ */
+export const UNTAGGED_TOPIC_SENTINEL = '(untagged)';
+
+/**
+ * Split a selectedTopics list into the two predicates the query
+ * builder needs: real topics for the `&&` overlap test, plus a
+ * boolean for "also include rows with no topics at all". Centralised
+ * so the three list paths (recent / older / archived) and the search
+ * path stay in lockstep on the sentinel.
+ */
+function partitionSelectedTopics(selected: readonly string[]): {
+  topics: string[];
+  includeUntagged: boolean;
+} {
+  let includeUntagged = false;
+  const topics: string[] = [];
+  for (const t of selected) {
+    if (t === UNTAGGED_TOPIC_SENTINEL) includeUntagged = true;
+    else topics.push(t);
+  }
+  return { topics, includeUntagged };
+}
+
+/**
+ * PostgREST `or(...)` clause matching the active topic filter. Returns
+ * null when no filter is active (caller skips the predicate entirely),
+ * or a string suitable for `.or()` otherwise. The two halves:
+ *
+ *   - "topics && {a,b}" — at least one of the selected real topics is
+ *     in the row's array. PostgREST encodes array literals as
+ *     {a,b,c}.
+ *   - "topics.eq.{}" — the row has no topics at all (the
+ *     "(untagged)" sentinel was selected).
+ *
+ * An OR of the two is the union the drawer's checkbox semantics
+ * promise. When only one half is active we emit only that half, which
+ * keeps the URL shorter and the query plan less branchy.
+ *
+ * `cs` (contains) vs `ov` (overlap): `ov` is the array-overlap
+ * operator (`&&`) which is what we want for OR semantics across
+ * multiple topics. `cs` would require ALL of the listed topics to be
+ * present, which is AND semantics.
+ */
+function topicsFilterClause(selected: readonly string[]): string | null {
+  if (selected.length === 0) return null;
+  const { topics, includeUntagged } = partitionSelectedTopics(selected);
+  const parts: string[] = [];
+  if (topics.length > 0) {
+    // PostgREST array literal: {a,b,c}. Topic strings are alphanumeric
+    // by the agent prompt (no commas, no braces) so no escaping is
+    // needed; if a stray punctuation char ever sneaks in, PostgREST's
+    // own quoting would reject the query before it reached the DB
+    // rather than mis-parse it.
+    parts.push(`topics.ov.{${topics.join(',')}}`);
+  }
+  if (includeUntagged) {
+    // Empty-array equality: a row whose topics column is `'{}'`. This
+    // is what "untagged" means in the UI.
+    parts.push('topics.eq.{}');
+  }
+  // Single predicate doesn't need an or() wrapper at the caller, but
+  // the .or() builder accepts a single comma-free clause too.
+  return parts.join(',');
 }
 
 /**
@@ -1132,13 +1227,16 @@ export class SupabaseService {
    * fully drained; any truthy value is what the caller should pass as
    * `cursor` to fetch the next page.
    */
-  async listRecentThreads(cutoff: string): Promise<Thread[]> {
+  async listRecentThreads(
+    cutoff: string,
+    selectedTopics: readonly string[] = []
+  ): Promise<Thread[]> {
     // Everything touched within the "active" window — hardcoded by the
     // caller so the boundary doesn't drift second-to-second and flip
     // threads at the edge between Recent and Older as seconds tick by.
     // Two-column ordering mirrors listOlderThreads so a thread the
     // user just updated doesn't hop position when it transitions.
-    const { data, error } = await this.client
+    let q = this.client
       .from('threads')
       .select('*')
       .eq('archived', false)
@@ -1146,6 +1244,9 @@ export class SupabaseService {
       .order('updated_at', { ascending: false })
       .order('id', { ascending: false })
       .limit(500);
+    const topicsClause = topicsFilterClause(selectedTopics);
+    if (topicsClause) q = q.or(topicsClause);
+    const { data, error } = await q;
     if (error) throw new SupabaseError(error.message);
     return (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
   }
@@ -1154,24 +1255,28 @@ export class SupabaseService {
     cutoff: string;
     cursor: ThreadCursor | null;
     pageSize?: number;
+    selectedTopics?: readonly string[];
   }): Promise<ThreadPage> {
     return this.pageThreads({
       archived: false,
       cutoff: opts.cutoff,
       cursor: opts.cursor,
       pageSize: opts.pageSize ?? DEFAULT_THREAD_PAGE_SIZE,
+      selectedTopics: opts.selectedTopics ?? [],
     });
   }
 
   async listArchivedThreads(opts: {
     cursor: ThreadCursor | null;
     pageSize?: number;
+    selectedTopics?: readonly string[];
   }): Promise<ThreadPage> {
     return this.pageThreads({
       archived: true,
       cutoff: null,
       cursor: opts.cursor,
       pageSize: opts.pageSize ?? DEFAULT_THREAD_PAGE_SIZE,
+      selectedTopics: opts.selectedTopics ?? [],
     });
   }
 
@@ -1193,6 +1298,7 @@ export class SupabaseService {
     target: ThreadCursor;
     archived: boolean;
     cutoff: string | null;
+    selectedTopics?: readonly string[];
   }): Promise<Thread[]> {
     let q = this.client
       .from('threads')
@@ -1202,6 +1308,8 @@ export class SupabaseService {
       .order('updated_at', { ascending: false })
       .order('id', { ascending: false });
     if (opts.cutoff) q = q.lt('updated_at', opts.cutoff);
+    const topicsClause = topicsFilterClause(opts.selectedTopics ?? []);
+    if (topicsClause) q = q.or(topicsClause);
     const { data, error } = await q;
     if (error) throw new SupabaseError(error.message);
     return (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
@@ -1212,6 +1320,7 @@ export class SupabaseService {
     cutoff: string | null;
     cursor: ThreadCursor | null;
     pageSize: number;
+    selectedTopics: readonly string[];
   }): Promise<ThreadPage> {
     // Fetch pageSize+1 rows so we can derive hasMore without a second
     // count query — if the server returned pageSize+1 rows we know at
@@ -1234,6 +1343,8 @@ export class SupabaseService {
         `updated_at.lt.${c.updated_at},and(updated_at.eq.${c.updated_at},id.lt.${c.id})`
       );
     }
+    const topicsClause = topicsFilterClause(opts.selectedTopics);
+    if (topicsClause) q = q.or(topicsClause);
     const { data, error } = await q;
     if (error) throw new SupabaseError(error.message);
     const rows = (data ?? []).map((row) => coerceThread(row as Record<string, unknown>));
@@ -1265,20 +1376,35 @@ export class SupabaseService {
     query: string;
     queryEmbedding: number[] | null;
     limit?: number;
+    /**
+     * When non-empty, search results are narrowed to the same topic
+     * filter the drawer's date-sorted list uses. Exact (ILIKE) hits
+     * are filtered server-side via the same `topicsFilterClause`
+     * helper the list paths use; semantic hits come back from the
+     * embedding RPC without topic columns, so we re-fetch the matched
+     * rows and filter in memory rather than touching the RPC signature.
+     * Matches the "topic filter constrains search too" UX decision -
+     * see docs/dev/topics.md.
+     */
+    selectedTopics?: readonly string[];
   }): Promise<ThreadSearchHit[]> {
     const query = opts.query.trim();
     if (query.length === 0) return [];
     const limit = opts.limit ?? 50;
+    const selectedTopics = opts.selectedTopics ?? [];
+    const topicsClause = topicsFilterClause(selectedTopics);
 
     const safe = query.replace(/([,()])/g, '\\$1');
     const pattern = `%${safe}%`;
-    const exactPromise = this.client
+    let exactQ = this.client
       .from('threads')
       .select('*')
       .ilike('title', pattern)
       .order('updated_at', { ascending: false })
       .order('id', { ascending: false })
       .limit(limit);
+    if (topicsClause) exactQ = exactQ.or(topicsClause);
+    const exactPromise = exactQ;
 
     const semanticPromise = opts.queryEmbedding
       ? this.client.rpc('search_threads_by_embedding', {
@@ -1307,6 +1433,40 @@ export class SupabaseService {
       coerceThread(row as Record<string, unknown>)
     );
 
+    // When a topic filter is active, narrow semantic hits to rows
+    // matching the same predicate. The embedding RPC doesn't read
+    // `topics`, so we do this client-side: fetch the matched rows'
+    // topics columns by id, then drop any that don't satisfy the
+    // filter. The fetch is one round trip with at most `limit` rows
+    // so the overhead is small (and only paid when a filter is
+    // active). When no filter is active we skip the round trip
+    // entirely and the existing path runs unchanged.
+    let allowedSemanticIds: Set<string> | null = null;
+    if (selectedTopics.length > 0 && semanticRows.length > 0) {
+      const ids = semanticRows.map((r) => r.id);
+      const { topics: realTopics, includeUntagged } =
+        partitionSelectedTopics(selectedTopics);
+      const { data: topicRows, error: topicErr } = await this.client
+        .from('threads')
+        .select('id, topics')
+        .in('id', ids);
+      if (topicErr) throw new SupabaseError(topicErr.message);
+      allowedSemanticIds = new Set<string>();
+      const realSet = new Set(realTopics);
+      for (const r of (topicRows ?? []) as { id: string; topics: unknown }[]) {
+        const rowTopics = Array.isArray(r.topics)
+          ? r.topics.filter((v): v is string => typeof v === 'string')
+          : [];
+        if (rowTopics.length === 0 && includeUntagged) {
+          allowedSemanticIds.add(r.id);
+          continue;
+        }
+        if (realSet.size > 0 && rowTopics.some((t) => realSet.has(t))) {
+          allowedSemanticIds.add(r.id);
+        }
+      }
+    }
+
     const out: ThreadSearchHit[] = [];
     const seen = new Set<string>();
     for (const t of exactThreads) {
@@ -1317,6 +1477,7 @@ export class SupabaseService {
     }
     for (const row of semanticRows) {
       if (seen.has(row.id)) continue;
+      if (allowedSemanticIds && !allowedSemanticIds.has(row.id)) continue;
       seen.add(row.id);
       // The RPC projection gives us enough for the row UI; fields the
       // result list doesn't render are stubbed so downstream code that
@@ -1334,6 +1495,7 @@ export class SupabaseService {
           title_manually_set: false,
           intuition_payload: null,
           context_recall_payload: null,
+          topics: [],
           created_at: row.updated_at,
           updated_at: row.updated_at,
         },
@@ -3148,6 +3310,93 @@ export class SupabaseService {
       p_holder_id: holderId,
     });
     if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Atomically claim the next thread that's settled past its last
+   * topics-tagging snapshot. Returns null when nothing qualifies. The
+   * `terminalMsgId` is the assistant message we should tag against;
+   * `existingTopics` is the user's current topic vocabulary, fetched
+   * in the same round trip so the agent can prompt the model with
+   * "reuse these names if they fit" without a second SELECT.
+   */
+  async claimNextThreadForTopics(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{
+    threadId: string;
+    terminalMsgId: string;
+    existingTopics: string[];
+  } | null> {
+    const { data, error } = await this.client.rpc('claim_next_thread_for_topics', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      thread_id: string;
+      terminal_msg_id: string;
+      existing_topics: string[] | null;
+    }[];
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      threadId: row.thread_id,
+      terminalMsgId: row.terminal_msg_id,
+      existingTopics: Array.isArray(row.existing_topics)
+        ? row.existing_topics.filter((t): t is string => typeof t === 'string')
+        : [],
+    };
+  }
+
+  /**
+   * Save the agent-produced topics IF our claim is still valid. RPC
+   * guards on holder + TTL + user_id. False return = a race; caller
+   * drops the work and the next cycle will re-pick the row.
+   */
+  async saveThreadTopicsIfClaimed(
+    threadId: string,
+    holderId: string,
+    topics: string[],
+    msgId: string
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('save_thread_topics_if_claimed', {
+      p_thread_id: threadId,
+      p_holder_id: holderId,
+      p_topics: topics,
+      p_msg_id: msgId,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Release the topics claim without writing topics. Used when the
+   * agent returned no usable output (model emitted garbage, abort
+   * fired) so the row re-enters the queue immediately rather than
+   * waiting for the per-thread TTL.
+   */
+  async clearTopicsClaim(threadId: string, holderId: string): Promise<void> {
+    const { error } = await this.client.rpc('clear_topics_claim', {
+      p_thread_id: threadId,
+      p_holder_id: holderId,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Distinct topic vocabulary for the current user. Backs the drawer's
+   * topic-filter dropdown; called on drawer mount and refreshed after
+   * a tagging event. Returns the unique flat sorted list of topics
+   * the worker has assigned across all threads. The "(untagged)"
+   * pseudo-topic the UI offers is NOT in this list - the UI
+   * synthesises it from the existence of zero-topic rows.
+   */
+  async listUserTopics(): Promise<string[]> {
+    const { data, error } = await this.client.rpc('list_user_topics');
+    if (error) throw new SupabaseError(error.message);
+    if (!Array.isArray(data)) return [];
+    return data.filter((t): t is string => typeof t === 'string');
   }
 
   /**
