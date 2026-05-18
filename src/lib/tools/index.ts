@@ -100,6 +100,9 @@ import { recipePhotosReorderSchema } from './recipe_photos_reorder.schema';
 import { recipePhotoLabelSetSchema } from './recipe_photo_label_set.schema';
 import { researchDocsSchema } from './research_docs.schema';
 import { wikiSearchSchema } from './wiki_search.schema';
+import { wikiListSchema } from './wiki_list.schema';
+import { wikiGetSchema } from './wiki_get.schema';
+import { wikiLibrarianSchema } from './wiki_librarian.schema';
 
 // Agent-only toolbox re-exports moved to the bottom of the file
 // alongside other re-exports. Direct `export ... from` rather than
@@ -220,6 +223,21 @@ const wikiSearch = lazyTool(
   () => import('./wiki_search'),
   'wikiSearch'
 );
+const wikiList = lazyTool(
+  wikiListSchema,
+  () => import('./wiki_list'),
+  'wikiList'
+);
+const wikiGet = lazyTool(
+  wikiGetSchema,
+  () => import('./wiki_get'),
+  'wikiGet'
+);
+const wikiLibrarian = lazyTool(
+  wikiLibrarianSchema,
+  () => import('./wiki_librarian'),
+  'wikiLibrarian'
+);
 
 /**
  * Always-on toolbox. Rides with every request regardless of the
@@ -254,7 +272,13 @@ const wikiSearch = lazyTool(
  *     conversation titles + summaries.
  *   - `wiki_search` - semantic search over the user's flat wiki
  *     (encyclopedic articles about topics in their life). Articles
- *     are never auto-injected; this is the only path to reach them.
+ *     are never auto-injected; this and the two reads below are the
+ *     only paths to reach them.
+ *   - `wiki_list` / `wiki_get` - alphabetical projection and
+ *     primary-key body fetch for the wiki. Same shape as the
+ *     recipe pair below; together they let the model survey wiki
+ *     shape and read a specific article without paying for a
+ *     vector search when it already knows the id.
  *   - `recipe_list` / `recipe_get` - browse and fetch the user's
  *     saved recipes.
  *   - `research_docs` - bounded sub-agent that answers
@@ -273,9 +297,9 @@ export const alwaysOnToolbox: Toolbox = {
     'Reflex-level tools that ride every request without being ' +
     'toggled. The umbrella `context` recall, the three per-layer ' +
     'recall tools, and read-only surfaces (search across ' +
-    'memories / conversations / wiki / cookbook / app docs) ' +
-    'plus web search, update_title, analyze_image, and the ' +
-    'toggle_toolbox meta-tool.',
+    'memories / conversations / wiki / cookbook / app docs; ' +
+    'plus list/get for wiki and cookbook) plus web search, ' +
+    'update_title, analyze_image, and the toggle_toolbox meta-tool.',
   tools: [
     toggleToolbox,
     contextTool,
@@ -285,6 +309,8 @@ export const alwaysOnToolbox: Toolbox = {
     memorySearch,
     conversationSearch,
     wikiSearch,
+    wikiList,
+    wikiGet,
     recipeList,
     recipeGet,
     researchDocs,
@@ -353,6 +379,33 @@ export const memoriesToolbox: Toolbox = {
 };
 
 /**
+ * Wiki maintenance toolbox. Wiki reads (wiki_search, wiki_list,
+ * wiki_get, wiki_recall) live in the always-on set; this toolbox
+ * carries the librarian-delegation tool, which dispatches a
+ * multi-round sub-agent that can create, update, and delete wiki
+ * articles on the user's behalf. The user enables the toolbox from
+ * the composer popover when they want to ask Nak to consolidate or
+ * reshape their wiki; the model can flip it on via `toggle_toolbox`
+ * once the conversation makes a librarian run the obvious next move.
+ *
+ * Only the librarian-invocation tool lives here - direct
+ * wiki_create / wiki_update / wiki_delete are NOT exposed to the
+ * main chat at all. Those remain reserved for the autonomous wiki
+ * agent and the librarian itself, so any wiki edit driven by the
+ * main chat has to go through the librarian's full read-then-plan
+ * loop rather than a one-shot scribble.
+ */
+export const wikiToolbox: Toolbox = {
+  name: 'wiki',
+  description:
+    "Delegate wiki maintenance tasks to the user's librarian sub-agent " +
+    '(merge duplicates, delete stubs, split or rewrite articles). Read ' +
+    'paths (wiki_search, wiki_list, wiki_get, wiki_recall) are ' +
+    'always-on; this toolbox carries the librarian invocation.',
+  tools: [wikiLibrarian],
+};
+
+/**
  * The canonical ordered list of toolboxes exposed to the main chat.
  * Order is visible to the model (system-prompt catalog) and to the
  * user (popover list). Always-on goes first so the model reads the
@@ -365,6 +418,7 @@ export const TOOLBOXES: readonly Toolbox[] = [
   alwaysOnToolbox,
   cookingToolbox,
   memoriesToolbox,
+  wikiToolbox,
 ];
 
 /**

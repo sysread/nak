@@ -274,6 +274,30 @@ background run. Manual and scheduled runs are independent.
 The button is grayed out while a scheduled librarian run is in
 flight - the two paths never write to the wiki at the same time.
 
+### Asking Nak to run the librarian from the chat
+
+You can also ask Nak to invoke the librarian from inside a normal
+conversation - for example, "consolidate my duplicate Maya articles"
+or "delete the kettle stub and tidy any references to it." The
+assistant has read access to your wiki (`wiki_list`, `wiki_get`,
+`wiki_search`) for surveying the shape of what is there, and it can
+delegate maintenance tasks to the librarian through a `wiki_librarian`
+tool. The tool is **gated** behind the **Wiki** toolbox in the
+composer's toolbox popover - Nak will enable it on the fly when the
+conversation makes maintenance the obvious next step, or you can flip
+it on yourself before asking.
+
+The chat-driven path runs the same librarian sub-agent the sparkles
+button does, with the same in-flight guard - a chat-triggered run
+while a manual or scheduled run is happening (or vice versa) returns
+an error rather than racing two passes. Nak reports back in prose
+what the librarian merged, deleted, or left alone.
+
+The assistant cannot edit wiki articles directly - it can only
+delegate through the librarian. That keeps every chat-driven wiki
+edit going through the same "read everything, plan, then act" loop a
+sparkles-button run uses, instead of a one-shot scribble.
+
 ## Changelog
 
 Every change to the wiki - article added, edited, deleted, by you or
