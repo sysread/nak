@@ -5,24 +5,60 @@
    * sidebar `WikiList` is the alphabetical browse surface, this panel
    * renders one article at a time keyed by `route.wiki_article_id`.
    *
-   * No article selected -> inline WikiChangelogPanel (with a "+ new
-   * article" affordance in its header that flips into compose mode).
-   * Selected -> Markdown body, Edit / Delete / "Ask agent to update".
+   * Pages (mutually exclusive surfaces inside .wiki-body, chained as
+   * one if/:else-if ladder in the template):
+   *
+   *   1. Librarian confirmation strip (librarianConfirmOpen)
+   *   2. No article + composing -> inline compose form
+   *   3. No article + not composing -> WikiChangelogPanel (the default)
+   *   4. wiki_article_id set, no match in results -> "not in results" hint
+   *   5. wiki_article_id set, match found -> the article view
+   *
+   * Page-switch entry points and their invariants:
+   *
+   *   - Top-bar sparkles button -> librarian. Sets `librarianConfirmOpen`.
+   *     `openLibrarianConfirm` clears `wiki_article_id` + tears down
+   *     per-article mid-edit / delete / manual-update strips. Does NOT
+   *     tear down `composing` - if the user was composing a new
+   *     article, their typed data persists as a sub-state of the
+   *     changelog slot so cancelling the librarian (or navigating
+   *     back to the changelog) returns them to their draft.
+   *   - Top-bar clock button -> changelog. Flips the
+   *     `triggerChangelogView` $bindable prop; the watcher below
+   *     closes the librarian and clears `wiki_article_id`. Does not
+   *     touch `composing` (same reason - preserve typed drafts).
+   *   - WikiList sidebar row click -> article view. Sets
+   *     `wiki_article_id`. The route-watch effect below closes any
+   *     open librarian so the article actually renders rather than
+   *     being hidden behind the librarian page.
+   *   - WikiChangelogPanel "+ New article" -> compose. Flips local
+   *     `composing` state via the `onAddArticle` callback. Tears down
+   *     edit / delete / manual-update strips so leftover article
+   *     sub-state doesn't bleed into the compose flow.
+   *   - WikiChangelogPanel entry row -> article view. Same `navigate`
+   *     call as the sidebar; the route-watch effect provides the
+   *     same librarian-close safety even though the changelog and
+   *     librarian can't render simultaneously.
+   *
+   * Selected article sub-flows: Edit / Delete / "Ask agent to update".
    * The "ask agent to update" flow mirrors the regenerate-with-preview
    * shape from Journal.svelte: textarea for instructions, preview with
    * Accept / Try Again / Cancel.
    *
-   * The librarian confirmation strip is its own page: when open it
-   * fully replaces the article/changelog/compose view rather than
-   * stacking on top, so the three top-bar destinations (read an
-   * article, see the changelog, run the librarian) read as siblings
-   * the way the rest of the app's panels do.
+   * The librarian and the changelog used to share the wiki body
+   * (librarian rendered on top of whatever was below). They're now
+   * sibling pages with the same standing as the article view - the
+   * librarian's only exit affordances are the page-switch buttons
+   * above (no explicit "Cancel" inside the strip's fresh/busy
+   * states). The done-state "Close" survives because dismissing a
+   * run result is a different operation from navigating to another
+   * page.
    *
    * The changelog used to live in a modal (WikiChangelog.svelte)
    * launched from a top-bar clock button. It moved into the empty
    * state so the wiki tab has a useful default surface instead of a
    * "pick an article from the sidebar" placeholder; the clock button
-   * now just clears the article selection to land here.
+   * now drives the bindable `triggerChangelogView` prop to land here.
    */
   import { app } from '$lib/state.svelte';
   import { route, navigate } from '$lib/routing.svelte';
@@ -61,8 +97,20 @@
      * dedicated callback prop.
      */
     triggerLibrarianRun?: boolean;
+    /**
+     * Top-bar clock button in Chat.svelte flips this to true to ask
+     * for the changelog page. The panel closes any open librarian and
+     * clears `wiki_article_id` so the changelog renders, then resets
+     * the flag. Same $bindable pattern as `triggerLibrarianRun`.
+     * Leaves `composing` alone - a user mid-draft keeps their typed
+     * data; cancelling compose (or saving) is the explicit way out.
+     */
+    triggerChangelogView?: boolean;
   }
-  let { triggerLibrarianRun = $bindable(false) }: Props = $props();
+  let {
+    triggerLibrarianRun = $bindable(false),
+    triggerChangelogView = $bindable(false),
+  }: Props = $props();
 
   const selectedArticle = $derived<WikiArticle | null>(
     route.wiki_article_id
@@ -666,6 +714,35 @@
     }
   });
 
+  // Watch the clock-button trigger. Closes the librarian (if open)
+  // and clears wiki_article_id (if set) so the changelog renders.
+  // Doesn't touch `composing` - see Props docstring for the typed-
+  // data-preservation rationale.
+  $effect(() => {
+    if (triggerChangelogView) {
+      librarianConfirmOpen = false;
+      if (route.wiki_article_id) {
+        navigate({ wiki_article_id: null });
+      }
+      triggerChangelogView = false;
+    }
+  });
+
+  // Page-switch safety: when the user lands on an article (sidebar
+  // click, changelog row click, browser back/forward to an
+  // article-bearing URL), close any open librarian. Without this the
+  // librarian's :else-if branch in the template would keep painting
+  // and the article the user just picked would be invisible. The
+  // gate on `route.wiki_article_id` truthiness - rather than firing
+  // unconditionally on every route change - means clearing the
+  // article (the clock-button path, the trigger above) doesn't
+  // re-trip this and leave us double-closing.
+  $effect(() => {
+    if (route.wiki_article_id) {
+      librarianConfirmOpen = false;
+    }
+  });
+
   // Auto-focus the instructions textarea when the strip opens so the
   // user can start typing without an extra click. Mirrors the focus
   // pattern on the "Ask agent to update" form above.
@@ -679,13 +756,15 @@
     // The librarian strip is its own page in the template (the
     // article/changelog/compose conditional is chained as an :else-if
     // off the librarian conditional), so we don't need to swap views
-    // explicitly here - just tear down per-article mid-edit / delete /
-    // manual-update strips so their state doesn't linger if the user
-    // cancels the librarian and lands back on the article. Also clear
-    // wiki_article_id so cancelling the librarian returns to the
-    // changelog rather than re-mounting the article the user was on -
-    // the librarian's whole reason to exist is wiki-wide operations,
-    // and the changelog is the natural surface to land on after one.
+    // explicitly here. We DO need to tear down per-article mid-edit /
+    // delete / manual-update strips, so their state doesn't bleed
+    // back in if the user later navigates to an article. Also clear
+    // wiki_article_id - the librarian's whole reason to exist is
+    // wiki-wide operations, and the changelog is the natural surface
+    // to fall back to when the user dismisses the post-run result or
+    // navigates away via the clock button. `composing` stays:
+    // preserving the user's typed draft is more useful than the
+    // tidiness of a hard reset.
     if (route.wiki_article_id) {
       navigate({ wiki_article_id: null });
       cancelEdit();
@@ -901,11 +980,16 @@
            exclusive with the article view, the changelog, and the
            compose form below (chained as :else-if branches off this
            conditional). Three layered states:
-             1. fresh:  textarea + Run / Cancel
+             1. fresh:  textarea + Run librarian
              2. busy:   textarea disabled, "Working..." spinner
              3. done:   summary + Close (the run's wiki edits, if any,
                         have already streamed through the wikiStore via
-                        emitWikiChange()). -->
+                        emitWikiChange()).
+           No "Cancel" affordance in fresh/busy - the librarian is a
+           page, so the way out is to navigate elsewhere via the top-
+           bar clock (changelog) or sidebar (article). Done-state
+           "Close" survives because dismissing the result is a
+           different operation from navigating away. -->
       <div class="wiki-librarian-confirm">
         <h3>Run the librarian now</h3>
         <p class="subtle">
@@ -959,13 +1043,6 @@
               disabled={librarianBusy}
             >
               {librarianBusy ? 'Working…' : 'Run librarian'}
-            </button>
-            <button
-              type="button"
-              onclick={cancelLibrarianRun}
-              disabled={librarianBusy}
-            >
-              Cancel
             </button>
           </div>
         {/if}

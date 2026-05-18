@@ -277,6 +277,14 @@
   // Same $bindable pattern: Chat.svelte flips it to true on click,
   // Wiki.svelte opens its confirmation strip and resets the flag.
   let wikiLibrarianTrigger = $state(false);
+  // Trigger flag for the wiki "Changelog" top-bar (clock) button.
+  // Same $bindable pattern. Wiki.svelte responds by closing any open
+  // librarian and clearing wiki_article_id so the changelog renders.
+  // Routed through Wiki.svelte rather than a direct navigate() call
+  // because the librarian's open/closed state lives there as a local
+  // flag; a clock-button click while the librarian is open has to
+  // touch both the route AND the local flag.
+  let wikiChangelogTrigger = $state(false);
   /**
    * Sidebar drawer tab. Backed by `route.drawer` - absent in the URL
    * means "chats" (the default). 'recipes' and 'memories' render
@@ -4658,15 +4666,20 @@
           </button>
           <!-- Wiki changelog jump. The changelog is the wiki tab's
                default surface (rendered inline by Wiki.svelte when
-               no article is selected), so this button just clears
-               wiki_article_id to land there - a one-click "back to
-               wiki home" affordance while reading an article. Sits
-               next to the librarian button so the two "audit the
-               wiki agent's behavior" affordances (run it now / see
-               what it has been doing) live side by side. -->
+               no article is selected and the librarian isn't open),
+               so this button asks the panel to land there - a one-
+               click "back to wiki home" affordance from the article
+               view OR the librarian page. Routed through a
+               $bindable trigger (rather than a direct navigate())
+               because the librarian's open/closed state lives in
+               Wiki.svelte; closing it requires touching that local
+               flag alongside the route. Sits next to the librarian
+               button so the two "audit the wiki agent's behavior"
+               affordances (run it now / see what it has been
+               doing) live side by side. -->
           <button
             class="secondary icon-btn wiki-changelog-btn"
-            onclick={() => navigate({ wiki_article_id: null })}
+            onclick={() => (wikiChangelogTrigger = true)}
             title="Wiki changelog"
             aria-label="Wiki changelog"
           >
@@ -5738,11 +5751,17 @@
         <!-- Wiki panel. Same inline-no-modal-chrome shape. The sidebar
              WikiList shares the same `wikiStore` so a search keystroke
              filters both surfaces. Edit / delete / "ask agent to
-             update" all happen inline on the article. The
-             triggerLibrarianRun prop wires the top-bar sparkles button
-             to the panel's manual-librarian confirmation strip. -->
+             update" all happen inline on the article. Two $bindable
+             trigger props wire the top-bar buttons to the panel:
+             `triggerLibrarianRun` for the sparkles button (opens the
+             librarian confirmation strip), `triggerChangelogView` for
+             the clock button (closes the librarian if open and
+             clears wiki_article_id so the changelog renders). -->
         {#if WikiComp}
-          <WikiComp bind:triggerLibrarianRun={wikiLibrarianTrigger} />
+          <WikiComp
+            bind:triggerLibrarianRun={wikiLibrarianTrigger}
+            bind:triggerChangelogView={wikiChangelogTrigger}
+          />
         {/if}
       {/if}
     </main>
