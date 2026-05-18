@@ -3603,8 +3603,8 @@ h1 {
 }
 
 /* ---------- Shared modal layering ----------
-   The `.center`-wrapped modals (Help, Memories, Settings, WikiChangelog)
-   inherit .center's `position: static` defaults, which leaves them at
+   The `.center`-wrapped modals (Help, Memories, Settings) inherit
+   .center's `position: static` defaults, which leaves them at
    `z-index: auto` and lets fixed-position siblings paint over them.
    In particular the SamskaraToasts mood pill (position: fixed,
    z-index: 25) was rendering on top of these modals, blocking
@@ -3615,8 +3615,7 @@ h1 {
    their own `position: fixed; inset: 0` backdrops and aren't affected. */
 .help-backdrop,
 .memories-backdrop,
-.settings-backdrop,
-.wiki-changelog-backdrop {
+.settings-backdrop {
   position: fixed;
   inset: 0;
   z-index: 30;
@@ -3636,14 +3635,12 @@ h1 {
 @media (max-width: 720px) {
   .help-backdrop,
   .memories-backdrop,
-  .settings-backdrop,
-  .wiki-changelog-backdrop {
+  .settings-backdrop {
     padding: 0;
   }
   .help-shell,
   .memories-shell,
-  .settings-shell,
-  .wiki-changelog-shell {
+  .settings-shell {
     border-radius: 0;
     border-left-width: 0;
     border-right-width: 0;

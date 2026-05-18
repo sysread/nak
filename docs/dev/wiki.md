@@ -56,7 +56,7 @@ Schema:
   `message` has a column-level `char_length` between 1 and 200
   CHECK that mirrors `MAX_WIKI_CHANGELOG_MESSAGE_CHARS`) plus
   append-only RLS (select + insert only, no update/delete) and a
-  `(user_id, created_at desc)` index for the modal's cursor-paged
+  `(user_id, created_at desc)` index for the panel's cursor-paged
   listing. `reset_wiki_data` clears `wiki_changelog` alongside
   `wiki_articles` so a wipe leaves no orphan history.
 
@@ -210,6 +210,13 @@ UI:
   in the wiki changelog after the mutation. The "ask agent to
   update" preview surfaces the agent's `reason` field as the
   changelog entry it would write; Accept passes it through.
+  When no article is selected (and the user isn't composing),
+  the panel renders `WikiChangelogPanel` as its default view -
+  the changelog is the wiki tab's "home page", not a modal
+  off to one side. The compose form's "+ new article"
+  affordance lives in the changelog panel header (handed to it
+  via the `onAddArticle` prop that flips Wiki.svelte's local
+  `composing` state to true).
   Renders a nested **table of contents** at the top of the
   article (between the title header and the body) for articles
   with two or more Markdown headings. ToC entries link to
@@ -221,20 +228,24 @@ UI:
   container instead of letting the browser append the fragment
   to the page URL. Heading extraction shares the slug helpers
   with `Help.svelte` (see `$lib/markdown` § Heading slugger).
-- `src/screens/WikiChangelog.svelte` - the changelog modal
-  itself. Cursor-paged list (`listWikiChangelog`); kind chips
-  (Added/Edited/Deleted), per-entry article link when the
-  article still exists, plain title snapshot for deletes.
-  Lazy-loaded from `Chat.svelte` on `route.modal ===
-  'wiki-changelog'`. Listens on `onWikiChange` so a write that
-  happens while the modal is open refreshes the first page.
+- `src/components/WikiChangelogPanel.svelte` - the inline
+  changelog. Cursor-paged list (`listWikiChangelog`); kind
+  chips (Added/Edited/Deleted), per-entry article link when
+  the article still exists, plain title snapshot for deletes.
+  Mounted by Wiki.svelte's no-article empty state. Listens on
+  `onWikiChange` so a write that happens while the panel is
+  visible refreshes the first page. Optional `onAddArticle`
+  prop renders a "+ new article" button in the header. Was a
+  modal (`src/screens/WikiChangelog.svelte`) reachable from a
+  top-bar clock button until the changelog moved inline.
 - `src/screens/Chat.svelte` - new tab, drawer branch,
   main-panel branch, top-bar branch, change-event listener.
   Top-bar branch carries the `librarian-run-btn` (sparkles)
-  next to the `wiki-changelog-btn` (clock); the latter
-  navigates to `modal: 'wiki-changelog'`. Lazy-import effect
-  for `WikiChangelog.svelte` parallels the other modal
-  components.
+  next to the `wiki-changelog-btn` (clock); the latter calls
+  `navigate({ wiki_article_id: null })` to clear the article
+  selection and land on the inline changelog (the wiki tab's
+  default view), giving the user a one-click "back to wiki
+  home" affordance while reading an article.
 - `src/screens/Settings.svelte` - new "Wiki" group with the
   `wikiAutomaticEnabled` toggle.
 
@@ -543,13 +554,16 @@ verification list):
    the body -> Accept persists and writes a changelog row
    using the agent's `reason` as the message; Cancel
    dismisses; Try again regenerates.
-6. **Changelog modal.** Click the clock icon next to the
-   sparkles librarian button in the Wiki top bar. Modal opens
-   with the user's create/update/delete history newest-first,
-   kind chips visible. Click an Edit/Add entry's title -> the
-   drawer flips to Wiki and the article opens. Delete-kind
-   titles are non-interactive. "Load more" appends the next
-   50 rows; the button hides once the tail is reached.
+6. **Changelog page.** Open the Wiki tab with no article
+   selected (or click the clock icon next to the sparkles
+   librarian button in the Wiki top bar to clear an existing
+   selection). The panel renders the user's
+   create/update/delete history newest-first, kind chips
+   visible. Click an Edit/Add entry's title -> the article
+   opens in the same panel. Delete-kind titles are
+   non-interactive. "Load more" appends the next 50 rows; the
+   button hides once the tail is reached. The header's
+   "+ new article" button flips the panel into compose mode.
 7. **Required commit messages.** The direct create / edit /
    delete strips on the Wiki panel all require a one-line
    change message before the destructive action enables; the

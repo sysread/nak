@@ -5,11 +5,18 @@
    * sidebar `WikiList` is the alphabetical browse surface, this panel
    * renders one article at a time keyed by `route.wiki_article_id`.
    *
-   * No article selected -> empty-state hint + "Add article" button.
+   * No article selected -> inline WikiChangelogPanel (with a "+ new
+   * article" affordance in its header that flips into compose mode).
    * Selected -> Markdown body, Edit / Delete / "Ask agent to update".
    * The "ask agent to update" flow mirrors the regenerate-with-preview
    * shape from Journal.svelte: textarea for instructions, preview with
    * Accept / Try Again / Cancel.
+   *
+   * The changelog used to live in a modal (WikiChangelog.svelte)
+   * launched from a top-bar clock button. It moved into the empty
+   * state so the wiki tab has a useful default surface instead of a
+   * "pick an article from the sidebar" placeholder; the clock button
+   * now just clears the article selection to land here.
    */
   import { app } from '$lib/state.svelte';
   import { route, navigate } from '$lib/routing.svelte';
@@ -38,6 +45,7 @@
   } from '$lib/supabase';
   import { extractHeadings, uniqueSlug, type HeadingEntry } from '$lib/markdown';
   import Markdown from '../components/Markdown.svelte';
+  import WikiChangelogPanel from '../components/WikiChangelogPanel.svelte';
 
   interface Props {
     /**
@@ -955,8 +963,9 @@
     {/if}
 
     {#if !route.wiki_article_id}
-      <!-- Empty state. Encourage either picking from the sidebar or
-           creating a fresh article inline. -->
+      <!-- No-article default. Compose mode wins; otherwise show the
+           inline changelog (the wiki's "home page") with a "+ new
+           article" button in its header. -->
       {#if composing}
         <div class="wiki-compose">
           <h2>New article</h2>
@@ -1021,13 +1030,7 @@
           </div>
         </div>
       {:else}
-        <p class="subtle wiki-empty">
-          Pick an article from the list on the left to read or edit it.
-          Or
-          <button type="button" class="link" onclick={startCompose}>
-            add a new one
-          </button>.
-        </p>
+        <WikiChangelogPanel onAddArticle={startCompose} />
       {/if}
     {:else if !selectedArticle}
       <p class="subtle wiki-empty">
@@ -1408,15 +1411,6 @@
   .wiki-empty {
     padding: 2rem 0;
     text-align: center;
-  }
-  .wiki-empty .link {
-    background: none;
-    border: none;
-    color: var(--accent, var(--text));
-    cursor: pointer;
-    text-decoration: underline;
-    padding: 0;
-    font: inherit;
   }
   .wiki-header {
     display: flex;

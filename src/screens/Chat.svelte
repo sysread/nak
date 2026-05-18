@@ -118,7 +118,6 @@
   type SamskaraComponent = typeof import('./Samskara.svelte').default;
   type IntuitionComponent = typeof import('./Intuition.svelte').default;
   type BiasProfileComponent = typeof import('./BiasProfile.svelte').default;
-  type WikiChangelogComponent = typeof import('./WikiChangelog.svelte').default;
   import RecipeList from '../components/RecipeList.svelte';
   import MemoryList from '../components/MemoryList.svelte';
   import WikiList from '../components/WikiList.svelte';
@@ -188,7 +187,6 @@
   const showSamskara = $derived(route.modal === 'samskara');
   const showIntuition = $derived(route.modal === 'intuition');
   const showBiasProfile = $derived(route.modal === 'bias-profile');
-  const showWikiChangelog = $derived(route.modal === 'wiki-changelog');
 
   // Lazy components. Each holds the loaded constructor in $state
   // (cached after first import) and an $effect that fires the
@@ -207,7 +205,6 @@
   let SamskaraComp: SamskaraComponent | null = $state(null);
   let IntuitionComp: IntuitionComponent | null = $state(null);
   let BiasProfileComp: BiasProfileComponent | null = $state(null);
-  let WikiChangelogComp: WikiChangelogComponent | null = $state(null);
   $effect(() => {
     if (sessionLoaded && !session && !AuthComp) {
       void import('./Auth.svelte').then((m) => (AuthComp = m.default));
@@ -255,13 +252,6 @@
   $effect(() => {
     if (showSamskara && !SamskaraComp) {
       void import('./Samskara.svelte').then((m) => (SamskaraComp = m.default));
-    }
-  });
-  $effect(() => {
-    if (showWikiChangelog && !WikiChangelogComp) {
-      void import('./WikiChangelog.svelte').then(
-        (m) => (WikiChangelogComp = m.default)
-      );
     }
   });
   $effect(() => {
@@ -4645,16 +4635,17 @@
               <path d="M19 14l.6 1.5L21 16l-1.4.5L19 18l-.6-1.5L17 16l1.4-.5L19 14z" />
             </svg>
           </button>
-          <!-- Wiki changelog launcher. Sits next to the librarian button
-               so the two "audit the wiki agent's behavior" affordances
-               (run it now / see what it has been doing) live side by
-               side. The modal itself is the `wiki-changelog` modal
-               value on the route; navigating preserves the rest of
-               the URL so closing the modal lands the user back on
-               the same tab. -->
+          <!-- Wiki changelog jump. The changelog is the wiki tab's
+               default surface (rendered inline by Wiki.svelte when
+               no article is selected), so this button just clears
+               wiki_article_id to land there - a one-click "back to
+               wiki home" affordance while reading an article. Sits
+               next to the librarian button so the two "audit the
+               wiki agent's behavior" affordances (run it now / see
+               what it has been doing) live side by side. -->
           <button
             class="secondary icon-btn wiki-changelog-btn"
-            onclick={() => navigate({ modal: 'wiki-changelog' })}
+            onclick={() => navigate({ wiki_article_id: null })}
             title="Wiki changelog"
             aria-label="Wiki changelog"
           >
@@ -5684,9 +5675,6 @@
   {/if}
   {#if showBiasProfile && BiasProfileComp}
     <BiasProfileComp onClose={() => navigate({ modal: null })} />
-  {/if}
-  {#if showWikiChangelog && WikiChangelogComp}
-    <WikiChangelogComp onClose={() => navigate({ modal: null })} />
   {/if}
   <!-- Cookbook, Memories, and Wiki now render inline in the main
        panel (drawerTab === 'recipes' / 'memories' / 'wiki') rather
