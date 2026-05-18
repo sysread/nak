@@ -16,7 +16,11 @@
  */
 import type { VeniceClient } from '../../venice';
 import { VeniceError } from '../../venice';
-import { BIAS_OBSERVER_PROMPT, type BiasObservationResult } from './prompts';
+import {
+  BIAS_OBSERVER_PROMPT,
+  type BiasObservationResult,
+  type BiasReactionResult,
+} from './prompts';
 import { isBiasKey } from '../../bias/catalog';
 
 /** One transcript line passed to the agent. The agent only reads
@@ -81,8 +85,10 @@ export class BiasObserverAgent {
   ) {}
 
   /**
-   * One analysis pass over a conversation. Returns the parsed
-   * observations on success, or null when:
+   * One analysis pass over a conversation. Returns both observations
+   * (biases the user exhibited) and reactions (how the user
+   * responded to the assistant's compensation behavior for biases
+   * in `activeBiases`) on success, or null when:
    *   - the model produced unparseable output (a parse failure)
    *   - the response had the wrong top-level shape
    *
@@ -98,14 +104,19 @@ export class BiasObserverAgent {
    */
   async observe(
     transcript: readonly TranscriptLine[],
+    activeBiases: readonly string[],
     signal: AbortSignal
-  ): Promise<BiasObservationResult[] | null> {
+  ): Promise<{
+    observations: BiasObservationResult[];
+    reactions: BiasReactionResult[];
+  } | null> {
     const payload = JSON.stringify({
       messages: transcript.map((m) => ({
         id: m.id,
         role: m.role,
         content: m.content,
       })),
+      active_biases: Array.from(activeBiases),
     });
 
     let raw: string;
@@ -128,34 +139,73 @@ export class BiasObserverAgent {
       return null;
     }
 
-    const parsed = tryParseJson<{ observations?: unknown }>(raw);
-    if (!parsed || !Array.isArray(parsed.observations)) return null;
+    const parsed = tryParseJson<{
+      observations?: unknown;
+      reactions?: unknown;
+    }>(raw);
+    if (!parsed) return null;
+    // Tolerate one of the two top-level keys being missing - the
+    // agent may produce only observations on a thread with no
+    // active biases, or only reactions if it found nothing
+    // bias-shaped but had compensation to react to. An entirely
+    // missing object is a parse failure; partial output is fine.
+    if (!Array.isArray(parsed.observations) && !Array.isArray(parsed.reactions)) {
+      return null;
+    }
 
     // Per-item validation. Items that fail shape checks are dropped
     // silently - we'd rather lose one bad item than throw away the
     // whole pass. Catalog validation uses the type guard from
     // catalog.ts; unknown bias names are dropped.
     const observations: BiasObservationResult[] = [];
-    for (const item of parsed.observations) {
-      if (typeof item !== 'object' || item === null) continue;
-      const o = item as Record<string, unknown>;
-      const bias = typeof o.bias === 'string' ? o.bias : null;
-      if (!bias || !isBiasKey(bias)) continue;
-      const confidence = typeof o.confidence === 'number' ? o.confidence : null;
-      if (confidence === null || Number.isNaN(confidence)) continue;
-      const reasoning = typeof o.reasoning === 'string' ? o.reasoning.trim() : '';
-      if (reasoning.length === 0) continue;
-      const evidenceMessageId =
-        typeof o.evidence_message_id === 'string' && o.evidence_message_id.length > 0
-          ? o.evidence_message_id
-          : null;
-      observations.push({
-        bias,
-        confidence,
-        reasoning,
-        evidenceMessageId,
-      });
+    if (Array.isArray(parsed.observations)) {
+      for (const item of parsed.observations) {
+        if (typeof item !== 'object' || item === null) continue;
+        const o = item as Record<string, unknown>;
+        const bias = typeof o.bias === 'string' ? o.bias : null;
+        if (!bias || !isBiasKey(bias)) continue;
+        const confidence = typeof o.confidence === 'number' ? o.confidence : null;
+        if (confidence === null || Number.isNaN(confidence)) continue;
+        const reasoning = typeof o.reasoning === 'string' ? o.reasoning.trim() : '';
+        if (reasoning.length === 0) continue;
+        const evidenceMessageId =
+          typeof o.evidence_message_id === 'string' && o.evidence_message_id.length > 0
+            ? o.evidence_message_id
+            : null;
+        observations.push({
+          bias,
+          confidence,
+          reasoning,
+          evidenceMessageId,
+        });
+      }
     }
-    return observations;
+
+    // Reactions: the bias must be in the active set the worker
+    // passed in. A reaction for a non-active bias is fabrication
+    // (no compensation was on the wire for it) and gets dropped.
+    // wasConfirmed is the three-state boolean | null; reasoning
+    // must be non-empty.
+    const activeSet = new Set(activeBiases);
+    const reactions: BiasReactionResult[] = [];
+    if (Array.isArray(parsed.reactions)) {
+      for (const item of parsed.reactions) {
+        if (typeof item !== 'object' || item === null) continue;
+        const r = item as Record<string, unknown>;
+        const bias = typeof r.bias === 'string' ? r.bias : null;
+        if (!bias || !isBiasKey(bias)) continue;
+        if (!activeSet.has(bias)) continue;
+        const reasoning = typeof r.reasoning === 'string' ? r.reasoning.trim() : '';
+        if (reasoning.length === 0) continue;
+        let wasConfirmed: boolean | null;
+        if (r.was_confirmed === true) wasConfirmed = true;
+        else if (r.was_confirmed === false) wasConfirmed = false;
+        else if (r.was_confirmed === null) wasConfirmed = null;
+        else continue;
+        reactions.push({ bias, wasConfirmed, reasoning });
+      }
+    }
+
+    return { observations, reactions };
   }
 }

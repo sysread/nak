@@ -67,7 +67,7 @@ function buildCoordinator(initiallyHolding = false): {
 
 function fakeAgent(overrides: Partial<BiasObserverAgent> = {}): BiasObserverAgent {
   const defaults: Partial<BiasObserverAgent> = {
-    observe: vi.fn(async () => []),
+    observe: vi.fn(async () => ({ observations: [], reactions: [] })),
   };
   return { ...defaults, ...overrides } as BiasObserverAgent;
 }
@@ -206,20 +206,23 @@ describe('analyze phase', () => {
       biasSaveObservations: vi.fn(async () => true),
     });
     const agent = fakeAgent({
-      observe: vi.fn(async () => [
-        {
-          bias: 'confirmation_bias' as const,
-          confidence: 0.95, // Above cap; should be clamped to 0.85.
-          reasoning: 'short',
-          evidenceMessageId: 'm1' as string | null,
-        },
-        {
-          bias: 'sunk_cost_fallacy' as const,
-          confidence: 0.30, // Below floor; should be dropped.
-          reasoning: 'short',
-          evidenceMessageId: 'm1' as string | null,
-        },
-      ]),
+      observe: vi.fn(async () => ({
+        observations: [
+          {
+            bias: 'confirmation_bias' as const,
+            confidence: 0.95, // Above cap; should be clamped to 0.85.
+            reasoning: 'short',
+            evidenceMessageId: 'm1' as string | null,
+          },
+          {
+            bias: 'sunk_cost_fallacy' as const,
+            confidence: 0.30, // Below floor; should be dropped.
+            reasoning: 'short',
+            evidenceMessageId: 'm1' as string | null,
+          },
+        ],
+        reactions: [],
+      })),
     });
     const { ctx } = buildContext({ phase: 'analyze', supabase, agent });
     const result = await runUntilLeaseHeld(ctx);
@@ -235,10 +238,54 @@ describe('analyze phase', () => {
         evidence_message_id: 'm1',
       },
     ]);
-    // No reactions yet - the reactor agent integration lands in a
-    // follow-up commit. Until then this slot is always empty and
-    // the v2 schema treats "no reactions" as the neutral score 0.
+    // Reactions slot is empty because the agent stub returned no
+    // reactions and the claim had an empty active-bias set. The
+    // dedicated reactor test below exercises the populated path.
     expect(saveCall[4]).toEqual([]);
+  });
+
+  it('passes activeBiases to the agent and persists the resulting reactions', async () => {
+    const supabase = fakeSupabase({
+      biasClaimNextThread: vi.fn(async () => ({
+        threadId: 't-1',
+        userMessageCount: 5,
+        activeBiases: ['confirmation_bias'] as string[],
+      })),
+      listMessages: vi.fn(async () => [
+        { id: 'm1', role: 'user', content: 'good point', thread_id: 't-1', created_at: new Date().toISOString() },
+      ] as Awaited<ReturnType<SupabaseService['listMessages']>>),
+      biasSaveObservations: vi.fn(async () => true),
+    });
+    const observeSpy = vi.fn(async () => ({
+      observations: [],
+      reactions: [
+        {
+          bias: 'confirmation_bias' as const,
+          wasConfirmed: true as boolean | null,
+          reasoning: 'user said "good point"',
+        },
+      ],
+    }));
+    const agent = fakeAgent({ observe: observeSpy });
+    const { ctx } = buildContext({ phase: 'analyze', supabase, agent });
+    const result = await runUntilLeaseHeld(ctx);
+    expect(result).toBe('progress');
+    // The agent received the active-bias list from the claim.
+    const observeCalls = (observeSpy as unknown as { mock: { calls: unknown[][] } })
+      .mock.calls;
+    // [transcript, activeBiases, signal]
+    expect(observeCalls[0][1]).toEqual(['confirmation_bias']);
+    // The save call carries the reactions in slot 4, mapped to the
+    // wire shape (was_confirmed snake-case).
+    const saveCall = (supabase.biasSaveObservations as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(saveCall[4]).toEqual([
+      {
+        bias: 'confirmation_bias',
+        was_confirmed: true,
+        reasoning: 'user said "good point"',
+      },
+    ]);
   });
 
   it('reports save-rejected when the RPC returns false (race lost)', async () => {
