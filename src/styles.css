@@ -3121,11 +3121,17 @@ h1 {
    shrinking. Heights are graded from 0.5em at the edges up to
    0.8em at the centre (bar 4), giving the row a subtle 3D bulge -
    the centre bar reads as closest to the viewer, edges as
-   receding. The bar shape (squat and narrow, near-square corners)
-   matches the segmented red grille on the front of K.I.T.T. in
-   the show; the earlier circular-dot rendering was the same
-   animation but read as a row of LEDs rather than the original
-   prop. */
+   receding. Per-bar hold times are graded the same way (longest
+   at the edges, shortest at the centre), so the highlight's
+   apparent screen velocity matches what an object would do moving
+   at constant 3D speed along a curve that bulges toward the
+   viewer: slow at the receding ends, fast through the close
+   centre. Together the two gradients (height + dwell time)
+   reinforce the perspective illusion. The bar shape (squat and
+   narrow, near-square corners) matches the segmented red grille
+   on the front of K.I.T.T. in the show; the earlier circular-dot
+   rendering was the same animation but read as a row of LEDs
+   rather than the original prop. */
 .scanner {
   display: inline-flex;
   align-items: center;
@@ -3213,57 +3219,70 @@ h1 {
    when the highlight arrives, but takes 7.5% (~128ms) to decay back
    to baseline after the highlight has moved on. Since the next bar
    only needs 2.5% to reach its peak, the previous bar's tail
-   extends through the entire next bar's hold (5%), so at any given
-   moment up to two adjacent bars can be glowing.
+   extends through the entire next bar's hold (3-6%, see grading
+   below), so at any given moment up to two adjacent bars can be
+   glowing.
 
-   End bars (1, 7) hold for 10% of cycle - twice as long as middle
-   bars (5%) - so the visual rhythm doesn't appear to "speed up" at
-   the bounce points where there's no neighbour to share timing
-   with.
+   Hold times are graded to support the 3D illusion. Edges hold
+   longest (slowest perceived motion, where the bar appears to be
+   receding); centre holds shortest (fastest perceived motion,
+   where the bar appears closest to the viewer):
 
-   Phase layout (cycle = 100%, edge hold 10%, middle hold 5%, rise
-   2.5%, fall 7.5% - the fall overlaps the next hold so it does
-   not consume cycle time):
+     bar 1, 7 (edges): 12% (~204ms)
+     bar 2, 6:         6%  (~102ms)
+     bar 3, 5:         4%  (~68ms)
+     bar 4 (centre):   3%  (~51ms)
 
-     bar 1 hold:   95%  -> 5%    (wraps the cycle boundary)
-     bar 2 rise:   5%   -> 7.5%
-     bar 1 fall:   5%   -> 12.5% (afterglow into bar 2's hold)
-     bar 2 hold:   7.5% -> 12.5%
-     bar 3 rise:   12.5% -> 15%
-     bar 2 fall:   12.5% -> 20%
-     bar 3 hold:   15%  -> 20%
-     bar 4 rise:   20%  -> 22.5%
-     bar 3 fall:   20%  -> 27.5%
-     bar 4 hold:   22.5% -> 27.5%
+   4:1 ratio between the slowest (edges) and fastest (centre)
+   dwell time. Together with the bar-height taper this projects a
+   constant-3D-velocity highlight moving along a curve that
+   bulges toward the viewer.
+
+   Phase layout (cycle = 100%, rise 2.5% everywhere, fall 7.5%
+   everywhere; the fall overlaps the next hold so it doesn't
+   consume cycle time). Cycle origin is shifted so bar 2's
+   inbound fall completes exactly at the wrap boundary, avoiding
+   the need for a mid-fall opacity at 0%/100%:
+
+     bar 1 hold:   95%  -> 7%    (wraps cycle boundary; 12%)
+     bar 2 rise:   7%   -> 9.5%
+     bar 1 fall:   7%   -> 14.5%
+     bar 2 hold:   9.5% -> 15.5% (6%)
+     bar 3 rise:   15.5% -> 18%
+     bar 2 fall:   15.5% -> 23%
+     bar 3 hold:   18%  -> 22%   (4%)
+     bar 4 rise:   22%  -> 24.5%
+     bar 3 fall:   22%  -> 29.5%
+     bar 4 hold:   24.5% -> 27.5% (3%, centre)
      bar 5 rise:   27.5% -> 30%
      bar 4 fall:   27.5% -> 35%
-     bar 5 hold:   30%  -> 35%
-     bar 6 rise:   35%  -> 37.5%
-     bar 5 fall:   35%  -> 42.5%
-     bar 6 hold:   37.5% -> 42.5%
+     bar 5 hold:   30%  -> 34%   (4%)
+     bar 6 rise:   34%  -> 36.5%
+     bar 5 fall:   34%  -> 41.5%
+     bar 6 hold:   36.5% -> 42.5% (6%)
      bar 7 rise:   42.5% -> 45%
      bar 6 fall:   42.5% -> 50%
-     bar 7 hold:   45%  -> 55%
-     bar 6 rise:   55%  -> 57.5%
-     bar 7 fall:   55%  -> 62.5%
-     bar 6 hold:   57.5% -> 62.5%
-     bar 5 rise:   62.5% -> 65%
-     bar 6 fall:   62.5% -> 70%
-     bar 5 hold:   65%  -> 70%
-     bar 4 rise:   70%  -> 72.5%
-     bar 5 fall:   70%  -> 77.5%
-     bar 4 hold:   72.5% -> 77.5%
+     bar 7 hold:   45%  -> 57%   (12%)
+     bar 6 rise:   57%  -> 59.5%
+     bar 7 fall:   57%  -> 64.5%
+     bar 6 hold:   59.5% -> 65.5% (6%, inbound)
+     bar 5 rise:   65.5% -> 68%
+     bar 6 fall:   65.5% -> 73%
+     bar 5 hold:   68%  -> 72%   (4%)
+     bar 4 rise:   72%  -> 74.5%
+     bar 5 fall:   72%  -> 79.5%
+     bar 4 hold:   74.5% -> 77.5% (3%, centre, inbound)
      bar 3 rise:   77.5% -> 80%
      bar 4 fall:   77.5% -> 85%
-     bar 3 hold:   80%  -> 85%
-     bar 2 rise:   85%  -> 87.5%
-     bar 3 fall:   85%  -> 92.5%
-     bar 2 hold:   87.5% -> 92.5%
+     bar 3 hold:   80%  -> 84%   (4%)
+     bar 2 rise:   84%  -> 86.5%
+     bar 3 fall:   84%  -> 91.5%
+     bar 2 hold:   86.5% -> 92.5% (6%)
      bar 1 rise:   92.5% -> 95%
      bar 2 fall:   92.5% -> 100%
 
    Cycle math (only holds + rises count, since falls overlap):
-   2*10 + 10*5 + 12*2.5 = 100. */
+   2*12 + 4*6 + 4*4 + 2*3 + 12*2.5 = 100. */
 .scanner > span:not(.sr-only):nth-child(1) { animation-name: kitt-bar-1; }
 .scanner > span:not(.sr-only):nth-child(2) { animation-name: kitt-bar-2; }
 .scanner > span:not(.sr-only):nth-child(3) { animation-name: kitt-bar-3; }
@@ -3273,67 +3292,67 @@ h1 {
 .scanner > span:not(.sr-only):nth-child(7) { animation-name: kitt-bar-7; }
 
 @keyframes kitt-bar-1 {
-  0%, 5%        { opacity: 1; }
-  12.5%         { opacity: 0.2; }
+  0%, 7%        { opacity: 1; }
+  14.5%         { opacity: 0.2; }
   92.5%         { opacity: 0.2; animation-timing-function: linear; }
   95%, 100%     { opacity: 1; }
 }
 
 @keyframes kitt-bar-2 {
   0%            { opacity: 0.2; }
-  5%            { opacity: 0.2; animation-timing-function: linear; }
-  7.5%, 12.5%   { opacity: 1; }
-  20%           { opacity: 0.2; }
-  85%           { opacity: 0.2; animation-timing-function: linear; }
-  87.5%, 92.5%  { opacity: 1; }
+  7%            { opacity: 0.2; animation-timing-function: linear; }
+  9.5%, 15.5%   { opacity: 1; }
+  23%           { opacity: 0.2; }
+  84%           { opacity: 0.2; animation-timing-function: linear; }
+  86.5%, 92.5%  { opacity: 1; }
   100%          { opacity: 0.2; }
 }
 
 @keyframes kitt-bar-3 {
   0%            { opacity: 0.2; }
-  12.5%         { opacity: 0.2; animation-timing-function: linear; }
-  15%, 20%      { opacity: 1; }
-  27.5%         { opacity: 0.2; }
+  15.5%         { opacity: 0.2; animation-timing-function: linear; }
+  18%, 22%      { opacity: 1; }
+  29.5%         { opacity: 0.2; }
   77.5%         { opacity: 0.2; animation-timing-function: linear; }
-  80%, 85%      { opacity: 1; }
-  92.5%, 100%   { opacity: 0.2; }
+  80%, 84%      { opacity: 1; }
+  91.5%, 100%   { opacity: 0.2; }
 }
 
 @keyframes kitt-bar-4 {
   0%            { opacity: 0.2; }
-  20%           { opacity: 0.2; animation-timing-function: linear; }
-  22.5%, 27.5%  { opacity: 1; }
+  22%           { opacity: 0.2; animation-timing-function: linear; }
+  24.5%, 27.5%  { opacity: 1; }
   35%           { opacity: 0.2; }
-  70%           { opacity: 0.2; animation-timing-function: linear; }
-  72.5%, 77.5%  { opacity: 1; }
+  72%           { opacity: 0.2; animation-timing-function: linear; }
+  74.5%, 77.5%  { opacity: 1; }
   85%, 100%     { opacity: 0.2; }
 }
 
 @keyframes kitt-bar-5 {
   0%            { opacity: 0.2; }
   27.5%         { opacity: 0.2; animation-timing-function: linear; }
-  30%, 35%      { opacity: 1; }
-  42.5%         { opacity: 0.2; }
-  62.5%         { opacity: 0.2; animation-timing-function: linear; }
-  65%, 70%      { opacity: 1; }
-  77.5%, 100%   { opacity: 0.2; }
+  30%, 34%      { opacity: 1; }
+  41.5%         { opacity: 0.2; }
+  65.5%         { opacity: 0.2; animation-timing-function: linear; }
+  68%, 72%      { opacity: 1; }
+  79.5%, 100%   { opacity: 0.2; }
 }
 
 @keyframes kitt-bar-6 {
   0%            { opacity: 0.2; }
-  35%           { opacity: 0.2; animation-timing-function: linear; }
-  37.5%, 42.5%  { opacity: 1; }
+  34%           { opacity: 0.2; animation-timing-function: linear; }
+  36.5%, 42.5%  { opacity: 1; }
   50%           { opacity: 0.2; }
-  55%           { opacity: 0.2; animation-timing-function: linear; }
-  57.5%, 62.5%  { opacity: 1; }
-  70%, 100%     { opacity: 0.2; }
+  57%           { opacity: 0.2; animation-timing-function: linear; }
+  59.5%, 65.5%  { opacity: 1; }
+  73%, 100%     { opacity: 0.2; }
 }
 
 @keyframes kitt-bar-7 {
   0%            { opacity: 0.2; }
   42.5%         { opacity: 0.2; animation-timing-function: linear; }
-  45%, 55%      { opacity: 1; }
-  62.5%, 100%   { opacity: 0.2; }
+  45%, 57%      { opacity: 1; }
+  64.5%, 100%   { opacity: 0.2; }
 }
 
 @media (prefers-reduced-motion: reduce) {
