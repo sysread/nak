@@ -40,6 +40,9 @@ import {
   BETA_PRIOR,
   CI_LB_SOFT,
   CI_LB_STRONG,
+  FEEDBACK_HALF_LIFE_DAYS,
+  FEEDBACK_PRIOR_WEIGHT,
+  FEEDBACK_THRESHOLD_DELTA,
   HALF_LIFE_DAYS,
   N_EFF_FLOOR,
   PER_CONV_CAP,
@@ -93,6 +96,18 @@ export interface ConversationContribution {
 }
 
 /**
+ * One reaction's contribution to the feedback EMA. Neutral
+ * reactions (wasConfirmed === null) are filtered out by the EMA
+ * helper rather than coerced to a numeric mid-point - the prior
+ * pseudo-count already carries that "no signal" weight, and
+ * counting neutrals would double-dampen the score.
+ */
+export interface FeedbackContribution {
+  wasConfirmed: boolean | null;
+  ageDays: number;
+}
+
+/**
  * Posterior summary, ready to write to bias_summary. Mirrors the
  * BiasSummaryRow row shape but without the catalog key (the caller
  * already knows what bias this is).
@@ -112,6 +127,11 @@ export interface PosteriorSummary {
  * non-observed conversations as `pConv = 0` so the denominator is
  * the full processed set, not just the hits - without that the rate
  * estimate collapses to 1.0 immediately.
+ *
+ * `feedbackScore` shifts the surfacing thresholds in `tier()` and
+ * defaults to 0 (no shift) so callers that don't yet thread the
+ * compensation-feedback EMA produce identical output to the v1
+ * pipeline.
  */
 export function aggregatePosterior(
   contributions: readonly ConversationContribution[],
@@ -119,11 +139,13 @@ export function aggregatePosterior(
     alphaPrior?: number;
     betaPrior?: number;
     halfLife?: number;
+    feedbackScore?: number;
   } = {}
 ): PosteriorSummary {
   const alphaPrior = opts.alphaPrior ?? ALPHA_PRIOR;
   const betaPrior = opts.betaPrior ?? BETA_PRIOR;
   const halfLife = opts.halfLife ?? HALF_LIFE_DAYS;
+  const feedbackScore = opts.feedbackScore ?? 0;
 
   let alpha = alphaPrior;
   let beta = betaPrior;
@@ -137,23 +159,66 @@ export function aggregatePosterior(
 
   const mean = alpha / (alpha + beta);
   const ciLower = betaInv(0.10, alpha, beta);
-  const t = tier(effectiveN, ciLower);
+  const t = tier(effectiveN, ciLower, feedbackScore);
   return { alpha, beta, effectiveN, mean, ciLower, tier: t };
 }
 
 /**
  * Tier rule. Both gates must pass for a non-elided tier - a high
  * ciLower with low N_eff means the math thinks the rate could be
- * high but does not have enough data to commit, and vice-versa. The
- * floor on N_eff is what protects against law-of-small-numbers in
- * the early-data regime where the prior is no longer the only
+ * high but does not have enough data to commit, and vice-versa.
+ * The floor on N_eff is what protects against law-of-small-numbers
+ * in the early-data regime where the prior is no longer the only
  * mass but the data is still thin.
+ *
+ * `feedbackScore` in [-1, +1] shifts the CI gates symmetrically by
+ * up to FEEDBACK_THRESHOLD_DELTA. Affirming users get more
+ * sensitive thresholds (more biases surface); pushing-back users
+ * get less sensitive thresholds (fewer biases surface). The math
+ * kernel does not touch the underlying posterior; the EMA just
+ * nudges where the gate sits. Defaults to 0 so callers that
+ * haven't wired feedback through yet behave identically.
  */
-export function tier(effectiveN: number, ciLower: number): Tier {
+export function tier(
+  effectiveN: number,
+  ciLower: number,
+  feedbackScore: number = 0
+): Tier {
   if (effectiveN < N_EFF_FLOOR) return 'elided';
-  if (ciLower <= CI_LB_SOFT) return 'elided';
-  if (ciLower <= CI_LB_STRONG) return 'soft';
+  // Clamp feedbackScore to [-1, +1] so a caller passing a raw EMA
+  // that briefly exceeds the bounds via numerical drift cannot push
+  // the gate past its intended envelope.
+  const fs = Math.max(-1, Math.min(1, feedbackScore));
+  const softGate = CI_LB_SOFT - FEEDBACK_THRESHOLD_DELTA * fs;
+  const strongGate = CI_LB_STRONG - FEEDBACK_THRESHOLD_DELTA * fs;
+  if (ciLower <= softGate) return 'elided';
+  if (ciLower <= strongGate) return 'soft';
   return 'strong';
+}
+
+/**
+ * Compensation-feedback EMA in [-1, +1] from a list of reaction
+ * rows. Weighted exponential decay with FEEDBACK_HALF_LIFE_DAYS;
+ * neutral reactions (wasConfirmed === null) are skipped entirely
+ * rather than weighted as 0, because the prior pseudo-count
+ * (FEEDBACK_PRIOR_WEIGHT neutrals) already carries the "no signal"
+ * mass and double-counting would over-dampen.
+ *
+ * Empty input returns 0 (no signal) - the prior is the only mass.
+ * Caller treats 0 as "use unshifted thresholds."
+ */
+export function feedbackEMA(
+  reactions: readonly FeedbackContribution[]
+): number {
+  let weightedSum = 0;
+  let totalWeight = FEEDBACK_PRIOR_WEIGHT;
+  for (const { wasConfirmed, ageDays } of reactions) {
+    if (wasConfirmed === null) continue;
+    const w = recencyWeight(ageDays, FEEDBACK_HALF_LIFE_DAYS);
+    weightedSum += w * (wasConfirmed ? 1 : -1);
+    totalWeight += w;
+  }
+  return weightedSum / totalWeight;
 }
 
 // --- Inverse regularized incomplete beta -----------------------------------

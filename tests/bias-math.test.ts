@@ -25,7 +25,9 @@ import {
   tier,
   betaInv,
   clampConfidence,
+  feedbackEMA,
   type ConversationContribution,
+  type FeedbackContribution,
 } from '../src/lib/bias/math';
 import {
   ALPHA_PRIOR,
@@ -34,6 +36,9 @@ import {
   CI_LB_STRONG,
   CONFIDENCE_CAP,
   CONFIDENCE_FLOOR,
+  FEEDBACK_HALF_LIFE_DAYS,
+  FEEDBACK_PRIOR_WEIGHT,
+  FEEDBACK_THRESHOLD_DELTA,
   HALF_LIFE_DAYS,
   N_EFF_FLOOR,
   PER_CONV_CAP,
@@ -183,6 +188,118 @@ describe('tier — gate combinations', () => {
   it('requires ciLower > CI_LB_STRONG to reach strong', () => {
     expect(tier(20, CI_LB_STRONG)).toBe('soft');
     expect(tier(20, CI_LB_STRONG + 0.001)).toBe('strong');
+  });
+
+  // Feedback-aware tier: the EMA shifts both gates symmetrically
+  // by FEEDBACK_THRESHOLD_DELTA at the extremes. These tests pin
+  // the shift direction (affirming user -> more biases surface,
+  // pushing-back user -> fewer biases surface) so a future kernel
+  // edit that inverts the sign blows up loudly.
+  it('omitting feedbackScore behaves identically to passing 0', () => {
+    expect(tier(20, 0.20)).toBe(tier(20, 0.20, 0));
+    expect(tier(20, 0.35)).toBe(tier(20, 0.35, 0));
+  });
+
+  it('positive feedback (affirming) lifts the soft tier earlier', () => {
+    // ciLower just below the default soft gate
+    const ci = CI_LB_SOFT + 0.01;
+    expect(tier(20, ci, 0)).toBe('soft'); // default gate already passed
+    // Push gate higher (negative feedback) and the same value tiers
+    // down to elided
+    expect(tier(20, ci, -1)).toBe('elided');
+    // Push gate lower (positive feedback) leaves it in soft / strong
+    expect(tier(20, ci, +1)).toBe('soft');
+  });
+
+  it('feedback shifts move both gates by FEEDBACK_THRESHOLD_DELTA at the extremes', () => {
+    // At feedback = +1 the soft gate drops to CI_LB_SOFT - delta
+    // and the strong gate drops to CI_LB_STRONG - delta.
+    const ciJustAboveShiftedSoft = CI_LB_SOFT - FEEDBACK_THRESHOLD_DELTA + 0.005;
+    const ciJustBelowShiftedSoft = CI_LB_SOFT - FEEDBACK_THRESHOLD_DELTA - 0.005;
+    expect(tier(20, ciJustAboveShiftedSoft, +1)).toBe('soft');
+    expect(tier(20, ciJustBelowShiftedSoft, +1)).toBe('elided');
+    // At feedback = -1 the soft gate rises to CI_LB_SOFT + delta;
+    // a value that was 'soft' at neutral lands 'elided' here.
+    const ciJustAboveDefaultSoft = CI_LB_SOFT + 0.005;
+    expect(tier(20, ciJustAboveDefaultSoft, 0)).toBe('soft');
+    expect(tier(20, ciJustAboveDefaultSoft, -1)).toBe('elided');
+  });
+
+  it('clamps feedback outside [-1, +1] to the bounds', () => {
+    // A caller passing a runaway EMA cannot push gates past their
+    // intended envelope.
+    expect(tier(20, CI_LB_SOFT + 0.05, -5)).toBe(tier(20, CI_LB_SOFT + 0.05, -1));
+    expect(tier(20, CI_LB_SOFT - 0.05, +5)).toBe(tier(20, CI_LB_SOFT - 0.05, +1));
+  });
+
+  it('N_eff floor is independent of feedback', () => {
+    // No amount of positive feedback can lift a bias out of elided
+    // before the small-N floor is cleared.
+    expect(tier(N_EFF_FLOOR - 0.01, 0.99, +1)).toBe('elided');
+  });
+});
+
+describe('feedbackEMA', () => {
+  it('returns 0 with no reactions (prior only)', () => {
+    expect(feedbackEMA([])).toBe(0);
+  });
+
+  it('skips neutral reactions (wasConfirmed === null) rather than counting them', () => {
+    // 3 neutrals in addition to the FEEDBACK_PRIOR_WEIGHT seed
+    // should leave the EMA at 0, identical to the empty case.
+    const reactions: FeedbackContribution[] = [
+      { wasConfirmed: null, ageDays: 1 },
+      { wasConfirmed: null, ageDays: 2 },
+      { wasConfirmed: null, ageDays: 3 },
+    ];
+    expect(feedbackEMA(reactions)).toBe(0);
+  });
+
+  it('one fresh confirm gives a modest positive shift dampened by the prior', () => {
+    const reactions: FeedbackContribution[] = [
+      { wasConfirmed: true, ageDays: 0 },
+    ];
+    // weight = 1; total = prior + 1 = 4; ema = 1/4 = 0.25
+    expect(feedbackEMA(reactions)).toBeCloseTo(1 / (FEEDBACK_PRIOR_WEIGHT + 1), 12);
+  });
+
+  it('one fresh disconfirm gives the mirror negative shift', () => {
+    const reactions: FeedbackContribution[] = [
+      { wasConfirmed: false, ageDays: 0 },
+    ];
+    expect(feedbackEMA(reactions)).toBeCloseTo(-1 / (FEEDBACK_PRIOR_WEIGHT + 1), 12);
+  });
+
+  it('asymptotes toward +1 with many recent confirms', () => {
+    const reactions: FeedbackContribution[] = [];
+    for (let i = 0; i < 100; i++) {
+      reactions.push({ wasConfirmed: true, ageDays: 0 });
+    }
+    // weight = 100; total = 103; ema = 100/103 ~ 0.97
+    expect(feedbackEMA(reactions)).toBeGreaterThan(0.95);
+    expect(feedbackEMA(reactions)).toBeLessThan(1);
+  });
+
+  it('decays older reactions toward the prior', () => {
+    const recent: FeedbackContribution[] = [
+      { wasConfirmed: true, ageDays: 0 },
+    ];
+    const old: FeedbackContribution[] = [
+      { wasConfirmed: true, ageDays: FEEDBACK_HALF_LIFE_DAYS * 4 },
+    ];
+    // Older reaction contributes less weight; its EMA sits closer
+    // to the prior-driven zero.
+    expect(feedbackEMA(recent)).toBeGreaterThan(feedbackEMA(old));
+    expect(feedbackEMA(old)).toBeGreaterThan(0);
+  });
+
+  it('mixed confirms and disconfirms partially cancel', () => {
+    const reactions: FeedbackContribution[] = [
+      { wasConfirmed: true, ageDays: 0 },
+      { wasConfirmed: false, ageDays: 0 },
+    ];
+    // numerator: 1 - 1 = 0; total = 5; ema = 0
+    expect(feedbackEMA(reactions)).toBe(0);
   });
 });
 
