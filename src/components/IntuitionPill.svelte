@@ -10,10 +10,12 @@
    * as a viewport-fixed pill) is what keeps the column aligned with
    * the scroll arrow regardless of composer height.
    *
-   * Visible whenever a thread is active AND a payload was passed in.
-   * On a cold thread (no intuition fired yet) the parent passes null
-   * and the pill renders nothing - cleaner than a "no data" pill that
-   * would just confuse the user about what was missing.
+   * ALWAYS visible. When no cached payload exists for the active thread
+   * (cold-start state, or no thread selected) the pill renders in a
+   * disabled / grayed-out state instead of disappearing entirely.
+   * The disabled-but-visible affordance is better UX than the prior
+   * hide-on-empty design: the user knows the feature exists and where
+   * to find it once data lands.
    *
    * The icon is a brain glyph (U+1F9E0). Same emoji-presentation
    * caveats apply as the mood pill: U+1F9E0 is classified emoji by
@@ -33,22 +35,30 @@
 
   const FLY_IN_MS = 220;
   const FLY_OUT_MS = 320;
+
+  const enabled = $derived(payload !== null);
 </script>
 
 <div class="intuition-pill-wrap" aria-live="polite" aria-atomic="true">
-  {#if payload}
-    <button
-      type="button"
-      class="intuition-pill"
-      title="View intuition - perception, drives, synthesis"
-      aria-label="Open intuition diagnostics"
-      onclick={() => navigate({ modal: 'intuition' })}
-      in:fly={{ x: 24, duration: FLY_IN_MS, easing: cubicOut }}
-      out:fly={{ x: 24, duration: FLY_OUT_MS, easing: cubicOut }}
-    >
-      <span class="emoji" aria-hidden="true">&#x1F9E0;</span>
-    </button>
-  {/if}
+  <button
+    type="button"
+    class="intuition-pill"
+    class:is-disabled={!enabled}
+    disabled={!enabled}
+    title={enabled
+      ? 'View intuition - perception, drives, synthesis'
+      : 'Intuition - no data for this conversation yet'}
+    aria-label={enabled
+      ? 'Open intuition diagnostics'
+      : 'Intuition diagnostics (no data yet)'}
+    onclick={() => {
+      if (enabled) navigate({ modal: 'intuition' });
+    }}
+    in:fly={{ x: 24, duration: FLY_IN_MS, easing: cubicOut }}
+    out:fly={{ x: 24, duration: FLY_OUT_MS, easing: cubicOut }}
+  >
+    <span class="emoji" aria-hidden="true">&#x1F9E0;</span>
+  </button>
 </div>
 
 <style>
@@ -95,6 +105,23 @@
   .intuition-pill:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+  }
+
+  /* Disabled state. Reduced opacity + cursor change signals "feature
+     exists, but no data to surface right now" without lying about
+     interactivity (the button is genuinely non-interactive thanks
+     to the disabled attribute - no click handler fires). Border
+     and shadow stay so the user can still tell where the affordance
+     sits; only the contents fade. */
+  .intuition-pill:disabled,
+  .intuition-pill.is-disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .intuition-pill:disabled:hover,
+  .intuition-pill.is-disabled:hover {
+    border-color: color-mix(in srgb, var(--border) 80%, transparent);
   }
 
   .emoji {

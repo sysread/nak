@@ -2529,6 +2529,108 @@ h1 {
   }
 }
 
+/* Mobile-only diagnostic wharf - mirror of the left-side composer
+   wharf but anchored to the right side of the composer-bar, opens
+   upward as a vertical column of pill buttons (intuition / samskara
+   mood / bias profile). On desktop the diagnostics live in the
+   bottom-right pill column inside .messages-wrap and this trigger is
+   hidden entirely; on mobile the column would crash against the
+   visible response so we move it into this drop-up instead.
+
+   Default state: trigger hidden everywhere. The mobile media query
+   below flips it visible at <= 720px and styles the drop-up panel. */
+.composer-diag-trigger {
+  display: none;
+}
+
+.composer-diag-wharf {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .composer-diag-trigger {
+    display: inline-flex;
+  }
+
+  .composer-diag-trigger.open {
+    box-shadow:
+      inset 1px 1px 0 var(--bevel-lo),
+      inset -1px -1px 0 var(--bevel-hi);
+    background: var(--bg-2);
+  }
+
+  /* Drop-up panel: only renders when .wharf-open is set. Anchored
+     to the right of the composer-bar via position:absolute (relative
+     to .composer-bar's positioning context). Same beveled-tile
+     styling as the left wharf so the two affordances feel like
+     parts of the same machinery. */
+  .composer-diag-wharf.wharf-open {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 3px;
+    position: absolute;
+    right: 0.2rem;
+    bottom: calc(100% + 0.35rem);
+    background: var(--bg-2);
+    border-radius: 0;
+    box-shadow:
+      inset 1px 1px 0 var(--bevel-hi),
+      inset -1px -1px 0 var(--bevel-lo),
+      0 10px 22px rgba(0, 0, 0, 0.35);
+    z-index: 25;
+    animation: composer-wharf-slide 160ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .composer-diag-wharf.wharf-open .diag-tile {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.4rem;
+    height: 2.4rem;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: var(--bg-2);
+    color: var(--text);
+    cursor: pointer;
+    box-shadow:
+      inset 1px 1px 0 var(--bevel-hi),
+      inset -1px -1px 0 var(--bevel-lo);
+  }
+
+  .composer-diag-wharf.wharf-open .diag-tile:active {
+    box-shadow:
+      inset 1px 1px 0 var(--bevel-lo),
+      inset -1px -1px 0 var(--bevel-hi);
+  }
+
+  /* Disabled tile: same opacity + cursor signal the desktop pills
+     use for their disabled state, so the two surfaces read
+     consistently regardless of viewport. */
+  .composer-diag-wharf.wharf-open .diag-tile:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .composer-diag-wharf.wharf-open .diag-tile .emoji {
+    font-size: 1.2rem;
+    line-height: 1;
+    font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
+  }
+
+  /* Hide the bottom-right pill column on mobile - its three pills
+     now live in the diagnostic wharf above. The selectors hit the
+     three pill components' outer wrappers (BiasPill, IntuitionPill,
+     SamskaraToasts); the .scroll-to-bottom arrow further below is
+     deliberately NOT in this list and stays visible. */
+  .bias-pill-wrap,
+  .intuition-pill-wrap,
+  .samskara-mood {
+    display: none;
+  }
+}
+
 .composer-textarea {
   /* The textarea is borderless inside the shell — the shell owns the
      outline and focus ring. Height is driven by a $effect in Chat.svelte
