@@ -220,6 +220,15 @@ Controls inside the drawer:
   **Default log level** in Settings > Appearance; changing the
   dropdown here is a within-session override that resets on the
   next open.
+- **Source dropdown** - narrow the feed to a single subsystem tag
+  (e.g. `embed-worker`, `reflection-worker`, `samskara`). The list is
+  built dynamically from the tags actually present in the current
+  buffer, so it never offers options that would match nothing. Starts
+  at **All sources**; the dropdown is greyed out until at least one
+  entry with a source has landed. The level filter still applies on
+  top, so picking a worker tag and stepping the level down to `Trace+`
+  is the fastest way to read one subsystem's per-cycle breadcrumbs in
+  isolation.
 - **Search box** - case-insensitive substring match against the
   source tag, the message, and any structured details attached to
   the entry. Whitespace splits the input into independent tokens, so
@@ -227,8 +236,9 @@ Controls inside the drawer:
   phrase. The **Any / All** dropdown next to the box decides whether
   an entry has to hit at least one token (Any, the default) or every
   token (All).
-- **Clear** - drops the current buffer. The live feed continues to
-  populate from the next log event onward.
+- **Clear** - drops the current buffer and resets the source filter
+  back to **All sources**. The live feed continues to populate from
+  the next log event onward.
 
 Each entry shows the level, the local time it was captured, the
 subsystem it came from (e.g. `[reflection-worker]`), and the message.

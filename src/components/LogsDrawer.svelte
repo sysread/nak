@@ -64,10 +64,20 @@
   // a stray toggle doesn't carry across sessions.
   let matchMode = $state<'or' | 'and'>('or');
 
+  // Source tag filter. Empty string is the "All sources" sentinel; any
+  // other value is an exact match against entry.source. Populated
+  // dynamically from the current buffer (see `availableSources` below)
+  // so the dropdown only ever offers tags that actually appear -
+  // typing `embed-worker` in the search box would also work, but the
+  // dropdown surfaces what's there without making the user remember
+  // exact spellings. Re-seeded on each open like the other filters.
+  let sourceFilter = $state('');
+
   $effect(() => {
     if (drawer.state.open) {
       levelFilter = app.defaultLogLevel;
       matchMode = 'or';
+      sourceFilter = '';
     }
   });
 
@@ -95,9 +105,11 @@
     e: LogEntry,
     threshold: LogLevel,
     needles: string[],
-    mode: 'or' | 'and'
+    mode: 'or' | 'and',
+    source: string
   ): boolean {
     if (LEVEL_RANK[e.level] < LEVEL_RANK[threshold]) return false;
+    if (source !== '' && e.source !== source) return false;
     if (needles.length === 0) return true;
     const hay = (
       (e.source ?? '') + ' ' + e.message + ' ' + detailsHaystack(e.details)
@@ -141,8 +153,25 @@
   );
 
   const visible = $derived(
-    logs.entries.filter((e) => entryMatches(e, levelFilter, needles, matchMode))
+    logs.entries.filter((e) =>
+      entryMatches(e, levelFilter, needles, matchMode, sourceFilter)
+    )
   );
+
+  // Unique source tags present in the current buffer, alphabetised so
+  // the dropdown is predictable as new entries stream in. Worker
+  // managers push their source through `appendFromWorker`, so this
+  // reflects both main-thread and worker-side loggers without any
+  // extra registration step. Tags with a null source (the few call
+  // sites that don't carry one) are skipped - they aren't selectable
+  // anyway and would surface as an empty option.
+  const availableSources = $derived.by(() => {
+    const set = new Set<string>();
+    for (const e of logs.entries) {
+      if (e.source) set.add(e.source);
+    }
+    return [...set].sort();
+  });
 
   // Copy-to-clipboard for the currently-filtered entry set. Feeds
   // the same "paste a JSON blob into chat" workflow as the
@@ -183,6 +212,7 @@
       buildCommit: __APP_COMMIT__,
       buildTime: __APP_BUILD_TIME__,
       levelFilter,
+      sourceFilter: sourceFilter || null,
       searchFilter: search,
       searchMode: matchMode,
       totalEntries: logs.entries.length,
@@ -423,14 +453,18 @@
       </button>
     </header>
     <div class="logs-controls">
-      <!-- Two-row layout: both dropdowns on row 1, search input plus
-           Copy/Clear on row 2. Earlier we paired the level dropdown
-           with Copy/Clear and put Any/All next to the search input,
-           but the search was elastic enough to push Copy/Clear into
-           wrapping below it on narrow drawer widths. Grouping the
-           dropdowns on their own row lets the search be the only
-           greedy element on row 2, so Copy/Clear stay anchored at
-           the right edge regardless of viewport width. -->
+      <!-- Three-row layout: level + mode dropdowns on row 1, source
+           dropdown on row 2, search input plus Copy/Clear on row 3.
+           Earlier we paired the level dropdown with Copy/Clear and
+           put Any/All next to the search input, but the search was
+           elastic enough to push Copy/Clear into wrapping below it
+           on narrow drawer widths. Grouping the dropdowns on their
+           own row lets the search be the only greedy element on the
+           search row, so Copy/Clear stay anchored at the right edge.
+           The source dropdown gets its own row because tag names
+           ("conversation-recall-agent", "attachment-expiry-worker")
+           are long enough that squeezing them onto row 1 would
+           truncate on a ~280px mobile drawer. -->
       <div class="logs-controls-row">
         <label class="logs-level">
           <span class="visually-hidden">Minimum level</span>
@@ -452,6 +486,28 @@
           <select bind:value={matchMode} aria-label="Search match mode">
             <option value="or">Any</option>
             <option value="and">All</option>
+          </select>
+        </label>
+      </div>
+      <!-- Row 2: source-tag filter. Populated dynamically from the
+           current buffer so it only ever offers tags that actually
+           appear. Disabled (with the "All sources" placeholder
+           greyed out) when the buffer has no entries with a source
+           yet - keeps the row's vertical footprint stable instead of
+           popping in once the first worker breadcrumb lands, which
+           would shift the search row down mid-read. -->
+      <div class="logs-controls-row">
+        <label class="logs-source">
+          <span class="visually-hidden">Source tag</span>
+          <select
+            bind:value={sourceFilter}
+            aria-label="Filter by source tag"
+            disabled={availableSources.length === 0}
+          >
+            <option value="">All sources</option>
+            {#each availableSources as src (src)}
+              <option value={src}>{src}</option>
+            {/each}
           </select>
         </label>
       </div>
@@ -512,6 +568,12 @@
             onclick={() => {
               logs.clear();
               expanded = new Set();
+              // Drop the source filter too - whatever tag was picked
+              // is no longer in the buffer, and leaving it set would
+              // either show "no entries match" or, depending on the
+              // browser, default-display the first remaining option
+              // while sourceFilter still holds the gone-away value.
+              sourceFilter = '';
             }}
             aria-label="Clear logs"
             title="Clear all log entries"
@@ -661,6 +723,7 @@
      padding. */
   .logs-level select,
   .logs-mode select,
+  .logs-source select,
   .logs-search {
     box-sizing: border-box;
     height: 28px;
@@ -709,6 +772,31 @@
   .logs-mode select {
     padding-right: 1.4rem;
     min-width: 4.2rem;
+  }
+
+  /* Source dropdown stretches to the full row width because tag
+     names like "conversation-recall-agent" run ~13em and would
+     otherwise truncate against the native chevron. Own row in the
+     header (see the markup comment) so the level + mode dropdowns
+     above stay at their fixed widths and aren't pulled wider by
+     this one's growth. */
+  .logs-source {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .logs-source select {
+    width: 100%;
+    padding-right: 1.6rem;
+  }
+  /* Greyed-out look while the buffer has no sourced entries yet -
+     the row is still mounted so the search row below doesn't
+     reflow into a different spot once the first worker log lands.
+     Browsers vary on default disabled-select appearance, so set
+     the colour + cursor explicitly. */
+  .logs-source select:disabled {
+    color: var(--muted);
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 
   .logs-search {
