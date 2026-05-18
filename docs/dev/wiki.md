@@ -217,6 +217,26 @@ UI:
   affordance lives in the changelog panel header (handed to it
   via the `onAddArticle` prop that flips Wiki.svelte's local
   `composing` state to true).
+  **Page model.** The `.wiki-body` template is one
+  if/:else-if ladder over five mutually-exclusive surfaces:
+  librarian, compose, changelog, "not in current results"
+  hint, article view. Page-switch entry points (top-bar
+  sparkles, top-bar clock, sidebar row, "+ new article",
+  changelog row) all converge on a single invariant - whichever
+  surface the route + local flags resolve to is the only one
+  rendered. Two $bindable triggers carry top-bar intent into
+  the panel: `triggerLibrarianRun` opens the librarian,
+  `triggerChangelogView` closes it and clears
+  `wiki_article_id`. A route-watch effect closes the librarian
+  whenever `wiki_article_id` becomes non-null so sidebar /
+  changelog-row clicks don't get hidden behind an open
+  librarian. `composing` is deliberately preserved across
+  page switches - the user's typed draft is theirs to abandon
+  via the form's own Cancel button, not for a tab switch to
+  destroy. The librarian itself has no Cancel button (the
+  way out is to navigate elsewhere); the done-state "Close"
+  survives because dismissing the run result is a different
+  operation from navigating away.
   Renders a nested **table of contents** at the top of the
   article (between the title header and the body) for articles
   with two or more Markdown headings. ToC entries link to
@@ -241,11 +261,14 @@ UI:
 - `src/screens/Chat.svelte` - new tab, drawer branch,
   main-panel branch, top-bar branch, change-event listener.
   Top-bar branch carries the `librarian-run-btn` (sparkles)
-  next to the `wiki-changelog-btn` (clock); the latter calls
-  `navigate({ wiki_article_id: null })` to clear the article
-  selection and land on the inline changelog (the wiki tab's
-  default view), giving the user a one-click "back to wiki
-  home" affordance while reading an article.
+  next to the `wiki-changelog-btn` (clock). Both buttons
+  drive `$bindable` flags (`wikiLibrarianTrigger`,
+  `wikiChangelogTrigger`) on `<WikiComp>` rather than
+  navigating directly - the librarian's open/closed state
+  is a local flag in `Wiki.svelte`, and a clock-button click
+  while the librarian is open has to touch both the route
+  AND that flag. Wiki.svelte resets each flag after
+  consuming it.
 - `src/screens/Settings.svelte` - new "Wiki" group with the
   `wikiAutomaticEnabled` toggle.
 
