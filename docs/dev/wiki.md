@@ -442,16 +442,34 @@ JSON).
 
 ### Tool toolbox split
 
-- `alwaysOnToolbox` includes only `wiki_search`. The main
-  LLM never gets a path to write to the wiki - that's the
-  spec's "articles are never auto-injected; recall is
-  pulled, never pushed" stance applied symmetrically.
-- `wikiToolbox` (in `src/lib/tools/wiki_toolbox.ts`) bundles
-  search + create + update + delete for the autonomous
-  agent. The agent receives delete because consolidation
-  (subsuming a stale duplicate into another article it just
-  updated) is a legitimate wiki-maintenance operation. The
-  prompt explicitly forbids deleting on the basis of "the
+- `alwaysOnToolbox` includes the read surfaces - `wiki_search`
+  (semantic + substring), `wiki_list` (alphabetical projection
+  with head-of-content excerpts; same shape the librarian's
+  prompt input uses), `wiki_get` (primary-key body fetch), and
+  `wiki_recall` (sub-agent that synthesises a topic note). All
+  four ride every chat request; reads are idempotent and cheap,
+  and the wiki blurb in the system prompt tells the model which
+  one to reach for in which case.
+- `wikiToolbox` (in `src/lib/tools/index.ts`, the main-chat
+  registry) is the gated toolbox the chat model toggles to call
+  `wiki_librarian` - a thin wrapper over the librarian runner's
+  `runManually()` that lets the model delegate maintenance work
+  (merge / split / delete / rewrite) inside the conversation. The
+  model never gets `wiki_create` / `wiki_update` / `wiki_delete`
+  directly; every chat-driven edit goes through the librarian's
+  read-everything-then-plan loop. Same in-flight guard as the
+  sparkles button (`wikiLibrarianRunner.manualBusy`), so the two
+  paths never race.
+- The agent-side `wikiToolbox` (in
+  `src/lib/tools/wiki_toolbox.ts`, NOT exported from the main
+  registry) bundles search + create + update + delete for the
+  autonomous per-conversation agent. Confusingly identical name
+  to the main-chat toolbox above; they are different objects with
+  different membership, and the agent toolbox is never reachable
+  from the main chat. The agent receives delete because
+  consolidation (subsuming a stale duplicate into another article
+  it just updated) is a legitimate wiki-maintenance operation.
+  The prompt explicitly forbids deleting on the basis of "the
   user said something different today" alone.
 
 ## Interactions

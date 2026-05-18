@@ -138,16 +138,27 @@ Cheap conversational turns (small talk, "what time is it?", a quick code questio
 // - their projects, the people in their life, places they live or visit,
 // things they're learning or reading, ongoing experiments, their work.
 // Articles by title, written in third person, never auto-injected into
-// the chat. wiki_search is the only path the assistant has to reach
-// this layer. The scope is intentionally NOT a general encyclopedia of
+// the chat. The block names the three read paths the assistant has to
+// the wiki - wiki_search (semantic), wiki_list (alphabetical overview),
+// wiki_get (primary-key body fetch) - and tells the model when to
+// prefer each. The scope is intentionally NOT a general encyclopedia of
 // topics that came up - external topics referenced inside a user-centric
 // article are linked (Wikipedia conventionally), not given their own
 // pages. Distinct from memory (atomic facts): the wiki carries curated
 // topical articles centered on the user, that span many conversations.
+//
+// The final paragraph names wiki_librarian as the maintenance path. The
+// main chat has no direct write tools (wiki_create / wiki_update /
+// wiki_delete are agent-only); when the user asks to reshape the wiki,
+// the model has to delegate through the librarian sub-agent. Gated
+// behind the `wiki` toolbox so an autonomous turn cannot scribble over
+// the wiki without intent.
 const WIKI_BLOCK = `\
 The application also maintains a user wiki: a flat collection of titled articles ABOUT THE USER - their projects, the people in their life, places they care about, things they are learning or reading, work, hobbies, experiments. Not a general encyclopedia of topics that came up.
 Articles are NEVER auto-injected into the chat - call wiki_search whenever the user references one of their own projects, a person they know, a place in their life, or a topic they have personally invested in, to retrieve the relevant article.
+For lookup by topic phrase use wiki_search; for an overview of what is in the wiki use wiki_list; once you know the id of a specific article use wiki_get to fetch the full body.
 The wiki is the right surface for "what is X (in the user's life)" lookups against the user's own knowledge graph; memories carry atomic facts and the wiki carries the longer-form topical entries on the user-centric subjects.
+You cannot edit wiki articles directly. When the user asks to consolidate duplicates, delete stale stubs, split a sprawling page, or otherwise reshape the wiki, enable the \`wiki\` toolbox and call wiki_librarian with concrete instructions - it delegates to a sub-agent that reads every article and carries out the maintenance pass. Scope the request first with wiki_list / wiki_get so the instructions reference specific titles or ids; vague instructions produce vague results.
 `;
 
 // Toolbox framing. The model sees the catalog below with (on)/(off) marks

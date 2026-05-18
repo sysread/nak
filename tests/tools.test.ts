@@ -17,6 +17,7 @@ import {
   alwaysOnToolbox,
   cookingToolbox,
   memoriesToolbox,
+  wikiToolbox,
   buildToolList,
   buildToolboxWireList,
   executeToolboxCall,
@@ -149,6 +150,8 @@ describe('tool registry', () => {
         'toggle_toolbox',
         'update_title',
         'web_search',
+        'wiki_get',
+        'wiki_list',
         'wiki_recall',
         'wiki_search',
       ]
@@ -175,6 +178,7 @@ describe('tool registry', () => {
       'recipe_photos_remove',
       'recipe_photos_reorder',
       'recipe_photo_label_set',
+      'wiki_librarian',
     ]) {
       expect(disabled).not.toContain(gated);
     }
@@ -254,6 +258,7 @@ describe('tool registry', () => {
       'always_on',
       'cooking',
       'memories',
+      'wiki',
     ]);
   });
 
@@ -261,6 +266,7 @@ describe('tool registry', () => {
     expect(GATED_TOOLBOX_NAMES).toEqual([
       'cooking',
       'memories',
+      'wiki',
     ]);
     expect(GATED_TOOLBOX_NAMES).not.toContain('always_on');
   });
@@ -273,6 +279,7 @@ describe('tool registry', () => {
     expect(GATED_TOOLBOX_META.map((m) => m.name)).toEqual([
       'cooking',
       'memories',
+      'wiki',
     ]);
     for (const m of GATED_TOOLBOX_META) {
       expect(typeof m.description).toBe('string');
@@ -280,10 +287,10 @@ describe('tool registry', () => {
     }
   });
 
-  it('cookingToolbox and memoriesToolbox are write-only subsets', () => {
-    // Reads (recipe_list, recipe_get, memory_search) live in
-    // alwaysOnToolbox. The gated boxes carry only the writes a
-    // user-or-model gate has to authorise.
+  it('cookingToolbox, memoriesToolbox, and wikiToolbox are write-only subsets', () => {
+    // Reads (recipe_list, recipe_get, memory_search, wiki_search,
+    // wiki_list, wiki_get) live in alwaysOnToolbox. The gated boxes
+    // carry only the writes a user-or-model gate has to authorise.
     expect(cookingToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
       'recipe_save',
       'recipe_update',
@@ -302,6 +309,30 @@ describe('tool registry', () => {
       'memory_relate',
       'memory_unrelate',
     ]);
+    // The wiki toolbox carries the librarian-delegation tool only;
+    // direct wiki_create / wiki_update / wiki_delete are agent-only
+    // (the autonomous wiki agent and the librarian itself) and are
+    // deliberately NOT exposed to the main chat at any toggle state.
+    expect(wikiToolbox.tools.map((t: ToolDef) => t.name)).toEqual([
+      'wiki_librarian',
+    ]);
+  });
+
+  it('buildToolList(["wiki"]) exposes the librarian; reads stay always-on', () => {
+    const names = buildToolList(['wiki']).map((t) => t.function.name);
+    expect(names).toContain('wiki_librarian');
+    // Wiki reads are always-on, not in the wiki toolbox.
+    expect(names).toContain('wiki_search');
+    expect(names).toContain('wiki_list');
+    expect(names).toContain('wiki_get');
+    // Direct wiki writes never reach the main chat - they are agent-
+    // only. If one of these ever leaks into the main catalog the
+    // librarian-only mutation policy has been bypassed.
+    expect(names).not.toContain('wiki_create');
+    expect(names).not.toContain('wiki_update');
+    expect(names).not.toContain('wiki_delete');
+    expect(names).not.toContain('recipe_save');
+    expect(names).not.toContain('memory_create');
   });
 
   it('alwaysOnToolbox carries every read-only surface', () => {
@@ -312,8 +343,12 @@ describe('tool registry', () => {
       'toggle_toolbox',
       'memory_recall',
       'conversation_recall',
+      'wiki_recall',
       'memory_search',
       'conversation_search',
+      'wiki_search',
+      'wiki_list',
+      'wiki_get',
       'recipe_list',
       'recipe_get',
       'research_docs',
@@ -330,6 +365,7 @@ describe('tool registry', () => {
       'recipe_save',
       'recipe_update',
       'recipe_delete',
+      'wiki_librarian',
     ]) {
       expect(names).not.toContain(write);
     }
