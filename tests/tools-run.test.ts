@@ -14,7 +14,11 @@
  * resolve/reject values and assert what arguments it saw.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { runHeadlessToolLoop, MAX_AGENT_DEPTH } from '../src/lib/tools/run';
+import {
+  runHeadlessToolLoop,
+  MAX_AGENT_DEPTH,
+  type HeadlessToolLoopEvent,
+} from '../src/lib/tools/run';
 import type { Toolbox, ToolContext, ToolDef } from '../src/lib/tools/types';
 import type {
   ChatCompletion,
@@ -477,5 +481,137 @@ describe('runHeadlessToolLoop — agent recursion depth', () => {
     });
 
     expect(result.finalText).toBe('ok');
+  });
+});
+
+describe('runHeadlessToolLoop — onProgress live events', () => {
+  it('emits a `thinking` event per round and a `tool` event per settled call', async () => {
+    const { venice } = makeVenice([
+      // Round 1: model asks for two parallel tool calls, both with
+      // their dispatcher-injected `activity` narrations populated.
+      {
+        toolCalls: [
+          {
+            id: 'c1',
+            type: 'function',
+            function: {
+              name: 'spy',
+              arguments: '{"activity":"searching wiki for Maya","x":1}',
+            },
+          },
+          {
+            id: 'c2',
+            type: 'function',
+            function: {
+              name: 'spy',
+              arguments: '{"activity":"merging duplicates","x":2}',
+            },
+          },
+        ],
+      },
+      // Round 2: terminal text-only response.
+      { text: 'done' },
+    ]);
+    const { toolbox } = makeToolbox(async () => ({ ok: true }));
+
+    const events: HeadlessToolLoopEvent[] = [];
+    const result = await runHeadlessToolLoop({
+      venice,
+      model: 'm',
+      messages: [{ role: 'user', content: 'go' }],
+      toolbox,
+      toolCtx: baseCtx(),
+      signal: new AbortController().signal,
+      onProgress: (e) => events.push(e),
+    });
+
+    expect(result.toolCalls).toBe(2);
+    // Two rounds, so two `thinking` events plus two `tool` events.
+    // Parallel tool execution means the order of the two `tool`
+    // events within the round isn't fixed - assert by partitioning
+    // rather than by index.
+    const thinking = events.filter((e) => e.kind === 'thinking');
+    const tools = events.filter((e) => e.kind === 'tool');
+    expect(thinking.map((e) => (e as { round: number }).round)).toEqual([1, 2]);
+    expect(tools).toHaveLength(2);
+    expect(tools.every((e) => (e as { ok: boolean }).ok)).toBe(true);
+    expect(
+      new Set(tools.map((e) => (e as { activity: string }).activity))
+    ).toEqual(new Set(['searching wiki for Maya', 'merging duplicates']));
+    // `thinking` for round 1 must precede every `tool` event - the
+    // step-list UI relies on this ordering to show "Thinking..." then
+    // resolve it as each tool lands.
+    expect(events[0].kind).toBe('thinking');
+  });
+
+  it('emits a `tool` event with ok=false when the handler throws', async () => {
+    const { venice } = makeVenice([
+      {
+        toolCalls: [
+          {
+            id: 'c1',
+            type: 'function',
+            function: {
+              name: 'spy',
+              arguments: '{"activity":"deleting Kermit"}',
+            },
+          },
+        ],
+      },
+      { text: 'done' },
+    ]);
+    const { toolbox } = makeToolbox(async () => {
+      throw new Error('boom');
+    });
+
+    const events: HeadlessToolLoopEvent[] = [];
+    await runHeadlessToolLoop({
+      venice,
+      model: 'm',
+      messages: [{ role: 'user', content: 'go' }],
+      toolbox,
+      toolCtx: baseCtx(),
+      signal: new AbortController().signal,
+      onProgress: (e) => events.push(e),
+    });
+
+    const toolEvent = events.find((e) => e.kind === 'tool') as
+      | { kind: 'tool'; name: string; activity: string; ok: boolean }
+      | undefined;
+    expect(toolEvent).toBeDefined();
+    expect(toolEvent?.ok).toBe(false);
+    expect(toolEvent?.activity).toBe('deleting Kermit');
+    expect(toolEvent?.name).toBe('spy');
+  });
+
+  it('swallows listener errors so the loop keeps running', async () => {
+    const { venice } = makeVenice([
+      {
+        toolCalls: [
+          {
+            id: 'c1',
+            type: 'function',
+            function: { name: 'spy', arguments: '{"activity":"a"}' },
+          },
+        ],
+      },
+      { text: 'done' },
+    ]);
+    const { toolbox } = makeToolbox(async () => ({ ok: true }));
+
+    const result = await runHeadlessToolLoop({
+      venice,
+      model: 'm',
+      messages: [{ role: 'user', content: 'go' }],
+      toolbox,
+      toolCtx: baseCtx(),
+      signal: new AbortController().signal,
+      onProgress: () => {
+        throw new Error('listener broke');
+      },
+    });
+
+    expect(result.finalText).toBe('done');
+    expect(result.toolCalls).toBe(1);
   });
 });

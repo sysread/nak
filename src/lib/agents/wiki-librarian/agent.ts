@@ -24,7 +24,7 @@ import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService } from '../../supabase';
 import type { VeniceClient, VeniceMessage } from '../../venice';
 import { wikiLibrarianToolbox } from '../../tools/wiki_librarian_toolbox';
-import { runHeadlessToolLoop } from '../../tools/run';
+import { runHeadlessToolLoop, type HeadlessToolLoopEvent } from '../../tools/run';
 import { agentModel } from '../../models';
 import { createLogger } from '../../logger.svelte';
 import {
@@ -73,6 +73,15 @@ export class WikiLibrarianAgent
    */
   private userProfile: WikiLibrarianUserProfile | null = null;
 
+  /**
+   * Optional live-progress listener. Set by the main-thread manual
+   * runner so the Wiki UI can show a step list while the loop runs.
+   * The scheduled worker leaves this null - functions can't cross
+   * the worker postMessage boundary, and the log drawer is the
+   * worker's feedback surface.
+   */
+  private onProgress: ((event: HeadlessToolLoopEvent) => void) | null = null;
+
   constructor(
     private venice: VeniceClient,
     private supabase: SupabaseService,
@@ -98,6 +107,18 @@ export class WikiLibrarianAgent
    */
   setUserProfile(profile: WikiLibrarianUserProfile | null): void {
     this.userProfile = profile;
+  }
+
+  /**
+   * Install (or clear) the live-progress listener forwarded into the
+   * underlying `runHeadlessToolLoop`. Called by the manual runner
+   * before `run()` so the Wiki strip can render the step list. Pass
+   * null to detach.
+   */
+  setProgressListener(
+    listener: ((event: HeadlessToolLoopEvent) => void) | null
+  ): void {
+    this.onProgress = listener;
   }
 
   async run(
@@ -154,6 +175,7 @@ export class WikiLibrarianAgent
         },
         signal,
         reasoningEffort: 'low',
+        onProgress: this.onProgress ?? undefined,
       });
 
       return {

@@ -171,7 +171,44 @@ export interface HeadlessToolLoopOptions {
    * quality.
    */
   disableThinking?: boolean;
+  /**
+   * Optional live-progress hook. Fires before every Venice round
+   * (`{kind:'thinking', round}`) and after each tool call settles
+   * (`{kind:'tool', name, activity, ok, ms}`). Activity is the
+   * model-emitted narration injected via the `activity` parameter at
+   * the dispatch seam; it's pulled from the call's parsed arguments
+   * so the caller sees the same sentence the chat UI would render.
+   * When the args fail to parse, activity is an empty string.
+   *
+   * This is the one main-thread-only surface on the loop: workers
+   * can't forward a function across postMessage, so they leave it
+   * undefined and rely on log lines instead. The manual librarian
+   * runner uses it to drive the step list in the Wiki UI - that's
+   * the motivating caller, but the contract is generic.
+   *
+   * Best-effort. A listener that throws does NOT abort the loop;
+   * the throw is swallowed (we own the contract, not the listener).
+   */
+  onProgress?: (event: HeadlessToolLoopEvent) => void;
 }
+
+/**
+ * Live-progress events emitted by `runHeadlessToolLoop` when the
+ * caller supplies an `onProgress` listener. Two kinds:
+ *
+ *   - `thinking`: a new Venice round is about to start. `round` is
+ *     1-based to match how operators count rounds in log lines.
+ *   - `tool`: a single tool call has finished. `ok` distinguishes
+ *     success from a thrown handler / unparseable args. `ms` is
+ *     wall-clock from the executor entering the tool to it returning.
+ *
+ * No `done` event - the caller already knows the loop returned when
+ * the Promise resolves, and an event for that would race with the
+ * resolve in unhelpful ways.
+ */
+export type HeadlessToolLoopEvent =
+  | { kind: 'thinking'; round: number }
+  | { kind: 'tool'; name: string; activity: string; ok: boolean; ms: number };
 
 export interface HeadlessToolLoopResult {
   /** Final assistant text — empty when the loop hit maxRounds without settling. */
@@ -226,9 +263,27 @@ export async function runHeadlessToolLoop(
   let toolCalls = 0;
   let stoppedByLimit = false;
 
+  // Helper that wraps the optional progress hook in a try/catch so a
+  // listener that throws can't break the loop. The contract is best-
+  // effort - the UI consumer would rather miss a step than have the
+  // agent run abort because their render code threw.
+  const emit = (event: HeadlessToolLoopEvent): void => {
+    if (!opts.onProgress) return;
+    try {
+      opts.onProgress(event);
+    } catch {
+      // Swallow - see comment above.
+    }
+  };
+
   for (let round = 0; round < maxRounds; round++) {
     if (signal.aborted) break;
     rounds++;
+
+    // Tell the caller a new round is starting before we block on the
+    // network. The Wiki UI uses this to push a "Thinking..." step with
+    // the spinner glyph while Venice processes the round.
+    emit({ kind: 'thinking', round: round + 1 });
 
     // Non-streaming: each round is a single POST + parsed response.
     // Background agents don't have a UI surface to render tokens
@@ -275,6 +330,7 @@ export async function runHeadlessToolLoop(
         signal: ctl.signal,
         depth: effectiveDepth,
       };
+      const startedAt = performance.now();
       let args: Record<string, unknown>;
       try {
         // OpenAI streams `arguments` as a JSON string, one fragment
@@ -288,13 +344,40 @@ export async function runHeadlessToolLoop(
         args = parseToolArguments(call.function.arguments);
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
+        emit({
+          kind: 'tool',
+          name: call.function.name,
+          activity: '',
+          ok: false,
+          ms: performance.now() - startedAt,
+        });
         return { call, ok: false as const, error };
       }
+      // `activity` is the per-call narration the dispatcher injects
+      // into every tool's schema (see src/lib/tools/dispatch.ts) -
+      // pulling it out here lets the progress hook render the same
+      // sentence the chat UI would show in its tool-call row.
+      const activity =
+        typeof args.activity === 'string' ? args.activity : '';
       try {
         const value = await executeToolboxCall(toolbox, call.function.name, args, ctx);
+        emit({
+          kind: 'tool',
+          name: call.function.name,
+          activity,
+          ok: true,
+          ms: performance.now() - startedAt,
+        });
         return { call, ok: true as const, value };
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
+        emit({
+          kind: 'tool',
+          name: call.function.name,
+          activity,
+          ok: false,
+          ms: performance.now() - startedAt,
+        });
         return { call, ok: false as const, error };
       }
     });

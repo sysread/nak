@@ -80,6 +80,29 @@ function buildProfile(
   };
 }
 
+/**
+ * Live-progress events the manual runner surfaces to the Wiki UI's
+ * step list. Three families:
+ *
+ *   - `preparing`: emitted once, before the agent starts. Covers the
+ *     wiki-list fetch and the prompt-build phase. `articleCount` is
+ *     the size of the snapshot the librarian will see.
+ *   - `thinking` and `tool`: forwarded verbatim from
+ *     `runHeadlessToolLoop`'s `onProgress` so the same step list can
+ *     show both model rounds and tool calls in arrival order.
+ *   - `done`: emitted once, after the agent returns (success or
+ *     error). The UI uses this to clear the spinner on the trailing
+ *     step.
+ *
+ * The Wiki strip pushes each event onto a list state variable and
+ * renders the latest as "in flight" with the rotating-glyph spinner.
+ */
+export type LibrarianProgress =
+  | { kind: 'preparing'; articleCount: number }
+  | { kind: 'thinking'; round: number }
+  | { kind: 'tool'; name: string; activity: string; ok: boolean; ms: number }
+  | { kind: 'done'; ok: boolean };
+
 export interface RunManuallyOpts {
   supabase: SupabaseService;
   venice: VeniceClient;
@@ -93,6 +116,15 @@ export interface RunManuallyOpts {
    */
   customInstructions: string | null;
   signal?: AbortSignal;
+  /**
+   * Optional live-progress hook. Wired up by the Wiki manual-run
+   * strip so it can show step-by-step feedback (model rounds + tool
+   * calls with their `activity` narration) instead of a single
+   * opaque "Working..." button. See `LibrarianProgress` above for
+   * the event shape. Listener errors are caught so a misbehaving UI
+   * can't kill the run.
+   */
+  onProgress?: (event: LibrarianProgress) => void;
 }
 
 export interface RunManuallyResult {
@@ -133,6 +165,16 @@ export async function runManually(
       ? 'custom-instructions'
       : 'standard';
   log.info(`manual librarian run requested (${variant})`);
+  // Wrap the caller's onProgress in a try/catch so a listener that
+  // throws can't tear down the run. Best-effort by contract.
+  const emit = (event: LibrarianProgress): void => {
+    if (!opts.onProgress) return;
+    try {
+      opts.onProgress(event);
+    } catch {
+      // Swallow - the librarian's job is not gated on UI bookkeeping.
+    }
+  };
   try {
     const articles = await opts.supabase.listWikiArticles({ limit: 500 });
     const projection = articles.map((a) => ({
@@ -140,6 +182,10 @@ export async function runManually(
       title: a.title,
       excerpt: a.content.slice(0, LIBRARIAN_EXCERPT_CHARS),
     }));
+    // Fire the first event once we know how many articles the run
+    // will see - that count is the most useful breadcrumb the UI can
+    // show before the model has produced anything.
+    emit({ kind: 'preparing', articleCount: projection.length });
 
     const agent = new WikiLibrarianAgent(
       opts.venice,
@@ -147,6 +193,23 @@ export async function runManually(
       undefined,
       buildProfile(opts.userName, opts.userLocation)
     );
+    // Forward loop-level events through the surface-level type. The
+    // `thinking` and `tool` variants are deliberately shape-compatible
+    // so this is a one-to-one passthrough; we narrow by `kind` to
+    // satisfy the union without an `as` cast.
+    agent.setProgressListener((event) => {
+      if (event.kind === 'thinking') {
+        emit({ kind: 'thinking', round: event.round });
+      } else {
+        emit({
+          kind: 'tool',
+          name: event.name,
+          activity: event.activity,
+          ok: event.ok,
+          ms: event.ms,
+        });
+      }
+    });
 
     const runResult = await agent.run({
       input: {
@@ -167,6 +230,7 @@ export async function runManually(
       log.warn(
         `manual librarian run errored: ${runResult.error ?? '(no message)'}`
       );
+      emit({ kind: 'done', ok: false });
       return {
         kind: 'error',
         finalText: '',
@@ -184,6 +248,7 @@ export async function runManually(
     // refetch is cheap and keeps the surface honest when edits did
     // land.
     emitWikiChange();
+    emit({ kind: 'done', ok: true });
     return {
       kind: 'ok',
       finalText: runResult.output.finalText,
@@ -193,6 +258,7 @@ export async function runManually(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`manual librarian run threw: ${msg}`);
+    emit({ kind: 'done', ok: false });
     return {
       kind: 'error',
       finalText: '',
