@@ -77,6 +77,7 @@ function fakeSupabase(overrides: Partial<SupabaseService> = {}): SupabaseService
     biasClaimNextThread: vi.fn(async () => null),
     biasSaveObservations: vi.fn(async () => true),
     biasProcessedThreadsForBias: vi.fn(async () => []),
+    biasReactionsForBias: vi.fn(async () => []),
     biasUpsertSummary: vi.fn(async () => undefined),
     listMessages: vi.fn(async () => []),
   };
@@ -195,6 +196,7 @@ describe('analyze phase', () => {
       biasClaimNextThread: vi.fn(async () => ({
         threadId: 't-1',
         userMessageCount: 5,
+        activeBiases: [] as string[],
       })),
       listMessages: vi.fn(async () => [
         { id: 'm1', role: 'user', content: 'hello', thread_id: 't-1', created_at: new Date().toISOString() },
@@ -224,7 +226,7 @@ describe('analyze phase', () => {
     expect(result).toBe('progress');
     const saveCall = (supabase.biasSaveObservations as ReturnType<typeof vi.fn>).mock
       .calls[0];
-    // [threadId, holderId, expectedMsgCount, observations]
+    // [threadId, holderId, expectedMsgCount, observations, reactions]
     expect(saveCall[3]).toEqual([
       {
         bias: 'confirmation_bias',
@@ -233,6 +235,10 @@ describe('analyze phase', () => {
         evidence_message_id: 'm1',
       },
     ]);
+    // No reactions yet - the reactor agent integration lands in a
+    // follow-up commit. Until then this slot is always empty and
+    // the v2 schema treats "no reactions" as the neutral score 0.
+    expect(saveCall[4]).toEqual([]);
   });
 
   it('reports save-rejected when the RPC returns false (race lost)', async () => {
@@ -240,6 +246,7 @@ describe('analyze phase', () => {
       biasClaimNextThread: vi.fn(async () => ({
         threadId: 't-1',
         userMessageCount: 5,
+        activeBiases: [] as string[],
       })),
       listMessages: vi.fn(async () => [
         { id: 'm1', role: 'user', content: 'hello', thread_id: 't-1', created_at: new Date().toISOString() },
@@ -257,6 +264,7 @@ describe('analyze phase', () => {
       biasClaimNextThread: vi.fn(async () => ({
         threadId: 't-1',
         userMessageCount: 5,
+        activeBiases: [] as string[],
       })),
       listMessages: vi.fn(async () => [
         { id: 'm1', role: 'user', content: 'hello', thread_id: 't-1', created_at: new Date().toISOString() },

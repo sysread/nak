@@ -74,6 +74,7 @@ export async function getBiasProfileBlock(
       posteriorBeta: r.posteriorBeta,
       posteriorMean: r.posteriorMean,
       ciLower: r.ciLower,
+      feedbackScore: r.feedbackScore,
       tier: r.tier as Tier,
       computedAt: r.computedAt,
     });

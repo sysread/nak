@@ -5375,6 +5375,17 @@ alter table public.threads
 alter table public.threads
   add column if not exists bias_claim_expires timestamptz;
 
+-- Snapshot of the bias keys that were rendered into the system
+-- prompt on the most recent chat-loop turn against this thread.
+-- Overwritten per turn (the chat-loop's `getBiasProfileBlock`
+-- writes whatever it just rendered). The worker reads this in its
+-- analyze phase so the merged observer/reactor agent knows which
+-- biases the user's messages could have been reacting to.
+-- Empty array (the default) means "no biases were active" - the
+-- reactor pass for this conversation produces no rows.
+alter table public.threads
+  add column if not exists bias_active_at_turn text[] not null default '{}';
+
 create table if not exists public.bias_observations (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -5445,6 +5456,14 @@ create table if not exists public.bias_summary (
   primary key (user_id, bias)
 );
 
+-- Compensation-feedback EMA in [-1, +1] (v2 calibration layer).
+-- Recomputed by the worker on every aggregate pass from the
+-- bias_reactions rows for this (user, bias). Default 0 on cold
+-- start so v1 callers see unshifted thresholds before any
+-- reactions land. See src/lib/bias/types.ts for FEEDBACK_* tunables.
+alter table public.bias_summary
+  add column if not exists feedback_score real not null default 0;
+
 alter table public.bias_summary enable row level security;
 
 drop policy if exists "bias summary self-selectable" on public.bias_summary;
@@ -5466,6 +5485,54 @@ create policy "bias summary self-deletable" on public.bias_summary
 alter table public.bias_summary
   alter column user_id set default auth.uid();
 
+-- Per-conversation per-bias compensation-feedback signal (v2). The
+-- merged observer/reactor agent classifies, for each bias that was
+-- active in the system prompt during a conversation, whether the
+-- user engaged positively with the assistant's compensated phrasing
+-- (was_confirmed=true), pushed back on it (was_confirmed=false), or
+-- showed no clear signal (was_confirmed=null, neutral). The
+-- worker's aggregate phase reads these to compute the per-(user,
+-- bias) feedback EMA cached on bias_summary.feedback_score.
+--
+-- One row per (user, thread, bias) - re-analyzing a thread (which
+-- happens whenever a new user message lands; see bias_clear_thread)
+-- replaces the prior row via the unique-key upsert in
+-- bias_save_reactions.
+create table if not exists public.bias_reactions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  thread_id uuid not null references public.threads(id) on delete cascade,
+  bias text not null,
+  -- true = user affirmed the compensation
+  -- false = user pushed back
+  -- null = neutral / no clear signal (still recorded so we can tell
+  --        "agent looked and saw nothing" from "agent never ran")
+  was_confirmed boolean,
+  reasoning text not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, thread_id, bias)
+);
+
+create index if not exists bias_reactions_user_bias_idx
+  on public.bias_reactions (user_id, bias);
+
+alter table public.bias_reactions enable row level security;
+
+drop policy if exists "bias reactions self-selectable" on public.bias_reactions;
+create policy "bias reactions self-selectable" on public.bias_reactions
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "bias reactions self-insertable" on public.bias_reactions;
+create policy "bias reactions self-insertable" on public.bias_reactions
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "bias reactions self-deletable" on public.bias_reactions;
+create policy "bias reactions self-deletable" on public.bias_reactions
+  for delete using (auth.uid() = user_id);
+
+alter table public.bias_reactions
+  alter column user_id set default auth.uid();
+
 -- Bias-profile RPCs ------------------------------------------------------
 --
 -- security invoker throughout - RLS still applies, and the explicit
@@ -5473,11 +5540,17 @@ alter table public.bias_summary
 -- intent obvious at the call site.
 
 -- Drop pre-existing signatures before recreating: return-type changes
--- break a plain `create or replace function`.
+-- break a plain `create or replace function`. The v1 signatures are
+-- listed here too so a sync against a pre-v2 database cleans up the
+-- prior shapes before the v2 functions land. New v2 signatures
+-- (with the extra parameters / extra return columns) are dropped on
+-- their own line so a re-sync against a v2 database is idempotent.
 drop function if exists public.bias_claim_next_thread(text, int, uuid[], timestamptz, int);
 drop function if exists public.bias_save_observations(uuid, text, int, jsonb);
+drop function if exists public.bias_save_observations(uuid, text, int, jsonb, jsonb);
 drop function if exists public.bias_clear_thread(uuid);
 drop function if exists public.bias_processed_threads_for_bias(text);
+drop function if exists public.bias_reactions_for_bias(text);
 
 -- Claim the next eligible thread for bias analysis. Eligibility is
 -- the full filter list from docs/dev/bias-profile.md:
@@ -5505,7 +5578,14 @@ create or replace function public.bias_claim_next_thread(
 )
 returns table (
   thread_id uuid,
-  user_message_count int
+  user_message_count int,
+  -- v2: snapshot of biases that were rendered into the system
+  -- prompt on the most recent chat-loop turn for this thread. The
+  -- merged observer/reactor agent uses this to know which biases'
+  -- compensation behavior the user's messages could have reacted
+  -- to. Empty array means "no biases were active" and the reactor
+  -- pass produces no rows.
+  active_biases text[]
 )
 security invoker
 language plpgsql
@@ -5513,6 +5593,7 @@ as $$
 declare
   v_id uuid;
   v_msg_count int;
+  v_active_biases text[];
 begin
   if auth.uid() is null then
     return;
@@ -5524,8 +5605,8 @@ begin
   select t.id, (
     select count(*)::int from public.messages m
       where m.thread_id = t.id and m.role = 'user'
-  )
-    into v_id, v_msg_count
+  ), coalesce(t.bias_active_at_turn, '{}'::text[])
+    into v_id, v_msg_count, v_active_biases
     from public.threads t
     where t.user_id = auth.uid()
       and t.updated_at < p_today_start
@@ -5563,11 +5644,13 @@ begin
 
   thread_id := v_id;
   user_message_count := v_msg_count;
+  active_biases := v_active_biases;
   return next;
 end;
 $$;
 
--- Save the agent's observations for a thread. Three guards:
+-- Save the agent's observations AND compensation-feedback reactions
+-- for a thread in one transaction. Three guards:
 --   - claim is still ours (someone else didn't steal it after TTL)
 --   - the user-message count we expected matches what's there now
 --     (no new user message landed during analysis - if it did, the
@@ -5576,13 +5659,22 @@ $$;
 --     this anyway, but the explicit check keeps the failure path
 --     deterministic instead of relying on a 0-row update)
 --
+-- `p_reactions` is a jsonb array of {bias, was_confirmed, reasoning}
+-- objects, where was_confirmed is true/false/null. Empty array is
+-- valid and means "the active-bias set was empty so there was
+-- nothing to react to" OR "the reactor agent saw no signal". The
+-- merged observer/reactor agent emits both arrays from one LLM
+-- call so persisting them together keeps observations and
+-- reactions in sync.
+--
 -- Returns true on success, false if any guard fails. Caller treats
 -- false as 'work was wasted, drain to next cycle'.
 create or replace function public.bias_save_observations(
   p_thread_id uuid,
   p_holder_id text,
   p_expected_msg_count int,
-  p_observations jsonb
+  p_observations jsonb,
+  p_reactions jsonb
 )
 returns boolean
 security invoker
@@ -5591,6 +5683,7 @@ as $$
 declare
   v_actual_count int;
   v_obs jsonb;
+  v_was_confirmed boolean;
 begin
   if auth.uid() is null then
     return false;
@@ -5621,11 +5714,13 @@ begin
     return false;
   end if;
 
-  -- Delete any pre-existing observations for this thread. A
-  -- previous analysis cycle's writes get fully replaced; we don't
-  -- merge in case the catalog has changed or the agent changed its
-  -- mind about the same conversation.
+  -- Delete any pre-existing observations and reactions for this
+  -- thread. A previous analysis cycle's writes get fully replaced;
+  -- we don't merge in case the catalog has changed or the agent
+  -- changed its mind about the same conversation.
   delete from public.bias_observations
+    where thread_id = p_thread_id;
+  delete from public.bias_reactions
     where thread_id = p_thread_id;
 
   -- Insert the new observations, if any. Empty array is a valid
@@ -5642,6 +5737,35 @@ begin
         v_obs->>'reasoning',
         nullif(v_obs->>'evidence_message_id', '')::uuid
       );
+    end loop;
+  end if;
+
+  -- Insert the new reactions, if any. Each reaction row carries a
+  -- was_confirmed that may be null - the reactor agent records
+  -- "neutral / no clear signal" as a distinct value from "did not
+  -- run" (the absence of a row).
+  if jsonb_array_length(p_reactions) > 0 then
+    for v_obs in select * from jsonb_array_elements(p_reactions) loop
+      -- jsonb -> boolean: explicit cast via text so true/false/null
+      -- all round-trip. A missing/non-boolean was_confirmed lands
+      -- as null which the EMA correctly treats as "no signal."
+      v_was_confirmed := case
+        when v_obs->>'was_confirmed' = 'true'  then true
+        when v_obs->>'was_confirmed' = 'false' then false
+        else null
+      end;
+      insert into public.bias_reactions
+        (thread_id, bias, was_confirmed, reasoning)
+      values (
+        p_thread_id,
+        v_obs->>'bias',
+        v_was_confirmed,
+        v_obs->>'reasoning'
+      )
+      on conflict (user_id, thread_id, bias) do update
+        set was_confirmed = excluded.was_confirmed,
+            reasoning = excluded.reasoning,
+            created_at = now();
     end loop;
   end if;
 
@@ -5676,11 +5800,17 @@ begin
   -- check keeps the failure path clear.
   delete from public.bias_observations
     where thread_id = p_thread_id and user_id = auth.uid();
+  -- v2: also clear reactions. The snapshot column gets reset to
+  -- empty - a re-analyze on the next worker pass will see whatever
+  -- the chat-loop renders on the next turn.
+  delete from public.bias_reactions
+    where thread_id = p_thread_id and user_id = auth.uid();
   update public.threads
     set bias_processed_at = null,
         bias_processed_msg_count = null,
         bias_claim_holder = null,
-        bias_claim_expires = null
+        bias_claim_expires = null,
+        bias_active_at_turn = '{}'::text[]
     where id = p_thread_id and user_id = auth.uid();
 end;
 $$;
@@ -5725,6 +5855,40 @@ begin
       left join hits h on h.thread_id = t.id
       where t.user_id = auth.uid()
         and t.bias_processed_at is not null;
+end;
+$$;
+
+-- v2 aggregate-phase input. Lists every reaction row for one bias
+-- with its age in days. The TypeScript side feeds these into
+-- feedbackEMA() to produce the per-(user, bias) score cached on
+-- bias_summary.feedback_score. Neutral reactions (was_confirmed is
+-- null) are returned alongside the signed ones so the aggregate
+-- pass can count them for its own debugging - the math kernel
+-- discards them, but the worker logs them.
+create or replace function public.bias_reactions_for_bias(p_bias text)
+returns table (
+  thread_id uuid,
+  was_confirmed boolean,
+  age_days real,
+  created_at timestamptz,
+  reasoning text
+)
+security invoker
+language plpgsql
+as $$
+begin
+  if auth.uid() is null then
+    return;
+  end if;
+  return query
+    select r.thread_id,
+           r.was_confirmed,
+           (extract(epoch from (now() - r.created_at)) / 86400.0)::real as age_days,
+           r.created_at,
+           r.reasoning
+      from public.bias_reactions r
+      where r.user_id = auth.uid() and r.bias = p_bias
+      order by r.created_at desc;
 end;
 $$;
 

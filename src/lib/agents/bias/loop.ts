@@ -42,7 +42,9 @@ import {
 import {
   aggregatePosterior,
   clampConfidence,
+  feedbackEMA,
   type ConversationContribution,
+  type FeedbackContribution,
 } from '../../bias/math';
 import { BIAS_KEYS } from '../../bias/catalog';
 
@@ -173,6 +175,7 @@ async function runAnalyzePhase(ctx: CycleContext): Promise<CycleResult> {
       claim.threadId,
       ctx.holderId,
       claim.userMessageCount,
+      [],
       []
     );
     return ok ? 'progress' : 'save-rejected';
@@ -232,7 +235,12 @@ async function runAnalyzePhase(ctx: CycleContext): Promise<CycleResult> {
       claim.threadId,
       ctx.holderId,
       claim.userMessageCount,
-      cleaned
+      cleaned,
+      // Reactions arrive in a follow-up commit when the merged
+      // observer/reactor prompt lands. Until then this is always
+      // empty - the v2 schema reads "no reactions yet" as a no-op
+      // for the EMA, which keeps thresholds at their v1 defaults.
+      []
     );
   } catch (err) {
     log.debug('analyze: save RPC failed', err);
@@ -267,6 +275,7 @@ async function runAggregatePhase(ctx: CycleContext): Promise<CycleResult> {
   for (const bias of BIAS_KEYS) {
     if (ctx.signal.aborted) return 'progress';
     let contributions: ConversationContribution[];
+    let feedback: FeedbackContribution[] = [];
     try {
       const rows = await ctx.supabase.biasProcessedThreadsForBias(bias);
       const now = Date.now();
@@ -279,7 +288,22 @@ async function runAggregatePhase(ctx: CycleContext): Promise<CycleResult> {
       // Don't fail the whole rotation for one bias; carry on.
       continue;
     }
-    const post = aggregatePosterior(contributions);
+    // Compensation-feedback EMA. A failure here is non-fatal -
+    // we'd rather aggregate with neutral feedback than skip the
+    // bias entirely. Treat any error as "no reactions" and keep
+    // going.
+    try {
+      const reactionRows = await ctx.supabase.biasReactionsForBias(bias);
+      feedback = reactionRows.map((r) => ({
+        wasConfirmed: r.wasConfirmed,
+        ageDays: r.ageDays,
+      }));
+    } catch (err) {
+      log.debug('aggregate: reactions query failed (treating as no signal)', { bias, err });
+      feedback = [];
+    }
+    const feedbackScore = feedbackEMA(feedback);
+    const post = aggregatePosterior(contributions, { feedbackScore });
     try {
       await ctx.supabase.biasUpsertSummary({
         bias,
@@ -288,6 +312,7 @@ async function runAggregatePhase(ctx: CycleContext): Promise<CycleResult> {
         posteriorBeta: post.beta,
         posteriorMean: post.mean,
         ciLower: post.ciLower,
+        feedbackScore,
         tier: post.tier,
       });
       touched += 1;
