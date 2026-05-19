@@ -1237,12 +1237,24 @@
     el.style.height = `${el.scrollHeight}px`;
   });
 
-  // Sibling to the focus-on-selectThread call: when the user flips the
-  // drawer tab from recipes/memories/wiki back to chats, the composer
-  // remounts but selectThread doesn't fire (the active thread didn't
-  // change), so we'd otherwise leave the user staring at an unfocused
-  // textarea. Track the previous tab and focus on the chats edge.
-  // Mobile is skipped for the same reason as in selectThread.
+  // Drawer-tab return handling. The messages container + composer both
+  // live inside {#if drawerTab === 'chats'}, so switching to recipes /
+  // memories / wiki fully unmounts them. When the user comes back to
+  // chats with the same thread still active, selectThread no-ops
+  // (route.cid still matches activeThreadId), so the focus + post-load
+  // scroll-snap it normally runs never fire. Two regressions follow:
+  //
+  //   1. The composer remounts unfocused - user stares at an inert
+  //      textarea after returning to chats. Mobile is skipped for the
+  //      same reason as in selectThread.
+  //   2. The messages container remounts at scrollTop=0 - returning to
+  //      a previously-scrolled thread lands the user at the top of the
+  //      transcript instead of the newest message, breaking the
+  //      "opening a conversation jumps to the end" UX.
+  //
+  // Both fire on the same prev != 'chats' -> 'chats' edge, so they
+  // share one effect. prevTab === null skips the initial mount: the
+  // selectThread path that ran during syncFromUrl already handled both.
   let prevDrawerTab: typeof drawerTab | null = null;
   $effect(() => {
     const tab = drawerTab;
@@ -1250,9 +1262,16 @@
     prevDrawerTab = tab;
     if (prev === null) return;
     if (tab !== 'chats' || prev === 'chats') return;
-    if (composerIsMobile) return;
+    // Wait a tick for the {#if drawerTab === 'chats'} block to commit
+    // the remounted composer + messages container before touching
+    // either.
     void tick().then(() => {
-      if (drawerTab === 'chats') composerEl?.focus();
+      if (drawerTab !== 'chats') return;
+      if (!composerIsMobile) composerEl?.focus();
+      if (activeThreadId !== null && messages.length > 0 && messagesEl) {
+        followBottom = true;
+        pinBottomWhileSettling();
+      }
     });
   });
 
