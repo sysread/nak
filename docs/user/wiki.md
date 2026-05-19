@@ -215,14 +215,20 @@ when it's off.
 
 Sometimes the agent can't process a conversation. The most common
 reason is Venice's content classifier rejecting the conversation
-body as inappropriate; another is a transient network or model
-failure that keeps recurring. After a few unsuccessful attempts on
-the same set of turns, the agent gives up on that conversation
-rather than retrying forever and burning quota.
+body as inappropriate. When that happens, the agent automatically
+retries the run against an **uncensored fallback model** (currently
+`arcee-trinity-large-thinking`) which doesn't run the same
+classifier, so most conversations the default model balks at get
+processed transparently on the retry. You don't have to do
+anything; it just works on the next sweep.
 
-Skipped conversations land in a dedicated **Skipped** panel inside
-the Wiki tab. The **alert-triangle** button in the Wiki top bar
-(next to the changelog clock button) opens it. Each row shows:
+If the fallback **also** can't process the conversation (rare - a
+real model error, a transient network issue, or an unsalvageable
+body), the agent gives up on that conversation rather than retrying
+forever and burning quota. Skipped conversations land in a dedicated
+**Skipped** panel inside the Wiki tab. The **alert-triangle** button
+in the Wiki top bar (next to the changelog clock button) opens it.
+Each row shows:
 
 - The **conversation title** as a link - clicking it switches to the
   Chat tab and opens that conversation.
@@ -236,7 +242,10 @@ what lets the agent try again on the next sweep. A successful next
 run automatically drops the row from the Skipped panel.
 
 If the panel is empty, the autonomous agent hasn't given up on
-anything - that's the steady state.
+anything - that's the steady state. Skips that predate the fallback
+behaviour are automatically re-attempted with the uncensored model
+the first time the worker sees them after this change ships; you'll
+see those rows clear from the panel as the worker processes them.
 
 ## The librarian
 
