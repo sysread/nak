@@ -71,7 +71,9 @@ unaffected.
 - `src/lib/ui/recipe-list.ts` — pure UI-behavior primitives for
   the recipe sidebar. `isSearching(query)`,
   `pickVisibleRecipes(args)` (server-order on search, rating sort
-  with null-rank/recency tie-break otherwise),
+  with null-rank/recency tie-break, alphabetical sort by title
+  with untitled drafts sinking and recency tie-break, or
+  default store order),
   `pickUpcomingRecipes` and `pickFavoriteRecipes` (filter +
   recency sort, empty during a search),
   `matchesTopicFilter(recipe, selected)` (client-side topic

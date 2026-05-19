@@ -140,6 +140,111 @@ describe('pickVisibleRecipes', () => {
     });
     expect(store.map((r) => r.id)).toEqual(['a', 'b']);
   });
+
+  it('sorts alphabetically by title, case- and accent-insensitive', () => {
+    // "Espresso" must collate with "espresso" (sensitivity "base"),
+    // and the leading article is left alone - we sort by raw title,
+    // not by a "stripped" form. The diacritic test guards against a
+    // future refactor that drops the localeCompare options.
+    const apple = makeRecipe('apple', { title: 'apple pie' });
+    const espresso = makeRecipe('espresso', { title: 'Espresso' });
+    const creme = makeRecipe('creme', { title: 'creme brulee' });
+    const banana = makeRecipe('banana', { title: 'Banana bread' });
+    const out = pickVisibleRecipes({
+      searching: false,
+      searchResults: [],
+      storeRecipes: [espresso, apple, creme, banana],
+      sortMode: 'alphabetical',
+      selectedTopics: [],
+    });
+    expect(out.map((r) => r.id)).toEqual([
+      'apple',
+      'banana',
+      'creme',
+      'espresso',
+    ]);
+  });
+
+  it('sinks untitled drafts to the bottom of the alphabetical sort', () => {
+    // An untitled draft has no useful collation key. Floating it
+    // above every titled recipe just because empty string sorts
+    // first would not match what "sort A-Z" means to the user.
+    const blank = makeRecipe('blank', { title: '' });
+    const whitespace = makeRecipe('whitespace', { title: '   ' });
+    const zucchini = makeRecipe('zucchini', { title: 'zucchini fritters' });
+    const apple = makeRecipe('apple', { title: 'apple pie' });
+    const out = pickVisibleRecipes({
+      searching: false,
+      searchResults: [],
+      storeRecipes: [blank, zucchini, whitespace, apple],
+      sortMode: 'alphabetical',
+      selectedTopics: [],
+    });
+    // Apple, then zucchini, then the two empty-title drafts in
+    // some order at the end. The relative order of the two
+    // untitled drafts is not load-bearing for the user; the
+    // contract is that they sink, not that they sort against
+    // each other.
+    expect(out.slice(0, 2).map((r) => r.id)).toEqual(['apple', 'zucchini']);
+    expect(out.slice(2).map((r) => r.id).sort()).toEqual([
+      'blank',
+      'whitespace',
+    ]);
+  });
+
+  it('breaks alphabetical ties by updated_at desc', () => {
+    // Two recipes share a title (a duplicate the user has not
+    // cleaned up yet). The newer edit wins the tie so the order
+    // is stable across reloads - matches the rating sort's
+    // tie-break rule.
+    const old = makeRecipe('old', {
+      title: 'omelette',
+      updated_at: '2026-05-01T00:00:00Z',
+    });
+    const fresh = makeRecipe('fresh', {
+      title: 'Omelette',
+      updated_at: '2026-05-19T12:00:00Z',
+    });
+    const out = pickVisibleRecipes({
+      searching: false,
+      searchResults: [],
+      storeRecipes: [old, fresh],
+      sortMode: 'alphabetical',
+      selectedTopics: [],
+    });
+    expect(out.map((r) => r.id)).toEqual(['fresh', 'old']);
+  });
+
+  it('narrows the alphabetical sort by the active topic filter', () => {
+    // The topic filter must compose with the alphabetical sort
+    // the same way it composes with the rating and updated
+    // branches - filter first, then sort the surviving subset.
+    const a = makeRecipe('a', { title: 'aglio e olio', topics: ['italian'] });
+    const b = makeRecipe('b', { title: 'birria tacos', topics: ['mexican'] });
+    const c = makeRecipe('c', { title: 'cacio e pepe', topics: ['italian'] });
+    const out = pickVisibleRecipes({
+      searching: false,
+      searchResults: [],
+      storeRecipes: [b, c, a],
+      sortMode: 'alphabetical',
+      selectedTopics: ['italian'],
+    });
+    expect(out.map((r) => r.id)).toEqual(['a', 'c']);
+  });
+
+  it('does not mutate the input store array when sorting alphabetically', () => {
+    const z = makeRecipe('z', { title: 'zucchini' });
+    const a = makeRecipe('a', { title: 'apple' });
+    const store = [z, a];
+    pickVisibleRecipes({
+      searching: false,
+      searchResults: [],
+      storeRecipes: store,
+      sortMode: 'alphabetical',
+      selectedTopics: [],
+    });
+    expect(store.map((r) => r.id)).toEqual(['z', 'a']);
+  });
 });
 
 describe('pickUpcomingRecipes', () => {
