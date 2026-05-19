@@ -4,12 +4,16 @@ Background worker that tags each thread with a short flat set of
 topic strings, plus the drawer UI that uses those tags to filter
 the conversation list.
 
-A sibling worker (`src/lib/agents/memory_topics/*`) does the same
-job for memories - the implementation mirrors the thread topics
-worker file-for-file and shares the `TopicsFilter.svelte` component
-and the `topicsFilterClause` helper. The "Memory topics" subsection
-below covers the memory-side deltas; everything else in this doc is
-the thread topics worker.
+Two sibling workers do the same job for the other drawer surfaces:
+
+- `src/lib/agents/memory_topics/*` tags `memories.topics` for the
+  Memories tab. See "Memory topics" below.
+- `src/lib/agents/recipe_topics/*` tags `recipes.topics` for the
+  Cookbook drawer tab. See "Recipe topics" below.
+
+All three implementations mirror each other file-for-file and share
+the `TopicsFilter.svelte` component plus the `topicsFilterClause`
+helper. Differences are noted in the subsections.
 
 ## Role in the app
 
@@ -268,10 +272,71 @@ how the dropdown picks up newly-minted topics without a drawer
 reopen. The RPC is a single distinct-array-agg per user and
 costs essentially nothing at our row counts.
 
+## Recipe topics
+
+Same shape as Memory topics but the input is one `recipes` row
+instead of a memory, and the output writes to `recipes.topics` so
+the Cookbook drawer can offer its own topic-filter dropdown. Three
+pieces differ vs the other two surfaces:
+
+- **Eligibility trigger.** A `clear_recipe_topics_on_change` trigger
+  nulls `last_topics_at` + claim columns when `title` or `cooklang`
+  changes. Deliberately NOT on `source` / `source_url` (those are
+  metadata about where the recipe came from, not what the dish IS)
+  and NOT on the bookmark / rating columns (`upcoming`, `favorite`,
+  `rating` - workflow state, not content). The existing
+  `clear_recipe_embedding_on_change` trigger DOES include source in
+  its dependency set because the embedded blob folds source in for
+  semantic search; the topic agent reads title + cooklang only.
+
+- **Cap is 1-6 instead of 1-4.** Recipes legitimately span four
+  dimensions - primary ingredients, cuisine, course, technique -
+  and the thread cap was forcing the model to drop cuisine or
+  course on multi-dimensional dishes ("chicken tikka masala" wants
+  chicken + indian + curry + dinner). Six lets all four dimensions
+  land plus a second headline ingredient on dual-protein dishes.
+  The cap lives in `MAX_RECIPE_TOPICS` in `recipe_topics/agent.ts`.
+
+- **Prompt.** Targets the four dimensions explicitly with worked
+  examples calibrating the "primary ingredients only - no pantry
+  staples" bias. Pushing recipes through the memory prompt
+  produced ingredient-name dumps (every `@ingredient{}` became a
+  tag); the memory prompt's "subject area" framing doesn't fit
+  structured Cooklang input. The prompt is the load-bearing part
+  of the recipe-topics design - see `recipe_topics/prompt.ts` for
+  the four-dimension rationale and the calibration examples.
+
+Filter wiring. Recipe topics are applied client-side in
+`src/components/RecipeList.svelte`: the cookbook is bounded
+(`loadRecipes` pulls up to 200 rows into `cookbook.recipes`), so a
+client-side predicate narrows the All / Upcoming / Favorites
+buckets AND the search-results bucket uniformly without a second
+round trip. Server-side filtering on `searchRecipes` would add
+scope for no perceptible perf win at recipe scale. The same
+predicate (real-topic overlap + `(untagged)` sentinel for empty
+arrays) matches the helper used on the other two surfaces.
+
+Vocabulary refresh. `loadRecipes` chains a
+`list_user_recipe_topics` fetch onto every successful refresh, so
+a newly-minted topic from the worker shows up in the dropdown the
+next time the list reloads (tool mutations, modal opens, tab
+switches all trigger reloads). The sibling
+`refreshRecipesTopicsVocabulary` is also called from
+`RecipeList.svelte`'s `onMount` so the dropdown is primed before
+the first load resolves.
+
+Files mirror the topics tree under
+`src/lib/agents/recipe_topics/`. Cross-tab lock name:
+`nak:recipe-topics-worker`. Worker_kind in the lease table:
+`recipe-topics`. RPC quartet: `claim_next_recipe_for_topics` /
+`save_recipe_topics_if_claimed` / `clear_recipe_topics_claim` /
+`list_user_recipe_topics`.
+
 ## Where to go next
 
 - `./summaries.md` — sibling worker, same shape.
 - `./auto-title.md` — runs first; topics is gated on it.
 - `./chat.md` — the drawer state that owns the filter UI.
 - `./memory.md` — the store the memory-topics worker tags.
+- `./cookbook.md` — the store the recipe-topics worker tags.
 - `./architecture.md` — the worker model in context.

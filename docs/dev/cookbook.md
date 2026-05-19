@@ -290,6 +290,14 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
 - **Memory** (`./memory.md`) — scope contrast. A memory is "something
   about the user"; a recipe is "an item the user owns". Share the
   RLS posture and the tool-registry pattern; don't share data.
+- **Topics** (`./topics.md` under "Recipe topics") — a background
+  worker (`src/lib/agents/recipe_topics/*`) tags each recipe with
+  1-6 short topic strings spanning primary ingredients, cuisine,
+  course, and technique. The Cookbook drawer mounts the same
+  `TopicsFilter.svelte` component the conversation and Memories
+  drawers use; the filter narrows the Upcoming / Favorites / All /
+  search buckets uniformly. Tags are managed by the worker - no
+  manual tagging tool exposed to the LLM or the user, by design.
 
 ## Gotchas
 

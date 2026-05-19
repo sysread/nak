@@ -224,6 +224,38 @@ or neither.
 Same as upcoming, the favorite flag is yours and the model does not
 toggle it on its own.
 
+## Filtering by topic
+
+Below the search box in the Recipes drawer, a **Topics ▾** dropdown
+narrows the listing to recipes about a particular ingredient,
+cuisine, course, or technique - "chicken", "italian", "dessert",
+"no-cook". A background worker tags each recipe with up to six short
+topic strings spanning those four dimensions as you accumulate them;
+the dropdown shows the topics you've collected so far, plus an
+**untagged** row that filters to recipes the worker hasn't reached
+yet.
+
+- **Multi-select is OR semantics.** Picking "chicken" + "dessert"
+  shows recipes tagged with either - useful for "what are my
+  chicken or dessert options."
+- **The filter narrows everything uniformly.** Upcoming, Favorites,
+  the main listing, and any active search all narrow to the same
+  predicate, so "filter to italian" really means "italian
+  everywhere on this tab."
+- **The worker focuses on PRIMARY ingredients.** It deliberately
+  skips pantry staples (salt, oil, butter, garlic, common spices) -
+  those are too ubiquitous to differentiate one recipe from
+  another. Tags are the headline protein or vegetable, plus
+  cuisine, course, and technique when each applies.
+- **Tags are managed for you.** No manual tagging UI; edit a
+  recipe's title or cooklang and the worker re-tags it on its next
+  pass. Bookmarking a recipe as upcoming or favorite, or changing
+  its rating, does not re-tag it.
+
+The pill row below the dropdown carries the active selection; each
+pill's × clears just that one tag, and a "clear" link appears when
+you have two or more selected.
+
 ## Photos
 
 Each recipe can carry up to 12 photos that show as thumbnails at the

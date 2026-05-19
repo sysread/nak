@@ -84,6 +84,15 @@ gets 1-4 short subject-area tags ("allergies", "tooling",
 memory's text re-queues it for tagging on the next worker pass;
 confidence-only nudges (reaffirm, doubt) leave the tags alone.
 
+A third sibling worker tags your recipes, with a higher cap of 1-6
+tags per recipe so all four dimensions - primary ingredients,
+cuisine, course, technique - can land on a single dish (chicken +
+indian + curry + dinner, for example). The **Recipes** drawer tab
+mounts the same **Topics ▾** dropdown. See
+[Cookbook](./cookbook.md) under "Filtering by topic" for usage.
+Editing a recipe's title or cooklang re-queues it for tagging;
+bookmark / rating changes do not.
+
 ## Memory reflection and recall
 
 Two background loops — **reflection** (writes long-term memories
