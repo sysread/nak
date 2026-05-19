@@ -251,6 +251,126 @@
     if (wasConfirmed === false) return 'pushed back';
     return 'neutral';
   }
+
+  /**
+   * Subjective, prose-y interpretation of a row's numbers. The
+   * stats grid carries the raw values; this paragraph translates
+   * them into "what does this actually mean for me?" for readers
+   * who do not want to translate a 90% credible interval lower
+   * bound on a Beta-Binomial posterior into intuition on the fly.
+   *
+   * Branches: below-N-floor (numbers are mostly prior), elided-but-
+   * above-floor (weak signal, no surfacing), soft tier (occasional
+   * pattern), strong tier (consistent pattern). The soft/strong
+   * arms also note when a bias is at-tier but bumped out by
+   * RENDER_CAP. A trailing feedback sentence appears only when the
+   * EMA is meaningful (|score| >= 0.10) - below that the gate
+   * shift rounds to zero anyway.
+   */
+  function interpretBias(row: SummaryRow, isRendered: boolean): string {
+    const pct = (n: number): string => (n * 100).toFixed(1) + '%';
+    const belowFloor = row.effectiveN < N_EFF_FLOOR;
+
+    let core: string;
+    if (belowFloor) {
+      const shortfall = Math.max(0, N_EFF_FLOOR - row.effectiveN).toFixed(1);
+      core =
+        `Mostly prior - only ${formatEffectiveN(row.effectiveN)} ` +
+        `effective observations (recency-weighted) against the ` +
+        `floor of ${N_EFF_FLOOR}. The posterior mean of ` +
+        `${pct(row.posteriorMean)} is dominated by the default ` +
+        `Beta(${ALPHA_PRIOR}, ${BETA_PRIOR}) prior (mean ~20%); ` +
+        `about ${shortfall} more recency-weighted observations ` +
+        `needed before any signal can clear the floor.`;
+    } else if (row.tier === 'elided') {
+      core =
+        `Weak signal - 90% confident the underlying rate is at ` +
+        `least ${pct(row.ciLower)}, below the ${pct(CI_LB_SOFT)} ` +
+        `soft gate. Not surfacing in the system prompt.`;
+    } else if (row.tier === 'soft') {
+      const trailing = isRendered
+        ? ` Surfaces as a light "occasionally" nudge in the system prompt.`
+        : ` Outside the top ${RENDER_CAP} by CI lower this turn, ` +
+          `so the system prompt skips it.`;
+      core =
+        `Occasional pattern - 90% lower bound of ` +
+        `${pct(row.ciLower)} clears the soft gate ` +
+        `(${pct(CI_LB_SOFT)}) but not strong ` +
+        `(${pct(CI_LB_STRONG)}).` +
+        trailing;
+    } else {
+      const trailing = isRendered
+        ? ` Surfaces as a firm "consistently" nudge in the system prompt.`
+        : ` Outside the top ${RENDER_CAP} by CI lower this turn, ` +
+          `so the system prompt skips it.`;
+      core =
+        `Consistent pattern - 90% lower bound of ` +
+        `${pct(row.ciLower)} clears the strong gate ` +
+        `(${pct(CI_LB_STRONG)}).` +
+        trailing;
+    }
+
+    const fb = row.feedbackScore;
+    if (Math.abs(fb) >= 0.1) {
+      const delta = (Math.abs(fb) * FEEDBACK_THRESHOLD_DELTA).toFixed(2);
+      if (fb > 0) {
+        core +=
+          ` Feedback ${formatFeedback(fb)} shifts both gates down ` +
+          `by ${delta}, surfacing this sooner.`;
+      } else {
+        core +=
+          ` Feedback ${formatFeedback(fb)} shifts both gates up ` +
+          `by ${delta}, raising the bar to surface.`;
+      }
+    }
+
+    return core;
+  }
+
+  /**
+   * Hue for the landscape bar - encodes where this bias's CI
+   * lower sits relative to the surfacing gates. Borrowed in
+   * spirit from `usageHue` in Settings.svelte (color carries
+   * "how unusual is this row"; length still carries the magnitude),
+   * but anchored to the absolute gate thresholds rather than the
+   * dataset's median, because the gates are what determine
+   * surfacing and they don't drift with the data.
+   *
+   *   0                       -> 220 (blue, no signal)
+   *   CI_LB_SOFT (0.15)       -> 140 (green, edge of soft tier)
+   *   CI_LB_STRONG (0.30)     ->  30 (orange, edge of strong tier)
+   *   >= CI_LB_STRONG + 0.20  ->   5 (red, deep into strong)
+   *
+   * Linear interpolation between waypoints.
+   */
+  function biasHue(ciLower: number): number {
+    if (ciLower <= 0) return 220;
+    if (ciLower < CI_LB_SOFT) {
+      const t = ciLower / CI_LB_SOFT;
+      return 220 - t * 80;
+    }
+    if (ciLower < CI_LB_STRONG) {
+      const t = (ciLower - CI_LB_SOFT) / (CI_LB_STRONG - CI_LB_SOFT);
+      return 140 - t * 110;
+    }
+    const t = Math.min(1, (ciLower - CI_LB_STRONG) / 0.2);
+    return 30 - t * 25;
+  }
+
+  /**
+   * Denominator for the landscape bar's width. Always extends at
+   * least to the strong-tier gate so the gate positions sit at a
+   * consistent visual location even when no bias has cleared it
+   * yet - otherwise a profile full of elided biases would stretch
+   * the tiny CI-lower values to full width and lose the "look how
+   * far we are from surfacing" read.
+   */
+  const chartScale = $derived(
+    Math.max(
+      CI_LB_STRONG * 1.1,
+      ...summaryRows.map((r) => r.ciLower),
+    ),
+  );
 </script>
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
@@ -391,6 +511,62 @@
         {/if}
 
         <section class="block">
+          <h2 class="block-title">Bias landscape</h2>
+          <p class="block-blurb subtle">
+            One bar per catalog entry, length tracking the 90%
+            credible interval lower bound (the same quantity the
+            surfacing gates check against). Hue moves blue -&gt;
+            green -&gt; orange -&gt; red as the bar passes the soft
+            ({formatProbability(CI_LB_SOFT)}) and strong
+            ({formatProbability(CI_LB_STRONG)}) gates. Detail cards
+            for each entry follow below.
+          </p>
+          <!-- Usage-style at-a-glance comparison. The detail
+               cards beneath carry the full numbers and prose; this
+               view exists to answer "which biases stand out and by
+               how much?" in a single glance. -->
+          <div
+            class="bias-chart"
+            role="table"
+            aria-label="Bias landscape"
+          >
+            <div class="bias-chart-row bias-chart-head" role="row">
+              <span class="bias-chart-name" role="columnheader">Bias</span>
+              <span class="bias-chart-bar-head" role="columnheader">90% CI lower</span>
+              <span class="bias-chart-value" role="columnheader">&nbsp;</span>
+            </div>
+            {#each summaryRows as row (row.bias)}
+              <div class="bias-chart-row" role="row">
+                <span
+                  class="bias-chart-name"
+                  role="cell"
+                  title={biasDefinition(row.bias)}
+                >{biasLabel(row.bias)}</span>
+                <span class="bias-chart-bar-cell" role="cell">
+                  <!--
+                    Width is `max(2%, share-of-scale)` so a
+                    non-zero but tiny CI lower still registers as
+                    a visible nub rather than vanishing.
+                    chartScale extends at least to CI_LB_STRONG *
+                    1.1 so gate-relative position stays readable
+                    even when no bias has cleared the strong gate
+                    yet.
+                  -->
+                  <span
+                    class="bias-chart-bar"
+                    class:elided={row.tier === 'elided'}
+                    style="--bias-pct:{row.ciLower > 0
+                      ? Math.max(2, (row.ciLower / chartScale) * 100)
+                      : 0}%; --bias-hue:{biasHue(row.ciLower)}"
+                  ></span>
+                </span>
+                <span class="bias-chart-value" role="cell">{formatProbability(row.ciLower)}</span>
+              </div>
+            {/each}
+          </div>
+        </section>
+
+        <section class="block">
           <h2 class="block-title">Per-bias evidence</h2>
           <p class="block-blurb subtle">
             One row per catalog entry. Tier is gated by the lower
@@ -419,6 +595,13 @@
                   <div><dt>effective N</dt><dd>{formatEffectiveN(row.effectiveN)}</dd></div>
                   <div title="EMA of compensation-reaction feedback in [-1, +1]. Positive = user has affirmed compensation; negative = user has pushed back. Shifts the surfacing gates by up to {FEEDBACK_THRESHOLD_DELTA.toFixed(2)} at the extremes."><dt>feedback</dt><dd>{formatFeedback(row.feedbackScore)}</dd></div>
                 </dl>
+                <!-- Prose gloss on what the four numbers above
+                     mean for this bias. Tier-aware, with a
+                     trailing feedback sentence when the EMA is
+                     meaningful enough to shift the gates. -->
+                <p class="bias-interpretation">
+                  {interpretBias(row, rendered.has(row.bias))}
+                </p>
               </li>
             {/each}
           </ul>
@@ -696,6 +879,102 @@
     margin: 0;
     font-size: 0.9rem;
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Prose gloss under the stats grid. Same visual weight as the
+     definition line but with the default text color (not subtle) -
+     this paragraph is the interpretive payload of the card, not
+     metadata. */
+  .bias-interpretation {
+    margin: 0.5rem 0 0;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--text);
+  }
+
+  /* Landscape bar chart. Mirrors the structure of .usage-chart
+     in src/styles.css (Settings > Usage), with bias-prefixed
+     class names so the two charts can drift independently if
+     either feature's needs change. Columns: [name] [bar] [value].
+     `display: contents` on the row lets the grid lay out cells
+     directly so column tracks stay aligned across rows. */
+  .bias-chart {
+    display: grid;
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr) max-content;
+    gap: 0.3rem 0.65rem;
+    align-items: center;
+    margin: 0;
+  }
+
+  .bias-chart-row {
+    display: contents;
+  }
+
+  .bias-chart-head > * {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: color-mix(in srgb, var(--text) 65%, transparent);
+    padding-bottom: 0.15rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .bias-chart-name {
+    /* Right-aligned so the ragged-length labels form a clean
+       right edge against the bar. White-space nowrap avoids
+       mid-name line breaks; if the modal is narrow enough that
+       the longest label doesn't fit, the column falls back to
+       horizontal scroll inside the cell (min-width: 0 is what
+       lets the column clamp). */
+    text-align: end;
+    font-size: 0.82rem;
+    color: var(--text);
+    white-space: nowrap;
+    overflow-x: auto;
+    min-width: 0;
+  }
+
+  .bias-chart-bar-cell {
+    display: flex;
+    align-items: center;
+  }
+
+  .bias-chart-bar {
+    display: block;
+    width: var(--bias-pct, 0%);
+    height: 0.55rem;
+    /* Hue is gate-relative (see biasHue): blue below CI_LB_SOFT,
+       green at the soft gate, orange at the strong gate, red
+       past it. Saturation / lightness are fixed so the only
+       moving part is hue. Matches the visual idiom of the
+       Usage chart's bars. */
+    background: linear-gradient(
+      90deg,
+      hsl(var(--bias-hue, 220), 62%, 52%) 0%,
+      hsl(var(--bias-hue, 220), 62%, 52%) 70%,
+      hsl(var(--bias-hue, 220), 58%, 40%) 100%
+    );
+    border-radius: 999px;
+  }
+
+  .bias-chart-bar.elided {
+    /* Cool the elided bars down a notch so the eye drifts to the
+       at-tier bars first without losing the elided ones entirely.
+       The hue is still set by biasHue (blue territory anyway for
+       elided); this just lowers saturation and opacity. */
+    opacity: 0.7;
+  }
+
+  .bias-chart-value {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8rem;
+    color: color-mix(in srgb, var(--text) 75%, transparent);
+    text-align: end;
+    min-width: 3rem;
+  }
+
+  .bias-chart-bar-head {
+    text-align: start;
   }
 
   .tier-badge {
