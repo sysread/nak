@@ -326,12 +326,16 @@
   }
 
   /* One row per option. Whole row is the click target via the
-     wrapping <label>. */
+     wrapping <label>. `margin-bottom: 0` undoes the global `label`
+     rule (src/styles.css) that adds 0.3rem of bottom margin to every
+     label - here that would just spread the rows out for no reason
+     since the popover is a tight checkbox list, not a form. */
   .topics-filter-row {
     display: flex;
     align-items: center;
     gap: 0.5rem;
     padding: 0.35rem 0.6rem;
+    margin-bottom: 0;
     cursor: pointer;
     font-size: 0.85rem;
     color: var(--text);
@@ -342,10 +346,23 @@
   /* Inputs sit native rather than custom-painted - the platform
      checkbox renders correctly across the mobile + desktop targets
      and matches the user's OS-level a11y settings (high contrast,
-     etc.). */
+     etc.). The width / padding / background / border resets undo
+     the global `input, textarea, select` rule in src/styles.css
+     (which is calibrated for text inputs - width: 100%, generous
+     padding, a visible border): on a native checkbox those rules
+     stretch the input to fill the row, leave zero space for the
+     flex-1 text span, and collapse the label to invisible via
+     overflow: hidden. The OS-painted checkbox glyph then sits
+     somewhere inside that 100%-wide invisible box, reading as a
+     centered checkbox with no text next to it. */
   .topics-filter-row input {
     flex-shrink: 0;
     cursor: pointer;
+    width: auto;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
   }
   .topics-filter-row-text {
     flex: 1;
