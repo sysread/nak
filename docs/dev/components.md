@@ -109,6 +109,13 @@ interface Props {
   layout uses `flex-wrap: wrap` and the detail row is
   `flex-basis: 100%`, so the row drops to its own line inside the
   bubble rather than floating on top.
+- Decision logic (the clamp + hue ramp + color string, the usage
+  summary, the timezone-aware timestamp formatter with bad-zone
+  fallback, the bullet-joined tooltip) lives in
+  `src/lib/ui/context-ring.ts` and is unit-tested directly in
+  `tests/context-ring.test.ts` alongside the component-mount
+  cases. The `.svelte` file owns the SVG geometry, the `open`
+  rune, and the Escape `$effect`.
 
 Consumers: message action bar in `Chat.svelte`.
 
@@ -138,6 +145,31 @@ composer CSS so the picker slots in next to the model picker
 without a style pass.
 
 Consumers: composer row in `Chat.svelte`.
+
+## `<AssistantBody>`
+
+File: `src/components/AssistantBody.svelte`.
+
+Assistant message body — everything inside an `.msg.assistant`
+bubble EXCEPT the in-progress streaming branch (which lives in
+`Chat.svelte` because it wires live state). Renders the
+markdown content, the reasoning panel above and the citations
+panel below, and the action bar (copy, citations toggle,
+context ring, regenerate).
+
+Decision logic (the `^N^` citation-ref detector, the
+orphan-refs `citationsUnavailable` predicate, the
+controls-visibility gate, the `#cite-N` href parser, the
+flash delay matching the slide-down) lives in
+`src/lib/ui/assistant-body.ts` and is unit-tested at
+`tests/assistant-body.test.ts`. The `.svelte` file owns
+`citationsOpen` / `flashCite` runes, the body-click delegation,
+and the markup.
+
+Consumers: assistant turns in `Chat.svelte` (both the plain
+content branch and the tool-group branch that slots
+`<ToolCalls>` between body and actions via the `children`
+snippet).
 
 ## `<ToolCalls>`
 
@@ -170,6 +202,13 @@ Timings are not persisted (in-memory, owned by `Chat.svelte`).
 Reopening a conversation shows completed rows with status glyph
 only, no duration pill — historical latency wasn't worth the
 storage cost.
+
+Decision logic (the 4-source status tree, the live-vs-final
+duration pill, the JSON fence builders, the activity-narration
+extractor that tolerates partial streaming JSON) lives in
+`src/lib/ui/tool-calls.ts` and is unit-tested at
+`tests/tool-calls.test.ts`. The `.svelte` file owns the
+per-call `expanded` rune and the markup.
 
 Consumers: assistant bubble in `Chat.svelte`.
 

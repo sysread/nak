@@ -46,6 +46,13 @@
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { app } from '$lib/state.svelte';
+  import {
+    clampedPct,
+    formatReceivedAt,
+    pctToRingColor,
+    usageSummary,
+    usageTooltip,
+  } from '$lib/ui/context-ring';
 
   interface Props {
     /** Total tokens spent on this turn (prompt + completion). */
@@ -64,21 +71,8 @@
 
   const { totalTokens, contextWindow, createdAt = null }: Props = $props();
 
-  // Clamp to [0, 1] so a provider that overshoots (shouldn't happen,
-  // but defensive) doesn't produce a ring that goes around twice or
-  // a negative stroke-dashoffset.
-  const pct = $derived.by(() => {
-    if (!(contextWindow > 0)) return 0;
-    const raw = totalTokens / contextWindow;
-    return Math.min(1, Math.max(0, raw));
-  });
-
-  // Hue track: 120 (green) → 0 (red). Matches the "getting worse as it
-  // fills" intuition the user asked for. The saturation/lightness
-  // combo below was picked to stay legible against both light and dark
-  // message-card surfaces.
-  const hue = $derived(Math.round((1 - pct) * 120));
-  const color = $derived(`hsl(${hue} 65% 42%)`);
+  const pct = $derived(clampedPct(totalTokens, contextWindow));
+  const color = $derived(pctToRingColor(pct));
 
   // SVG geometry. viewBox is 24 for alignment with other icons in the
   // bar; the visible size is 14px to match CopyButton's glyph. r=9 with
@@ -88,52 +82,9 @@
   const CIRC = 2 * Math.PI * RADIUS;
   const dashOffset = $derived(CIRC * (1 - pct));
 
-  // Human-readable summary for the tooltip / detail row / aria-label.
-  // Percentage comes first because it's the headline — a glance at the
-  // ring already suggests "about half full"; the reveal's job is to
-  // put a specific number to that impression, then back it up with
-  // the exact token counts. Thousands separators make the magnitudes
-  // legible (1,234,567 reads instantly; 1234567 doesn't).
-  const fmt = new Intl.NumberFormat();
-  const summary = $derived(
-    `Context window: ${Math.round(pct * 100)}% used (${fmt.format(totalTokens)} / ${fmt.format(contextWindow)} tokens)`
-  );
-
-  // Render the row's wall-clock timestamp in the user's preferred
-  // zone. `medium` + `short` reads as e.g. "May 4, 2026, 3:42 PM" -
-  // unambiguous across years without going full ISO. Re-built inside
-  // the derived so a mid-session timezone change in Settings is
-  // reflected the next time Svelte re-runs the dependency graph; the
-  // formatter is cheap to construct and only fires when the row is
-  // actually mounted. Wrap in a try/catch since `Intl.DateTimeFormat`
-  // throws on an invalid timeZone; falling back to the browser zone
-  // keeps a stale or hand-edited setting from blanking the row.
-  const receivedAt = $derived.by(() => {
-    if (!createdAt) return null;
-    const ts = new Date(createdAt);
-    if (Number.isNaN(ts.getTime())) return null;
-    try {
-      return new Intl.DateTimeFormat(undefined, {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-        timeZone: app.displayTimezone,
-      }).format(ts);
-    } catch {
-      // Bad zone string - fall back to the browser default rather
-      // than rendering nothing.
-      return new Intl.DateTimeFormat(undefined, {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      }).format(ts);
-    }
-  });
-
-  // The hover tooltip and aria-label fold the timestamp in with a
-  // bullet so a quick peek surfaces both the usage and the
-  // received-at time without expanding the row.
-  const tooltip = $derived(
-    receivedAt ? `${summary} • Received ${receivedAt}` : summary
-  );
+  const summary = $derived(usageSummary(totalTokens, contextWindow));
+  const receivedAt = $derived(formatReceivedAt(createdAt, app.displayTimezone));
+  const tooltip = $derived(usageTooltip(summary, receivedAt));
 
   let open = $state(false);
   let detailEl = $state<HTMLDivElement | null>(null);

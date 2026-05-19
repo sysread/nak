@@ -25,6 +25,13 @@
   import { navigate } from '$lib/routing.svelte';
   import { onWikiChange } from '$lib/wiki-events';
   import type { WikiChangelogEntry } from '$lib/supabase';
+  import {
+    PAGE_SIZE,
+    canOpenArticle,
+    formatChangelogStamp,
+    isExhausted,
+    kindLabel,
+  } from '$lib/ui/wiki-changelog-panel';
 
   interface Props {
     /**
@@ -36,12 +43,6 @@
     onAddArticle?: () => void;
   }
   let { onAddArticle }: Props = $props();
-
-  // 50 reads as "a useful screenful" without dragging the first paint.
-  // Bumping it costs little - the index makes the range scan cheap -
-  // but more rows per request means more layout work the moment the
-  // panel mounts, and 50 hits a sweet spot.
-  const PAGE_SIZE = 50;
 
   let entries = $state<WikiChangelogEntry[]>([]);
   let loading = $state(true);
@@ -66,7 +67,7 @@
     try {
       const rows = await app.supabase.listWikiChangelog({ limit: PAGE_SIZE });
       entries = rows;
-      exhausted = rows.length < PAGE_SIZE;
+      exhausted = isExhausted(rows.length);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -86,7 +87,7 @@
         before: tail.created_at,
       });
       entries = [...entries, ...rows];
-      if (rows.length < PAGE_SIZE) exhausted = true;
+      if (isExhausted(rows.length)) exhausted = true;
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -105,28 +106,6 @@
     });
     return () => off();
   });
-
-  function kindLabel(k: WikiChangelogEntry['kind']): string {
-    if (k === 'create') return 'Added';
-    if (k === 'update') return 'Edited';
-    return 'Deleted';
-  }
-
-  // Compact locale-aware timestamp. Matches the format Cookbook's
-  // version-history rows use so the two changelog-style surfaces read
-  // the same. Falls back to the raw ISO string on parse failure
-  // rather than rendering an "Invalid Date".
-  function formatStamp(iso: string): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  }
 
   function openArticle(articleId: string): void {
     // Already on the Wiki tab (this panel only mounts there) - just
@@ -167,7 +146,7 @@
               aria-label={kindLabel(entry.kind)}
               title={kindLabel(entry.kind)}
             >{kindLabel(entry.kind)}</span>
-            {#if entry.article_id && entry.kind !== 'delete'}
+            {#if canOpenArticle(entry)}
               <button
                 type="button"
                 class="wiki-changelog-link"
@@ -175,11 +154,10 @@
                 title="Open this article"
               >{entry.title_at_change}</button>
             {:else}
-              <!-- article_id null (deleted) OR delete kind: render
-                   plain. For delete-kind we deliberately don't link
-                   even if article_id is still set (it won't be -
-                   the FK set null fires on delete - but the guard
-                   is belt-and-braces). -->
+              <!-- Deleted OR article_id null - render plain. The
+                   primitive collapses both gates into one
+                   predicate; see canOpenArticle's docstring for
+                   the belt-and-braces rationale. -->
               <span class="wiki-changelog-title-gone">
                 {entry.title_at_change}
               </span>
@@ -187,7 +165,7 @@
             <time
               class="wiki-changelog-stamp"
               datetime={entry.created_at}
-            >{formatStamp(entry.created_at)}</time>
+            >{formatChangelogStamp(entry.created_at)}</time>
           </div>
           <p class="wiki-changelog-message">{entry.message}</p>
         </li>
