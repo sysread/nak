@@ -106,6 +106,14 @@
   // empty array means "fetched and nothing recorded."
   let currentThreadObs = $state<ObservationRow[] | null>(null);
   let currentThreadReactions = $state<ReactionRow[] | null>(null);
+  // Has the worker analyzed the active thread yet? Drives the
+  // copy under "Observations from this conversation" - we need to
+  // distinguish "already analyzed, came up empty" from "not yet
+  // analyzed" (which covers both the worker-not-gotten-to-it case
+  // and the brand-new-draft case where the thread row doesn't even
+  // exist in the DB and the observations query trivially returns
+  // []). Null while the fetch is in flight.
+  let currentThreadProcessedAt = $state<string | null>(null);
   // Snapshot route.cid at mount so a thread switch behind the modal
   // doesn't yank the section's data partway through. The user can
   // close and reopen the modal to see the new thread.
@@ -118,7 +126,7 @@
       return;
     }
     try {
-      const [s, p, threadObs, threadReactions] = await Promise.all([
+      const [s, p, threadObs, threadReactions, processedAt] = await Promise.all([
         supabase.biasListSummary(),
         supabase.biasListProcessedThreads(30),
         activeThreadId
@@ -127,11 +135,15 @@
         activeThreadId
           ? supabase.biasListReactionsForThread(activeThreadId)
           : Promise.resolve([] as ReactionRow[]),
+        activeThreadId
+          ? supabase.biasGetThreadProcessedAt(activeThreadId)
+          : Promise.resolve(null),
       ]);
       summary = s;
       processed = p;
       currentThreadObs = activeThreadId ? threadObs : null;
       currentThreadReactions = activeThreadId ? threadReactions : null;
+      currentThreadProcessedAt = processedAt;
     } finally {
       loading = false;
     }
@@ -444,7 +456,18 @@
             {/if}
 
             <h3 class="sub-title">Observations from this conversation</h3>
-            {#if currentThreadObs === null}
+            {#if currentThreadObs === null || currentThreadProcessedAt === null}
+              <!-- Worker hasn't analyzed this thread yet. Covers
+                   two cases that look the same from the modal's
+                   perspective: (1) the thread is materialized but
+                   the worker excludes it while open in this tab,
+                   and (2) the thread is still a brand-new draft
+                   that hasn't been written to the DB yet, in which
+                   case the observations query trivially returns []
+                   and would otherwise read as "already analyzed,
+                   no findings" - wrong and misleading for a
+                   conversation that hasn't even had its first
+                   message sent. -->
               <p class="empty">
                 Not yet analyzed. While this conversation is open
                 in this tab the worker excludes it from its scan;
@@ -475,9 +498,15 @@
             {/if}
 
             <h3 class="sub-title">Reactions to compensation on this conversation</h3>
-            {#if currentThreadReactions === null || currentThreadReactions.length === 0}
+            {#if currentThreadReactions === null || currentThreadProcessedAt === null || currentThreadReactions.length === 0}
               <p class="empty">
-                {#if currentThreadReactions === null}
+                {#if currentThreadReactions === null || currentThreadProcessedAt === null}
+                  <!-- Same "not yet analyzed" gating as the
+                       observations block above: an empty reactions
+                       list on an un-processed thread is the worker
+                       not having gotten to it (or the thread being
+                       a draft that doesn't exist in the DB yet),
+                       not "scanned and found nothing." -->
                   Not yet analyzed. Reactions are recorded for the
                   biases that were active in the system prompt while
                   the conversation happened; the worker classifies

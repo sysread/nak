@@ -5423,6 +5423,28 @@ export class SupabaseService {
   }
 
   /**
+   * Debug modal: fetch a thread's bias_processed_at timestamp.
+   * Returns null if the thread row doesn't exist yet (e.g. a brand-
+   * new draft conversation that hasn't been materialized to the DB)
+   * or if the worker hasn't analyzed it yet. The bias-profile modal
+   * uses this to distinguish "not yet analyzed" (no observations
+   * because the worker hasn't gotten to it) from "already analyzed,
+   * no findings" (no observations because the worker scanned and
+   * came up empty) - otherwise a fresh conversation reads as the
+   * latter, which is wrong and misleading.
+   */
+  async biasGetThreadProcessedAt(threadId: string): Promise<string | null> {
+    const { data, error } = await this.client
+      .from('threads')
+      .select('bias_processed_at')
+      .eq('id', threadId)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    const row = data as { bias_processed_at: string | null } | null;
+    return row?.bias_processed_at ?? null;
+  }
+
+  /**
    * Debug modal: list observations for one thread. Used by the
    * per-conversation drill-down. Includes the cited message id so
    * the modal can deep-link back to the original.
