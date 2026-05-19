@@ -24,6 +24,7 @@
     refreshMemoriesTopicsVocabulary,
   } from '$lib/memories-store.svelte';
   import { classifyMemoryConfidence } from '$lib/memories';
+  import { SEARCH_DEBOUNCE_MS, emptyMessage } from '$lib/ui/memories-list';
   import TopicsFilter from './TopicsFilter.svelte';
 
   // Parent (Chat shell) passes a callback that dismisses the mobile
@@ -34,11 +35,6 @@
     onSelect?: () => void;
   }
   const { onSelect }: Props = $props();
-
-  // Same window the old in-modal search used. Long enough that the
-  // semantic-search request fires once at the end of a typing burst,
-  // short enough that intent-to-result still feels responsive.
-  const SEARCH_DEBOUNCE_MS = 200;
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -130,11 +126,7 @@
     </p>
   {:else if memoriesStore.results.length === 0}
     <p class="subtle" style="padding:0.75rem">
-      {#if memoriesStore.query.trim().length > 0}
-        No matches.
-      {:else}
-        No memories yet. They accumulate as you chat.
-      {/if}
+      {emptyMessage(memoriesStore.query)}
     </p>
   {:else}
     {#each memoriesStore.results as m (m.id)}

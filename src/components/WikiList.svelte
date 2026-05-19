@@ -17,14 +17,18 @@
   import { app } from '$lib/state.svelte';
   import { route, navigate } from '$lib/routing.svelte';
   import { wikiStore, runWikiSearch } from '$lib/wiki-store.svelte';
+  import {
+    SEARCH_DEBOUNCE_MS,
+    emptyMessage,
+    pickSortedArticles,
+    scannerLabel,
+  } from '$lib/ui/wiki-list';
   import Scanner from './Scanner.svelte';
 
   interface Props {
     onSelect?: () => void;
   }
   const { onSelect }: Props = $props();
-
-  const SEARCH_DEBOUNCE_MS = 200;
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -46,17 +50,12 @@
     };
   });
 
-  // Empty query: alphabetical, so the drawer reads as a wiki listing
-  // rather than a relevance ranking. Active query: pass server-returned
-  // order through verbatim - semantic hits come back ordered by cosine
-  // similarity ascending (closest first), then ILIKE hits the vector
-  // pass missed. That's what "ordered by closest match" means here.
-  const sorted = $derived.by(() => {
-    if (wikiStore.query.trim().length > 0) return wikiStore.results;
-    return [...wikiStore.results].sort((a, b) =>
-      a.title.toLowerCase().localeCompare(b.title.toLowerCase()),
-    );
-  });
+  const sorted = $derived(
+    pickSortedArticles({
+      articles: wikiStore.results,
+      query: wikiStore.query,
+    })
+  );
 
   function pickArticle(id: string): void {
     navigate({ wiki_article_id: id });
@@ -83,12 +82,7 @@
          query refresh on mount. Embedding the query takes a Venice
          round-trip; without this the drawer reads as frozen. -->
     <div class="search-status">
-      <Scanner
-        label={wikiStore.query.trim().length > 0
-          ? 'Searching wiki'
-          : 'Loading wiki'}
-        size={0.9}
-      />
+      <Scanner label={scannerLabel(wikiStore.query)} size={0.9} />
     </div>
   {:else if wikiStore.error}
     <p class="error" style="padding:0.75rem">
@@ -96,12 +90,7 @@
     </p>
   {:else if sorted.length === 0}
     <p class="subtle" style="padding:0.75rem">
-      {#if wikiStore.query.trim().length > 0}
-        No matches.
-      {:else}
-        No wiki articles yet. The background agent writes them as you
-        chat, or you can add your own.
-      {/if}
+      {emptyMessage(wikiStore.query)}
     </p>
   {:else}
     {#each sorted as a (a.id)}

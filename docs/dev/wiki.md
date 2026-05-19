@@ -205,7 +205,18 @@ Main-thread plumbing:
 UI:
 
 - `src/components/WikiList.svelte` - drawer listing. Search
-  input + alphabetical sort.
+  input + alphabetical sort. Composition-only: the sort
+  decision (alphabetical on empty query, server-relevance
+  order on active search), the scanner-label and empty-
+  message strings, and the `SEARCH_DEBOUNCE_MS` tunable all
+  live in the primitives module next door.
+- `src/lib/ui/wiki-list.ts` - pure UI-behavior primitives for
+  the sidebar listing. `pickSortedArticles({articles, query})`
+  carries the sort decision; `scannerLabel(query)` picks
+  between "Searching wiki" and "Loading wiki" for the
+  in-flight scanner; `emptyMessage(query)` picks between
+  "No matches." and the cold-account explainer. Unit-tested
+  at `tests/wiki-list.test.ts`.
 - `src/screens/Wiki.svelte` - main-panel article view, edit
   form, create form, delete confirmation, and the "ask agent
   to update" preview/accept/cancel flow. Each direct-edit flow
@@ -266,6 +277,17 @@ UI:
   "can-link-this-row" gate, the exhausted-page check) lives
   in `src/lib/ui/wiki-changelog-panel.ts` and is unit-tested
   at `tests/wiki-changelog-panel.test.ts`.
+- `src/components/WikiSkippedPanel.svelte` - the inline
+  panel mounted by Wiki.svelte when `skippedViewOpen` is set.
+  Lists threads whose `wiki_last_skip_at` is non-null (the
+  agent gave up after the per-thread failure cap) with the
+  trimmed Venice error reason; clicking a row navigates to
+  the conversation. Subscribes to `onWikiChange` so a
+  successful run draining a skip marker is reflected without
+  reopening the panel. Composition-only: the timestamp
+  formatter and the "[untitled conversation]" title fallback
+  live in `src/lib/ui/wiki-skipped-panel.ts` and are unit-
+  tested at `tests/wiki-skipped-panel.test.ts`.
 - `src/screens/Chat.svelte` - new tab, drawer branch,
   main-panel branch, top-bar branch, change-event listener.
   Top-bar branch carries the `librarian-run-btn` (sparkles)
