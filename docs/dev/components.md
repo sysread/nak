@@ -5,6 +5,14 @@ runes (`$props`, `$state`, `$effect`) rather than Svelte 4 stores.
 Screens (`src/screens/*.svelte`) compose these; no component here
 imports from another screen.
 
+Components are the *composition* layer: they wire pure UI-behavior
+primitives from `src/lib/ui/` to framework-native reactivity, bind
+to DOM events, and render markup. The decision logic those
+primitives encode (option lists, selection mutators, display-label
+transforms, domain sentinels) does not live in the `.svelte` file -
+see [`./frontend-organization.md`](./frontend-organization.md) for
+the criteria and a worked example.
+
 ## `<Markdown>`
 
 File: `src/components/Markdown.svelte`.

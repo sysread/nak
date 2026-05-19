@@ -50,7 +50,18 @@ threads tagged with either.
   Worker, builds the `StartMessage`.
 - `src/components/TopicsFilter.svelte` — the drawer's dropdown +
   pill row. Pure presentation; the parent passes the vocabulary +
-  selection in and gets an `onChange` callback out.
+  selection in and gets an `onChange` callback out. The Svelte file
+  owns only what is genuinely framework-specific: prop wiring,
+  `$state` / `$derived` declarations, DOM refs, the document-level
+  click/key listeners, and the markup. Every UI-behavior decision
+  is composed in from the primitives module.
+- `src/lib/ui/topics-filter.ts` — pure UI-behavior primitives for the
+  topic filter. `computeOptions(topics)`, `labelFor(topic)`,
+  `isUntagged(topic)`, `selectionAfterToggle(selected, topic)`,
+  `selectionAfterClearOne(selected, topic)`. No runes, no Svelte
+  imports - this file is what a port to another framework would
+  carry across unchanged. Unit-tested directly in
+  `tests/topics-filter.test.ts` (plain vitest, no harness).
 - `src/screens/Chat.svelte` — owns `selectedTopics` /
   `topicsVocabulary` state, threads `selectedTopics` through the
   three bucket fetches + search + window-fetch, refreshes the

@@ -35,12 +35,21 @@
    * shared filter URL (a future capability; today the selection is
    * in-memory only).
    *
-   * The "(untagged)" sentinel is imported from supabase.ts so the
-   * single source of truth lives next to the query builder that
-   * special-cases it.
+   * UI-behavior primitives (effective option list, selection
+   * mutators, display-label transform) live in `$lib/ui/topics-filter`
+   * as plain functions. This component composes them with its own
+   * Svelte runes and DOM listeners. A port to another framework would
+   * carry that module across unchanged and rewrite only the
+   * reactivity glue + markup below.
    */
   import { onMount, onDestroy } from 'svelte';
-  import { UNTAGGED_TOPIC_SENTINEL } from '$lib/supabase';
+  import {
+    computeOptions,
+    labelFor,
+    isUntagged,
+    selectionAfterToggle,
+    selectionAfterClearOne,
+  } from '$lib/ui/topics-filter';
 
   interface Props {
     /**
@@ -72,37 +81,16 @@
   let buttonEl: HTMLButtonElement | undefined = $state();
   let popoverEl: HTMLDivElement | undefined = $state();
 
+  const options = $derived(computeOptions(topics));
   const selectedSet = $derived(new Set(selected));
   const hasActive = $derived(selected.length > 0);
 
-  /**
-   * Effective option list. The (untagged) sentinel is always
-   * offered, even on accounts with zero tagged threads - it lets the
-   * user see the "the agent hasn't reached me yet" subset
-   * explicitly. Real topics come from the per-user vocabulary,
-   * alphabetised at the supabase layer.
-   */
-  const options = $derived([UNTAGGED_TOPIC_SENTINEL, ...topics]);
-
-  /**
-   * Display label for a topic. The sentinel renders as plain
-   * "untagged" without the parens - the parens are an internal-only
-   * marker that keeps it from colliding with any real topic the
-   * model could emit.
-   */
-  function labelFor(t: string): string {
-    return t === UNTAGGED_TOPIC_SENTINEL ? 'untagged' : t;
+  function toggle(topic: string): void {
+    onChange(selectionAfterToggle(selected, topic));
   }
 
-  function toggle(name: string): void {
-    const next = selectedSet.has(name)
-      ? selected.filter((t) => t !== name)
-      : [...selected, name];
-    onChange(next);
-  }
-
-  function clearOne(name: string): void {
-    onChange(selected.filter((t) => t !== name));
+  function clearOne(topic: string): void {
+    onChange(selectionAfterClearOne(selected, topic));
   }
 
   function clearAll(): void {
@@ -111,8 +99,9 @@
 
   /**
    * Click-outside-to-close. Listens at document level only when the
-   * popover is open so the listener doesn't sit live for the
-   * whole session.
+   * popover is open so the listener doesn't sit live for the whole
+   * session. The hit-testing here is DOM-coupled by nature and stays
+   * with the component.
    */
   function onDocClick(e: MouseEvent): void {
     if (!open) return;
@@ -193,7 +182,7 @@
             checked={selectedSet.has(opt)}
             onchange={() => toggle(opt)}
           />
-          <span class="topics-filter-row-text" class:untagged={opt === UNTAGGED_TOPIC_SENTINEL}>
+          <span class="topics-filter-row-text" class:untagged={isUntagged(opt)}>
             {labelFor(opt)}
           </span>
         </label>
@@ -215,7 +204,7 @@
   {#if hasActive}
     <div class="topics-filter-pills" role="group" aria-label="Active topic filters">
       {#each selected as t (t)}
-        <span class="topics-filter-pill" class:untagged={t === UNTAGGED_TOPIC_SENTINEL}>
+        <span class="topics-filter-pill" class:untagged={isUntagged(t)}>
           <span class="topics-filter-pill-text">{labelFor(t)}</span>
           <button
             type="button"

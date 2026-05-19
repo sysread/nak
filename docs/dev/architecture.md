@@ -304,6 +304,9 @@ follows the claim-RPC pattern.
 
 ## Where to go next
 
+- `./frontend-organization.md` — the UI-primitives /
+  Svelte-composition split. How to decide which layer a
+  change belongs in.
 - `./components.md` — the Svelte components `Chat.svelte` and
   friends compose.
 - `./chat.md` — the chat loop and the UI that drives it.
