@@ -14,7 +14,7 @@
 import type { Recipe } from '../supabase';
 import { UNTAGGED_TOPIC_SENTINEL } from '../supabase';
 
-export type SortMode = 'updated' | 'rating';
+export type SortMode = 'updated' | 'rating' | 'alphabetical';
 
 /**
  * How long to wait after the user's last keystroke before firing
@@ -54,6 +54,32 @@ function compareByRating(a: Recipe, b: Recipe): number {
 }
 
 /**
+ * Comparator for the alphabetical sort. Case- and accent-
+ * insensitive title compare via `localeCompare` with sensitivity
+ * "base", so "Espresso" / "espresso" and "creme" / "creme" collate
+ * together regardless of how the diacritics got typed. Titles are
+ * trimmed before comparison so a stray leading space cannot float
+ * a row above its peers.
+ *
+ * Untitled drafts (empty or whitespace-only `title`) sink to the
+ * bottom - they would otherwise leapfrog every real recipe whose
+ * name starts with a letter, which is not what "sort alphabetically"
+ * means to the user.
+ *
+ * Ties fall back to `updated_at` desc so the order is stable
+ * across reloads even when two recipes share a title.
+ */
+function compareByTitle(a: Recipe, b: Recipe): number {
+  const at = (a.title ?? '').trim();
+  const bt = (b.title ?? '').trim();
+  if (!at && bt) return 1;
+  if (at && !bt) return -1;
+  const cmp = at.localeCompare(bt, undefined, { sensitivity: 'base' });
+  if (cmp !== 0) return cmp;
+  return (b.updated_at ?? '').localeCompare(a.updated_at ?? '');
+}
+
+/**
  * Topic-filter predicate applied client-side over the bounded
  * cookbook (~200 rows on a heavy account; server-side filtering
  * would add scope for no perceptible perf win, and the same
@@ -84,20 +110,23 @@ export function matchesTopicFilter(
 }
 
 /**
- * Top of the visible listing. Three modes, in precedence:
+ * Top of the visible listing. Four modes, in precedence:
  *
  *   - Searching - server-returned hits in relevance order win;
  *     ranking is exactly what the user asked for.
  *   - sortMode === 'rating' - rating descending with the null-rank
  *     / recency tie-break.
- *   - Default - the store's existing order (most-recently-edited
- *     first; the cookbook store sorts on insert).
+ *   - sortMode === 'alphabetical' - title compare (case- and
+ *     accent-insensitive) with untitled drafts sinking to the
+ *     bottom and recency as the tie-break.
+ *   - Default ('updated') - the store's existing order (most-
+ *     recently-edited first; the cookbook store sorts on insert).
  *
  * The active topic filter narrows whichever source is in play -
  * the search ranking stays intact (the filter is applied AFTER
  * the server returns hits, so it does not perturb relevance
  * order), and the sort/default branches filter before sorting so
- * the rating order is computed over only the matching subset.
+ * the chosen order is computed over only the matching subset.
  */
 export function pickVisibleRecipes(args: {
   searching: boolean;
@@ -110,6 +139,9 @@ export function pickVisibleRecipes(args: {
     matchesTopicFilter(r, args.selectedTopics);
   if (args.searching) return args.searchResults.filter(match);
   const filtered = args.storeRecipes.filter(match);
+  if (args.sortMode === 'alphabetical') {
+    return filtered.sort(compareByTitle);
+  }
   if (args.sortMode === 'rating') {
     return filtered.sort(compareByRating);
   }

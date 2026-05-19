@@ -169,6 +169,11 @@ Cookbook list pane. Highest-rated recipes appear first, ties broken
 by most-recent edit; unrated recipes sink to the bottom so the
 sort is honest about which recipes you've actually tried.
 
+The same selector also offers **A-Z**, which sorts the list by
+title (case- and accent-insensitive). Useful when you remember the
+name of a recipe but not when you last opened it. Untitled drafts
+sink to the bottom; ties fall back to most-recent edit.
+
 ## Marking recipes as "upcoming"
 
 When you're planning the next grocery run, you can mark recipes as
@@ -192,7 +197,7 @@ deck" without scrolling.
 - **Stable sort**: toggling the upcoming flag does NOT bump the
   recipe to the top of the recency sort - the flag is a workflow
   bookmark, not an edit. The recipe stays in whatever spot the
-  "Recent" or "Rating" sort puts it.
+  "Recent", "Rating", or "A-Z" sort puts it.
 - **Manual clear**: the flag stays on until you turn it off. There
   is no automatic "reset at end of week" - turn upcoming off when
   you've shopped (or cooked) the recipe.

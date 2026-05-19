@@ -48,9 +48,10 @@
 
   let query = $state('');
   // 'updated' keeps the most-recently-edited recipe at the top;
-  // 'rating' bubbles the user's favourites up. Matches the old modal.
-  // Only consulted when query is empty; an active search uses
-  // server-returned relevance order.
+  // 'rating' bubbles the user's favourites up; 'alphabetical'
+  // sorts by title for when you remember the name but not when
+  // you last touched it. Only consulted when query is empty; an
+  // active search uses server-returned relevance order.
   let sortMode = $state<SortMode>('updated');
 
   let searchResults = $state<Recipe[]>([]);
@@ -198,6 +199,7 @@
         >
           <option value="updated">Recent</option>
           <option value="rating">Rating</option>
+          <option value="alphabetical">A-Z</option>
         </select>
       </label>
     {/if}
