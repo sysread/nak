@@ -61,8 +61,25 @@ Two jobs, one module:
 - `src/lib/logger.svelte.ts` - the logger module. Holds the
   reactive buffer, the drawer open/close singleton, and the
   worker-to-main log relay.
-- `src/components/LogsDrawer.svelte` - the left-side drawer.
+- `src/components/LogsDrawer.svelte` - the right-side drawer.
   Reads `logs.entries` and `logsDrawer.state.open` reactively.
+  Composition only: the filter runes, the three `$effect`s
+  (re-seed filters on open, Escape listener, scroll-pin tail),
+  the clipboard orchestration, and the markup. Every decision
+  the panel makes is delegated to the primitives module next
+  door.
+- `src/lib/ui/logs-drawer.ts` - pure UI-behavior primitives.
+  `entryMatches(entry, filter)` + `splitNeedles(search)` for
+  the filter predicate; `availableSources(entries)` for the
+  source-tag dropdown; the `hasStructuredDetails` /
+  `inlineStringDetails` / `structuredDetails` partition over
+  detail arrays; `formatStructured` and `normalizeDetail` for
+  the structured-render and clone-safe-snapshot paths;
+  `highlightSegments(text, needles)` for the multi-needle
+  range-merge highlight algorithm; `formatTimestamp`,
+  `nearBottom`, `emptyMessage`, and `buildLogSnapshot` for the
+  rest. Unit-tested directly at `tests/logs-drawer.test.ts`
+  with plain vitest (50 cases, no mount, no harness).
 - `src/screens/Chat.svelte` - mounts `<LogsDrawer />` and owns
   the scroll-icon button in the top bar that toggles it.
 

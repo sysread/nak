@@ -38,10 +38,23 @@
     logsDrawer,
     LOG_LEVELS,
     LOG_LEVEL_LABELS,
-    type LogEntry,
     type LogLevel,
   } from '$lib/logger.svelte';
   import { app } from '$lib/state.svelte';
+  import {
+    availableSources as availableSourcesFn,
+    buildLogSnapshot,
+    emptyMessage,
+    entryMatches,
+    formatStructured,
+    formatTimestamp,
+    hasStructuredDetails,
+    highlightSegments,
+    inlineStringDetails,
+    nearBottom,
+    splitNeedles,
+    structuredDetails,
+  } from '$lib/ui/logs-drawer';
 
   const drawer = logsDrawer;
 
@@ -89,148 +102,50 @@
   // per-entry payload to carry.
   let expanded = $state<Set<number>>(new Set());
 
-  // Rank levels so the filter can do a numeric >= check. Kept local
-  // to the component because no other site needs this ordering.
-  // `trace` sits below `debug` so picking the Trace+ tier widens the
-  // filter to include the per-cycle worker breadcrumbs.
-  const LEVEL_RANK: Record<LogLevel, number> = {
-    trace: -1,
-    debug: 0,
-    info: 1,
-    warn: 2,
-    error: 3,
-  };
-
-  function entryMatches(
-    e: LogEntry,
-    threshold: LogLevel,
-    needles: string[],
-    mode: 'or' | 'and',
-    source: string
-  ): boolean {
-    if (LEVEL_RANK[e.level] < LEVEL_RANK[threshold]) return false;
-    if (source !== '' && e.source !== source) return false;
-    if (needles.length === 0) return true;
-    const hay = (
-      (e.source ?? '') + ' ' + e.message + ' ' + detailsHaystack(e.details)
-    ).toLowerCase();
-    if (mode === 'and') {
-      return needles.every((n) => hay.includes(n.toLowerCase()));
-    }
-    return needles.some((n) => hay.includes(n.toLowerCase()));
-  }
-
-  function detailsHaystack(details: unknown[]): string {
-    // Flatten details into a searchable string. Errors contribute
-    // their message + stack; objects contribute their JSON; anything
-    // else falls back to String(). Best-effort: a huge nested object
-    // still searches in O(n) so this stays predictable.
-    const parts: string[] = [];
-    for (const d of details) {
-      if (d instanceof Error) {
-        parts.push(d.message);
-        if (d.stack) parts.push(d.stack);
-        continue;
-      }
-      if (typeof d === 'string') {
-        parts.push(d);
-        continue;
-      }
-      try {
-        parts.push(JSON.stringify(d));
-      } catch {
-        parts.push(String(d));
-      }
-    }
-    return parts.join(' ');
-  }
-
-  // Whitespace-split tokens. Empty tokens (from leading / trailing /
-  // double spaces) are dropped so the user doesn't accidentally match
-  // every entry just by hitting space.
-  const needles = $derived(
-    search.trim().split(/\s+/).filter((s) => s.length > 0)
-  );
+  const needles = $derived(splitNeedles(search));
 
   const visible = $derived(
     logs.entries.filter((e) =>
-      entryMatches(e, levelFilter, needles, matchMode, sourceFilter)
+      entryMatches(e, {
+        levelFilter,
+        matchMode,
+        sourceFilter,
+        needles,
+      })
     )
   );
 
-  // Unique source tags present in the current buffer, alphabetised so
-  // the dropdown is predictable as new entries stream in. Worker
-  // managers push their source through `appendFromWorker`, so this
-  // reflects both main-thread and worker-side loggers without any
-  // extra registration step. Tags with a null source (the few call
-  // sites that don't carry one) are skipped - they aren't selectable
-  // anyway and would surface as an empty option.
-  const availableSources = $derived.by(() => {
-    const set = new Set<string>();
-    for (const e of logs.entries) {
-      if (e.source) set.add(e.source);
-    }
-    return [...set].sort();
-  });
+  const availableSources = $derived(availableSourcesFn(logs.entries));
 
   // Copy-to-clipboard for the currently-filtered entry set. Feeds
   // the same "paste a JSON blob into chat" workflow as the
   // Samskara diagnostics panel; keeps what the user is looking at,
   // not the full raw buffer, so a search-narrowed view doesn't
-  // bury the 10 relevant lines under 1990 unrelated ones. Details
-  // are normalized to a clone-safe shape because Error instances
-  // and circular objects don't survive JSON.stringify cleanly.
-  // Two-state only: 'copied' flashes the checkmark glyph, 'idle' shows
-  // the copy glyph. A clipboard failure (denied permission, insecure
+  // bury the 10 relevant lines under 1990 unrelated ones. Two-state
+  // only: 'copied' flashes the checkmark glyph, 'idle' shows the
+  // copy glyph. A clipboard failure (denied permission, insecure
   // context, both writeText AND the textarea fallback throwing) bails
   // without flashing - the absence of the checkmark is itself the
   // failure signal, matching CopyButton.svelte's convention.
   let copyState = $state<'idle' | 'copied'>('idle');
   let copyResetTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function normalizeDetail(d: unknown): unknown {
-    if (d instanceof Error) {
-      return { name: d.name, message: d.message, stack: d.stack ?? null };
-    }
-    if (d === null || typeof d !== 'object') return d;
-    try {
-      // Round-trip through JSON to strip functions / symbols /
-      // non-enumerable props and catch circular refs early.
-      return JSON.parse(JSON.stringify(d));
-    } catch {
-      try {
-        return String(d);
-      } catch {
-        return '[unserializable]';
-      }
-    }
-  }
-
-  function buildLogSnapshot(): string {
-    const payload = {
-      capturedAt: new Date().toISOString(),
-      buildCommit: __APP_COMMIT__,
-      buildTime: __APP_BUILD_TIME__,
-      levelFilter,
-      sourceFilter: sourceFilter || null,
-      searchFilter: search,
-      searchMode: matchMode,
-      totalEntries: logs.entries.length,
-      shownEntries: visible.length,
-      entries: visible.map((e) => ({
-        id: e.id,
-        timestamp: new Date(e.timestamp).toISOString(),
-        level: e.level,
-        source: e.source,
-        message: e.message,
-        details: e.details.map(normalizeDetail),
-      })),
-    };
-    return JSON.stringify(payload, null, 2);
-  }
-
   async function copyLogs(): Promise<void> {
-    const text = buildLogSnapshot();
+    const text = JSON.stringify(
+      buildLogSnapshot({
+        capturedAt: new Date().toISOString(),
+        buildCommit: __APP_COMMIT__,
+        buildTime: __APP_BUILD_TIME__,
+        levelFilter,
+        matchMode,
+        sourceFilter,
+        search,
+        totalEntries: logs.entries.length,
+        visibleEntries: visible,
+      }),
+      null,
+      2
+    );
     let ok = false;
     try {
       await navigator.clipboard.writeText(text);
@@ -261,97 +176,6 @@
       copyState = 'idle';
       copyResetTimer = null;
     }, 1500);
-  }
-
-  function formatTimestamp(ms: number): string {
-    const d = new Date(ms);
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    const ss = String(d.getSeconds()).padStart(2, '0');
-    const mss = String(d.getMilliseconds()).padStart(3, '0');
-    return `${hh}:${mm}:${ss}.${mss}`;
-  }
-
-  function hasStructuredDetails(details: unknown[]): boolean {
-    // Plain-string details render inline under the message; anything
-    // else (Error, object, array, number, ...) gets the expander.
-    return details.some((d) => typeof d !== 'string');
-  }
-
-  function inlineStringDetails(details: unknown[]): string[] {
-    return details.filter((d): d is string => typeof d === 'string');
-  }
-
-  function structuredDetails(details: unknown[]): unknown[] {
-    return details.filter((d) => typeof d !== 'string');
-  }
-
-  function formatStructured(d: unknown): string {
-    if (d instanceof Error) {
-      // Show the stack if we have one; otherwise fall back to the
-      // name+message line so the entry still conveys something.
-      return d.stack && d.stack.length > 0
-        ? d.stack
-        : `${d.name}: ${d.message}`;
-    }
-    try {
-      return JSON.stringify(d, null, 2);
-    } catch {
-      return String(d);
-    }
-  }
-
-  // Split `text` into runs of unmatched/matched substrings against the
-  // current search needles. Caller renders matched runs inside <mark>
-  // for the search-highlight band, unmatched runs as plain text. Empty
-  // needle list short-circuits to a single unmatched run so an empty
-  // filter produces no DOM churn vs. the pre-highlight render.
-  //
-  // Multi-needle highlighting: collect every match range across every
-  // needle, sort by start, merge overlaps, then walk the merged ranges
-  // to emit segments. Highlights are mode-agnostic - in OR mode we mark
-  // whichever needle hit; in AND mode every needle hit by definition,
-  // so the same logic produces the right rendering for both.
-  function highlightSegments(
-    text: string,
-    queryNeedles: string[]
-  ): Array<{ text: string; match: boolean }> {
-    if (queryNeedles.length === 0 || text.length === 0) {
-      return [{ text, match: false }];
-    }
-    const hay = text.toLowerCase();
-    const ranges: Array<[number, number]> = [];
-    for (const n of queryNeedles) {
-      if (n.length === 0) continue;
-      const find = n.toLowerCase();
-      let i = 0;
-      while (i < text.length) {
-        const at = hay.indexOf(find, i);
-        if (at === -1) break;
-        ranges.push([at, at + n.length]);
-        i = at + n.length;
-      }
-    }
-    if (ranges.length === 0) return [{ text, match: false }];
-    ranges.sort((a, b) => a[0] - b[0]);
-    const merged: Array<[number, number]> = [];
-    for (const r of ranges) {
-      const last = merged[merged.length - 1];
-      if (last && r[0] <= last[1]) {
-        last[1] = Math.max(last[1], r[1]);
-      } else {
-        merged.push([r[0], r[1]]);
-      }
-    }
-    const out: Array<{ text: string; match: boolean }> = [];
-    let cursor = 0;
-    for (const [s, e] of merged) {
-      if (s > cursor) out.push({ text: text.slice(cursor, s), match: false });
-      out.push({ text: text.slice(s, e), match: true });
-      cursor = e;
-    }
-    if (cursor < text.length) out.push({ text: text.slice(cursor), match: false });
-    return out;
   }
 
   function toggleExpanded(id: number): void {
@@ -390,8 +214,7 @@
   function onBodyScroll(): void {
     const el = bodyEl;
     if (!el) return;
-    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 16;
-    followTail = nearBottom;
+    followTail = nearBottom(el.scrollTop, el.clientHeight, el.scrollHeight);
   }
 
   $effect(() => {
@@ -603,9 +426,7 @@
     >
       {#if visible.length === 0}
         <p class="logs-empty">
-          {logs.entries.length === 0
-            ? 'No log entries yet.'
-            : 'No entries match the current filter.'}
+          {emptyMessage(logs.entries.length, visible.length)}
         </p>
       {:else}
         {#each visible as entry (entry.id)}
