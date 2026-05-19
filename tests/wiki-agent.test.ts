@@ -46,53 +46,6 @@ function makeSupabase(messages: Message[]): SupabaseService {
 }
 
 /**
- * Scripted venice client whose `completeChat` decides what to return
- * based on the model id on the request. Each `script[modelId]` is a
- * queue of completions; popping past the end resolves with a default
- * empty terminal response. The recorded call list lets the tests
- * assert which models were actually contacted.
- */
-function makeVenice(script: Record<string, ChatCompletion[]>): {
-  venice: VeniceClient;
-  calls: { model: string }[];
-} {
-  const calls: { model: string }[] = [];
-  const remaining: Record<string, ChatCompletion[]> = {};
-  for (const [k, v] of Object.entries(script)) {
-    remaining[k] = v.slice();
-  }
-  const completeChat = vi.fn(
-    async (req: { model: string; messages: VeniceMessage[] }): Promise<ChatCompletion> => {
-      calls.push({ model: req.model });
-      const queue = remaining[req.model];
-      if (!queue || queue.length === 0) {
-        return {
-          text: '',
-          reasoning: '',
-          toolCalls: [],
-          usage: null,
-          citations: [],
-          finishReason: 'stop',
-        };
-      }
-      const next = queue.shift()!;
-      if (next instanceof Error) throw next;
-      // Allow scripted errors via plain Error objects masquerading as
-      // ChatCompletion - the type signature above keeps callers
-      // honest; the test helper below wraps the throw.
-      return next;
-    }
-  );
-  return {
-    venice: {
-      completeChat,
-      embed: vi.fn(async () => ({ data: [] })),
-    } as unknown as VeniceClient,
-    calls,
-  };
-}
-
-/**
  * Convenience: build a venice whose `completeChat` throws for the
  * primary model with the content-classifier sentinel, and returns a
  * happy terminal response for the fallback. Lets the agent's two-shot
