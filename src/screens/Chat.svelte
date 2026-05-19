@@ -3448,6 +3448,56 @@
     hasOverflow = el.scrollHeight > el.clientHeight + 1;
   }
 
+  // Mobile-touch companion to onMessagesScroll. iOS Safari (and some
+  // Android WebViews) batch or defer 'scroll' events during a finger-
+  // down drag - scrollTop updates live on the element but the listener
+  // doesn't fire until the touch ends or the browser decides to flush.
+  // The visible symptom: the user drags up to read while a response
+  // is streaming, but `followBottom` and `lastScrollTop` stay frozen
+  // at the values from before the drag. When `onAssistantPersisted`
+  // lands the persisted row, the discrete-mutations effect sees a
+  // stale `followBottom=true` and calls `scrollToBottom`, which yanks
+  // the view to the bottom of the just-finished response despite the
+  // user's scroll-lock. Sampling on every touchmove keeps the state
+  // fresh through the drag so the effect's gate reads the user's
+  // actual position. Idempotent against extra fires - the handler
+  // diffs newScrollTop against lastScrollTop and is a no-op when
+  // they match (the user is touching but not scrolling).
+  function onMessagesTouchMove(): void {
+    onMessagesScroll();
+  }
+
+  // Defensive sample-and-disengage for the auto-scroll firing paths.
+  // Same stale-state hazard as onMessagesTouchMove guards against,
+  // re-checked at the moment we're about to scroll: if the live
+  // scrollTop has dropped below lastScrollTop without a 'scroll' or
+  // 'touchmove' event having fired in between (rare but possible on
+  // mobile when the discrete effect runs in the same microtask as a
+  // user drag), drop the lock so we don't fight the user's intent.
+  //
+  // Asymmetric on purpose - only catches scrollTop going backwards,
+  // since scrollTop going forwards is either a programmatic scroll
+  // (handled by the scroll-event path) or the user dragging toward
+  // the bottom (will pick up via the scroll handler shortly).
+  //
+  // The `!isNearBottom` second gate distinguishes a stale user-drag
+  // from a browser scroll-anchor adjustment: when the reasoning
+  // panel above the viewport collapses while the user is riding
+  // the bottom, `overflow-anchor: auto` shifts scrollTop down to
+  // keep the visible content stable, but the user is still
+  // effectively at the bottom. Disengaging the lock in that case
+  // would silently break follow-bottom mid-stream. Treat the drop
+  // as user intent only when the new position is actually away
+  // from the bottom.
+  function refreshFollowBottom(): void {
+    const el = messagesEl;
+    if (!el) return;
+    if (el.scrollTop < lastScrollTop) {
+      if (!isNearBottom(el)) followBottom = false;
+      lastScrollTop = el.scrollTop;
+    }
+  }
+
   // Streaming deltas arrive fast enough that scrolling on every
   // coalesced paint makes the content rocket off-screen before the
   // eye can lock onto a word — the view feels like a slot machine.
@@ -3480,10 +3530,14 @@
     // while the timer was pending, and the completion may have ended
     // between schedule and fire (max-wait of 300ms can outlive the
     // final round of streaming) - either condition disables auto-scroll.
+    // refreshFollowBottom guards against the mobile case where the
+    // user dragged up without a 'scroll' event firing in time.
+    refreshFollowBottom();
     if (sending && followBottom) scrollToBottom(false);
   }
 
   function scheduleStreamScroll(): void {
+    refreshFollowBottom();
     if (!sending || !followBottom) {
       // Auto-scroll only runs while a completion is in progress and
       // scroll-lock isn't engaged. Drop any pending scrolls so a stale
@@ -3535,6 +3589,13 @@
     if (!el) return;
     hasOverflow = el.scrollHeight > el.clientHeight + 1;
     cancelScrollTimers();
+    // refreshFollowBottom: this effect fires synchronously off the
+    // assistant-persist appendMessage, which on mobile can happen
+    // while the user has a finger down dragging up to read - the
+    // 'scroll' event from that drag may not have fired yet, so
+    // followBottom can still read stale-true. Sampling scrollTop
+    // here disengages the lock before the gate is read.
+    refreshFollowBottom();
     if (sending && followBottom) scrollToBottom(false);
   });
 
@@ -4767,10 +4828,21 @@
 
       {#if drawerTab === 'chats'}
       <div class="messages-wrap">
+        <!--
+          ontouchmove: not a user-facing interaction - the handler is a
+          scroll-state sampler that re-runs onMessagesScroll during a
+          touch drag because mobile browsers (iOS Safari especially)
+          can defer 'scroll' events until the finger lifts. The div is
+          already scrollable via overflow:auto and doesn't take on any
+          new interactive semantics here, so suppressing the a11y rule
+          is appropriate rather than slapping a role on it.
+        -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="messages"
           bind:this={messagesEl}
           onscroll={onMessagesScroll}
+          ontouchmove={onMessagesTouchMove}
         >
           {#each messageBlocks as block (
             block.kind === 'plain'
