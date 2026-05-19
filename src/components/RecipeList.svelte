@@ -384,13 +384,16 @@
     flex: 1;
     min-width: 0;
   }
-  /* Topic-filter row, matches `.thread-list-topics` /
-     `.memory-list-topics` so all three drawer tabs render the filter
-     identically. Negative margin-top tucks the trigger close under
-     the search row; side gutter aligns with the input above; bottom
-     margin separates from the first listing entry. */
+  /* Topic-filter row. Sits below the search row and aligns to the
+     same content gutters: the controls row's padding-x is 0.6rem, so
+     this row's margin-x matches so the Topics trigger's left and
+     right edges line up with the search input's left edge and the
+     Recent dropdown's right edge respectively. Mirrors
+     `.memory-list-topics`. Negative margin-top tucks the trigger
+     close under the controls row; bottom margin separates from the
+     first listing entry. */
   .recipe-list-topics {
-    margin: -0.3rem 0.35rem 0.5rem;
+    margin: -0.3rem 0.6rem 0.5rem;
     flex-shrink: 0;
   }
   .recipe-sort-label {

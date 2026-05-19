@@ -184,15 +184,14 @@
     min-width: 0;
   }
   /* Topic-filter row. Sits between the search input and the memory
-     listing. Matches `.thread-list-topics` in styles.css - same negative
-     margin-top so the trigger pulls up close under the search row, same
-     side gutter so the trigger spans the input's full edge-to-edge
-     width, same margin-bottom so the first listing row isn't crowded.
-     Kept local rather than added to the global stylesheet because the
-     selector is component-scoped and there's nothing for another
-     module to reuse. */
+     listing. The controls row's padding-x is 0.6rem so this row's
+     margin-x matches: the Topics trigger's left and right edges line
+     up with the search input's edges above. Mirrors
+     `.recipe-list-topics`. Negative margin-top tucks the trigger
+     close under the search row; bottom margin separates from the
+     first listing entry. */
   .memory-list-topics {
-    margin: -0.3rem 0.35rem 0.5rem;
+    margin: -0.3rem 0.6rem 0.5rem;
     flex-shrink: 0;
   }
   /* Two-line memory row: label on top, confidence chip inline. */
