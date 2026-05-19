@@ -193,7 +193,7 @@
             checked={selectedSet.has(opt)}
             onchange={() => toggle(opt)}
           />
-          <span class="topics-filter-row-text" class:sentinel={opt === UNTAGGED_TOPIC_SENTINEL}>
+          <span class="topics-filter-row-text" class:untagged={opt === UNTAGGED_TOPIC_SENTINEL}>
             {labelFor(opt)}
           </span>
         </label>
@@ -215,7 +215,7 @@
   {#if hasActive}
     <div class="topics-filter-pills" role="group" aria-label="Active topic filters">
       {#each selected as t (t)}
-        <span class="topics-filter-pill" class:sentinel={t === UNTAGGED_TOPIC_SENTINEL}>
+        <span class="topics-filter-pill" class:untagged={t === UNTAGGED_TOPIC_SENTINEL}>
           <span class="topics-filter-pill-text">{labelFor(t)}</span>
           <button
             type="button"
@@ -376,16 +376,21 @@
        with the left-aligned real-topic rows above and below it. */
     text-align: left;
   }
-  /* The (untagged) sentinel renders with muted styling so it reads
-     as a meta-option distinct from the real topic list. The
-     `text-align` repetition here is belt-and-suspenders against
-     any future rule that lands `text-align` on a competing
-     selector at higher specificity - the value matches the base
-     row-text rule above. */
-  .topics-filter-row-text.sentinel {
+  /* The (untagged) row renders with muted italic styling so it
+     reads as a meta-option distinct from the real topic list. The
+     class is named `.untagged` rather than the cleaner-sounding
+     `.sentinel` because the latter collides with the global
+     `.sentinel` class (src/styles.css) used for the conversation
+     drawer's IntersectionObserver pagination targets - that
+     global rule sets `display: flex; justify-content: center;
+     align-items: center` and any element carrying both
+     `topics-filter-row-text` and `sentinel` ends up centering its
+     text content despite the `text-align: left` on the base rule
+     (text-align is a no-op once the element is a flex container
+     with `justify-content: center`). */
+  .topics-filter-row-text.untagged {
     color: var(--muted);
     font-style: italic;
-    text-align: left;
   }
 
   .topics-filter-empty {
@@ -415,7 +420,7 @@
     font-size: 0.8rem;
     max-width: 100%;
   }
-  .topics-filter-pill.sentinel {
+  .topics-filter-pill.untagged {
     background: var(--surface);
     color: var(--muted);
     font-style: italic;
