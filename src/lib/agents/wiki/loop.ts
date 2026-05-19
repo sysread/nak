@@ -9,6 +9,17 @@
  * advances the pointer so the same conversation is not re-processed
  * every cycle. New turns added to the thread will reset eligibility
  * via the next-day predicate in `claim_next_thread_for_wiki`.
+ *
+ * Error path: the agent's `stoppedReason === 'error'` branch does NOT
+ * mark the thread processed - it calls `record_wiki_failure_or_skip`
+ * which increments a per-thread counter and either releases the claim
+ * (so the next cycle retries quickly) or, once the counter reaches
+ * `maxFailuresPerThread`, advances the pointer to skip the thread.
+ * Skipping protects against pinning the queue on a permanently-
+ * filtered conversation (Venice's content classifier rejecting the
+ * same text every attempt). The skipped thread rejoins the queue only
+ * when a new turn changes the terminal message, giving the filter a
+ * fresh body to evaluate.
  */
 import type { Agent } from '../types';
 import type { SupabaseService } from '../../supabase';
@@ -23,6 +34,12 @@ export type CycleResult =
   | 'polling'
   | 'empty-queue'
   | 'processed'
+  /**
+   * Agent errored and the per-thread failure counter reached the cap.
+   * Pointer was advanced (the failing terminal message is now behind
+   * us); claim was cleared. Drain to the next thread.
+   */
+  | 'skipped'
   | 'claim-lost'
   | 'error';
 
@@ -39,6 +56,13 @@ export interface CycleContext {
    */
   timezone: string | null;
   threadClaimTtlSeconds: number;
+  /**
+   * Consecutive-failure cap per thread. When the agent errors this
+   * many times against the same terminal message, the pointer is
+   * advanced (skipping the thread for this round of turns) rather
+   * than retrying forever. Set in `manager.ts`'s WORKER_DEFAULTS.
+   */
+  maxFailuresPerThread: number;
   signal: AbortSignal;
   onLeaseLost: () => void;
 }
@@ -98,11 +122,52 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
 
   if (runResult.stoppedReason === 'error') {
     // Side effects from any wiki_* tool calls already landed (the
-    // wiki tools are owned by the user, not the claim). Don't
-    // advance the pointer - next cycle will retry.
+    // wiki tools are owned by the user, not the claim). The failure
+    // RPC increments a per-thread counter and decides whether to
+    // release the claim (retry on the next cycle) or advance the
+    // pointer (give up after N attempts so a permanently-filtered
+    // thread doesn't pin the queue).
+    const errMsg = runResult.error ?? '(no message)';
+    let outcome: 'released' | 'skipped' | 'claim-lost';
+    try {
+      outcome = await ctx.supabase.recordWikiFailureOrSkip(
+        claim.threadId,
+        ctx.holderId,
+        claim.terminalMsgId,
+        ctx.maxFailuresPerThread
+      );
+    } catch (rpcErr) {
+      // Counter bookkeeping failed. The original agent error is
+      // still the headline; surface both so an operator reading the
+      // drawer can correlate them. The claim TTL (10 min) will sweep
+      // the row regardless, so we still make forward progress -
+      // just on the slower fallback path.
+      log.info(
+        `thread ${claim.threadId} agent reported error: ` +
+          `${errMsg} ${titleTag} ` +
+          `(failure RPC also threw: ${
+            rpcErr instanceof Error ? rpcErr.message : String(rpcErr)
+          })`
+      );
+      return 'error';
+    }
+    if (outcome === 'skipped') {
+      log.warn(
+        `thread ${claim.threadId} agent reported error: ${errMsg} ` +
+          `(reached failure cap; pointer advanced to skip) ${titleTag}`
+      );
+      return 'skipped';
+    }
+    if (outcome === 'claim-lost') {
+      log.debug(
+        `thread ${claim.threadId} agent reported error: ${errMsg} ` +
+          `(claim already gone; another device will retry) ${titleTag}`
+      );
+      return 'claim-lost';
+    }
     log.info(
-      `thread ${claim.threadId} agent reported error: ` +
-        `${runResult.error ?? '(no message)'} ${titleTag}`
+      `thread ${claim.threadId} agent reported error: ${errMsg} ` +
+        `(claim released; will retry next cycle) ${titleTag}`
     );
     return 'error';
   }
@@ -158,6 +223,7 @@ export function napForResult(result: CycleResult, config: NapConfig): number {
   switch (result) {
     case 'acquired-lease':
     case 'processed':
+    case 'skipped':
     case 'claim-lost':
       return 0;
     case 'polling':

@@ -5198,10 +5198,20 @@ create policy "wiki_articles are self-deletable" on public.wiki_articles
 -- Independent of last_reflected_msg_id so both workers can run
 -- concurrently against the same thread without crowding each
 -- other's pointers.
+--
+-- wiki_failure_count tracks consecutive agent errors against a given
+-- terminal message. The error path in loop.ts increments it and
+-- releases the claim so the next cycle retries; once the count crosses
+-- the per-thread cap (passed by the worker) the pointer is advanced
+-- and the count reset so a permanently-filtered conversation (Venice
+-- 400 inappropriate-content rulings, repeatable parse failures, etc.)
+-- doesn't pin the queue forever. Successful processing resets the
+-- counter so a transient blip doesn't shorten future retry budget.
 alter table public.threads
   add column if not exists last_wiki_processed_msg_id uuid references public.messages(id) on delete set null,
   add column if not exists wiki_claim_holder text,
-  add column if not exists wiki_claim_expires_at timestamptz;
+  add column if not exists wiki_claim_expires_at timestamptz,
+  add column if not exists wiki_failure_count int not null default 0;
 
 -- Claim the next thread eligible for wiki processing. Two notable
 -- shape choices:
@@ -5300,11 +5310,12 @@ language sql security invoker as $$
 $$;
 
 -- Advance the per-thread wiki pointer IF our claim is still ours.
--- Called after every agent run regardless of outcome - even a no-op
--- run (agent decided no topic in the conversation warranted an
--- article) should advance the pointer so the same conversation is not
--- re-processed every poll. Returns false on claim-lost; caller drops
--- the cycle.
+-- Called after every successful agent run - even a no-op run (agent
+-- decided no topic in the conversation warranted an article) advances
+-- the pointer so the same conversation is not re-processed every poll.
+-- Also resets wiki_failure_count so transient blips during prior
+-- attempts don't shorten future retry budget. Returns false on
+-- claim-lost; caller drops the cycle.
 drop function if exists public.mark_thread_wiki_processed_if_claimed(uuid, text, uuid);
 create or replace function public.mark_thread_wiki_processed_if_claimed(
   p_thread_id uuid,
@@ -5318,13 +5329,71 @@ begin
   update public.threads
      set last_wiki_processed_msg_id = p_msg_id,
          wiki_claim_holder = null,
-         wiki_claim_expires_at = null
+         wiki_claim_expires_at = null,
+         wiki_failure_count = 0
    where id = p_thread_id
      and user_id = auth.uid()
      and wiki_claim_holder = p_holder_id
      and wiki_claim_expires_at > now();
   get diagnostics updated = row_count;
   return updated > 0;
+end $$;
+
+-- Record an agent failure against the claimed wiki thread. The error
+-- path in loop.ts calls this instead of mark_thread_wiki_processed
+-- so the pointer doesn't advance prematurely on a transient blip.
+--
+-- Behaviour:
+--   - Under our claim: increment wiki_failure_count.
+--     - If the new count is below p_max_failures, clear the claim so
+--       the next worker cycle can re-claim the thread quickly (the
+--       10-minute TTL otherwise gates retries to one attempt per 10
+--       min - too slow for a transient network blip).
+--     - If the new count reaches p_max_failures, treat the thread as
+--       permanently failing for this terminal message: advance the
+--       pointer to p_msg_id, reset the counter, clear the claim. The
+--       conversation rejoins the queue only when a new turn lands
+--       (which changes the terminal message) - giving Venice's content
+--       filter a fresh body to evaluate.
+--   - Not under our claim (TTL lapsed, another device took over): no-op.
+--
+-- Returns 'released', 'skipped', or 'claim-lost' so the cycle driver
+-- can log + decide whether to keep draining.
+drop function if exists public.record_wiki_failure_or_skip(uuid, text, uuid, int);
+create or replace function public.record_wiki_failure_or_skip(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_msg_id uuid,
+  p_max_failures int
+) returns text
+language plpgsql security invoker as $$
+declare
+  v_new_count int;
+begin
+  update public.threads
+     set wiki_failure_count = wiki_failure_count + 1
+   where id = p_thread_id
+     and user_id = auth.uid()
+     and wiki_claim_holder = p_holder_id
+     and wiki_claim_expires_at > now()
+  returning wiki_failure_count into v_new_count;
+  if not found then
+    return 'claim-lost';
+  end if;
+  if v_new_count >= p_max_failures then
+    update public.threads
+       set last_wiki_processed_msg_id = p_msg_id,
+           wiki_claim_holder = null,
+           wiki_claim_expires_at = null,
+           wiki_failure_count = 0
+     where id = p_thread_id;
+    return 'skipped';
+  end if;
+  update public.threads
+     set wiki_claim_holder = null,
+         wiki_claim_expires_at = null
+   where id = p_thread_id;
+  return 'released';
 end $$;
 
 -- Embeddings pipeline RPCs for wiki articles. Same claim/save shape
@@ -5728,7 +5797,8 @@ begin
   update public.threads
      set last_wiki_processed_msg_id = null,
          wiki_claim_holder = null,
-         wiki_claim_expires_at = null
+         wiki_claim_expires_at = null,
+         wiki_failure_count = 0
    where user_id = v_user;
 end $$;
 

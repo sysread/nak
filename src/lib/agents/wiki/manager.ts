@@ -45,6 +45,14 @@ const WORKER_DEFAULTS = {
   leasePollMs: 20_000,
   idleIntervalMs: 30_000,
   errorBackoffMs: 10_000,
+  // Three consecutive agent errors against the same terminal message
+  // before the loop gives up and advances the pointer. Tuned for the
+  // dominant failure shape we've observed - Venice's content
+  // classifier rejecting a conversation body - where retries can't
+  // succeed because the input doesn't change between attempts. The
+  // counter resets on the next successful run, so a transient blip
+  // doesn't shorten future retry budget.
+  maxFailuresPerThread: 3,
 };
 
 class WikiManager extends BaseWorkerManager<WikiStartOpts> {

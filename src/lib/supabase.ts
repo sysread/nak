@@ -3017,6 +3017,47 @@ export class SupabaseService {
     return data === true;
   }
 
+  /**
+   * Record an agent failure against the claimed wiki thread. Atomic
+   * increment + branch in SQL so a multi-device race can't double-
+   * count or end up with a half-applied skip. See the function header
+   * in schema.sql for the full state-transition table; the short
+   * version is "increment under claim, then either release for retry
+   * or advance the pointer to give up".
+   *
+   * - 'released': failure count below threshold; claim cleared so the
+   *   next cycle re-claims promptly.
+   * - 'skipped': failure count reached the threshold; pointer advanced
+   *   to msgId, counter reset, claim cleared. Conversation rejoins the
+   *   queue only when a new turn changes the terminal message.
+   * - 'claim-lost': the claim was no longer ours (TTL lapsed or another
+   *   device took over). Caller treats as a normal claim-lost.
+   */
+  async recordWikiFailureOrSkip(
+    threadId: string,
+    holderId: string,
+    msgId: string,
+    maxFailures: number
+  ): Promise<'released' | 'skipped' | 'claim-lost'> {
+    const { data, error } = await this.client.rpc(
+      'record_wiki_failure_or_skip',
+      {
+        p_thread_id: threadId,
+        p_holder_id: holderId,
+        p_msg_id: msgId,
+        p_max_failures: maxFailures,
+      }
+    );
+    if (error) throw new SupabaseError(error.message);
+    if (data === 'released' || data === 'skipped' || data === 'claim-lost') {
+      return data;
+    }
+    // Defensive: unrecognised return from the RPC. Treat as released
+    // so the thread re-enters the queue rather than stays orphaned
+    // under a stale claim.
+    return 'released';
+  }
+
   async claimNextPendingWikiArticle(
     holderId: string,
     ttlSeconds: number
