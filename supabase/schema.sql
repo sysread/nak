@@ -5211,7 +5211,16 @@ alter table public.threads
   add column if not exists last_wiki_processed_msg_id uuid references public.messages(id) on delete set null,
   add column if not exists wiki_claim_holder text,
   add column if not exists wiki_claim_expires_at timestamptz,
-  add column if not exists wiki_failure_count int not null default 0;
+  add column if not exists wiki_failure_count int not null default 0,
+  -- Skip marker stamped by record_wiki_failure_or_skip when the
+  -- counter hits the cap. Surfaced in the Wiki tab's "Skipped" panel
+  -- so the user can see which conversations the autonomous agent gave
+  -- up on (Venice content classifier rejections are the dominant
+  -- reason). Both columns are cleared on the next successful run, so
+  -- the panel naturally drains as the user edits the offending
+  -- conversations.
+  add column if not exists wiki_last_skip_at timestamptz,
+  add column if not exists wiki_last_skip_reason text;
 
 -- Claim the next thread eligible for wiki processing. Two notable
 -- shape choices:
@@ -5330,7 +5339,13 @@ begin
      set last_wiki_processed_msg_id = p_msg_id,
          wiki_claim_holder = null,
          wiki_claim_expires_at = null,
-         wiki_failure_count = 0
+         wiki_failure_count = 0,
+         -- A successful run supersedes any previous skip marker
+         -- (whoever-took-over-after-the-skip ran cleanly, or the
+         -- user edited the conversation so the agent could process
+         -- it). Clear the marker so the Skipped panel drains.
+         wiki_last_skip_at = null,
+         wiki_last_skip_reason = null
    where id = p_thread_id
      and user_id = auth.uid()
      and wiki_claim_holder = p_holder_id
@@ -5360,11 +5375,18 @@ end $$;
 -- Returns 'released', 'skipped', or 'claim-lost' so the cycle driver
 -- can log + decide whether to keep draining.
 drop function if exists public.record_wiki_failure_or_skip(uuid, text, uuid, int);
+drop function if exists public.record_wiki_failure_or_skip(uuid, text, uuid, int, text);
 create or replace function public.record_wiki_failure_or_skip(
   p_thread_id uuid,
   p_holder_id text,
   p_msg_id uuid,
-  p_max_failures int
+  p_max_failures int,
+  -- Short human-readable summary of the failure (the agent's error
+  -- message, typically the Venice HTTP body). Stamped into
+  -- wiki_last_skip_reason on the skip path so the Skipped panel can
+  -- render it. Ignored on the release path - in-flight failures
+  -- don't warrant surfacing yet; only the final give-up does.
+  p_reason text default null
 ) returns text
 language plpgsql security invoker as $$
 declare
@@ -5385,7 +5407,13 @@ begin
        set last_wiki_processed_msg_id = p_msg_id,
            wiki_claim_holder = null,
            wiki_claim_expires_at = null,
-           wiki_failure_count = 0
+           wiki_failure_count = 0,
+           wiki_last_skip_at = now(),
+           -- Truncate at 500 chars to keep the row reasonable when the
+           -- error body is a large HTTP response. The UI shows enough
+           -- to identify the failure mode (Venice's classifier message
+           -- is short); a longer body would just bloat the row store.
+           wiki_last_skip_reason = nullif(left(coalesce(p_reason, ''), 500), '')
      where id = p_thread_id;
     return 'skipped';
   end if;
@@ -5395,6 +5423,30 @@ begin
    where id = p_thread_id;
   return 'released';
 end $$;
+
+-- Read the user's skipped-thread list. Joined with the title for
+-- display and the newest message timestamp so the panel can sort by
+-- recency. RLS scopes to auth.uid() - the security_invoker posture
+-- on this function inherits the caller's identity, same as the rest
+-- of the wiki RPCs.
+drop function if exists public.list_wiki_skipped_threads();
+create or replace function public.list_wiki_skipped_threads()
+returns table (
+  thread_id uuid,
+  title text,
+  last_skip_at timestamptz,
+  last_skip_reason text
+)
+language sql security invoker as $$
+  select t.id as thread_id,
+         t.title as title,
+         t.wiki_last_skip_at as last_skip_at,
+         t.wiki_last_skip_reason as last_skip_reason
+    from public.threads t
+   where t.user_id = auth.uid()
+     and t.wiki_last_skip_at is not null
+   order by t.wiki_last_skip_at desc;
+$$;
 
 -- Embeddings pipeline RPCs for wiki articles. Same claim/save shape
 -- as memories, same 2048-dim padded vectors,
@@ -5798,7 +5850,9 @@ begin
      set last_wiki_processed_msg_id = null,
          wiki_claim_holder = null,
          wiki_claim_expires_at = null,
-         wiki_failure_count = 0
+         wiki_failure_count = 0,
+         wiki_last_skip_at = null,
+         wiki_last_skip_reason = null
    where user_id = v_user;
 end $$;
 

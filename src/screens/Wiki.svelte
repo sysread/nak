@@ -89,6 +89,7 @@
   import { extractHeadings, uniqueSlug, type HeadingEntry } from '$lib/markdown';
   import Markdown from '../components/Markdown.svelte';
   import WikiChangelogPanel from '../components/WikiChangelogPanel.svelte';
+  import WikiSkippedPanel from '../components/WikiSkippedPanel.svelte';
 
   interface Props {
     /**
@@ -107,10 +108,18 @@
      * data; cancelling compose (or saving) is the explicit way out.
      */
     triggerChangelogView?: boolean;
+    /**
+     * Top-bar alert button in Chat.svelte flips this to true to ask
+     * for the Skipped panel. Mutually exclusive with the librarian
+     * and article views (same shape as the changelog trigger). Same
+     * `$bindable` pattern.
+     */
+    triggerSkippedView?: boolean;
   }
   let {
     triggerLibrarianRun = $bindable(false),
     triggerChangelogView = $bindable(false),
+    triggerSkippedView = $bindable(false),
   }: Props = $props();
 
   const selectedArticle = $derived<WikiArticle | null>(
@@ -703,6 +712,11 @@
   // run is in flight (`wikiLibrarianRunner.workerBusy`) or this
   // strip's own submission is in flight (`librarianBusy`).
   let librarianConfirmOpen = $state(false);
+  // True when the user has asked for the Skipped panel (top-bar
+  // alert button). Mutually exclusive with the librarian strip and
+  // the article view - the template branches enforce that by chaining
+  // it into the same :else-if cascade.
+  let skippedViewOpen = $state(false);
   let librarianInstructions = $state('');
   let librarianBusy = $state(false);
   let librarianError = $state<string | null>(null);
@@ -788,10 +802,25 @@
   $effect(() => {
     if (triggerChangelogView) {
       librarianConfirmOpen = false;
+      skippedViewOpen = false;
       if (route.wiki_article_id) {
         navigate({ wiki_article_id: null });
       }
       triggerChangelogView = false;
+    }
+  });
+
+  // Watch the alert-button trigger. Closes the librarian and the
+  // article view so the Skipped panel can render (the template's
+  // :else-if cascade requires both to be cleared).
+  $effect(() => {
+    if (triggerSkippedView) {
+      librarianConfirmOpen = false;
+      if (route.wiki_article_id) {
+        navigate({ wiki_article_id: null });
+      }
+      skippedViewOpen = true;
+      triggerSkippedView = false;
     }
   });
 
@@ -803,10 +832,12 @@
   // gate on `route.wiki_article_id` truthiness - rather than firing
   // unconditionally on every route change - means clearing the
   // article (the clock-button path, the trigger above) doesn't
-  // re-trip this and leave us double-closing.
+  // re-trip this and leave us double-closing. The same closes the
+  // skipped panel for the same reason.
   $effect(() => {
     if (route.wiki_article_id) {
       librarianConfirmOpen = false;
+      skippedViewOpen = false;
     }
   });
 
@@ -1143,9 +1174,10 @@
         </div>
       {/if}
     {:else if !route.wiki_article_id}
-      <!-- No-article default. Compose mode wins; otherwise show the
-           inline changelog (the wiki's "home page") with a "+ new
-           article" button in its header. -->
+      <!-- No-article default. Compose mode wins (don't yank a mid-
+           draft user off their form), then the Skipped panel (alert-
+           button trigger), and finally the changelog (the wiki's
+           "home page" with a "+ new article" button in its header). -->
       {#if composing}
         <div class="wiki-compose">
           <h2>New article</h2>
@@ -1209,6 +1241,8 @@
             </button>
           </div>
         </div>
+      {:else if skippedViewOpen}
+        <WikiSkippedPanel />
       {:else}
         <WikiChangelogPanel onAddArticle={startCompose} />
       {/if}

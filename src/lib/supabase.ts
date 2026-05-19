@@ -3037,7 +3037,8 @@ export class SupabaseService {
     threadId: string,
     holderId: string,
     msgId: string,
-    maxFailures: number
+    maxFailures: number,
+    reason: string | null
   ): Promise<'released' | 'skipped' | 'claim-lost'> {
     const { data, error } = await this.client.rpc(
       'record_wiki_failure_or_skip',
@@ -3046,6 +3047,7 @@ export class SupabaseService {
         p_holder_id: holderId,
         p_msg_id: msgId,
         p_max_failures: maxFailures,
+        p_reason: reason,
       }
     );
     if (error) throw new SupabaseError(error.message);
@@ -3056,6 +3058,37 @@ export class SupabaseService {
     // so the thread re-enters the queue rather than stays orphaned
     // under a stale claim.
     return 'released';
+  }
+
+  /**
+   * List the user's wiki-skipped threads, most recent first. The
+   * Wiki tab's Skipped panel renders this; a row drops off the list
+   * automatically when the next successful wiki run on that thread
+   * clears the skip marker (mark_thread_wiki_processed_if_claimed
+   * nulls both columns in one update).
+   */
+  async listWikiSkippedThreads(): Promise<
+    {
+      threadId: string;
+      title: string | null;
+      lastSkipAt: string;
+      lastSkipReason: string | null;
+    }[]
+  > {
+    const { data, error } = await this.client.rpc('list_wiki_skipped_threads');
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      thread_id: string;
+      title: string | null;
+      last_skip_at: string;
+      last_skip_reason: string | null;
+    }[];
+    return rows.map((r) => ({
+      threadId: r.thread_id,
+      title: r.title,
+      lastSkipAt: r.last_skip_at,
+      lastSkipReason: r.last_skip_reason,
+    }));
   }
 
   async claimNextPendingWikiArticle(

@@ -134,7 +134,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
         claim.threadId,
         ctx.holderId,
         claim.terminalMsgId,
-        ctx.maxFailuresPerThread
+        ctx.maxFailuresPerThread,
+        errMsg
       );
     } catch (rpcErr) {
       // Counter bookkeeping failed. The original agent error is

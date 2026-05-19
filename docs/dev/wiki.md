@@ -350,6 +350,16 @@ Docs:
 - `wiki_claim_holder text`, `wiki_claim_expires_at timestamptz`
   - per-thread claim columns (note: `_at` suffix here, matching
   the existing journal claim columns).
+- `wiki_failure_count int not null default 0` - consecutive
+  agent errors against the current terminal message. Incremented
+  by `record_wiki_failure_or_skip`, reset by a successful
+  `mark_thread_wiki_processed_if_claimed`.
+- `wiki_last_skip_at timestamptz`, `wiki_last_skip_reason text`
+  - skip marker set when the failure counter reaches the cap.
+  Surfaced in the Wiki tab's Skipped panel
+  (`WikiSkippedPanel.svelte`) so the user can see which
+  conversations the agent gave up on. Cleared on the next
+  successful run; the panel naturally drains.
 
 These are independent of the memory-reflection
 (`last_reflected_msg_id`) and journal
@@ -398,6 +408,26 @@ Mark is **unconditional on `done`**. Even a no-op cycle
 pointer so the same conversation isn't re-processed every
 cycle. New turns added later trigger eligibility again via
 the next-day predicate.
+
+The **error branch** does not call mark. Instead it routes
+through `record_wiki_failure_or_skip`, which atomically:
+
+- increments `wiki_failure_count` under our claim,
+- below the cap (`maxFailuresPerThread`, default 3): clears
+  the claim so the next cycle retries quickly,
+- at the cap: advances the pointer, resets the counter,
+  stamps `wiki_last_skip_at` + `wiki_last_skip_reason`.
+
+This is the give-up path for conversations the agent can't
+process - dominantly Venice's content classifier rejecting
+the body with HTTP 400, but also any other persistent agent
+error. Without the cap, a permanently-filtered conversation
+would pin the queue at one failed call per claim-TTL window
+(10 min) forever. With the cap, the agent burns three attempts
+and moves on; the user sees the skip in the Wiki tab's Skipped
+panel and can edit the conversation if they want the agent to
+try again (editing changes the terminal message id, which the
+eligibility predicate keys off of).
 
 This differs from the journal flow, which uses an atomic
 `upsert_journal_entry_and_mark_thread` RPC because the entry

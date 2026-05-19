@@ -211,6 +211,33 @@ You can disable the autonomous agent in **Settings -> Wiki**. Manual
 edits and the per-article "Ask agent to update" flow keep working
 when it's off.
 
+### Skipped conversations
+
+Sometimes the agent can't process a conversation. The most common
+reason is Venice's content classifier rejecting the conversation
+body as inappropriate; another is a transient network or model
+failure that keeps recurring. After a few unsuccessful attempts on
+the same set of turns, the agent gives up on that conversation
+rather than retrying forever and burning quota.
+
+Skipped conversations land in a dedicated **Skipped** panel inside
+the Wiki tab. The **alert-triangle** button in the Wiki top bar
+(next to the changelog clock button) opens it. Each row shows:
+
+- The **conversation title** as a link - clicking it switches to the
+  Chat tab and opens that conversation.
+- The **timestamp** the agent gave up.
+- The **error detail** the agent received (trimmed for display).
+
+There is no retry button: the agent's eligibility predicate keys off
+the most recent turn in the conversation, so editing the
+conversation (adding a turn, removing one, or modifying the body) is
+what lets the agent try again on the next sweep. A successful next
+run automatically drops the row from the Skipped panel.
+
+If the panel is empty, the autonomous agent hasn't given up on
+anything - that's the steady state.
+
 ## The librarian
 
 A second background agent - the wiki **librarian** - runs every 12

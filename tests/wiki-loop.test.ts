@@ -130,7 +130,8 @@ describe('runOneCycle wiki - error path', () => {
       't-1',
       'holder-test',
       'a-1',
-      3
+      3,
+      'Venice HTTP 400: filter'
     );
     expect(spies.markThreadWikiProcessedIfClaimed).not.toHaveBeenCalled();
   });
