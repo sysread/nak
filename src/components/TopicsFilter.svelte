@@ -35,15 +35,21 @@
    * shared filter URL (a future capability; today the selection is
    * in-memory only).
    *
-   * UI-behavior decisions (effective option list, selection
-   * mutators, what counts as "active", display-label transform,
-   * popover open state) live in `$lib/topics-filter.svelte.ts` so a
-   * port to another framework would only have to re-write the glue
-   * below: prop wiring, DOM refs, the two document-level listeners,
-   * and the markup. Everything else is the controller.
+   * UI-behavior primitives (effective option list, selection
+   * mutators, display-label transform) live in `$lib/ui/topics-filter`
+   * as plain functions. This component composes them with its own
+   * Svelte runes and DOM listeners. A port to another framework would
+   * carry that module across unchanged and rewrite only the
+   * reactivity glue + markup below.
    */
   import { onMount, onDestroy } from 'svelte';
-  import { createTopicsFilter } from '$lib/topics-filter.svelte';
+  import {
+    computeOptions,
+    labelFor,
+    isUntagged,
+    selectionAfterToggle,
+    selectionAfterClearOne,
+  } from '$lib/ui/topics-filter';
 
   interface Props {
     /**
@@ -71,40 +77,45 @@
   }
   const { topics, selected, onChange }: Props = $props();
 
-  // Inputs are passed as getters so the controller's $derived values
-  // re-evaluate when the parent's props change. Destructured runes
-  // props stay reactive in Svelte 5 - each call to the getter reads
-  // the current bound value, not a snapshot taken at factory-call
-  // time. A plain `topics: topics` would freeze the array reference.
-  const filter = createTopicsFilter({
-    topics: () => topics,
-    selected: () => selected,
-    onChange: (next) => onChange(next),
-  });
-
+  let open = $state(false);
   let buttonEl: HTMLButtonElement | undefined = $state();
   let popoverEl: HTMLDivElement | undefined = $state();
 
+  const options = $derived(computeOptions(topics));
+  const selectedSet = $derived(new Set(selected));
+  const hasActive = $derived(selected.length > 0);
+
+  function toggle(topic: string): void {
+    onChange(selectionAfterToggle(selected, topic));
+  }
+
+  function clearOne(topic: string): void {
+    onChange(selectionAfterClearOne(selected, topic));
+  }
+
+  function clearAll(): void {
+    onChange([]);
+  }
+
   /**
    * Click-outside-to-close. Listens at document level only when the
-   * popover is open so the listener doesn't sit live for the
-   * whole session. DOM-bound so it stays here rather than in the
-   * controller - the "close on outside" rule is the controller's
-   * concern, the hit-testing is the component's.
+   * popover is open so the listener doesn't sit live for the whole
+   * session. The hit-testing here is DOM-coupled by nature and stays
+   * with the component.
    */
   function onDocClick(e: MouseEvent): void {
-    if (!filter.open) return;
+    if (!open) return;
     const tgt = e.target;
     if (!(tgt instanceof Node)) return;
     if (popoverEl?.contains(tgt)) return;
     if (buttonEl?.contains(tgt)) return;
-    filter.close();
+    open = false;
   }
 
   function onKey(e: KeyboardEvent): void {
-    if (filter.open && e.key === 'Escape') {
+    if (open && e.key === 'Escape') {
       e.preventDefault();
-      filter.close();
+      open = false;
       buttonEl?.focus();
     }
   }
@@ -123,14 +134,14 @@
   <button
     type="button"
     class="topics-filter-trigger"
-    class:active={filter.hasActive}
+    class:active={hasActive}
     aria-haspopup="listbox"
-    aria-expanded={filter.open}
+    aria-expanded={open}
     bind:this={buttonEl}
-    onclick={() => filter.toggleOpen()}
+    onclick={() => (open = !open)}
   >
     <span class="topics-filter-label">Topics</span>
-    {#if filter.hasActive}
+    {#if hasActive}
       <span class="topics-filter-dot" aria-hidden="true"></span>
     {/if}
     <span class="topics-filter-caret" aria-hidden="true">
@@ -146,21 +157,21 @@
         stroke-width="2.5"
         stroke-linecap="round"
         stroke-linejoin="round"
-        class:flipped={filter.open}
+        class:flipped={open}
       >
         <polyline points="6 9 12 15 18 9" />
       </svg>
     </span>
   </button>
 
-  {#if filter.open}
+  {#if open}
     <div
       class="topics-filter-popover"
       role="listbox"
       aria-label="Filter conversations by topic"
       bind:this={popoverEl}
     >
-      {#each filter.options as opt (opt)}
+      {#each options as opt (opt)}
         <!-- Whole row is clickable. Hidden input keeps keyboard /
              screen-reader semantics; visible checkbox glyph is the
              label's `::before` so focus rings land cleanly on the
@@ -168,11 +179,11 @@
         <label class="topics-filter-row">
           <input
             type="checkbox"
-            checked={filter.selectedSet.has(opt)}
-            onchange={() => filter.toggle(opt)}
+            checked={selectedSet.has(opt)}
+            onchange={() => toggle(opt)}
           />
-          <span class="topics-filter-row-text" class:untagged={filter.isUntagged(opt)}>
-            {filter.labelFor(opt)}
+          <span class="topics-filter-row-text" class:untagged={isUntagged(opt)}>
+            {labelFor(opt)}
           </span>
         </label>
       {/each}
@@ -190,17 +201,17 @@
     </div>
   {/if}
 
-  {#if filter.hasActive}
+  {#if hasActive}
     <div class="topics-filter-pills" role="group" aria-label="Active topic filters">
       {#each selected as t (t)}
-        <span class="topics-filter-pill" class:untagged={filter.isUntagged(t)}>
-          <span class="topics-filter-pill-text">{filter.labelFor(t)}</span>
+        <span class="topics-filter-pill" class:untagged={isUntagged(t)}>
+          <span class="topics-filter-pill-text">{labelFor(t)}</span>
           <button
             type="button"
             class="topics-filter-pill-x"
-            aria-label="Remove {filter.labelFor(t)} filter"
+            aria-label="Remove {labelFor(t)} filter"
             title="Remove"
-            onclick={() => filter.clearOne(t)}
+            onclick={() => clearOne(t)}
           >×</button>
         </span>
       {/each}
@@ -208,7 +219,7 @@
         <button
           type="button"
           class="topics-filter-clear-all"
-          onclick={() => filter.clearAll()}
+          onclick={clearAll}
         >clear</button>
       {/if}
     </div>
