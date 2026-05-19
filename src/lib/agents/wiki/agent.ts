@@ -378,6 +378,100 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
   }
 
   /**
+   * In-panel "Retry" affordance for the Wiki Skipped page. Mirrors
+   * the autonomous worker's pipeline (claim - run - mark) but
+   * bypasses the claim protocol: this runs synchronously on the
+   * main thread when the user clicks Retry on a row, so there's no
+   * concurrent device to coordinate with. The flow:
+   *
+   *   1. Resolve the thread's terminal assistant message id
+   *      server-side (the same lateral the worker's claim RPC
+   *      computes), so the agent operates on the same anchor it
+   *      would have anyway.
+   *   2. Call `run()`, which already does the primary -> uncensored-
+   *      fallback two-shot internally. A successful run lands the
+   *      wiki_* tool side effects through the user-owned RPCs.
+   *   3. On done: call `manualAdvanceWikiPointer` to clear the skip
+   *      marker and advance `last_wiki_processed_msg_id` outside
+   *      the worker's claim guard. The Skipped panel reloads and
+   *      the row drops.
+   *   4. On error: surface the agent's error string. The skip
+   *      marker stays put so the user sees the row is still
+   *      problematic; the worker won't touch it until the
+   *      eligibility predicate matches again.
+   *
+   * `'no-op'` covers the edge case where the thread has no
+   * assistant message to anchor against (a thread the user purged
+   * messages from since the skip stamp). Caller renders a friendly
+   * message rather than an error banner.
+   */
+  async retrySkippedThread(args: {
+    threadId: string;
+    userId: string;
+    signal?: AbortSignal;
+  }): Promise<
+    | { kind: 'ok'; terminalMsgId: string }
+    | { kind: 'no-op'; reason: string }
+    | { kind: 'error'; error: string }
+  > {
+    const signal = args.signal ?? new AbortController().signal;
+    if (signal.aborted) return { kind: 'no-op', reason: 'Retry aborted.' };
+
+    let terminalMsgId: string | null;
+    try {
+      terminalMsgId = await this.supabase.computeWikiTerminalMsgId(
+        args.threadId
+      );
+    } catch (err) {
+      return {
+        kind: 'error',
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (terminalMsgId === null) {
+      return {
+        kind: 'no-op',
+        reason: 'No assistant message to process in this thread.',
+      };
+    }
+
+    const result = await this.run({
+      input: { threadId: args.threadId, terminalMsgId },
+      userId: args.userId,
+      threadId: args.threadId,
+      signal,
+    });
+
+    if (result.stoppedReason === 'aborted') {
+      return { kind: 'no-op', reason: 'Retry aborted.' };
+    }
+    if (result.stoppedReason === 'error') {
+      return {
+        kind: 'error',
+        error: result.error ?? 'unknown error',
+      };
+    }
+    // stoppedReason === 'done'. Advance the pointer + clear the skip
+    // outside the claim protocol. Best-effort: a failure here would
+    // mean the wiki tool side effects landed but the skip marker
+    // didn't clear, leaving a stale row in the panel. Surface as an
+    // error so the user can retry (which is idempotent at the tool
+    // layer - wiki_create with the same title hits the unique
+    // constraint and the agent falls through to wiki_update).
+    try {
+      await this.supabase.manualAdvanceWikiPointer(args.threadId, terminalMsgId);
+    } catch (err) {
+      return {
+        kind: 'error',
+        error: `agent succeeded but pointer-advance failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
+    return { kind: 'ok', terminalMsgId };
+  }
+
+  /**
    * User-initiated "ask agent to update this article" flow. Runs on
    * the main thread, single completion, structured-JSON output. Does
    * NOT write to the DB - the caller (Wiki.svelte) shows a preview

@@ -42,6 +42,9 @@ function makeSupabase(messages: Message[]): SupabaseService {
     createWikiArticle: vi.fn(async () => ({ id: 'w-1' })),
     updateWikiArticle: vi.fn(async () => undefined),
     deleteWikiArticle: vi.fn(async () => undefined),
+    // retrySkippedThread reaches these.
+    computeWikiTerminalMsgId: vi.fn(async () => 'a-default'),
+    manualAdvanceWikiPointer: vi.fn(async () => undefined),
   } as unknown as SupabaseService;
 }
 
@@ -252,5 +255,134 @@ describe('WikiAgent - content-classifier fallback', () => {
     expect(result.stoppedReason).toBe('error');
     expect(calls).toHaveLength(1);
     expect(calls[0].model).toBe('arcee-trinity-large-thinking');
+  });
+});
+
+describe('WikiAgent.retrySkippedThread', () => {
+  it('resolves the terminal id, runs the agent, advances the pointer on done', async () => {
+    const messages: Message[] = [
+      makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
+      makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
+    ];
+    const svc = makeSupabase(messages);
+    // Override the default mock so we can assert it was called with
+    // the specific thread id the test passes in.
+    (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      'a1'
+    );
+    const { venice } = makeVeniceWithFilterOnPrimary(
+      'deepseek-v4-flash',
+      'arcee-trinity-large-thinking',
+      'Recovered on the fallback.'
+    );
+    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+
+    const result = await agent.retrySkippedThread({
+      threadId: 't-1',
+      userId: 'u',
+    });
+
+    expect(result.kind).toBe('ok');
+    if (result.kind === 'ok') {
+      expect(result.terminalMsgId).toBe('a1');
+    }
+    expect(svc.computeWikiTerminalMsgId).toHaveBeenCalledWith('t-1');
+    expect(svc.manualAdvanceWikiPointer).toHaveBeenCalledWith('t-1', 'a1');
+  });
+
+  it('returns no-op (without calling Venice) when the thread has no anchor', async () => {
+    const svc = makeSupabase([]);
+    (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      null
+    );
+    const completeChat = vi.fn(async (): Promise<ChatCompletion> => {
+      throw new Error('should not have been called');
+    });
+    const venice = {
+      completeChat,
+      embed: vi.fn(async () => ({ data: [] })),
+    } as unknown as VeniceClient;
+    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+
+    const result = await agent.retrySkippedThread({
+      threadId: 't-empty',
+      userId: 'u',
+    });
+
+    expect(result.kind).toBe('no-op');
+    expect(completeChat).not.toHaveBeenCalled();
+    expect(svc.manualAdvanceWikiPointer).not.toHaveBeenCalled();
+  });
+
+  it('returns the agent error and does NOT advance the pointer when both attempts fail', async () => {
+    const messages: Message[] = [
+      makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
+      makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
+    ];
+    const svc = makeSupabase(messages);
+    (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      'a1'
+    );
+    const completeChat = vi.fn(async (): Promise<ChatCompletion> => {
+      throw new Error('Venice HTTP 500: upstream');
+    });
+    const venice = {
+      completeChat,
+      embed: vi.fn(async () => ({ data: [] })),
+    } as unknown as VeniceClient;
+    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+
+    const result = await agent.retrySkippedThread({
+      threadId: 't-1',
+      userId: 'u',
+    });
+
+    expect(result.kind).toBe('error');
+    if (result.kind === 'error') {
+      expect(result.error).toContain('Venice HTTP 500');
+    }
+    // Critical: the skip marker stays put (we did not advance the
+    // pointer), so the user keeps seeing the row in the Skipped panel.
+    expect(svc.manualAdvanceWikiPointer).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a pointer-advance failure even after a successful agent run', async () => {
+    const messages: Message[] = [
+      makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
+      makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
+    ];
+    const svc = makeSupabase(messages);
+    (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      'a1'
+    );
+    (svc.manualAdvanceWikiPointer as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('RPC blew up')
+    );
+    const completeChat = vi.fn(
+      async (): Promise<ChatCompletion> => ({
+        text: 'done',
+        reasoning: '',
+        toolCalls: [],
+        usage: null,
+        citations: [],
+        finishReason: 'stop',
+      })
+    );
+    const venice = {
+      completeChat,
+      embed: vi.fn(async () => ({ data: [] })),
+    } as unknown as VeniceClient;
+    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+
+    const result = await agent.retrySkippedThread({
+      threadId: 't-1',
+      userId: 'u',
+    });
+
+    expect(result.kind).toBe('error');
+    if (result.kind === 'error') {
+      expect(result.error).toContain('pointer-advance failed');
+      expect(result.error).toContain('RPC blew up');
+    }
   });
 });

@@ -29,7 +29,8 @@
    */
   import { app } from '$lib/state.svelte';
   import { navigate } from '$lib/routing.svelte';
-  import { onWikiChange } from '$lib/wiki-events';
+  import { onWikiChange, emitWikiChange } from '$lib/wiki-events';
+  import { WikiAgent } from '$lib/agents/wiki/agent';
   import {
     displayTitle,
     formatSkipTimestamp,
@@ -46,6 +47,15 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
 
+  /**
+   * Per-row retry state. Keyed by thread id so a click on one row's
+   * Retry button only spins that row's button + only surfaces that
+   * row's error inline. Cleared on a successful retry (the row
+   * disappears from `rows` anyway) and on panel reload.
+   */
+  let retrying = $state<Record<string, boolean>>({});
+  let retryError = $state<Record<string, string>>({});
+
   async function load(): Promise<void> {
     if (!app.supabase) return;
     loading = true;
@@ -56,6 +66,56 @@
       error = err instanceof Error ? err.message : String(err);
     } finally {
       loading = false;
+    }
+  }
+
+  async function retryRow(row: SkippedRow): Promise<void> {
+    if (!app.supabase || !app.venice) return;
+    if (retrying[row.threadId]) return;
+    // Best-effort: wipe the previous error inline before the new run
+    // so the user doesn't read a stale message while the spinner is
+    // spinning.
+    delete retryError[row.threadId];
+    retryError = { ...retryError };
+    retrying[row.threadId] = true;
+    retrying = { ...retrying };
+    try {
+      const session = await app.supabase.getSession();
+      if (!session) {
+        retryError[row.threadId] = 'Not signed in.';
+        retryError = { ...retryError };
+        return;
+      }
+      // Build a per-click WikiAgent on the main thread. The agent's
+      // internal primary -> fallback retry path runs identically to
+      // the worker's, so the manual button hits the uncensored
+      // fallback on a content-classifier rejection without
+      // duplicating that policy here.
+      const agent = new WikiAgent(app.venice, app.supabase);
+      const result = await agent.retrySkippedThread({
+        threadId: row.threadId,
+        userId: session.user.id,
+      });
+      if (result.kind === 'ok') {
+        // Successful run: the agent's wiki_* tool calls (if any)
+        // already landed; the pointer was advanced + skip marker
+        // cleared inside retrySkippedThread. Reload the list so
+        // this row drops, and fire the wiki-change event so any
+        // open WikiList / WikiChangelogPanel refetches too.
+        emitWikiChange();
+        await load();
+        return;
+      }
+      retryError[row.threadId] =
+        result.kind === 'no-op' ? result.reason : result.error;
+      retryError = { ...retryError };
+    } catch (err) {
+      retryError[row.threadId] =
+        err instanceof Error ? err.message : String(err);
+      retryError = { ...retryError };
+    } finally {
+      retrying[row.threadId] = false;
+      retrying = { ...retrying };
     }
   }
 
@@ -130,6 +190,22 @@
               No error detail was captured.
             </p>
           {/if}
+          <div class="wiki-skipped-row-foot">
+            <button
+              type="button"
+              class="wiki-skipped-retry"
+              onclick={() => retryRow(row)}
+              disabled={retrying[row.threadId]}
+              title="Re-run the wiki agent against this conversation now"
+            >
+              {retrying[row.threadId] ? 'Retrying...' : 'Retry'}
+            </button>
+            {#if retryError[row.threadId]}
+              <span class="wiki-skipped-retry-error" role="status">
+                {retryError[row.threadId]}
+              </span>
+            {/if}
+          </div>
         </li>
       {/each}
     </ul>
@@ -205,6 +281,34 @@
     font-family: var(--mono, ui-monospace, SFMono-Regular, monospace);
     font-size: 0.85rem;
     white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .wiki-skipped-row-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .wiki-skipped-retry {
+    font-size: 0.85rem;
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .wiki-skipped-retry:hover:not(:disabled) {
+    background: var(--surface-hover, var(--surface));
+  }
+  .wiki-skipped-retry:disabled {
+    cursor: progress;
+    opacity: 0.7;
+  }
+  .wiki-skipped-retry-error {
+    color: var(--danger, #b91c1c);
+    font-size: 0.85rem;
     word-break: break-word;
   }
 </style>

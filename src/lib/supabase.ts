@@ -3091,6 +3091,42 @@ export class SupabaseService {
     }));
   }
 
+  /**
+   * Resolve the "terminal assistant message" id the worker would pin
+   * against a given thread. The Skipped panel's Retry button uses
+   * this to feed the inline wiki-agent run with the same anchor the
+   * background worker would have chosen. Returns null when the
+   * thread has no eligible assistant message - the caller should
+   * surface a no-op rather than calling the agent with a null id.
+   */
+  async computeWikiTerminalMsgId(threadId: string): Promise<string | null> {
+    const { data, error } = await this.client.rpc(
+      'compute_wiki_terminal_msg_id',
+      { p_thread_id: threadId }
+    );
+    if (error) throw new SupabaseError(error.message);
+    if (typeof data === 'string' && data.length > 0) return data;
+    return null;
+  }
+
+  /**
+   * Advance the wiki pointer + clear the skip marker from outside
+   * the worker's claim protocol. Called by the Skipped panel's
+   * Retry button after a successful inline agent run. RLS scopes
+   * the underlying RPC to the caller's own threads, so this is
+   * safe to expose to the UI directly.
+   */
+  async manualAdvanceWikiPointer(
+    threadId: string,
+    msgId: string
+  ): Promise<void> {
+    const { error } = await this.client.rpc('manual_advance_wiki_pointer', {
+      p_thread_id: threadId,
+      p_msg_id: msgId,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
   async claimNextPendingWikiArticle(
     holderId: string,
     ttlSeconds: number

@@ -5300,25 +5300,6 @@ language sql security invoker as $$
          limit 1
       ) newest
      where t.user_id = auth.uid()
-       and (
-         -- Either there's new work past the pointer, OR the thread
-         -- was previously skipped by the content classifier and the
-         -- fallback model hasn't been tried yet against this terminal
-         -- message. The OR clause is what lets legacy skips - rows
-         -- the worker gave up on before the uncensored-fallback retry
-         -- path existed - re-enter the queue automatically. The
-         -- success path clears both the skip reason and the
-         -- fallback-attempted flag together, so a thread can't loop
-         -- through this OR clause indefinitely: at most one re-entry,
-         -- after which either the agent processed it (skip marker
-         -- cleared) or the fallback failed too (flag stamped true).
-         term.msg_id is distinct from t.last_wiki_processed_msg_id
-         or (
-           t.wiki_last_skip_reason is not null
-           and t.wiki_last_skip_reason ilike '%inappropriate content%'
-           and not t.wiki_skip_fallback_attempted
-         )
-       )
        and (t.wiki_claim_expires_at is null
             or t.wiki_claim_expires_at < now())
        and (
@@ -5330,10 +5311,41 @@ language sql security invoker as $$
           where m3.thread_id = t.id
             and m3.role = 'user'
        ) >= 2
-       -- Next-day eligibility. Newest message must land on a
-       -- calendar day strictly before today in the user's tz.
-       and (newest.created_at at time zone p_timezone)::date
-           < (now() at time zone p_timezone)::date
+       and (
+         -- Two eligibility branches:
+         --
+         --   (a) Normal: there's new work past the pointer AND the
+         --       newest message lands on a calendar day strictly
+         --       before today in the user's tz. The day-gate is what
+         --       lets in-flight conversations settle before the
+         --       autonomous agent reads them.
+         --
+         --   (b) Recovery: the thread carries a content-classifier
+         --       skip marker that the uncensored fallback hasn't tried
+         --       yet. This branch INTENTIONALLY bypasses the day-gate:
+         --       a skipped thread is by definition not in-flight any
+         --       more (the agent already attempted it and gave up),
+         --       and gating on next-day would mean adding a new turn
+         --       to nudge the worker actually pushes the eligibility
+         --       boundary OUT to tomorrow rather than making the
+         --       thread retryable sooner. The success path clears
+         --       both the skip reason and the fallback-attempted flag
+         --       together, so a thread can't loop through this branch
+         --       indefinitely: at most one re-entry per terminal
+         --       message, after which either the agent processed it
+         --       (skip marker cleared) or the fallback failed too
+         --       (flag stamped true).
+         (
+           term.msg_id is distinct from t.last_wiki_processed_msg_id
+           and (newest.created_at at time zone p_timezone)::date
+               < (now() at time zone p_timezone)::date
+         )
+         or (
+           t.wiki_last_skip_reason is not null
+           and t.wiki_last_skip_reason ilike '%inappropriate content%'
+           and not t.wiki_skip_fallback_attempted
+         )
+       )
      order by newest.created_at asc
      limit 1
      for update of t skip locked
@@ -5492,6 +5504,61 @@ language sql security invoker as $$
    where t.user_id = auth.uid()
      and t.wiki_last_skip_at is not null
    order by t.wiki_last_skip_at desc;
+$$;
+
+-- Compute the same "terminal assistant message" id the worker would
+-- pin against a given thread. Used by the in-panel Retry button on
+-- the Skipped page, which runs the wiki agent inline against the
+-- thread and needs the same msg id the worker would have picked.
+-- Returns null when the thread has no assistant message with
+-- non-empty content and no tool calls (the agent would have nothing
+-- to anchor against).
+drop function if exists public.compute_wiki_terminal_msg_id(uuid);
+create or replace function public.compute_wiki_terminal_msg_id(
+  p_thread_id uuid
+) returns uuid
+language sql security invoker as $$
+  select m.id
+    from public.messages m
+   inner join public.threads t on t.id = m.thread_id
+   where m.thread_id = p_thread_id
+     and t.user_id = auth.uid()
+     and m.role = 'assistant'
+     and (m.tool_calls is null
+          or jsonb_typeof(m.tool_calls) <> 'array'
+          or jsonb_array_length(m.tool_calls) = 0)
+     and m.content is not null
+     and length(m.content) > 0
+   order by m.created_at desc
+   limit 1;
+$$;
+
+-- Advance the wiki pointer + clear the skip marker from outside the
+-- worker's claim protocol. Used by the in-panel Retry button after a
+-- successful inline agent run: the worker's mark RPC requires an
+-- active claim (the worker holds one for the duration of its
+-- cycle), but the manual retry doesn't go through the claim
+-- protocol at all. This RPC does the equivalent state transition
+-- without the claim guard - it's RLS-scoped to auth.uid()'s own
+-- threads, so a user can only manually advance their own pointers.
+-- No-op when the thread isn't found (e.g. a thread the user just
+-- deleted while the retry was in flight).
+drop function if exists public.manual_advance_wiki_pointer(uuid, uuid);
+create or replace function public.manual_advance_wiki_pointer(
+  p_thread_id uuid,
+  p_msg_id uuid
+) returns void
+language sql security invoker as $$
+  update public.threads
+     set last_wiki_processed_msg_id = p_msg_id,
+         wiki_claim_holder = null,
+         wiki_claim_expires_at = null,
+         wiki_failure_count = 0,
+         wiki_last_skip_at = null,
+         wiki_last_skip_reason = null,
+         wiki_skip_fallback_attempted = false
+   where id = p_thread_id
+     and user_id = auth.uid();
 $$;
 
 -- Embeddings pipeline RPCs for wiki articles. Same claim/save shape
