@@ -312,6 +312,7 @@ export type AgentRole =
   | 'summary'
   | 'topics'
   | 'memoryTopics'
+  | 'recipeTopics'
   | 'samskara'
   | 'bias'
   | 'recall'
@@ -395,6 +396,12 @@ export type AgentRole =
  *     same id as `topics` so a future tier swap of either flows
  *     through both.
  *
+ *   recipeTopics - mistral-small-3-2-24b-instruct. Sibling of
+ *     memoryTopics targeting one `recipes` row (title + cooklang).
+ *     Picks 1-6 tags spanning primary ingredients, cuisine, course,
+ *     and technique. Same JSON-out / no-tools profile; same model id
+ *     as the other topic taggers so a swap flows through all three.
+ *
  *   samskara - mistral-small-3-2-24b-instruct. Five short JSON-out
  *     phases (assimilate, relate, mint, classify, compound summary)
  *     with maxTokens 200-500 per phase. Structured output on bounded
@@ -445,6 +452,7 @@ export const AGENT_MODELS = {
   summary:            'mistral-small-3-2-24b-instruct',
   topics:             'mistral-small-3-2-24b-instruct',
   memoryTopics:       'mistral-small-3-2-24b-instruct',
+  recipeTopics:       'mistral-small-3-2-24b-instruct',
   samskara:           'mistral-small-3-2-24b-instruct',
   bias:               'mistral-small-3-2-24b-instruct',
   recall:             'qwen3-5-35b-a3b',

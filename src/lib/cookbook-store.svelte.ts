@@ -43,6 +43,25 @@ interface CookbookState {
    * Detail open is the only path that needs them.
    */
   photos: Record<string, RecipePhoto[] | null | undefined>;
+  /**
+   * Active topic filter. Empty array = no filter. Includes the
+   * UNTAGGED_TOPIC_SENTINEL when the user selected "untagged" in
+   * the dropdown. The RecipeList sidebar narrows both the bucket
+   * list and the search results by this selection - applied client-
+   * side because the recipe set is bounded (~200 rows loaded into
+   * `recipes`) and server-side filtering would add scope for no
+   * perf win.
+   */
+  selectedTopics: string[];
+  /**
+   * Per-user topic vocabulary - the flat sorted list returned by
+   * `list_user_recipe_topics`. Drives the TopicsFilter dropdown
+   * options. Refreshed on every successful `loadRecipes` so a
+   * newly-minted topic from the background worker shows up in the
+   * dropdown the next time the list reloads (which fires on tool
+   * mutations, modal opens, and tab switches).
+   */
+  topicsVocabulary: string[];
 }
 
 export const cookbook = $state<CookbookState>({
@@ -50,6 +69,8 @@ export const cookbook = $state<CookbookState>({
   loading: false,
   error: null,
   photos: {},
+  selectedTopics: [],
+  topicsVocabulary: [],
 });
 
 /**
@@ -66,10 +87,34 @@ export async function loadRecipes(supabase: SupabaseService): Promise<void> {
     const rows = await supabase.listRecipes('', 200);
     cookbook.recipes = rows;
     cookbook.error = null;
+    // Piggy-back a vocabulary refresh so a newly-minted topic from
+    // the background worker shows up in the dropdown the next time
+    // the list reloads. Best-effort: a failure leaves the prior
+    // vocabulary in place rather than blanking it - the dropdown
+    // stays usable across a transient Supabase blip.
+    void refreshRecipesTopicsVocabulary(supabase);
   } catch (err) {
     cookbook.error = err instanceof Error ? err.message : String(err);
   } finally {
     cookbook.loading = false;
+  }
+}
+
+/**
+ * Refresh the per-user recipe topic vocabulary from
+ * `list_user_recipe_topics`. Called by `loadRecipes` after every
+ * successful load, and exposed for the sidebar's onMount path to
+ * prime the dropdown before the first load resolves. Best-effort:
+ * a failure leaves the existing vocabulary in place rather than
+ * blanking it.
+ */
+export async function refreshRecipesTopicsVocabulary(
+  supabase: SupabaseService
+): Promise<void> {
+  try {
+    cookbook.topicsVocabulary = await supabase.listUserRecipeTopics();
+  } catch {
+    // swallow - see comment above
   }
 }
 

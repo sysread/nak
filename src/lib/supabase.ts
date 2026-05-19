@@ -344,6 +344,19 @@ export interface Recipe {
    * `updated_at`-bumping semantics as `upcoming`.
    */
   favorite: boolean;
+  /**
+   * Topic tags written by the recipe-topics worker
+   * (src/lib/agents/recipe_topics/*). Empty array means "untagged" -
+   * either the worker hasn't reached the row, the agent ran and
+   * chose to emit nothing, or the user just edited title/cooklang
+   * (the `clear_recipe_topics_on_change` trigger nulls
+   * `last_topics_at` on content change and the next worker cycle
+   * re-tags). The UNTAGGED_TOPIC_SENTINEL is a UI-only primitive
+   * and never lands in this column. Cap of 6 tags per row vs the
+   * 4 used on threads/memories - recipes legitimately span more
+   * dimensions (primary ingredients + cuisine + course + technique).
+   */
+  topics: string[];
   created_at: string;
   updated_at: string;
   /** Populated only by `search_recipes_by_embedding`. */
@@ -1891,7 +1904,7 @@ export class SupabaseService {
     let q = this.client
       .from('recipes')
       .select(
-        'id, title, source, source_url, cooklang, rating, upcoming, favorite, created_at, updated_at'
+        'id, title, source, source_url, cooklang, rating, upcoming, favorite, topics, created_at, updated_at'
       )
       .limit(limit);
     if (sort === 'rating') {
@@ -1918,7 +1931,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('recipes')
       .select(
-        'id, title, source, source_url, cooklang, rating, upcoming, favorite, created_at, updated_at'
+        'id, title, source, source_url, cooklang, rating, upcoming, favorite, topics, created_at, updated_at'
       )
       .eq('id', id)
       .maybeSingle();
@@ -1956,7 +1969,7 @@ export class SupabaseService {
     const ilikePromise = this.client
       .from('recipes')
       .select(
-        'id, title, source, source_url, cooklang, rating, upcoming, favorite, created_at, updated_at'
+        'id, title, source, source_url, cooklang, rating, upcoming, favorite, topics, created_at, updated_at'
       )
       .ilike('title', pattern)
       .order('updated_at', { ascending: false })
@@ -3513,6 +3526,98 @@ export class SupabaseService {
    */
   async listUserMemoryTopics(): Promise<string[]> {
     const { data, error } = await this.client.rpc('list_user_memory_topics');
+    if (error) throw new SupabaseError(error.message);
+    if (!Array.isArray(data)) return [];
+    return data.filter((t): t is string => typeof t === 'string');
+  }
+
+  /**
+   * Recipe-topics sibling of `claimNextMemoryForTopics`. The RPC
+   * returns the recipe's title + cooklang (the agent input) plus
+   * the user's existing recipe-topic vocabulary in one round trip.
+   * Eligibility predicate inside the RPC is `last_topics_at is
+   * null` - a fresh row or a content-edited row (title or
+   * cooklang) both qualify; bookmark / rating-only edits do not.
+   */
+  async claimNextRecipeForTopics(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{
+    recipeId: string;
+    title: string;
+    cooklang: string;
+    existingTopics: string[];
+  } | null> {
+    const { data, error } = await this.client.rpc('claim_next_recipe_for_topics', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      recipe_id: string;
+      title: string;
+      cooklang: string;
+      existing_topics: string[] | null;
+    }[];
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      recipeId: row.recipe_id,
+      title: row.title,
+      cooklang: row.cooklang,
+      existingTopics: Array.isArray(row.existing_topics)
+        ? row.existing_topics.filter((t): t is string => typeof t === 'string')
+        : [],
+    };
+  }
+
+  /**
+   * Save the agent-produced topics IF our claim is still valid.
+   * RPC stamps `last_topics_at = now()` and guards on holder + TTL.
+   * False return = a race (TTL expired, holder stolen, or the user
+   * edited title/cooklang and the trigger nulled our claim mid-run).
+   */
+  async saveRecipeTopicsIfClaimed(
+    recipeId: string,
+    holderId: string,
+    topics: string[]
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc(
+      'save_recipe_topics_if_claimed',
+      {
+        p_recipe_id: recipeId,
+        p_holder_id: holderId,
+        p_topics: topics,
+      }
+    );
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Release the recipe-topics claim without writing topics. Used
+   * when the agent returned no usable output so the row re-enters
+   * the queue immediately rather than waiting for the per-row TTL.
+   */
+  async clearRecipeTopicsClaim(
+    recipeId: string,
+    holderId: string
+  ): Promise<void> {
+    const { error } = await this.client.rpc('clear_recipe_topics_claim', {
+      p_recipe_id: recipeId,
+      p_holder_id: holderId,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Distinct recipe-topic vocabulary for the current user. Backs
+   * the Cookbook drawer's topic-filter dropdown. Distinct from
+   * `listUserTopics` (threads) and `listUserMemoryTopics`
+   * (memories) so a user's vocabularies don't cross-pollute.
+   */
+  async listUserRecipeTopics(): Promise<string[]> {
+    const { data, error } = await this.client.rpc('list_user_recipe_topics');
     if (error) throw new SupabaseError(error.message);
     if (!Array.isArray(data)) return [];
     return data.filter((t): t is string => typeof t === 'string');

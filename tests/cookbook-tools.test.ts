@@ -33,6 +33,7 @@ function sampleRecipe(overrides: Partial<Recipe> = {}): Recipe {
     rating: null,
     upcoming: false,
     favorite: false,
+    topics: [],
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
     ...overrides,

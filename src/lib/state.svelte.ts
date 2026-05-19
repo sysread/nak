@@ -113,6 +113,9 @@ const topics = lazyManager(() =>
 const memoryTopics = lazyManager(() =>
   import('./agents/memory_topics/manager').then((m) => m.memoryTopicsManager)
 );
+const recipeTopics = lazyManager(() =>
+  import('./agents/recipe_topics/manager').then((m) => m.recipeTopicsManager)
+);
 const attachmentExpiry = lazyManager(() =>
   import('./agents/attachment_expiry/manager').then((m) => m.attachmentExpiryManager)
 );
@@ -677,25 +680,27 @@ function startBackgroundWorkers(config: AppConfig): void {
   // The workers run concurrently and partition the shared
   // `worker_leases` table on `worker_kind` ('embedding' /
   // 'reflection' / 'summary' / 'topics' / 'memory-topics' /
-  // 'attachment_expiry' / 'auto_title' / 'samskara' / 'wiki') so one
-  // device can hold every lease simultaneously without contention.
-  // The summary worker feeds the drawer's search feature - it writes
-  // `threads.summary`, which the embeddings worker then picks up to
-  // build the searchable vector. The topics worker writes
-  // `threads.topics` which the drawer reads to populate the topic-
-  // filter dropdown; see docs/dev/topics.md. The memory-topics worker
-  // is the sibling that tags `memories.topics` for the Memories tab's
-  // own topic filter. The attachment-expiry worker reclaims binaries
-  // from attachments on threads quieter than 30 days. The auto-title
-  // worker fills in titles for threads still on the 'New conversation'
-  // placeholder; see docs/dev/auto-title.md. The samskara worker
-  // forms the chat model's progressively-built predictive model of
-  // the user; see docs/dev/samskara.md.
+  // 'recipe-topics' / 'attachment_expiry' / 'auto_title' /
+  // 'samskara' / 'wiki') so one device can hold every lease
+  // simultaneously without contention. The summary worker feeds the
+  // drawer's search feature - it writes `threads.summary`, which the
+  // embeddings worker then picks up to build the searchable vector.
+  // The topics worker writes `threads.topics` which the drawer reads
+  // to populate the topic-filter dropdown; see docs/dev/topics.md.
+  // The memory-topics and recipe-topics workers are siblings that
+  // tag `memories.topics` and `recipes.topics` for the Memories and
+  // Recipes tabs' own topic filters. The attachment-expiry worker
+  // reclaims binaries from attachments on threads quieter than 30
+  // days. The auto-title worker fills in titles for threads still
+  // on the 'New conversation' placeholder; see docs/dev/auto-title.md.
+  // The samskara worker forms the chat model's progressively-built
+  // predictive model of the user; see docs/dev/samskara.md.
   embeddings.start({ supabase: app.supabase, config });
   reflection.start({ supabase: app.supabase, config });
   summary.start({ supabase: app.supabase, config });
   topics.start({ supabase: app.supabase, config });
   memoryTopics.start({ supabase: app.supabase, config });
+  recipeTopics.start({ supabase: app.supabase, config });
   attachmentExpiry.start({ supabase: app.supabase, config });
   autoTitle.start({ supabase: app.supabase, config });
   samskara.start({ supabase: app.supabase, config });
@@ -810,6 +815,7 @@ function stopBackgroundWorkers(): void {
   summary.stop();
   topics.stop();
   memoryTopics.stop();
+  recipeTopics.stop();
   attachmentExpiry.stop();
   autoTitle.stop();
   samskara.stop();

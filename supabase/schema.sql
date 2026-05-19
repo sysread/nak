@@ -1445,6 +1445,7 @@ create or replace function public.recipe_create_with_version(
   rating smallint,
   upcoming boolean,
   favorite boolean,
+  topics text[],
   created_at timestamptz,
   updated_at timestamptz
 )
@@ -1528,7 +1529,7 @@ begin
 
   return query
     select r.id, r.title, r.source, r.source_url, r.cooklang, r.rating,
-           r.upcoming, r.favorite, r.created_at, r.updated_at
+           r.upcoming, r.favorite, r.topics, r.created_at, r.updated_at
       from public.recipes r where r.id = v_recipe_id;
 end $$;
 
@@ -1572,6 +1573,7 @@ create or replace function public.recipe_update_with_version(
   rating smallint,
   upcoming boolean,
   favorite boolean,
+  topics text[],
   created_at timestamptz,
   updated_at timestamptz
 )
@@ -1715,7 +1717,7 @@ begin
 
   return query
     select r.id, r.title, r.source, r.source_url, r.cooklang, r.rating,
-           r.upcoming, r.favorite, r.created_at, r.updated_at
+           r.upcoming, r.favorite, r.topics, r.created_at, r.updated_at
       from public.recipes r where r.id = p_id;
 end $$;
 
@@ -2201,6 +2203,65 @@ create trigger clear_recipe_embedding_on_change
   before update on public.recipes
   for each row execute function public.clear_recipe_embedding_on_change();
 
+-- Recipe topic-tagging pipeline -----------------------------------------
+--
+-- Same shape as memories.topics (see "Memory topic-tagging pipeline"
+-- above): a background worker (src/lib/agents/recipe_topics/*) tags
+-- each recipe with a short flat set of topic strings so the Cookbook
+-- drawer can offer a topic filter. The agent reads title + cooklang
+-- plus the user's existing recipe-topic vocabulary and picks 1-6
+-- topics across four dimensions - primary ingredients, cuisine,
+-- course, technique - reusing existing names where they fit so the
+-- dropdown vocabulary stays small and stable.
+--
+-- Cap is higher than threads (4) and memories (4) because recipes
+-- legitimately span more dimensions: "chicken tikka masala" wants
+-- to surface under chicken, indian, dinner, and curry without
+-- forcing the model to drop three of the four. The trade-off is the
+-- pill row gets denser; the user can clear individual pills if it
+-- becomes noisy.
+alter table public.recipes
+  add column if not exists topics text[] not null default '{}',
+  add column if not exists last_topics_at timestamptz,
+  add column if not exists topics_claim_holder text,
+  add column if not exists topics_claim_expires timestamptz;
+
+create index if not exists recipes_topics_gin_idx
+  on public.recipes using gin (topics);
+
+create index if not exists recipes_topics_claim_idx
+  on public.recipes (topics_claim_expires)
+  where topics_claim_holder is not null;
+
+-- Re-queue a recipe for tagging whenever the text the tags were
+-- derived from changes. Title and cooklang are the substance; source
+-- and source_url are metadata about WHERE the recipe came from (a
+-- magazine, a website) and don't change WHAT the dish is, so they
+-- intentionally do NOT trigger a re-tag - the embedding trigger
+-- above includes source because the embedded blob folds it in, but
+-- the topic agent reads title + cooklang only.
+--
+-- The bookmark flags (upcoming, favorite) and the rating column also
+-- don't fire this trigger - those are workflow state, not content,
+-- same way they don't bump updated_at on the recipes table.
+create or replace function public.clear_recipe_topics_on_change()
+  returns trigger language plpgsql as $$
+begin
+  if new.title is distinct from old.title
+     or new.cooklang is distinct from old.cooklang then
+    new.topics := '{}'::text[];
+    new.last_topics_at := null;
+    new.topics_claim_holder := null;
+    new.topics_claim_expires := null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clear_recipe_topics_on_change on public.recipes;
+create trigger clear_recipe_topics_on_change
+  before update on public.recipes
+  for each row execute function public.clear_recipe_topics_on_change();
+
 -- Claim the next recipe whose embedding is null or whose prior claim
 -- has expired. Same skip-locked fairness and claim shape as the wiki
 -- pipeline. Returns (id, title, source, cooklang) so the worker can
@@ -2270,13 +2331,18 @@ create or replace function public.search_recipes_by_embedding(
   rating smallint,
   upcoming boolean,
   favorite boolean,
+  topics text[],
   created_at timestamptz,
   updated_at timestamptz,
   similarity real
 )
 language sql stable security invoker as $$
+  -- `topics` rides the return row so the Cookbook drawer's topic
+  -- filter can be applied client-side over semantic hits without a
+  -- second round trip. Tiny per-row overhead (1-6 short strings),
+  -- well under the noise floor at recipe scale.
   select id, title, source, source_url, cooklang, rating,
-         upcoming, favorite, created_at, updated_at,
+         upcoming, favorite, topics, created_at, updated_at,
          (1 - (embedding <=> query_embedding))::real as similarity
     from public.recipes
    where user_id = auth.uid()
@@ -3140,6 +3206,119 @@ language sql security invoker as $$
     from public.memories m, unnest(m.topics) as topic
    where m.user_id = auth.uid()
      and m.topics <> '{}'::text[];
+$$;
+
+-- Recipe topic-tagging pipeline RPCs ------------------------------------
+--
+-- Sibling of the memory-topics RPCs above. Shape is intentionally
+-- identical so anyone reading one has the other's vocabulary for free.
+-- Eligibility predicate is `last_topics_at is null`, same as memories -
+-- the trigger on title/cooklang change nulls last_topics_at and that's
+-- what re-enters the row into the queue. The claim returns title +
+-- cooklang as the agent input; no second SELECT against `recipes`.
+drop function if exists public.claim_next_recipe_for_topics(text, int);
+create or replace function public.claim_next_recipe_for_topics(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  recipe_id uuid,
+  title text,
+  cooklang text,
+  existing_topics text[]
+)
+language sql security invoker as $$
+  with candidate as (
+    select r.id as recipe_id, r.title, r.cooklang
+      from public.recipes r
+     where r.user_id = auth.uid()
+       and r.last_topics_at is null
+       and (r.topics_claim_expires is null
+            or r.topics_claim_expires < now())
+     order by r.updated_at asc
+     limit 1
+     for update of r skip locked
+  ),
+  vocab as (
+    -- One-shot read of the user's current recipe-topic vocabulary so
+    -- the worker can pass it to the model as a "reuse these names"
+    -- list. Empty array on a brand-new account is fine; the agent
+    -- gets free rein on the first few recipes and the vocabulary
+    -- self-seeds.
+    select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
+      from public.recipes r, unnest(r.topics) as topic
+     where r.user_id = auth.uid()
+       and r.topics <> '{}'::text[]
+  )
+  update public.recipes r
+     set topics_claim_holder = p_holder_id,
+         topics_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c, vocab v
+   where r.id = c.recipe_id
+  returning r.id as recipe_id, c.title, c.cooklang, v.topics as existing_topics;
+$$;
+
+-- Save the agent-produced topics IF our claim is still valid. The
+-- last_topics_at = now() stamp marks the row as tagged; the trigger
+-- on title/cooklang change nulls it back to re-qualify the row on
+-- the next cycle. Returns false when the claim expired or was
+-- stolen. Does NOT touch updated_at so a tagging pass doesn't
+-- shuffle the recipe list's recency ordering (and doesn't trip the
+-- embedding trigger by way of an unrelated column write).
+drop function if exists public.save_recipe_topics_if_claimed(uuid, text, text[]);
+create or replace function public.save_recipe_topics_if_claimed(
+  p_recipe_id uuid,
+  p_holder_id text,
+  p_topics text[]
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.recipes
+     set topics = p_topics,
+         last_topics_at = now(),
+         topics_claim_holder = null,
+         topics_claim_expires = null
+   where id = p_recipe_id
+     and user_id = auth.uid()
+     and topics_claim_holder = p_holder_id
+     and topics_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Explicit claim release for the empty-topics path. Mirrors
+-- clear_memory_topics_claim - used when the agent produced nothing
+-- usable so another cycle can re-pick the row immediately rather
+-- than waiting for the TTL.
+drop function if exists public.clear_recipe_topics_claim(uuid, text);
+create or replace function public.clear_recipe_topics_claim(
+  p_recipe_id uuid,
+  p_holder_id text
+) returns void
+language plpgsql security invoker as $$
+begin
+  update public.recipes
+     set topics_claim_holder = null,
+         topics_claim_expires = null
+   where id = p_recipe_id
+     and user_id = auth.uid()
+     and topics_claim_holder = p_holder_id;
+end $$;
+
+-- Distinct recipe-topic vocabulary for the current user. Backs the
+-- Cookbook drawer's topic-filter dropdown. Distinct from
+-- list_user_topics (threads) and list_user_memory_topics (memories)
+-- so a user can have separate vocabularies on each surface without
+-- one polluting another.
+drop function if exists public.list_user_recipe_topics();
+create or replace function public.list_user_recipe_topics()
+returns text[]
+language sql security invoker as $$
+  select coalesce(array_agg(distinct topic order by topic), '{}'::text[])
+    from public.recipes r, unnest(r.topics) as topic
+   where r.user_id = auth.uid()
+     and r.topics <> '{}'::text[];
 $$;
 
 -- Thread embedding pipeline RPCs ----------------------------------------

@@ -19,12 +19,17 @@
    */
   import { app } from '$lib/state.svelte';
   import { navigate, route } from '$lib/routing.svelte';
-  import { cookbook } from '$lib/cookbook-store.svelte';
+  import {
+    cookbook,
+    refreshRecipesTopicsVocabulary,
+  } from '$lib/cookbook-store.svelte';
   import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from '$lib/models';
-  import type { Recipe } from '$lib/supabase';
+  import { UNTAGGED_TOPIC_SENTINEL, type Recipe } from '$lib/supabase';
+  import { onMount } from 'svelte';
   import RecipeRating from './RecipeRating.svelte';
   import Scanner from './Scanner.svelte';
   import BucketHeader from './BucketHeader.svelte';
+  import TopicsFilter from './TopicsFilter.svelte';
 
   interface Props {
     onSelect?: () => void;
@@ -113,21 +118,61 @@
 
   const isSearching = $derived(query.trim().length > 0);
 
+  // Prime the dropdown vocabulary as soon as the drawer opens.
+  // loadRecipes also chains this in, but onMount handles the case
+  // where the drawer is opened after recipes were eagerly loaded
+  // elsewhere (e.g. via a tool call that already refreshed the store).
+  onMount(() => {
+    if (!app.supabase) return;
+    void refreshRecipesTopicsVocabulary(app.supabase);
+  });
+
+  function setTopics(next: string[]): void {
+    cookbook.selectedTopics = next;
+  }
+
+  /*
+   * Topic-filter predicate. Empty selection passes everything
+   * through. The (untagged) sentinel matches recipes whose topics
+   * column is empty (worker hasn't reached the row, or chose to
+   * emit nothing). Real-topic entries match via overlap (OR
+   * semantics, same as the conversation drawer's filter). Applied
+   * client-side to the bounded ~200 row cookbook - server-side
+   * filtering would add scope for no perceptible perf win.
+   */
+  function matchesTopicFilter(r: Recipe): boolean {
+    const sel = cookbook.selectedTopics;
+    if (sel.length === 0) return true;
+    let includeUntagged = false;
+    const real: string[] = [];
+    for (const t of sel) {
+      if (t === UNTAGGED_TOPIC_SENTINEL) includeUntagged = true;
+      else real.push(t);
+    }
+    const topics = Array.isArray(r.topics) ? r.topics : [];
+    if (topics.length === 0 && includeUntagged) return true;
+    if (real.length > 0 && topics.some((t) => real.includes(t))) return true;
+    return false;
+  }
+
   const visibleRecipes = $derived.by<Recipe[]>(() => {
     if (isSearching) {
       // Server order wins during a search; the relevance ranking is
-      // exactly what the user asked for.
-      return searchResults;
+      // exactly what the user asked for. Topic filter still applies
+      // - the search returns server results, and the user's filter
+      // narrows what they see locally without changing the ranking.
+      return searchResults.filter(matchesTopicFilter);
     }
+    const filtered = cookbook.recipes.filter(matchesTopicFilter);
     if (sortMode === 'rating') {
-      return [...cookbook.recipes].sort((a, b) => {
+      return [...filtered].sort((a, b) => {
         const ar = a.rating ?? -1;
         const br = b.rating ?? -1;
         if (ar !== br) return br - ar;
         return (b.updated_at ?? '').localeCompare(a.updated_at ?? '');
       });
     }
-    return cookbook.recipes;
+    return filtered;
   });
 
   // Upcoming recipes surface in a section at the top regardless of the
@@ -139,11 +184,13 @@
   // and a bucket above it would just visually fight the result order.
   // Sort within the section by updated_at desc so the most recently
   // edited upcoming recipe sits first - matches the "Recent" bucket in
-  // the conversations drawer.
+  // the conversations drawer. Topic filter applies uniformly to all
+  // buckets so "filter to italian" narrows Upcoming and Favorites
+  // identically to the All list.
   const upcomingRecipes = $derived.by<Recipe[]>(() => {
     if (isSearching) return [];
     return cookbook.recipes
-      .filter((r) => r.upcoming)
+      .filter((r) => r.upcoming && matchesTopicFilter(r))
       .sort((a, b) =>
         (b.updated_at ?? '').localeCompare(a.updated_at ?? '')
       );
@@ -157,7 +204,7 @@
   const favoriteRecipes = $derived.by<Recipe[]>(() => {
     if (isSearching) return [];
     return cookbook.recipes
-      .filter((r) => r.favorite)
+      .filter((r) => r.favorite && matchesTopicFilter(r))
       .sort((a, b) =>
         (b.updated_at ?? '').localeCompare(a.updated_at ?? '')
       );
@@ -193,6 +240,17 @@
         </select>
       </label>
     {/if}
+  </div>
+  <!-- Topic-filter row. Sits below the search input and above the
+       listing. Applied client-side over the bounded cookbook so the
+       same predicate narrows Upcoming, Favorites, search results, and
+       the main listing uniformly. -->
+  <div class="recipe-list-topics">
+    <TopicsFilter
+      topics={cookbook.topicsVocabulary}
+      selected={cookbook.selectedTopics}
+      onChange={setTopics}
+    />
   </div>
   {#if isSearching && searchBusy}
     <!-- Replace the listing with the K.I.T.T. scanner while the
@@ -325,6 +383,15 @@
   .recipe-list-controls .sidebar-search-input {
     flex: 1;
     min-width: 0;
+  }
+  /* Topic-filter row, matches `.thread-list-topics` /
+     `.memory-list-topics` so all three drawer tabs render the filter
+     identically. Negative margin-top tucks the trigger close under
+     the search row; side gutter aligns with the input above; bottom
+     margin separates from the first listing entry. */
+  .recipe-list-topics {
+    margin: -0.3rem 0.35rem 0.5rem;
+    flex-shrink: 0;
   }
   .recipe-sort-label {
     display: inline-flex;
