@@ -377,10 +377,15 @@
     text-align: left;
   }
   /* The (untagged) sentinel renders with muted styling so it reads
-     as a meta-option distinct from the real topic list. */
+     as a meta-option distinct from the real topic list. The
+     `text-align` repetition here is belt-and-suspenders against
+     any future rule that lands `text-align` on a competing
+     selector at higher specificity - the value matches the base
+     row-text rule above. */
   .topics-filter-row-text.sentinel {
     color: var(--muted);
     font-style: italic;
+    text-align: left;
   }
 
   .topics-filter-empty {
