@@ -62,6 +62,28 @@ unaffected.
 - `src/screens/Chat.svelte` — drawer tab switcher (`drawerTab`),
   Recipes list rendering, footer book icon, Cookbook modal mount,
   `COOKBOOK_CHANGE_EVENT` listener in `onMount`.
+- `src/components/RecipeList.svelte` — the sidebar listing
+  rendered by the Recipes drawer tab. Owns the search input, the
+  sort selector, the topic-filter dropdown mount, the debounced
+  embed-then-search round trip with abort-controller supersede,
+  and the buckets-plus-main-list markup. Composition-only: every
+  UI-behavior decision lives in the primitives module next door.
+- `src/lib/ui/recipe-list.ts` — pure UI-behavior primitives for
+  the recipe sidebar. `isSearching(query)`,
+  `pickVisibleRecipes(args)` (server-order on search, rating sort
+  with null-rank/recency tie-break otherwise),
+  `pickUpcomingRecipes` and `pickFavoriteRecipes` (filter +
+  recency sort, empty during a search),
+  `matchesTopicFilter(recipe, selected)` (client-side topic
+  predicate; the bounded cookbook size makes server-side
+  filtering not worth the round trip, and the same predicate
+  has to narrow Upcoming, Favorites, search results, and the
+  main listing uniformly), and `computeListView(args)` returning
+  a tagged union for the listing area's 5-state render decision
+  (scanner-search / error / scanner-loading / empty / list). The
+  `SEARCH_DEBOUNCE_MS` and `RECIPE_SEARCH_LIMIT` tunables also
+  live here. Unit-tested at `tests/recipe-list.test.ts` with
+  plain vitest.
 - `src/styles.css` — `.sidebar-nav`, `.recipe-drawer-list`,
   `.recipe-drawer-footer`. The nav section reuses `.thread` and
   `.thread-row` for the button chrome and lives with the rest of
