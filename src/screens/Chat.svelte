@@ -5460,6 +5460,7 @@
                a stream is a draft for the *next* turn, not something
                that auto-fires when the current stream completes. -->
           <textarea
+            name="composer"
             class="composer-textarea"
             class:is-collapsed={composerIsMobile && !composerFocused}
             bind:value={composer}

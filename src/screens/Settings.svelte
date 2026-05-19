@@ -1437,6 +1437,7 @@
                 </button>
               </div>
               <textarea
+                name="prompt-body-{p.id}"
                 class="prompt-body"
                 value={p.body}
                 placeholder="The system prompt text… (e.g. 'Be concise.')"
