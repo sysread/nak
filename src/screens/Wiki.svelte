@@ -215,7 +215,6 @@
     | { kind: 'idle' }
     | { kind: 'dirty' }
     | { kind: 'saving' }
-    | { kind: 'saved' }
     | { kind: 'error'; message: string };
 
   let editingId = $state<string | null>(null);
@@ -309,8 +308,14 @@
         // best-effort; see comment above.
       }
       emitWikiChange();
+      // Drop straight back to the rendered article. The form closing
+      // is the success signal; a successful save followed by a stale
+      // form sitting open invited "did it actually save?" doubt.
+      editingId = null;
+      editTitle = '';
+      editContent = '';
       editMessage = '';
-      saveState = { kind: 'saved' };
+      saveState = { kind: 'idle' };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       saveState = { kind: 'error', message: msg };
@@ -1263,8 +1268,6 @@
             <p class="error">{saveState.message}</p>
           {:else if saveState.kind === 'dirty'}
             <p class="subtle">Unsaved changes.</p>
-          {:else if saveState.kind === 'saved'}
-            <p class="subtle">Saved.</p>
           {/if}
           <div class="row">
             <button
