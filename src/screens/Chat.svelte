@@ -124,6 +124,7 @@
   import IntuitionPill from '../components/IntuitionPill.svelte';
   import BiasPill from '../components/BiasPill.svelte';
   import TopicsFilter from '../components/TopicsFilter.svelte';
+  import BucketHeader from '../components/BucketHeader.svelte';
   import {
     cookbook,
     loadRecipes,
@@ -4577,7 +4578,7 @@
                live above Recent since they're always "in progress"
                even though they have no server-side updated_at. -->
           {#if drafts.length > 0 || recentThreads.length > 0}
-            <h3 class="bucket-header">Recent</h3>
+            <BucketHeader label="Recent" />
             {#each drafts as t (t.id)}
               {@render threadRow(t)}
             {/each}
@@ -4588,9 +4589,15 @@
 
           <!-- Older: paginated 25 at a time. Header hides when there's
                nothing to show so a fresh account doesn't see an empty
-               "Older" stub above its first real thread. -->
+               "Older" stub above its first real thread. The dinkus
+               sits above this header only when Recent rendered, so a
+               drawer that opens straight onto Older (cold-load or a
+               wiped Recent bucket) doesn't get an orphan ornament. -->
           {#if olderThreads.length > 0 || olderHasMore}
-            <h3 class="bucket-header">Older</h3>
+            <BucketHeader
+              label="Older"
+              flourish={drafts.length > 0 || recentThreads.length > 0}
+            />
             {#each olderThreads as t (t.id)}
               {@render threadRow(t)}
             {/each}

@@ -1531,17 +1531,20 @@ h1 {
    type style. */
 .sidebar-search-input::-webkit-search-cancel-button { display: none; }
 
-/* Recent / Older subheads above the paginated buckets. Visually
-   identical to `.archive-toggle`'s typography (uppercase, muted,
-   tracking) minus the chevron — they're labels, not toggles. */
+/* Section headers above the drawer's bucketed listings (chats:
+   Recent / Older; recipes: Upcoming / Favorites / All recipes).
+   Read as chapter dividers, paired with the dinkus ornament between
+   sections (see BucketHeader.svelte). Bold + var(--text) so the
+   header carries the section break visually; uppercase + tracking
+   matches the project's other label-style subheads. */
 .bucket-header {
   margin: 0.5rem 0 0.2rem;
   padding: 0.35rem 0.55rem;
-  color: var(--muted);
+  color: var(--text);
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  font-weight: 500;
+  font-weight: 700;
 }
 
 /* Pagination sentinel. 1px min-height keeps it in the layout even
