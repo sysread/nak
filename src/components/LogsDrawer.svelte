@@ -520,6 +520,7 @@
              elsewhere. -->
         <input
           type="search"
+          name="logs-search"
           class="logs-search"
           placeholder="Search (space-separated)"
           bind:value={search}

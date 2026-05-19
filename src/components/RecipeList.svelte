@@ -167,6 +167,7 @@
   <div class="recipe-list-controls">
     <input
       type="search"
+      name="recipe-search"
       class="sidebar-search-input"
       placeholder="Search recipes"
       aria-label="Search recipes"

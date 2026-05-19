@@ -72,6 +72,7 @@
   <div class="memory-list-controls">
     <input
       type="search"
+      name="memory-search"
       class="sidebar-search-input"
       placeholder="Search memories"
       aria-label="Search memories"
