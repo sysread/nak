@@ -638,6 +638,46 @@ Treat each warning as a TODO until you've either resolved it or
 deliberately decided the trade-off (with the reasoning written
 down in code comments next to the import that triggered it).
 
+## Verifying UI changes
+
+The standing harness rule is "for UI or frontend changes, start the
+dev server and use the feature in a browser before reporting the task
+as complete." That rule applies only when the environment can
+actually do it - **the cloud agent cannot**. Cloud sessions don't
+have a browser, don't have a Pages preview, and the dev server it
+can spin up has no surface the user can see. Pretending to verify by
+running `mise run dev` and reading the build output is theatre - the
+build was already covered by `mise run check`.
+
+The cloud agent's correct posture:
+
+1. Run `mise run check` (and `mise run knip` for non-trivial work) so
+   the gate's static guarantees stand - tests pass, svelte-check is
+   clean, ESLint is clean, the build succeeds, dead-code surface
+   didn't grow. These cover correctness of code; they don't cover
+   correctness of UX.
+2. Reason carefully about the visual + interaction layer: empty /
+   loading / error states, mutual-exclusivity branches in template
+   :else-if cascades, button placement, icon legibility at the
+   target size, mobile-narrow viewport behavior, dark-mode contrast.
+   Code review for UI work is what stands in for the missing browser
+   check.
+3. In the end-of-turn summary, **explicitly flag what wasn't
+   verified.** "The gate is green, but I can't open the page in a
+   browser from here - the alert-triangle icon rendering, the row-
+   click navigation, the panel's mutual exclusivity with the
+   librarian view, and the empty/loading/error states want a manual
+   sanity check before this lands on main." Don't bury it; the user
+   needs that signal to know which part of the change the gate did
+   and didn't cover.
+4. If the user green-lights the merge anyway, that's their call -
+   they're choosing to spot-check after the fact rather than block
+   the merge. Don't try to talk them out of it; just merge.
+
+The Claude Code CLI session runs on the user's machine and CAN open
+a browser (or ask them to); that case still follows the standing
+rule. The cloud-env carveout is for the cloud agent specifically.
+
 ## Supabase schema changes
 
 Schema lives in `supabase/schema.sql` and is applied to the linked
