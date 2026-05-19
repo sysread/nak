@@ -284,14 +284,40 @@
       </div>
     {/snippet}
 
+    {#snippet sectionFlourish()}
+      <!-- Decorative "book chapter break" ornament between sections.
+           Two opposing swashes flanking a center dot - the classic
+           typographer's dinkus. Purely visual; aria-hidden so screen
+           readers skip it. Rendered between sections only, never above
+           the first one. -->
+      <div class="recipe-section-flourish" aria-hidden="true">
+        <svg
+          viewBox="0 0 72 12"
+          width="60"
+          height="10"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1"
+          stroke-linecap="round"
+        >
+          <path d="M 4 6 Q 14 -2 24 6 T 33 6" />
+          <circle cx="36" cy="6" r="1.2" fill="currentColor" stroke="none" />
+          <path d="M 39 6 Q 48 14 58 6 T 68 6" />
+        </svg>
+      </div>
+    {/snippet}
+
     {#if upcomingRecipes.length > 0}
-      <h3 class="bucket-header">Upcoming</h3>
+      <h3 class="bucket-header recipe-bucket-header">Upcoming</h3>
       {#each upcomingRecipes as r (`upcoming:${r.id}`)}
         {@render recipeRow(r, { keyPrefix: 'upcoming' })}
       {/each}
     {/if}
     {#if favoriteRecipes.length > 0}
-      <h3 class="bucket-header">Favorites</h3>
+      {#if upcomingRecipes.length > 0}
+        {@render sectionFlourish()}
+      {/if}
+      <h3 class="bucket-header recipe-bucket-header">Favorites</h3>
       {#each favoriteRecipes as r (`favorite:${r.id}`)}
         {@render recipeRow(r, { keyPrefix: 'favorite' })}
       {/each}
@@ -302,7 +328,8 @@
            above. Only shown when at least one bucket section is
            present - otherwise the main list IS the whole listing and
            a header would just be noise. -->
-      <h3 class="bucket-header">All recipes</h3>
+      {@render sectionFlourish()}
+      <h3 class="bucket-header recipe-bucket-header">All recipes</h3>
     {/if}
     {#each visibleRecipes as r (r.id)}
       {@render recipeRow(r)}
@@ -380,5 +407,25 @@
   }
   .recipe-list-rating {
     opacity: 0.8;
+  }
+  /* Bold the recipe section headers so Upcoming / Favorites / All
+     recipes read as proper chapter dividers rather than the muted
+     subhead used elsewhere in the drawer. Scoped to RecipeList so the
+     Chat drawer's Recent / Older headers keep their lighter weight. */
+  .recipe-bucket-header {
+    font-weight: 700;
+    color: var(--text);
+  }
+  /* Dinkus between sections. Muted so it reads as a divider, not a
+     control; centered with breathing room above and below so the
+     adjacent rows / header don't collide with it. */
+  .recipe-section-flourish {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: var(--muted);
+    opacity: 0.7;
+    margin: 0.6rem 0 0.2rem;
+    padding: 0 0.55rem;
   }
 </style>
