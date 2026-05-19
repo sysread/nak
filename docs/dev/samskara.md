@@ -107,6 +107,22 @@ toast is just a glance cue that the bias model is forming.
   suppressed on the brand-new-chat screen where `route.cid` is
   null. Click always opens the Samskara diagnostics modal
   regardless of state. Mounted once in `Chat.svelte`.
+- `src/components/CohortPanel.svelte` - the per-cohort diagnostic
+  card mounted inline under each user message in the transcript.
+  Composition-only: prop wiring, the `raw` and `expandedClusters`
+  runes, `$derived` declarations that thread props through the
+  primitives, and the markup. Every decision the panel makes is
+  delegated to the primitives module next door.
+- `src/lib/ui/cohort-panel.ts` - pure UI-behavior primitives for
+  the panel. `sortFiresByScore`, `clusterFires` (with the
+  negative-fallback-seq rule for unassigned fires that keeps the
+  each-block keys distinct), `resolutionLabel` /
+  `resolutionStatusClass` for the three-state confirmation flag,
+  `assimilationStatus` / `substrateStatusClass` for the substrate
+  lifecycle, and the `formatRelative` (injectable `now`) and
+  `formatValence` formatters. Unit-tested directly at
+  `tests/cohort-panel.test.ts` with plain vitest - no mount, no
+  harness.
 - `src/lib/embeddings/sources/samskara-substrate.ts` - registered
   with the embeddings worker as a third source alongside
   memories and threads. Polls `samskara_substrate where
