@@ -5386,6 +5386,39 @@ export class SupabaseService {
   }
 
   /**
+   * Debug modal: per-bias raw observation counts across the user's
+   * full history. Distinct from `effective_n` on the summary row -
+   * effective_n is the recency-weighted sum of ALL processed
+   * conversations (including the pConv=0 "no-hit" denominator), so
+   * every catalog entry the worker has touched ends up with a
+   * non-zero effective_n even when it was never flagged. The
+   * observation count answers the user's question "has anything
+   * ever been recorded against this bias for me?" - zero means the
+   * row's posterior is just the prior plus the cumulative no-hit
+   * mass, and the modal renders it as "no evidence" rather than
+   * the ~5% prior 10th-percentile.
+   *
+   * Aggregation is client-side. The bias_observations table has no
+   * native group-by in the PostgREST surface, and observation
+   * counts are small enough (worker-rate-limited, bounded by the
+   * catalog size times processed conversations) that pulling the
+   * `bias` column and tallying in JS is cheaper than adding an
+   * RPC for it.
+   */
+  async biasListObservationCounts(): Promise<Record<string, number>> {
+    const { data, error } = await this.client
+      .from('bias_observations')
+      .select('bias');
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as { bias: string }[];
+    const counts: Record<string, number> = {};
+    for (const r of rows) {
+      counts[r.bias] = (counts[r.bias] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  /**
    * Debug modal: list per-conversation reactions for one thread.
    * The current-conversation section uses this to surface "did the
    * user affirm or push back on the compensation for X here?"
