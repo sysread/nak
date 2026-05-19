@@ -113,6 +113,19 @@ Switching to a different drawer tab (Chats, Recipes, Wiki)
 and back keeps your selection - the picked memory is on the URL,
 so a refresh or a back button lands you on the same card.
 
+Below the search box, a **Topics ▾** dropdown lets you narrow
+the listing to memories about a particular subject area
+("allergies", "tooling", "family"). A background worker tags
+each memory with one to four short topic strings as you accumulate
+them; the dropdown shows the topics you've collected so far,
+plus an **untagged** row that filters to memories the worker
+hasn't reached yet (or chose not to tag). Picking multiple topics
+is OR semantics - "allergies" + "food" shows memories tagged with
+either. Pills below the dropdown carry the active selection;
+each pill's × clears just that one. Tags are managed for you -
+there is no manual tagging UI; edit a memory's text and the
+worker re-tags it on its next pass.
+
 From the panel you can:
 
 - **Edit a memory in place.** Clicking *Edit* swaps the row into

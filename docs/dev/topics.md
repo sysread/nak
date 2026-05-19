@@ -4,6 +4,13 @@ Background worker that tags each thread with a short flat set of
 topic strings, plus the drawer UI that uses those tags to filter
 the conversation list.
 
+A sibling worker (`src/lib/agents/memory_topics/*`) does the same
+job for memories - the implementation mirrors the thread topics
+worker file-for-file and shares the `TopicsFilter.svelte` component
+and the `topicsFilterClause` helper. The "Memory topics" subsection
+below covers the memory-side deltas; everything else in this doc is
+the thread topics worker.
+
 ## Role in the app
 
 When a thread accumulates a terminal assistant message past
@@ -192,9 +199,68 @@ threads tagged with either.
   Acceptable because the vocabulary self-corrects across the
   user's thread set.
 
+## Memory topics
+
+Same shape as above but the input is one `memories` row instead of
+a conversation transcript, and the output writes to
+`memories.topics` so the Memories drawer can offer its own topic-
+filter dropdown. Two pieces differ vs threads:
+
+- **Eligibility predicate.** A memory has no message stream, so
+  "needs (re)tagging" is `memories.last_topics_at is null` rather
+  than "terminal message past `last_topics_msg_id`". A
+  `clear_memory_topics_on_change` trigger nulls `last_topics_at`
+  (plus the claim columns) on `label` / `data` change - the same
+  shape as the existing `clear_memory_embedding_on_change` trigger
+  next to it. Confidence-only updates (bump / decay / reaffirm /
+  doubt) don't touch label or data, so they don't re-queue the row
+  - tags stay stable across volitional nudges the same way the
+  embedding does.
+- **Prompt.** The model is asked to pick the SUBJECT AREA of a
+  memory, not a summary of its assertion. "Allergic to shellfish"
+  belongs under "allergies", not under "shellfish-allergy". The
+  prompt has worked examples for that distinction since the
+  thread topics prompt's framing produced verbose paraphrases when
+  pointed at single facts.
+
+Files mirror the topics tree under
+`src/lib/agents/memory_topics/` (`agent.ts`, `prompt.ts`,
+`loop.ts`, `worker.ts`, `manager.ts`). Cross-tab lock name:
+`nak:memory-topics-worker`. Worker_kind in the lease table:
+`memory-topics`. RPC quartet:
+`claim_next_memory_for_topics` /
+`save_memory_topics_if_claimed` /
+`clear_memory_topics_claim` / `list_user_memory_topics`. The UI
+is `src/components/MemoryList.svelte` (which mounts the same
+`TopicsFilter.svelte` the conversation drawer uses) backed by
+`memoriesStore.topicsVocabulary` + `memoriesStore.selectedTopics`
+in `src/lib/memories-store.svelte.ts`.
+
+Topic-filter wiring: `searchMemoriesSemantic` (in
+`src/lib/memories.ts`) takes an optional `selectedTopics`. Server-
+side filtering covers the ILIKE / list-all / unembedded paths via
+the same `topicsFilterClause` helper - the column happens to be
+named `topics` on both tables so no per-table generalisation was
+needed. Vector hits are filtered client-side because
+`search_memories_by_embedding` returns `topics` on each row
+(adding a topic-filter argument to the RPC would have distorted
+the rank-then-limit pipeline; client-side post-filtering keeps
+the contract simple). The assistant-facing `memory_search` tool
+passes nothing for `selectedTopics`, so its behaviour is
+unchanged.
+
+Vocabulary refresh: `runMemoriesSearch` chains a
+`list_user_memory_topics` fetch onto every successful search
+resolution. No memories realtime channel today (see the
+cookbook-events note in `memories-store.svelte.ts`), so this is
+how the dropdown picks up newly-minted topics without a drawer
+reopen. The RPC is a single distinct-array-agg per user and
+costs essentially nothing at our row counts.
+
 ## Where to go next
 
 - `./summaries.md` — sibling worker, same shape.
 - `./auto-title.md` — runs first; topics is gated on it.
 - `./chat.md` — the drawer state that owns the filter UI.
+- `./memory.md` — the store the memory-topics worker tags.
 - `./architecture.md` — the worker model in context.

@@ -15,13 +15,16 @@
    * uses for `memory_search` - see `searchMemoriesSemantic` in
    * `$lib/memories`. Drives `runMemoriesSearch` on the store.
    */
+  import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
   import { route, navigate } from '$lib/routing.svelte';
   import {
     memoriesStore,
     runMemoriesSearch,
+    refreshMemoriesTopicsVocabulary,
   } from '$lib/memories-store.svelte';
   import { classifyMemoryConfidence } from '$lib/memories';
+  import TopicsFilter from './TopicsFilter.svelte';
 
   // Parent (Chat shell) passes a callback that dismisses the mobile
   // drawer once the panel has navigated to the chosen memory. Optional
@@ -66,6 +69,37 @@
     navigate({ memory: id });
     onSelect?.();
   }
+
+  // Pull the topic vocabulary on mount so the [Topics ▾] dropdown
+  // has options to show as soon as the drawer opens. Subsequent
+  // refreshes happen from realtime memory-update events (wired up
+  // in Chat.svelte's onUpdate path) - we don't poll. Best-effort:
+  // the helper swallows errors and leaves any prior vocabulary
+  // intact, so the dropdown stays usable across a transient
+  // Supabase blip.
+  onMount(() => {
+    if (!app.supabase) return;
+    void refreshMemoriesTopicsVocabulary(app.supabase);
+  });
+
+  // Refetch the search whenever the topic selection changes. The
+  // store's `runMemoriesSearch` already reads the selection from the
+  // store inside its body, so we just trigger another call. Cursors
+  // / pagination aren't a thing on the memories surface (there's no
+  // bucketing, just a single results list), so no cursor reset is
+  // needed - this is the lighter-weight analogue of the threads
+  // drawer's filter-change effect.
+  $effect(() => {
+    // Read for reactive tracking.
+    const _sel = memoriesStore.selectedTopics;
+    void _sel;
+    if (!app.supabase) return;
+    void runMemoriesSearch(app.supabase, app.venice);
+  });
+
+  function setTopics(next: string[]): void {
+    memoriesStore.selectedTopics = next;
+  }
 </script>
 
 <div class="recipe-drawer-list">
@@ -79,6 +113,13 @@
       bind:value={memoriesStore.query}
       autocomplete="off"
       spellcheck="false"
+    />
+  </div>
+  <div class="memory-list-topics">
+    <TopicsFilter
+      topics={memoriesStore.topicsVocabulary}
+      selected={memoriesStore.selectedTopics}
+      onChange={setTopics}
     />
   </div>
   {#if memoriesStore.loading && memoriesStore.results.length === 0}
@@ -134,6 +175,18 @@
   .memory-list-controls .sidebar-search-input {
     flex: 1;
     min-width: 0;
+  }
+  /* Topic-filter row. Sits between the search input and the memory
+     listing. Matches `.thread-list-topics` in styles.css - same negative
+     margin-top so the trigger pulls up close under the search row, same
+     side gutter so the trigger spans the input's full edge-to-edge
+     width, same margin-bottom so the first listing row isn't crowded.
+     Kept local rather than added to the global stylesheet because the
+     selector is component-scoped and there's nothing for another
+     module to reuse. */
+  .memory-list-topics {
+    margin: -0.3rem 0.35rem 0.5rem;
+    flex-shrink: 0;
   }
   /* Two-line memory row: label on top, confidence chip inline. */
   .memory-list-label {

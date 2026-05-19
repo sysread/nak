@@ -26,6 +26,14 @@ store:
   outbound relations alongside each matched memory so the LLM
   sees its own uncertainty and the graph it's been building.
 
+A third, sibling subsystem - the **memory-topics worker** - tags
+each memory with a short flat set of topic strings so the
+Memories drawer can filter by topic. The shape mirrors the thread
+topics worker exactly; the implementation deltas (different
+eligibility predicate, different prompt) live in
+[`./topics.md`](./topics.md) under "Memory topics" rather than
+duplicating the description here.
+
 Samskara is the separate, fully-subconscious counterpart to
 this - see `./samskara.md`. Zero shared tables or RPCs; both
 ride the system prompt independently.
@@ -295,6 +303,14 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   on a poll of `embedding is null`. Memory search's vector path
   reads that column; the ILIKE fallback covers the "just
   written, not yet embedded" window. See `./embeddings.md`.
+- **Topics** — the memory-topics background worker tags each
+  memory with 1-4 short topic strings so the Memories drawer can
+  offer a topic filter. Both surfaces (search + filter) share the
+  same `searchMemoriesSemantic` pipeline; the filter is an
+  optional `selectedTopics` argument that the assistant-facing
+  `memory_search` tool doesn't pass (no UI on the LLM side). See
+  `./topics.md` under "Memory topics" for the worker shape, the
+  schema deltas, and the trigger / claim discipline.
 - **Summaries / conversation recall** — separate store (thread
   rows), separate agents. Mentioned here only because the
   reflection loop shares the same claim-pattern plumbing with

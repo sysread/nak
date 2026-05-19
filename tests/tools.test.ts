@@ -527,7 +527,7 @@ describe('memory_search', () => {
     // Vector path runs against the embedded rows; the ILIKE probe
     // covers just-written rows the worker hasn't embedded yet.
     expect(spies.searchMemoriesByEmbedding).toHaveBeenCalledOnce();
-    expect(spies.searchUnembeddedMemoriesByText).toHaveBeenCalledWith('foo', 20);
+    expect(spies.searchUnembeddedMemoriesByText).toHaveBeenCalledWith('foo', 20, []);
     // The legacy ILIKE-everything path is only used for list-all (empty
     // query) now.
     expect(spies.searchMemories).not.toHaveBeenCalled();
@@ -549,20 +549,24 @@ describe('memory_search', () => {
   it('empty query lists everything via the legacy path', async () => {
     const { svc, spies } = mockSupabase();
     await tool.execute({}, ctxFor(svc));
-    expect(spies.searchMemories).toHaveBeenCalledWith('', 20);
+    // The third argument is the empty selectedTopics filter -
+    // searchMemoriesSemantic always threads it through (defaults to
+    // [] when the caller doesn't supply one, which the tool path
+    // doesn't because the model has no topic-selection UI).
+    expect(spies.searchMemories).toHaveBeenCalledWith('', 20, []);
     expect(spies.searchMemoriesByEmbedding).not.toHaveBeenCalled();
   });
 
   it('clamps limit to the max', async () => {
     const { svc, spies } = mockSupabase();
     await tool.execute({ limit: 9999 }, ctxFor(svc));
-    expect(spies.searchMemories).toHaveBeenCalledWith('', 100);
+    expect(spies.searchMemories).toHaveBeenCalledWith('', 100, []);
   });
 
   it('clamps limit to at least 1', async () => {
     const { svc, spies } = mockSupabase();
     await tool.execute({ limit: 0 }, ctxFor(svc));
-    expect(spies.searchMemories).toHaveBeenCalledWith('', 1);
+    expect(spies.searchMemories).toHaveBeenCalledWith('', 1, []);
   });
 
   it('merges vector hits ahead of ILIKE fallback hits without duplicates', async () => {
@@ -589,7 +593,7 @@ describe('memory_search', () => {
       embed: vi.fn(async () => ({ data: [] })),
     } as unknown as VeniceClient;
     await tool.execute({ query: 'foo' }, ctxFor(svc, venice));
-    expect(spies.searchMemories).toHaveBeenCalledWith('foo', 20);
+    expect(spies.searchMemories).toHaveBeenCalledWith('foo', 20, []);
     expect(spies.searchMemoriesByEmbedding).not.toHaveBeenCalled();
   });
 });
