@@ -35,6 +35,10 @@ changing a contract that other features depend on.
 - [Architecture](./architecture.md) — boot flow, phase state
   machine, worker model, data-layer conventions, Venice
   adapter. The one doc to read first.
+- [Frontend organization](./frontend-organization.md) — how
+  UI logic splits between pure primitives in `src/lib/ui/`
+  and Svelte composition in `src/components/`. Read before
+  adding or refactoring anything under either directory.
 - [Components](./components.md) — the reusable Svelte
   components screens compose.
 
