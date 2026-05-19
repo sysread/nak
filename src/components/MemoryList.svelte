@@ -23,7 +23,7 @@
     runMemoriesSearch,
     refreshMemoriesTopicsVocabulary,
   } from '$lib/memories-store.svelte';
-  import { classifyMemoryConfidence } from '$lib/memories';
+  import { formatMemoryConfidenceGlyph } from '$lib/memories';
   import TopicsFilter from './TopicsFilter.svelte';
 
   // Parent (Chat shell) passes a callback that dismisses the mobile
@@ -147,10 +147,17 @@
           title={m.label}
         >
           <span class="memory-list-label">{m.label}</span>
-          {#if classifyMemoryConfidence(m.confidence)}
+          {#if formatMemoryConfidenceGlyph(m.confidence)}
+            {@const g = formatMemoryConfidenceGlyph(m.confidence)!}
+            <!-- Glyph-only badge. The full prose tag rides the title
+                 attribute for hover / accessibility; the row's main
+                 currency is real estate, and a wordy chip (e.g.
+                 "corroborated" eats ~12ch) crowds the label on a
+                 narrow drawer. -->
             <span
-              class="memory-list-tag tag-{classifyMemoryConfidence(m.confidence)}"
-            >{classifyMemoryConfidence(m.confidence)}</span>
+              class="memory-list-tag"
+              title={g.title}
+              aria-label={g.title}>{g.glyph}</span>
           {/if}
         </button>
       </div>
@@ -196,31 +203,14 @@
     white-space: nowrap;
     max-width: 100%;
   }
+  /* Glyph-only confidence badge. No pill chrome - the emoji is the
+     whole signal. Margin-left separates it from the label; the
+     font-size matches the row text rather than the smaller prose-
+     chip size we used before, since emoji glyphs read better at
+     full row size than at 0.7rem. */
   .memory-list-tag {
-    font-size: 0.7rem;
-    padding: 0.05rem 0.35rem;
     margin-left: 0.4rem;
-    border-radius: 999px;
-    border: 1px solid var(--border);
     line-height: 1;
-    text-transform: lowercase;
-    font-weight: 500;
-  }
-  /* Match the panel-side palette so the chip means the same thing in
-     both places. Keep restrained - this is a row-level chip on a
-     dense list, not a headline element. */
-  :global(.memory-list-tag.tag-corroborated) {
-    background: var(--accent-bg, var(--bg-2));
-    border-color: var(--accent, var(--border));
-    color: var(--accent, var(--text));
-  }
-  :global(.memory-list-tag.tag-hedged) {
-    background: var(--bg-2);
-    color: var(--muted);
-  }
-  :global(.memory-list-tag.tag-shaky) {
-    background: var(--bg-2);
-    color: var(--muted);
-    border-style: dashed;
+    flex-shrink: 0;
   }
 </style>

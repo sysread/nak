@@ -81,6 +81,52 @@ export function formatMemoryConfidenceTag(confidence: number): string {
   return tag === null ? '' : `[${tag}] `;
 }
 
+/**
+ * Compact glyph + tooltip for the sidebar memory listing. The full
+ * prose tag ("corroborated") chews through ~12ch in a row that's
+ * already crowded between the label and the active-marker; a single
+ * emoji communicates the same information at a fraction of the
+ * width, and the title attribute carries the long-form for hover /
+ * screen reader callers.
+ *
+ *   - corroborated -> 👍 ("reaffirmed by repeated evidence"). Matches
+ *     the verb the LLM uses to bump confidence (memory_reaffirm) so
+ *     the glyph reads as "thumbs-upped" rather than as a generic
+ *     positive marker.
+ *   - hedged -> 🤔 ("mild uncertainty"). Thinking face for the band
+ *     where the model is told to soften claims.
+ *   - shaky -> ⚠️ U+26A0 + U+FE0F. The warning sign is dual-
+ *     presentation; without the variation selector it renders as a
+ *     thin black-and-white text glyph that disappears against the
+ *     row background. Forces emoji presentation everywhere the row
+ *     ships. Same rationale as the variation-selector calls in
+ *     models/index.ts and SamskaraToasts.svelte.
+ *   - neutral band -> null. The chip is omitted entirely so default-
+ *     confidence rows stay clean (the default 1.0 falls in this
+ *     band, so most freshly-written memories show nothing here).
+ *
+ * Returns null when no glyph should render. Title attribute is the
+ * source of truth for the long-form label.
+ */
+export function formatMemoryConfidenceGlyph(
+  confidence: number
+): { glyph: string; title: string } | null {
+  const tag = classifyMemoryConfidence(confidence);
+  if (tag === null) return null;
+  switch (tag) {
+    case 'corroborated':
+      return { glyph: '\u{1F44D}', title: 'corroborated' };
+    case 'hedged':
+      return { glyph: '\u{1F914}', title: 'hedged' };
+    case 'shaky':
+      // U+26A0 WARNING SIGN + U+FE0F VARIATION SELECTOR-16. The
+      // escape form keeps the selector visible in source so a
+      // future copy-paste can't accidentally drop it - U+FE0F is
+      // a zero-width codepoint that doesn't render in editors.
+      return { glyph: '⚠️', title: 'shaky' };
+  }
+}
+
 export interface SearchMemoriesDeps {
   supabase: SupabaseService;
   venice: VeniceClient | null;
