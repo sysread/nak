@@ -4430,11 +4430,11 @@
       <div class="thread-list">
         <!-- Conversation search lives below the tab nav and above the
              thread list, mirroring the search position inside
-             RecipeList / MemoryList. The wrapper carries the divider
-             border so the four tabs all read the same: tabs, hr,
-             search, list. The topbar's `.new-thread-mini`
-             icon (visible on every viewport, not just mobile) is the
-             primary new-thread affordance. -->
+             RecipeList / MemoryList. The four tabs all read the same:
+             tabs, search, list - no rule line between them. The
+             topbar's `.new-thread-mini` icon (visible on every
+             viewport, not just mobile) is the primary new-thread
+             affordance. -->
         <div class="thread-list-controls">
           <input
             type="search"
@@ -4446,12 +4446,10 @@
             onkeydown={onSearchKey}
           />
         </div>
-        <!-- Topic-filter row. Sits below the search input + the divider
-             so the search box's bottom-border still reads as the
-             separator between the controls strip and the list. The
-             pill row inside TopicsFilter grows downward on multi-
-             selections, pushing the conversation rows down rather than
-             overflowing. -->
+        <!-- Topic-filter row. Sits below the search input and above
+             the thread list. The pill row inside TopicsFilter grows
+             downward on multi-selections, pushing the conversation
+             rows down rather than overflowing. -->
         <div class="thread-list-topics">
           <TopicsFilter
             topics={topicsVocabulary}

@@ -119,17 +119,17 @@
 
 <style>
   /* Mirrors `.recipe-list-controls` so the search bar reads as the
-     same visual element across the four drawer tabs. The bottom border
-     IS the divider between the search row and the listing rows below. */
+     same visual element across the four drawer tabs. The bottom margin
+     is the only separator between the search row and the listing rows
+     below - no rule line. */
   .memory-list-controls {
     display: flex;
     gap: 0.35rem;
     align-items: center;
     padding: 0.4rem 0.6rem;
-    /* Space below the divider so the first memory row doesn't crowd
+    /* Space below the search row so the first memory row doesn't crowd
        the search input. Mirrors the chats / recipes / wiki tabs. */
     margin-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border);
   }
   .memory-list-controls .sidebar-search-input {
     flex: 1;
