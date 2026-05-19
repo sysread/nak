@@ -84,9 +84,101 @@
 
   // Delete confirmation - one row at a time, same reasoning as edits.
   let deletingId = $state<string | null>(null);
-  // Surfaces a delete failure inline next to the targeted row rather
-  // than in the global error banner, so the user sees it in context.
-  let deleteError = $state<string | null>(null);
+
+  // Inline busy/feedback state for the per-card action buttons
+  // (Reaffirm / Doubt / confirmed Delete). The previous shape ran the
+  // call without any visible indicator, so a click that didn't cross a
+  // confidence threshold looked like the button had silently no-op'd
+  // ("did it work? do I click again?"). We always show the user that
+  // their click did something: while a call is in flight, the targeted
+  // button reads "Reaffirming..." / "Doubting..." / "Deleting..." and
+  // the sibling action buttons disable so the user can't fire a
+  // second mutation against the same row mid-flight; on completion we
+  // flash a brief success label that auto-clears, and surface errors
+  // inline in the same slot. Edit and + Relate aren't here because
+  // their visual feedback is the form/picker mounting - no network
+  // round-trip to cover.
+  type ActionKind = 'reaffirm' | 'doubt' | 'delete';
+  type ActionStatus =
+    | { kind: 'idle' }
+    | { kind: 'busy'; action: ActionKind; memoryId: string }
+    | { kind: 'done'; action: ActionKind; memoryId: string }
+    | { kind: 'error'; action: ActionKind; memoryId: string; message: string };
+  let actionStatus = $state<ActionStatus>({ kind: 'idle' });
+  // Window the "done" pulse stays up before auto-clearing back to idle.
+  // Long enough to register as success, short enough that the user can
+  // click again immediately without waiting for it to fade.
+  const ACTION_DONE_LINGER_MS = 1200;
+  let actionDoneTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function actionLabel(action: ActionKind, busy: boolean): string {
+    if (!busy) {
+      if (action === 'reaffirm') return 'Reaffirm';
+      if (action === 'doubt') return 'Doubt';
+      return 'Delete';
+    }
+    if (action === 'reaffirm') return 'Reaffirming...';
+    if (action === 'doubt') return 'Doubting...';
+    return 'Deleting...';
+  }
+
+  function actionDoneLabel(action: ActionKind): string {
+    if (action === 'reaffirm') return 'Reaffirmed';
+    if (action === 'doubt') return 'Doubted';
+    return 'Deleted';
+  }
+
+  function actionErrorPrefix(action: ActionKind): string {
+    if (action === 'reaffirm') return "Couldn't reaffirm";
+    if (action === 'doubt') return "Couldn't doubt";
+    return "Couldn't delete";
+  }
+
+  // True iff some action is currently mid-flight against the given
+  // memory. Used by every action button on the card to grey itself
+  // out (`disabled`) so the user can't stack mutations on the same
+  // row. Cross-row disabling isn't needed - actions are per-row and
+  // the panel only shows one card at a time today, but the predicate
+  // is keyed by id so a future multi-card view stays correct.
+  function isAnyActionBusyFor(id: string): boolean {
+    return actionStatus.kind === 'busy' && actionStatus.memoryId === id;
+  }
+
+  function isActionBusyForRow(
+    id: string,
+    action: ActionKind,
+  ): boolean {
+    return (
+      actionStatus.kind === 'busy' &&
+      actionStatus.action === action &&
+      actionStatus.memoryId === id
+    );
+  }
+
+  function clearActionDoneTimer(): void {
+    if (actionDoneTimer !== null) {
+      clearTimeout(actionDoneTimer);
+      actionDoneTimer = null;
+    }
+  }
+
+  function scheduleActionDoneClear(memoryId: string, action: ActionKind): void {
+    clearActionDoneTimer();
+    actionDoneTimer = setTimeout(() => {
+      actionDoneTimer = null;
+      // Only collapse the badge if it's still describing the same
+      // success - a follow-up click that started a new action will
+      // have replaced `actionStatus` with a `busy` entry, and clobbering
+      // that would visually swallow the in-flight call.
+      if (
+        actionStatus.kind === 'done' &&
+        actionStatus.memoryId === memoryId &&
+        actionStatus.action === action
+      ) {
+        actionStatus = { kind: 'idle' };
+      }
+    }, ACTION_DONE_LINGER_MS);
+  }
 
   // Outbound relations live on the shared store keyed by source memory id.
   const RELATION_KINDS = [
@@ -140,23 +232,62 @@
 
   async function reaffirmMemory(m: Memory): Promise<void> {
     if (!app.supabase) return;
+    if (actionStatus.kind === 'busy') return;
+    clearActionDoneTimer();
+    actionStatus = { kind: 'busy', action: 'reaffirm', memoryId: m.id };
     try {
       const next = await app.supabase.reaffirmMemoryConfidence(m.id);
-      if (next === null) return;
+      if (next === null) {
+        // RPC returned no row - either the row was deleted out from
+        // under us or RLS blocked the update. Tell the user explicitly
+        // rather than silently no-op'ing.
+        actionStatus = {
+          kind: 'error',
+          action: 'reaffirm',
+          memoryId: m.id,
+          message: 'memory not found',
+        };
+        return;
+      }
       patchMemoryRow(m.id, { confidence: next });
+      actionStatus = { kind: 'done', action: 'reaffirm', memoryId: m.id };
+      scheduleActionDoneClear(m.id, 'reaffirm');
     } catch (err) {
-      memoriesStore.error = err instanceof Error ? err.message : String(err);
+      actionStatus = {
+        kind: 'error',
+        action: 'reaffirm',
+        memoryId: m.id,
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 
   async function doubtMemory(m: Memory): Promise<void> {
     if (!app.supabase) return;
+    if (actionStatus.kind === 'busy') return;
+    clearActionDoneTimer();
+    actionStatus = { kind: 'busy', action: 'doubt', memoryId: m.id };
     try {
       const next = await app.supabase.doubtMemoryConfidence(m.id);
-      if (next === null) return;
+      if (next === null) {
+        actionStatus = {
+          kind: 'error',
+          action: 'doubt',
+          memoryId: m.id,
+          message: 'memory not found',
+        };
+        return;
+      }
       patchMemoryRow(m.id, { confidence: next });
+      actionStatus = { kind: 'done', action: 'doubt', memoryId: m.id };
+      scheduleActionDoneClear(m.id, 'doubt');
     } catch (err) {
-      memoriesStore.error = err instanceof Error ? err.message : String(err);
+      actionStatus = {
+        kind: 'error',
+        action: 'doubt',
+        memoryId: m.id,
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 
@@ -307,7 +438,6 @@
     // Cancel any pending delete confirmation when the user pivots to
     // edit mode - two open prompts at once is confusing.
     deletingId = null;
-    deleteError = null;
   }
 
   function cancelEdit(): void {
@@ -390,7 +520,15 @@
 
   function requestDelete(m: Memory): void {
     deletingId = m.id;
-    deleteError = null;
+    // Clear any lingering action status from a previous attempt against
+    // this row so the confirm strip opens clean.
+    if (
+      (actionStatus.kind === 'error' || actionStatus.kind === 'done') &&
+      actionStatus.memoryId === m.id
+    ) {
+      clearActionDoneTimer();
+      actionStatus = { kind: 'idle' };
+    }
     // Cancel an open edit on a different row - we don't want an inline
     // editor and a delete-confirm strip both visible at the same time.
     if (editingId && editingId !== m.id) cancelEdit();
@@ -398,12 +536,14 @@
 
   function cancelDelete(): void {
     deletingId = null;
-    deleteError = null;
   }
 
   async function confirmDelete(): Promise<void> {
     if (!deletingId || !app.supabase) return;
+    if (actionStatus.kind === 'busy') return;
     const id = deletingId;
+    clearActionDoneTimer();
+    actionStatus = { kind: 'busy', action: 'delete', memoryId: id };
     try {
       await app.supabase.deleteMemory(id);
       removeMemoryRow(id);
@@ -418,14 +558,25 @@
       }
       if (relatingFromId === id) cancelRelate();
       deletingId = null;
-      deleteError = null;
+      // The row has been pulled out of the listing; the panel is
+      // about to either route to "no selection" or to the empty
+      // state. Don't park a 'done' status on a memory id that's no
+      // longer rendered - it would have nowhere to display. Just
+      // collapse back to idle.
+      actionStatus = { kind: 'idle' };
       // Drop the routed selection too. Without this the panel would
       // render the "not in current results" empty state pointing at a
       // memory that no longer exists, which reads as a bug rather
       // than as the deletion the user just confirmed.
       if (route.memory === id) navigate({ memory: null });
     } catch (err) {
-      deleteError = err instanceof Error ? err.message : String(err);
+      const msg = err instanceof Error ? err.message : String(err);
+      actionStatus = {
+        kind: 'error',
+        action: 'delete',
+        memoryId: id,
+        message: msg,
+      };
     }
   }
 
@@ -604,24 +755,31 @@
                     type="button"
                     class="secondary"
                     onclick={() => startEdit(m)}
+                    disabled={isAnyActionBusyFor(m.id)}
                   >Edit</button>
                   <button
                     type="button"
                     class="secondary"
+                    class:is-busy={isActionBusyForRow(m.id, 'reaffirm')}
                     onclick={() => reaffirmMemory(m)}
+                    disabled={isAnyActionBusyFor(m.id)}
+                    aria-busy={isActionBusyForRow(m.id, 'reaffirm') ? 'true' : undefined}
                     title="Nudge confidence upward (+0.5)"
-                  >Reaffirm</button>
+                  >{actionLabel('reaffirm', isActionBusyForRow(m.id, 'reaffirm'))}</button>
                   <button
                     type="button"
                     class="secondary"
+                    class:is-busy={isActionBusyForRow(m.id, 'doubt')}
                     onclick={() => doubtMemory(m)}
+                    disabled={isAnyActionBusyFor(m.id)}
+                    aria-busy={isActionBusyForRow(m.id, 'doubt') ? 'true' : undefined}
                     title="Nudge confidence downward (x0.7)"
-                  >Doubt</button>
+                  >{actionLabel('doubt', isActionBusyForRow(m.id, 'doubt'))}</button>
                   <button
                     type="button"
                     class="secondary"
                     onclick={() => startRelate(m)}
-                    disabled={relatingFromId === m.id}
+                    disabled={isAnyActionBusyFor(m.id) || relatingFromId === m.id}
                   >+ Relate</button>
                   {#if deletingId === m.id}
                     <span class="subtle memory-delete-prompt">Really delete?</span>
@@ -629,18 +787,40 @@
                       type="button"
                       class="secondary"
                       onclick={cancelDelete}
+                      disabled={isActionBusyForRow(m.id, 'delete')}
                     >Cancel</button>
                     <button
                       type="button"
                       class="danger"
+                      class:is-busy={isActionBusyForRow(m.id, 'delete')}
                       onclick={confirmDelete}
-                    >Delete</button>
+                      disabled={isAnyActionBusyFor(m.id)}
+                      aria-busy={isActionBusyForRow(m.id, 'delete') ? 'true' : undefined}
+                    >{actionLabel('delete', isActionBusyForRow(m.id, 'delete'))}</button>
                   {:else}
                     <button
                       type="button"
                       class="secondary"
                       onclick={() => requestDelete(m)}
+                      disabled={isAnyActionBusyFor(m.id)}
                     >Delete</button>
+                  {/if}
+                  <!-- Done/error pulse. Anchored to the actions row so
+                       the success or failure reads next to the button
+                       the user just hit, mirroring the edit form's
+                       memory-save-state cue. aria-live so screen
+                       readers pick up the state transition without
+                       any extra focus management. -->
+                  {#if actionStatus.kind === 'done' && actionStatus.memoryId === m.id}
+                    <span
+                      class="memory-action-state action-ok"
+                      aria-live="polite"
+                    >{actionDoneLabel(actionStatus.action)} ✓</span>
+                  {:else if actionStatus.kind === 'error' && actionStatus.memoryId === m.id}
+                    <span
+                      class="memory-action-state error"
+                      aria-live="polite"
+                    >{actionErrorPrefix(actionStatus.action)} - {actionStatus.message}</span>
                   {/if}
                 </div>
                 {#if relatingFromId === m.id}
@@ -719,9 +899,6 @@
                       >Cancel</button>
                     </div>
                   </div>
-                {/if}
-                {#if deletingId === m.id && deleteError}
-                  <p class="error">{deleteError}</p>
                 {/if}
               </div>
             {/if}
@@ -831,6 +1008,42 @@
   .memory-delete-prompt {
     font-size: 0.85rem;
     margin-right: 0.25rem;
+  }
+
+  /* Busy state for the action buttons (Reaffirm / Doubt / confirmed
+     Delete). The disabled attribute already greys + uncursors the
+     button; this layer adds a "live" cue - a soft accent-weak fill
+     so the active button reads as the one mid-flight, distinct from
+     the sibling buttons that disabled at the same time but are NOT
+     the one doing work. progress cursor over the box reinforces the
+     "wait, this is running" read. */
+  .memory-card-actions button.is-busy {
+    background: var(--accent-weak);
+    color: var(--text);
+    cursor: progress;
+    /* The disabled attribute on the busy button itself would drop
+       opacity, hiding the accent-weak fill. Counter-act so the
+       in-flight button visibly differs from the inert siblings. */
+    opacity: 1;
+  }
+  /* Danger-flavoured variant for the confirmed-Delete button so the
+     busy state stays red rather than swapping to the accent palette
+     mid-call. Same idea as `.tag-shaky` borrowing `--danger`. */
+  .memory-card-actions button.danger.is-busy {
+    background: color-mix(in srgb, var(--danger) 55%, transparent);
+    color: var(--ink-on-danger);
+  }
+
+  /* Per-action status pulse rendered inside the actions row. Mirrors
+     the size and tone of `.memory-save-state` in the edit form so
+     the two surfaces share a visual vocabulary. */
+  .memory-action-state {
+    font-size: 0.8rem;
+    margin-left: 0.25rem;
+    line-height: 1.1;
+  }
+  .memory-action-state.action-ok {
+    color: var(--ok);
   }
 
   .memory-edit .form-row {

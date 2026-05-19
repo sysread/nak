@@ -109,6 +109,12 @@ main panel - one card at a time, with the full body, confidence
 tag, last-touched timestamp, relations, and the inline edit /
 delete / reaffirm / doubt / + Relate controls.
 
+Rows in the sidebar are tinted by confidence so you can scan the
+listing at a glance: green-tinted rows are *corroborated*, light-
+red rows are *hedged*, and a stronger red marks *shaky*. Neutral
+rows stay plain. Hover a row to see the tag spelled out in the
+tooltip alongside the label.
+
 Switching to a different drawer tab (Chats, Recipes, Wiki)
 and back keeps your selection - the picked memory is on the URL,
 so a refresh or a back button lands you on the same card.
@@ -135,9 +141,15 @@ From the panel you can:
   if the write failed, so you never have to guess whether an edit
   landed on the server.
 - **Reaffirm or doubt a memory.** *Reaffirm* nudges confidence up
-  by 0.5; *Doubt* multiplies it by 0.7. The chip in the header
-  row shows the resulting tag (corroborated / hedged / shaky) or
-  a numeric value when it's in the neutral band.
+  by 0.5; *Doubt* multiplies it by 0.7. While the request is in
+  flight the button label flips to *Reaffirming…* / *Doubting…*
+  and the sibling action buttons disable, so you can see the
+  click registered; on completion a brief *Reaffirmed ✓* /
+  *Doubted ✓* pulse appears next to the buttons before they
+  return to normal. The chip in the header row shows the
+  resulting tag (corroborated / hedged / shaky) or a numeric
+  value when it's in the neutral band, and the sidebar row's
+  background tint updates to match.
 - **Link memories.** *+ Relate* opens an inline picker: choose a
   relation kind (supports / contradicts / generalises /
   specialises), search for a target memory to link to, optionally
@@ -146,7 +158,10 @@ From the panel you can:
   next to an edge removes it.
 - **Delete a memory.** *Delete* asks you to confirm inline before
   issuing a hard delete (the same operation the assistant's
-  `memory_delete` tool performs).
+  `memory_delete` tool performs). The confirmed *Delete* button
+  flips to *Deleting…* while the request is in flight; if the
+  server refuses, the error surfaces next to the buttons rather
+  than in the global banner.
 
 A freshly edited memory briefly falls back to substring search
 while the background embedding worker recomputes its vector — the
