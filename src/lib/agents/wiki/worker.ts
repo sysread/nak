@@ -51,6 +51,8 @@ interface StartMessage {
   leasePollMs: number;
   idleIntervalMs: number;
   errorBackoffMs: number;
+  /** See manager.ts WORKER_DEFAULTS for the rationale. */
+  maxFailuresPerThread: number;
 }
 
 interface StopMessage {
@@ -202,6 +204,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
         userId: msg.userId,
         timezone: tzHolder.value,
         threadClaimTtlSeconds: msg.threadClaimTtlSeconds,
+        maxFailuresPerThread: msg.maxFailuresPerThread,
         signal,
         onLeaseLost: () => {
           post({

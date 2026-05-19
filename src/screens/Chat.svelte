@@ -287,6 +287,15 @@
   // flag; a clock-button click while the librarian is open has to
   // touch both the route AND the local flag.
   let wikiChangelogTrigger = $state(false);
+
+  // Top-bar Skipped panel jump for the wiki tab. The autonomous wiki
+  // worker stamps wiki_last_skip_at on threads it gave up on after
+  // repeated agent errors (Venice content classifier rejections are
+  // the dominant cause); this trigger asks the Wiki panel to render
+  // the Skipped sibling page so the user can see which conversations
+  // landed there and why. Same $bindable trigger shape as the other
+  // two wiki panel buttons.
+  let wikiSkippedTrigger = $state(false);
   /**
    * Sidebar drawer tab. Backed by `route.drawer` - absent in the URL
    * means "chats" (the default). 'recipes' and 'memories' render
@@ -4923,6 +4932,26 @@
               <polyline points="12 6 12 12 16 14" />
             </svg>
           </button>
+          <!-- Wiki skipped-threads jump. Mirrors the changelog button
+               next door: a one-click affordance to land on a sibling
+               page inside the wiki tab. Feather "alert-triangle"
+               reads as "something needs your attention" without
+               overcommitting to an error tone - the panel itself is
+               often empty, and a skip is a "FYI" not a "broken"
+               state. -->
+          <button
+            class="secondary icon-btn wiki-skipped-btn"
+            onclick={() => (wikiSkippedTrigger = true)}
+            title="Wiki skipped threads"
+            aria-label="Wiki skipped threads"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+          </button>
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Wiki</span>
           </div>
@@ -6026,6 +6055,7 @@
           <WikiComp
             bind:triggerLibrarianRun={wikiLibrarianTrigger}
             bind:triggerChangelogView={wikiChangelogTrigger}
+            bind:triggerSkippedView={wikiSkippedTrigger}
           />
         {/if}
       {/if}
