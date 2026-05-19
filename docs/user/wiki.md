@@ -409,15 +409,15 @@ reset button:
 
 - **Automatic articles** - whether the per-conversation wiki agent
   runs in the background after threads settle.
-- **Reset wiki data** - sits directly below the Automatic articles
-  toggle. Permanently deletes every wiki article and clears the
-  per-conversation wiki state so the agent re-evaluates your
-  threads from scratch. Irreversible. There's a confirmation
-  prompt. If the automatic toggle is still on, the wiki agent will
-  begin rewriting articles on its next sweep - flip it off first
-  if you want a permanent wipe.
 - **Librarian** - whether the periodic librarian agent runs in the
   background to consolidate and fact-check.
+- **Reset wiki data** - lives at the bottom of the pane. Permanently
+  deletes every wiki article and clears the per-conversation wiki
+  state so the agent re-evaluates your threads from scratch.
+  Irreversible. There's a confirmation prompt. If the automatic
+  toggle is still on, the wiki agent will begin rewriting articles
+  on its next sweep - flip it off first if you want a permanent
+  wipe.
 
 Both toggles are on by default. The wiki uses the display timezone
 you set under Settings -> AI -> About you.

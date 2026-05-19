@@ -1501,17 +1501,6 @@
             untouched.
           </span>
         </label>
-        <p class="subtle" style="font-size:0.85rem">
-          Permanently delete every wiki article and clear the per-
-          conversation wiki state so the agent re-evaluates your
-          threads from scratch. Irreversible.
-        </p>
-        <button
-          type="button"
-          class="danger"
-          onclick={onResetWikiData}
-          disabled={wikiResetBusy}
-        >{wikiResetBusy ? 'Resetting…' : 'Reset wiki data'}</button>
 
         <h3 class="pane-section">Librarian</h3>
         <label class="form-row toggle-row">
@@ -1534,6 +1523,19 @@
           The wiki uses the display timezone you set under
           Settings -> AI -> About you to bucket day-eligible threads.
         </p>
+
+        <h3 class="pane-section">Reset</h3>
+        <p class="subtle" style="font-size:0.85rem">
+          Permanently delete every wiki article and clear the per-
+          conversation wiki state so the agent re-evaluates your
+          threads from scratch. Irreversible.
+        </p>
+        <button
+          type="button"
+          class="danger"
+          onclick={onResetWikiData}
+          disabled={wikiResetBusy}
+        >{wikiResetBusy ? 'Resetting…' : 'Reset wiki data'}</button>
 
         {#if wikiError}<p class="error">{wikiError}</p>{/if}
         {#if wikiInfo}<p class="subtle">{wikiInfo}</p>{/if}
