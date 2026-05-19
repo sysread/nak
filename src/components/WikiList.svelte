@@ -68,6 +68,7 @@
   <div class="wiki-list-controls">
     <input
       type="search"
+      name="wiki-search"
       class="sidebar-search-input"
       placeholder="Search wiki"
       aria-label="Search wiki"

@@ -4438,6 +4438,7 @@
         <div class="thread-list-controls">
           <input
             type="search"
+            name="thread-search"
             class="sidebar-search-input"
             placeholder="Search conversations"
             aria-label="Search conversations"
