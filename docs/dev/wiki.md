@@ -261,6 +261,11 @@ UI:
   prop renders a "+ new article" button in the header. Was a
   modal (`src/screens/WikiChangelog.svelte`) reachable from a
   top-bar clock button until the changelog moved inline.
+  Composition-only: every decision (kind-label mapping,
+  compact timestamp formatter with ISO fallback, the
+  "can-link-this-row" gate, the exhausted-page check) lives
+  in `src/lib/ui/wiki-changelog-panel.ts` and is unit-tested
+  at `tests/wiki-changelog-panel.test.ts`.
 - `src/screens/Chat.svelte` - new tab, drawer branch,
   main-panel branch, top-bar branch, change-event listener.
   Top-bar branch carries the `librarian-run-btn` (sparkles)

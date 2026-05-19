@@ -12,6 +12,14 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, fireEvent } from '@testing-library/svelte';
 import ContextRing from '../src/components/ContextRing.svelte';
+import {
+  clampedPct,
+  formatReceivedAt,
+  pctToHue,
+  pctToRingColor,
+  usageSummary,
+  usageTooltip,
+} from '../src/lib/ui/context-ring';
 
 afterEach(() => {
   cleanup();
@@ -237,5 +245,90 @@ describe('ContextRing', () => {
 
     await fireEvent.keyDown(document, { key: 'Escape' });
     expect(btn.getAttribute('aria-expanded')).toBe('false');
+  });
+});
+
+// Pure-function tests for the primitive module. The component
+// tests above exercise the rendered output end-to-end; these
+// pin the decision logic directly so a future change to the
+// formatters / clamps surfaces here without needing a mount.
+
+describe('clampedPct', () => {
+  it('returns the literal ratio for valid inputs', () => {
+    expect(clampedPct(8_000, 32_000)).toBe(0.25);
+  });
+
+  it('clamps overshoot to 1', () => {
+    expect(clampedPct(40_000, 32_000)).toBe(1);
+  });
+
+  it('clamps negative inputs to 0', () => {
+    expect(clampedPct(-100, 32_000)).toBe(0);
+  });
+
+  it('returns 0 when the contextWindow is missing or zero', () => {
+    expect(clampedPct(1000, 0)).toBe(0);
+    expect(clampedPct(1000, Number.NaN)).toBe(0);
+  });
+});
+
+describe('pctToHue', () => {
+  it('runs 120 at 0% through 60 at 50% to 0 at 100%', () => {
+    expect(pctToHue(0)).toBe(120);
+    expect(pctToHue(0.5)).toBe(60);
+    expect(pctToHue(1)).toBe(0);
+  });
+});
+
+describe('pctToRingColor', () => {
+  it('emits an HSL string with the computed hue plus fixed sat/lightness', () => {
+    expect(pctToRingColor(0)).toBe('hsl(120 65% 42%)');
+    expect(pctToRingColor(1)).toBe('hsl(0 65% 42%)');
+  });
+});
+
+describe('usageSummary', () => {
+  it('puts the percentage first and thousands-separates the counts', () => {
+    expect(usageSummary(8_000, 32_000)).toBe(
+      'Context window: 25% used (8,000 / 32,000 tokens)'
+    );
+  });
+});
+
+describe('formatReceivedAt', () => {
+  it('returns null for null or undefined input', () => {
+    expect(formatReceivedAt(null, 'UTC')).toBeNull();
+    expect(formatReceivedAt(undefined, 'UTC')).toBeNull();
+  });
+
+  it('returns null for unparseable ISO strings', () => {
+    expect(formatReceivedAt('not-a-date', 'UTC')).toBeNull();
+  });
+
+  it('renders a stamp in the requested zone', () => {
+    const out = formatReceivedAt('2026-05-19T15:42:00Z', 'UTC');
+    expect(out).toBeTruthy();
+    expect(out).toMatch(/2026/);
+    expect(out).toMatch(/42/);
+  });
+
+  it('falls back to the browser default when the zone string is bad', () => {
+    // Garbage zone makes Intl.DateTimeFormat throw; the fallback
+    // renders something useful rather than blanking the line.
+    const out = formatReceivedAt('2026-05-19T15:42:00Z', 'Not/A_Real_Zone');
+    expect(out).toBeTruthy();
+    expect(out).toMatch(/2026/);
+  });
+});
+
+describe('usageTooltip', () => {
+  it('returns the summary alone when there is no timestamp', () => {
+    expect(usageTooltip('Summary text', null)).toBe('Summary text');
+  });
+
+  it('folds the timestamp in after a bullet when present', () => {
+    expect(usageTooltip('Summary text', 'May 19, 2026, 3:42 PM')).toBe(
+      'Summary text • Received May 19, 2026, 3:42 PM'
+    );
   });
 });

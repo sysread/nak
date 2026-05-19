@@ -43,12 +43,14 @@
   import type { OpenAIToolCall } from '$lib/tools';
   import type { Message } from '$lib/supabase';
   import Markdown from './Markdown.svelte';
-
-  interface CallTiming {
-    startedAt: number;
-    endedAt?: number;
-    error?: boolean;
-  }
+  import {
+    activityFor,
+    durationPill,
+    fencedArgs,
+    fencedResult,
+    statusFor,
+    type CallTiming,
+  } from '$lib/ui/tool-calls';
 
   interface Props {
     /** The tool_calls array from the assistant message that invoked them. */
@@ -78,117 +80,18 @@
 
   let expanded = $state<Record<string, boolean>>({});
 
-  type Status = 'pending' | 'ok' | 'error';
-
-  function statusFor(callId: string): Status {
-    const t = timings[callId];
-    const result = resultsByCallId[callId];
-    // Session-local: a started-but-not-ended timing means the call is
-    // in flight - but only if the session is actually still streaming.
-    // If `sending` is false, the stream ended without completing this
-    // tool (parent finalizes dangling timings on the sending->idle
-    // edge, so this branch is rarely hit; the guard is defense in
-    // depth for the frame between the edge firing and the finalize
-    // effect running).
-    if (t && !t.endedAt) return sending ? 'pending' : 'error';
-    if (t?.error) return 'error';
-    // Replayed history: we don't have timings, so fall back to the
-    // tool-result row. A JSON `error` key means the execution failed;
-    // anything else we treat as success.
-    if (result) {
-      try {
-        const parsed = JSON.parse(result.content) as unknown;
-        if (parsed && typeof parsed === 'object' && 'error' in (parsed as object)) {
-          return 'error';
-        }
-      } catch {
-        // Non-JSON content is uncommon but fine - treat as success.
-      }
-      return 'ok';
-    }
-    // No timing, no result. During an active turn this is the brief
-    // window between the assistant message landing in `messages` and
-    // the first onToolStart handler firing - render as pending so the
-    // row doesn't flash red. When the session is idle it means the
-    // tool_calls persisted but execution never ran (stream cut off
-    // before any tool started, or thread opened fresh with an orphan
-    // tail and in-memory timings wiped) - render as errored so the
-    // spinner doesn't animate indefinitely.
-    return sending ? 'pending' : 'error';
-  }
-
-  function durationPill(callId: string): string {
-    const t = timings[callId];
-    if (!t) return '';
-    if (t.endedAt !== undefined) {
-      return `${Math.round(t.endedAt - t.startedAt)} ms`;
-    }
-    const elapsed = Math.max(0, Math.round(nowMs - t.startedAt));
-    return `${elapsed} ms`;
-  }
-
   function toggle(callId: string): void {
     expanded[callId] = !expanded[callId];
-  }
-
-  /**
-   * Pretty-print a JSON string for the markdown fence. Falls back to
-   * the raw string if parsing fails — the LLM occasionally emits
-   * invalid JSON and we still want to show what it sent.
-   */
-  function prettyJson(raw: string): string {
-    if (!raw) return '';
-    try {
-      return JSON.stringify(JSON.parse(raw), null, 2);
-    } catch {
-      return raw;
-    }
-  }
-
-  function fencedArgs(call: OpenAIToolCall): string {
-    return '```json\n' + prettyJson(call.function.arguments || '{}') + '\n```';
-  }
-
-  function fencedResult(callId: string): string {
-    const result = resultsByCallId[callId];
-    if (!result) return '_In progress…_';
-    return '```json\n' + prettyJson(result.content) + '\n```';
-  }
-
-  /**
-   * Pull the narration sentence out of a call's arguments JSON.
-   * Returns `null` when the key is missing (older persisted calls
-   * from before the `activity` injection existed, or a streaming call
-   * whose arguments haven't finished arriving yet), when it's not a
-   * string, or when it parses to an empty string. Callers fall back
-   * to the legacy tool-name-primary layout when this is null.
-   */
-  function activityFor(call: OpenAIToolCall): string | null {
-    const raw = call.function.arguments;
-    if (!raw) return null;
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === 'object' && 'activity' in parsed) {
-        const value = (parsed as { activity: unknown }).activity;
-        if (typeof value === 'string') {
-          const trimmed = value.trim();
-          return trimmed.length > 0 ? trimmed : null;
-        }
-      }
-    } catch {
-      // Partial JSON during streaming is expected; the activity will
-      // appear on the next render once the fragments close.
-    }
-    return null;
   }
 </script>
 
 <div class="tool-calls" role="group" aria-label="Tool calls">
   <div class="tool-calls-heading">Tools:</div>
   {#each calls as call (call.id)}
-    {@const status = statusFor(call.id)}
+    {@const status = statusFor(call.id, timings, resultsByCallId, sending)}
     {@const isOpen = expanded[call.id] === true}
     {@const activity = activityFor(call)}
+    {@const pill = durationPill(call.id, timings, nowMs)}
     <div class="tool-call">
       <button
         type="button"
@@ -223,8 +126,8 @@
           {:else}
             <span class="tool-name">{call.function.name}</span>
           {/if}
-          {#if durationPill(call.id)}
-            <span class="tool-pill">{durationPill(call.id)}</span>
+          {#if pill}
+            <span class="tool-pill">{pill}</span>
           {/if}
           <span class="tool-chevron" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
         </span>
@@ -234,7 +137,7 @@
           <div class="tool-detail-label">arguments</div>
           <Markdown content={fencedArgs(call)} />
           <div class="tool-detail-label">result</div>
-          <Markdown content={fencedResult(call.id)} />
+          <Markdown content={fencedResult(call.id, resultsByCallId)} />
         </div>
       {/if}
     </div>

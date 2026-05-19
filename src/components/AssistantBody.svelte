@@ -37,6 +37,13 @@
   import type { Snippet } from 'svelte';
   import type { Message } from '$lib/supabase';
   import { findContextWindowById } from '$lib/models';
+  import {
+    citationFlashDelay,
+    hasCitationRefsInBody,
+    isCitationsUnavailable,
+    parseCitationRefHref,
+    showCitationsControls,
+  } from '$lib/ui/assistant-body';
 
   interface Props {
     content: string;
@@ -95,31 +102,13 @@
 
   const citationList = $derived(citations ?? []);
   const hasCitations = $derived(citationList.length > 0);
-
-  /**
-   * True when the message body carries `^N^` / `^i,j^` superscript
-   * references — the same pattern the markdown extension matches on.
-   * Used to detect the "older row" case: an assistant turn from
-   * before we persisted the citations column still has the inline
-   * marks, but no source list to expand behind them. In that case
-   * we still show the panel and the toggle — just with a "sources
-   * weren't saved on this message" note inside — so a click on
-   * `^2^` doesn't silently no-op.
-   */
-  const hasCitationRefsInBody = $derived.by(() => {
-    if (!content) return false;
-    return /\^\d+(?:\s*,\s*\d+)*\^/.test(content);
-  });
-  /**
-   * Flag rather than a derived of `!hasCitations` alone — a turn
-   * with neither refs nor stored citations (the common case) should
-   * not surface a toggle or panel at all, only a turn with orphan
-   * refs should.
-   */
+  const hasRefs = $derived(hasCitationRefsInBody(content));
   const citationsUnavailable = $derived(
-    hasCitationRefsInBody && !hasCitations
+    isCitationsUnavailable(hasRefs, hasCitations)
   );
-  const showCitationsControls = $derived(hasCitations || citationsUnavailable);
+  const controlsVisible = $derived(
+    showCitationsControls(hasCitations, citationsUnavailable)
+  );
 
   const contextWindow = $derived(
     usage ? findContextWindowById(model ?? undefined) : null
@@ -131,11 +120,6 @@
    * `<a href="#cite-N" class="citation-ref">N</a>`; we intercept the
    * navigation here, expand the panel if it's closed, and schedule
    * a flash on row N for after the slide-down animation completes.
-   *
-   * `await tick()` + a 240ms delay covers the 220ms slide transition
-   * in CitationsPanel plus a cushion for the layout to settle. Doing
-   * the flash earlier would start the highlight while the row is
-   * still sliding in, which reads as jank.
    */
   function onBodyClick(e: MouseEvent): void {
     const target = e.target;
@@ -143,11 +127,8 @@
     const anchor = target.closest('a.citation-ref');
     if (!(anchor instanceof HTMLAnchorElement)) return;
     e.preventDefault();
-    const href = anchor.getAttribute('href') ?? '';
-    const m = /^#cite-(\d+)$/.exec(href);
-    if (!m) return;
-    const idx = Number(m[1]);
-    if (!Number.isFinite(idx)) return;
+    const idx = parseCitationRefHref(anchor.getAttribute('href') ?? '');
+    if (idx === null) return;
     const wasOpen = citationsOpen;
     if (!citationsOpen) citationsOpen = true;
     // Orphan-refs case (older rows before the citations column
@@ -157,7 +138,6 @@
     // it — keeps the "missing sources" affordance from looking like
     // it's half-working.
     if (citationsUnavailable) return;
-    const delay = wasOpen ? 0 : 240;
     // setTimeout rather than `tick()` — Svelte's tick resolves as
     // soon as the state update commits, but the slide transition
     // itself is still in flight. We want the flash to fire AFTER
@@ -166,7 +146,7 @@
     window.setTimeout(() => {
       flashCounter += 1;
       flashCite = { index: idx, key: flashCounter };
-    }, delay);
+    }, citationFlashDelay(wasOpen));
   }
 </script>
 
@@ -189,7 +169,7 @@
 {#if content}
   <div class="msg-actions">
     <CopyButton text={content} ariaLabel="Copy message" {disabled} />
-    {#if showCitationsControls}
+    {#if controlsVisible}
       <!-- Citations toggle — numbered badge doubles as count AND the
            "source list" affordance. Inline-linked in the markdown as
            `^N^` anchors; this button opens the same panel a direct
