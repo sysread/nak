@@ -88,20 +88,17 @@
   let seedGeneration = 0;
 
   function adopt(detail: SamskaraMintEventDetail): void {
-    // The shared store always reflects the most recent raw triple,
-    // even when the local pill skips its visual update below. The
-    // diagnostics-modal "you are here" dot reads this directly, so
-    // it tracks the actual mint event rather than the de-duplicated
-    // pill animation - if two consecutive mints land in the same
-    // band, the dot still updates to the second mint's exact
-    // (valence, confidence) coordinate.
-    moodState.set({
-      valence: detail.valence,
-      confidence: detail.confidence,
-      tier: detail.tier,
-    });
-    const next = nextMoodFromMint(current, detail);
-    if (next !== null) current = { id: ++nextId, ...next };
+    const transition = nextMoodFromMint(current, detail);
+    // storeUpdate is unconditional: the shared store tracks every
+    // mint event even when the local pill's dedup decision (below)
+    // skips the visual swap. The diagnostics-modal "you are here"
+    // dot reads the store directly so it follows raw mints rather
+    // than the de-duplicated pill animation.
+    moodState.set(transition.storeUpdate);
+    // visual is null when dedup applies (same band, same tier).
+    if (transition.visual !== null) {
+      current = { id: ++nextId, ...transition.visual };
+    }
   }
 
   onMount(() => {
@@ -128,22 +125,22 @@
     if (!sb) return;
     try {
       const result = await sb.samskaraGetLatestFireMood(cid);
+      // Cross-thread race guard: discard if the user navigated to
+      // a different thread while this query was in flight. Stays
+      // at the call site because it reads the component's own
+      // generation counter; both within-thread races (real mint
+      // already replaced the placeholder; RPC returned no seed)
+      // are folded into `nextMoodFromSeed`'s null return.
       if (gen !== seedGeneration) return;
-      if (!result) return;
-      const next = nextMoodFromSeed(current, result);
-      if (next === null) return;
-      current = { id: ++nextId, ...next };
-      // Mirror the seed into the shared store so the diagnostics-
-      // modal dot can render even on a freshly-reopened thread that
-      // hasn't seen a new mint yet. Reached only after
-      // `nextMoodFromSeed` confirmed the placeholder is still
-      // showing, so a real mint that landed first won't get
-      // clobbered by a slow seed query.
-      moodState.set({
-        valence: result.valence,
-        confidence: result.confidence,
-        tier: result.tier,
-      });
+      const transition = nextMoodFromSeed(current, result);
+      if (transition === null) return;
+      current = { id: ++nextId, ...transition.visual };
+      // The store update mirrors the seed value so the
+      // diagnostics-modal dot can render on a freshly-reopened
+      // thread that hasn't seen a new mint yet. Always paired with
+      // the visual update - `nextMoodFromSeed` returns either both
+      // or neither.
+      moodState.set(transition.storeUpdate);
     } catch {
       // best-effort; staying on 💤 is the correct fallback shape.
     }

@@ -52,6 +52,45 @@ export interface MoodShape {
 }
 
 /**
+ * Triple the shared `moodState` rune stores. Returned by the
+ * transition primitives so the component never has to construct
+ * the shape itself - that rule (the store stores valence +
+ * confidence + tier in this exact shape) belongs with the
+ * decision logic, not the dispatch site.
+ */
+export interface MoodStoreUpdate {
+  valence: number;
+  confidence: number;
+  tier: 1 | 2;
+}
+
+/**
+ * Outcome of a mint event. `storeUpdate` is always present - the
+ * shared store tracks every mint regardless of the local pill's
+ * dedup decision (the diagnostics-modal dot reads the store
+ * directly and should track raw mint events even when the local
+ * pill skips its visual swap). `visual` is null when dedup
+ * applies; non-null otherwise.
+ */
+export interface MintTransition {
+  storeUpdate: MoodStoreUpdate;
+  visual: MoodShape | null;
+}
+
+/**
+ * Outcome of a seed-from-history apply. Mint's asymmetry (store
+ * always, visual maybe) is absent here - both writes share the
+ * same gate (placeholder still showing AND seed result non-null),
+ * so the type wraps the apply-or-skip decision around the whole
+ * thing as `SeedTransition | null` rather than carrying null in
+ * either field.
+ */
+export interface SeedTransition {
+  storeUpdate: MoodStoreUpdate;
+  visual: MoodShape;
+}
+
+/**
  * The placeholder shape shown on thread open before any mood has
  * landed. Tier 1 by default - the placeholder has no real tier;
  * the value only matters once a real mint replaces it.
@@ -66,25 +105,29 @@ export function defaultMood(): MoodShape {
 }
 
 /**
- * Next visual state after a fresh mint event, or null when the
- * pill should skip the visual swap because the incoming mint lands
- * in the same band as what's already showing AND the tier hasn't
- * changed.
+ * Outcome of a fresh mint event. `storeUpdate` is the unconditional
+ * push into the shared mood store - it tracks every mint event
+ * regardless of the local pill's dedup decision. `visual` carries
+ * the dedup decision: null when the incoming mint lands in the
+ * same emoji/label band as what is already showing AND the tier
+ * hasn't changed, non-null otherwise.
  *
- * Without this dedup the fly transition replays on every mint -
- * reads as visual noise when the model has been steady-state for a
- * few mints in a row. Tier is part of the comparison because
- * tier-2 carries a halo (`.mood-pill.tier-2`) so a tier change IS
- * visually meaningful even at the same valence band.
- *
- * The shared `moodState` store update is the component's
- * responsibility and runs unconditionally; this function only
- * decides the local pill's visual transition.
+ * The dedup matters because every visual swap re-plays the fly
+ * transition, which reads as visual noise when the model has been
+ * steady-state for a few mints in a row. Tier is part of the
+ * comparison because tier-2 carries a halo (`.mood-pill.tier-2`)
+ * so a tier change IS visually meaningful even at the same
+ * valence band.
  */
 export function nextMoodFromMint(
   prev: MoodShape | null,
   detail: SamskaraMintEventDetail
-): MoodShape | null {
+): MintTransition {
+  const storeUpdate: MoodStoreUpdate = {
+    valence: detail.valence,
+    confidence: detail.confidence,
+    tier: detail.tier,
+  };
   const emoji = valenceToEmoji(detail.valence, detail.confidence);
   const label = valenceToMoodLabel(detail.valence, detail.confidence);
   if (
@@ -93,36 +136,50 @@ export function nextMoodFromMint(
     prev.label === label &&
     prev.tier === detail.tier
   ) {
-    return null;
+    return { storeUpdate, visual: null };
   }
   return {
-    emoji,
-    label,
-    tier: detail.tier,
-    isDefault: false,
+    storeUpdate,
+    visual: {
+      emoji,
+      label,
+      tier: detail.tier,
+      isDefault: false,
+    },
   };
 }
 
 /**
- * Next visual state after a seed-from-history fetch resolves, or
- * null when the placeholder is no longer showing - a real mint
- * landed during the in-flight fetch and the seed should be
- * discarded rather than clobber the live read.
+ * Outcome of a seed-from-history fetch, or null when the seed
+ * should not be applied. The null return path folds two distinct
+ * reasons that share the same outcome (stay on the placeholder,
+ * no writes anywhere):
+ *
+ *   - `seed === null` — the RPC returned no fires for this thread.
+ *     Nothing to seed from; the U+1F4A4 placeholder is the right
+ *     read for "we have no mood data."
+ *   - `prev` is not the placeholder — a real mint won the within-
+ *     thread race against this fetch and the seed must not clobber
+ *     either the visual or the shared store.
  *
  * The component's per-thread generation counter handles the cross-
  * thread case (slow query for thread A versus fresh seed for
- * thread B); this function handles the within-thread case (slow
- * query versus a fresh mint that arrived first).
+ * thread B); that gate stays at the call site because it depends
+ * on the component's own lifecycle state.
  */
 export function nextMoodFromSeed(
   prev: MoodShape | null,
-  seed: { valence: number; confidence: number; tier: 1 | 2 }
-): MoodShape | null {
+  seed: MoodStoreUpdate | null
+): SeedTransition | null {
+  if (!seed) return null;
   if (!prev || !prev.isDefault) return null;
   return {
-    emoji: valenceToEmoji(seed.valence, seed.confidence),
-    label: valenceToMoodLabel(seed.valence, seed.confidence),
-    tier: seed.tier,
-    isDefault: false,
+    storeUpdate: seed,
+    visual: {
+      emoji: valenceToEmoji(seed.valence, seed.confidence),
+      label: valenceToMoodLabel(seed.valence, seed.confidence),
+      tier: seed.tier,
+      isDefault: false,
+    },
   };
 }

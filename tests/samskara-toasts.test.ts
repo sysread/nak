@@ -56,62 +56,102 @@ describe('defaultMood', () => {
 });
 
 describe('nextMoodFromMint', () => {
-  it('returns a new shape when there is no prior mood', () => {
-    const next = nextMoodFromMint(null, mint(0.6, 0.9));
-    expect(next).not.toBeNull();
-    expect(next?.isDefault).toBe(false);
-    expect(next?.tier).toBe(1);
-    expect(next?.emoji).toBeTruthy();
-    expect(next?.label).toBeTruthy();
+  describe('storeUpdate (unconditional)', () => {
+    it('always carries the raw triple from the mint detail', () => {
+      // No prior mood; visual will materialise, but the contract
+      // here is that storeUpdate is identical whether or not the
+      // dedup path takes the visual.
+      const out = nextMoodFromMint(null, mint(0.6, 0.9, 2));
+      expect(out.storeUpdate).toEqual({
+        valence: 0.6,
+        confidence: 0.9,
+        tier: 2,
+      });
+    });
+
+    it('still carries the triple when the visual is dedup-skipped', () => {
+      // The diagnostics-modal dot reads the shared store directly,
+      // so it must track every mint event even when the local
+      // pill skips its visual swap.
+      const first = nextMoodFromMint(null, mint(0.6, 0.9));
+      const prev = first.visual as MoodShape;
+      const second = nextMoodFromMint(prev, mint(0.62, 0.91));
+      expect(second.visual).toBeNull();
+      expect(second.storeUpdate).toEqual({
+        valence: 0.62,
+        confidence: 0.91,
+        tier: 1,
+      });
+    });
   });
 
-  it('replaces the default placeholder with a real mood', () => {
-    const next = nextMoodFromMint(defaultMood(), mint(0.6, 0.9));
-    expect(next).not.toBeNull();
-    expect(next?.isDefault).toBe(false);
-    expect(next?.emoji).not.toBe(DEFAULT_EMOJI);
-  });
+  describe('visual (dedup decision)', () => {
+    it('materialises a new shape when there is no prior mood', () => {
+      const out = nextMoodFromMint(null, mint(0.6, 0.9));
+      expect(out.visual).not.toBeNull();
+      expect(out.visual?.isDefault).toBe(false);
+      expect(out.visual?.tier).toBe(1);
+    });
 
-  it('returns null when the incoming mint lands in the same band', () => {
-    // Two mints in the same valence/confidence neighbourhood
-    // should produce identical emoji + label + tier - the dedup
-    // skips the visual swap so the fly transition does not
-    // re-play.
-    const first = nextMoodFromMint(null, mint(0.6, 0.9));
-    expect(first).not.toBeNull();
-    const prev: MoodShape = first as MoodShape;
-    const second = nextMoodFromMint(prev, mint(0.62, 0.91));
-    expect(second).toBeNull();
-  });
+    it('replaces the default placeholder with a real mood', () => {
+      const out = nextMoodFromMint(defaultMood(), mint(0.6, 0.9));
+      expect(out.visual).not.toBeNull();
+      expect(out.visual?.isDefault).toBe(false);
+      expect(out.visual?.emoji).not.toBe(DEFAULT_EMOJI);
+    });
 
-  it('returns a new shape when valence band changes', () => {
-    const prev = nextMoodFromMint(null, mint(0.6, 0.9)) as MoodShape;
-    const next = nextMoodFromMint(prev, mint(-0.6, 0.9));
-    expect(next).not.toBeNull();
-    expect(next?.emoji).not.toBe(prev.emoji);
-  });
+    it('is null when the incoming mint lands in the same band', () => {
+      // Two mints in the same valence/confidence neighbourhood
+      // should produce identical emoji + label + tier - the dedup
+      // skips the visual swap so the fly transition does not
+      // re-play.
+      const first = nextMoodFromMint(null, mint(0.6, 0.9));
+      const prev = first.visual as MoodShape;
+      const second = nextMoodFromMint(prev, mint(0.62, 0.91));
+      expect(second.visual).toBeNull();
+    });
 
-  it('returns a new shape when tier changes even at the same valence', () => {
-    // Tier-2 carries a halo so the visual treatment differs from
-    // tier-1 at the same valence band. Dedup must NOT skip in
-    // that case.
-    const prev = nextMoodFromMint(null, mint(0.6, 0.9, 1)) as MoodShape;
-    const next = nextMoodFromMint(prev, mint(0.6, 0.9, 2));
-    expect(next).not.toBeNull();
-    expect(next?.tier).toBe(2);
+    it('materialises a new shape when valence band changes', () => {
+      const prev = nextMoodFromMint(null, mint(0.6, 0.9)).visual as MoodShape;
+      const out = nextMoodFromMint(prev, mint(-0.6, 0.9));
+      expect(out.visual).not.toBeNull();
+      expect(out.visual?.emoji).not.toBe(prev.emoji);
+    });
+
+    it('materialises a new shape when tier changes even at the same valence', () => {
+      // Tier-2 carries a halo so the visual treatment differs from
+      // tier-1 at the same valence band. Dedup must NOT skip in
+      // that case.
+      const prev = nextMoodFromMint(null, mint(0.6, 0.9, 1)).visual as MoodShape;
+      const out = nextMoodFromMint(prev, mint(0.6, 0.9, 2));
+      expect(out.visual).not.toBeNull();
+      expect(out.visual?.tier).toBe(2);
+    });
   });
 });
 
 describe('nextMoodFromSeed', () => {
-  it('upgrades the default placeholder with the seed result', () => {
-    const next = nextMoodFromSeed(defaultMood(), {
+  it('returns a paired storeUpdate + visual when upgrading from the placeholder', () => {
+    const out = nextMoodFromSeed(defaultMood(), {
       valence: 0.6,
       confidence: 0.9,
       tier: 1,
     });
-    expect(next).not.toBeNull();
-    expect(next?.isDefault).toBe(false);
-    expect(next?.emoji).not.toBe(DEFAULT_EMOJI);
+    expect(out).not.toBeNull();
+    expect(out?.storeUpdate).toEqual({
+      valence: 0.6,
+      confidence: 0.9,
+      tier: 1,
+    });
+    expect(out?.visual.isDefault).toBe(false);
+    expect(out?.visual.emoji).not.toBe(DEFAULT_EMOJI);
+  });
+
+  it('returns null when the RPC returned no fires for this thread', () => {
+    // The "nothing to seed from" decision lives in the primitive
+    // so the component does not have to type-narrow result twice
+    // after the primitive call. Stays on the placeholder.
+    expect(nextMoodFromSeed(defaultMood(), null)).toBeNull();
   });
 
   it('returns null when no prior mood is showing', () => {
@@ -126,26 +166,26 @@ describe('nextMoodFromSeed', () => {
   it('returns null when a real mint won the race (current is no longer default)', () => {
     // The within-thread race: seed query is in flight; a fresh
     // mint event lands first and replaces the placeholder; the
-    // seed result must not clobber it.
-    const realMint = nextMoodFromMint(
-      defaultMood(),
-      mint(0.6, 0.9)
-    ) as MoodShape;
+    // seed result must not clobber either the visual or the
+    // shared store.
+    const realMint = nextMoodFromMint(defaultMood(), mint(0.6, 0.9))
+      .visual as MoodShape;
     expect(realMint.isDefault).toBe(false);
-    const next = nextMoodFromSeed(realMint, {
+    const out = nextMoodFromSeed(realMint, {
       valence: -0.3,
       confidence: 0.5,
       tier: 1,
     });
-    expect(next).toBeNull();
+    expect(out).toBeNull();
   });
 
-  it('preserves the seed tier on the upgraded shape', () => {
-    const next = nextMoodFromSeed(defaultMood(), {
+  it('preserves the seed tier on both visual and storeUpdate', () => {
+    const out = nextMoodFromSeed(defaultMood(), {
       valence: 0.6,
       confidence: 0.9,
       tier: 2,
     });
-    expect(next?.tier).toBe(2);
+    expect(out?.visual.tier).toBe(2);
+    expect(out?.storeUpdate.tier).toBe(2);
   });
 });
