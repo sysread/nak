@@ -30,6 +30,10 @@
   import { app } from '$lib/state.svelte';
   import { navigate } from '$lib/routing.svelte';
   import { onWikiChange } from '$lib/wiki-events';
+  import {
+    displayTitle,
+    formatSkipTimestamp,
+  } from '$lib/ui/wiki-skipped-panel';
 
   interface SkippedRow {
     threadId: string;
@@ -70,18 +74,6 @@
     });
     return () => off();
   });
-
-  function formatStamp(iso: string): string {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  }
 
   function openThread(threadId: string): void {
     // Mirrors the patch openSourceThread uses for inline ?cid= links
@@ -125,11 +117,11 @@
               class="wiki-skipped-link"
               onclick={() => openThread(row.threadId)}
               title="Open this conversation"
-            >{row.title ?? '[untitled conversation]'}</button>
+            >{displayTitle(row.title)}</button>
             <time
               class="wiki-skipped-stamp"
               datetime={row.lastSkipAt}
-            >{formatStamp(row.lastSkipAt)}</time>
+            >{formatSkipTimestamp(row.lastSkipAt)}</time>
           </div>
           {#if row.lastSkipReason}
             <p class="wiki-skipped-reason">{row.lastSkipReason}</p>

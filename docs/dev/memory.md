@@ -138,7 +138,18 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   shows `label + classifyMemoryConfidence` chip and an
   `.active` marker when its id matches `route.memory`. Clicking
   a row calls `navigate({ memory: id })` and (on mobile) closes
-  the drawer.
+  the drawer. Composition-only: the `SEARCH_DEBOUNCE_MS`
+  tunable and the empty-state message decision live in the
+  primitives module next door.
+- `src/lib/ui/memories-list.ts` — pure UI-behavior primitives
+  for the sidebar listing. `SEARCH_DEBOUNCE_MS` (shared with
+  the recipe / wiki drawer tabs) and `emptyMessage(query)`
+  (picks between the "No matches." search-empty reading and
+  the cold-account "No memories yet. They accumulate as you
+  chat." explainer). Topic filtering runs server-side via
+  `topicsFilterClause`, so this module deliberately carries
+  no client-side topic predicate. Unit-tested at
+  `tests/memories-list.test.ts`.
 - `src/lib/memories-store.svelte.ts` — shared reactive state
   (`results`, `relations`, `loading`, `loaded`, `error`,
   `query`) plus `runMemoriesSearch`, `patchMemoryRow`,
