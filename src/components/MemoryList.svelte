@@ -23,7 +23,7 @@
     runMemoriesSearch,
     refreshMemoriesTopicsVocabulary,
   } from '$lib/memories-store.svelte';
-  import { formatMemoryConfidenceGlyph } from '$lib/memories';
+  import { classifyMemoryConfidence } from '$lib/memories';
   import TopicsFilter from './TopicsFilter.svelte';
 
   // Parent (Chat shell) passes a callback that dismisses the mobile
@@ -138,27 +138,19 @@
     </p>
   {:else}
     {#each memoriesStore.results as m (m.id)}
+      {@const tag = classifyMemoryConfidence(m.confidence)}
       <div class="row thread-row" data-memory-id-link={m.id}>
         <button
           class="thread grow"
           class:active={route.memory === m.id}
+          class:mem-corroborated={tag === 'corroborated'}
+          class:mem-hedged={tag === 'hedged'}
+          class:mem-shaky={tag === 'shaky'}
           aria-current={route.memory === m.id ? 'true' : undefined}
           onclick={() => pickMemory(m.id)}
-          title={m.label}
+          title={tag ? `${m.label} (${tag})` : m.label}
         >
           <span class="memory-list-label">{m.label}</span>
-          {#if formatMemoryConfidenceGlyph(m.confidence)}
-            {@const g = formatMemoryConfidenceGlyph(m.confidence)!}
-            <!-- Glyph-only badge. The full prose tag rides the title
-                 attribute for hover / accessibility; the row's main
-                 currency is real estate, and a wordy chip (e.g.
-                 "corroborated" eats ~12ch) crowds the label on a
-                 narrow drawer. -->
-            <span
-              class="memory-list-tag"
-              title={g.title}
-              aria-label={g.title}>{g.glyph}</span>
-          {/if}
         </button>
       </div>
     {/each}
@@ -194,7 +186,11 @@
     margin: -0.3rem 0.6rem 0.5rem;
     flex-shrink: 0;
   }
-  /* Two-line memory row: label on top, confidence chip inline. */
+  /* Single-line memory row: label only. Confidence rides as a
+     background tint on the row itself rather than as a trailing
+     badge - long titles used to push the glyph off-screen, and the
+     point of the listing is to scan labels at a glance, so the
+     signal moves onto the row chrome. */
   .memory-list-label {
     font-weight: 500;
     overflow: hidden;
@@ -202,14 +198,30 @@
     white-space: nowrap;
     max-width: 100%;
   }
-  /* Glyph-only confidence badge. No pill chrome - the emoji is the
-     whole signal. Margin-left separates it from the label; the
-     font-size matches the row text rather than the smaller prose-
-     chip size we used before, since emoji glyphs read better at
-     full row size than at 0.7rem. */
-  .memory-list-tag {
-    margin-left: 0.4rem;
-    line-height: 1;
-    flex-shrink: 0;
+  /* Confidence-tinted rows. Green for the affirmed band, red shades
+     for the doubted bands (hedged = light, shaky = stronger). The
+     tints use `color-mix` against `--ok` / `--danger` so they pick
+     up theme + accent variation without per-theme overrides. Hover
+     and active states layer on top via separate background-color
+     transitions in the global `.thread` rules; we ride only the
+     default state here so the active-selection accent-weak fill
+     still reads clearly when a tinted row is the picked one. */
+  .thread.mem-corroborated:not(.active) {
+    background: color-mix(in srgb, var(--ok) 16%, transparent);
+  }
+  .thread.mem-corroborated:not(.active):hover {
+    background: color-mix(in srgb, var(--ok) 24%, transparent);
+  }
+  .thread.mem-hedged:not(.active) {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+  }
+  .thread.mem-hedged:not(.active):hover {
+    background: color-mix(in srgb, var(--danger) 20%, transparent);
+  }
+  .thread.mem-shaky:not(.active) {
+    background: color-mix(in srgb, var(--danger) 24%, transparent);
+  }
+  .thread.mem-shaky:not(.active):hover {
+    background: color-mix(in srgb, var(--danger) 32%, transparent);
   }
 </style>
