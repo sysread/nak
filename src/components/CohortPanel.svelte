@@ -27,12 +27,16 @@
     SamskaraFireDiagnosticRow,
     SamskaraSubstrateDiagnosticRow,
   } from '$lib/supabase';
-
-  interface ClusterView {
-    seq: number;
-    representative: SamskaraFireDiagnosticRow;
-    siblings: SamskaraFireDiagnosticRow[];
-  }
+  import {
+    assimilationStatus,
+    clusterFires,
+    formatRelative,
+    formatValence,
+    resolutionLabel,
+    resolutionStatusClass,
+    sortFiresByScore,
+    substrateStatusClass,
+  } from '$lib/ui/cohort-panel';
 
   interface Props {
     /** All fires belonging to this cohort, in any order. */
@@ -56,39 +60,14 @@
   let raw = $state(false);
   let expandedClusters = $state<Set<number>>(new Set());
 
-  // Order fires highest-score-first so the "representative" of any
-  // cluster is the strongest member. Pull min(firedAt) and the
-  // shared was_confirmed off the first row - every fire in a cohort
-  // shares both by construction.
-  const sortedFires = $derived(
-    [...fires].sort((a, b) => b.score - a.score)
-  );
+  // Sort once; the sorted list feeds the raw-view each-block, the
+  // cluster bucketing, AND the firedAt / wasConfirmed reads off
+  // the first row (every fire in a cohort shares both by
+  // construction).
+  const sortedFires = $derived(sortFiresByScore(fires));
   const firedAt = $derived(sortedFires[0]?.firedAt ?? null);
   const wasConfirmed = $derived(sortedFires[0]?.wasConfirmed ?? null);
-
-  const clusters: ClusterView[] = $derived.by(() => {
-    const bySeq = new Map<number, SamskaraFireDiagnosticRow[]>();
-    // Fires without a cluster assignment each get a unique negative
-    // fallback seq so they render as their own singleton. Using ?? 0
-    // would silently collapse every unassigned fire into one bucket
-    // and produce duplicate each-block keys.
-    let nextFallbackSeq = -1;
-    for (const f of sortedFires) {
-      const assigned = clusterMap.get(f.id);
-      const seq = assigned?.clusterSeq ?? nextFallbackSeq--;
-      const bucket = bySeq.get(seq);
-      if (bucket) bucket.push(f);
-      else bySeq.set(seq, [f]);
-    }
-    return [...bySeq.entries()]
-      .map(([seq, members]) => ({
-        seq,
-        representative: members[0],
-        siblings: members.slice(1),
-      }))
-      .sort((a, b) => b.representative.score - a.representative.score);
-  });
-
+  const clusters = $derived(clusterFires(sortedFires, clusterMap));
   const collapsed = $derived(clusters.length < sortedFires.length);
 
   function toggleCluster(seq: number): void {
@@ -96,63 +75,6 @@
     if (next.has(seq)) next.delete(seq);
     else next.add(seq);
     expandedClusters = next;
-  }
-
-  function formatRelative(iso: string | null | undefined): string {
-    if (!iso) return 'never';
-    const then = new Date(iso).getTime();
-    if (Number.isNaN(then)) return iso ?? 'never';
-    const diffMs = Date.now() - then;
-    const diffSec = Math.round(diffMs / 1000);
-    if (diffSec < 60) return `${diffSec}s ago`;
-    const diffMin = Math.round(diffSec / 60);
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffHr = Math.round(diffMin / 60);
-    if (diffHr < 24) return `${diffHr}h ago`;
-    const diffDay = Math.round(diffHr / 24);
-    if (diffDay < 30) return `${diffDay}d ago`;
-    const diffMo = Math.round(diffDay / 30);
-    if (diffMo < 12) return `${diffMo}mo ago`;
-    const diffYr = Math.round(diffMo / 12);
-    return `${diffYr}y ago`;
-  }
-
-  function formatValence(v: number | null): string {
-    if (v === null) return '-';
-    const sign = v > 0 ? '+' : '';
-    return `${sign}${v.toFixed(2)}`;
-  }
-
-  // Three-state resolution. The old four-way label (in-flight /
-  // window-open / aged-out) earned its keep in the diagnostics
-  // modal where cohorts were a flat list with no message context;
-  // inline under the user message that fired them, the transcript
-  // already encodes "this turn fired N exchanges ago" - if a later
-  // user turn is visible the classifier had its shot, and if it
-  // didn't, the cohort is the latest one. "pending" covers every
-  // unresolved state.
-  function resolutionLabel(confirmed: boolean | null): string {
-    if (confirmed === true) return 'confirmed';
-    if (confirmed === false) return 'disconfirmed';
-    return 'pending';
-  }
-
-  function resolutionStatusClass(confirmed: boolean | null): string {
-    if (confirmed === true) return 'confirm';
-    if (confirmed === false) return 'disconfirm';
-    return 'pending';
-  }
-
-  function assimilationStatus(r: SamskaraSubstrateDiagnosticRow): string {
-    if (r.situation === null) return 'pending assimilation';
-    if (r.embeddingModel === null) return 'assimilated, pending embed';
-    return 'assimilated + embedded';
-  }
-
-  function substrateStatusClass(r: SamskaraSubstrateDiagnosticRow): string {
-    if (r.situation === null) return 'pending';
-    if (r.embeddingModel === null) return 'partial';
-    return 'done';
   }
 </script>
 
