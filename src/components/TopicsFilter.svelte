@@ -35,12 +35,15 @@
    * shared filter URL (a future capability; today the selection is
    * in-memory only).
    *
-   * The "(untagged)" sentinel is imported from supabase.ts so the
-   * single source of truth lives next to the query builder that
-   * special-cases it.
+   * UI-behavior decisions (effective option list, selection
+   * mutators, what counts as "active", display-label transform,
+   * popover open state) live in `$lib/topics-filter.svelte.ts` so a
+   * port to another framework would only have to re-write the glue
+   * below: prop wiring, DOM refs, the two document-level listeners,
+   * and the markup. Everything else is the controller.
    */
   import { onMount, onDestroy } from 'svelte';
-  import { UNTAGGED_TOPIC_SENTINEL } from '$lib/supabase';
+  import { createTopicsFilter } from '$lib/topics-filter.svelte';
 
   interface Props {
     /**
@@ -68,65 +71,40 @@
   }
   const { topics, selected, onChange }: Props = $props();
 
-  let open = $state(false);
+  // Inputs are passed as getters so the controller's $derived values
+  // re-evaluate when the parent's props change. Destructured runes
+  // props stay reactive in Svelte 5 - each call to the getter reads
+  // the current bound value, not a snapshot taken at factory-call
+  // time. A plain `topics: topics` would freeze the array reference.
+  const filter = createTopicsFilter({
+    topics: () => topics,
+    selected: () => selected,
+    onChange: (next) => onChange(next),
+  });
+
   let buttonEl: HTMLButtonElement | undefined = $state();
   let popoverEl: HTMLDivElement | undefined = $state();
-
-  const selectedSet = $derived(new Set(selected));
-  const hasActive = $derived(selected.length > 0);
-
-  /**
-   * Effective option list. The (untagged) sentinel is always
-   * offered, even on accounts with zero tagged threads - it lets the
-   * user see the "the agent hasn't reached me yet" subset
-   * explicitly. Real topics come from the per-user vocabulary,
-   * alphabetised at the supabase layer.
-   */
-  const options = $derived([UNTAGGED_TOPIC_SENTINEL, ...topics]);
-
-  /**
-   * Display label for a topic. The sentinel renders as plain
-   * "untagged" without the parens - the parens are an internal-only
-   * marker that keeps it from colliding with any real topic the
-   * model could emit.
-   */
-  function labelFor(t: string): string {
-    return t === UNTAGGED_TOPIC_SENTINEL ? 'untagged' : t;
-  }
-
-  function toggle(name: string): void {
-    const next = selectedSet.has(name)
-      ? selected.filter((t) => t !== name)
-      : [...selected, name];
-    onChange(next);
-  }
-
-  function clearOne(name: string): void {
-    onChange(selected.filter((t) => t !== name));
-  }
-
-  function clearAll(): void {
-    onChange([]);
-  }
 
   /**
    * Click-outside-to-close. Listens at document level only when the
    * popover is open so the listener doesn't sit live for the
-   * whole session.
+   * whole session. DOM-bound so it stays here rather than in the
+   * controller - the "close on outside" rule is the controller's
+   * concern, the hit-testing is the component's.
    */
   function onDocClick(e: MouseEvent): void {
-    if (!open) return;
+    if (!filter.open) return;
     const tgt = e.target;
     if (!(tgt instanceof Node)) return;
     if (popoverEl?.contains(tgt)) return;
     if (buttonEl?.contains(tgt)) return;
-    open = false;
+    filter.close();
   }
 
   function onKey(e: KeyboardEvent): void {
-    if (open && e.key === 'Escape') {
+    if (filter.open && e.key === 'Escape') {
       e.preventDefault();
-      open = false;
+      filter.close();
       buttonEl?.focus();
     }
   }
@@ -145,14 +123,14 @@
   <button
     type="button"
     class="topics-filter-trigger"
-    class:active={hasActive}
+    class:active={filter.hasActive}
     aria-haspopup="listbox"
-    aria-expanded={open}
+    aria-expanded={filter.open}
     bind:this={buttonEl}
-    onclick={() => (open = !open)}
+    onclick={() => filter.toggleOpen()}
   >
     <span class="topics-filter-label">Topics</span>
-    {#if hasActive}
+    {#if filter.hasActive}
       <span class="topics-filter-dot" aria-hidden="true"></span>
     {/if}
     <span class="topics-filter-caret" aria-hidden="true">
@@ -168,21 +146,21 @@
         stroke-width="2.5"
         stroke-linecap="round"
         stroke-linejoin="round"
-        class:flipped={open}
+        class:flipped={filter.open}
       >
         <polyline points="6 9 12 15 18 9" />
       </svg>
     </span>
   </button>
 
-  {#if open}
+  {#if filter.open}
     <div
       class="topics-filter-popover"
       role="listbox"
       aria-label="Filter conversations by topic"
       bind:this={popoverEl}
     >
-      {#each options as opt (opt)}
+      {#each filter.options as opt (opt)}
         <!-- Whole row is clickable. Hidden input keeps keyboard /
              screen-reader semantics; visible checkbox glyph is the
              label's `::before` so focus rings land cleanly on the
@@ -190,11 +168,11 @@
         <label class="topics-filter-row">
           <input
             type="checkbox"
-            checked={selectedSet.has(opt)}
-            onchange={() => toggle(opt)}
+            checked={filter.selectedSet.has(opt)}
+            onchange={() => filter.toggle(opt)}
           />
-          <span class="topics-filter-row-text" class:untagged={opt === UNTAGGED_TOPIC_SENTINEL}>
-            {labelFor(opt)}
+          <span class="topics-filter-row-text" class:untagged={filter.isUntagged(opt)}>
+            {filter.labelFor(opt)}
           </span>
         </label>
       {/each}
@@ -212,17 +190,17 @@
     </div>
   {/if}
 
-  {#if hasActive}
+  {#if filter.hasActive}
     <div class="topics-filter-pills" role="group" aria-label="Active topic filters">
       {#each selected as t (t)}
-        <span class="topics-filter-pill" class:untagged={t === UNTAGGED_TOPIC_SENTINEL}>
-          <span class="topics-filter-pill-text">{labelFor(t)}</span>
+        <span class="topics-filter-pill" class:untagged={filter.isUntagged(t)}>
+          <span class="topics-filter-pill-text">{filter.labelFor(t)}</span>
           <button
             type="button"
             class="topics-filter-pill-x"
-            aria-label="Remove {labelFor(t)} filter"
+            aria-label="Remove {filter.labelFor(t)} filter"
             title="Remove"
-            onclick={() => clearOne(t)}
+            onclick={() => filter.clearOne(t)}
           >×</button>
         </span>
       {/each}
@@ -230,7 +208,7 @@
         <button
           type="button"
           class="topics-filter-clear-all"
-          onclick={clearAll}
+          onclick={() => filter.clearAll()}
         >clear</button>
       {/if}
     </div>

@@ -50,7 +50,18 @@ threads tagged with either.
   Worker, builds the `StartMessage`.
 - `src/components/TopicsFilter.svelte` — the drawer's dropdown +
   pill row. Pure presentation; the parent passes the vocabulary +
-  selection in and gets an `onChange` callback out.
+  selection in and gets an `onChange` callback out. The Svelte file
+  is thin glue (markup, DOM refs, document-level click/key
+  listeners); every UI-behavior decision (effective option list,
+  toggle/clearOne/clearAll mutators, what counts as "active",
+  display-label transform, popover open flag) lives in the
+  `createTopicsFilter` controller next door.
+- `src/lib/topics-filter.svelte.ts` — `createTopicsFilter` factory.
+  Owns the UI state machine and decision logic that would survive a
+  port to another framework; reads its inputs through getter
+  functions so a parent's reactive props flow through the
+  controller's `$derived` values. Unit-tested directly in
+  `tests/topics-filter.svelte.test.ts` - no DOM mount required.
 - `src/screens/Chat.svelte` — owns `selectedTopics` /
   `topicsVocabulary` state, threads `selectedTopics` through the
   three bucket fetches + search + window-fetch, refreshes the
