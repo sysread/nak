@@ -82,6 +82,21 @@ export function clusterFires(
 }
 
 /**
+ * True when clustering collapsed at least two fires into one
+ * bucket - i.e. the panel's "grouped by theme" view is hiding
+ * some siblings behind cluster chips, and the "Show all" toggle
+ * has something to reveal. The implementation reads as
+ * "cluster count below fire count" but the meaning depends on
+ * knowing how the cluster RPC works; the name carries the intent.
+ */
+export function isCollapsedView(
+  clusters: readonly ClusterView[],
+  fires: readonly SamskaraFireDiagnosticRow[]
+): boolean {
+  return clusters.length < fires.length;
+}
+
+/**
  * Three-state resolution label. The old four-way variant (in-flight
  * / window-open / aged-out) earned its keep in the diagnostics modal
  * where cohorts were a flat list with no message context; inline

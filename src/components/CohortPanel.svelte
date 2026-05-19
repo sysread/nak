@@ -32,6 +32,7 @@
     clusterFires,
     formatRelative,
     formatValence,
+    isCollapsedView,
     resolutionLabel,
     resolutionStatusClass,
     sortFiresByScore,
@@ -68,7 +69,7 @@
   const firedAt = $derived(sortedFires[0]?.firedAt ?? null);
   const wasConfirmed = $derived(sortedFires[0]?.wasConfirmed ?? null);
   const clusters = $derived(clusterFires(sortedFires, clusterMap));
-  const collapsed = $derived(clusters.length < sortedFires.length);
+  const collapsed = $derived(isCollapsedView(clusters, sortedFires));
 
   function toggleCluster(seq: number): void {
     const next = new Set(expandedClusters);

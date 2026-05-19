@@ -126,18 +126,39 @@ Borderline cases stay in the component until the second
 caller appears. Three similar lines beat a premature
 abstraction.
 
-## Trivial one-liners stay inline
+## What to extract: domain knowledge, not length
 
-If the entire "primitive" would be `selected.length > 0` or
-`onChange([])`, leave it in the component. A primitive
-should carry knowledge a future reader would have to
-re-derive. Universal arithmetic isn't worth a module
-boundary.
+The bar for extraction is **whether a reader needs feature-
+specific knowledge to interpret the expression**, not whether
+it's short. Length is a bad proxy. A one-liner that requires
+the reader to recall how the feature works internally
+deserves a name. A one-liner that's universal arithmetic
+doesn't.
 
-The topic-filter component keeps `hasActive`,
-`selectedSet`, and `clearAll` inline for exactly this
-reason. Each is one expression with no domain meaning to
-preserve.
+`selected.length > 0` is universal - any reader knows what
+"array is non-empty" means without context. Stays inline.
+`new Set(selected)` is universal - "build a lookup set."
+Stays inline. `onChange([])` is universal - "reset to empty."
+Stays inline.
+
+`clusters.length < sortedFires.length` is **not** universal.
+It only means "the panel is showing a collapsed view" if you
+already know the cluster RPC produces fewer buckets than
+members exactly when at least one bucket has siblings.
+That's domain knowledge leaking into arithmetic. Extracts to
+`isCollapsedView(clusters, fires)` - the name carries the
+intent and the reader doesn't have to re-derive the meaning.
+
+The test isn't "could I write this inline" - of course you
+could - it's "would a reader of the component understand it
+without consulting the feature's docs."
+
+Trivial inline examples from the topic-filter component
+(`hasActive`, `selectedSet`, `clearAll`) all pass the
+universal-arithmetic test. The cohort-panel component's
+`toggleCluster` is similar - the body is pure Set
+manipulation any reader can follow without knowing what
+clusters are.
 
 ## Testing
 

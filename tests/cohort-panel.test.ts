@@ -16,6 +16,7 @@ import {
   clusterFires,
   formatRelative,
   formatValence,
+  isCollapsedView,
   resolutionLabel,
   resolutionStatusClass,
   sortFiresByScore,
@@ -146,6 +147,30 @@ describe('clusterFires', () => {
     const out = clusterFires([f1, f2, f3], map);
     expect(out[0].representative.id).toBe('f1');
     expect(out[0].siblings.map((s) => s.id)).toEqual(['f2', 'f3']);
+  });
+});
+
+describe('isCollapsedView', () => {
+  it('is true when clustering bucketed at least one pair of fires together', () => {
+    const f1 = makeFire('f1', 0.9);
+    const f2 = makeFire('f2', 0.6);
+    const map = new Map([
+      ['f1', { clusterSeq: 1, clusterSize: 2 }],
+      ['f2', { clusterSeq: 1, clusterSize: 2 }],
+    ]);
+    const clusters = clusterFires([f1, f2], map);
+    expect(isCollapsedView(clusters, [f1, f2])).toBe(true);
+  });
+
+  it('is false when every fire is its own singleton', () => {
+    const f1 = makeFire('f1', 0.9);
+    const f2 = makeFire('f2', 0.6);
+    const clusters = clusterFires([f1, f2], new Map());
+    expect(isCollapsedView(clusters, [f1, f2])).toBe(false);
+  });
+
+  it('is false for an empty cohort', () => {
+    expect(isCollapsedView([], [])).toBe(false);
   });
 });
 
