@@ -1847,7 +1847,7 @@
         {#if aboutCheckedInfo}
           <p class="subtle" style="margin-top:0.5rem">{aboutCheckedInfo}</p>
         {/if}
-        <p class="subtle" style="font-size:0.8rem">
+        <p class="subtle" style="margin-top:0.5rem;font-size:0.8rem">
           "Check for updates" asks the service worker to look for a
           fresh deploy without reloading. If one's found the button
           flips to "Reload to update" and the top-right banner
