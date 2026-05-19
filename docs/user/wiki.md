@@ -235,17 +235,24 @@ Each row shows:
 - The **timestamp** the agent gave up.
 - The **error detail** the agent received (trimmed for display).
 
-There is no retry button: the agent's eligibility predicate keys off
-the most recent turn in the conversation, so editing the
-conversation (adding a turn, removing one, or modifying the body) is
-what lets the agent try again on the next sweep. A successful next
-run automatically drops the row from the Skipped panel.
+Each row carries a **Retry** button. Clicking it re-runs the wiki
+agent against the conversation right now, on the main thread, going
+through the same primary -> uncensored-fallback two-shot the worker
+uses. On success the row drops from the panel; on failure the new
+error appears inline next to the button and you can retry again
+once you've made changes. The agent's writes (any new wiki
+articles, any updates) land regardless, since the wiki tools commit
+each call individually.
+
+The autonomous worker also processes skipped rows on its own
+schedule. Adding or editing turns in the conversation is not the
+trigger - skipped threads bypass the usual "wait a day after the
+last message" cooldown so the worker can pick them up on its next
+sweep without waiting. If you want immediate feedback, use the
+Retry button; if you can wait, the worker will get to them.
 
 If the panel is empty, the autonomous agent hasn't given up on
-anything - that's the steady state. Skips that predate the fallback
-behaviour are automatically re-attempted with the uncensored model
-the first time the worker sees them after this change ships; you'll
-see those rows clear from the panel as the worker processes them.
+anything - that's the steady state.
 
 ## The librarian
 

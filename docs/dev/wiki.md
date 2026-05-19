@@ -416,30 +416,43 @@ concurrently against the same thread.
    "when did the conversation actually last move" - a future
    bump to threads.updated_at from an unrelated write would
    shift the gate.
-2. **Strict-yesterday gate.** The eligibility predicate is
-   `(newest.created_at at time zone p_timezone)::date <
-   (now() at time zone p_timezone)::date` - newest message
-   must land on a calendar day strictly before today in the
-   user's tz. Effect: chat Monday -> eligible Tuesday; user
-   resumes Wednesday -> the new newest msg lands on Wednesday
-   and the inequality fails again until Thursday.
+2. **Strict-yesterday gate.** The normal-eligibility branch
+   includes `(newest.created_at at time zone p_timezone)::date <
+   (now() at time zone p_timezone)::date` - newest message must
+   land on a calendar day strictly before today in the user's tz.
+   Effect: chat Monday -> eligible Tuesday; user resumes Wednesday
+   -> the new newest msg lands on Wednesday and the inequality
+   fails again until Thursday. The day-gate sits INSIDE the
+   normal branch (see below), not at the top of the WHERE, so the
+   skip-recovery branch can ignore it.
 
 Same depth guard (>= 2 user messages) and `for update of t
 skip locked` fairness as the journal RPC.
 
-The "new work past the pointer" predicate is actually an OR:
-either `term.msg_id is distinct from t.last_wiki_processed_msg_id`
-(normal case) or the thread carries a content-classifier skip
-that the uncensored fallback hasn't tried yet
-(`wiki_last_skip_reason ilike '%inappropriate content%' AND NOT
-wiki_skip_fallback_attempted`). The OR clause is what
-re-eligibilises legacy skips - rows the worker gave up on before
-the fallback-model retry path existed. After the agent makes its
-attempt (success or failure), one of the two state transitions
-clears the OR clause: success nulls the skip reason and resets
-the flag; failure-cap-reached stamps the flag to true alongside
-re-stamping the reason. Either way, the same thread doesn't
-re-trip the OR clause without intervening edits.
+The eligibility check is a two-branch OR:
+
+- **Normal:** `term.msg_id is distinct from
+  t.last_wiki_processed_msg_id` AND the day-gate above. There's
+  new work past the pointer and the thread has settled past
+  today's boundary.
+
+- **Recovery:** the thread carries a content-classifier skip the
+  uncensored fallback hasn't tried yet (`wiki_last_skip_reason
+  ilike '%inappropriate content%' AND NOT
+  wiki_skip_fallback_attempted`). This branch INTENTIONALLY
+  ignores the day-gate. A skipped thread is by definition no
+  longer in-flight (the agent already tried it and gave up), and
+  gating the recovery sweep on next-day would mean adding a turn
+  to nudge the worker actually pushes eligibility OUT to tomorrow
+  rather than making the thread retryable sooner. The success
+  path clears both the skip reason and the fallback-attempted
+  flag together, and the failure-cap path stamps the flag to
+  true, so a thread can't loop the recovery branch indefinitely:
+  at most one re-entry per terminal message.
+
+The same predicate logic is what re-eligibilises legacy skips -
+rows the worker gave up on before the uncensored-fallback retry
+path existed.
 
 ## Contracts
 
@@ -476,9 +489,31 @@ error. Without the cap, a permanently-filtered conversation
 would pin the queue at one failed call per claim-TTL window
 (10 min) forever. With the cap, the agent burns three attempts
 and moves on; the user sees the skip in the Wiki tab's Skipped
-panel and can edit the conversation if they want the agent to
-try again (editing changes the terminal message id, which the
-eligibility predicate keys off of).
+panel and can either click Retry on the row (inline rerun on
+the main thread) or wait for the worker to pick it up via the
+recovery branch of the eligibility predicate.
+
+### Manual retry (Skipped panel)
+
+The Skipped panel's Retry button skips the worker entirely.
+The flow lives in `WikiAgent.retrySkippedThread()`:
+
+1. `compute_wiki_terminal_msg_id(thread_id)` resolves the same
+   anchor the worker's claim RPC would have picked.
+2. `WikiAgent.run({ threadId, terminalMsgId })` runs the
+   primary -> fallback two-shot on the main thread. The wiki
+   tools commit their writes through their own user-owned RPCs,
+   so any tool-call side effects land regardless of what
+   happens next.
+3. On `stoppedReason === 'done'`,
+   `manual_advance_wiki_pointer(thread_id, msg_id)` clears the
+   skip marker and advances `last_wiki_processed_msg_id`. This
+   bypasses the claim guard `mark_thread_wiki_processed_if_claimed`
+   uses - the manual button never went through the claim
+   protocol, so requiring a claim would block it. RLS scopes
+   the RPC to the caller's own threads.
+4. On error, the skip marker is left in place. The user sees
+   the failure inline on the row and can retry again.
 
 **Content-classifier fallback (in `agent.ts`).** Before the
 worker-level failure counter ever increments for a
