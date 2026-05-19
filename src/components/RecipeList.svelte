@@ -24,7 +24,17 @@
     refreshRecipesTopicsVocabulary,
   } from '$lib/cookbook-store.svelte';
   import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from '$lib/models';
-  import { UNTAGGED_TOPIC_SENTINEL, type Recipe } from '$lib/supabase';
+  import type { Recipe } from '$lib/supabase';
+  import {
+    RECIPE_SEARCH_LIMIT,
+    SEARCH_DEBOUNCE_MS,
+    type SortMode,
+    computeListView,
+    isSearching as isSearchingFn,
+    pickFavoriteRecipes,
+    pickUpcomingRecipes,
+    pickVisibleRecipes,
+  } from '$lib/ui/recipe-list';
   import { onMount } from 'svelte';
   import RecipeRating from './RecipeRating.svelte';
   import Scanner from './Scanner.svelte';
@@ -36,7 +46,6 @@
   }
   const { onSelect }: Props = $props();
 
-  type SortMode = 'updated' | 'rating';
   let query = $state('');
   // 'updated' keeps the most-recently-edited recipe at the top;
   // 'rating' bubbles the user's favourites up. Matches the old modal.
@@ -48,9 +57,6 @@
   let searchBusy = $state(false);
   let searchError = $state<string | null>(null);
   let searchAbort: AbortController | null = null;
-
-  const SEARCH_DEBOUNCE_MS = 200;
-  const RECIPE_SEARCH_LIMIT = 50;
 
   $effect(() => {
     const q = query.trim();
@@ -116,12 +122,11 @@
     }
   }
 
-  const isSearching = $derived(query.trim().length > 0);
-
-  // Prime the dropdown vocabulary as soon as the drawer opens.
-  // loadRecipes also chains this in, but onMount handles the case
+  // Prime the topic-filter vocabulary as soon as the drawer opens.
+  // `loadRecipes` also chains this in, but onMount covers the case
   // where the drawer is opened after recipes were eagerly loaded
-  // elsewhere (e.g. via a tool call that already refreshed the store).
+  // elsewhere (e.g. via a tool call that already refreshed the
+  // store).
   onMount(() => {
     if (!app.supabase) return;
     void refreshRecipesTopicsVocabulary(app.supabase);
@@ -131,84 +136,40 @@
     cookbook.selectedTopics = next;
   }
 
-  /*
-   * Topic-filter predicate. Empty selection passes everything
-   * through. The (untagged) sentinel matches recipes whose topics
-   * column is empty (worker hasn't reached the row, or chose to
-   * emit nothing). Real-topic entries match via overlap (OR
-   * semantics, same as the conversation drawer's filter). Applied
-   * client-side to the bounded ~200 row cookbook - server-side
-   * filtering would add scope for no perceptible perf win.
-   */
-  function matchesTopicFilter(r: Recipe): boolean {
-    const sel = cookbook.selectedTopics;
-    if (sel.length === 0) return true;
-    let includeUntagged = false;
-    const real: string[] = [];
-    for (const t of sel) {
-      if (t === UNTAGGED_TOPIC_SENTINEL) includeUntagged = true;
-      else real.push(t);
-    }
-    const topics = Array.isArray(r.topics) ? r.topics : [];
-    if (topics.length === 0 && includeUntagged) return true;
-    if (real.length > 0 && topics.some((t) => real.includes(t))) return true;
-    return false;
-  }
-
-  const visibleRecipes = $derived.by<Recipe[]>(() => {
-    if (isSearching) {
-      // Server order wins during a search; the relevance ranking is
-      // exactly what the user asked for. Topic filter still applies
-      // - the search returns server results, and the user's filter
-      // narrows what they see locally without changing the ranking.
-      return searchResults.filter(matchesTopicFilter);
-    }
-    const filtered = cookbook.recipes.filter(matchesTopicFilter);
-    if (sortMode === 'rating') {
-      return [...filtered].sort((a, b) => {
-        const ar = a.rating ?? -1;
-        const br = b.rating ?? -1;
-        if (ar !== br) return br - ar;
-        return (b.updated_at ?? '').localeCompare(a.updated_at ?? '');
-      });
-    }
-    return filtered;
-  });
-
-  // Upcoming recipes surface in a section at the top regardless of the
-  // active sort, then ALSO continue to appear in their natural position
-  // in the main listing below. The duplication is intentional - the
-  // user wants "what's coming up this shopping cycle" as a quick read
-  // without losing the recipe from its normal spot. Hidden during a
-  // search because the relevance ranking is what the user asked for
-  // and a bucket above it would just visually fight the result order.
-  // Sort within the section by updated_at desc so the most recently
-  // edited upcoming recipe sits first - matches the "Recent" bucket in
-  // the conversations drawer. Topic filter applies uniformly to all
-  // buckets so "filter to italian" narrows Upcoming and Favorites
-  // identically to the All list.
-  const upcomingRecipes = $derived.by<Recipe[]>(() => {
-    if (isSearching) return [];
-    return cookbook.recipes
-      .filter((r) => r.upcoming && matchesTopicFilter(r))
-      .sort((a, b) =>
-        (b.updated_at ?? '').localeCompare(a.updated_at ?? '')
-      );
-  });
-
-  // Favorites section sits between Upcoming and the main "All recipes"
-  // list. Same duplication contract as upcoming: a favorited row also
-  // appears in its natural spot in the main list (and in the Upcoming
-  // section above if it's flagged for both). Hidden during a search
-  // for the same reason - relevance ranking owns the result order.
-  const favoriteRecipes = $derived.by<Recipe[]>(() => {
-    if (isSearching) return [];
-    return cookbook.recipes
-      .filter((r) => r.favorite && matchesTopicFilter(r))
-      .sort((a, b) =>
-        (b.updated_at ?? '').localeCompare(a.updated_at ?? '')
-      );
-  });
+  const searching = $derived(isSearchingFn(query));
+  const visibleRecipes = $derived(
+    pickVisibleRecipes({
+      searching,
+      searchResults,
+      storeRecipes: cookbook.recipes,
+      sortMode,
+      selectedTopics: cookbook.selectedTopics,
+    })
+  );
+  const upcomingRecipes = $derived(
+    pickUpcomingRecipes(
+      cookbook.recipes,
+      searching,
+      cookbook.selectedTopics
+    )
+  );
+  const favoriteRecipes = $derived(
+    pickFavoriteRecipes(
+      cookbook.recipes,
+      searching,
+      cookbook.selectedTopics
+    )
+  );
+  const view = $derived(
+    computeListView({
+      searching,
+      searchBusy,
+      searchError,
+      storeLoading: cookbook.loading,
+      storeCount: cookbook.recipes.length,
+      visibleCount: visibleRecipes.length,
+    })
+  );
 </script>
 
 <div class="recipe-drawer-list">
@@ -223,7 +184,7 @@
       autocomplete="off"
       spellcheck="false"
     />
-    {#if !isSearching}
+    {#if !searching}
       <!-- Sort selector. 'Most recent' is the default to match the
            backing-store order; 'Rating' bubbles favourites up. Hidden
            during a search because relevance is the active sort then. -->
@@ -252,25 +213,23 @@
       onChange={setTopics}
     />
   </div>
-  {#if isSearching && searchBusy}
+  {#if view.kind === 'scanner-search'}
     <!-- Replace the listing with the K.I.T.T. scanner while the
          Venice embed + Supabase round-trip are in flight. -->
     <div class="search-status">
       <Scanner label="Searching recipes" size={0.9} />
     </div>
-  {:else if isSearching && searchError}
+  {:else if view.kind === 'error'}
     <p class="error" style="padding:0.75rem">
-      Search failed: {searchError}
+      Search failed: {view.message}
     </p>
-  {:else if !isSearching && cookbook.loading && cookbook.recipes.length === 0}
+  {:else if view.kind === 'scanner-loading'}
     <div class="search-status">
       <Scanner label="Loading recipes" size={0.9} />
     </div>
-  {:else if visibleRecipes.length === 0}
+  {:else if view.kind === 'empty'}
     <p class="subtle recipe-list-empty">
-      {#if isSearching}
-        No matches.
-      {:else if cookbook.recipes.length === 0}
+      {#if view.reason === 'no-recipes-yet'}
         No recipes yet. Use the panel to add one.
       {:else}
         No matches.
