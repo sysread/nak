@@ -311,6 +311,7 @@ export type AgentRole =
   | 'intuition'
   | 'summary'
   | 'topics'
+  | 'memoryTopics'
   | 'samskara'
   | 'bias'
   | 'recall'
@@ -388,6 +389,12 @@ export type AgentRole =
  *     fit, otherwise mint new ones." Bounded JSON output, same
  *     reasoning profile as summary. No tools.
  *
+ *   memoryTopics - mistral-small-3-2-24b-instruct. Sibling of `topics`
+ *     but the input is a single memory (label+data) rather than a
+ *     conversation. Same JSON-out / no-tools profile. Pinned to the
+ *     same id as `topics` so a future tier swap of either flows
+ *     through both.
+ *
  *   samskara - mistral-small-3-2-24b-instruct. Five short JSON-out
  *     phases (assimilate, relate, mint, classify, compound summary)
  *     with maxTokens 200-500 per phase. Structured output on bounded
@@ -437,6 +444,7 @@ export const AGENT_MODELS = {
   intuition:          'mistral-small-3-2-24b-instruct',
   summary:            'mistral-small-3-2-24b-instruct',
   topics:             'mistral-small-3-2-24b-instruct',
+  memoryTopics:       'mistral-small-3-2-24b-instruct',
   samskara:           'mistral-small-3-2-24b-instruct',
   bias:               'mistral-small-3-2-24b-instruct',
   recall:             'qwen3-5-35b-a3b',

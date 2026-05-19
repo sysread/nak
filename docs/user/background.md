@@ -76,6 +76,14 @@ do.
 
 No toggle.
 
+A sibling worker does the same job for your memories: each memory
+gets 1-4 short subject-area tags ("allergies", "tooling",
+"family") and the **Memories** drawer tab gains the same
+**Topics ▾** dropdown the conversation drawer has. See
+[Memory](./memory.md) for the user-facing side. Editing a
+memory's text re-queues it for tagging on the next worker pass;
+confidence-only nudges (reaffirm, doubt) leave the tags alone.
+
 ## Memory reflection and recall
 
 Two background loops — **reflection** (writes long-term memories

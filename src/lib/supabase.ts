@@ -203,6 +203,17 @@ export interface Memory {
   label: string;
   data: string;
   confidence: number;
+  /**
+   * Topic tags written by the memory-topics worker
+   * (src/lib/agents/memory_topics/*). Empty array means "untagged" -
+   * either the worker hasn't reached the row yet, the agent ran and
+   * chose to emit nothing, or the user just edited the row (the
+   * `clear_memory_topics_on_change` trigger nulls last_topics_at on
+   * content change and the next worker cycle re-tags). The
+   * UNTAGGED_TOPIC_SENTINEL is a UI-only primitive and never lands
+   * in this column.
+   */
+  topics: string[];
   created_at: string;
   updated_at: string;
 }
@@ -1759,11 +1770,22 @@ export class SupabaseService {
    * Case-insensitive substring search over `label || data`. Empty query
    * lists all memories (most-recent first). Results are capped at `limit`
    * so a runaway LLM can't blow up context with a giant memory dump.
+   *
+   * `selectedTopics` narrows the result set to rows whose `topics`
+   * column overlaps the selection (or is empty, if the UI-only
+   * UNTAGGED_TOPIC_SENTINEL is included). Empty array means "no filter
+   * active" - the LLM-facing memory_search tool passes nothing here
+   * because the model has no topic-selection UI, so its calls keep the
+   * pre-filter behaviour exactly.
    */
-  async searchMemories(query: string, limit: number): Promise<Memory[]> {
+  async searchMemories(
+    query: string,
+    limit: number,
+    selectedTopics: readonly string[] = []
+  ): Promise<Memory[]> {
     let q = this.client
       .from('memories')
-      .select('id, label, data, confidence, created_at, updated_at')
+      .select('id, label, data, confidence, topics, created_at, updated_at')
       .order('updated_at', { ascending: false })
       .limit(limit);
     if (query && query.length > 0) {
@@ -1775,6 +1797,8 @@ export class SupabaseService {
       const pattern = `%${safe}%`;
       q = q.or(`label.ilike.${pattern},data.ilike.${pattern}`);
     }
+    const topicsClause = topicsFilterClause(selectedTopics);
+    if (topicsClause) q = q.or(topicsClause);
     const { data, error } = await q;
     if (error) throw new SupabaseError(error.message);
     return (data ?? []) as Memory[];
@@ -1804,7 +1828,7 @@ export class SupabaseService {
     const { data: row, error } = await this.client
       .from('memories')
       .insert(payload)
-      .select('id, label, data, confidence, created_at, updated_at')
+      .select('id, label, data, confidence, topics, created_at, updated_at')
       .single();
     if (error) throw new SupabaseError(error.message);
     return row as Memory;
@@ -1823,7 +1847,7 @@ export class SupabaseService {
       .from('memories')
       .update({ ...patch, updated_at: new Date().toISOString() })
       .eq('id', id)
-      .select('id, label, data, confidence, created_at, updated_at')
+      .select('id, label, data, confidence, topics, created_at, updated_at')
       .single();
     if (error) throw new SupabaseError(error.message);
     return row as Memory;
@@ -3400,6 +3424,101 @@ export class SupabaseService {
   }
 
   /**
+   * Memory-topics sibling of `claimNextThreadForTopics`. The RPC
+   * returns the memory's label + data (so the agent doesn't need a
+   * second SELECT) plus the user's existing memory-topic vocabulary.
+   * Eligibility predicate inside the RPC is `last_topics_at is null` -
+   * a fresh row (never tagged) or a content-edited row (the trigger
+   * nulls last_topics_at on label/data change) both qualify.
+   */
+  async claimNextMemoryForTopics(
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<{
+    memoryId: string;
+    label: string;
+    data: string;
+    existingTopics: string[];
+  } | null> {
+    const { data, error } = await this.client.rpc('claim_next_memory_for_topics', {
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as {
+      memory_id: string;
+      label: string;
+      data: string;
+      existing_topics: string[] | null;
+    }[];
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      memoryId: row.memory_id,
+      label: row.label,
+      data: row.data,
+      existingTopics: Array.isArray(row.existing_topics)
+        ? row.existing_topics.filter((t): t is string => typeof t === 'string')
+        : [],
+    };
+  }
+
+  /**
+   * Save the agent-produced topics IF our claim is still valid. RPC
+   * stamps `last_topics_at = now()` so the row drops out of the
+   * eligibility queue until its content changes again. False return =
+   * a race (TTL expired, another holder stole the claim, or the user
+   * edited the memory and the trigger nulled our claim mid-run).
+   * Caller drops the work in that case.
+   */
+  async saveMemoryTopicsIfClaimed(
+    memoryId: string,
+    holderId: string,
+    topics: string[]
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc(
+      'save_memory_topics_if_claimed',
+      {
+        p_memory_id: memoryId,
+        p_holder_id: holderId,
+        p_topics: topics,
+      }
+    );
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Release the memory-topics claim without writing topics. Used when
+   * the agent returned no usable output so the row re-enters the
+   * queue immediately rather than waiting for the per-row TTL.
+   */
+  async clearMemoryTopicsClaim(
+    memoryId: string,
+    holderId: string
+  ): Promise<void> {
+    const { error } = await this.client.rpc('clear_memory_topics_claim', {
+      p_memory_id: memoryId,
+      p_holder_id: holderId,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Distinct memory-topic vocabulary for the current user. Backs the
+   * Memories drawer's topic-filter dropdown; called on drawer mount
+   * and refreshed after a tagging event. The "(untagged)" pseudo-
+   * topic is NOT in this list - the UI synthesises it from the
+   * existence of zero-topic rows.
+   */
+  async listUserMemoryTopics(): Promise<string[]> {
+    const { data, error } = await this.client.rpc('list_user_memory_topics');
+    if (error) throw new SupabaseError(error.message);
+    if (!Array.isArray(data)) return [];
+    return data.filter((t): t is string => typeof t === 'string');
+  }
+
+  /**
    * Claim the next thread awaiting a title+summary embedding. Same
    * shape as `claimNextPendingMemory` but against threads. Rows with
    * the placeholder title AND no summary yet are deliberately skipped
@@ -3622,18 +3741,27 @@ export class SupabaseService {
    */
   async searchUnembeddedMemoriesByText(
     query: string,
-    limit: number
+    limit: number,
+    selectedTopics: readonly string[] = []
   ): Promise<Memory[]> {
     if (!query || query.length === 0) return [];
     const safe = query.replace(/([,()])/g, '\\$1');
     const pattern = `%${safe}%`;
-    const { data, error } = await this.client
+    let q = this.client
       .from('memories')
-      .select('id, label, data, confidence, created_at, updated_at')
+      .select('id, label, data, confidence, topics, created_at, updated_at')
       .is('embedding', null)
       .or(`label.ilike.${pattern},data.ilike.${pattern}`)
       .order('updated_at', { ascending: false })
       .limit(limit);
+    // Server-side topic filter on the just-written rows. Vector hits
+    // are filtered client-side inside searchMemoriesSemantic (the RPC
+    // returns `topics` on each row), so the two halves of the merged
+    // result set agree on what "the filter is active" means without
+    // needing to refactor the embedding RPC to take topic args.
+    const topicsClause = topicsFilterClause(selectedTopics);
+    if (topicsClause) q = q.or(topicsClause);
+    const { data, error } = await q;
     if (error) throw new SupabaseError(error.message);
     return (data ?? []) as Memory[];
   }

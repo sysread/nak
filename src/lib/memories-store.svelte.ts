@@ -36,6 +36,21 @@ interface MemoriesStore {
   error: string | null;
   /** Bound to the sidebar search input. */
   query: string;
+  /**
+   * Active topic filter. Empty array = no filter. Includes the
+   * UNTAGGED_TOPIC_SENTINEL when the user selected "untagged" in the
+   * dropdown. Threaded into `searchMemoriesSemantic` so the same
+   * predicate applies to vector and ILIKE hits.
+   */
+  selectedTopics: string[];
+  /**
+   * Per-user topic vocabulary - the flat sorted list returned by
+   * `list_user_memory_topics`. Drives the TopicsFilter dropdown's
+   * options. Refreshed on first load and after a tagging realtime
+   * event lands. The "(untagged)" sentinel is NOT in this list - the
+   * TopicsFilter component synthesises it from the dropdown.
+   */
+  topicsVocabulary: string[];
 }
 
 export const memoriesStore = $state<MemoriesStore>({
@@ -45,6 +60,8 @@ export const memoriesStore = $state<MemoriesStore>({
   loaded: false,
   error: null,
   query: '',
+  selectedTopics: [],
+  topicsVocabulary: [],
 });
 
 // Match the assistant's `memory_search` per-call cap so the human UI
@@ -74,6 +91,7 @@ export async function runMemoriesSearch(
       supabase,
       venice,
       signal: ctl.signal,
+      selectedTopics: memoriesStore.selectedTopics,
     });
     if (ctl.signal.aborted) return;
     memoriesStore.results = hits;
@@ -99,6 +117,19 @@ export async function runMemoriesSearch(
       }
     }
     if (!ctl.signal.aborted) memoriesStore.relations = nextMap;
+
+    // Piggy-back a vocabulary refresh on every search resolution.
+    // Memory writes by the background memory-topics worker land
+    // server-side without going through any client-side store
+    // mutation - no realtime channel today (see the cookbook-events
+    // / no-memory-events note in this file's header) - so this is
+    // how the dropdown picks up newly-minted topics without
+    // requiring a drawer reopen. The RPC is a single distinct-array-
+    // agg per user, cheap at the scale of "tens of distinct topics
+    // per account", so chaining it onto every search is well under
+    // the noise floor. Best-effort: a failure leaves the prior
+    // vocabulary in place.
+    if (!ctl.signal.aborted) await refreshMemoriesTopicsVocabulary(supabase);
   } catch (err) {
     if (ctl.signal.aborted) return;
     memoriesStore.error = err instanceof Error ? err.message : String(err);
@@ -108,6 +139,25 @@ export async function runMemoriesSearch(
       memoriesStore.loading = false;
       memoriesStore.loaded = true;
     }
+  }
+}
+
+/**
+ * Refresh the per-user topic vocabulary from
+ * `list_user_memory_topics`. Called from MemoryList.svelte on first
+ * load and after a memory-update realtime event lands (the topics
+ * column changing is a strong signal to repopulate the dropdown).
+ * Best-effort: a failure leaves the existing vocabulary in place
+ * rather than blanking it, since a stale list is more useful than
+ * an empty one.
+ */
+export async function refreshMemoriesTopicsVocabulary(
+  supabase: SupabaseService
+): Promise<void> {
+  try {
+    memoriesStore.topicsVocabulary = await supabase.listUserMemoryTopics();
+  } catch {
+    // swallow - see comment above
   }
 }
 

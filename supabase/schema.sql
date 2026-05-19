@@ -837,6 +837,65 @@ create trigger clear_memory_embedding_on_change
   before update on public.memories
   for each row execute function public.clear_memory_embedding_on_change();
 
+-- Memory topic-tagging pipeline -----------------------------------------
+--
+-- Same shape as threads.topics (see "Topic-tagging pipeline" above): a
+-- background worker (src/lib/agents/memory_topics/*) tags each memory
+-- with a short flat set of topic strings so the Memories drawer can
+-- offer a topic filter. The agent reads the memory's label+data plus
+-- the user's existing per-account vocabulary and picks 1-4 topics,
+-- reusing existing names where they fit so the dropdown vocabulary
+-- stays small and stable.
+--
+-- `topics` defaults to '{}' so existing rows match "untagged" without a
+-- backfill and re-qualify on the first cycle (last_topics_at is null,
+-- which is the eligibility predicate). The GIN index backs the `&&`
+-- overlap operator the filter uses. The claim columns mirror the
+-- embedding pipeline's per-row lease shape exactly.
+alter table public.memories
+  add column if not exists topics text[] not null default '{}',
+  add column if not exists last_topics_at timestamptz,
+  add column if not exists topics_claim_holder text,
+  add column if not exists topics_claim_expires timestamptz;
+
+create index if not exists memories_topics_gin_idx
+  on public.memories using gin (topics);
+
+create index if not exists memories_topics_claim_idx
+  on public.memories (topics_claim_expires)
+  where topics_claim_holder is not null;
+
+-- Re-queue a memory for tagging whenever the text the tags were derived
+-- from changes. Same trigger pattern as `clear_memory_embedding_on_change`
+-- above - parallel rather than merged so a future change to one path
+-- doesn't risk dragging the other along by accident. Confidence-only
+-- updates (bump / decay / reaffirm / doubt) DO NOT change label or data,
+-- so they don't fire this trigger and the tags stay stable across
+-- volitional nudges - matching how the embedding survives confidence
+-- changes today.
+--
+-- Nulling the claim columns alongside last_topics_at protects against
+-- the same race the embedding trigger protects against: an in-flight
+-- worker save would otherwise see a live claim + valid TTL and write
+-- stale tags. With the claim cleared, save_memory_topics_if_claimed's
+-- holder guard fails and the worker drops the result.
+create or replace function public.clear_memory_topics_on_change()
+  returns trigger language plpgsql as $$
+begin
+  if new.label is distinct from old.label or new.data is distinct from old.data then
+    new.topics := '{}'::text[];
+    new.last_topics_at := null;
+    new.topics_claim_holder := null;
+    new.topics_claim_expires := null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clear_memory_topics_on_change on public.memories;
+create trigger clear_memory_topics_on_change
+  before update on public.memories
+  for each row execute function public.clear_memory_topics_on_change();
+
 alter table public.memories enable row level security;
 
 drop policy if exists "memories are self-selectable" on public.memories;
@@ -2469,11 +2528,17 @@ create or replace function public.search_memories_by_embedding(
   label text,
   data text,
   confidence real,
+  topics text[],
   created_at timestamptz,
   updated_at timestamptz
 )
 language sql stable security invoker as $$
-  select id, label, data, confidence, created_at, updated_at
+  -- `topics` rides the return row so the Memories drawer's topic filter
+  -- can be applied client-side over semantic hits without a second
+  -- round trip. The array is small (1-4 short strings per row), so the
+  -- wire-size cost vs the pre-topics shape is negligible at the per-
+  -- query row counts we run.
+  select id, label, data, confidence, topics, created_at, updated_at
     from public.memories
    where user_id = auth.uid()
      and embedding is not null
@@ -2952,6 +3017,129 @@ language sql security invoker as $$
     from public.threads t, unnest(t.topics) as topic
    where t.user_id = auth.uid()
      and t.topics <> '{}'::text[];
+$$;
+
+-- Memory topic-tagging pipeline RPCs ------------------------------------
+--
+-- Sibling of the thread topics RPCs above. Shape is intentionally
+-- identical so anyone reading one has the other's vocabulary for free.
+-- The two differences vs threads:
+--
+--   1. Eligibility is `last_topics_at is null` rather than "terminal
+--      message past last_topics_msg_id". Memories don't have a message
+--      stream - they're a single piece of text - so the trigger on
+--      label/data change nulls last_topics_at and that's what re-enters
+--      the row into the queue.
+--
+--   2. The claim returns label + data rather than a thread id + msg id.
+--      The agent's input is the memory text itself; no second SELECT
+--      against `memories` is needed inside the agent.
+--
+-- The vocabulary subquery is shared shape: distinct topics across the
+-- user's memories, alphabetised, empty array on a brand-new account.
+drop function if exists public.claim_next_memory_for_topics(text, int);
+create or replace function public.claim_next_memory_for_topics(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (
+  memory_id uuid,
+  label text,
+  data text,
+  existing_topics text[]
+)
+language sql security invoker as $$
+  with candidate as (
+    select m.id as memory_id, m.label, m.data
+      from public.memories m
+     where m.user_id = auth.uid()
+       and m.last_topics_at is null
+       and (m.topics_claim_expires is null
+            or m.topics_claim_expires < now())
+     order by m.updated_at asc
+     limit 1
+     for update of m skip locked
+  ),
+  vocab as (
+    -- One-shot read of the user's current memory-topic vocabulary so
+    -- the worker can pass it to the model as a "reuse these names"
+    -- list. Empty array on a brand-new account is fine; the agent gets
+    -- free rein on the first few memories and the vocabulary self-
+    -- seeds.
+    select coalesce(array_agg(distinct topic order by topic), '{}'::text[]) as topics
+      from public.memories m, unnest(m.topics) as topic
+     where m.user_id = auth.uid()
+       and m.topics <> '{}'::text[]
+  )
+  update public.memories m
+     set topics_claim_holder = p_holder_id,
+         topics_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate c, vocab v
+   where m.id = c.memory_id
+  returning m.id as memory_id, c.label, c.data, v.topics as existing_topics;
+$$;
+
+-- Save the agent-produced topics IF our claim is still valid. The
+-- `last_topics_at = now()` stamp is what marks the row as "tagged"; the
+-- trigger on label/data change nulls it back to re-qualify the row on
+-- the next cycle. Returns false when the claim expired or was stolen -
+-- the worker drops the work. Does NOT touch updated_at so a tagging
+-- pass doesn't shuffle the memory list's recency ordering.
+drop function if exists public.save_memory_topics_if_claimed(uuid, text, text[]);
+create or replace function public.save_memory_topics_if_claimed(
+  p_memory_id uuid,
+  p_holder_id text,
+  p_topics text[]
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.memories
+     set topics = p_topics,
+         last_topics_at = now(),
+         topics_claim_holder = null,
+         topics_claim_expires = null
+   where id = p_memory_id
+     and user_id = auth.uid()
+     and topics_claim_holder = p_holder_id
+     and topics_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Explicit claim release for the empty-topics path - mirrors
+-- clear_topics_claim above. Used when the agent produced nothing
+-- usable so another cycle can re-pick the row immediately rather than
+-- waiting for the TTL. Holder guard prevents a stale call from a
+-- displaced worker from clearing the live claim.
+drop function if exists public.clear_memory_topics_claim(uuid, text);
+create or replace function public.clear_memory_topics_claim(
+  p_memory_id uuid,
+  p_holder_id text
+) returns void
+language plpgsql security invoker as $$
+begin
+  update public.memories
+     set topics_claim_holder = null,
+         topics_claim_expires = null
+   where id = p_memory_id
+     and user_id = auth.uid()
+     and topics_claim_holder = p_holder_id;
+end $$;
+
+-- Distinct memory-topic vocabulary for the current user. Used by the
+-- Memories drawer's topic-filter dropdown on mount and after a tagging
+-- event arrives via realtime. Distinct from list_user_topics() (which
+-- targets threads) so a user can have separate vocabularies on each
+-- surface without one polluting the other.
+drop function if exists public.list_user_memory_topics();
+create or replace function public.list_user_memory_topics()
+returns text[]
+language sql security invoker as $$
+  select coalesce(array_agg(distinct topic order by topic), '{}'::text[])
+    from public.memories m, unnest(m.topics) as topic
+   where m.user_id = auth.uid()
+     and m.topics <> '{}'::text[];
 $$;
 
 -- Thread embedding pipeline RPCs ----------------------------------------

@@ -26,6 +26,7 @@
 
 import type { SupabaseService, Memory } from './supabase';
 import type { VeniceClient } from './venice';
+import { UNTAGGED_TOPIC_SENTINEL } from './supabase';
 import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from './models';
 
 /**
@@ -84,6 +85,44 @@ export interface SearchMemoriesDeps {
   supabase: SupabaseService;
   venice: VeniceClient | null;
   signal?: AbortSignal;
+  /**
+   * Optional topic filter from the Memories drawer's TopicsFilter.
+   * Empty array (the default) means "no filter active" - the
+   * assistant-facing memory_search tool always passes nothing here
+   * since the model has no topic-selection UI. ILIKE/vector hits
+   * narrow to rows whose `topics` overlap the selection; the
+   * UNTAGGED_TOPIC_SENTINEL ("(untagged)") matches rows with an
+   * empty topics array.
+   */
+  selectedTopics?: readonly string[];
+}
+
+/**
+ * Decide whether a memory row passes a topic filter. Empty selection
+ * always passes (filter inactive). The UNTAGGED_TOPIC_SENTINEL matches
+ * rows whose `topics` is empty - that's how the UI surfaces "rows the
+ * worker hasn't reached" alongside real topic selections. Used to
+ * filter vector hits client-side because `search_memories_by_embedding`
+ * returns `topics` on each row but can't take a filter argument (the
+ * RPC's ordering+limit shape would need a more invasive change to
+ * filter pre-order, and the post-order filter would distort the score
+ * ranking anyway - client-side keeps the contract simple).
+ */
+function memoryMatchesTopicFilter(
+  row: Memory,
+  selectedTopics: readonly string[]
+): boolean {
+  if (selectedTopics.length === 0) return true;
+  let includeUntagged = false;
+  const real: string[] = [];
+  for (const t of selectedTopics) {
+    if (t === UNTAGGED_TOPIC_SENTINEL) includeUntagged = true;
+    else real.push(t);
+  }
+  const rowTopics = Array.isArray(row.topics) ? row.topics : [];
+  if (rowTopics.length === 0 && includeUntagged) return true;
+  if (real.length > 0 && rowTopics.some((t) => real.includes(t))) return true;
+  return false;
 }
 
 export async function searchMemoriesSemantic(
@@ -91,17 +130,17 @@ export async function searchMemoriesSemantic(
   limit: number,
   deps: SearchMemoriesDeps,
 ): Promise<Memory[]> {
-  const { supabase, venice, signal } = deps;
+  const { supabase, venice, signal, selectedTopics = [] } = deps;
 
   // Empty query: list everything most-recent-first. Matches the
   // assistant-facing tool's "leave `query` empty to list every
   // memory" contract.
-  if (query.length === 0) return supabase.searchMemories('', limit);
+  if (query.length === 0) return supabase.searchMemories('', limit, selectedTopics);
 
   // No Venice client configured (e.g. the user hasn't entered a key
   // yet, or we're in an offline test). Straight to ILIKE; the user
   // still gets substring matches.
-  if (!venice) return supabase.searchMemories(query, limit);
+  if (!venice) return supabase.searchMemories(query, limit, selectedTopics);
 
   let rawEmbedding: number[] | undefined;
   try {
@@ -115,11 +154,11 @@ export async function searchMemoriesSemantic(
     // Silent fallback — the tool path does the same (see its comment
     // about not throwing when Venice is unreachable). An ILIKE result
     // set is strictly better than a hard error from the caller's POV.
-    return supabase.searchMemories(query, limit);
+    return supabase.searchMemories(query, limit, selectedTopics);
   }
 
   if (!rawEmbedding || rawEmbedding.length === 0) {
-    return supabase.searchMemories(query, limit);
+    return supabase.searchMemories(query, limit, selectedTopics);
   }
 
   // Vector search path. Pad to the column's storage dim — the RPC
@@ -132,16 +171,19 @@ export async function searchMemoriesSemantic(
   // Run the RPC and the unembedded-ILIKE probe in parallel — they hit
   // disjoint row sets (RPC filters `embedding is not null`, ILIKE path
   // filters `embedding is null`), so merging is a straight concat with
-  // ordering by "vector first, then recency".
+  // ordering by "vector first, then recency". The ILIKE probe carries
+  // the topic filter server-side; vector hits get it applied client-
+  // side below (RPC returns `topics` on each row for exactly that).
   const [vectorHits, ilikeHits] = await Promise.all([
     supabase.searchMemoriesByEmbedding(queryEmbedding, limit),
-    supabase.searchUnembeddedMemoriesByText(query, limit),
+    supabase.searchUnembeddedMemoriesByText(query, limit, selectedTopics),
   ]);
 
   const seen = new Set<string>();
   const merged: Memory[] = [];
   for (const row of vectorHits) {
     if (seen.has(row.id)) continue;
+    if (!memoryMatchesTopicFilter(row, selectedTopics)) continue;
     seen.add(row.id);
     merged.push(row);
     if (merged.length >= limit) return merged;
