@@ -107,7 +107,8 @@ the new draft or open the existing article and edit it.
 Open an article and click **Edit**. The view flips to a form with the
 title, content, and a **change message** field. The form shows
 "Unsaved changes" the moment you diverge from the stored row;
-**Save** persists, **Cancel** drops the draft.
+**Save** persists and flips the view back to the rendered article,
+**Cancel** drops the draft.
 
 The change message is required - it's the one-line entry the
 [changelog](#changelog) shows next to this edit. Treat it like a git
