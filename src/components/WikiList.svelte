@@ -122,15 +122,14 @@
 
 <style>
   /* Mirrors the search-row styling used by the other drawer tabs. The
-     bottom border IS the divider between the search row and the
-     listing rows. */
+     bottom margin is the only separator between the search row and the
+     listing rows - no rule line. */
   .wiki-list-controls {
     display: flex;
     gap: 0.35rem;
     align-items: center;
     padding: 0.4rem 0.6rem;
     margin-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border);
   }
   .wiki-list-controls .sidebar-search-input {
     flex: 1;

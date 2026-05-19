@@ -1258,21 +1258,19 @@ h1 {
 
 /* Search row for the chats tab. Mirrors `.recipe-list-controls` and
    `.memory-list-controls` so all four drawer tabs read the same:
-   tabs in the header, hr-line via this border, search input, list
-   rows below. The negative margins cancel out `.thread-list`'s
-   0.25rem padding so the divider runs edge-to-edge with the tab nav
-   above and the search bar below. */
+   tabs in the header, search input, list rows below - no rule line
+   between them. The negative margins cancel out `.thread-list`'s
+   0.25rem padding so the search row runs edge-to-edge with the tab
+   nav above. */
 .thread-list-controls {
   display: flex;
   gap: 0.35rem;
   align-items: center;
   padding: 0.4rem 0.6rem;
-  /* Bottom margin separates the divider/search row from the first
-     thread row so the list doesn't crowd the input. The negative
-     top/side margins still pull the wrapper edge-to-edge against
-     the tab nav above. */
+  /* Bottom margin separates the search row from the first thread row
+     so the list doesn't crowd the input. The negative top/side margins
+     still pull the wrapper edge-to-edge against the tab nav above. */
   margin: -0.25rem -0.25rem 0.5rem;
-  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .thread-list-controls .sidebar-search-input {
