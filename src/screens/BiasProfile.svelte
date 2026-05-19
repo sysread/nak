@@ -95,6 +95,13 @@
 
   let summary = $state<SummaryRow[]>([]);
   let processed = $state<ProcessedThreadRow[]>([]);
+  // Per-bias count of raw observations across the user's history.
+  // Zero means the worker has analyzed conversations but never
+  // flagged this bias - the summary row's ci_lower is just the
+  // prior's 10th-percentile (~5%) plus the cumulative no-hit mass,
+  // not actual signal. Drives the "no evidence" rendering in the
+  // chart, value column, and per-bias detail cards.
+  let observationCounts = $state<Record<string, number>>({});
   let loading = $state(true);
   let expandedThreadId = $state<string | null>(null);
   let expandedObs = $state<ObservationRow[]>([]);
@@ -126,9 +133,10 @@
       return;
     }
     try {
-      const [s, p, threadObs, threadReactions, processedAt] = await Promise.all([
+      const [s, p, counts, threadObs, threadReactions, processedAt] = await Promise.all([
         supabase.biasListSummary(),
         supabase.biasListProcessedThreads(30),
+        supabase.biasListObservationCounts(),
         activeThreadId
           ? supabase.biasListObservationsForThread(activeThreadId)
           : Promise.resolve([] as ObservationRow[]),
@@ -141,6 +149,7 @@
       ]);
       summary = s;
       processed = p;
+      observationCounts = counts;
       currentThreadObs = activeThreadId ? threadObs : null;
       currentThreadReactions = activeThreadId ? threadReactions : null;
       currentThreadProcessedAt = processedAt;
@@ -265,26 +274,53 @@
   }
 
   /**
+   * Has the worker ever flagged this bias for the user? Distinct
+   * from "is the row above the N_eff floor": effective_n counts
+   * processed conversations (with pConv=0 for no-hits), while this
+   * counts raw observation rows. Zero observations means the
+   * row's ci_lower is just the prior's 10th-percentile (~5%)
+   * dragged slightly down by the cumulative no-hit denominator -
+   * not actual signal. Drives the "no evidence" rendering.
+   */
+  function hasEvidence(biasKey: string): boolean {
+    return (observationCounts[biasKey] ?? 0) > 0;
+  }
+
+  /**
    * Subjective, prose-y interpretation of a row's numbers. The
    * stats grid carries the raw values; this paragraph translates
    * them into "what does this actually mean for me?" for readers
    * who do not want to translate a 90% credible interval lower
    * bound on a Beta-Binomial posterior into intuition on the fly.
    *
-   * Branches: below-N-floor (numbers are mostly prior), elided-but-
-   * above-floor (weak signal, no surfacing), soft tier (occasional
-   * pattern), strong tier (consistent pattern). The soft/strong
-   * arms also note when a bias is at-tier but bumped out by
-   * RENDER_CAP. A trailing feedback sentence appears only when the
-   * EMA is meaningful (|score| >= 0.10) - below that the gate
-   * shift rounds to zero anyway.
+   * Branches: no-observations (never flagged, ci_lower is just the
+   * prior's 10th-percentile), below-N-floor (numbers are mostly
+   * prior), elided-but-above-floor (weak signal, no surfacing),
+   * soft tier (occasional pattern), strong tier (consistent
+   * pattern). The soft/strong arms also note when a bias is
+   * at-tier but bumped out by RENDER_CAP. A trailing feedback
+   * sentence appears only when the EMA is meaningful (|score| >=
+   * 0.10) - below that the gate shift rounds to zero anyway.
    */
   function interpretBias(row: SummaryRow, isRendered: boolean): string {
     const pct = (n: number): string => (n * 100).toFixed(1) + '%';
+    const noObservations = !hasEvidence(row.bias);
     const belowFloor = row.effectiveN < N_EFF_FLOOR;
 
     let core: string;
-    if (belowFloor) {
+    if (noObservations) {
+      // The ci_lower sits at the prior's 10th-percentile (~5%) plus
+      // a small downward drift from cumulative no-hit denominator
+      // mass; the percentage itself is uninformative, so the prose
+      // leans on "never flagged" rather than the number.
+      core =
+        `No evidence - the worker has not flagged this bias in any ` +
+        `analyzed conversation. The stats above are just the ` +
+        `Beta(${ALPHA_PRIOR}, ${BETA_PRIOR}) prior with the ` +
+        `cumulative no-hit denominator from processed conversations ` +
+        `pulling the posterior slightly below the prior mean ` +
+        `of ~20%.`;
+    } else if (belowFloor) {
       const shortfall = Math.max(0, N_EFF_FLOOR - row.effectiveN).toFixed(1);
       core =
         `Mostly prior - only ${formatEffectiveN(row.effectiveN)} ` +
@@ -547,8 +583,12 @@
             surfacing gates check against). Hue moves blue -&gt;
             green -&gt; orange -&gt; red as the bar passes the soft
             ({formatProbability(CI_LB_SOFT)}) and strong
-            ({formatProbability(CI_LB_STRONG)}) gates. Detail cards
-            for each entry follow below.
+            ({formatProbability(CI_LB_STRONG)}) gates. Biases the
+            worker has never flagged read as "no evidence" with a
+            faint gray placeholder bar - their underlying numbers
+            collapse to the prior's 10th-percentile (~5%) and would
+            be misleading if rendered against the gate scale.
+            Detail cards for each entry follow below.
           </p>
           <!-- Usage-style at-a-glance comparison. The detail
                cards beneath carry the full numbers and prose; this
@@ -579,17 +619,30 @@
                     chartScale extends at least to CI_LB_STRONG *
                     1.1 so gate-relative position stays readable
                     even when no bias has cleared the strong gate
-                    yet.
+                    yet. No-evidence rows are pinned to a fixed
+                    1.5% gray nub - the ci_lower for these is just
+                    prior + cumulative no-hit drift, so rendering
+                    it at gate-relative position would imply signal
+                    that isn't there.
                   -->
                   <span
                     class="bias-chart-bar"
                     class:elided={row.tier === 'elided'}
-                    style="--bias-pct:{row.ciLower > 0
-                      ? Math.max(2, (row.ciLower / chartScale) * 100)
-                      : 0}%; --bias-hue:{biasHue(row.ciLower)}"
+                    class:no-evidence={!hasEvidence(row.bias)}
+                    style="--bias-pct:{!hasEvidence(row.bias)
+                      ? 1.5
+                      : row.ciLower > 0
+                        ? Math.max(2, (row.ciLower / chartScale) * 100)
+                        : 0}%; --bias-hue:{biasHue(row.ciLower)}"
                   ></span>
                 </span>
-                <span class="bias-chart-value" role="cell">{formatProbability(row.ciLower)}</span>
+                <span class="bias-chart-value" role="cell">
+                  {#if !hasEvidence(row.bias)}
+                    <em class="no-evidence-label">no evidence</em>
+                  {:else}
+                    {formatProbability(row.ciLower)}
+                  {/if}
+                </span>
               </div>
             {/each}
           </div>
@@ -619,7 +672,16 @@
                 </header>
                 <p class="bias-def subtle">{biasDefinition(row.bias)}</p>
                 <dl class="bias-stats">
-                  <div><dt>CI lower (90%)</dt><dd>{formatProbability(row.ciLower)}</dd></div>
+                  <div>
+                    <dt>CI lower (90%)</dt>
+                    <dd>
+                      {#if !hasEvidence(row.bias)}
+                        <em class="no-evidence-label">no evidence</em>
+                      {:else}
+                        {formatProbability(row.ciLower)}
+                      {/if}
+                    </dd>
+                  </div>
                   <div><dt>posterior mean</dt><dd>{formatProbability(row.posteriorMean)}</dd></div>
                   <div><dt>effective N</dt><dd>{formatEffectiveN(row.effectiveN)}</dd></div>
                   <div title="EMA of compensation-reaction feedback in [-1, +1]. Positive = user has affirmed compensation; negative = user has pushed back. Shifts the surfacing gates by up to {FEEDBACK_THRESHOLD_DELTA.toFixed(2)} at the extremes."><dt>feedback</dt><dd>{formatFeedback(row.feedbackScore)}</dd></div>
@@ -992,6 +1054,25 @@
        The hue is still set by biasHue (blue territory anyway for
        elided); this just lowers saturation and opacity. */
     opacity: 0.7;
+  }
+
+  .bias-chart-bar.no-evidence {
+    /* Never-flagged biases: override the gate-relative hue with a
+       desaturated gray and drop opacity further so the bar reads
+       as "placeholder, not a measurement." The fixed 1.5% width
+       (set inline) gives the row a visible nub so the eye can
+       still scan the column without the row vanishing. */
+    background: color-mix(in srgb, var(--text) 35%, transparent);
+    opacity: 0.35;
+  }
+
+  .no-evidence-label {
+    /* Same color/weight as the .subtle helper - the label is
+       metadata, not a measurement, and shouldn't compete visually
+       with the at-tier rows' percentages. */
+    color: color-mix(in srgb, var(--text) 55%, transparent);
+    font-style: italic;
+    font-size: 0.78rem;
   }
 
   .bias-chart-value {

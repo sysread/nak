@@ -75,7 +75,11 @@ The modal has three sections:
   current tier (elided, soft, or strong), the lower bound of
   the 90% credible interval, the posterior mean rate, and the
   effective sample size. Biases marked "in prompt" are the ones
-  actively shaping responses this session.
+  actively shaping responses this session. Biases the worker has
+  never flagged in any analyzed conversation read as "no
+  evidence" rather than a number - their CI lower would just be
+  the prior's 10th-percentile (~5%), and surfacing that as a
+  percentage misreads as a real measurement.
 - **Recently processed conversations.** The latest threads the
   worker has analyzed. Click any thread to expand and see the
   individual observations it found.
