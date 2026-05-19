@@ -50,48 +50,30 @@
   import { cubicOut } from 'svelte/easing';
   import {
     SAMSKARA_MINT_EVENT,
-    valenceToEmoji,
-    valenceToMoodLabel,
     type SamskaraMintEventDetail,
   } from '$lib/samskara/events';
   import { moodState } from '$lib/samskara/mood.svelte';
+  import {
+    DEFAULT_EMOJI,
+    defaultMood,
+    nextMoodFromMint,
+    nextMoodFromSeed,
+    type MoodShape,
+  } from '$lib/ui/samskara-toasts';
   import { navigate, route } from '$lib/routing.svelte';
   import { app } from '$lib/state.svelte';
 
-  interface Mood {
-    /** Stable key for Svelte's keyed each. Monotonic counter beats
-     *  Date.now() because back-to-back mints in the same ms still
-     *  get distinct ids, and the key drives the fly transition so a
-     *  new mint visibly replaces the old one. */
+  /**
+   * Component-local view of a mood: the primitive's `MoodShape`
+   * plus a stable id that keys the `{#key current.id}` block and
+   * drives the fly transition. Monotonic counter beats Date.now()
+   * because back-to-back mints in the same ms still get distinct
+   * ids, and the key drives the transition so a new mint visibly
+   * replaces the old one.
+   */
+  interface Mood extends MoodShape {
     id: number;
-    emoji: string;
-    /** Short label (cheerful / content / neutral / uneasy / pensive,
-     *  or `idle` for the default sleeping state) that drives the
-     *  tooltip. Derived at capture time from the same valence the
-     *  emoji came from, so the two stay consistent even if
-     *  valenceToEmoji's bands later shift. */
-    label: string;
-    /** Tier is carried for future styling differentiation (tier-2
-     *  could get a subtle halo, for instance). Not used visually
-     *  today. */
-    tier: 1 | 2;
-    /** True for the 💤 placeholder shown on threads with no fire
-     *  history yet (or while the seed fetch is in flight). Flips to
-     *  false once a real mood lands - either via a fresh mint event
-     *  through `adopt`, or via `seedFromHistory` upgrading the
-     *  placeholder with the most recent stored fire's valence.
-     *  Drives the tooltip and aria-label so screen readers can tell
-     *  "no mood data" from a real reading instead of just hearing
-     *  "samskara mood: idle" and not knowing what idle means. */
-    isDefault: boolean;
   }
-
-  /** U+1F4A4 SLEEPING SYMBOL. The "nothing has fired yet" placeholder.
-   *  Picked deliberately because it isn't in valenceToEmoji's output
-   *  set - any real mint produces a different glyph, so the swap from
-   *  default to mood is always visible. */
-  const DEFAULT_EMOJI = '\u{1F4A4}';
-  const DEFAULT_LABEL = 'idle';
 
   const FLY_IN_MS = 220;
   const FLY_OUT_MS = 320;
@@ -105,19 +87,7 @@
   // (or a real mint) for thread B if the user switches mid-fetch.
   let seedGeneration = 0;
 
-  function makeDefault(): Mood {
-    return {
-      id: ++nextId,
-      emoji: DEFAULT_EMOJI,
-      label: DEFAULT_LABEL,
-      tier: 1,
-      isDefault: true,
-    };
-  }
-
   function adopt(detail: SamskaraMintEventDetail): void {
-    const emoji = valenceToEmoji(detail.valence, detail.confidence);
-    const label = valenceToMoodLabel(detail.valence, detail.confidence);
     // The shared store always reflects the most recent raw triple,
     // even when the local pill skips its visual update below. The
     // diagnostics-modal "you are here" dot reads this directly, so
@@ -130,30 +100,8 @@
       confidence: detail.confidence,
       tier: detail.tier,
     });
-    // Skip the swap when the incoming mint lands in the same
-    // valence band as what's already showing AND the tier hasn't
-    // changed. Without this, every mint bumps `id`, which keys the
-    // fly transition and re-plays the slide even when the emoji
-    // and the styling are identical - reads as visual noise when
-    // the model has been steady-state for a few mints in a row.
-    // tier is part of the comparison because tier-2 carries a halo
-    // (.mood-pill.tier-2) so a tier change IS visually meaningful
-    // even at the same valence.
-    if (
-      current !== null &&
-      current.emoji === emoji &&
-      current.label === label &&
-      current.tier === detail.tier
-    ) {
-      return;
-    }
-    current = {
-      id: ++nextId,
-      emoji,
-      label,
-      tier: detail.tier,
-      isDefault: false,
-    };
+    const next = nextMoodFromMint(current, detail);
+    if (next !== null) current = { id: ++nextId, ...next };
   }
 
   onMount(() => {
@@ -182,19 +130,15 @@
       const result = await sb.samskaraGetLatestFireMood(cid);
       if (gen !== seedGeneration) return;
       if (!result) return;
-      if (!current || !current.isDefault) return;
-      current = {
-        id: ++nextId,
-        emoji: valenceToEmoji(result.valence, result.confidence),
-        label: valenceToMoodLabel(result.valence, result.confidence),
-        tier: result.tier,
-        isDefault: false,
-      };
+      const next = nextMoodFromSeed(current, result);
+      if (next === null) return;
+      current = { id: ++nextId, ...next };
       // Mirror the seed into the shared store so the diagnostics-
       // modal dot can render even on a freshly-reopened thread that
-      // hasn't seen a new mint yet. Stays inside the
-      // `current.isDefault` guard above so a real mint that landed
-      // first won't get clobbered by a slow seed query.
+      // hasn't seen a new mint yet. Reached only after
+      // `nextMoodFromSeed` confirmed the placeholder is still
+      // showing, so a real mint that landed first won't get
+      // clobbered by a slow seed query.
       moodState.set({
         valence: result.valence,
         confidence: result.confidence,
@@ -227,7 +171,7 @@
     // to a thread" semantics the local pill uses for its 💤 placeholder.
     moodState.clear();
     if (cid !== null) {
-      current = makeDefault();
+      current = { id: ++nextId, ...defaultMood() };
       void seedFromHistory(cid, gen);
     } else {
       current = null;
