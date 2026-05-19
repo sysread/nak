@@ -139,6 +139,7 @@ describe('tool registry', () => {
     expect(list.map((t) => t.function.name).sort()).toEqual(
       [
         'analyze_image',
+        'ask_user',
         'context',
         'conversation_recall',
         'conversation_search',

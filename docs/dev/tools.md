@@ -153,6 +153,19 @@ The gated `research` toolbox carries:
   `ctx.attachments`. Requires `ToolContext.attachments` to be
   populated (the chat loop does this from the current user
   message's attachment rows). Returns `{answer: string}`.
+- `src/lib/tools/ask_user.ts` - the clarifying-question tool. Pure
+  args-validator that returns a `{__ask_user_pending__: true,
+  question, options}` sentinel; the chat-loop suspends after
+  persisting the sentinel as the tool-result row content, and the
+  `AskUserCard` UI rewrites the row to an `{__ask_user_answered__:
+  true, answer, via, option_index?}` envelope on submit (or
+  abandonment). `parseAskUserContent` and
+  `buildAskUserAnswerContent` are shared with `Chat.svelte` and
+  `chat-loop.ts`. The tool surface is unique in the catalog: every
+  other tool's result is computed by code, this one's result is
+  supplied by the user across a wire-format suspend/resume gap. See
+  `./chat.md` for the corresponding `ChatLoopResult.awaitingUserAnswer`
+  contract.
 - `src/lib/tools/research_docs.ts` - bundles every `docs/user/`
   markdown file into the system prompt of a fast-tier sub-
   completion and returns `{answer, sources}`. The trailing

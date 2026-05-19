@@ -71,6 +71,7 @@ import { contextTool } from './context';
 import { webSearch } from './web_search';
 import { updateTitle } from './update_title';
 import { analyzeImage } from './analyze_image';
+import { askUser } from './ask_user';
 
 // --- Lazy-loaded tool schemas ---------------------------------------
 // The schemas (name + description + shortDescription + parameters)
@@ -290,6 +291,12 @@ const wikiLibrarian = lazyTool(
  *     very first turn before any gated toolbox is on.
  *   - `analyze_image` - vision sub-completion against an image
  *     attached anywhere in the thread.
+ *   - `ask_user` - pose a clarifying multiple-choice question to the
+ *     user instead of guessing intent. The chat-loop suspends after
+ *     this call lands; the next round starts when the user submits an
+ *     answer via the AskUserCard UI. Always-on because the model
+ *     should be able to reach for it as a clarification reflex on the
+ *     first turn, not after toggling a write box.
  */
 export const alwaysOnToolbox: Toolbox = {
   name: 'always_on',
@@ -299,7 +306,7 @@ export const alwaysOnToolbox: Toolbox = {
     'recall tools, and read-only surfaces (search across ' +
     'memories / conversations / wiki / cookbook / app docs; ' +
     'plus list/get for wiki and cookbook) plus web search, ' +
-    'update_title, analyze_image, and the toggle_toolbox meta-tool.',
+    'update_title, analyze_image, ask_user, and the toggle_toolbox meta-tool.',
   tools: [
     toggleToolbox,
     contextTool,
@@ -317,6 +324,7 @@ export const alwaysOnToolbox: Toolbox = {
     webSearch,
     updateTitle,
     analyzeImage,
+    askUser,
   ],
 };
 

@@ -4328,6 +4328,40 @@ export class SupabaseService {
   }
 
   /**
+   * Replace the `content` field on a single `role='tool'` row, located
+   * by its (thread_id, tool_call_id) pair. The ONLY caller is the
+   * ask_user suspend/resume path: the chat-loop initially writes a
+   * pending sentinel as the tool row content, and the UI rewrites it
+   * to the real answer payload when the user submits (or to an
+   * abandonment payload on refresh / new send / sibling cancel).
+   *
+   * Scoped to role='tool' at the application layer in addition to the
+   * RLS UPDATE policy's role check, so a future caller can't
+   * accidentally rewrite an assistant or user row's content through
+   * this surface. The tool_call_id pair is unique within a thread
+   * (one tool result per call) so `single()` is correct here.
+   *
+   * Returns the updated row so the caller can append/replace it in
+   * the in-memory message list.
+   */
+  async updateToolMessageContent(
+    threadId: string,
+    toolCallId: string,
+    content: string
+  ): Promise<Message> {
+    const { data, error } = await this.client
+      .from('messages')
+      .update({ content })
+      .eq('thread_id', threadId)
+      .eq('tool_call_id', toolCallId)
+      .eq('role', 'tool')
+      .select()
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return data as Message;
+  }
+
+  /**
    * Hard-delete a contiguous batch of message rows. Used by the
    * regenerate-from-here flow: the rows for the discarded turn(s) stay
    * in the DB while the replacement is in flight (so a mid-stream

@@ -161,6 +161,28 @@ The wiki is the right surface for "what is X (in the user's life)" lookups again
 You cannot edit wiki articles directly. When the user asks to consolidate duplicates, delete stale stubs, split a sprawling page, or otherwise reshape the wiki, enable the \`wiki\` toolbox and call wiki_librarian with concrete instructions - it delegates to a sub-agent that reads every article and carries out the maintenance pass. Scope the request first with wiki_list / wiki_get so the instructions reference specific titles or ids; vague instructions produce vague results.
 `;
 
+// Clarifying-question framing. Counter-pushes against the model's
+// tendency to guess at ambiguous user intent and then waste a long
+// answer on the wrong branch. The ask_user tool lives in the always-on
+// toolbox; this block tells the model when to reach for it. Tone
+// matches VOICE_BLOCK - terse, second person, no hedging. Deliberately
+// guarded with "only when" qualifiers so the model doesn't reach for
+// ask_user on every turn and turn every conversation into a Q&A funnel.
+//
+// Position in the sections order: between WIKI_BLOCK and
+// TOOLBOX_FRAMING_BLOCK so it reads as a posture statement on how to
+// handle ambiguity, immediately before the model meets the tool
+// catalog. Earlier than the catalog so the disposition is set before
+// the model picks a tool; later than RECALL_BLOCK so the model
+// considers persistent context first (the answer to "what does the
+// user mean by X" often lives in memory).
+const ASK_USER_BLOCK = `\
+When the user's intent is genuinely ambiguous, prefer asking a clarifying multiple-choice question over guessing and writing a long wrong answer.
+The \`ask_user\` tool poses a short question with 2-4 short options; the UI adds an "Other" free-form escape automatically, and the conversation pauses until the user picks one.
+Use it only when (a) the wrong branch would waste several paragraphs, (b) the right branch is unobvious, and (c) the answer space is tight enough to enumerate. Skip it when a sensible default exists, when the user's wording already pins the answer, when persistent memory or the current thread would resolve the ambiguity, or as a stalling tactic.
+Do not pair ask_user with other tool calls in the same round unless the other call directly informs the question being asked - the round suspends as soon as the question is posed.
+`;
+
 // Toolbox framing. The model sees the catalog below with (on)/(off) marks
 // on the gated toolboxes; always-on tools (every read path, plus web search,
 // update_title, analyze_image, the umbrella `context` tool, the three
@@ -284,6 +306,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     VOICE_BLOCK,
     RECALL_BLOCK,
     WIKI_BLOCK,
+    ASK_USER_BLOCK,
     TOOLBOX_FRAMING_BLOCK,
     ACTIVITY_BLOCK,
     buildCatalog(enabled),
