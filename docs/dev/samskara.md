@@ -106,7 +106,19 @@ toast is just a glance cue that the bias model is forming.
   seed fetch against thread-switch races. The pill is only
   suppressed on the brand-new-chat screen where `route.cid` is
   null. Click always opens the Samskara diagnostics modal
-  regardless of state. Mounted once in `Chat.svelte`.
+  regardless of state. Mounted once in `Chat.svelte`. Composition
+  only: every mood-shape transition (dedup-on-same-band,
+  placeholder factory, seed-vs-mint race resolution) lives in the
+  primitives module next door.
+- `src/lib/ui/samskara-toasts.ts` - pure UI-behavior primitives
+  for the mood pill. `defaultMood()` factory + the `DEFAULT_EMOJI`
+  / `DEFAULT_LABEL` constants for the 💤 placeholder;
+  `nextMoodFromMint(prev, detail)` returns the next visual shape
+  or null to signal the dedup skip (incoming mint lands in the
+  same emoji/label/tier as what's showing); `nextMoodFromSeed(prev,
+  seed)` returns the upgraded shape or null when a real mint won
+  the within-thread race against a slow seed query. Unit-tested
+  directly at `tests/samskara-toasts.test.ts` with plain vitest.
 - `src/components/CohortPanel.svelte` - the per-cohort diagnostic
   card mounted inline under each user message in the transcript.
   Composition-only: prop wiring, the `raw` and `expandedClusters`
