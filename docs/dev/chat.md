@@ -177,6 +177,24 @@ A chat turn goes:
 - `MAX_ROUNDS = 5` — guardrail on runaway tool loops. Exits with
   `stoppedByLimit: true`; the UI shows a "tool-use round cap
   reached" banner.
+- `ChatLoopResult.awaitingUserAnswer` — non-null when the loop
+  suspended on an `ask_user` tool call. The pending tool row is
+  already persisted (carrying the `{__ask_user_pending__: true,
+  question, options}` sentinel as content) so the wire shape stays
+  valid; the caller surfaces the question via `AskUserCard` and on
+  submit `UPDATE`s the same row's content to an
+  `{__ask_user_answered__: true, answer, via, option_index?}`
+  envelope, then re-invokes `runChatLoop` against the post-answer
+  history. The substrate stub is skipped on suspend - it fires on
+  whichever resumed run actually terminates the turn. The
+  `cancelPendingAskUser` helper in `Chat.svelte` writes an
+  `abandoned_on_*` answer envelope when the user reloads (mount-
+  time scan in `selectThread`) or sends a new message instead of
+  picking an option, keeping the wire shape valid in both cases.
+  See `src/lib/tools/ask_user.ts` for the sentinel/answer shapes
+  and `src/lib/notifications.svelte.ts` for the foreground OS
+  notification that fires when the suspension lands while the tab
+  is backgrounded.
 
 ## Interactions with other features
 

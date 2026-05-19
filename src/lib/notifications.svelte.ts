@@ -129,6 +129,78 @@ export function notifyTurnComplete(args: NotifyArgs): void {
   markThreadUnread(args.threadId);
 }
 
+/**
+ * Maximum body length for the ask_user notification. iOS PWA
+ * notifications silently truncate long bodies; capping at ~120 chars
+ * keeps the question visible on every platform. Android and desktop
+ * are more forgiving but the cap is uniform for simplicity.
+ */
+const ASK_USER_BODY_MAX_CHARS = 120;
+
+export interface NotifyAskUserArgs {
+  threadId: string;
+  /** Thread title, used as the notification heading. */
+  title: string;
+  /** The clarifying question text, used as the body. */
+  question: string;
+  /** True iff this thread is the one the user is currently viewing. */
+  isActive: boolean;
+  onClick: (threadId: string) => void;
+}
+
+/**
+ * Sibling of `notifyTurnComplete` for the ask_user suspended-loop
+ * state: an OS notification when the tab is backgrounded so the user
+ * knows the model is asking them something, with the question itself
+ * as the body so they can decide whether to switch back without first
+ * unlocking and reopening the app. Tagged distinctly from
+ * `notifyTurnComplete` so a later completion in the same thread does
+ * not collapse this notification away.
+ *
+ * Falls back to the in-app unread dot when the OS path isn't
+ * available (permission denied, document visible elsewhere, browser
+ * lacks Notification API). The pending question card in the message
+ * list is the durable signal regardless - this is a nudge, not the
+ * notification of record.
+ */
+export function notifyAskUser(args: NotifyAskUserArgs): void {
+  if (args.isActive) return;
+  if (!app.notifyOnComplete) return;
+  const hidden = typeof document !== 'undefined' && document.hidden === true;
+  if (hidden && isSupported() && Notification.permission === 'granted') {
+    try {
+      const truncated =
+        args.question.length > ASK_USER_BODY_MAX_CHARS
+          ? args.question.slice(0, ASK_USER_BODY_MAX_CHARS - 1).trimEnd() + '…'
+          : args.question;
+      const notif = new Notification(args.title || 'Question for you', {
+        body: truncated || 'The assistant is waiting for an answer.',
+        icon: iconUrl(),
+        // Distinct prefix so completion + ask notifications don't
+        // collapse onto each other - the user might have both states
+        // pending across two threads.
+        tag: `ask:${args.threadId}`,
+      });
+      notif.onclick = () => {
+        try {
+          window.focus();
+        } catch {
+          // focus() can throw on hostile popup-blocker environments;
+          // fall through so the user still lands on the thread.
+        }
+        args.onClick(args.threadId);
+        notif.close();
+      };
+      return;
+    } catch {
+      // Notification constructor occasionally throws on Android
+      // embedded browsers despite reporting permission=granted; fall
+      // back to the unread dot so the pending question still surfaces.
+    }
+  }
+  markThreadUnread(args.threadId);
+}
+
 function markThreadUnread(threadId: string): void {
   if (notifications.unread.has(threadId)) return;
   const next = new Set(notifications.unread);

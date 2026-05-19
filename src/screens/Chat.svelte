@@ -39,7 +39,12 @@
   import { onMount, tick } from 'svelte';
   import type { Session } from '@supabase/supabase-js';
   import { app, lock, applyServerSettings, notifyBiasActiveConvIds } from '$lib/state.svelte';
-  import { notifications, notifyTurnComplete, markThreadRead } from '$lib/notifications.svelte';
+  import {
+    notifications,
+    notifyTurnComplete,
+    notifyAskUser,
+    markThreadRead,
+  } from '$lib/notifications.svelte';
   import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
   import { route, navigate, buildSearch } from '$lib/routing.svelte';
   import {
@@ -161,6 +166,15 @@
   import VerbosityPicker from '../components/VerbosityPicker.svelte';
   import Scanner from '../components/Scanner.svelte';
   import ToolCalls from '../components/ToolCalls.svelte';
+  import AskUserCard from '../components/AskUserCard.svelte';
+  import {
+    parseAskUserContent,
+    buildAskUserAnswerContent,
+    ASK_USER_PENDING_FLAG,
+    type AskUserVia,
+    type AskUserAnsweredContent,
+    type AskUserPendingContent,
+  } from '$lib/tools/ask_user';
   import MessageAttachments from '../components/MessageAttachments.svelte';
   // ExtractedTextDrawer + LogsDrawer are toggled overlays - the
   // user has to deliberately open them via a button or an
@@ -1872,6 +1886,28 @@
       // against a late response stomping newer state.
       if (activeThreadId !== id) return;
       messages = fetched;
+      // Eager-cancel any pending ask_user sentinel left over from a
+      // prior session. The chat-loop suspends without persisting the
+      // priming state, and we can't restart inference from where it
+      // left off across a page reload anyway, so a pending question
+      // is treated as abandoned on (re)load - matching the standing
+      // convention in conversation-recovery that incomplete tool
+      // exchanges resolve to a cancellation rather than a hang.
+      // Best-effort: a write failure leaves the sentinel in place,
+      // the card renders pending, and the user can still submit (or
+      // hitting send will cancel it on the new-send path). Fire-and-
+      // forget so a slow Supabase doesn't block thread switching.
+      void cancelPendingAskUser(id, 'abandoned_on_refresh').then(() => {
+        // The cancel write also lives inside listMessages's recovery
+        // shape - re-pull so the message order and any other state
+        // the recovery pipeline touched lands consistently. Skipped
+        // if the user has already navigated away.
+        if (activeThreadId !== id) return;
+        // No need to re-fetch the whole list - the in-memory patch
+        // inside cancelPendingAskUser already updated the affected
+        // row. The realtime echo will arrive separately and dedupe
+        // by id.
+      });
       // Kick off the cohort + substrate fetch in parallel with the
       // draft check below. The inline cohort panels under each user
       // message read off this state; loading it lazily on first
@@ -2377,6 +2413,14 @@
     } catch (err) {
       log.warn('persistSyntheticRecovery failed', err);
     }
+
+    // Cancel any pending ask_user before the new user message lands.
+    // The user typed into the composer instead of picking an option;
+    // per the design decision, that abandons the question and the
+    // new message is processed as a normal user turn. The model sees
+    // the cancellation marker + the new user message on its next
+    // round and can choose to re-ask or move on.
+    await cancelPendingAskUser(threadId, 'abandoned_on_new_send');
 
     let userMessageId: string;
     try {
@@ -2939,16 +2983,36 @@
       // or sets an unread dot on the sidebar row. Skip on user-initiated
       // stop (they know they hit Stop), on a limit-without-text outcome
       // (no actual reply to report), and on conflict (nothing committed).
-      if (!loopResult.interrupted && !loopResult.conflictDetected && loopResult.finalText.length > 0) {
+      //
+      // Branches on awaitingUserAnswer: when the loop suspended on
+      // ask_user, fire notifyAskUser with the question as the body
+      // so a backgrounded tab gets a meaningful nudge instead of "your
+      // reply is ready" (which would be misleading - the reply is
+      // waiting on the USER, not the other way around). The pending
+      // question card in the message list is the durable signal
+      // regardless of whether the OS notification lands.
+      if (!loopResult.interrupted && !loopResult.conflictDetected) {
         const threadForNotif = findThread(ctx.threadId);
-        notifyTurnComplete({
-          threadId: ctx.threadId,
-          title: threadForNotif?.title || 'New reply',
-          isActive: activeThreadId === ctx.threadId,
-          onClick: (id) => {
-            void selectThread(id);
-          },
-        });
+        if (loopResult.awaitingUserAnswer) {
+          notifyAskUser({
+            threadId: ctx.threadId,
+            title: threadForNotif?.title || 'Question for you',
+            question: loopResult.awaitingUserAnswer.question,
+            isActive: activeThreadId === ctx.threadId,
+            onClick: (id) => {
+              void selectThread(id);
+            },
+          });
+        } else if (loopResult.finalText.length > 0) {
+          notifyTurnComplete({
+            threadId: ctx.threadId,
+            title: threadForNotif?.title || 'New reply',
+            isActive: activeThreadId === ctx.threadId,
+            onClick: (id) => {
+              void selectThread(id);
+            },
+          });
+        }
       }
       await refreshThreads();
       // Refresh inline diagnostics so the cohort + substrate written
@@ -3890,7 +3954,25 @@
     // (unlikely, but the model could do it). `assistantId` anchors
     // the block to its originating assistant row for debugging /
     // future deep-link needs.
-    | { kind: 'rename'; key: string; assistantId: string; title: string };
+    | { kind: 'rename'; key: string; assistantId: string; title: string }
+    // Rendered as an AskUserCard for an `ask_user` tool call. Three
+    // states (pending / answered / abandoned) derive from the tool-
+    // result row's content (see parseAskUserContent). `key` is the
+    // tool_call_id, stable across renders so the #each loop doesn't
+    // tear down the card on every messages mutation. `pendingContent`
+    // is set when state==='pending'; `answeredContent` when it isn't.
+    // We carry both shapes through the block rather than re-parsing
+    // in the template because the pending question text is only on
+    // the persisted sentinel - the answered shape doesn't echo it.
+    | {
+        kind: 'ask-user';
+        key: string;
+        assistantId: string;
+        state: 'pending' | 'answered' | 'abandoned';
+        question: string;
+        options: { label: string; description: string }[];
+        answeredContent: AskUserAnsweredContent | null;
+      };
 
   // Tool names rendered as something other than a standard tool-call
   // card:
@@ -3904,7 +3986,13 @@
   // The underlying `tool_calls` and tool-result rows still live in the
   // message store and go out on the wire on replay; this is purely a
   // display filter.
-  const HIDDEN_TOOL_NAMES = new Set(['toggle_tools', 'update_title']);
+  // `ask_user` is suppressed from the standard tool-group card because
+  // it has its own dedicated AskUserCard rendering below. The
+  // tool_calls and tool-result rows still live in the message store
+  // (and ship on the wire on the resumed round) - this is purely a
+  // display filter so the question doesn't render as both a faceless
+  // tool row and a question card.
+  const HIDDEN_TOOL_NAMES = new Set(['toggle_tools', 'update_title', 'ask_user']);
 
   /**
    * Pull the sanitised title out of an update_title call + its
@@ -3949,6 +4037,222 @@
       }
     } catch {
       // malformed JSON on the wire is the model's fault; skip the block
+    }
+    return null;
+  }
+
+  /**
+   * Parse the `arguments` JSON string off an ask_user tool call into
+   * the question + options shape the card needs. Defensive against
+   * malformed JSON and partial wire payloads - returns null when the
+   * args are unusable, in which case the block-builder skips emitting
+   * an ask-user block for this call. The activity parameter that
+   * dispatch.ts injects is ignored here; the card only needs the
+   * question + options.
+   */
+  function parseAskUserCallArgs(
+    raw: string
+  ): { question: string; options: { label: string; description: string }[] } | null {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw || '{}');
+    } catch {
+      return null;
+    }
+    if (!parsed || typeof parsed !== 'object') return null;
+    const obj = parsed as Record<string, unknown>;
+    const question = typeof obj.question === 'string' ? obj.question.trim() : '';
+    const rawOptions = Array.isArray(obj.options) ? obj.options : [];
+    const options: { label: string; description: string }[] = [];
+    for (const o of rawOptions) {
+      if (!o || typeof o !== 'object') continue;
+      const oo = o as Record<string, unknown>;
+      if (typeof oo.label !== 'string' || typeof oo.description !== 'string') continue;
+      const label = oo.label.trim();
+      const description = oo.description.trim();
+      if (!label || !description) continue;
+      options.push({ label, description });
+    }
+    if (!question || options.length === 0) return null;
+    return { question, options };
+  }
+
+  /**
+   * Locate the unique pending ask_user tool row in the current
+   * thread's messages, if any. Per the chat-loop's contract, at most
+   * one such row exists at any time: a pending sentinel is written
+   * when ask_user lands, and the next event either replaces its
+   * content with an answer (user submitted) or with an abandonment
+   * payload (refresh / new-send / sibling cancel). A new ask_user
+   * cannot land until the previous one resolves because the loop is
+   * suspended in between.
+   */
+  function findPendingAskUserRow(): {
+    row: Message;
+    toolCallId: string;
+    question: string;
+  } | null {
+    for (const m of messages) {
+      if (m.role !== 'tool' || !m.tool_call_id) continue;
+      const parsed = parseAskUserContent(m.content);
+      if (parsed && ASK_USER_PENDING_FLAG in parsed) {
+        return {
+          row: m,
+          toolCallId: m.tool_call_id,
+          question: (parsed as AskUserPendingContent).question,
+        };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Write an abandonment payload over the pending sentinel and patch
+   * the in-memory message. Best-effort: a write failure logs but
+   * doesn't surface, because the alternative is blocking the user's
+   * action (new send, refresh path) over a transient network blip -
+   * the sentinel will get rewritten on the next try and the wire
+   * shape stays valid either way.
+   *
+   * Used by:
+   *   - selectThread's mount-time cleanup (via='abandoned_on_refresh')
+   *   - send()'s pre-send cancel (via='abandoned_on_new_send')
+   *
+   * The model sees the abandonment as the resumed-round tool result
+   * the next time runChatLoop fires; the `via` field tells it which
+   * path led there so it can choose to re-ask or move on.
+   */
+  async function cancelPendingAskUser(
+    threadId: string,
+    via: AskUserVia
+  ): Promise<void> {
+    if (!app.supabase) return;
+    const pending = findPendingAskUserRow();
+    if (!pending) return;
+    const newContent = buildAskUserAnswerContent(null, via);
+    try {
+      const updated = await app.supabase.updateToolMessageContent(
+        threadId,
+        pending.toolCallId,
+        newContent
+      );
+      // Patch in-memory message so the AskUserCard immediately
+      // re-renders in the 'abandoned' state instead of leaving a
+      // stale pending card flashing past while the resumed loop
+      // (if any) reads the persisted state.
+      messages = messages.map((m) => (m.id === updated.id ? updated : m));
+    } catch (err) {
+      log.warn('cancelPendingAskUser failed', err);
+    }
+  }
+
+  /**
+   * True when the user is mid-submit on an AskUserCard. Disables the
+   * card's chips/textarea during the brief window while we write the
+   * answer and start the resumed runChatLoop. Falls back to false
+   * after the resume settles (the AskUserCard is now in 'answered'
+   * state and ignores the busy prop). One global flag is enough -
+   * by invariant there is at most one pending ask_user at a time.
+   */
+  let askUserSubmitBusy = $state(false);
+
+  /**
+   * Submit handler for the active AskUserCard. Writes the answer
+   * payload over the pending sentinel, patches the in-memory
+   * message, then re-fires the chat-loop against the post-answer
+   * history. The resumed turn carries the same userMessageId as the
+   * original turn so the samskara substrate stub (which was skipped
+   * on suspend) fires on the resumed completion paired with the
+   * original user message - one substrate row per logical user turn,
+   * regardless of how many suspend/resume cycles it took.
+   */
+  async function answerAskUser(
+    toolCallId: string,
+    answer: string,
+    via: AskUserVia,
+    optionIndex?: number
+  ): Promise<void> {
+    if (!app.supabase || !app.venice || !activeThreadId) return;
+    if (askUserSubmitBusy) return;
+    askUserSubmitBusy = true;
+    try {
+      const threadId = activeThreadId;
+      const newContent = buildAskUserAnswerContent(answer, via, optionIndex);
+      const updated = await app.supabase.updateToolMessageContent(
+        threadId,
+        toolCallId,
+        newContent
+      );
+      messages = messages.map((m) => (m.id === updated.id ? updated : m));
+
+      // Resume the chat-loop. Rebuild the exchange context from
+      // current state - we may be on a fresh tab load with no
+      // in-memory closure from the original send. The userMessageId
+      // is the user message that opened the suspended turn, which
+      // we recover by walking backward through messages from the
+      // updated tool row.
+      const userMessageId = findOpeningUserMessageIdForTail();
+      if (!userMessageId) {
+        log.warn('answerAskUser: could not locate opening user message');
+        return;
+      }
+      const freshThread = findThread(threadId);
+      if (!freshThread) return;
+      const tier = resolveTier(freshThread.model ?? null, defaultTier);
+      const tierSpec = TIERS[tier];
+      const modelId = TIERS[tier].id;
+      const sendReasoning: ReasoningEffort | undefined =
+        tierSpec.supportsReasoning && !tierSpec.disableThinking
+          ? resolveReasoningEffort(
+              freshThread.reasoning_effort ?? null,
+              defaultReasoning,
+              tierSpec.defaultReasoningEffort
+            )
+          : undefined;
+      const sendDisableThinking: boolean = tierSpec.disableThinking ?? false;
+      const sendVerbosity: Verbosity = resolveVerbosity(
+        freshThread.verbosity ?? null,
+        defaultVerbosity
+      );
+      const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
+        .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
+        .map((p) => ({ role: 'system' as const, content: p.body }));
+      const currentUserId = session?.user.id ?? freshThread.user_id;
+
+      await runExchange({
+        threadId,
+        currentUserId,
+        modelId,
+        tierSpec,
+        systemMessages,
+        sendReasoning,
+        sendDisableThinking,
+        sendVerbosity,
+        sendEmphasis: app.emphasisMarkdown,
+        sendUserName: app.userName,
+        sendUserLocation: app.userLocation,
+        // Not used inside runExchange after the user-message write,
+        // which the resume path skips entirely (no new user message
+        // is created on resume - the answer is the trigger).
+        originalText: '',
+        userMessageId,
+      });
+    } finally {
+      askUserSubmitBusy = false;
+    }
+  }
+
+  /**
+   * Walk backward through messages from the tail to find the most
+   * recent role='user' message - the one that opened the currently-
+   * suspended (or just-resumed) turn. Returns null if no user
+   * message is present (cold thread), which means the resume cannot
+   * proceed and the caller surfaces a warning.
+   */
+  function findOpeningUserMessageIdForTail(): string | null {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === 'user') return m.id;
     }
     return null;
   }
@@ -4022,6 +4326,54 @@
               title,
             });
           }
+        }
+
+        // Emit one ask-user block per `ask_user` call on this turn.
+        // The question and options come from the call's arguments (the
+        // model's original ask) so they survive into the answered
+        // history view, which carries only the answer payload. The
+        // tool-result row's content determines the state and the
+        // answer envelope (if any).
+        const askUserCalls = m.tool_calls.filter(
+          (c) => c.function.name === 'ask_user'
+        );
+        for (const call of askUserCalls) {
+          const args = parseAskUserCallArgs(call.function.arguments);
+          if (!args) continue;
+          const resultRow = resultsByCallId[call.id];
+          const parsedResult = resultRow
+            ? parseAskUserContent(resultRow.content)
+            : null;
+          let state: 'pending' | 'answered' | 'abandoned';
+          let answeredContent: AskUserAnsweredContent | null = null;
+          if (!parsedResult) {
+            // Result row not yet persisted; the chat-loop is in the
+            // sub-second window between assistant-row write and
+            // tool-row write. Skip the block until the row lands -
+            // emitting a card with no backing row would make submit
+            // operations target a non-existent tool_call_id.
+            continue;
+          }
+          if (ASK_USER_PENDING_FLAG in parsedResult) {
+            state = 'pending';
+          } else {
+            answeredContent = parsedResult;
+            const via = parsedResult.via;
+            if (via === 'option' || via === 'free_form') {
+              state = 'answered';
+            } else {
+              state = 'abandoned';
+            }
+          }
+          blocks.push({
+            kind: 'ask-user',
+            key: call.id,
+            assistantId: m.id,
+            state,
+            question: args.question,
+            options: args.options,
+            answeredContent,
+          });
         }
       } else {
         blocks.push({ kind: 'plain', message: m });
@@ -5004,6 +5356,8 @@
               ? block.message.id
               : block.kind === 'rename'
               ? `rename:${block.key}`
+              : block.kind === 'ask-user'
+              ? `ask-user:${block.key}`
               : block.assistant.id
           )}
             {#if block.kind === 'tool-group'}
@@ -5049,6 +5403,26 @@
                    <style> block to match other subdued chat chrome. -->
               <div class="renamed-to" role="note" aria-label="Conversation renamed">
                 Renamed to <em>{block.title}</em>
+              </div>
+            {:else if block.kind === 'ask-user'}
+              <!-- ask_user clarifying question. Renders inside an
+                   assistant bubble so the visual weight matches the
+                   surrounding model-driven content (the question came
+                   from the model, the affordance to answer is its
+                   dedicated affordance). The card itself owns the
+                   three-state render (pending / answered / abandoned)
+                   and all the mobile-first wrap rules - see
+                   AskUserCard.svelte for the layout discipline. -->
+              <div class="msg assistant ask-user-host">
+                <AskUserCard
+                  mode={block.state}
+                  question={block.question}
+                  options={block.options}
+                  answer={block.answeredContent}
+                  busy={askUserSubmitBusy}
+                  onSubmit={(answer, via, optionIndex) =>
+                    answerAskUser(block.key, answer, via, optionIndex)}
+                />
               </div>
             {:else if block.message.role === 'assistant'}
               <div

@@ -353,6 +353,48 @@ second click against a clean pool reports "Nothing to consolidate".
 
 Closes via the ×, Escape, or clicking the backdrop.
 
+## When the model asks you a clarifying question
+
+If you ask something genuinely ambiguous - "what should I do about
+the calendar thing?", "help me write that email", "explain quantum
+mechanics" - the model can pause and ask you to clarify before
+spending a long reply on the wrong reading. When that happens, a
+small card appears inline in the conversation with the question and
+2-4 buttons for the most likely answers, plus an **Other** button
+that expands a textarea where you can type a free-form reply.
+
+The conversation pauses until you respond. Pick one of the buttons
+to send that answer back, or type into Other and hit Enter.
+
+A few things to know:
+
+- **You can ignore the question and just send a new message
+  instead.** Typing into the main composer and hitting send treats
+  the question as skipped - the model sees that you moved on and
+  responds to your new message. The question card sticks around in
+  the conversation history showing it was skipped.
+- **Reloading the page skips the question.** A clarifying question
+  that hasn't been answered when you close the tab or refresh the
+  app is treated as skipped on next load. The card reappears in
+  history with a "skipped on reload" tag. If you want to actually
+  answer, send a new message that says what you would have picked.
+- **OS notifications carry the question text.** If you have [reply
+  notifications](#reply-notifications) on and the tab is
+  backgrounded when a clarifying question lands, the notification's
+  body is the question itself, so you can decide whether to switch
+  back without first unlocking and opening the app. The question
+  card in the message list is the durable signal regardless of
+  whether the notification fires.
+- **Answered questions stay in the transcript.** After you answer,
+  the card dims and shows your reply below the question - the
+  conversation reads cleanly on a re-scroll without losing the
+  context of which option you picked.
+
+The model is told to use clarifying questions sparingly, only when
+the wrong reading would waste a long answer and the question has a
+tight answer space. If you find Nak asking too often, that's a bug
+to report.
+
 ## Reply notifications
 
 If you switch to a different conversation while a reply is still

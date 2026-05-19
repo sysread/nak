@@ -2080,6 +2080,17 @@ h1 {
   font-style: italic;
 }
 
+/* Host for the AskUserCard. Reuses the .msg.assistant alignment/width
+   rules so the card lines up with surrounding bubbles, but strips the
+   bubble's surface fill + border so AskUserCard provides the visual
+   chrome instead. Without this override the card renders as a card-
+   inside-a-card with two stacked borders. */
+.msg.ask-user-host {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
 /* Inline failure notice in the transcript. Rendered where the
    streaming bubble was when an exchange failed, so a user on mobile
    (with the composer banner often below the keyboard) still sees the

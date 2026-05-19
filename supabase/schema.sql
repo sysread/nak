@@ -243,6 +243,33 @@ create policy "messages are self-deletable via thread" on public.messages
     )
   );
 
+-- The only writer that needs UPDATE access on messages is the ask_user
+-- suspend/resume path (src/lib/tools/ask_user.ts +
+-- src/lib/supabase.ts updateToolMessageContent): the chat-loop writes a
+-- pending sentinel into a role='tool' row's content when the model
+-- calls ask_user, and the UI rewrites that content to the real answer
+-- payload (or an abandonment marker) when the user submits.
+--
+-- Scoped to role='tool' rows specifically so a buggy or compromised
+-- client cannot use this policy to rewrite assistant or user content -
+-- those rows remain immutable from the client. Thread ownership gates
+-- access the same way the other messages policies do.
+drop policy if exists "messages are self-updatable for tool answers" on public.messages;
+create policy "messages are self-updatable for tool answers" on public.messages
+  for update using (
+    role = 'tool'
+    and exists (
+      select 1 from public.threads t
+      where t.id = messages.thread_id and t.user_id = auth.uid()
+    )
+  ) with check (
+    role = 'tool'
+    and exists (
+      select 1 from public.threads t
+      where t.id = messages.thread_id and t.user_id = auth.uid()
+    )
+  );
+
 -- Tool calling -----------------------------------------------------------
 --
 -- Messages gain an OpenAI-shaped tool-call payload so conversations

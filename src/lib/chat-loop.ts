@@ -52,6 +52,12 @@ import {
 } from './tools';
 import { buildSystemPrompt } from './chat-prompt';
 import {
+  askUser,
+  ASK_USER_PENDING_FLAG,
+  buildAskUserAnswerContent,
+  type AskUserOption,
+} from './tools/ask_user';
+import {
   parseToolArguments,
   sanitizeToolCallIdForWire,
   sanitizeToolCallsForWire,
@@ -887,6 +893,32 @@ export interface ChatLoopResult {
    * see the same surface the model last saw.
    */
   toolboxesEnabled: readonly string[];
+  /**
+   * Non-null when the loop exited because the model called the
+   * `ask_user` tool and is now waiting on a human answer. The tool-
+   * result row is already written (carrying the pending sentinel as
+   * its content) so the wire shape stays valid; conversation-recovery
+   * sees every tool_call_id matched and stays a no-op. The caller
+   * (Chat.svelte) is expected to surface the question via the
+   * AskUserCard UI, fire a notification, and on submit:
+   *   1. UPDATE the tool row's content to the answer payload via
+   *      `supabase.updateToolMessageContent(threadId, toolCallId, ...)`,
+   *   2. Re-invoke `runChatLoop` against the updated history.
+   *
+   * The substrate stub is intentionally skipped on suspend (the turn
+   * is not yet logically complete); the next runChatLoop call writes
+   * it when the turn actually terminates.
+   *
+   * `toolCallId` is the same id the chat-loop wrote on the pending
+   * tool row; the answer-write path locates the row by it. `question`
+   * and `options` are forwarded so the UI doesn't have to re-parse
+   * the persisted content on the same-tab happy path.
+   */
+  awaitingUserAnswer: {
+    toolCallId: string;
+    question: string;
+    options: { label: string; description: string }[];
+  } | null;
 }
 
 /**
@@ -1056,6 +1088,12 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   let stoppedByLimit = false;
   let interrupted = false;
   let conflictDetected = false;
+  // Non-null when an ask_user tool call landed this turn and the
+  // loop is suspending to wait for the user's answer. Returned to the
+  // caller (Chat.svelte) so the UI can flip into "awaiting answer"
+  // mode. See ChatLoopResult.awaitingUserAnswer for the contract on
+  // what the caller does next.
+  let awaitingUserAnswer: ChatLoopResult['awaitingUserAnswer'] = null;
   // Track the last assistant row we persisted across rounds. End-of-
   // turn samskara substrate writes pair the opening user message with
   // whichever assistant row closed the turn — final text or terminal
@@ -1686,6 +1724,40 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     });
     const settled = await Promise.all(executions);
 
+    // Identify the FIRST successful ask_user call in this round. Per
+    // the multi-call rule (see docs/dev/chat.md), only the first
+    // ask_user suspends the loop; any sibling ask_user calls land as
+    // pre-cancelled answer rows so the wire shape stays valid but the
+    // UI doesn't render a second pending card. The discriminator is
+    // call.id rather than call object identity so the rewrite below
+    // can compare against settled[].call.id without aliasing
+    // concerns.
+    let firstAskUserCallId: string | null = null;
+    let firstAskUserQuestion = '';
+    let firstAskUserOptions: AskUserOption[] = [];
+    for (const r of settled) {
+      if (!r.ok) continue;
+      if (r.call.function.name !== askUser.name) continue;
+      // The tool's execute() returns the pending sentinel shape;
+      // sniff for the magic flag to confirm we are looking at a
+      // legitimate suspend-bearing result rather than an error-
+      // shaped object that happens to be ok=true.
+      const v = r.value as Record<string, unknown> | null | undefined;
+      if (!v || v[ASK_USER_PENDING_FLAG] !== true) continue;
+      firstAskUserCallId = r.call.id;
+      firstAskUserQuestion = typeof v.question === 'string' ? v.question : '';
+      const rawOptions = Array.isArray(v.options) ? v.options : [];
+      firstAskUserOptions = rawOptions
+        .filter((o): o is { label: string; description: string } =>
+          !!o &&
+          typeof o === 'object' &&
+          typeof (o as { label?: unknown }).label === 'string' &&
+          typeof (o as { description?: unknown }).description === 'string'
+        )
+        .map((o) => ({ label: o.label, description: o.description }));
+      break;
+    }
+
     // Extend the history with the assistant-with-tool-calls row plus
     // one tool-result row per call. Order matters: the assistant row
     // must precede its result rows in the array we send next round.
@@ -1699,9 +1771,28 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       tool_calls: sanitizeToolCallsForWire(roundCalls),
     });
     for (const r of settled) {
-      const content = r.ok
-        ? encodeToolContent({ ok: true, value: r.value })
-        : encodeToolContent({ ok: false, error: r.error });
+      // Sibling-cancel path: if the model issued ask_user alongside
+      // another ask_user call in the same round, the second (and
+      // beyond) lands as a pre-cancelled answer row so the UI never
+      // shows a second pending card and the resumed turn sees the
+      // cancellation explicitly. The first ask_user falls through to
+      // the normal encodeToolContent path - its pending sentinel
+      // ships verbatim and the loop suspends below.
+      let content: string;
+      if (
+        firstAskUserCallId !== null &&
+        r.call.function.name === askUser.name &&
+        r.call.id !== firstAskUserCallId
+      ) {
+        content = buildAskUserAnswerContent(
+          null,
+          'cancelled_by_sibling_ask_user'
+        );
+      } else {
+        content = r.ok
+          ? encodeToolContent({ ok: true, value: r.value })
+          : encodeToolContent({ ok: false, error: r.error });
+      }
       const msg = await supabase.addMessage(thread.id, 'tool', content, {
         tool_call_id: r.call.id,
         name: r.call.function.name,
@@ -1732,6 +1823,26 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           toolCitations.push({ ...cite, index: toolCitations.length + 1 });
         }
       }
+    }
+
+    // Suspend the loop if ask_user landed this round. The pending
+    // tool row is already persisted (the encodeToolContent path above
+    // emits the sentinel verbatim), siblings are either real results
+    // or pre-cancelled markers, and the wire shape is internally
+    // consistent. The substrate stub is intentionally skipped at the
+    // bottom of this function when awaitingUserAnswer is set - the
+    // turn is not logically complete yet. The mid-turn title-trigger
+    // pipeline below is also skipped via this early break, which is
+    // the desired behaviour: a pending question is the next "user
+    // input" the topic-shift signal would react to, and re-firing
+    // intuition now would burn compute on a stale view.
+    if (firstAskUserCallId !== null) {
+      awaitingUserAnswer = {
+        toolCallId: firstAskUserCallId,
+        question: firstAskUserQuestion,
+        options: firstAskUserOptions,
+      };
+      break;
     }
 
     // Mid-turn title trigger: if any update_title call succeeded this
@@ -1871,12 +1982,29 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // simply has fewer rows to work from until the next round writes
   // successfully. Skipped when the caller didn't supply
   // userMessageId (older callers, tests) or when no assistant row
-  // landed at all (early abort, error path).
-  if (userMessageId && lastAssistantId !== null) {
+  // landed at all (early abort, error path). Also skipped when the
+  // loop is suspended on an ask_user pending answer - the turn is
+  // not logically complete, the formation pipeline shouldn't see a
+  // half-finished round, and the next runChatLoop call (post-answer)
+  // will re-enter this path with the same userMessageId and write
+  // the stub then.
+  if (
+    userMessageId &&
+    lastAssistantId !== null &&
+    awaitingUserAnswer === null
+  ) {
     void recordSubstrateStub(supabase, thread.id, userMessageId, lastAssistantId);
   }
 
-  return { finalText, roundsRun, stoppedByLimit, interrupted, conflictDetected, toolboxesEnabled };
+  return {
+    finalText,
+    roundsRun,
+    stoppedByLimit,
+    interrupted,
+    conflictDetected,
+    toolboxesEnabled,
+    awaitingUserAnswer,
+  };
 }
 
 // Test hook: the formatter is otherwise integration-tested via the

@@ -2710,4 +2710,175 @@ describe('runChatLoop', () => {
       expect(recallContent).toMatch(/(memory|convo)-[12]/);
     });
   });
+
+  describe('ask_user suspend', () => {
+    it('suspends the loop and returns awaitingUserAnswer when ask_user is called', async () => {
+      // The model calls ask_user; the chat-loop is expected to:
+      //   - persist the assistant row with the tool_call
+      //   - run ask_user.execute (validates args, returns sentinel)
+      //   - persist a role='tool' row whose content is the sentinel
+      //   - return with awaitingUserAnswer set and roundsRun=1
+      //   - NOT issue a second streamChat round
+      //   - NOT write the samskara substrate stub (turn is incomplete)
+      const askCall = mkCall(
+        'ask_user',
+        {
+          question: 'what context?',
+          options: [
+            { label: 'Philosophical', description: 'A serious answer.' },
+            { label: '42', description: 'A Hitchhiker reference.' },
+          ],
+          activity: 'asking what context you mean',
+        },
+        'call_ask'
+      );
+      const venice = mockVenice([[{ type: 'tool_call', toolCall: askCall }]]);
+      const { svc, mocks } = mockSupabase();
+      const result = await runChatLoop({
+        venice,
+        supabase: svc,
+        thread: mkThread(),
+        userId: 'u-1',
+        modelId: 'm',
+        history: [{ role: 'user', content: 'meaning of life?' }],
+        signal: new AbortController().signal,
+        userMessageId: 'um-1',
+      });
+      expect(result.awaitingUserAnswer).not.toBeNull();
+      expect(result.awaitingUserAnswer?.toolCallId).toBe('call_ask');
+      expect(result.awaitingUserAnswer?.question).toBe('what context?');
+      expect(result.awaitingUserAnswer?.options).toHaveLength(2);
+      expect(result.roundsRun).toBe(1);
+      // Two addMessage calls: assistant-with-tool_calls + tool-result
+      // with the sentinel. No third round, no terminal text row.
+      const addCalls = mocks.addMessage.mock.calls;
+      const roles = addCalls.map((c) => c[1]);
+      expect(roles).toEqual(['assistant', 'tool']);
+      const toolRow = addCalls[1];
+      expect(toolRow[3].tool_call_id).toBe('call_ask');
+      const parsed = JSON.parse(toolRow[2]) as Record<string, unknown>;
+      expect(parsed.__ask_user_pending__).toBe(true);
+      expect(parsed.question).toBe('what context?');
+      // Substrate stub MUST NOT fire on a suspended turn - the formation
+      // worker would otherwise see a half-finished round paired with
+      // the user message. The resumed run writes it when the turn
+      // actually completes.
+      expect(mocks.samskaraRecordSubstrate).not.toHaveBeenCalled();
+    });
+
+    it('first ask_user suspends; sibling ask_user calls land pre-cancelled', async () => {
+      // The model issues two ask_user calls in the same round. Only
+      // the first should suspend the loop; the second is rewritten to
+      // a `cancelled_by_sibling_ask_user` answer so the wire shape
+      // stays valid but the UI never renders a second pending card.
+      const ask1 = mkCall(
+        'ask_user',
+        {
+          question: 'first?',
+          options: [
+            { label: 'A', description: 'a' },
+            { label: 'B', description: 'b' },
+          ],
+          activity: 'asking',
+        },
+        'call_ask_1'
+      );
+      const ask2 = mkCall(
+        'ask_user',
+        {
+          question: 'second?',
+          options: [
+            { label: 'C', description: 'c' },
+            { label: 'D', description: 'd' },
+          ],
+          activity: 'asking',
+        },
+        'call_ask_2'
+      );
+      const venice = mockVenice([
+        [
+          { type: 'tool_call', toolCall: ask1 },
+          { type: 'tool_call', toolCall: ask2 },
+        ],
+      ]);
+      const { svc, mocks } = mockSupabase();
+      const result = await runChatLoop({
+        venice,
+        supabase: svc,
+        thread: mkThread(),
+        userId: 'u-1',
+        modelId: 'm',
+        history: [{ role: 'user', content: 'go' }],
+        signal: new AbortController().signal,
+      });
+      expect(result.awaitingUserAnswer?.toolCallId).toBe('call_ask_1');
+      // Three addMessage calls: assistant + two tool rows.
+      const addCalls = mocks.addMessage.mock.calls;
+      expect(addCalls.map((c) => c[1])).toEqual(['assistant', 'tool', 'tool']);
+      const toolRow1 = JSON.parse(addCalls[1][2]);
+      const toolRow2 = JSON.parse(addCalls[2][2]);
+      expect(toolRow1.__ask_user_pending__).toBe(true);
+      // Second ask_user is pre-cancelled.
+      expect(toolRow2.__ask_user_answered__).toBe(true);
+      expect(toolRow2.via).toBe('cancelled_by_sibling_ask_user');
+      expect(toolRow2.answer).toBeNull();
+    });
+
+    it('ask_user alongside another tool: sibling tool runs normally, loop suspends after', async () => {
+      // Mixed round: memory_search and ask_user fire together. The
+      // memory_search result should land as a real tool row (not
+      // cancelled) and the ask_user should suspend the loop after
+      // all tool rows have been written.
+      const memCall = mkCall('memory_search', { query: 'whiskers' }, 'call_mem');
+      const askCall = mkCall(
+        'ask_user',
+        {
+          question: 'which one?',
+          options: [
+            { label: 'A', description: 'a' },
+            { label: 'B', description: 'b' },
+          ],
+          activity: 'asking',
+        },
+        'call_ask'
+      );
+      const venice = mockVenice([
+        [
+          { type: 'tool_call', toolCall: memCall },
+          { type: 'tool_call', toolCall: askCall },
+        ],
+      ]);
+      const { svc, mocks } = mockSupabase({
+        searchMemoriesByEmbedding: vi.fn(async () => [
+          { id: 'mem-1', label: 'cat', data: 'Whiskers', created_at: 't', updated_at: 't' },
+        ]),
+      });
+      const result = await runChatLoop({
+        venice,
+        supabase: svc,
+        thread: mkThread(),
+        userId: 'u-1',
+        modelId: 'm',
+        history: [{ role: 'user', content: 'q' }],
+        signal: new AbortController().signal,
+      });
+      expect(result.awaitingUserAnswer?.toolCallId).toBe('call_ask');
+      const addCalls = mocks.addMessage.mock.calls;
+      // assistant + two tool rows (mem + ask).
+      expect(addCalls.map((c) => c[1])).toEqual(['assistant', 'tool', 'tool']);
+      const toolByCallId = new Map(
+        addCalls
+          .filter((c) => c[1] === 'tool')
+          .map((c) => [(c[3] as { tool_call_id?: string }).tool_call_id, c[2]])
+      );
+      // memory_search result is NOT a sentinel or answer - it's the
+      // tool's normal return shape.
+      const memContent = JSON.parse(toolByCallId.get('call_mem') as string);
+      expect(memContent.__ask_user_pending__).toBeUndefined();
+      expect(memContent.__ask_user_answered__).toBeUndefined();
+      // ask_user landed as the pending sentinel.
+      const askContent = JSON.parse(toolByCallId.get('call_ask') as string);
+      expect(askContent.__ask_user_pending__).toBe(true);
+    });
+  });
 });
