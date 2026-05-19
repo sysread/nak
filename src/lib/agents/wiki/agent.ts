@@ -49,6 +49,46 @@ const log = createLogger('wiki-worker');
  */
 const WIKI_MANUAL_RESPONSE_FORMAT: ResponseFormat = { type: 'json_object' };
 
+/**
+ * Sentinel substring Venice emits when its content classifier rejects
+ * the request body. Observed shape (truncated):
+ *
+ *   Venice HTTP 400: {"error":"Input text data may contain
+ *   inappropriate content.","request_id":"..."}
+ *
+ * Matching on the human-readable phrase (rather than the HTTP code
+ * alone) keeps the fallback narrow: a 400 for a malformed request,
+ * an over-context error, or anything else stays on the original
+ * model's error path and lets the loop's failure counter handle it.
+ */
+const CONTENT_FILTER_SENTINEL =
+  'Input text data may contain inappropriate content';
+
+/**
+ * Uncensored fallback model. The default wiki slot
+ * (deepseek-v4-flash, see AGENT_MODELS in src/lib/models/index.ts)
+ * has a strict input classifier that rejects bodies it doesn't like
+ * even before the model gets a chance to read them - on a wiki run
+ * that means the autonomous agent can't process the conversation no
+ * matter how many retries we throw at it. arcee-trinity-large-thinking
+ * does not run that classifier, so a single retry against it
+ * unblocks the conversation. We retry exactly once: if the fallback
+ * also fails, the failure path records it and the loop's counter
+ * eventually advances the pointer.
+ */
+const CONTENT_FILTER_FALLBACK_MODEL = 'arcee-trinity-large-thinking';
+
+/**
+ * True when an error looks like Venice's content-classifier rejection.
+ * Exported for test coverage so the sentinel can be exercised
+ * without needing a real VeniceError instance.
+ */
+export function isContentFilterRejection(err: unknown): boolean {
+  if (err == null) return false;
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes(CONTENT_FILTER_SENTINEL);
+}
+
 function messageToVenice(m: Message): VeniceMessage {
   if (m.role === 'tool') {
     return {
@@ -183,12 +223,14 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
       };
     }
 
+    let slice: Message[];
+    let convo: VeniceMessage[];
     try {
       const allMessages = await this.supabase.listMessages(req.input.threadId);
       const terminalIdx = allMessages.findIndex(
         (m) => m.id === req.input.terminalMsgId
       );
-      const slice =
+      slice =
         terminalIdx >= 0 ? allMessages.slice(0, terminalIdx + 1) : allMessages;
 
       if (slice.length === 0) {
@@ -201,31 +243,103 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
         };
       }
 
-      const convo: VeniceMessage[] = slice.map(messageToVenice);
+      convo = slice.map(messageToVenice);
       convo.push({
         role: 'user',
         content: buildWikiAutonomousPrompt({
           userProfile: this.userProfile,
         }),
       });
+    } catch (err) {
+      // History fetch / prompt build failed before any Venice call.
+      // No fallback applies; surface as a normal agent error.
+      return {
+        output: { finalText: '', inputMessageCount: 0 },
+        toolCalls: 0,
+        stoppedReason: 'error',
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
 
+    // Two-shot model attempt. The fallback only triggers when the
+    // primary fails with the content-classifier sentinel; any other
+    // error (network blip, 500, parse failure) returns as-is so the
+    // loop's failure counter handles it. A single retry is enough -
+    // if the uncensored model also fails, we genuinely can't process
+    // this conversation and the loop should advance.
+    const primary = await this.runOnce({
+      modelId: this.model,
+      convo,
+      slice,
+      signal,
+      req,
+    });
+    if (primary.kind === 'ok') return primary.result;
+    if (
+      !isContentFilterRejection(primary.error) ||
+      this.model === CONTENT_FILTER_FALLBACK_MODEL
+    ) {
+      return primary.errorResult;
+    }
+
+    log.warn(
+      `content-classifier rejection on thread ${req.input.threadId}; ` +
+        `retrying with ${CONTENT_FILTER_FALLBACK_MODEL}`
+    );
+    const fallback = await this.runOnce({
+      modelId: CONTENT_FILTER_FALLBACK_MODEL,
+      convo,
+      slice,
+      signal,
+      req,
+    });
+    if (fallback.kind === 'ok') {
       log.info(
-        `asking model about thread ${req.input.threadId} ` +
-          `(${slice.length} messages)`
+        `fallback ${CONTENT_FILTER_FALLBACK_MODEL} cleared content-filter ` +
+          `rejection on thread ${req.input.threadId}`
       );
+      return fallback.result;
+    }
+    return fallback.errorResult;
+  }
 
+  /**
+   * Run a single Venice tool loop against the given model id and
+   * return either a success result or the error wrapped alongside the
+   * AgentRunResult the caller would surface unchanged. Factored out
+   * of `run()` so the primary + fallback paths share the exact same
+   * tool-loop invocation; the only thing that varies is the model
+   * id. Returns a discriminated union rather than throwing so the
+   * caller can decide whether the failure mode warrants the
+   * fallback retry without a second try/catch.
+   */
+  private async runOnce(args: {
+    modelId: string;
+    convo: VeniceMessage[];
+    slice: Message[];
+    signal: AbortSignal;
+    req: AgentRunRequest<WikiInput>;
+  }): Promise<
+    | { kind: 'ok'; result: AgentRunResult<WikiOutput> }
+    | { kind: 'error'; error: unknown; errorResult: AgentRunResult<WikiOutput> }
+  > {
+    log.info(
+      `asking ${args.modelId} about thread ${args.req.input.threadId} ` +
+        `(${args.slice.length} messages)`
+    );
+    try {
       const result = await runHeadlessToolLoop({
         venice: this.venice,
-        model: this.model,
-        messages: convo,
+        model: args.modelId,
+        messages: args.convo,
         toolbox: this.toolbox,
         toolCtx: {
           supabase: this.supabase,
           venice: this.venice,
-          userId: req.userId,
-          threadId: req.input.threadId,
+          userId: args.req.userId,
+          threadId: args.req.input.threadId,
         },
-        signal,
+        signal: args.signal,
         // Bumped from 'low' to 'medium' after production traffic
         // showed the agent surface-pattern-matching its way through
         // conversations - extracting every named entity into a
@@ -238,21 +352,27 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
         // user already directing the change.
         reasoningEffort: 'medium',
       });
-
       return {
-        output: {
-          finalText: result.finalText,
-          inputMessageCount: slice.length,
+        kind: 'ok',
+        result: {
+          output: {
+            finalText: result.finalText,
+            inputMessageCount: args.slice.length,
+          },
+          toolCalls: result.toolCalls,
+          stoppedReason: args.signal.aborted ? 'aborted' : 'done',
         },
-        toolCalls: result.toolCalls,
-        stoppedReason: signal.aborted ? 'aborted' : 'done',
       };
     } catch (err) {
       return {
-        output: { finalText: '', inputMessageCount: 0 },
-        toolCalls: 0,
-        stoppedReason: 'error',
-        error: err instanceof Error ? err.message : String(err),
+        kind: 'error',
+        error: err,
+        errorResult: {
+          output: { finalText: '', inputMessageCount: 0 },
+          toolCalls: 0,
+          stoppedReason: 'error',
+          error: err instanceof Error ? err.message : String(err),
+        },
       };
     }
   }

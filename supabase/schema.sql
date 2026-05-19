@@ -5220,7 +5220,17 @@ alter table public.threads
   -- the panel naturally drains as the user edits the offending
   -- conversations.
   add column if not exists wiki_last_skip_at timestamptz,
-  add column if not exists wiki_last_skip_reason text;
+  add column if not exists wiki_last_skip_reason text,
+  -- True when the per-thread skip was stamped after the agent already
+  -- attempted the uncensored fallback model (currently
+  -- arcee-trinity-large-thinking, see agent.ts). The eligibility
+  -- predicate uses this to decide whether a content-classifier skip
+  -- is worth re-eligibilising: rows whose skip happened BEFORE the
+  -- fallback existed (or before the fallback got a turn) carry the
+  -- default `false` and re-enter the queue automatically, so legacy
+  -- skips recover without a manual reset. Cleared on the next
+  -- successful run alongside the rest of the per-thread state.
+  add column if not exists wiki_skip_fallback_attempted boolean not null default false;
 
 -- Claim the next thread eligible for wiki processing. Two notable
 -- shape choices:
@@ -5290,7 +5300,25 @@ language sql security invoker as $$
          limit 1
       ) newest
      where t.user_id = auth.uid()
-       and term.msg_id is distinct from t.last_wiki_processed_msg_id
+       and (
+         -- Either there's new work past the pointer, OR the thread
+         -- was previously skipped by the content classifier and the
+         -- fallback model hasn't been tried yet against this terminal
+         -- message. The OR clause is what lets legacy skips - rows
+         -- the worker gave up on before the uncensored-fallback retry
+         -- path existed - re-enter the queue automatically. The
+         -- success path clears both the skip reason and the
+         -- fallback-attempted flag together, so a thread can't loop
+         -- through this OR clause indefinitely: at most one re-entry,
+         -- after which either the agent processed it (skip marker
+         -- cleared) or the fallback failed too (flag stamped true).
+         term.msg_id is distinct from t.last_wiki_processed_msg_id
+         or (
+           t.wiki_last_skip_reason is not null
+           and t.wiki_last_skip_reason ilike '%inappropriate content%'
+           and not t.wiki_skip_fallback_attempted
+         )
+       )
        and (t.wiki_claim_expires_at is null
             or t.wiki_claim_expires_at < now())
        and (
@@ -5345,7 +5373,12 @@ begin
          -- user edited the conversation so the agent could process
          -- it). Clear the marker so the Skipped panel drains.
          wiki_last_skip_at = null,
-         wiki_last_skip_reason = null
+         wiki_last_skip_reason = null,
+         -- Reset the fallback flag too: a successful run means the
+         -- next skip (if any) starts a fresh recovery budget. Without
+         -- this, a thread that succeeded once and then later failed
+         -- with content-filter would never get the fallback retry.
+         wiki_skip_fallback_attempted = false
    where id = p_thread_id
      and user_id = auth.uid()
      and wiki_claim_holder = p_holder_id
@@ -5413,7 +5446,20 @@ begin
            -- error body is a large HTTP response. The UI shows enough
            -- to identify the failure mode (Venice's classifier message
            -- is short); a longer body would just bloat the row store.
-           wiki_last_skip_reason = nullif(left(coalesce(p_reason, ''), 500), '')
+           wiki_last_skip_reason = nullif(left(coalesce(p_reason, ''), 500), ''),
+           -- If the agent gave up with a content-classifier reason,
+           -- we know the in-agent primary -> fallback retry already
+           -- ran (the wiki agent always tries the fallback for that
+           -- sentinel). Stamp the flag so the eligibility predicate
+           -- stops re-eligibilising this thread. Non-content-filter
+           -- skips leave the flag at its existing value; the predicate
+           -- only consults it alongside the content-filter reason
+           -- match, so the value doesn't affect them.
+           wiki_skip_fallback_attempted = case
+             when p_reason ilike '%inappropriate content%'
+               then true
+             else wiki_skip_fallback_attempted
+           end
      where id = p_thread_id;
     return 'skipped';
   end if;
@@ -5852,7 +5898,8 @@ begin
          wiki_claim_expires_at = null,
          wiki_failure_count = 0,
          wiki_last_skip_at = null,
-         wiki_last_skip_reason = null
+         wiki_last_skip_reason = null,
+         wiki_skip_fallback_attempted = false
    where user_id = v_user;
 end $$;
 

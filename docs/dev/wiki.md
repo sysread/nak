@@ -387,6 +387,16 @@ Docs:
   (`WikiSkippedPanel.svelte`) so the user can see which
   conversations the agent gave up on. Cleared on the next
   successful run; the panel naturally drains.
+- `wiki_skip_fallback_attempted boolean not null default false`
+  - true when the per-thread skip was stamped after the agent
+  already retried with the uncensored fallback model
+  (`arcee-trinity-large-thinking` per
+  `CONTENT_FILTER_FALLBACK_MODEL` in `agent.ts`). The eligibility
+  predicate's OR clause uses this to re-eligibilise legacy
+  content-classifier skips (rows skipped before the fallback path
+  existed) without looping forever on threads where the fallback
+  also failed. Reset to false by the success path so a future
+  skip on the same thread starts a fresh recovery budget.
 
 These are independent of the memory-reflection
 (`last_reflected_msg_id`) and journal
@@ -416,6 +426,20 @@ concurrently against the same thread.
 
 Same depth guard (>= 2 user messages) and `for update of t
 skip locked` fairness as the journal RPC.
+
+The "new work past the pointer" predicate is actually an OR:
+either `term.msg_id is distinct from t.last_wiki_processed_msg_id`
+(normal case) or the thread carries a content-classifier skip
+that the uncensored fallback hasn't tried yet
+(`wiki_last_skip_reason ilike '%inappropriate content%' AND NOT
+wiki_skip_fallback_attempted`). The OR clause is what
+re-eligibilises legacy skips - rows the worker gave up on before
+the fallback-model retry path existed. After the agent makes its
+attempt (success or failure), one of the two state transitions
+clears the OR clause: success nulls the skip reason and resets
+the flag; failure-cap-reached stamps the flag to true alongside
+re-stamping the reason. Either way, the same thread doesn't
+re-trip the OR clause without intervening edits.
 
 ## Contracts
 
@@ -455,6 +479,24 @@ and moves on; the user sees the skip in the Wiki tab's Skipped
 panel and can edit the conversation if they want the agent to
 try again (editing changes the terminal message id, which the
 eligibility predicate keys off of).
+
+**Content-classifier fallback (in `agent.ts`).** Before the
+worker-level failure counter ever increments for a
+classifier rejection, `WikiAgent.run()` itself retries the
+tool loop against `CONTENT_FILTER_FALLBACK_MODEL` (currently
+`arcee-trinity-large-thinking`, which does not run the same
+classifier). Only the content-filter sentinel triggers the
+retry; other errors propagate immediately. On a successful
+fallback run the agent returns `stoppedReason='done'` and the
+worker's mark path clears any prior skip marker. If the
+fallback also fails, the agent returns `stoppedReason='error'`
+and the failure counter takes over - and when the counter
+eventually advances the pointer, `record_wiki_failure_or_skip`
+stamps `wiki_skip_fallback_attempted=true` for a
+classifier-shaped reason so the eligibility predicate's OR
+clause can't loop the same thread back into the queue. Legacy
+skips (rows skipped before the fallback existed) carry the
+default `false` and re-enter automatically.
 
 This differs from the journal flow, which uses an atomic
 `upsert_journal_entry_and_mark_thread` RPC because the entry
