@@ -370,6 +370,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* Explicit left-align rather than relying on inherited default.
+       Without this the italicised (untagged) row was rendering
+       centered in the flex slot - the bare label looked out of step
+       with the left-aligned real-topic rows above and below it. */
+    text-align: left;
   }
   /* The (untagged) sentinel renders with muted styling so it reads
      as a meta-option distinct from the real topic list. */
