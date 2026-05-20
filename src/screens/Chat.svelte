@@ -17,10 +17,10 @@
    * Streaming lifecycle:
    *   1. User clicks send → insert user message row → clear composer.
    *   2. Kick off `app.venice.streamChat` with an AbortController.
-   *      Deltas append into `streamingText`, which renders as an
+   *      Deltas append into `exchange.streamingText`, which renders as an
    *      "assistant" bubble below the persisted messages.
    *   3. When the stream completes: insert an assistant message row,
-   *      clear streamingText, refresh the thread list so the sidebar
+   *      clear exchange.streamingText, refresh the thread list so the sidebar
    *      ordering reflects updated_at.
    *   4. Conversation titles are named by the model itself via the
    *      always-on `update_title` tool (see src/lib/tools/update_title.ts).
@@ -59,6 +59,7 @@
     type SamskaraSubstrateDiagnosticRow,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
+  import { ExchangeSlot } from '$lib/exchange/exchange-slot.svelte';
   import { isRecoveryMessage } from '$lib/conversation-recovery';
   import {
     saveDraft,
@@ -575,49 +576,25 @@
    * runtime has elapsed and the rows are pruned from `messages`.
    */
   let fadeOutDelays = $state<Record<string, number>>({});
-  let streamingText = $state('');
-  // Live companion to streamingText during a turn. `streamingReasoning`
-  // is the running buffer of `delta.reasoning_content` chunks for the
-  // current round; reset when the assistant row persists and a new
-  // round begins.
-  //
-  // `streamingReasoningOpen` drives the slide-open state of the live
-  // reasoning panel. We flip it on the first reasoning delta, then —
-  // once the visible answer starts flowing — schedule a timer to
-  // animate it shut. Value persists across the transition so the
-  // intermediate "still streaming content with reasoning tucked away"
-  // state has somewhere to sit.
-  //
-  // Citations are NOT mirrored into a streaming buffer: Venice ships
-  // them in the first chunk, but rendering an open citations panel
-  // mid-stream pushes the bubble's bottom edge down by the height of
-  // the source list, and follow-bottom scrolling then anchors to that
-  // edge - leaving reasoning streaming in above the viewport. Skip the
-  // live render entirely; the citations show up via AssistantBody
-  // (collapsed by default, toggle in the action bar) the instant the
-  // message persists.
-  let streamingReasoning = $state('');
-  let streamingReasoningOpen = $state(false);
-  // Rate-limit waiting state. Populated by the chat-loop's
-  // onRateLimitWait handler when Venice returns 429 and the loop is
-  // about to sleep before retrying; cleared by onRateLimitResolved
-  // when the wait ends (whether the next attempt succeeds or fails).
-  // The streaming bubble renders a "waiting on Venice" clock-icon
-  // indicator while these are non-null. The user's existing stop
-  // button (stopStreaming -> abortCtl.abort) doubles as the cancel
-  // path; the chat-loop maps an abort-during-wait to an AbortError
-  // that lands in the same INTERRUPTED_MARKER branch as a mid-stream
-  // cancel, so no separate cancel wiring is needed here.
-  let rateLimitWaitUntil = $state<number | null>(null);
-  let rateLimitAttempt = $state(0);
+
+  /**
+   * The in-flight chat-turn state lives on this slot. See
+   * `src/lib/exchange/exchange-slot.svelte.ts` for the field-by-field
+   * lifecycle docs. The screen reads slot fields directly (template
+   * bindings, $derived expressions) and the runExchange function
+   * writes them. Single instance for now; Phase 2 of the per-thread
+   * refactor introduces a `Map<threadId, ExchangeSlot>` and the
+   * screen-level accessor picks the right slot for the active thread.
+   */
+  const exchange = new ExchangeSlot();
   // Tick counter that drives a 1Hz reactive re-read of Date.now() while
   // a rate-limit wait is active, so the bubble's countdown updates each
   // second without rebinding the assistant render. The interval is
-  // kept inside an $effect tied to rateLimitWaitUntil so it self-cleans
-  // when the wait ends.
+  // kept inside an $effect tied to the slot's rate-limit wait field so
+  // it self-cleans when the wait ends.
   let rateLimitNowTick = $state(0);
   $effect(() => {
-    if (rateLimitWaitUntil === null) return;
+    if (exchange.rateLimitWaitUntil === null) return;
     const id = window.setInterval(() => {
       rateLimitNowTick = rateLimitNowTick + 1;
     }, 1000);
@@ -629,38 +606,10 @@
   // template can guard the "resuming in Ns" suffix on a positive
   // value rather than null-checking a separate variable.
   const rateLimitRemainingSec = $derived.by(() => {
-    if (rateLimitWaitUntil === null) return 0;
+    if (exchange.rateLimitWaitUntil === null) return 0;
     void rateLimitNowTick;
-    return Math.max(0, Math.ceil((rateLimitWaitUntil - Date.now()) / 1000));
+    return Math.max(0, Math.ceil((exchange.rateLimitWaitUntil - Date.now()) / 1000));
   });
-  // Inline error surface for chat exchange failures. Rendered as a
-  // prominent red bubble at the bottom of the transcript - inside
-  // `.messages` - so it travels with the conversation flow and
-  // stays visible regardless of what the composer / keyboard are
-  // doing. This is the canonical place for send-path errors; the
-  // `error` banner above the composer is reserved for non-exchange
-  // problems (attachment upload, thread rename, pre-send guards)
-  // that don't have a transcript anchor. On a rate-limit, an
-  // optional `retry` closure is attached and the bubble renders a
-  // refresh button alongside the dismiss X. Cleared at the start
-  // of every new send.
-  interface StreamingError {
-    text: string;
-    retry?: () => void;
-  }
-  let streamingError = $state<StreamingError | null>(null);
-  // Timer id for the delayed-close on first content arrival. Separated
-  // from the text-flush timer because they have different lifetimes —
-  // the close fires once per round, the flush fires on every delta.
-  let reasoningCloseTimer = 0;
-  // Sticky flag: flipped on the first content delta of a round and
-  // NOT reset until that round ends (assistant persisted / stream
-  // errored). Prevents `onReasoningUpdate` from re-opening the panel
-  // after the auto-close timer has already fired — some reasoning
-  // models interleave a late thought or two after the first visible
-  // sentence, and the panel jumping back open on that reads as a
-  // misfire rather than a feature.
-  let streamingContentStarted = false;
 
   // Drawer state: four separate buckets.
   //   drafts         — local-only threads the user has started but not
@@ -910,18 +859,11 @@
   let longPressTimer: ReturnType<typeof setTimeout> | null = null;
   let suppressNextClick = false;
 
-  /**
-   * In-memory latency tracking for tool calls in the current session.
-   * Populated by the chat-loop's onToolStart / onToolDone / onToolError
-   * handlers and read by the ToolCalls component. Wiped on navigation
-   * (fresh thread selection clears this) because "how long did this
-   * take when it originally ran?" isn't a question we bother to
-   * persist — reopened conversations show only the final status
-   * glyph and hide the pill.
-   */
-  let toolTimings = $state<Record<string, { startedAt: number; endedAt?: number; error?: boolean }>>(
-    {}
-  );
+  // Tool timings live on `exchange.toolTimings`. Wiped on navigation
+  // (fresh thread selection clears this) because "how long did this
+  // take when it originally ran?" isn't a question we bother to
+  // persist - reopened conversations show only the final status glyph
+  // and hide the pill.
   /**
    * Live monotonic clock, driven by rAF while any tool is in flight and
    * frozen when everything is idle. Drives the live-duration pill in
@@ -930,7 +872,7 @@
    */
   let nowMs = $state<number>(typeof performance !== 'undefined' ? performance.now() : 0);
   $effect(() => {
-    const pending = Object.values(toolTimings).some((t) => t.endedAt === undefined);
+    const pending = Object.values(exchange.toolTimings).some((t) => t.endedAt === undefined);
     if (!pending) return;
     let raf = 0;
     const tick = (): void => {
@@ -942,7 +884,6 @@
   });
   let composer = $state('');
   let composerEl: HTMLTextAreaElement | undefined = $state();
-  let sending = $state(false);
   // Finalize any tool timings that never got an endedAt when the
   // session stops streaming. A clean run sets endedAt via onToolDone /
   // onToolError, but a stream that dies mid-tool (network drop, abort,
@@ -950,21 +891,21 @@
   // which statusFor() reads as "still in flight" and keeps the spinner
   // animating indefinitely. Marking them errored on the sending->idle
   // edge converts orphaned spinners into red-X glyphs and also prevents
-  // a later same-session send from reviving the animation when sending
-  // flips back to true.
+  // a later same-session send from reviving the animation when the slot's
+  // sending flag flips back to true.
   let sendingWasTrue = false;
   $effect(() => {
-    if (sending) {
+    if (exchange.sending) {
       sendingWasTrue = true;
       return;
     }
     if (!sendingWasTrue) return;
     sendingWasTrue = false;
     const now = performance.now();
-    for (const id of Object.keys(toolTimings)) {
-      const t = toolTimings[id];
+    for (const id of Object.keys(exchange.toolTimings)) {
+      const t = exchange.toolTimings[id];
       if (t.endedAt === undefined) {
-        toolTimings[id] = { ...t, endedAt: now, error: true };
+        exchange.toolTimings[id] = { ...t, endedAt: now, error: true };
       }
     }
   });
@@ -975,13 +916,12 @@
   // earlier retry closure; the banner only ever owns one.
   type ChatError = { text: string; retry?: () => void };
   let error = $state<ChatError | null>(null);
-  // Reactive because the send button's disabled state reads it: while
-  // `sending` is true, the button acts as a stop button and needs to
-  // latch to disabled for the brief window after abort() fires but
-  // before the runExchange finally block nulls the controller. Without
-  // $state, the template wouldn't re-render when abortCtl flips back
-  // to null and the button would stay on its last frame.
-  let abortCtl = $state<AbortController | null>(null);
+  // abortCtl lives on the slot. The send button's disabled state reads
+  // `exchange.abortCtl` directly: while `exchange.sending` is true, the
+  // button acts as a stop button and needs to latch to disabled for the
+  // brief window after abort() fires but before runExchange's finally
+  // block nulls the controller. Slot fields are reactive, so the
+  // template re-renders correctly when it flips back to null.
 
   // Screen wake lock held for the duration of an active streaming round.
   // Prevents Chrome on Android from freezing the tab while the LLM
@@ -1013,9 +953,9 @@
   // The browser releases any held wake lock when the page hides; without
   // this effect, returning to the tab mid-stream would leave the lock gone.
   $effect(() => {
-    if (!sending) return;
+    if (!exchange.sending) return;
     const handleVisibility = (): void => {
-      if (document.visibilityState === 'visible' && sending && !activeLock) {
+      if (document.visibilityState === 'visible' && exchange.sending && !activeLock) {
         void acquireWakeLock();
       }
     };
@@ -1858,7 +1798,7 @@
     cohortSubstrate = [];
     cohortClusterMap = new Map();
     expandedCohortPanels = new Set();
-    streamingText = '';
+    exchange.streamingText = '';
     interruptedDraft = null;
     // Re-seed the active prompt set from defaults whenever the user
     // switches threads - per-thread toggles are not persisted, so a
@@ -1874,7 +1814,7 @@
     // Tool-call timings are a session-scoped display aid; nav to another
     // thread drops them so the previous thread's pills don't leak into
     // the new one.
-    toolTimings = {};
+    exchange.toolTimings = {};
     // On mobile the drawer is modal, so dismiss it once a thread is chosen.
     // On desktop the sidebar is a persistent column - leave it open.
     if (id !== null) closeDrawerOnMobile();
@@ -2369,8 +2309,8 @@
       return;
     }
 
-    // Claim the sending flag synchronously, before any await. The button
-    // and keyboard handler already short-circuit on `sending`, but they
+    // Claim the exchange.sending flag synchronously, before any await. The button
+    // and keyboard handler already short-circuit on `exchange.sending`, but they
     // read it from outside this function - a second invocation that
     // sneaks in while the first is awaiting createThread / materializeIfDraft
     // (200ms+ network round-trip on the draft-materialization path)
@@ -2384,8 +2324,8 @@
     // race on each row. Owning the flag synchronously here closes the
     // window; the existing pre-exchange error paths still clear it on
     // their way out, and runExchange takes over the flag once we reach it.
-    if (sending) return;
-    sending = true;
+    if (exchange.sending) return;
+    exchange.sending = true;
 
     let threadId: string;
     if (!active) {
@@ -2481,15 +2421,15 @@
       // Surface on the inline bubble so the failure shows up in the
       // transcript where the user expected their message to land.
       log.error('send failed before exchange', err);
-      streamingError = { text: describeError(err) };
-      sending = false;
+      exchange.streamingError = { text: describeError(err) };
+      exchange.sending = false;
       return;
     }
 
     const freshThread = findThread(threadId);
     if (!freshThread) {
       error = { text: 'Thread disappeared before send.' };
-      sending = false;
+      exchange.sending = false;
       return;
     }
     const currentUserId = session?.user.id ?? freshThread.user_id;
@@ -2566,7 +2506,7 @@
 
   /**
    * Run (or re-run) a single chat-loop exchange against the current
-   * thread. Owns the `sending` flag, the abort controller, the text
+   * thread. Owns the `exchange.sending` flag, the abort controller, the text
    * flush throttle, and the error banner's retry wiring — so both the
    * initial send path and the rate-limit refresh button share identical
    * lifecycle handling.
@@ -2593,14 +2533,20 @@
       error = { text: 'Thread disappeared before send.' };
       return;
     }
+    // Timer id for the delayed-close on first content arrival. Local
+    // to one exchange's lifetime - the handlers below close over it
+    // and the outer finally clears it. Separated from the text-flush
+    // timer because they have different lifetimes: the close fires
+    // once per round, the flush fires on every delta.
+    let reasoningCloseTimer = 0;
     error = null;
-    streamingError = null;
+    exchange.streamingError = null;
     // Clear any orphaned-draft recovery banner at the start of a new
     // exchange so the retry button doesn't persist alongside the new stream.
     interruptedDraft = null;
-    sending = true;
-    streamingText = '';
-    abortCtl = new AbortController();
+    exchange.sending = true;
+    exchange.streamingText = '';
+    exchange.abortCtl = new AbortController();
 
     // Rebuild at call time so a retry after mid-exchange persists
     // (assistant row + tool result from a prior round) sees them.
@@ -2645,7 +2591,7 @@
       return null;
     };
 
-    // Throttle streamingText updates to ~2Hz while the response
+    // Throttle exchange.streamingText updates to ~2Hz while the response
     // arrives. Every assignment drives <Markdown> to re-run marked
     // + DOMPurify + highlight.js over the full growing buffer, so
     // flushing on each SSE delta would peg the main thread and make
@@ -2661,13 +2607,13 @@
     const flushPending = (): void => {
       flushTimer = 0;
       if (pending !== null) {
-        streamingText = pending;
+        exchange.streamingText = pending;
         pending = null;
       }
       // Piggyback the IDB draft flush on every display flush (~500ms).
       // Best-effort: a write failure is swallowed so a broken IDB never
       // stalls the visible render path.
-      void updateDraftText(ctx.threadId, streamingText, streamingReasoning).catch(() => {});
+      void updateDraftText(ctx.threadId, exchange.streamingText, exchange.streamingReasoning).catch(() => {});
     };
     const cancelPending = (): void => {
       if (flushTimer !== 0) {
@@ -2707,7 +2653,7 @@
     try {
       let loopResult;
       // Auto-retry once on Venice 429 ("model is busy / overloaded").
-      // The retry runs inside this inner try so `sending` stays
+      // The retry runs inside this inner try so `exchange.sending` stays
       // asserted across the brief delay - the composer doesn't
       // re-enable mid-retry, no error banner appears, and the user
       // just sees a slightly longer pause. Only when the second
@@ -2741,7 +2687,7 @@
           userId: ctx.currentUserId,
           modelId: ctx.modelId,
           history: buildHistoryOnWire(),
-          signal: abortCtl!.signal,
+          signal: exchange.abortCtl!.signal,
           userMessageId: ctx.userMessageId,
           reasoningEffort: ctx.sendReasoning,
           disableThinking: ctx.sendDisableThinking,
@@ -2772,44 +2718,44 @@
               // snap close. 600ms is long enough to read as a
               // deliberate hand-off; shorter and it feels like the
               // panel is running from the content rather than
-              // yielding to it. Guarded on streamingContentStarted
+              // yielding to it. Guarded on exchange.streamingContentStarted
               // so only the first text delta schedules it.
-              if (!streamingContentStarted) {
-                streamingContentStarted = true;
-                if (streamingReasoningOpen && streamingReasoning.length > 0) {
+              if (!exchange.streamingContentStarted) {
+                exchange.streamingContentStarted = true;
+                if (exchange.streamingReasoningOpen && exchange.streamingReasoning.length > 0) {
                   reasoningCloseTimer = window.setTimeout(() => {
-                    streamingReasoningOpen = false;
+                    exchange.streamingReasoningOpen = false;
                     reasoningCloseTimer = 0;
                   }, 600);
                 }
               }
             },
             onReasoningUpdate: (t) => {
-              streamingReasoning = t;
+              exchange.streamingReasoning = t;
               // Panel opens on the first reasoning delta so the user
               // watches the thinking stream in. Only before content
               // has started — once the answer is flowing, late
               // reasoning shouldn't pop the panel back open.
-              if (!streamingReasoningOpen && !streamingContentStarted) {
-                streamingReasoningOpen = true;
+              if (!exchange.streamingReasoningOpen && !exchange.streamingContentStarted) {
+                exchange.streamingReasoningOpen = true;
               }
             },
             onAssistantPersisted: (msg) => {
               // Cancel any pending frame — the persisted row takes
               // over rendering and we don't want a stale flush to
-              // replay the text into streamingText after this.
+              // replay the text into exchange.streamingText after this.
               cancelPending();
               pending = null;
               appendMessage(msg);
-              streamingText = '';
+              exchange.streamingText = '';
               // Streaming companions reset per round so the NEXT
               // round starts with a clean slate. The persisted row
               // already carries reasoning for the round just finished,
               // so the UI keeps rendering it via the message store
               // rather than the streaming state.
-              streamingReasoning = '';
-              streamingReasoningOpen = false;
-              streamingContentStarted = false;
+              exchange.streamingReasoning = '';
+              exchange.streamingReasoningOpen = false;
+              exchange.streamingContentStarted = false;
               if (reasoningCloseTimer !== 0) {
                 window.clearTimeout(reasoningCloseTimer);
                 reasoningCloseTimer = 0;
@@ -2823,14 +2769,14 @@
               // elapsed math is monotonic — the user's clock jumping
               // (NTP sync, daylight saving) can't produce negative
               // durations.
-              toolTimings[call.id] = { startedAt: performance.now() };
+              exchange.toolTimings[call.id] = { startedAt: performance.now() };
             },
             onToolDone: (call) => {
-              const t = toolTimings[call.id];
+              const t = exchange.toolTimings[call.id];
               if (t) t.endedAt = performance.now();
             },
             onToolError: (call) => {
-              const t = toolTimings[call.id];
+              const t = exchange.toolTimings[call.id];
               if (t) {
                 t.endedAt = performance.now();
                 t.error = true;
@@ -2898,8 +2844,8 @@
               // gone quiet for a few seconds. The stop button keeps
               // working - it aborts the wait and lands in the same
               // INTERRUPTED_MARKER branch a mid-stream cancel takes.
-              rateLimitWaitUntil = until;
-              rateLimitAttempt = attempt;
+              exchange.rateLimitWaitUntil = until;
+              exchange.rateLimitAttempt = attempt;
             },
             onRateLimitResolved: () => {
               // Sleep ended (or was cancelled). Clear the indicator
@@ -2907,8 +2853,8 @@
               // spinner while the next attempt fires. If the retry
               // immediately rate-limits again, onRateLimitWait will
               // re-populate these for the next wait window.
-              rateLimitWaitUntil = null;
-              rateLimitAttempt = 0;
+              exchange.rateLimitWaitUntil = null;
+              exchange.rateLimitAttempt = 0;
             },
           },
         });
@@ -2928,7 +2874,7 @@
         // sees the final state.
         cancelPending();
         if (pending !== null) {
-          streamingText = pending;
+          exchange.streamingText = pending;
           pending = null;
         }
       }
@@ -2989,22 +2935,22 @@
       // device for the new context - no retry closure because the right
       // action is to navigate away and back once the other turn lands.
       if (loopResult.conflictDetected) {
-        streamingError = {
+        exchange.streamingError = {
           text: 'This conversation was updated on another device while a response was generating. The response was discarded - refresh this thread to see the latest.',
         };
       }
-      streamingText = '';
-      streamingReasoning = '';
-      streamingReasoningOpen = false;
-      streamingContentStarted = false;
+      exchange.streamingText = '';
+      exchange.streamingReasoning = '';
+      exchange.streamingReasoningOpen = false;
+      exchange.streamingContentStarted = false;
       // Belt-and-braces: the chat-loop's onRateLimitResolved already
       // clears the wait indicator at the end of every wait, but if a
       // round completes without firing it (e.g. a successful first
       // attempt) these stay at their initial values anyway. Resetting
       // here keeps the streaming state and the wait indicator on the
       // same lifecycle.
-      rateLimitWaitUntil = null;
-      rateLimitAttempt = 0;
+      exchange.rateLimitWaitUntil = null;
+      exchange.rateLimitAttempt = 0;
       // Surface the completion to the notifications service: either
       // fires an OS notification (tab backgrounded + permission granted)
       // or sets an unread dot on the sidebar row. Skip on user-initiated
@@ -3064,7 +3010,7 @@
       // per-tool catch) bubbled one up - treat it the same way:
       // the user asked for it, not a failure to report.
       const isAbort =
-        abortCtl?.signal.aborted === true ||
+        exchange.abortCtl?.signal.aborted === true ||
         (err instanceof Error && err.name === 'AbortError');
       if (!isAbort) {
         // Final-fallback diagnostic. Everything from the pre-stream
@@ -3076,16 +3022,16 @@
         // the stack survives.
         log.error('chat exchange failed', err);
       }
-      streamingText = '';
-      streamingReasoning = '';
-      streamingReasoningOpen = false;
-      streamingContentStarted = false;
+      exchange.streamingText = '';
+      exchange.streamingReasoning = '';
+      exchange.streamingReasoningOpen = false;
+      exchange.streamingContentStarted = false;
       // Same belt-and-braces reset as the success branch above - if
       // the loop blew up mid-wait the resolved handler still ran in
       // the chat-loop's finally, but if it failed before any wait
       // started these are already null and the assignment is a no-op.
-      rateLimitWaitUntil = null;
-      rateLimitAttempt = 0;
+      exchange.rateLimitWaitUntil = null;
+      exchange.rateLimitAttempt = 0;
       // Restore any rows the user had marked for regenerate-from-here.
       // Failure means no replacement landed (or the post-loop delete
       // itself blew up, in which case the old rows are still
@@ -3106,20 +3052,20 @@
       // for them and the bubble renders dismiss-only. Aborts don't
       // raise a banner at all - the stop was the intended outcome.
       if (isAbort) {
-        streamingError = null;
+        exchange.streamingError = null;
       } else if (err instanceof VeniceError && err.kind === 'rate_limit') {
-        streamingError = {
+        exchange.streamingError = {
           text: formatRateLimitMessage(err),
           retry: () => {
             void runExchange(ctx);
           },
         };
       } else {
-        streamingError = { text: describeError(err) };
+        exchange.streamingError = { text: describeError(err) };
       }
     } finally {
-      sending = false;
-      abortCtl = null;
+      exchange.sending = false;
+      exchange.abortCtl = null;
       releaseWakeLock();
       // Delete the streaming draft on any clean exit (success, conflict,
       // abort, or error). The draft's purpose is crash recovery; once
@@ -3174,7 +3120,7 @@
    * regenerateFrom.
    */
   async function retryInterrupted(): Promise<void> {
-    if (sending || !app.supabase || !app.venice || !interruptedDraft) return;
+    if (exchange.sending || !app.supabase || !app.venice || !interruptedDraft) return;
     const draft = interruptedDraft;
     interruptedDraft = null;
     // Delete the draft now so a subsequent crash doesn't loop the user
@@ -3221,7 +3167,7 @@
   }
 
   async function regenerateFrom(assistantMessageId: string): Promise<void> {
-    if (sending || !app.supabase || !app.venice) return;
+    if (exchange.sending || !app.supabase || !app.venice) return;
     const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
     if (!active || active.isDraft || active.archived) return;
     const clickedIdx = messages.findIndex((m) => m.id === assistantMessageId);
@@ -3316,7 +3262,7 @@
    * that continues the turn.
    */
   async function retryIncompleteTurn(): Promise<void> {
-    if (sending || !app.supabase || !app.venice) return;
+    if (exchange.sending || !app.supabase || !app.venice) return;
     const active = activeThreadId ? findThread(activeThreadId) ?? null : null;
     if (!active || active.isDraft || active.archived) return;
     // Walk back to the user message that opened this turn. Mirrors
@@ -3447,12 +3393,12 @@
   // instead of send - the button's dual mode (send <-> stop) is
   // mirrored by its keyboard shortcut, so users never end up firing
   // a new send while waiting for the current stream to clear. After
-  // the stream aborts (sending flips false), the next submit-modifier
+  // the stream aborts (exchange.sending flips false), the next submit-modifier
   // Enter fires the draft the user typed while waiting.
   function onKeydown(e: KeyboardEvent): void {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || e.shiftKey)) {
       e.preventDefault();
-      if (sending) {
+      if (exchange.sending) {
         stopStreaming();
       } else {
         void send();
@@ -3465,11 +3411,11 @@
    * which propagates through runChatLoop (where the stream consumer's
    * abort-aware branch persists partial text / reasoning with a marker)
    * and through any in-flight tool fetches (via childController). Safe
-   * to call repeatedly - once `abortCtl` is nulled in runExchange's
+   * to call repeatedly - once `exchange.abortCtl` is nulled in runExchange's
    * finally block this is a no-op.
    */
   function stopStreaming(): void {
-    abortCtl?.abort();
+    exchange.abortCtl?.abort();
   }
 
   // Platform-aware hint in the composer placeholder. Uses the modern
@@ -3555,7 +3501,7 @@
   // clamp. A clamp happens when the scroll container shrinks under a
   // user who had scrolled away from the bottom: the streaming bubble
   // collapses (reasoning panel slides closed, text becomes the
-  // Scanner, then the whole bubble disappears when `sending` flips),
+  // Scanner, then the whole bubble disappears when `exchange.sending` flips),
   // scrollHeight drops, and the browser pins scrollTop to the new
   // max - which now satisfies `isNearBottom`. Without this guard the
   // resulting 'scroll' event would silently flip `followBottom` back
@@ -3738,12 +3684,12 @@
     // refreshFollowBottom guards against the mobile case where the
     // user dragged up without a 'scroll' event firing in time.
     refreshFollowBottom();
-    if (sending && followBottom) scrollToBottom(false);
+    if (exchange.sending && followBottom) scrollToBottom(false);
   }
 
   function scheduleStreamScroll(): void {
     refreshFollowBottom();
-    if (!sending || !followBottom) {
+    if (!exchange.sending || !followBottom) {
       // Auto-scroll only runs while a completion is in progress and
       // scroll-lock isn't engaged. Drop any pending scrolls so a stale
       // timer doesn't yank the view after the user scrolls up or after
@@ -3784,7 +3730,7 @@
   // `messages` so non-message render blocks (e.g. the rename
   // indicator) also count as discrete mutations.
   //
-  // Gated on `sending` so a delayed realtime echo or cross-tab mutation
+  // Gated on `exchange.sending` so a delayed realtime echo or cross-tab mutation
   // arriving after the completion ends doesn't yank the view back to
   // the bottom. Thread-load lands on the bottom via the explicit
   // scrollToBottom in loadMessages, not via this effect.
@@ -3801,24 +3747,24 @@
     // followBottom can still read stale-true. Sampling scrollTop
     // here disengages the lock before the gate is read.
     refreshFollowBottom();
-    if (sending && followBottom) scrollToBottom(false);
+    if (exchange.sending && followBottom) scrollToBottom(false);
   });
 
   // Streaming deltas — debounced with a max-wait cap. Tracks both the
-  // answer buffer (`streamingText`) and the reasoning buffer
-  // (`streamingReasoning`) so the view follows the bottom of the
+  // answer buffer (`exchange.streamingText`) and the reasoning buffer
+  // (`exchange.streamingReasoning`) so the view follows the bottom of the
   // bubble while the thinking panel is growing, not just after the
-  // answer starts. Also tracks `streamingReasoningOpen`: the panel
+  // answer starts. Also tracks `exchange.streamingReasoningOpen`: the panel
   // opening or closing causes a vertical layout shift that should
   // scroll the view exactly the same way a token append would.
-  // `streamingText` toggling to '' at the end of a round also runs
+  // `exchange.streamingText` toggling to '' at the end of a round also runs
   // through here; the follow-up messages effect (assistant persisted)
   // will cancel the pending timer and do the final snap-to-bottom,
   // so we don't need a special "stream ended" signal.
   $effect(() => {
-    void streamingText;
-    void streamingReasoning;
-    void streamingReasoningOpen;
+    void exchange.streamingText;
+    void exchange.streamingReasoning;
+    void exchange.streamingReasoningOpen;
     const el = messagesEl;
     if (!el) return;
     hasOverflow = el.scrollHeight > el.clientHeight + 1;
@@ -4428,16 +4374,16 @@
    *     round never wrote anything (immediate failure, or refresh
    *     during the very first round before any persistence).
    *
-   * Suppressed while `sending` is true (a turn in progress has the
+   * Suppressed while `exchange.sending` is true (a turn in progress has the
    * same DB tail mid-exchange and we don't want the banner fighting
-   * the live streaming bubble), and while `streamingError` is set
+   * the live streaming bubble), and while `exchange.streamingError` is set
    * (its own banner already offers a retry where applicable, and
    * double-rendering two retry prompts for the same failure is
    * noisy).
    */
   const incompleteTurnTail = $derived.by<Message | null>(() => {
-    if (sending) return null;
-    if (streamingError) return null;
+    if (exchange.sending) return null;
+    if (exchange.streamingError) return null;
     if (messages.length === 0) return null;
     const last = messages[messages.length - 1];
     if (last.role === 'tool') return last;
@@ -5406,15 +5352,15 @@
                   model={block.assistant.model}
                   usage={block.assistant.usage}
                   createdAt={block.assistant.created_at}
-                  disabled={pendingDeleteSet.has(block.assistant.id) || sending}
+                  disabled={pendingDeleteSet.has(block.assistant.id) || exchange.sending}
                   onRegenerate={() => { void regenerateFrom(block.assistant.id); }}
                 >
                   <ToolCalls
                     calls={block.assistant.tool_calls ?? []}
                     resultsByCallId={block.resultsByCallId}
-                    timings={toolTimings}
+                    timings={exchange.toolTimings}
                     nowMs={nowMs}
-                    sending={sending}
+                    sending={exchange.sending}
                   />
                 </AssistantBody>
               </div>
@@ -5465,7 +5411,7 @@
                   model={block.message.model}
                   usage={block.message.usage}
                   createdAt={block.message.created_at}
-                  disabled={pendingDeleteSet.has(block.message.id) || sending}
+                  disabled={pendingDeleteSet.has(block.message.id) || exchange.sending}
                   onRegenerate={() => { void regenerateFrom(block.message.id); }}
                 />
               </div>
@@ -5547,7 +5493,7 @@
           {/each}
           {#if incompleteTurnTail}
             <!-- Post-refresh resume banner. The in-session rate-limit
-                 retry lives only on `streamingError.retry` and doesn't
+                 retry lives only on `exchange.streamingError.retry` and doesn't
                  survive a page reload, so when a user refreshes after
                  an overload-mid-turn failure the orphaned tool rows
                  sit at the tail with no way to continue the turn short
@@ -5565,7 +5511,7 @@
                   type="button"
                   class="secondary icon-btn msg-incomplete-retry"
                   onclick={() => { void retryIncompleteTurn(); }}
-                  disabled={sending}
+                  disabled={exchange.sending}
                   aria-label="Retry"
                   title="Retry"
                 >
@@ -5602,7 +5548,7 @@
                   type="button"
                   class="secondary icon-btn msg-incomplete-retry"
                   onclick={() => void retryInterrupted()}
-                  disabled={sending}
+                  disabled={exchange.sending}
                   aria-label="Retry interrupted response"
                   title="Retry"
                 >
@@ -5628,12 +5574,12 @@
               </div>
             </div>
           {/if}
-          {#if streamingError}
+          {#if exchange.streamingError}
             <!-- Canonical error surface for chat send-path failures.
                  Rendered in the transcript where the streaming output
                  was, so it follows the conversation flow regardless
                  of what the composer or keyboard are doing. Carries
-                 the retry button when `streamingError.retry` is set
+                 the retry button when `exchange.streamingError.retry` is set
                  (rate-limit errors, currently). The `.error-bar`
                  banner above the composer is reserved for non-
                  exchange errors (attachment upload, thread rename,
@@ -5643,13 +5589,13 @@
             <div class="msg assistant msg-error" role="alert">
               <div class="msg-error-body">
                 <span class="msg-error-icon" aria-hidden="true">!</span>
-                <div class="msg-error-text">{streamingError.text}</div>
-                {#if streamingError.retry}
+                <div class="msg-error-text">{exchange.streamingError.text}</div>
+                {#if exchange.streamingError.retry}
                   <button
                     type="button"
                     class="secondary icon-btn msg-error-retry"
-                    onclick={streamingError.retry}
-                    disabled={sending}
+                    onclick={exchange.streamingError.retry}
+                    disabled={exchange.sending}
                     aria-label="Retry"
                     title="Retry"
                   >
@@ -5667,14 +5613,14 @@
                 <button
                   type="button"
                   class="secondary icon-btn msg-error-dismiss"
-                  onclick={() => { streamingError = null; }}
+                  onclick={() => { exchange.streamingError = null; }}
                   aria-label="Dismiss error"
                   title="Dismiss"
                 >×</button>
               </div>
             </div>
           {/if}
-          <!-- Streaming bubble visibility is gated on `sending` alone -
+          <!-- Streaming bubble visibility is gated on `exchange.sending` alone -
                the master flag for "chat loop is running". This
                guarantees the KITT Scanner inside stays on screen for
                the ENTIRE response cycle: from the moment the user hits
@@ -5683,7 +5629,7 @@
                execute, next round opens, text streams in again), and
                only winks out when the chat loop finally closes after
                the terminal round's `data: [DONE]`. Earlier shapes
-               OR'd in `streamingText || streamingReasoning` defensively;
+               OR'd in `exchange.streamingText || exchange.streamingReasoning` defensively;
                that read as "is there content" rather than "is the
                turn alive" and made the bubble's lifetime ambiguous to
                anyone reading it. Both buffers are cleared by
@@ -5691,12 +5637,12 @@
                the bubble collapses back to a Scanner-only card while
                tools execute or the next round is being opened) and
                the runExchange success/error paths clear them both
-               before `sending = false` runs in finally - so dropping
+               before `exchange.sending = false` runs in finally - so dropping
                them from the condition can't shorten the visible
                window, only document the intent. -->
-          {#if sending}
+          {#if exchange.sending}
             <div class="msg assistant">
-              <!-- Live reasoning panel. Open when `streamingReasoningOpen`
+              <!-- Live reasoning panel. Open when `exchange.streamingReasoningOpen`
                    is true; flipped on by the first reasoning delta and
                    flipped off 600ms after the first content delta (see
                    the onTextUpdate / onReasoningUpdate handlers). The
@@ -5704,11 +5650,11 @@
                    sell the close as a deliberate hand-off to the
                    answer below. -->
               <ReasoningPanel
-                reasoning={streamingReasoning}
-                bind:open={streamingReasoningOpen}
+                reasoning={exchange.streamingReasoning}
+                bind:open={exchange.streamingReasoningOpen}
                 duration={320}
               />
-              {#if streamingText}
+              {#if exchange.streamingText}
                 <!-- Live markdown render of the in-progress buffer. The
                      onTextUpdate handler throttles writes to ~4Hz (see
                      FLUSH_MS in send()), so marked + DOMPurify +
@@ -5717,7 +5663,7 @@
                      resolve themselves as more deltas arrive; once the
                      stream ends the persisted message rerenders through
                      this same <Markdown> path. -->
-                <Markdown content={streamingText} />
+                <Markdown content={exchange.streamingText} />
               {/if}
               <!-- Continuous "still working" signal for the entire
                    window between "user hit send" and the chat loop
@@ -5727,13 +5673,13 @@
                    between rounds; round just ended, next round about
                    to start; final round persisted but post-loop
                    bookkeeping like refreshThreads is still running).
-                   Stays visible AFTER streamingText starts arriving
+                   Stays visible AFTER exchange.streamingText starts arriving
                    too: a single round can emit text deltas and then
                    switch to tool_call deltas within the same
                    assistant message, and once the text stops flowing
                    the bubble otherwise reads as "done responding"
                    even though the model is still building a tool
-                   call on the wire. Cleared only when `sending` flips
+                   call on the wire. Cleared only when `exchange.sending` flips
                    false in runExchange's outer finally - by which
                    time every round, every tool execution, and every
                    inter-round gap has played out. Sits below
@@ -5745,7 +5691,7 @@
               <div class="thinking">
                 <Scanner label="Thinking" />
               </div>
-              {#if rateLimitWaitUntil !== null}
+              {#if exchange.rateLimitWaitUntil !== null}
                 <!-- Rate-limit wait indicator. Sits below the Scanner
                      (or the streaming Markdown when text is already
                      arriving) so the existing "still working" cue
@@ -5769,7 +5715,7 @@
                     <polyline points="12 6 12 12 16 14" />
                   </svg>
                   <span>
-                    Waiting on Venice (attempt {rateLimitAttempt})
+                    Waiting on Venice (attempt {exchange.rateLimitAttempt})
                     {#if rateLimitRemainingSec > 0}- resuming in {rateLimitRemainingSec}s{/if}
                   </span>
                 </div>
@@ -5786,7 +5732,7 @@
                    to expand on demand. -->
             </div>
           {/if}
-          {#if messages.length === 0 && !streamingText && !sending}
+          {#if messages.length === 0 && !exchange.streamingText && !exchange.sending}
             <div class="empty">Type a message to begin.</div>
           {/if}
           <!-- End-of-conversation notice for archived chats. Sits inside
@@ -5841,7 +5787,7 @@
               type="button"
               class="secondary icon-btn error-retry"
               onclick={error.retry}
-              disabled={sending}
+              disabled={exchange.sending}
               title="Retry"
               aria-label="Retry"
             >
@@ -5906,7 +5852,7 @@
               {/each}
             </div>
           {/if}
-          <!-- The textarea stays enabled while `sending` is true so the
+          <!-- The textarea stays enabled while `exchange.sending` is true so the
                user can draft their next message while the current reply
                is still streaming. The send button transforms into a
                stop button in the same state (see the .send-btn block
@@ -6182,7 +6128,7 @@
                 }}
                 title="Attach files (or paste / drag-drop)"
                 aria-label="Attach files"
-                disabled={sending ||
+                disabled={exchange.sending ||
                   currentThread?.archived ||
                   pendingAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE}
               >
@@ -6340,27 +6286,27 @@
             <!-- Dual-purpose button: sends when idle, stops the in-
                  flight response when a stream is running. The icon
                  swap (paper plane <-> filled square) signals the mode;
-                 the handler branches on `sending`. While sending, the
+                 the handler branches on `exchange.sending`. While exchange.sending, the
                  disabled rules that gate the send path (empty composer,
                  archived thread) are intentionally ignored - stop
                  must always be clickable once a response is in flight,
                  regardless of what the user has typed next. -->
             <button
               class="send-btn"
-              class:is-stopping={sending}
-              onclick={sending ? stopStreaming : send}
-              disabled={sending
-                ? abortCtl === null
+              class:is-stopping={exchange.sending}
+              onclick={exchange.sending ? stopStreaming : send}
+              disabled={exchange.sending
+                ? exchange.abortCtl === null
                 : (composer.trim().length === 0 && pendingAttachments.length === 0) ||
                   currentThread?.archived}
-              title={sending
+              title={exchange.sending
                 ? 'Stop response'
                 : currentThread?.archived
                   ? 'Archived — restore to continue'
                   : 'Send'}
-              aria-label={sending ? 'Stop response' : 'Send'}
+              aria-label={exchange.sending ? 'Stop response' : 'Send'}
             >
-              {#if sending}
+              {#if exchange.sending}
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"
                      aria-hidden="true">
                   <rect x="5" y="5" width="14" height="14" rx="2" />
