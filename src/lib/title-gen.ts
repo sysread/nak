@@ -25,8 +25,10 @@
  * capable and we want the title text directly, not a CoT preamble.
  * The output is sanitised through the same helper the `update_title`
  * tool uses (trim, strip surrounding quotes / trailing punctuation,
- * cap length) so manual + automatic + tool-driven renames all land
- * with the same shape.
+ * cap length, uppercase the first character) so worker auto-title and
+ * tool-driven renames land with the same shape - including a
+ * capitalized opening word, which weaker / instruction-loose models
+ * otherwise skip despite the title-case hint in the prompt.
  *
  * Failure model: best-effort. A network failure, a Venice 4xx, an
  * abort - any of these resolve `null` and the caller logs once and

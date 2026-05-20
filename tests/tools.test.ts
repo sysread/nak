@@ -717,6 +717,46 @@ describe('sanitizeTitle', () => {
   it('returns empty string when the input is only whitespace / newlines', () => {
     expect(sanitizeTitle('\n\n   \r\n  ')).toBe('');
   });
+
+  // Smaller / instruction-loose models routinely emit lowercase titles
+  // despite the "title-case is fine" prompt. Without normalization, the
+  // sidebar renders an inconsistent mix of capitalized (manual,
+  // tool-driven) and lowercase (worker-titled by a weaker model)
+  // entries that reads as half-done. Force first-character uppercase so
+  // every model-generated title lands looking the same.
+  it('uppercases the first character on a lowercase title', () => {
+    expect(sanitizeTitle('troubleshooting the refrigerator')).toBe(
+      'Troubleshooting the refrigerator'
+    );
+  });
+
+  it('leaves an already-capitalized title alone', () => {
+    expect(sanitizeTitle('Holy Spirit Origins in Christianity')).toBe(
+      'Holy Spirit Origins in Christianity'
+    );
+  });
+
+  it('only touches the first character - mid-word casing survives', () => {
+    // The model deliberately picked the iOS casing; only char 0 is ours
+    // to normalize.
+    expect(sanitizeTitle('iOS upgrade walkthrough')).toBe('IOS upgrade walkthrough');
+  });
+
+  it('uppercases after stripping a wrapping quote', () => {
+    // Quote stripping runs before capitalization, so the post-strip
+    // first character is what gets normalized - not the quote.
+    expect(sanitizeTitle('"casual howdy greeting"')).toBe('Casual howdy greeting');
+  });
+
+  it('is a no-op on a leading non-letter character', () => {
+    // toLocaleUpperCase on a digit / symbol returns it unchanged, so a
+    // title that opens with "5 reasons ..." stays "5 reasons ...".
+    expect(sanitizeTitle('5 reasons to refactor')).toBe('5 reasons to refactor');
+  });
+
+  it('uppercases unicode letters via toLocaleUpperCase', () => {
+    expect(sanitizeTitle('édition spéciale du livre')).toBe('Édition spéciale du livre');
+  });
 });
 
 describe('update_title', () => {
