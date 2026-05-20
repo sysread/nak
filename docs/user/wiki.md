@@ -238,11 +238,15 @@ Each row shows:
 Each row carries a **Retry** button. Clicking it re-runs the wiki
 agent against the conversation right now, on the main thread, going
 through the same primary -> uncensored-fallback two-shot the worker
-uses. On success the row drops from the panel; on failure the new
-error appears inline next to the button and you can retry again
-once you've made changes. The agent's writes (any new wiki
-articles, any updates) land regardless, since the wiki tools commit
-each call individually.
+uses. On success the row stays visible with the agent's verdict
+inline: how many wiki edits landed (often **zero** - the agent's
+prompt tells it to be conservative and skip rather than fabricate
+content), and a one-line **reasoning** summary the agent wrote
+about why. A **Dismiss** button removes the row once you've read
+it. On failure the new error appears inline next to the button and
+you can retry again once you've made changes. The agent's writes
+(any new wiki articles, any updates) land regardless, since the
+wiki tools commit each call individually.
 
 The autonomous worker also processes skipped rows on its own
 schedule. Adding or editing turns in the conversation is not the

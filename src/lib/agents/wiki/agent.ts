@@ -410,7 +410,27 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
     userId: string;
     signal?: AbortSignal;
   }): Promise<
-    | { kind: 'ok'; terminalMsgId: string }
+    | {
+        kind: 'ok';
+        terminalMsgId: string;
+        /**
+         * Number of wiki_* tool calls the agent issued. Zero is a
+         * legitimate outcome - the prompt tells the model to be
+         * conservative and skip rather than fabricate edits, and
+         * Trinity in particular leans on that. Surface the count so
+         * the UI can tell the user whether anything actually landed
+         * in the changelog.
+         */
+        toolCalls: number;
+        /**
+         * The model's one-or-two-sentence operator-facing summary of
+         * what it did and why (see WIKI_AUTONOMOUS_BODY_LINES'
+         * "Final reply" block in ./prompt.ts). Falls back to '(none)'
+         * if the model returned an empty string - same convention
+         * the worker's log line uses.
+         */
+        reasoning: string;
+      }
     | { kind: 'no-op'; reason: string }
     | { kind: 'error'; error: string }
   > {
@@ -468,7 +488,25 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
         }`,
       };
     }
-    return { kind: 'ok', terminalMsgId };
+    // Normalise whitespace so a stray newline in the model's summary
+    // doesn't break our single-line log convention, and fall back to
+    // a sentinel for an empty summary so a missing reasoning still
+    // shows up as something rather than as a dangling empty quote.
+    // Mirrors the same shape the worker's loop.ts uses.
+    const reasoning =
+      result.output.finalText.replace(/\s+/g, ' ').trim() || '(none)';
+    log.info(
+      `manual retry finished thread ${args.threadId} ` +
+        `(${result.toolCalls} tool calls over ` +
+        `${result.output.inputMessageCount} messages, ` +
+        `reasoning="${reasoning}")`
+    );
+    return {
+      kind: 'ok',
+      terminalMsgId,
+      toolCalls: result.toolCalls,
+      reasoning,
+    };
   }
 
   /**

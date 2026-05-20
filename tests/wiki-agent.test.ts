@@ -285,9 +285,51 @@ describe('WikiAgent.retrySkippedThread', () => {
     expect(result.kind).toBe('ok');
     if (result.kind === 'ok') {
       expect(result.terminalMsgId).toBe('a1');
+      // Tool-call count + reasoning are part of the success result
+      // so the panel can surface "0 edits - here's why" or
+      // "3 edits landed - here's what" without dropping the row
+      // silently. Zero tool calls is a legitimate done outcome.
+      expect(result.toolCalls).toBe(0);
+      expect(result.reasoning).toBe('Recovered on the fallback.');
     }
     expect(svc.computeWikiTerminalMsgId).toHaveBeenCalledWith('t-1');
     expect(svc.manualAdvanceWikiPointer).toHaveBeenCalledWith('t-1', 'a1');
+  });
+
+  it('falls back to "(none)" reasoning when the model returned an empty final text', async () => {
+    const messages: Message[] = [
+      makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
+      makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
+    ];
+    const svc = makeSupabase(messages);
+    (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      'a1'
+    );
+    const completeChat = vi.fn(
+      async (): Promise<ChatCompletion> => ({
+        text: '   \n   ',
+        reasoning: '',
+        toolCalls: [],
+        usage: null,
+        citations: [],
+        finishReason: 'stop',
+      })
+    );
+    const venice = {
+      completeChat,
+      embed: vi.fn(async () => ({ data: [] })),
+    } as unknown as VeniceClient;
+    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+
+    const result = await agent.retrySkippedThread({
+      threadId: 't-2',
+      userId: 'u',
+    });
+
+    expect(result.kind).toBe('ok');
+    if (result.kind === 'ok') {
+      expect(result.reasoning).toBe('(none)');
+    }
   });
 
   it('returns no-op (without calling Venice) when the thread has no anchor', async () => {
