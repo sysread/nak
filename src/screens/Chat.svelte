@@ -6084,6 +6084,31 @@
                 >
                   <span class="emoji" aria-hidden="true">&#x1F4C8;</span>
                 </button>
+                <button
+                  type="button"
+                  class="diag-tile"
+                  disabled={currentContextRecallPayload === null ||
+                    currentContextRecallPayload.note.trim().length === 0}
+                  title={currentContextRecallPayload !== null &&
+                    currentContextRecallPayload.note.trim().length > 0
+                    ? 'Recall - what Nak remembered before the next reply'
+                    : 'Recall - no data for this conversation yet'}
+                  aria-label={currentContextRecallPayload !== null &&
+                    currentContextRecallPayload.note.trim().length > 0
+                    ? 'Open recall diagnostics'
+                    : 'Recall diagnostics (no data yet)'}
+                  onclick={() => {
+                    closeMenus();
+                    if (
+                      currentContextRecallPayload !== null &&
+                      currentContextRecallPayload.note.trim().length > 0
+                    ) {
+                      navigate({ modal: 'recall' });
+                    }
+                  }}
+                >
+                  <span class="emoji" aria-hidden="true">&#x1F4A1;</span>
+                </button>
               </div>
             </div>
 
