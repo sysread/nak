@@ -2685,11 +2685,13 @@ button.composer-wharf-trigger {
     font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
   }
 
-  /* Hide the bottom-right pill column on mobile - its three pills
+  /* Hide the bottom-right pill column on mobile - its four pills
      now live in the diagnostic wharf above. The selectors hit the
-     three pill components' outer wrappers (BiasPill, IntuitionPill,
-     SamskaraToasts); the .scroll-to-bottom arrow further below is
-     deliberately NOT in this list and stays visible. */
+     four pill components' outer wrappers (RecallPill, BiasPill,
+     IntuitionPill, SamskaraToasts); the .scroll-to-bottom arrow
+     further below is deliberately NOT in this list and stays
+     visible. */
+  .recall-pill-wrap,
   .bias-pill-wrap,
   .intuition-pill-wrap,
   .samskara-mood {
