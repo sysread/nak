@@ -37,12 +37,12 @@ import { updateTitleSchema, TITLE_MAX_CHARS } from './update_title.schema';
 
 /**
  * Trim, collapse to the first non-empty line, strip wrapping / trailing
- * punctuation, cap length. Extracted so the main-chat auto-title path
- * and any future caller that wants the same shape can share the logic
- * without a copy. The regex matches the original autoTitle's - both
- * ASCII and Unicode "smart" quotes, plus trailing periods / exclamation
- * / question marks that the model sometimes adds despite the system-
- * prompt saying not to.
+ * punctuation, cap length, capitalize the first character. Extracted so
+ * the main-chat auto-title path and any future caller that wants the
+ * same shape can share the logic without a copy. The regex matches the
+ * original autoTitle's - both ASCII and Unicode "smart" quotes, plus
+ * trailing periods / exclamation / question marks that the model
+ * sometimes adds despite the system-prompt saying not to.
  *
  * First-line split: the model sometimes ignores the "concise 3-6 word
  * title" instruction and stuffs its full response into the argument
@@ -53,6 +53,17 @@ import { updateTitleSchema, TITLE_MAX_CHARS } from './update_title.schema';
  * intended title in the common case (line 1 is the title, line 2+ is
  * spillover) and at worst yields a single truncated sentence rather
  * than a multi-line one.
+ *
+ * First-letter capitalization: the title-gen prompt says title-case is
+ * fine but not required, so smaller / instruction-loose models routinely
+ * emit lowercase ("troubleshooting the refrigerator", "how to bake
+ * sourdough"). Those land in the sidebar looking unfinished and
+ * inconsistent with manually-named threads. We force the first character
+ * to uppercase here so every model-generated title - worker auto-title
+ * and the `update_title` tool both flow through this helper - lands
+ * looking the same. Only the first character is touched; "iOS upgrade"
+ * style mid-word casing the model deliberately chose stays intact past
+ * char 0.
  */
 export function sanitizeTitle(raw: string): string {
   const firstLine =
@@ -60,10 +71,12 @@ export function sanitizeTitle(raw: string): string {
       .split(/\r?\n/)
       .map((line) => line.trim())
       .find((line) => line.length > 0) ?? '';
-  return firstLine
+  const trimmed = firstLine
     .replace(/^["'“”‘’]+|["'“”‘’.!?]+$/g, '')
     .trim()
     .slice(0, TITLE_MAX_CHARS);
+  if (trimmed.length === 0) return trimmed;
+  return trimmed.charAt(0).toLocaleUpperCase() + trimmed.slice(1);
 }
 
 export const updateTitle: ToolDef = {
