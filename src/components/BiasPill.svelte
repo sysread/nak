@@ -1,11 +1,11 @@
 <script lang="ts">
   /**
    * Bottom-right indicator that opens the Bias Profile diagnostics
-   * modal. Sibling to IntuitionPill, SamskaraToasts, and the
-   * scroll-to-bottom arrow - all four absolutely positioned within
-   * .messages-wrap (Chat.svelte) and stacking as a vertical column.
-   * This pill sits at the top of the column, above the intuition
-   * brain.
+   * modal. Sibling to RecallPill, IntuitionPill, SamskaraToasts, and
+   * the scroll-to-bottom arrow - all five absolutely positioned
+   * within .messages-wrap (Chat.svelte) and stacking as a vertical
+   * column. This pill sits second from the top, above the intuition
+   * brain and below the recall light bulb.
    *
    * ALWAYS visible regardless of cache state. Unlike IntuitionPill
    * (which hides on cold threads) and SamskaraToasts (which seeds
@@ -50,6 +50,7 @@
 
 <style>
   /* Stacks above the intuition pill. The column from top to bottom:
+       recall pill (light bulb)         bottom: 11.1rem
        bias pill (this one)             bottom: 8.6rem
        intuition pill (brain)           bottom: 6.1rem
        samskara mood pill               bottom: ~3.6rem

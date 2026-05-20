@@ -63,11 +63,12 @@ lives in the source at `src/lib/bias/catalog.ts`.
 
 ## How to inspect it
 
-Look for the chart-graph icon at the top of the pill column in
-the bottom-right corner of the messages pane (above the brain
-and the mood emoji). The icon appears once the worker has
-analyzed at least one conversation. Click it to open the bias
-profile diagnostics modal.
+Look for the chart-graph icon in the pill column in the
+bottom-right corner of the messages pane - second from the top,
+above the brain and the mood emoji, below the recall light
+bulb. The icon appears once the worker has analyzed at least
+one conversation. Click it to open the bias profile diagnostics
+modal.
 
 The modal has three sections:
 
