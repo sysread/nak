@@ -3,13 +3,25 @@
  *
  * The slot is a passive state container - it doesn't drive Venice or
  * Supabase itself; runExchange writes into it and the screen reads from
- * it. These tests pin the post-construction defaults and the reset()
- * shape so the Phase 2 work (per-thread slot map) can refactor the
- * surrounding plumbing without accidentally changing the slot's
- * observable behaviour.
+ * it. These tests pin the post-construction defaults, the reset() shape,
+ * and the persistedRows / orphan-timing finalization helpers so the
+ * surrounding plumbing can refactor without accidentally changing the
+ * slot's observable behaviour.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ExchangeSlot } from '../src/lib/exchange/exchange-slot.svelte';
+import type { Message } from '../src/lib/supabase';
+
+function makeMessage(overrides: Partial<Message> = {}): Message {
+  return {
+    id: 'msg-1',
+    thread_id: 't1',
+    role: 'assistant',
+    content: 'hi',
+    created_at: '2026-05-20T00:00:00Z',
+    ...overrides,
+  };
+}
 
 describe('ExchangeSlot', () => {
   it('starts in the idle steady state', () => {
@@ -24,6 +36,7 @@ describe('ExchangeSlot', () => {
     expect(slot.rateLimitAttempt).toBe(0);
     expect(slot.abortCtl).toBeNull();
     expect(slot.toolTimings).toEqual({});
+    expect(slot.persistedRows).toEqual([]);
   });
 
   it('accepts writes to every field and reads them back', () => {
@@ -74,6 +87,7 @@ describe('ExchangeSlot', () => {
     slot.rateLimitAttempt = 3;
     slot.abortCtl = new AbortController();
     slot.toolTimings = { a: { startedAt: 1, endedAt: 2 } };
+    slot.recordPersistedRow(makeMessage());
 
     slot.reset();
 
@@ -87,6 +101,7 @@ describe('ExchangeSlot', () => {
     expect(slot.rateLimitAttempt).toBe(0);
     expect(slot.abortCtl).toBeNull();
     expect(slot.toolTimings).toEqual({});
+    expect(slot.persistedRows).toEqual([]);
   });
 
   it('produces independent state between instances', () => {
@@ -98,5 +113,56 @@ describe('ExchangeSlot', () => {
     expect(b.streamingText).toBe('two');
     a.toolTimings['x'] = { startedAt: 1 };
     expect(b.toolTimings['x']).toBeUndefined();
+  });
+
+  describe('recordPersistedRow', () => {
+    it('appends rows in call order', () => {
+      const slot = new ExchangeSlot();
+      const a = makeMessage({ id: 'a', created_at: '2026-05-20T00:00:00Z' });
+      const b = makeMessage({ id: 'b', created_at: '2026-05-20T00:00:01Z' });
+      slot.recordPersistedRow(a);
+      slot.recordPersistedRow(b);
+      expect(slot.persistedRows.map((m) => m.id)).toEqual(['a', 'b']);
+    });
+
+    it('skips duplicates by id', () => {
+      const slot = new ExchangeSlot();
+      const a = makeMessage({ id: 'a' });
+      slot.recordPersistedRow(a);
+      slot.recordPersistedRow({ ...a, content: 'edited' });
+      expect(slot.persistedRows).toHaveLength(1);
+      expect(slot.persistedRows[0].content).toBe('hi');
+    });
+  });
+
+  describe('finalizePendingToolTimings', () => {
+    beforeEach(() => {
+      vi.spyOn(performance, 'now').mockReturnValue(500);
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('marks any timing without endedAt as errored with the current clock', () => {
+      const slot = new ExchangeSlot();
+      slot.toolTimings = {
+        running: { startedAt: 100 },
+        done: { startedAt: 100, endedAt: 200 },
+        errored: { startedAt: 100, endedAt: 150, error: true },
+      };
+      slot.finalizePendingToolTimings();
+      expect(slot.toolTimings).toEqual({
+        running: { startedAt: 100, endedAt: 500, error: true },
+        done: { startedAt: 100, endedAt: 200 },
+        errored: { startedAt: 100, endedAt: 150, error: true },
+      });
+    });
+
+    it('is a no-op when nothing is pending', () => {
+      const slot = new ExchangeSlot();
+      slot.toolTimings = { a: { startedAt: 100, endedAt: 200 } };
+      slot.finalizePendingToolTimings();
+      expect(slot.toolTimings).toEqual({ a: { startedAt: 100, endedAt: 200 } });
+    });
   });
 });
