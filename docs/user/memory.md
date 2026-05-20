@@ -93,6 +93,24 @@ above handles the ambient case.
 Recall runs on the fast tier — the cost is a few cents of tokens
 per invocation, at most.
 
+## Seeing what was recalled
+
+There's a light-bulb glyph (💡) at the top of the bottom-right pill
+column on the conversation pane, stacked above the bias chart, the
+intuition brain, the mood pill, and the scroll-to-latest arrow.
+Click it to open the **Recall** modal, which shows the stitched
+first-person note that was most recently injected as the
+assistant's prior thought — verbatim, in italic, the way a chapter
+opens with an illuminated initial. The modal also reports when the
+recall fired, which user round it landed on, and what triggered it
+(cold start, topic shift, mood shift, or staleness fuse).
+
+Only one recall is kept per thread at a time, so the modal always
+reflects what the assistant remembered before its most recent
+reply. When a new recall fires, the modal's content updates in
+place. The light bulb stays disabled until a recall has actually
+landed for the active thread.
+
 ## Browsing memories directly
 
 The **Memories** tab in the left drawer is the entry point - same

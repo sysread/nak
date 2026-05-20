@@ -123,11 +123,13 @@
   type SamskaraComponent = typeof import('./Samskara.svelte').default;
   type IntuitionComponent = typeof import('./Intuition.svelte').default;
   type BiasProfileComponent = typeof import('./BiasProfile.svelte').default;
+  type RecallComponent = typeof import('./Recall.svelte').default;
   import RecipeList from '../components/RecipeList.svelte';
   import MemoryList from '../components/MemoryList.svelte';
   import WikiList from '../components/WikiList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
   import BiasPill from '../components/BiasPill.svelte';
+  import RecallPill from '../components/RecallPill.svelte';
   import TopicsFilter from '../components/TopicsFilter.svelte';
   import BucketHeader from '../components/BucketHeader.svelte';
   import {
@@ -157,7 +159,11 @@
     pickFresherIntuitionPayload,
     type IntuitionPayload,
   } from '$lib/intuition';
-  import { pickFresherContextRecallPayload } from '$lib/context-recall';
+  import {
+    coerceContextRecallPayload,
+    pickFresherContextRecallPayload,
+    type ContextRecallPayload,
+  } from '$lib/context-recall';
   import AssistantBody from '../components/AssistantBody.svelte';
   import CohortPanel from '../components/CohortPanel.svelte';
   import Markdown from '../components/Markdown.svelte';
@@ -208,6 +214,7 @@
   const showSamskara = $derived(route.modal === 'samskara');
   const showIntuition = $derived(route.modal === 'intuition');
   const showBiasProfile = $derived(route.modal === 'bias-profile');
+  const showRecall = $derived(route.modal === 'recall');
 
   // Lazy components. Each holds the loaded constructor in $state
   // (cached after first import) and an $effect that fires the
@@ -226,6 +233,7 @@
   let SamskaraComp: SamskaraComponent | null = $state(null);
   let IntuitionComp: IntuitionComponent | null = $state(null);
   let BiasProfileComp: BiasProfileComponent | null = $state(null);
+  let RecallComp: RecallComponent | null = $state(null);
   $effect(() => {
     if (sessionLoaded && !session && !AuthComp) {
       void import('./Auth.svelte').then((m) => (AuthComp = m.default));
@@ -283,6 +291,11 @@
   $effect(() => {
     if (showBiasProfile && !BiasProfileComp) {
       void import('./BiasProfile.svelte').then((m) => (BiasProfileComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (showRecall && !RecallComp) {
+      void import('./Recall.svelte').then((m) => (RecallComp = m.default));
     }
   });
   // Trigger flag for the recipe "new" top-bar button. Chat.svelte
@@ -1967,6 +1980,17 @@
     currentThread ? coerceIntuitionPayload(currentThread.intuition_payload) : null
   );
 
+  // Active thread's cached context-recall payload, coerced from the
+  // jsonb column. Null on cold threads or shape drift; the pill and
+  // modal both gate on this being non-null with a non-empty note.
+  // Reactive because patchThread() (used by onContextRecallUpdate)
+  // re-derives currentThread, which re-runs this expression.
+  const currentContextRecallPayload = $derived<ContextRecallPayload | null>(
+    currentThread
+      ? coerceContextRecallPayload(currentThread.context_recall_payload)
+      : null
+  );
+
   const defaultTier = $derived<ModelTier>(app.defaultModel ?? DEFAULT_TIER);
   const currentTier = $derived<ModelTier>(
     resolveTier(currentThread?.model ?? null, defaultTier)
@@ -2855,10 +2879,13 @@
             },
             onContextRecallUpdate: (payload) => {
               // Same optimistic-patch posture as onIntuitionUpdate.
-              // Currently no UI consumer renders the cache directly,
-              // but the patch keeps the in-memory row consistent with
-              // the persisted row so a later tab/refresh doesn't see
-              // a stale null from a delayed realtime echo.
+              // The RecallPill + Recall modal both derive from
+              // currentContextRecallPayload, which re-derives off
+              // currentThread; patching here lights the pill up the
+              // moment a fresh recall lands rather than waiting for
+              // the realtime echo. The patch also keeps the in-memory
+              // row consistent with the persisted row so a delayed
+              // echo doesn't overwrite the fresher value with null.
               patchThread(ctx.threadId, {
                 context_recall_payload: payload,
               });
@@ -5804,6 +5831,7 @@
         <SamskaraToasts />
         <IntuitionPill payload={currentIntuitionPayload} />
         <BiasPill />
+        <RecallPill payload={currentContextRecallPayload} />
       </div>
       {#if error}
         <div class="error-bar">
@@ -6055,6 +6083,31 @@
                   }}
                 >
                   <span class="emoji" aria-hidden="true">&#x1F4C8;</span>
+                </button>
+                <button
+                  type="button"
+                  class="diag-tile"
+                  disabled={currentContextRecallPayload === null ||
+                    currentContextRecallPayload.note.trim().length === 0}
+                  title={currentContextRecallPayload !== null &&
+                    currentContextRecallPayload.note.trim().length > 0
+                    ? 'Recall - what Nak remembered before the next reply'
+                    : 'Recall - no data for this conversation yet'}
+                  aria-label={currentContextRecallPayload !== null &&
+                    currentContextRecallPayload.note.trim().length > 0
+                    ? 'Open recall diagnostics'
+                    : 'Recall diagnostics (no data yet)'}
+                  onclick={() => {
+                    closeMenus();
+                    if (
+                      currentContextRecallPayload !== null &&
+                      currentContextRecallPayload.note.trim().length > 0
+                    ) {
+                      navigate({ modal: 'recall' });
+                    }
+                  }}
+                >
+                  <span class="emoji" aria-hidden="true">&#x1F4A1;</span>
                 </button>
               </div>
             </div>
@@ -6486,6 +6539,12 @@
   {/if}
   {#if showBiasProfile && BiasProfileComp}
     <BiasProfileComp onClose={() => navigate({ modal: null })} />
+  {/if}
+  {#if showRecall && RecallComp}
+    <RecallComp
+      onClose={() => navigate({ modal: null })}
+      threads={loadedThreads}
+    />
   {/if}
   <!-- Cookbook, Memories, and Wiki now render inline in the main
        panel (drawerTab === 'recipes' / 'memories' / 'wiki') rather

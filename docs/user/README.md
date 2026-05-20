@@ -47,8 +47,8 @@ You can reach these pages two ways:
 - [Intuition](./intuition.md) — the subconscious read Nak forms of
   each conversation: how the brain icon next to the mood emoji works,
   and what the inline cards mean.
-- [Bias profile](./bias-profile.md) — the chart icon at the top of
-  the bottom-right pill column. Nak watches your past conversations
+- [Bias profile](./bias-profile.md) — the chart icon in the
+  bottom-right pill column. Nak watches your past conversations
   for cognitive biases and quietly nudges its responses to
   compensate; this page covers what's tracked, where the math sits,
   and how to inspect what it has on you.
