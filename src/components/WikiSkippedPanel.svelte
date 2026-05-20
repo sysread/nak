@@ -50,11 +50,23 @@
   /**
    * Per-row retry state. Keyed by thread id so a click on one row's
    * Retry button only spins that row's button + only surfaces that
-   * row's error inline. Cleared on a successful retry (the row
-   * disappears from `rows` anyway) and on panel reload.
+   * row's error / result inline.
+   *
+   * `retryResult` holds the agent's tool-call count + reasoning
+   * summary on a successful retry. The row stays visible (rather
+   * than dropping immediately) so the user can read what the agent
+   * decided - especially important when the agent returned done
+   * with zero tool calls, which means the skip cleared but nothing
+   * landed in the changelog. Dismissing removes the row locally;
+   * the next `load()` call wouldn't include it anyway since the
+   * skip marker is already cleared in the DB.
    */
   let retrying = $state<Record<string, boolean>>({});
   let retryError = $state<Record<string, string>>({});
+  let retryResult = $state<
+    Record<string, { toolCalls: number; reasoning: string }>
+  >({});
+  let dismissed = $state<Record<string, true>>({});
 
   async function load(): Promise<void> {
     if (!app.supabase) return;
@@ -72,11 +84,13 @@
   async function retryRow(row: SkippedRow): Promise<void> {
     if (!app.supabase || !app.venice) return;
     if (retrying[row.threadId]) return;
-    // Best-effort: wipe the previous error inline before the new run
-    // so the user doesn't read a stale message while the spinner is
-    // spinning.
+    // Best-effort: wipe the previous error / result inline before
+    // the new run so the user doesn't read a stale message while the
+    // spinner is spinning.
     delete retryError[row.threadId];
     retryError = { ...retryError };
+    delete retryResult[row.threadId];
+    retryResult = { ...retryResult };
     retrying[row.threadId] = true;
     retrying = { ...retrying };
     try {
@@ -97,13 +111,20 @@
         userId: session.user.id,
       });
       if (result.kind === 'ok') {
-        // Successful run: the agent's wiki_* tool calls (if any)
-        // already landed; the pointer was advanced + skip marker
-        // cleared inside retrySkippedThread. Reload the list so
-        // this row drops, and fire the wiki-change event so any
-        // open WikiList / WikiChangelogPanel refetches too.
+        // Successful run. Stash the agent's tool-call count + final
+        // reasoning so the row can show what actually happened
+        // before the user dismisses it. Critical when toolCalls is
+        // 0: the skip cleared but nothing landed in the changelog,
+        // and silently dropping the row would leave the user
+        // confused (we just shipped a fix for exactly that). Emit
+        // the wiki-change event so sibling surfaces (changelog,
+        // list) refetch in case there WERE edits.
+        retryResult[row.threadId] = {
+          toolCalls: result.toolCalls,
+          reasoning: result.reasoning,
+        };
+        retryResult = { ...retryResult };
         emitWikiChange();
-        await load();
         return;
       }
       retryError[row.threadId] =
@@ -117,6 +138,15 @@
       retrying[row.threadId] = false;
       retrying = { ...retrying };
     }
+  }
+
+  function dismissRow(threadId: string): void {
+    // Local-only: the skip marker was already cleared in the DB
+    // inside retrySkippedThread. Hiding it from the rendered list
+    // is enough; on the next mount, listWikiSkippedThreads won't
+    // include this thread anyway.
+    dismissed[threadId] = true;
+    dismissed = { ...dismissed };
   }
 
   $effect(() => {
@@ -153,7 +183,7 @@
     <p class="subtle">Loading...</p>
   {:else if error}
     <p class="error">{error}</p>
-  {:else if rows.length === 0}
+  {:else if rows.filter((r) => !dismissed[r.threadId]).length === 0}
     <p class="subtle">
       No skipped threads. The autonomous wiki agent processes
       conversations a day after they settle; if it errors out
@@ -169,7 +199,7 @@
       this list.
     </p>
     <ul class="wiki-skipped-list">
-      {#each rows as row (row.threadId)}
+      {#each rows.filter((r) => !dismissed[r.threadId]) as row (row.threadId)}
         <li class="wiki-skipped-row">
           <div class="wiki-skipped-row-head">
             <button
@@ -190,20 +220,54 @@
               No error detail was captured.
             </p>
           {/if}
+          {#if retryResult[row.threadId]}
+            <!-- Successful retry. The skip is cleared in the DB; the
+                 row is staying visible specifically so the user can
+                 see what the agent decided before dismissing.
+                 Especially important when toolCalls === 0: nothing
+                 landed in the changelog and silently dropping the
+                 row was what confused users before this branch. -->
+            <div class="wiki-skipped-result" role="status">
+              <p class="wiki-skipped-result-headline">
+                {#if retryResult[row.threadId].toolCalls === 0}
+                  Retry done. The agent decided no edits were warranted.
+                {:else if retryResult[row.threadId].toolCalls === 1}
+                  Retry done. 1 wiki edit landed.
+                {:else}
+                  Retry done. {retryResult[row.threadId].toolCalls} wiki edits landed.
+                {/if}
+              </p>
+              <p class="wiki-skipped-result-reasoning">
+                <span class="wiki-skipped-result-label">Reasoning:</span>
+                {retryResult[row.threadId].reasoning}
+              </p>
+            </div>
+          {/if}
           <div class="wiki-skipped-row-foot">
-            <button
-              type="button"
-              class="wiki-skipped-retry"
-              onclick={() => retryRow(row)}
-              disabled={retrying[row.threadId]}
-              title="Re-run the wiki agent against this conversation now"
-            >
-              {retrying[row.threadId] ? 'Retrying...' : 'Retry'}
-            </button>
-            {#if retryError[row.threadId]}
-              <span class="wiki-skipped-retry-error" role="status">
-                {retryError[row.threadId]}
-              </span>
+            {#if retryResult[row.threadId]}
+              <button
+                type="button"
+                class="wiki-skipped-dismiss"
+                onclick={() => dismissRow(row.threadId)}
+                title="Hide this row"
+              >
+                Dismiss
+              </button>
+            {:else}
+              <button
+                type="button"
+                class="wiki-skipped-retry"
+                onclick={() => retryRow(row)}
+                disabled={retrying[row.threadId]}
+                title="Re-run the wiki agent against this conversation now"
+              >
+                {retrying[row.threadId] ? 'Retrying...' : 'Retry'}
+              </button>
+              {#if retryError[row.threadId]}
+                <span class="wiki-skipped-retry-error" role="status">
+                  {retryError[row.threadId]}
+                </span>
+              {/if}
             {/if}
           </div>
         </li>
@@ -310,5 +374,44 @@
     color: var(--danger, #b91c1c);
     font-size: 0.85rem;
     word-break: break-word;
+  }
+  .wiki-skipped-result {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.6rem;
+    border-radius: 6px;
+    background: color-mix(in srgb, #15803d 10%, transparent);
+    border: 1px solid color-mix(in srgb, #15803d 30%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .wiki-skipped-result-headline {
+    margin: 0;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text);
+  }
+  .wiki-skipped-result-reasoning {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text);
+    word-break: break-word;
+  }
+  .wiki-skipped-result-label {
+    color: var(--muted);
+    font-weight: 600;
+    margin-right: 0.25rem;
+  }
+  .wiki-skipped-dismiss {
+    font-size: 0.85rem;
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .wiki-skipped-dismiss:hover {
+    background: var(--surface-hover, var(--surface));
   }
 </style>
