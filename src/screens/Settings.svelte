@@ -162,6 +162,20 @@
   // user denies we snap back off, since the in-app unread dot alone
   // isn't what the toggle advertises.
   let notifyOnComplete = $state<boolean>(app.notifyOnComplete);
+  // Per-device snapshot of the browser-level Notification permission.
+  // The `notifyOnComplete` preference syncs across devices via Supabase
+  // but the OS-level grant is per-origin-per-browser and doesn't sync,
+  // so a user who enabled the toggle on phone will arrive at desktop
+  // with the checkbox already on AND no permission granted - silently
+  // breaking notifications on the new device. We snapshot the current
+  // permission so the pane can offer an inline re-grant button when
+  // the two diverge. Refreshed inside the toggle handler (which calls
+  // requestPermission itself) and inside onEnableNotifyPermission.
+  let notifyPermission = $state<NotificationPermission | 'unsupported'>(
+    typeof window !== 'undefined' && 'Notification' in window
+      ? Notification.permission
+      : 'unsupported'
+  );
   // Free-form profile fields injected into the system-prompt
   // appendix on every turn. Saved on the input's `change` event
   // (fires on blur or Enter when the value changed) so a half-typed
@@ -948,6 +962,7 @@
       // because we haven't called persist* yet, so no rollback
       // there either.
       const result = await requestPermission();
+      notifyPermission = result === 'unsupported' ? 'unsupported' : result;
       if (result === 'denied' || result === 'default') {
         notifyOnComplete = false;
         modelError =
@@ -967,6 +982,41 @@
     } catch (err) {
       notifyOnComplete = prev;
       modelError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  /**
+   * Per-device permission reconciliation. Fired when the synced
+   * `notifyOnComplete` preference says ON but this browser's
+   * Notification.permission is not 'granted' - usually because the
+   * user enabled the toggle on a different device and the OS-level
+   * grant didn't travel with the account. We can't auto-request on
+   * load (Chromium + Safari both require a user gesture), so we
+   * surface a button and call requestPermission from its click.
+   * Doesn't touch `notifyOnComplete` itself - the preference is
+   * already on the way the user wants it; we're just catching up the
+   * browser-side grant.
+   */
+  async function onEnableNotifyPermission(): Promise<void> {
+    modelError = null;
+    modelInfo = null;
+    const result = await requestPermission();
+    notifyPermission = result === 'unsupported' ? 'unsupported' : result;
+    if (result === 'granted') {
+      modelInfo = 'Reply notifications enabled for this browser.';
+    } else if (result === 'denied') {
+      // Chromium auto-rejects requestPermission() after a prior deny
+      // without showing UI, so the user has to unblock via browser
+      // settings. Spell that out rather than leaving them clicking a
+      // button that silently does nothing.
+      modelError =
+        'Browser notifications are blocked for this site. Allow them in your browser settings, then reload.';
+    } else {
+      // 'default' means the user dismissed the prompt without picking
+      // (closed the chip, hit Escape). Re-clicking the button will
+      // re-show the prompt since the gesture chain stays alive.
+      modelError =
+        'Notifications still off. Click the button again to retry, or allow them in your browser settings.';
     }
   }
 
@@ -1419,6 +1469,22 @@
             <span>Notify me when replies finish</span>
           </label>
         </div>
+        {#if notifyOnComplete && notificationsSupported() && notifyPermission !== 'granted'}
+          <!-- Per-device reconciliation: the account-level setting is
+               on but this browser hasn't granted the OS-level permission
+               yet. Common case is a user who enabled the toggle on phone
+               and is now visiting on desktop for the first time. -->
+          <div class="form-row" style="display:flex;flex-direction:column;gap:0.5rem;align-items:flex-start">
+            <p class="subtle" style="color:var(--warn);font-size:0.85rem;margin:0">
+              Reply notifications are enabled on your account, but this
+              browser hasn't been granted permission yet. Browser-level
+              grants don't sync across devices.
+            </p>
+            <button type="button" onclick={onEnableNotifyPermission}>
+              Enable notifications for this browser
+            </button>
+          </div>
+        {/if}
         {#if modelError}<p class="error">{modelError}</p>{/if}
         {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
 
