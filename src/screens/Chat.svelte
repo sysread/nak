@@ -3317,7 +3317,7 @@
       // either retry the regenerate or copy the content out. Also
       // drop any fade-out delays so a row that happened to be
       // mid-dissolve (delete-promise failure after fade started)
-      // snaps back to the .disabled appearance instead of staying
+      // snaps back to the .regen-target appearance instead of staying
       // frozen at 8px blur.
       pendingDeleteIds = [];
       fadeOutDelays = {};
@@ -5657,7 +5657,7 @@
                    stays focused on per-message body concerns. -->
               <div
                 class="msg assistant"
-                class:disabled={pendingDeleteSet.has(block.assistant.id)}
+                class:regen-target={pendingDeleteSet.has(block.assistant.id)}
                 class:fading-out={fadeOutDelays[block.assistant.id] !== undefined}
                 style:animation-delay={`${fadeOutDelays[block.assistant.id] ?? 0}ms`}
               >
@@ -5716,7 +5716,7 @@
             {:else if block.message.role === 'assistant'}
               <div
                 class="msg assistant"
-                class:disabled={pendingDeleteSet.has(block.message.id)}
+                class:regen-target={pendingDeleteSet.has(block.message.id)}
                 class:fading-out={fadeOutDelays[block.message.id] !== undefined}
                 style:animation-delay={`${fadeOutDelays[block.message.id] ?? 0}ms`}
               >
@@ -5749,7 +5749,7 @@
                 : false}
               <div
                 class="msg {block.message.role}"
-                class:disabled={pendingDeleteSet.has(block.message.id)}
+                class:regen-target={pendingDeleteSet.has(block.message.id)}
                 class:fading-out={fadeOutDelays[block.message.id] !== undefined}
                 style:animation-delay={`${fadeOutDelays[block.message.id] ?? 0}ms`}
               >
