@@ -2673,6 +2673,117 @@ language sql stable security invoker as $$
    limit match_limit
 $$;
 
+-- Thread response claim --------------------------------------------------
+--
+-- Cross-device coordination for "one device is currently producing the
+-- assistant response to this thread." When tab A starts a chat turn it
+-- acquires the claim via acquire_thread_response_claim; tab B (or the
+-- user's other device) viewing the same thread sees the claim row via
+-- the regular threads realtime subscription and renders a
+-- "responding on another device" indicator instead of letting the user
+-- send a competing message. When A's runExchange finishes (or aborts),
+-- release_thread_response_claim clears the claim and B's UI re-enables.
+--
+-- The claim is per-THREAD, distinct from the per-worker-kind singleton
+-- `worker_leases` used by background agents. Each thread has at most one
+-- in-flight response across all of the user's devices; multiple threads
+-- can be responding in parallel (their claims live on different rows).
+--
+-- TTL is 60s and the holder beats every 20s (see ThreadClaimCoordinator
+-- in src/lib/exchange/thread-claim-coordinator.ts). Longer than the
+-- worker-lease 45s/20s because chat turns legitimately run longer than
+-- background jobs on slow models. A device that crashes mid-turn frees
+-- its claim within 60s.
+--
+-- Columns piggyback on `threads` rather than living in a separate table
+-- so the existing threads realtime subscription (subscribeToThreads in
+-- supabase.ts) delivers claim changes to observers for free - no new
+-- subscription wiring on the client.
+alter table public.threads
+  add column if not exists response_holder_id text,
+  add column if not exists response_claim_expires_at timestamptz;
+
+-- Claim-lookup index. Partial on `response_holder_id is not null` so
+-- the index only carries live claims - the steady state has 0 rows
+-- claimed and a partial index stays tiny under that. Same shape as
+-- the reflection-claim index above.
+create index if not exists threads_response_claim_idx
+  on public.threads (response_claim_expires_at)
+  where response_holder_id is not null;
+
+-- Try to take the response claim on a specific thread. Returns true iff
+-- we hold it after the call. Atomic via the WHERE on the UPDATE: the
+-- write only lands if the row was either unclaimed, ours already
+-- (harmless refresh), or carrying an expired claim. The threads RLS
+-- already scopes by user_id = auth.uid(); the inner guard is belt-and-
+-- braces in case a future RLS change widens the policy.
+drop function if exists public.acquire_thread_response_claim(uuid, text, int);
+create or replace function public.acquire_thread_response_claim(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_ttl_seconds int
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.threads
+     set response_holder_id = p_holder_id,
+         response_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
+   where id = p_thread_id
+     and user_id = auth.uid()
+     and (
+       response_holder_id is null
+       or response_holder_id = p_holder_id
+       or response_claim_expires_at < now()
+     );
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Extend our claim if we still own it. Returns false when our claim has
+-- already been taken over by someone else (or the thread has been
+-- deleted) - in that case the chat-loop must abort immediately rather
+-- than keep streaming on a turn it no longer has the right to produce.
+drop function if exists public.heartbeat_thread_response_claim(uuid, text, int);
+create or replace function public.heartbeat_thread_response_claim(
+  p_thread_id uuid,
+  p_holder_id text,
+  p_ttl_seconds int
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  update public.threads
+     set response_claim_expires_at = now() + make_interval(secs => p_ttl_seconds)
+   where id = p_thread_id
+     and user_id = auth.uid()
+     and response_holder_id = p_holder_id
+     and response_claim_expires_at > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- Explicit release - used on graceful end-of-turn (success, abort,
+-- error) so observer devices re-enable their composer instantly rather
+-- than waiting for the TTL. Returns void: a release call when we don't
+-- hold the claim (already taken over, or never acquired) is a no-op.
+drop function if exists public.release_thread_response_claim(uuid, text);
+create or replace function public.release_thread_response_claim(
+  p_thread_id uuid,
+  p_holder_id text
+) returns void
+language plpgsql security invoker as $$
+begin
+  update public.threads
+     set response_holder_id = null,
+         response_claim_expires_at = null
+   where id = p_thread_id
+     and user_id = auth.uid()
+     and response_holder_id = p_holder_id;
+end $$;
+
 -- Reflection pipeline RPCs -----------------------------------------------
 --
 -- The reflection agent's worker runs on the same claim/lease pattern as
