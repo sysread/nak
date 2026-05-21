@@ -160,6 +160,15 @@ export interface ModelSpec {
  * agent-table check becomes a no-op.
  */
 export const MODELS = {
+  'qwen-3-6-plus': {
+    id: 'qwen-3-6-plus',
+    contextWindow: 1_000_000,
+    supportsReasoning: true,
+    // Native vision: image_url parts can be inlined directly without
+    // routing through the analyze_image tool.
+    supportsVision: true,
+    supportsResponseFormat: true,
+  },
   'deepseek-v4-flash': {
     id: 'deepseek-v4-flash',
     contextWindow: 1_000_000,
@@ -228,12 +237,14 @@ export interface TierSpec extends ModelSpec {
   /**
    * Tier-level reasoning_effort default. When set, wins over the user's
    * account-level default (but not the per-thread override). Used to
-   * differentiate tiers fronting the same Venice id - all three tiers
-   * currently front deepseek-v4-flash and the labels really mean "same
-   * model, different thinking budgets," with this field realising that
-   * contract. Absent means "no tier opinion - fall through to the user
-   * default." Only consulted when the underlying model's
-   * supportsReasoning is also true and `disableThinking` is not set.
+   * differentiate tiers fronting the same Venice id - Balanced and Fast
+   * currently both front deepseek-v4-flash and the labels really mean
+   * "same model, different thinking budgets," with this field realising
+   * that contract. (Smart fronts qwen-3-6-plus and carries its own
+   * default independently.) Absent means "no tier opinion - fall
+   * through to the user default." Only consulted when the underlying
+   * model's supportsReasoning is also true and `disableThinking` is
+   * not set.
    */
   readonly defaultReasoningEffort?: ReasoningEffort;
   /**
@@ -254,11 +265,11 @@ export interface TierSpec extends ModelSpec {
 
 export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
   smart: {
-    ...MODELS['deepseek-v4-flash'],
+    ...MODELS['qwen-3-6-plus'],
     tier: 'smart',
     label: 'Smart',
     icon: '🧠',
-    description: 'DeepSeek V4 Flash with medium thinking. Best for hard problems.',
+    description: 'Qwen 3.6 Plus with medium thinking. 1M context, native vision. Best for hard problems.',
     defaultReasoningEffort: 'medium',
   },
   balanced: {
@@ -334,14 +345,14 @@ export type AgentRole =
  *     judgments, call the memory tools. Big-window model is the win -
  *     the entire conversation is the context.
  *
- *     NOTE on capacity: as of the deepseek-v4-flash tier swap, all
- *     three foreground tiers (Smart / Balanced / Fast) ALSO front
- *     this id. The earlier policy of "background agents must not
- *     share capacity with foreground tiers" has been deliberately
- *     relaxed. If overload errors return under the shared-capacity
- *     shape, the next move is repointing the background agents
- *     (reflection, wiki, wikiLibrarian, webSearch, researchDocs) to
- *     a non-foreground id, NOT downgrading the foreground tiers.
+ *     NOTE on capacity: the Balanced and Fast foreground tiers ALSO
+ *     front this id (Smart was moved off to qwen-3-6-plus). The
+ *     earlier policy of "background agents must not share capacity
+ *     with foreground tiers" has been deliberately relaxed. If
+ *     overload errors return under the shared-capacity shape, the
+ *     next move is repointing the background agents (reflection,
+ *     wiki, wikiLibrarian, webSearch, researchDocs) to a non-
+ *     foreground id, NOT downgrading the foreground tiers.
  *
  *   wiki - deepseek-v4-flash. Autonomous wiki agent: read a settled
  *     thread the day after, decide which topics warrant a new article

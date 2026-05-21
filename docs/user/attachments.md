@@ -27,12 +27,14 @@ Click the × on a chip to remove it before sending.
 
 ## What the model actually sees
 
-- **Images**. All current tiers are text-only, so Nak automatically
-  calls a vision sub-model on the main model's behalf: the model
-  receives a note listing the attached image filenames and calls the
-  built-in `analyze_image` tool to get a text description. You do not
-  need to switch tiers to send an image; if a future tier is
-  vision-capable, Nak will inline the pixels directly instead.
+- **Images**. The **Smart** tier (Qwen 3.6 Plus) is natively vision-
+  capable, so Nak inlines the pixels directly and the model sees the
+  image first-hand. **Balanced** and **Fast** are text-only, so Nak
+  automatically calls a vision sub-model on the main model's behalf:
+  the model receives a note listing the attached image filenames and
+  calls the built-in `analyze_image` tool to get a text description.
+  You do not need to switch tiers to send an image; the routing is
+  automatic per tier.
 - **Documents, code, and other files**. Nak calls Venice's text
   parser at upload time to pull readable text out, then prepends
   that text to your message as a fenced block tagged with the

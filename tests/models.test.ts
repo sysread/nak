@@ -45,19 +45,24 @@ describe('MODELS (active registry)', () => {
   it('records mistral-small as non-reasoning - the docblock says Venice 4xxs on the field', () => {
     expect(MODELS['mistral-small-3-2-24b-instruct'].supportsReasoning).toBe(false);
   });
-  it('records the vision model as the only supportsVision=true entry', () => {
-    expect(MODELS['e2ee-qwen3-5-122b-a10b'].supportsVision).toBe(true);
+  it('marks the vision-capable ids as supportsVision=true', () => {
+    // Two vision-capable entries today: the analyze_image sub-call
+    // (e2ee-qwen3-5-122b-a10b) and the Smart tier's foreground model
+    // (qwen-3-6-plus, which inlines image_url parts directly rather
+    // than routing through analyze_image).
+    const visionIds = new Set(['e2ee-qwen3-5-122b-a10b', 'qwen-3-6-plus']);
     for (const [id, spec] of Object.entries(MODELS)) {
-      if (id !== 'e2ee-qwen3-5-122b-a10b') expect(spec.supportsVision).toBe(false);
+      expect(spec.supportsVision).toBe(visionIds.has(id));
     }
   });
 });
 
 describe('TIERS (user-facing wrappers)', () => {
   it('has the three tiers with the expected Venice model ids', () => {
-    // All three tiers currently front the same deepseek-v4-flash id; the
-    // difference is the reasoning configuration (medium / low / off).
-    expect(TIERS.smart.id).toBe('deepseek-v4-flash');
+    // Smart fronts qwen-3-6-plus (1M context, native vision). Balanced
+    // and Fast still share deepseek-v4-flash, differing only in their
+    // reasoning configuration (low / off).
+    expect(TIERS.smart.id).toBe('qwen-3-6-plus');
     expect(TIERS.balanced.id).toBe('deepseek-v4-flash');
     expect(TIERS.fast.id).toBe('deepseek-v4-flash');
   });
