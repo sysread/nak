@@ -40,7 +40,7 @@ const realTimers: ThreadClaimTimers = {
   clearInterval: (h) => clearInterval(h),
 };
 
-export interface ThreadClaimConfig {
+interface ThreadClaimConfig {
   /** Length of the claim stamped on acquire and every heartbeat, in seconds. */
   ttlSeconds: number;
   /** How often to heartbeat while holding, in milliseconds. Must be < ttlSeconds * 1000. */

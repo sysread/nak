@@ -198,6 +198,15 @@ A chat turn goes:
 
 ## Interactions with other features
 
+- **Exchange** — the in-flight chat-turn state machine
+  (`ExchangeSlot`, `ExchangeStore`, the cross-device claim)
+  lives in `src/lib/exchange/`. `Chat.svelte` owns one
+  `ExchangeStore` plus a per-tab `holderId`; every "is this
+  thread mid-stream?" UI surface reads through `activeSlot?.X`
+  and every chat-loop handler writes through the slot that
+  `runExchange` resolved from `ctx.threadId`. See
+  `./exchange.md` for the full lifecycle and the
+  `respondingElsewhere` / observer-side wiring.
 - **Tools** - every main-chat round's `streamChat` call passes `tools:
   buildToolList(thread.toolboxes_enabled)`. Tool calls arrive as
   `StreamEvent` of type `tool_call`; `executeToolCall` dispatches

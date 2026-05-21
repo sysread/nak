@@ -78,18 +78,18 @@
 
 import type { Message } from '../supabase';
 
-export interface StreamingError {
+interface StreamingError {
   text: string;
   retry?: () => void;
 }
 
-export interface ToolTiming {
+interface ToolTiming {
   startedAt: number;
   endedAt?: number;
   error?: boolean;
 }
 
-export type ToolTimings = Record<string, ToolTiming>;
+type ToolTimings = Record<string, ToolTiming>;
 
 /**
  * Why the in-flight controller was aborted. Read by runExchange's
@@ -108,7 +108,7 @@ export type ToolTimings = Record<string, ToolTiming>;
  * Plain field, not $state - no template reads it directly; the
  * runExchange catch consumes it within a synchronous block.
  */
-export type AbortReason = 'user' | 'claim' | null;
+type AbortReason = 'user' | 'claim' | null;
 
 export class ExchangeSlot {
   sending = $state(false);
