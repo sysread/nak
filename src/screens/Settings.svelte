@@ -1436,6 +1436,7 @@
           <label style="display:flex;gap:0.5rem;align-items:center">
             <input
               type="checkbox"
+              name="emphasis-markdown"
               checked={emphasisMarkdown}
               onchange={(e) =>
                 onToggleEmphasis((e.currentTarget as HTMLInputElement).checked)}
@@ -1462,6 +1463,7 @@
           <label style="display:flex;gap:0.5rem;align-items:center">
             <input
               type="checkbox"
+              name="notify-on-complete"
               checked={notifyOnComplete}
               onchange={(e) =>
                 onToggleNotifyOnComplete((e.currentTarget as HTMLInputElement).checked)}
@@ -1501,6 +1503,7 @@
               <div class="prompt-row">
                 <input
                   type="text"
+                  name="prompt-name-{p.id}"
                   class="prompt-name"
                   value={p.name}
                   placeholder="Name"
@@ -1509,6 +1512,7 @@
                 <label class="prompt-default">
                   <input
                     type="checkbox"
+                    name="prompt-default-{p.id}"
                     checked={p.enabledByDefault}
                     onchange={(e) =>
                       updatePrompt(p.id, {
@@ -1586,6 +1590,7 @@
         <label class="form-row toggle-row">
           <input
             type="checkbox"
+            name="wiki-automatic"
             checked={wikiAutomaticEnabled}
             onchange={(e) => onToggleWikiAutomatic(e.currentTarget.checked)}
           />
@@ -1602,6 +1607,7 @@
         <label class="form-row toggle-row">
           <input
             type="checkbox"
+            name="wiki-librarian"
             checked={wikiLibrarianEnabled}
             onchange={(e) => onToggleWikiLibrarian(e.currentTarget.checked)}
           />
@@ -1689,6 +1695,7 @@
         </p>
         <div class="form-row">
           <select
+            name="default-log-level"
             aria-label="Default minimum log level"
             value={defaultLogLevel}
             onchange={(e) => {
@@ -1733,6 +1740,7 @@
             <span>From</span>
             <input
               type="date"
+              name="usage-start"
               bind:value={usageStart}
               max={usageEnd}
             />
@@ -1741,6 +1749,7 @@
             <span>To</span>
             <input
               type="date"
+              name="usage-end"
               bind:value={usageEnd}
               min={usageStart}
               max={todayYmd()}
