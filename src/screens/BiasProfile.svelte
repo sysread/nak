@@ -175,9 +175,16 @@
         supabase.biasListObservationsForThread(threadId),
         supabase.biasListReactionsForThread(threadId),
       ]);
+      // Guard against a quick re-toggle (collapse this thread,
+      // or expand a different one) while the fetch was in flight -
+      // without this check, the stale response would overwrite the
+      // newly-active panel's data with the prior thread's
+      // observations.
+      if (expandedThreadId !== threadId) return;
       expandedObs = obs;
       expandedReactions = reactions;
     } catch {
+      if (expandedThreadId !== threadId) return;
       expandedObs = [];
       expandedReactions = [];
     }

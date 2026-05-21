@@ -47,6 +47,7 @@
    * yourself adding another one, the convention says you probably
    * want auto-apply with rollback instead.
    */
+  import { onDestroy } from 'svelte';
   import { changePassword, saveConfig, toExportedConfig } from '$lib/config';
   import {
     app,
@@ -277,6 +278,21 @@
     }
   }
 
+  // Closing the modal mid-debounce would otherwise drop the user's
+  // most recent prompt edit on the floor (the timer outlives the
+  // component but its closure writes to state nobody reads anymore,
+  // and persistSystemPrompts never gets called). Cancel the pending
+  // timer and fire one final fire-and-forget save so the typed-but-
+  // unsent state lands on the server. Safe to no-op when there's no
+  // pending edit.
+  onDestroy(() => {
+    if (promptsDebounce !== null) {
+      clearTimeout(promptsDebounce);
+      promptsDebounce = null;
+      void savePrompts();
+    }
+  });
+
   // --- Appearance pane ---
   let colorMode = $state<ColorMode>(app.colorMode);
   let accent = $state<Accent>(app.accent);
@@ -478,18 +494,27 @@
     customError = null;
     customLoading = true;
     customTruncated = false;
+    // Snapshot the requested range so a user who edits the date
+    // pickers and re-clicks Refresh before this fetch settles
+    // doesn't see the prior range's rows land as if they were the
+    // new range's response.
+    const requestedStart = usageStart;
+    const requestedEnd = usageEnd;
+    const isStale = (): boolean =>
+      usageStart !== requestedStart || usageEnd !== requestedEnd;
     try {
       // End-of-day upper bound: the date picker reads as "through this
       // whole day". Venice treats endDate as an exclusive cutoff, so
       // we pass the *next* midnight to include the picked day itself.
-      const startIso = new Date(`${usageStart}T00:00:00Z`).toISOString();
-      const endDay = new Date(`${usageEnd}T00:00:00Z`);
+      const startIso = new Date(`${requestedStart}T00:00:00Z`).toISOString();
+      const endDay = new Date(`${requestedEnd}T00:00:00Z`);
       endDay.setUTCDate(endDay.getUTCDate() + 1);
       const endIso = endDay.toISOString();
       const rows = await app.venice.fetchUsage({
         startDate: startIso,
         endDate: endIso,
       });
+      if (isStale()) return;
       customRows = rows;
       // Best-effort cap detection: if the response came back exactly at
       // the page × per-page ceiling, we almost certainly hit the safety
@@ -498,6 +523,7 @@
       // hint — never shown when we're confidently under the cap.
       customTruncated = rows.length >= USAGE_MAX_PAGES * 500;
     } catch (err) {
+      if (isStale()) return;
       customError =
         err instanceof VeniceError
           ? err.message
@@ -506,7 +532,11 @@
             : String(err);
       customRows = null;
     } finally {
-      customLoading = false;
+      // Only flip the spinner off for our own request - a stale
+      // response landing while a newer fetch is in flight would
+      // otherwise prematurely clear the spinner the new request
+      // just turned on.
+      if (!isStale()) customLoading = false;
     }
   }
 
