@@ -25,12 +25,12 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  * show up as silent undefineds at runtime.
  *
  * Timing constants:
- *   - leaseTtlSeconds 90 / leaseHeartbeatMs 40_000: same shape as
+ *   - leaseTtlSeconds 300 / leaseHeartbeatMs 90_000: same shape as
  *     the other workers; two attempts per expiry window.
  *   - threadClaimTtlSeconds 120: mirrors summary - one non-streaming
  *     Venice call with a 512-token cap. Generous with margin.
  *   - leasePollMs 20_000: match the heartbeat; cheap SELECT.
- *   - idleIntervalMs 60_000: longer than summary because the topic
+ *   - idleIntervalMs 300_000: longer than summary because the topic
  *     vocabulary stabilises - once a thread is tagged it stays
  *     tagged until the user adds more turns, and most settled
  *     threads never re-qualify. A 60s idle nap bounds tagging
@@ -40,11 +40,11 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  *     blips without hammering retries.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 90,
-  leaseHeartbeatMs: 40_000,
+  leaseTtlSeconds: 300,
+  leaseHeartbeatMs: 90_000,
   threadClaimTtlSeconds: 120,
   leasePollMs: 20_000,
-  idleIntervalMs: 60_000,
+  idleIntervalMs: 300_000,
   errorBackoffMs: 30_000,
 };
 

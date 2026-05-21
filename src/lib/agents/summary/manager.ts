@@ -20,14 +20,14 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  * show up as silent undefineds at runtime.
  *
  * Timing constants:
- *   - leaseTtlSeconds 90 / leaseHeartbeatMs 40_000: same shape as
+ *   - leaseTtlSeconds 300 / leaseHeartbeatMs 90_000: same shape as
  *     embeddings and reflection; two attempts per expiry window.
  *   - threadClaimTtlSeconds 120: generous for one non-streaming
  *     Venice call. Reflection uses 600s because it can span
  *     multiple tool rounds; summary has no tools, so one round
  *     is the ceiling.
  *   - leasePollMs 20_000: match the heartbeat; cheap SELECT.
- *   - idleIntervalMs 30_000: match reflection. Summarisable
+ *   - idleIntervalMs 180_000: match reflection. Summarisable
  *     threads appear at conversation boundaries, which are rare
  *     on the "always check" cadence embeddings uses (5s); 30s
  *     bounds the end-of-conversation -> summary latency.
@@ -36,11 +36,11 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  *     blips without hammering retries.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 90,
-  leaseHeartbeatMs: 40_000,
+  leaseTtlSeconds: 300,
+  leaseHeartbeatMs: 90_000,
   threadClaimTtlSeconds: 120,
   leasePollMs: 20_000,
-  idleIntervalMs: 30_000,
+  idleIntervalMs: 180_000,
   errorBackoffMs: 10_000,
 };
 

@@ -23,7 +23,7 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  * show up as silent undefineds at runtime.
  *
  * Timing constants:
- *   - leaseTtlSeconds 90 / leaseHeartbeatMs 40_000: same shape as
+ *   - leaseTtlSeconds 300 / leaseHeartbeatMs 90_000: same shape as
  *     the other workers; two attempts per expiry window.
  *   - leasePollMs 20_000: match the heartbeat cadence.
  *   - idleIntervalMs 3_600_000 (1 hour): expirations are a 30-day
@@ -37,8 +37,8 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  *     constant is kept client-side so tests can dial it down.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 90,
-  leaseHeartbeatMs: 40_000,
+  leaseTtlSeconds: 300,
+  leaseHeartbeatMs: 90_000,
   leasePollMs: 20_000,
   idleIntervalMs: 60 * 60 * 1000,
   errorBackoffMs: 60_000,

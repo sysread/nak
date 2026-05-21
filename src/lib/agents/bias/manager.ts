@@ -38,7 +38,7 @@ import {
  *     workers; two beats per expiry window.
  *   - claimTtlSeconds 300: generous (5 min). One LLM call against
  *     a moderately long transcript fits comfortably.
- *   - idleIntervalMs 120_000: bias work is the LEAST time-critical
+ *   - idleIntervalMs 300_000: bias work is the LEAST time-critical
  *     of any agent - the user does not see results until they
  *     open the debug modal or until a future chat-turn renders the
  *     system-prompt block. Two-minute idle keeps the worker quiet
@@ -48,11 +48,11 @@ import {
  *     have zero UX urgency, so back off twice as long.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 90,
-  leaseHeartbeatMs: 40_000,
+  leaseTtlSeconds: 300,
+  leaseHeartbeatMs: 90_000,
   claimTtlSeconds: 300,
   leasePollMs: 30_000,
-  idleIntervalMs: 120_000,
+  idleIntervalMs: 300_000,
   errorBackoffMs: 30_000,
   rateLimitBackoffMs: 120_000,
 };

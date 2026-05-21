@@ -44,7 +44,7 @@ const traceLog = createLogger('samskara-worker');
  * field names identical means grep finds both ends at once.
  *
  * Timing constants:
- *   - leaseTtlSeconds 90 / leaseHeartbeatMs 40_000: same shape as
+ *   - leaseTtlSeconds 300 / leaseHeartbeatMs 90_000: same shape as
  *     the other workers; two beats per expiry window.
  *   - claimTtlSeconds 600: generous (10 min). Each phase claims one
  *     row and may run an LLM call; the TTL must outlast the slowest
@@ -57,7 +57,7 @@ const traceLog = createLogger('samskara-worker');
  *     "generous, lower priority" reasoning; in practice a hung
  *     regen blocks the always-on summary update for everyone.
  *   - leasePollMs 20_000: match heartbeat cadence.
- *   - idleIntervalMs 60_000: when holding the lease and every
+ *   - idleIntervalMs 300_000: when holding the lease and every
  *     phase said empty-phase, idle for a minute. Samskara work is
  *     much less time-critical than embeddings (the next chat-loop
  *     turn doesn't wait on it), so a longer idle is fine.
@@ -69,12 +69,12 @@ const traceLog = createLogger('samskara-worker');
  *     pushes back.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 90,
-  leaseHeartbeatMs: 40_000,
+  leaseTtlSeconds: 300,
+  leaseHeartbeatMs: 90_000,
   claimTtlSeconds: 600,
   regenClaimTtlSeconds: 180,
   leasePollMs: 20_000,
-  idleIntervalMs: 60_000,
+  idleIntervalMs: 300_000,
   errorBackoffMs: 15_000,
   rateLimitBackoffMs: 60_000,
 };

@@ -39,11 +39,11 @@ export interface WikiStartOpts extends BaseStartOpts {
  * settled conversation) so identical knobs are fine.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 90,
-  leaseHeartbeatMs: 40_000,
+  leaseTtlSeconds: 300,
+  leaseHeartbeatMs: 90_000,
   threadClaimTtlSeconds: 600,
   leasePollMs: 20_000,
-  idleIntervalMs: 30_000,
+  idleIntervalMs: 180_000,
   errorBackoffMs: 10_000,
   // Three consecutive agent errors against the same terminal message
   // before the loop gives up and advances the pointer. Tuned for the

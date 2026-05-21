@@ -14,13 +14,13 @@ import { agentModel } from '../../models';
 import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
 
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 90,
-  leaseHeartbeatMs: 40_000,
+  leaseTtlSeconds: 300,
+  leaseHeartbeatMs: 90_000,
   // Bounded single-recipe input; one fast-tier call with a 384-token
   // cap. 60s mirrors the memory-topics TTL and is comfortable margin.
   recipeClaimTtlSeconds: 60,
   leasePollMs: 20_000,
-  idleIntervalMs: 60_000,
+  idleIntervalMs: 300_000,
   errorBackoffMs: 30_000,
 };
 

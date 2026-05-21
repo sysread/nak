@@ -28,7 +28,7 @@ import { VENICE_EMBEDDING_MODEL } from '../models';
  * at once.
  *
  * Timing constants picked to match the lease protocol:
- *   - leaseTtlSeconds 90 / leaseHeartbeatMs 40_000: two attempts
+ *   - leaseTtlSeconds 300 / leaseHeartbeatMs 90_000: two attempts
  *     per TTL window; a single failed beat is inside the margin.
  *   - rowClaimTtlSeconds 120: longer than leaseTtl so a row
  *     claimed by a dying worker isn't instantly grabbed by the
@@ -36,26 +36,25 @@ import { VENICE_EMBEDDING_MODEL } from '../models';
  *     has definitely returned before the claim expires.
  *   - leasePollMs 20_000: while we don't hold the lease, poll at
  *     the same cadence we would've heartbeated. Cheap SELECT.
- *   - idleIntervalMs 30_000: when we DO hold the lease and the
+ *   - idleIntervalMs 180_000: when we DO hold the lease and the
  *     queue is empty, this is the cadence the worker probes the
- *     claim RPC. A tighter setting picks up fresh memories
- *     faster but spends a steady stream of "nothing to embed"
- *     RPCs the entire time the tab is open. 30s is a compromise:
- *     a memory written by the user surfaces within at most half
- *     a minute, which is well inside what feels live for a
- *     background process, while cutting the idle poll rate to
- *     1/6 of the previous 5s setting. The right fix long-term
- *     is a postMessage wake from the main thread when new work
- *     gets queued; until that lands, 30s is the right number.
+ *     claim RPC. A fresh memory written by the user surfaces in
+ *     the recall index within at most 3 minutes, which is
+ *     acceptable for a personal-scale app where the same person
+ *     is unlikely to recall against a memory they just wrote.
+ *     The right fix for true responsiveness is a postMessage
+ *     wake from the main thread when new work gets queued; until
+ *     that lands, this interval favours mobile battery life over
+ *     near-real-time embedding.
  *   - rateLimitBackoffMs 30_000: Venice's 429 doesn't carry a
  *     standard retry-after; 30s is a polite default.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 90,
-  leaseHeartbeatMs: 40_000,
+  leaseTtlSeconds: 300,
+  leaseHeartbeatMs: 90_000,
   rowClaimTtlSeconds: 120,
   leasePollMs: 20_000,
-  idleIntervalMs: 30_000,
+  idleIntervalMs: 180_000,
   errorBackoffMs: 5_000,
   rateLimitBackoffMs: 30_000,
 };

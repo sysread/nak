@@ -29,7 +29,7 @@ export interface WikiLibrarianStartOpts extends BaseStartOpts {
 /**
  * Worker timing defaults.
  *
- *   - leaseTtlSeconds 90 / leaseHeartbeatMs 40_000: same as the other
+ *   - leaseTtlSeconds 300 / leaseHeartbeatMs 90_000: same as the other
  *     agent workers.
  *   - minIntervalSeconds 12 * 3600 = 43_200: minimum 12h between
  *     successive runs (across all devices). Enforced atomically by
@@ -44,8 +44,8 @@ export interface WikiLibrarianStartOpts extends BaseStartOpts {
  *     workers' 10s; transient failures here are not urgent.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 90,
-  leaseHeartbeatMs: 40_000,
+  leaseTtlSeconds: 300,
+  leaseHeartbeatMs: 90_000,
   minIntervalSeconds: 12 * 3600,
   leasePollMs: 60_000,
   idleIntervalMs: 60 * 60_000,

@@ -20,7 +20,7 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  * field names identical so grep finds both ends at once.
  *
  * Timing constants:
- *   - leaseTtlSeconds 90 / leaseHeartbeatMs 40_000: two attempts
+ *   - leaseTtlSeconds 300 / leaseHeartbeatMs 90_000: two attempts
  *     per expiry window; a single failed beat stays inside the
  *     margin. Same shape as the embeddings worker.
  *   - threadClaimTtlSeconds 600: 10 minutes is generous. A
@@ -29,7 +29,7 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  *     Venice round-trip; TTL must cover the slowest realistic run
  *     with margin for retries.
  *   - leasePollMs 20_000: match heartbeat cadence; cheap SELECT.
- *   - idleIntervalMs 30_000: when holding the lease with an empty
+ *   - idleIntervalMs 180_000: when holding the lease with an empty
  *     queue, poll less often than embeddings (5s) because a thread
  *     becoming reflectable is a much rarer event than a memory
  *     becoming embeddable. 30s bounds the latency from "user
@@ -39,11 +39,11 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  *     queue moves slowly anyway.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 90,
-  leaseHeartbeatMs: 40_000,
+  leaseTtlSeconds: 300,
+  leaseHeartbeatMs: 90_000,
   threadClaimTtlSeconds: 600,
   leasePollMs: 20_000,
-  idleIntervalMs: 30_000,
+  idleIntervalMs: 180_000,
   errorBackoffMs: 10_000,
 };
 
