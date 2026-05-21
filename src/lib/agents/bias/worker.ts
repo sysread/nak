@@ -102,6 +102,17 @@ let currentClient: SupabaseClient | null = null;
  */
 const activeConvIds = new Set<string>();
 
+/**
+ * Cross-rotation gate for the aggregate phase. Seeded `true` so
+ * the first rotation after worker start (or after re-acquiring
+ * the lease) refills the bias_summary cache once; thereafter
+ * analyze sets `value=true` on every successful save and
+ * aggregate clears it. Without this gate the aggregate phase
+ * spun N_catalog * 3 RPCs per rotation with no idle nap - see
+ * `loop.ts` for the full failure mode.
+ */
+const aggregateDirty = { value: true };
+
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   if (ms <= 0) return Promise.resolve();
   return new Promise<void>((resolve) => {
@@ -171,6 +182,11 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
       level: 'warn',
       message: 'bias lease lost - re-entering polling',
     });
+    // Re-flag the cache as dirty so the next acquire-and-rotate
+    // pass runs aggregate once: while we were leaseless the
+    // device that took over may have written observations we
+    // never saw, so our previous "clean" stance is stale.
+    aggregateDirty.value = true;
   };
 
   try {
@@ -190,6 +206,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
           signal,
           onLeaseLost,
           excludeThreadIds: () => Array.from(activeConvIds),
+          aggregateDirty,
         };
         const result = await runOneCycle(ctx);
         post({ type: 'progress', phase, result });

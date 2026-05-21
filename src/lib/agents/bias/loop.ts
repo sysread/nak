@@ -16,17 +16,26 @@
  *     analysis. The thread becomes re-eligible on the next pass.
  *
  *   - `aggregate`: recompute `bias_summary` for every catalog
- *     entry. Cheap: one query + JS math per bias. Always runs once
- *     per rotation so the chat-loop's read of the cache is never
- *     more than a rotation stale. If no observations exist for a
- *     bias yet, the recomputed row reflects the prior alone
- *     (Beta(2, 8)) and tiers as 'elided'.
+ *     entry. Cheap per-bias, but the full pass is N_catalog * 3
+ *     round-trips (list contributions + list reactions + upsert),
+ *     so we only run it when analyze has produced new
+ *     observations since the last aggregate. The
+ *     `aggregateDirty` flag on the CycleContext, owned and seeded
+ *     by the worker, gates the work: analyze sets it on every
+ *     successful save, aggregate clears it after running.
+ *     Initial value is `true` so the very first rotation after
+ *     worker startup (or after re-acquiring the lease from
+ *     another device) re-fills the cache regardless of analyze
+ *     activity. If no observations exist for a bias yet, the
+ *     recomputed row reflects the prior alone (Beta(2, 8)) and
+ *     tiers as 'elided'.
  *
- * Rotation order: aggregate first, analyze second. That way a
- * fresh cycle catches up on the cache even when there's nothing
- * to analyze, which keeps the chat-loop read warm. The
- * dependency goes one way - aggregate reads what analyze writes -
- * but rotation order matters mainly for the cold-start case.
+ * Rotation order: aggregate first, analyze second. The cold-start
+ * dirty=true path means a fresh worker fills the cache on its
+ * first rotation; subsequent rotations skip aggregate cheaply
+ * (zero RPCs) until analyze flags a save. The dependency goes
+ * one way - aggregate reads what analyze writes - so a save in
+ * rotation N gets reflected in the cache on rotation N+1.
  */
 import type { SupabaseService } from '../../supabase';
 import type { VeniceClient } from '../../venice';
@@ -95,6 +104,18 @@ export interface CycleContext {
    *  typing in. Updated by the manager via postMessage; defaults
    *  to empty. */
   excludeThreadIds: () => readonly string[];
+  /**
+   * Cross-phase aggregate gate. Owned by the worker so its state
+   * survives rotations. analyze sets `value=true` on every
+   * successful save; aggregate consumes the flag (work + clear)
+   * and otherwise short-circuits to 'empty-phase' without any
+   * RPCs. Seeded `true` at worker startup so cold-start fills the
+   * cache once. Without this gate the aggregate phase fires
+   * N_catalog * 3 RPCs every rotation forever, including idle,
+   * which is what the worker drawer surfaced as the "request
+   * spam" pattern.
+   */
+  aggregateDirty: { value: boolean };
 }
 
 export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
@@ -178,6 +199,11 @@ async function runAnalyzePhase(ctx: CycleContext): Promise<CycleResult> {
       [],
       []
     );
+    // Even zero-observation saves bump the processed-thread count
+    // for every catalog bias, which moves the denominators in the
+    // aggregate math. Flag the cache stale so the next rotation
+    // recomputes.
+    if (ok) ctx.aggregateDirty.value = true;
     return ok ? 'progress' : 'save-rejected';
   }
 
@@ -278,26 +304,41 @@ async function runAnalyzePhase(ctx: CycleContext): Promise<CycleResult> {
     `analyze: saved ${cleaned.length} observation(s) and ${reactions.length} reaction(s) ` +
       `for thread ${claim.threadId}`
   );
+  // Flag the cache as stale so the next aggregate rotation actually
+  // runs. Without this the dirty gate would never trip and the
+  // bias_summary cache would drift away from the saved
+  // observations.
+  ctx.aggregateDirty.value = true;
   return 'progress';
 }
 
 /**
  * Aggregate phase. For every catalog entry, query the per-bias
  * processed-thread contributions, run the math, upsert one
- * `bias_summary` row. Cheap; happens every rotation regardless of
- * whether analyze produced new work.
+ * `bias_summary` row.
  *
- * "Empty-phase" semantics: the rotation reports empty when every
- * bias's recomputed row is identical to the cached row (within
- * float tolerance). In practice this means "nothing observable
- * changed", and the outer worker's idle-sleep heuristic counts that
- * as quiescent. Achieving identical-up-to-eps detection requires a
- * round-trip per bias to read the prior row; cheaper to always
- * return 'progress' here and let the idle sleep come from the
- * analyze phase being repeatedly empty. The aggregate side runs in
- * milliseconds.
+ * Gated by `ctx.aggregateDirty.value`. When the flag is false the
+ * phase short-circuits to 'empty-phase' with zero RPCs - analyze
+ * hasn't saved anything since the last aggregate, so the cache is
+ * known-current. When the flag is true we run the full N_catalog
+ * pass, then clear the flag. Either way the phase returns
+ * 'empty-phase' so the worker's idle-sleep accounting treats this
+ * as cache-maintenance rather than work that needs to be drained
+ * (nothing downstream of aggregate consumes its output inside the
+ * same worker; the chat-loop reads bias_summary directly from
+ * Supabase whenever it needs the block).
+ *
+ * Without the gate this phase was the dominant idle-time request
+ * source - 19 biases * 3 RPCs per rotation in a tight loop, since
+ * `touched > 0` was always true on the prior-only writes and the
+ * `'progress'` return prevented the outer worker from ever taking
+ * its idle nap.
  */
 async function runAggregatePhase(ctx: CycleContext): Promise<CycleResult> {
+  if (!ctx.aggregateDirty.value) {
+    log.trace('aggregate: cache clean, skipping');
+    return 'empty-phase';
+  }
   let touched = 0;
   for (const bias of BIAS_KEYS) {
     if (ctx.signal.aborted) return 'progress';
@@ -348,9 +389,15 @@ async function runAggregatePhase(ctx: CycleContext): Promise<CycleResult> {
     }
   }
   log.trace(`aggregate: recomputed ${touched} summary row(s)`);
-  // Even when no observations exist, the prior-only rows still
-  // need writing so the cache is queryable.
-  return touched > 0 ? 'progress' : 'empty-phase';
+  // Clear the dirty flag whether or not any individual upsert
+  // failed; partial failures will catch up next time analyze
+  // flags the cache. Returning 'empty-phase' (not 'progress')
+  // means cache maintenance doesn't block the outer worker's
+  // idle nap - nothing inside the worker reacts to the aggregate
+  // output, and the chat-loop reads bias_summary directly from
+  // Supabase per request.
+  ctx.aggregateDirty.value = false;
+  return 'empty-phase';
 }
 
 /**

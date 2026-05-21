@@ -121,7 +121,7 @@ describe('samskara runOneCycle - lease handling', () => {
 });
 
 describe('samskara runOneCycle - decay phase', () => {
-  it('runs the decay RPC and reports progress', async () => {
+  it('runs the decay RPC and reports empty-phase so the worker can idle', async () => {
     const { coordinator } = buildCoordinator();
     const decay = vi.fn(async () => 5);
     const supabase = fakeSupabase({ samskaraDecay: decay } as Partial<SupabaseService>);
@@ -129,7 +129,12 @@ describe('samskara runOneCycle - decay phase', () => {
     await runOneCycle(ctx); // acquired-lease
     const result = await runOneCycle(ctx);
     expect(decay).toHaveBeenCalled();
-    expect(result).toBe<CycleResult>('progress');
+    // Decay is pure cache maintenance - the SQL update has no
+    // consumer inside the worker. Returning 'progress' would
+    // pin the outer worker's allEmpty gate false on every
+    // rotation, defeating the idle nap and spinning every other
+    // phase's per-rotation queries at full speed.
+    expect(result).toBe<CycleResult>('empty-phase');
   });
 
   it('returns error when the decay RPC throws', async () => {

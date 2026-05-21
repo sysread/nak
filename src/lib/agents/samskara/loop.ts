@@ -757,11 +757,20 @@ async function runDecayPhase(ctx: CycleContext): Promise<CycleResult> {
     log.debug('decay: RPC failed', err);
     return 'error';
   }
-  // Fires every rotation - the RPC is a single SQL update with no
-  // useful diagnostic surface unless it failed. Trace so it stays out
-  // of the default drawer view.
+  // Single SQL update with no useful diagnostic surface unless it
+  // failed; trace so it stays out of the default drawer view.
   log.trace('decay: applied');
-  return 'progress';
+  // 'empty-phase', not 'progress'. Decay is pure cache maintenance
+  // - nothing inside the worker reacts to it, and the chat-loop
+  // reads samskara state directly from Supabase per request. A
+  // 'progress' return here would prevent the outer worker from
+  // ever taking its idle nap (the `allEmpty` gate flips false on
+  // any non-empty phase), spinning the loop at full speed and
+  // hammering every other phase's per-rotation queries
+  // (samskara_recent_embedded_substrate, samskara_fires, etc.)
+  // alongside it. The decay RPC still runs once per idle wake
+  // (~60s), which is the right cadence.
+  return 'empty-phase';
 }
 
 /**
