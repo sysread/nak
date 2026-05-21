@@ -91,6 +91,25 @@ export interface ToolTiming {
 
 export type ToolTimings = Record<string, ToolTiming>;
 
+/**
+ * Why the in-flight controller was aborted. Read by runExchange's
+ * catch to decide what to surface on the inline error banner:
+ *
+ *   null     - no abort (or the catch already handled a previous
+ *              abort and reset the reason).
+ *   'user'   - the user clicked Stop. No banner; the user knows what
+ *              they did and an error message would read as theatre.
+ *   'claim'  - the cross-device claim was decisively lost
+ *              (heartbeat RPC returned false; another device took
+ *              over). Surface a banner so the user knows their turn
+ *              was preempted - the alternative is an inexplicable
+ *              dead transcript with no signal about what happened.
+ *
+ * Plain field, not $state - no template reads it directly; the
+ * runExchange catch consumes it within a synchronous block.
+ */
+export type AbortReason = 'user' | 'claim' | null;
+
 export class ExchangeSlot {
   sending = $state(false);
   streamingText = $state('');
@@ -116,6 +135,13 @@ export class ExchangeSlot {
    * a screen-wide re-render on every persisted-row callback.
    */
   persistedRows: Message[] = [];
+  /**
+   * Why the controller was aborted, if it was. Set by the caller
+   * BEFORE calling abortCtl.abort() so runExchange's catch can read
+   * the reason after the abort propagates. Cleared by reset() and
+   * by the catch after consumption.
+   */
+  abortReason: AbortReason = null;
 
   /**
    * Reset every field to its idle value. Called at the start of a
@@ -140,6 +166,7 @@ export class ExchangeSlot {
     this.abortCtl = null;
     this.toolTimings = {};
     this.persistedRows = [];
+    this.abortReason = null;
   }
 
   /**
