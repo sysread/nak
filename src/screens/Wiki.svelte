@@ -1661,6 +1661,13 @@
   .wiki-librarian-confirm h3 {
     margin: 0 0 0.75rem 0;
   }
+  /* The manual-update form sits directly above the article body (see
+     the placement comment at the use site). Without a bottom margin
+     the form's border butts right up against the article's first
+     heading and reads as one merged block. */
+  .wiki-manual-update {
+    margin-bottom: 1rem;
+  }
   .form-row {
     display: flex;
     flex-direction: column;
