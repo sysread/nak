@@ -19,7 +19,7 @@
    * empty thread-picker state because the global sections (corpus
    * counts, compound summary, mood legend) don't need a thread.
    */
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { app } from '$lib/state.svelte';
   import { route } from '$lib/routing.svelte';
   import {
@@ -127,6 +127,23 @@
 
   onMount(() => {
     void refresh();
+  });
+
+  // The two reset timers (`copyResetTimer`, `collapseResetTimer`) hold
+  // the component closure alive past the modal's destroy if the user
+  // closes the panel within the 2-4s reset window after copying or
+  // consolidating. Clear them on destroy so the closure can GC and the
+  // timer never fires its set-back-to-idle write into a destroyed
+  // component's state.
+  onDestroy(() => {
+    if (copyResetTimer !== null) {
+      clearTimeout(copyResetTimer);
+      copyResetTimer = null;
+    }
+    if (collapseResetTimer !== null) {
+      clearTimeout(collapseResetTimer);
+      collapseResetTimer = null;
+    }
   });
 
   // --- formatters ---------------------------------------------------------
