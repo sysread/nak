@@ -589,6 +589,49 @@ function esc(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * Narrow inline-emphasis pass for step text. Runs AFTER `esc()`, so
+ * the input has already had HTML entities escaped; we only introduce
+ * the small set of tags below. NOT a markdown renderer - no links,
+ * code spans, headings, lists, line-break handling. Scope is the
+ * inline styles the LLM reaches for when writing prose:
+ *
+ *   **bold**          -> <strong>bold</strong>
+ *   *italic*          -> <em>italic</em>
+ *   _italic_          -> <em>italic</em>   (word-boundary guarded)
+ *
+ * Why hand-roll this instead of pulling in marked / markdown-it:
+ *   - The cookbook view doesn't want a general markdown surface (it
+ *     would invite tables, raw HTML, link injection, and a security
+ *     review). The three patterns here cover the LLM's actual habits
+ *     without the rest.
+ *   - The step-text output is already HTML-escaped; tacking three
+ *     regex substitutions on the back is cheaper and clearer than
+ *     wiring a parser to "no, only these".
+ *
+ * Ordering matters: bold runs first so `**X**` is consumed before the
+ * italic-asterisk pass would see the inner `*`s. Underscore italic is
+ * guarded by non-word lookbehind/lookahead so `pre_minced` (a single
+ * word with an internal `_`) does not match - CommonMark behaves the
+ * same way for the same reason.
+ */
+function renderInlineEmphasis(escaped: string): string {
+  let out = escaped;
+  // `**bold**`: two asterisks, at least one non-asterisk non-newline
+  // char, two asterisks. Non-greedy body so `**a** **b**` stays as
+  // two distinct spans rather than one giant one.
+  out = out.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
+  // `*italic*`: single asterisks with no asterisk inside. Same shape;
+  // a sequence the bold pass already consumed can't reappear here.
+  out = out.replace(/\*([^*\n]+?)\*/g, '<em>$1</em>');
+  // `_italic_`: underscores with word boundaries on both sides. The
+  // `(^|[^\w])` group captures the boundary char so we can re-emit
+  // it; the trailing `(?=[^\w]|$)` is a lookahead so we don't consume
+  // (and lose) the boundary on the right side.
+  out = out.replace(/(^|[^\w])_([^_\n]+?)_(?=[^\w]|$)/g, '$1<em>$2</em>');
+  return out;
+}
+
 function formatQtyUnit(qty: string | null, unit: string | null): string {
   if (qty && unit) return `${qty} ${unit}`;
   if (qty) return qty;
@@ -764,7 +807,7 @@ export function recipeToHtml(recipe: Recipe): string {
     if (!hasSections) {
       out.push('<ol class="cook-steps">');
       for (const step of instructionSteps) {
-        out.push(`<li>${esc(step.text)}</li>`);
+        out.push(`<li>${renderInlineEmphasis(esc(step.text))}</li>`);
       }
       out.push('</ol>');
     } else {
@@ -779,7 +822,7 @@ export function recipeToHtml(recipe: Recipe): string {
         // recipes and what the reader expects when sections exist.
         out.push('<ol class="cook-steps">');
         for (const step of bucketInstructions) {
-          out.push(`<li>${esc(step.text)}</li>`);
+          out.push(`<li>${renderInlineEmphasis(esc(step.text))}</li>`);
         }
         out.push('</ol>');
       }
@@ -1060,11 +1103,10 @@ export function recipeToMarkdown(
  *
  * Current checks:
  *
- *   1. Markdown emphasis (`**bold**`, single-backtick spans). The
- *      recipe HTML pipeline escapes step text and inserts it via
- *      `{@html}` on a structured wrapper — there's no markdown pass.
- *      So `**hot**` renders as literal asterisks. Reject so the LLM
- *      drops the markdown habit.
+ *   1. Backtick code spans. The renderer supports inline emphasis
+ *      (`**bold**`, `*italic*`, `_italic_`) but NOT code spans, and
+ *      a recipe with `` `like this` `` would show literal backticks.
+ *      Reject so the LLM drops the code-span habit.
  *   2. `@modifier @ingredient{...}` pattern. The LLM sometimes reaches
  *      for two adjacent `@` tokens to qualify an ingredient with a
  *      leading modifier (`@pre-minced @garlic{1%tbsp}`). The parser
@@ -1073,21 +1115,14 @@ export function recipeToMarkdown(
  *      "pre-minced" row and a duplicate of an existing `@garlic`
  *      entry. The right form is a single multi-word braced name:
  *      `@pre-minced garlic{1%tbsp}`.
+ *
+ * What we DON'T flag (anymore): `**bold**`, `*italic*`, `_italic_`
+ * markdown emphasis. The HTML renderer now picks these up in step
+ * text via `renderInlineEmphasis`. Plain-text and markdown exports
+ * leave them as authored.
  */
 export function validateCooklangSource(src: string): string[] {
   const errors: string[] = [];
-
-  // `**bold**` — two asterisks, at least one non-asterisk char, two
-  // asterisks. Doesn't match a single `*` (could be a footnote marker,
-  // rare but legitimate) or `***` (also rare and probably intentional).
-  if (/\*\*[^*\n]+\*\*/.test(src)) {
-    errors.push(
-      'markdown emphasis (`**bold**`) is not valid Cooklang and renders ' +
-        'as literal asterisks. Remove the `**` markers. If you wanted to ' +
-        'highlight a duration, use the Cooklang timer syntax `~{N%unit}` ' +
-        '(e.g. `~{4-5%hours}`) and let the renderer style it.',
-    );
-  }
 
   // Backtick code spans — `like this`. Single-line only so we don't
   // misfire on a recipe that happens to have two backticks far apart.
@@ -1095,7 +1130,9 @@ export function validateCooklangSource(src: string): string[] {
     errors.push(
       'markdown code spans (`like this`) are not valid Cooklang and ' +
         'render as literal backticks. Remove the backticks; plain text ' +
-        'in a step is already prose.',
+        'in a step is already prose. (Inline emphasis is supported - ' +
+        '`**bold**`, `*italic*`, and `_italic_` all render in step ' +
+        'text - but code spans are not.)',
     );
   }
 

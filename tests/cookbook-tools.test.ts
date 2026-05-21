@@ -158,21 +158,37 @@ describe('recipe_save', () => {
     expect(createRecipe).not.toHaveBeenCalled();
   });
 
-  it('rejects cooklang with markdown emphasis and surfaces the corrective hint', async () => {
-    // The validator's whole point is to teach the LLM the right syntax
-    // via the tool error - so we assert the message reaches the caller
-    // unaltered, not just that the save was blocked.
+  it('accepts inline emphasis (`**bold**`) since the renderer styles it', async () => {
+    // The HTML renderer applies a narrow inline-markdown pass to step
+    // text, so `**5 hours**` lands as `<strong>5 hours</strong>` in
+    // the cookbook view. The validator should let it through.
+    const createRecipe = vi.fn().mockResolvedValue(sampleRecipe());
+    await recipeSave.execute(
+      {
+        title: 'T',
+        cooklang: 'Cook for **5 hours** on low.',
+        change_message: 'init',
+      },
+      ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
+    );
+    expect(createRecipe).toHaveBeenCalled();
+  });
+
+  it('still rejects cooklang with backtick code spans (not rendered)', async () => {
+    // Code spans don't have a renderer counterpart, so they would show
+    // as literal backticks. Failing at the tool surface gives the LLM
+    // the corrective error.
     const createRecipe = vi.fn();
     await expect(
       recipeSave.execute(
         {
           title: 'T',
-          cooklang: 'Cook for **5 hours** on low.',
+          cooklang: 'Set the dial to `low`.',
           change_message: 'init',
         },
         ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
       )
-    ).rejects.toThrow(/markdown emphasis/);
+    ).rejects.toThrow(/code spans/);
     expect(createRecipe).not.toHaveBeenCalled();
   });
 
@@ -399,20 +415,21 @@ describe('recipe_update', () => {
 
   it('rejects cooklang with authoring-quirks on update (validator wired)', async () => {
     // Same validator the save tool runs - if the LLM is patching the
-    // cooklang field with markdown bold, the update fails at the tool
-    // surface and the LLM gets the corrective error rather than the
-    // cookbook silently regressing to literal asterisks.
+    // cooklang field with the duplicate-creating `@modifier
+    // @ingredient` pattern, the update fails at the tool surface and
+    // the LLM gets the corrective error rather than the cookbook
+    // silently regressing to a phantom ingredient row.
     const updateRecipe = vi.fn();
     await expect(
       recipeUpdate.execute(
         {
           id: 'r-1',
-          cooklang: 'Stir for **3 minutes**.',
-          change_message: 'add timing',
+          cooklang: 'Add @pre-minced @garlic{1%tbsp}.',
+          change_message: 'add garlic',
         },
         ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
       )
-    ).rejects.toThrow(/markdown emphasis/);
+    ).rejects.toThrow(/modifier @ingredient/);
     expect(updateRecipe).not.toHaveBeenCalled();
   });
 

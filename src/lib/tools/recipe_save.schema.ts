@@ -17,15 +17,18 @@ export const recipeSaveSchema = {
     'dash-only line like `--` ends the declaration block so prose ' +
     'instructions below render as a flat numbered list). Wrap a long ' +
     'instruction across lines by prefixing continuations with `> `. ' +
-    'IMPORTANT: Cooklang is NOT markdown - never use `**bold**`, ' +
-    '`*italic*`, or backtick code spans in the source; the renderer ' +
-    'shows the punctuation literally. For durations, use `~{N%unit}` ' +
-    '(e.g. `~{4-5%hours}`) - not `**{4-5%hours}**`. For an ingredient ' +
-    'with a modifier, write the whole phrase as a single multi-word ' +
-    'braced name: `@pre-minced garlic{1%tbsp}`, NEVER `@pre-minced ' +
-    '@garlic{1%tbsp}` (which creates two separate ingredient entries). ' +
-    'For alternatives ("use X or Y"), only the primary ingredient gets ' +
-    '`@`; write the substitute as plain prose. ' +
+    'Inline emphasis is supported in step text: `**bold**`, ' +
+    '`*italic*`, and `_italic_` render as styled spans. Backtick code ' +
+    'spans are NOT rendered - they show as literal backticks, so ' +
+    "don't use them. For durations, prefer the Cooklang timer syntax " +
+    '`~{N%unit}` (e.g. `~{4-5%hours}`) so the duration also ' +
+    'contributes to the timers list; wrapping it in `**...**` for ' +
+    'emphasis is fine but the `~` is what makes it a timer. For an ' +
+    'ingredient with a modifier, write the whole phrase as a single ' +
+    'multi-word braced name: `@pre-minced garlic{1%tbsp}`, NEVER ' +
+    '`@pre-minced @garlic{1%tbsp}` (which creates two separate ' +
+    'ingredient entries). For alternatives ("use X or Y"), only the ' +
+    'primary ingredient gets `@`; write the substitute as plain prose. ' +
     'change_message is REQUIRED and lands in the recipe history. ' +
     'Returns {id, title, updated_at}.',
   shortDescription: 'save a recipe to the cookbook',
