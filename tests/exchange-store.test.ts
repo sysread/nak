@@ -9,6 +9,7 @@
  * fold back into the right place when listMessages settles.
  */
 import { describe, it, expect } from 'vitest';
+import { SvelteMap } from 'svelte/reactivity';
 import { ExchangeStore, mergeMessagesById } from '../src/lib/exchange/exchange-store.svelte';
 import { ExchangeSlot } from '../src/lib/exchange/exchange-slot.svelte';
 import type { Message } from '../src/lib/supabase';
@@ -25,6 +26,23 @@ function msg(id: string, createdAt: string, overrides: Partial<Message> = {}): M
 }
 
 describe('ExchangeStore', () => {
+  it('uses SvelteMap so $derived consumers re-evaluate when a slot is added', () => {
+    // Regression: `$state(new Map())` does NOT make Map operations
+    // reactive in Svelte 5 - only plain objects and arrays get the
+    // deep proxy. A consumer that does `$derived(store.peek(id))`
+    // would silently miss the slot allocated by `send()` if this
+    // ever reverts to a plain Map. The user-visible symptom was the
+    // streaming bubble never appearing and the "incomplete turn"
+    // banner sitting under the user message while the assistant
+    // response was in flight - both gated on `activeSlot?.sending`,
+    // which read as undefined when the derived couldn't see the
+    // slot.
+    const store = new ExchangeStore();
+    store.slotFor('t1');
+    const internalMap = (store as unknown as { map: unknown }).map;
+    expect(internalMap).toBeInstanceOf(SvelteMap);
+  });
+
   it('returns the same slot instance across slotFor calls for one thread', () => {
     const store = new ExchangeStore();
     const a1 = store.slotFor('t1');
