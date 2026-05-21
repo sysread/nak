@@ -2014,6 +2014,61 @@
     return Date.now() < expiry;
   });
 
+  /**
+   * Safety-net refresh: when the active thread's response claim
+   * transitions from foreign-held to released (the other device
+   * just finished its turn), re-fetch the thread's message list to
+   * reconcile against any realtime packets that may have been
+   * dropped. The realtime subscription on `messages` is already
+   * appending rows live as the responding device persists them, so
+   * the diff should usually be empty - this just catches the edge
+   * where the channel lost a packet under load or reconnected
+   * after a transient drop.
+   *
+   * Tracks the prior (threadId, holder) pair so the effect fires
+   * only on the genuine release transition. Switching between
+   * threads does NOT trigger a refresh - if the user was viewing
+   * thread A (foreign-held), then switches to thread B, the effect
+   * re-runs but the prev-state's threadId no longer matches and we
+   * fall through. Same posture for switching back to a thread
+   * whose claim cleared while we were elsewhere: selectThread
+   * already did a listMessages on entry, so a second fetch would
+   * be wasted work. Our own claim's lifecycle is also skipped -
+   * we have authoritative local state for our own turns.
+   */
+  let prevForeignClaim: { threadId: string; holderId: string } | null = null;
+  $effect(() => {
+    const t = currentThread;
+    if (!t || !app.supabase) return;
+    const isForeign =
+      t.response_holder_id !== null &&
+      t.response_holder_id !== holderId;
+    const wasForeignOnSameThread =
+      prevForeignClaim !== null && prevForeignClaim.threadId === t.id;
+    prevForeignClaim = isForeign
+      ? { threadId: t.id, holderId: t.response_holder_id as string }
+      : null;
+    if (!wasForeignOnSameThread || isForeign) return;
+    // Foreign claim on THIS thread just cleared. Reconcile against
+    // the canonical state. Guarded against thread switch mid-fetch
+    // (activeThreadId changes can race the await).
+    const threadId = t.id;
+    const supabase = app.supabase;
+    void (async () => {
+      try {
+        const fetched = await supabase.listMessages(threadId);
+        if (activeThreadId !== threadId) return;
+        const bufferedRows = exchangeStore.peek(threadId)?.persistedRows ?? [];
+        messages = mergeMessagesById(fetched, bufferedRows);
+      } catch (err) {
+        // Best-effort: a failed reconciliation just leaves the
+        // realtime-delivered state in place. The user can still
+        // navigate away and back to force a full reload.
+        log.warn('post-claim-release reconcile failed', err);
+      }
+    })();
+  });
+
   // Active thread's cached intuition payload, coerced from the
   // jsonb column. Null on cold threads or shape drift; the modal
   // and the inline card both gate on this being non-null. Reactive
@@ -3972,10 +4027,17 @@
   // `messages` so non-message render blocks (e.g. the rename
   // indicator) also count as discrete mutations.
   //
-  // Gated on `activeSlot?.sending` so a delayed realtime echo or cross-tab mutation
-  // arriving after the completion ends doesn't yank the view back to
-  // the bottom. Thread-load lands on the bottom via the explicit
-  // scrollToBottom in loadMessages, not via this effect.
+  // Gated on `activeSlot?.sending` OR `respondingElsewhere` so the
+  // view follows the bottom for both the locally-driven case (this
+  // device is producing the response) and the cross-device case
+  // (another device is producing it, rows arrive via the realtime
+  // messages subscription). A late echo from an exchange that has
+  // already ended falls past both gates and leaves the view alone -
+  // the user has finished reading; we don't want a stray realtime
+  // packet yanking them back to the bottom.
+  //
+  // Thread-load lands on the bottom via the explicit scrollToBottom
+  // in loadMessages, not via this effect.
   $effect(() => {
     void messageBlocks;
     const el = messagesEl;
@@ -3989,7 +4051,9 @@
     // followBottom can still read stale-true. Sampling scrollTop
     // here disengages the lock before the gate is read.
     refreshFollowBottom();
-    if (activeSlot?.sending && followBottom) scrollToBottom(false);
+    if ((activeSlot?.sending || respondingElsewhere) && followBottom) {
+      scrollToBottom(false);
+    }
   });
 
   // Streaming deltas — debounced with a max-wait cap. Tracks both the
