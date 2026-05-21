@@ -439,19 +439,33 @@
         };
         addRelationEdge(edge);
       }
-      cancelRelate();
+      // Cross-row guard: if the user navigated to a different
+      // memory and opened its Relate picker mid-RPC, relatingFromId
+      // now points at that other memory and pickerQuery /
+      // pickerCandidates / pickerAbort belong to that picker.
+      // cancelRelate() here would abort the new picker's in-flight
+      // search and wipe the user's typed query. addRelationEdge
+      // above is fromId-keyed so the store write lands regardless.
+      if (relatingFromId === fromId) cancelRelate();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // Unique-constraint failure = the edge already exists. Treat as
       // success from the UI's perspective; the user gets the same
       // outcome they asked for.
       if (msg.includes('duplicate key value') || msg.includes('unique constraint')) {
-        cancelRelate();
-      } else {
+        // Same cross-row guard as the success path.
+        if (relatingFromId === fromId) cancelRelate();
+      } else if (relatingFromId === fromId) {
+        // Same cross-row guard - a stale "relation failed" banner
+        // on a different memory's picker would misattribute the
+        // failure.
         pickerError = msg;
       }
     } finally {
-      pickerBusy = false;
+      // Same cross-row guard - clearing pickerBusy on a different
+      // memory's in-flight submit would flip its loading indicator
+      // off mid-flight.
+      if (relatingFromId === fromId) pickerBusy = false;
     }
   }
 
@@ -531,12 +545,25 @@
       // not re-querying here keeps the edit affordance stable (the
       // row we just saved stays where it was).
       patchMemoryRow(id, updated);
-      saveState = { kind: 'saved' };
+      // Cross-row guard: if the user navigated to a different
+      // memory and clicked Edit on it before this save settled,
+      // editingId now points at that other memory and the form
+      // bindings are showing the user's in-progress draft on B.
+      // Writing saveState='saved' here unconditionally would flash
+      // a "saved" confirmation on B's edit form for a save the
+      // user never initiated. patchMemoryRow above is id-keyed so
+      // the store write lands correctly regardless.
+      if (editingId === id) saveState = { kind: 'saved' };
     } catch (err) {
-      saveState = {
-        kind: 'error',
-        message: err instanceof Error ? err.message : String(err),
-      };
+      // Same cross-row guard as the success path - a stale 'error'
+      // banner painted on a different memory's edit form would
+      // misattribute a failure the user didn't cause.
+      if (editingId === id) {
+        saveState = {
+          kind: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
   }
 
@@ -602,13 +629,27 @@
         saveState = { kind: 'idle' };
       }
       if (relatingFromId === id) cancelRelate();
-      deletingId = null;
-      // The row has been pulled out of the listing; the panel is
-      // about to either route to "no selection" or to the empty
-      // state. Don't park a 'done' status on a memory id that's no
-      // longer rendered - it would have nowhere to display. Just
-      // collapse back to idle.
-      actionStatus = { kind: 'idle' };
+      // Cross-row guard: if the user navigated to a different
+      // memory and opened its delete confirm strip mid-RPC,
+      // deletingId now points at that other memory. Clearing here
+      // unconditionally would close the confirm strip the user is
+      // about to interact with on B. removeMemoryRow above is
+      // id-keyed so the store removal lands regardless.
+      if (deletingId === id) deletingId = null;
+      // Clear our own busy state. Without this it would linger as
+      // a stale spinner if anything re-renders the row before the
+      // navigation away from the deleted memory completes. The
+      // guard makes sure we don't stomp on a busy state another
+      // action set on a different memory after our RPC started
+      // (e.g. a reaffirm on memory B fired while A's delete was
+      // settling).
+      if (
+        actionStatus.kind === 'busy' &&
+        actionStatus.memoryId === id &&
+        actionStatus.action === 'delete'
+      ) {
+        actionStatus = { kind: 'idle' };
+      }
       // Drop the routed selection too. Without this the panel would
       // render the "not in current results" empty state pointing at a
       // memory that no longer exists, which reads as a bug rather
