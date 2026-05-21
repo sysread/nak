@@ -63,6 +63,7 @@
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
   import { ExchangeStore, mergeMessagesById } from '$lib/exchange/exchange-store.svelte';
+  import { ThreadClaimCoordinator } from '$lib/exchange/thread-claim-coordinator';
   import { isRecoveryMessage } from '$lib/conversation-recovery';
   import {
     saveDraft,
@@ -597,6 +598,20 @@
    * screen's `messages` array on the next open of that thread.
    */
   const exchangeStore = new ExchangeStore();
+  /**
+   * Stable per-tab identifier used as the holder id for every
+   * thread-response claim acquired by this screen. Different tabs of
+   * the same user get different ids, so two tabs competing for the
+   * same thread are visible to each other as separate holders.
+   * `crypto.randomUUID` is universal in modern browsers; the fallback
+   * is for the test environment where jsdom sometimes lacks it.
+   */
+  const holderId: string = (() => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return `holder-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  })();
   /**
    * The slot for the thread the user is currently viewing, or null
    * when no thread is selected or nothing has ever been sent on it.
@@ -1954,6 +1969,51 @@
     activeThreadId ? findThread(activeThreadId) ?? null : null
   );
 
+  // Tick counter that drives a 5Hz reactive re-read of Date.now()
+  // while an observer-side claim is live, so the
+  // `respondingElsewhere` derivation below can detect TTL expiry
+  // even when no realtime event arrives (the responding device
+  // crashed mid-turn and stopped heartbeating). 5-second cadence is
+  // plenty - the TTL is 60s and the responding device heartbeats
+  // every 20s, so we just need to notice that updates have stopped
+  // arriving and the stamped expiry has slipped into the past. No
+  // tick is armed when the active thread has no observed claim, so
+  // idle threads pay nothing.
+  let claimNowTick = $state(0);
+  $effect(() => {
+    const t = currentThread;
+    if (!t?.response_holder_id) return;
+    if (t.response_holder_id === holderId) return;
+    const id = window.setInterval(() => {
+      claimNowTick = claimNowTick + 1;
+    }, 5000);
+    return () => window.clearInterval(id);
+  });
+
+  /**
+   * `true` when the active thread has a live response claim held by
+   * SOMEONE ELSE (a different tab of ours, or a different device).
+   * Drives the composer's disabled state and an observer-side
+   * "responding on another device" bubble. False on idle threads,
+   * on threads we hold the claim for ourselves, and on threads whose
+   * stamped expiry has slipped into the past (the holder crashed
+   * mid-turn and stopped heartbeating).
+   *
+   * Reads `claimNowTick` so the TTL-expired transition re-runs the
+   * derivation; the value isn't used in the math.
+   */
+  const respondingElsewhere = $derived.by(() => {
+    void claimNowTick;
+    const t = currentThread;
+    if (!t) return false;
+    if (!t.response_holder_id) return false;
+    if (t.response_holder_id === holderId) return false;
+    if (!t.response_claim_expires_at) return false;
+    const expiry = Date.parse(t.response_claim_expires_at);
+    if (Number.isNaN(expiry)) return false;
+    return Date.now() < expiry;
+  });
+
   // Active thread's cached intuition payload, coerced from the
   // jsonb column. Null on cold threads or shape drift; the modal
   // and the inline card both gate on this being non-null. Reactive
@@ -2625,6 +2685,47 @@
     slot.reset();
     slot.sending = true;
     slot.abortCtl = new AbortController();
+    // Cross-device claim. Acquired before any chat-loop work so a
+    // contended thread (another tab or another device is already
+    // responding) bails out without firing inference. The
+    // coordinator heartbeats while the chat-loop runs; a decisive
+    // loss (heartbeat RPC returns false because another device took
+    // over) aborts our in-flight controller via the onLost callback,
+    // and the catch below surfaces a "preempted" banner instead of
+    // the silent stop a user-initiated abort produces.
+    const claim = new ThreadClaimCoordinator(app.supabase, ctx.threadId, holderId);
+    let claimAcquired = false;
+    try {
+      claimAcquired = await claim.acquire();
+    } catch (err) {
+      // Network failure on acquire. Surface as a streaming error
+      // rather than silently bailing - the user clicked send and
+      // deserves to know nothing happened.
+      log.warn('thread response claim acquire failed', err);
+      slot.streamingError = { text: 'Could not check responding-device status. Try again in a moment.' };
+      slot.sending = false;
+      slot.abortCtl = null;
+      return;
+    }
+    if (!claimAcquired) {
+      // Another device holds a live claim. Don't fire inference -
+      // it would race the other device's persisted assistant row
+      // and the atomic message-commit RPC would discard whichever
+      // landed second anyway.
+      slot.streamingError = {
+        text: 'Another device is responding to this conversation. Wait for it to finish before sending here.',
+      };
+      slot.sending = false;
+      slot.abortCtl = null;
+      return;
+    }
+    claim.startHeartbeat(() => {
+      // Decisive loss: another device took over. Stamp the slot's
+      // abort reason so the catch knows to render the "preempted"
+      // banner rather than treating this as a user-initiated stop.
+      slot.abortReason = 'claim';
+      slot.abortCtl?.abort();
+    });
     // Timer id for the delayed-close on first content arrival. Local
     // to one exchange's lifetime - the handlers below close over it
     // and the outer finally clears it. Separated from the text-flush
@@ -3162,9 +3263,21 @@
       // user is already reading; other failure kinds (auth, parse)
       // would just repeat the error on retry, so we omit the closure
       // for them and the bubble renders dismiss-only. Aborts don't
-      // raise a banner at all - the stop was the intended outcome.
+      // raise a banner at all - the stop was the intended outcome -
+      // EXCEPT when abortReason is 'claim', meaning another device
+      // took over our turn via the response-claim heartbeat. In that
+      // case the user needs to know their turn was preempted, so we
+      // surface a banner with no retry (the right move is to refresh
+      // and see what the other device produced).
       if (isAbort) {
-        slot.streamingError = null;
+        if (slot.abortReason === 'claim') {
+          slot.streamingError = {
+            text: 'Another device took over this conversation. Refresh to see the latest.',
+          };
+        } else {
+          slot.streamingError = null;
+        }
+        slot.abortReason = null;
       } else if (err instanceof VeniceError && err.kind === 'rate_limit') {
         slot.streamingError = {
           text: formatRateLimitMessage(err),
@@ -3176,6 +3289,11 @@
         slot.streamingError = { text: describeError(err) };
       }
     } finally {
+      // Release the cross-device claim before clearing screen state.
+      // `release` swallows RPC errors and stops the heartbeat
+      // unconditionally, so a sign-out / network failure here doesn't
+      // throw out of the finally and corrupt the exchange's cleanup.
+      await claim.release();
       // Finalize any tool timings that never got an endedAt. Runs
       // BEFORE clearing `sending` so the orphan markers land while
       // the slot still reads as in-flight; consumers that observe
@@ -5859,7 +5977,26 @@
                    to expand on demand. -->
             </div>
           {/if}
-          {#if messages.length === 0 && !activeSlot?.streamingText && !activeSlot?.sending}
+          {#if respondingElsewhere}
+            <!-- Observer-side bubble: another tab or device holds the
+                 response claim on this thread. We don't have the
+                 streaming deltas (those are local to the responding
+                 device's chat-loop), but we do want a visible signal
+                 that something is happening so the user understands
+                 why their composer is disabled and why messages are
+                 about to start appearing. The Scanner is the same
+                 "still working" cue the local streaming bubble uses,
+                 so the visual language is consistent across the two
+                 cases. The persisted assistant row will arrive via
+                 the realtime subscription on `messages` when the
+                 responding device commits it. -->
+            <div class="msg assistant" role="status" aria-live="polite">
+              <div class="thinking">
+                <Scanner label="Responding on another device" />
+              </div>
+            </div>
+          {/if}
+          {#if messages.length === 0 && !activeSlot?.streamingText && !activeSlot?.sending && !respondingElsewhere}
             <div class="empty">Type a message to begin.</div>
           {/if}
           <!-- End-of-conversation notice for archived chats. Sits inside
@@ -5999,8 +6136,10 @@
             onblur={() => (composerFocused = false)}
             placeholder={currentThread?.archived
               ? 'Restore this conversation to continue.'
-              : sendHint}
-            disabled={currentThread?.archived}
+              : respondingElsewhere
+                ? 'Another device is responding. Wait for it to finish.'
+                : sendHint}
+            disabled={currentThread?.archived || respondingElsewhere}
           ></textarea>
           <!-- Hidden file input — the paperclip button triggers this
                via .click(). `multiple` because users routinely attach
@@ -6425,12 +6564,15 @@
               disabled={activeSlot?.sending
                 ? activeSlot?.abortCtl === null
                 : (composer.trim().length === 0 && pendingAttachments.length === 0) ||
-                  currentThread?.archived}
+                  currentThread?.archived ||
+                  respondingElsewhere}
               title={activeSlot?.sending
                 ? 'Stop response'
-                : currentThread?.archived
-                  ? 'Archived — restore to continue'
-                  : 'Send'}
+                : respondingElsewhere
+                  ? 'Another device is responding to this conversation'
+                  : currentThread?.archived
+                    ? 'Archived — restore to continue'
+                    : 'Send'}
               aria-label={activeSlot?.sending ? 'Stop response' : 'Send'}
             >
               {#if activeSlot?.sending}

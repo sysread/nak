@@ -37,6 +37,7 @@ describe('ExchangeSlot', () => {
     expect(slot.abortCtl).toBeNull();
     expect(slot.toolTimings).toEqual({});
     expect(slot.persistedRows).toEqual([]);
+    expect(slot.abortReason).toBeNull();
   });
 
   it('accepts writes to every field and reads them back', () => {
@@ -88,6 +89,7 @@ describe('ExchangeSlot', () => {
     slot.abortCtl = new AbortController();
     slot.toolTimings = { a: { startedAt: 1, endedAt: 2 } };
     slot.recordPersistedRow(makeMessage());
+    slot.abortReason = 'claim';
 
     slot.reset();
 
@@ -102,6 +104,7 @@ describe('ExchangeSlot', () => {
     expect(slot.abortCtl).toBeNull();
     expect(slot.toolTimings).toEqual({});
     expect(slot.persistedRows).toEqual([]);
+    expect(slot.abortReason).toBeNull();
   });
 
   it('produces independent state between instances', () => {
