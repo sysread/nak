@@ -1440,9 +1440,10 @@
           marked for replacement" while the manual-update flow is
           open above; .fading-out plays the dissolve animation
           between the DB write and the in-store content swap on
-          Accept. Both classes share their visual contract with the
-          chat regenerate flow (.msg.disabled / .msg.fading-out) so
-          the language reads consistently across surfaces.
+          Accept. .regen-target is shared with the chat regenerate
+          flow (Chat.svelte applies it to the .msg bubble) so the
+          language reads consistently across surfaces - see the
+          definition in styles.css.
         -->
         <!--
           The onclick here is delegation only: it catches anchor clicks

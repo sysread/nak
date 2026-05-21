@@ -1989,39 +1989,51 @@ h1 {
   border: 1px solid var(--border);
 }
 
-/* Pending-delete bubble. Set on .msg by Chat.svelte when the user
-   has clicked regenerate-from-here on this row (or a row before it)
-   and the replacement turn hasn't landed yet. Greys the body via
-   opacity so the rows read as "on the way out," and paints a red
-   outline so the danger of the pending replacement is legible at a
-   glance. Outline rather than border so we don't have to retrofit a
-   border slot onto role variants that don't already carry one (user
-   bubbles in dark mode, tool-group children). The per-button
-   disabled state is handled by the action-bar buttons themselves
-   taking the `disabled` prop, so structural toggles (reasoning
-   panel header, tool-call expand rows, body-side citation `^N^`
-   clicks) stay clickable and the user can still inspect what's
-   about to be replaced. Cleared along with the row itself when the
-   new completion lands (after the fade-out animation); on abort or
-   error the class drops back off and the bubble restores. */
-.msg.disabled {
+/* Cross-surface "this thing is about to be replaced" marker. Set on
+   chat .msg bubbles by Chat.svelte when the user clicks
+   regenerate-from-here, and on the wiki <article> element while
+   "Ask agent to update" is open. Greys the body via opacity so the
+   target reads as "on the way out," and paints a red outline so the
+   danger of the pending replacement is legible at a glance.
+
+   Outline (not border) so we don't have to retrofit a border slot
+   onto role variants that don't already carry one (chat user bubbles
+   in dark mode, tool-group children, the bare wiki <article>).
+   border-radius is set on the class itself so the outline corners
+   round consistently across hosts - on .msg the bubble already
+   carries border-radius: 12px so the outline picks that up; on
+   bare hosts like .wiki-article the radius here is what the outline
+   follows. outline-offset is positive so the frame sits OUTSIDE the
+   element with a small visual gap, reading as a deliberate
+   selection frame rather than a flush inset edge.
+
+   In chat: the per-button disabled state is handled by the
+   action-bar buttons themselves taking the `disabled` prop, so
+   structural toggles (reasoning panel header, tool-call expand
+   rows, body-side citation `^N^` clicks) stay clickable and the
+   user can still inspect what's about to be replaced. Cleared
+   along with the row itself when the new completion lands (after
+   the fade-out animation); on abort or error the class drops back
+   off and the row restores. */
+.regen-target {
   opacity: 0.55;
-  outline: 1px solid var(--danger);
-  outline-offset: -1px;
+  outline: 2px solid var(--danger);
+  outline-offset: 4px;
+  border-radius: 8px;
 }
 
-/* Fade-out animation applied to pending-delete rows once the
-   replacement turn lands cleanly, just before they're pruned from
-   the DOM. The parent sets animation-delay per element so the rows
-   cascade out newest-first with a 250ms stagger between them -
-   makes the replacement read as "the old thread is being undone
-   from the tail back toward the user's prompt" rather than a
-   simultaneous collapse. animation-fill-mode: forwards pins the
-   final (invisible + heavily blurred) state so rows don't flicker
-   back to the .disabled appearance between the animation's end
-   and the JS-side filter that removes them from the messages
-   array. pointer-events: none so dissolving rows can't absorb
-   stray clicks that would otherwise hit the incoming reply below. */
+/* Fade-out animation applied to a regen-target once the replacement
+   has landed cleanly, just before the original is pruned. In chat,
+   Chat.svelte sets animation-delay per element so rows cascade out
+   newest-first with a 250ms stagger - makes the replacement read as
+   "the old thread is being undone from the tail back toward the
+   user's prompt" rather than a simultaneous collapse. In wiki the
+   element fades on its own (no cascade). animation-fill-mode:
+   forwards pins the final (invisible + heavily blurred) state so
+   the host doesn't flicker back to the .regen-target appearance
+   between the animation's end and the JS-side filter that removes
+   it. pointer-events: none so dissolving rows can't absorb stray
+   clicks that would otherwise hit the incoming reply below. */
 @keyframes msg-fade-out {
   from {
     filter: blur(0);
@@ -2031,24 +2043,6 @@ h1 {
     filter: blur(8px);
     opacity: 0;
   }
-}
-.msg.fading-out {
-  animation: msg-fade-out 500ms ease-in forwards;
-  pointer-events: none;
-}
-
-/* Same visual contract as .msg.disabled / .msg.fading-out, applied
-   to non-chat surfaces (wiki articles during the "Ask agent to
-   update" flow). The chat version sits on .msg because the bubble
-   structure is chat-specific; .regen-target rides on whichever
-   container element represents "the thing that's about to be
-   replaced". Reuses the msg-fade-out keyframe above so the fade
-   timing is identical across surfaces; tweaking the duration there
-   propagates here. */
-.regen-target {
-  opacity: 0.55;
-  outline: 1px solid var(--danger);
-  outline-offset: -1px;
 }
 .regen-target.fading-out {
   animation: msg-fade-out 500ms ease-in forwards;

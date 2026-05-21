@@ -62,11 +62,11 @@
     /**
      * Set true when this message is in the regenerate-from-here
      * pending-delete range. Greys the bubble (via the parent's
-     * `.msg.disabled` class) and disables every button in the action
-     * bar so the user can read what's about to be replaced but can't
-     * trigger a parallel action against it. Structural toggles
-     * (reasoning panel header, tool-call expand rows, body-side
-     * `^N^` clicks) stay live so inspection still works.
+     * `.regen-target` class) and disables every button in the
+     * action bar so the user can read what's about to be replaced
+     * but can't trigger a parallel action against it. Structural
+     * toggles (reasoning panel header, tool-call expand rows,
+     * body-side `^N^` clicks) stay live so inspection still works.
      */
     disabled?: boolean;
     /**
