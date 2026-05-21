@@ -341,6 +341,16 @@
       editError = 'Wait for photo uploads to finish before saving.';
       return;
     }
+    // Capture the recipe id and pane we started in. The save's
+    // post-await tail compares against the current state to detect
+    // whether the user navigated to a different recipe mid-save (a
+    // sidebar click on mobile, browser back/forward, etc). If they
+    // did, the route-sync effect has already loaded the new recipe
+    // and switched pane='detail'; we leave their context alone
+    // rather than ripping them back to the saved recipe. The
+    // id-keyed RPC below has already landed by the time we look,
+    // so the saved data is safe either way.
+    const startedAt = activeId;
     saving = true;
     editError = null;
     try {
@@ -360,9 +370,10 @@
         id: p.imageId,
         label: p.label,
       }));
-      if (activeId) {
+      let savedId: string;
+      if (startedAt) {
         await app.supabase.updateRecipe(
-          activeId,
+          startedAt,
           {
             title,
             cooklang,
@@ -373,6 +384,7 @@
           },
           changeMessage
         );
+        savedId = startedAt;
       } else {
         const row = await app.supabase.createRecipe(
           title,
@@ -383,30 +395,49 @@
           changeMessage,
           photos
         );
-        activeId = row.id;
+        savedId = row.id;
       }
-      // Three independent post-save reads: refresh the recipe list,
-      // reload the History panel (the new version is the latest entry,
-      // and we want it visible the moment the user lands back on
-      // detail), and re-fetch photos so the strip reflects what we
-      // just saved (positions renumbered, deletions applied, new
-      // uploads appended). Run in parallel - they don't depend on
-      // each other.
-      const id = activeId;
-      const supabase = app.supabase;
+      // Cookbook list refresh is global - the saved recipe's row
+      // may have shifted in the sort order regardless of where the
+      // user has navigated. Always useful, so this runs before the
+      // navigation gate below.
+      await refresh();
+      // The user can navigate to a different recipe mid-save. If
+      // they did, leave them on whatever they navigated to - the
+      // route-sync effect has already loaded that recipe's data
+      // and set pane='detail'. Otherwise (still on the edit form
+      // with the same activeId we captured) finish the save flow
+      // normally: adopt the new id for create, reload per-recipe
+      // state, flip to detail, sync the router.
+      const stayedOnIt = pane === 'edit' && activeId === startedAt;
+      if (!stayedOnIt) return;
+      // Create flow lands us on a brand-new id; adopt it as the
+      // active recipe. Update flow keeps the same activeId.
+      if (startedAt === null) activeId = savedId;
+      // Per-recipe reloads: History panel (so the just-saved
+      // version is the latest entry) and photos (so the strip
+      // reflects renumbered positions, deletions applied, and new
+      // uploads appended). Parallel - they don't depend on each
+      // other.
       await Promise.all([
-        refresh(),
-        id ? loadVersions(id) : Promise.resolve(),
-        id ? loadRecipePhotos(supabase, id) : Promise.resolve(),
+        loadVersions(savedId),
+        loadRecipePhotos(app.supabase, savedId),
       ]);
       pane = 'detail';
       photoErrors = [];
-      // Create flow lands us on a recipe id that wasn't in the URL;
-      // update flow keeps the same id. Either way we reconcile the
-      // router so refresh-from-here lands on this recipe's detail.
-      if (activeId) navigate({ recipe: activeId });
+      // Reconcile the router so a refresh-from-here lands on this
+      // recipe's detail. For create flow this writes the new id
+      // into the URL; for update flow it's a no-op (the URL
+      // already has this id).
+      navigate({ recipe: savedId });
     } catch (err) {
-      editError = errMsg(err);
+      // Cross-recipe gate: if the user navigated away mid-save,
+      // surfacing the error on whichever recipe they're now looking
+      // at would be misattributed. openEdit clears editError on
+      // entry, so a user returning to this recipe via Edit gets a
+      // clean form - the catch path's banner is only useful if
+      // they're still in this save's context.
+      if (pane === 'edit' && activeId === startedAt) editError = errMsg(err);
     } finally {
       saving = false;
     }
@@ -610,9 +641,16 @@
     try {
       await app.supabase.deleteRecipe(id);
       await refresh();
-      openList();
+      // Only kick the user back to the list view if they're still
+      // on the deleted recipe. If they navigated to a different
+      // recipe mid-delete, openList() would obliterate that
+      // navigation - the route-sync effect has already taken them
+      // somewhere meaningful and we leave them there.
+      if (route.recipe === id) openList();
     } catch (err) {
-      editError = errMsg(err);
+      // Same cross-recipe gate as onSave's catch - the editError
+      // banner is misattributed if surfaced on a different recipe.
+      if (route.recipe === id) editError = errMsg(err);
     }
   }
 
