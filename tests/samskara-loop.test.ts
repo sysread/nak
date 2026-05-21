@@ -98,6 +98,14 @@ function buildCtx(overrides: Partial<CycleContext> = {}): CycleContext {
     phase: 'decay',
     signal: new AbortController().signal,
     onLeaseLost: () => {},
+    // Empty map = nothing throttled yet, which preserves the
+    // existing tests' assumption that exploratory phases run
+    // unimpeded. Tests that exercise the throttle gate seed the
+    // map explicitly.
+    phaseThrottle: {
+      lastRunMs: new Map(),
+      minIntervalMs: 60 * 1000,
+    },
     ...overrides,
   };
 }
@@ -236,6 +244,125 @@ describe('samskara runOneCycle - compound-regen phase', () => {
     await runOneCycle(ctx);
     const result = await runOneCycle(ctx);
     expect(result).toBe<CycleResult>('empty-phase');
+  });
+});
+
+describe('samskara runOneCycle - phase throttle (mint-tier1, pair-relate)', () => {
+  it('mint-tier1 skips entirely when throttled, no substrate fetch fires', async () => {
+    const { coordinator } = buildCoordinator();
+    const substrateFetch = vi.fn(async () => []);
+    const supabase = fakeSupabase({
+      samskaraRecentEmbeddedSubstrate: substrateFetch,
+    } as Partial<SupabaseService>);
+    // Seed lastRunMs at "just now" so the throttle window is wide
+    // open. The phase must return empty-phase before touching the
+    // expensive substrate fetch.
+    const ctx = buildCtx({
+      coordinator,
+      supabase,
+      phase: 'mint-tier1',
+      phaseThrottle: {
+        lastRunMs: new Map([['mint-tier1', Date.now()]]),
+        minIntervalMs: 60_000,
+      },
+    });
+    await runOneCycle(ctx); // acquired-lease
+    const result = await runOneCycle(ctx);
+    expect(result).toBe<CycleResult>('empty-phase');
+    expect(substrateFetch).not.toHaveBeenCalled();
+  });
+
+  it('pair-relate skips entirely when throttled, no substrate fetch fires', async () => {
+    const { coordinator } = buildCoordinator();
+    const substrateFetch = vi.fn(async () => []);
+    const supabase = fakeSupabase({
+      samskaraRecentEmbeddedSubstrate: substrateFetch,
+    } as Partial<SupabaseService>);
+    const ctx = buildCtx({
+      coordinator,
+      supabase,
+      phase: 'pair-relate',
+      phaseThrottle: {
+        lastRunMs: new Map([['pair-relate', Date.now()]]),
+        minIntervalMs: 60_000,
+      },
+    });
+    await runOneCycle(ctx);
+    const result = await runOneCycle(ctx);
+    expect(result).toBe<CycleResult>('empty-phase');
+    expect(substrateFetch).not.toHaveBeenCalled();
+  });
+
+  it('mint-tier1 stamps the throttle clock after a successful substrate fetch', async () => {
+    const { coordinator } = buildCoordinator();
+    const supabase = fakeSupabase({
+      // Less than 4 rows so the mint exits early - but the
+      // substrate fetch DID succeed, so the stamp must land
+      // anyway. Otherwise the next rotation would re-fetch.
+      samskaraRecentEmbeddedSubstrate: vi.fn(async () => [
+        { id: 'a', situation: 's', outcome: 'o', valence: 0, situation_embedding: [0, 0] as number[], created_at: new Date().toISOString() },
+      ] as unknown as Awaited<ReturnType<SupabaseService['samskaraRecentEmbeddedSubstrate']>>),
+    } as Partial<SupabaseService>);
+    const throttle = {
+      lastRunMs: new Map<typeof PHASES[number], number>(),
+      minIntervalMs: 60_000,
+    };
+    const ctx = buildCtx({
+      coordinator,
+      supabase,
+      phase: 'mint-tier1',
+      phaseThrottle: throttle,
+    });
+    await runOneCycle(ctx);
+    const result = await runOneCycle(ctx);
+    expect(result).toBe<CycleResult>('empty-phase');
+    expect(throttle.lastRunMs.get('mint-tier1')).toBeGreaterThan(0);
+  });
+
+  it('mint-tier1 does NOT stamp when the substrate fetch errors (retries soon)', async () => {
+    const { coordinator } = buildCoordinator();
+    const supabase = fakeSupabase({
+      samskaraRecentEmbeddedSubstrate: vi.fn(async () => {
+        throw new Error('network');
+      }),
+    } as Partial<SupabaseService>);
+    const throttle = {
+      lastRunMs: new Map<typeof PHASES[number], number>(),
+      minIntervalMs: 60_000,
+    };
+    const ctx = buildCtx({
+      coordinator,
+      supabase,
+      phase: 'mint-tier1',
+      phaseThrottle: throttle,
+    });
+    await runOneCycle(ctx);
+    const result = await runOneCycle(ctx);
+    expect(result).toBe<CycleResult>('error');
+    // No stamp - error back-off handles retry cadence, the phase
+    // throttle shouldn't suppress retries of a transient failure.
+    expect(throttle.lastRunMs.has('mint-tier1')).toBe(false);
+  });
+
+  it('runs normally once the throttle window has elapsed', async () => {
+    const { coordinator } = buildCoordinator();
+    const substrateFetch = vi.fn(async () => []);
+    const supabase = fakeSupabase({
+      samskaraRecentEmbeddedSubstrate: substrateFetch,
+    } as Partial<SupabaseService>);
+    const ctx = buildCtx({
+      coordinator,
+      supabase,
+      phase: 'pair-relate',
+      // Last run was 10 minutes ago - well past the 60s window.
+      phaseThrottle: {
+        lastRunMs: new Map([['pair-relate', Date.now() - 10 * 60 * 1000]]),
+        minIntervalMs: 60_000,
+      },
+    });
+    await runOneCycle(ctx);
+    await runOneCycle(ctx);
+    expect(substrateFetch).toHaveBeenCalled();
   });
 });
 

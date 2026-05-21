@@ -138,6 +138,33 @@ export interface CycleContext {
    * unit tests and non-UI contexts can omit it.
    */
   onMint?: (info: { tier: 1 | 2; valence: number; confidence: number }) => void;
+  /**
+   * Cross-rotation throttle for the exploratory phases (mint-tier1,
+   * pair-relate). Both phases probe "is there a new pair I should
+   * relate?" / "is there a cluster I should mint?" on every entry
+   * by fetching the recent substrate and calling an LLM agent
+   * against it. Without a throttle they fire every ~9 seconds
+   * forever because the dedup-reinforce branch in mint-tier1
+   * always returns 'progress' when there's any existing substrate
+   * to match against, pinning the outer worker's `allEmpty` gate
+   * to false and skipping the idle nap indefinitely.
+   *
+   * Owned by the worker so state survives rotations. `lastRunMs`
+   * is the timestamp of the most recent successful run; reset to
+   * 0 on lease loss so a recovered device re-explores once. The
+   * map is the per-phase scoping; defaulting to a single shared
+   * `minIntervalMs` keeps tuning simple.
+   *
+   * Throttle skips happen BEFORE the substrate fetch, which is
+   * the expensive bit - mint-tier1's limit-8 query returns ~8 *
+   * 2048-dim embeddings (~130 KB), pair-relate's limit-40 query
+   * returns ~640 KB. Suppressing those payloads is the main
+   * point.
+   */
+  phaseThrottle: {
+    lastRunMs: Map<SamskaraPhase, number>;
+    minIntervalMs: number;
+  };
 }
 
 export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
@@ -180,6 +207,26 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     }
     return 'error';
   }
+}
+
+/**
+ * Cross-rotation throttle gate for exploratory phases. Returns
+ * true (caller should return 'empty-phase') when the phase ran
+ * inside the throttle window. The stamp happens AFTER the
+ * expensive substrate fetch so a throttled call costs zero
+ * RPCs and zero LLM time.
+ */
+function isPhaseThrottled(ctx: CycleContext, phase: SamskaraPhase): boolean {
+  const last = ctx.phaseThrottle.lastRunMs.get(phase);
+  if (!last) return false;
+  const sinceLast = Date.now() - last;
+  if (sinceLast >= ctx.phaseThrottle.minIntervalMs) return false;
+  log.trace(
+    `${phase}: throttled ` +
+      `(last run ${Math.round(sinceLast / 1000)}s ago, ` +
+      `min interval ${Math.round(ctx.phaseThrottle.minIntervalMs / 1000)}s)`
+  );
+  return true;
 }
 
 // --- Phase implementations ----------------------------------------------
@@ -290,12 +337,18 @@ async function runAssimilatePhase(ctx: CycleContext): Promise<CycleResult> {
  * substrate-corpus scale (low thousands per user max).
  */
 async function runPairRelatePhase(ctx: CycleContext): Promise<CycleResult> {
+  if (isPhaseThrottled(ctx, 'pair-relate')) return 'empty-phase';
   let recent: SamskaraSubstrateRow[];
   try {
     recent = await ctx.supabase.samskaraRecentEmbeddedSubstrate(40);
   } catch {
     return 'error';
   }
+  // Stamp the throttle clock once the expensive part is done.
+  // Subsequent rotations within minIntervalMs skip this phase
+  // entirely. Errors during the substrate fetch don't stamp -
+  // they get the usual error back-off and retry naturally.
+  ctx.phaseThrottle.lastRunMs.set('pair-relate', Date.now());
   if (recent.length < 2) return 'empty-phase';
 
   // Walk the most recent row; find its closest neighbour in the rest
@@ -406,6 +459,7 @@ async function runPairRelatePhase(ctx: CycleContext): Promise<CycleResult> {
  * empty-phase when there's not enough substrate yet.
  */
 async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
+  if (isPhaseThrottled(ctx, 'mint-tier1')) return 'empty-phase';
   let recent: SamskaraSubstrateRow[];
   try {
     recent = await ctx.supabase.samskaraRecentEmbeddedSubstrate(8);
@@ -413,6 +467,12 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
     log.debug('mint-tier1: substrate fetch failed', err);
     return 'error';
   }
+  // Stamp the throttle clock once the expensive part is done.
+  // Subsequent rotations within minIntervalMs skip this phase
+  // entirely - that's the whole point of the gate, since the
+  // substrate query carries 8 * 2048-dim embeddings (~130 KB)
+  // and the followup mint agent call burns Venice budget.
+  ctx.phaseThrottle.lastRunMs.set('mint-tier1', Date.now());
   if (recent.length < 4) {
     log.trace('mint-tier1: insufficient substrate', { have: recent.length, need: 4 });
     return 'empty-phase';

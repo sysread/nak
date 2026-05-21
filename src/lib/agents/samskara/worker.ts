@@ -22,7 +22,25 @@ import {
   PHASES,
   type CycleContext,
   type NapConfig,
+  type SamskaraPhase,
 } from './loop';
+
+/**
+ * How often the exploratory phases (mint-tier1, pair-relate) are
+ * allowed to fire. Both look at the recent substrate and call an
+ * LLM agent against it; without a throttle they fire every
+ * rotation forever (mint-tier1's dedup-reinforce branch always
+ * returns 'progress' when there's any existing substrate to
+ * match, pinning the outer worker's idle nap off).
+ *
+ * Sixty seconds gives the worker a chance to keep up with bursts
+ * of new substrate (assimilate writes new rows) while ensuring
+ * the steady-state idle case rotates at roughly 1/minute instead
+ * of 1/9-seconds. Tighter would re-spam; looser would leave new
+ * substrate unminted longer than feels responsive in the toast
+ * stream.
+ */
+const PHASE_THROTTLE_MIN_INTERVAL_MS = 60 * 1000;
 
 interface StartMessage {
   type: 'start';
@@ -154,6 +172,19 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
 
   const agent = new SamskaraAgent(venice, msg.fastModel);
 
+  // Per-phase throttle state. Lives for the worker process
+  // lifetime so successive rotations of the outer loop see the
+  // same map. Lease loss clears the map so a recovered device
+  // re-explores once - another holder may have written substrate
+  // we never saw while we were leaseless.
+  const phaseThrottle: {
+    lastRunMs: Map<SamskaraPhase, number>;
+    minIntervalMs: number;
+  } = {
+    lastRunMs: new Map(),
+    minIntervalMs: PHASE_THROTTLE_MIN_INTERVAL_MS,
+  };
+
   const napConfig: NapConfig = {
     leasePollMs: msg.leasePollMs,
     idleIntervalMs: msg.idleIntervalMs,
@@ -165,8 +196,14 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     post({
       type: 'log',
       level: 'warn',
-      message: 'samskara lease lost — re-entering polling',
+      message: 'samskara lease lost - re-entering polling',
     });
+    // Clear the throttle so a recovered device re-explores once.
+    // Another holder may have written substrate (assimilate
+    // writes, agent mints) we never saw while we were leaseless;
+    // our cached "I just looked at the substrate" stamps are
+    // therefore stale.
+    phaseThrottle.lastRunMs.clear();
   };
 
   try {
@@ -198,6 +235,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
               valence: info.valence,
               confidence: info.confidence,
             }),
+          phaseThrottle,
         };
         const result = await runOneCycle(ctx);
         post({ type: 'progress', phase, result });
