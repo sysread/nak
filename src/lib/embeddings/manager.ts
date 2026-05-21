@@ -36,9 +36,17 @@ import { VENICE_EMBEDDING_MODEL } from '../models';
  *     has definitely returned before the claim expires.
  *   - leasePollMs 20_000: while we don't hold the lease, poll at
  *     the same cadence we would've heartbeated. Cheap SELECT.
- *   - idleIntervalMs 5_000: when we DO hold the lease and the
- *     queue is empty, poll more often so fresh memories are
- *     picked up quickly (the user may have just written one).
+ *   - idleIntervalMs 30_000: when we DO hold the lease and the
+ *     queue is empty, this is the cadence the worker probes the
+ *     claim RPC. A tighter setting picks up fresh memories
+ *     faster but spends a steady stream of "nothing to embed"
+ *     RPCs the entire time the tab is open. 30s is a compromise:
+ *     a memory written by the user surfaces within at most half
+ *     a minute, which is well inside what feels live for a
+ *     background process, while cutting the idle poll rate to
+ *     1/6 of the previous 5s setting. The right fix long-term
+ *     is a postMessage wake from the main thread when new work
+ *     gets queued; until that lands, 30s is the right number.
  *   - rateLimitBackoffMs 30_000: Venice's 429 doesn't carry a
  *     standard retry-after; 30s is a polite default.
  */
@@ -47,7 +55,7 @@ const WORKER_DEFAULTS = {
   leaseHeartbeatMs: 20_000,
   rowClaimTtlSeconds: 120,
   leasePollMs: 20_000,
-  idleIntervalMs: 5_000,
+  idleIntervalMs: 30_000,
   errorBackoffMs: 5_000,
   rateLimitBackoffMs: 30_000,
 };

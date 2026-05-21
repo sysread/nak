@@ -34,11 +34,16 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  *     the fast model with a 64-token cap. 60s is generous; the summary
  *     loop uses 120s because its model has more to chew on.
  *   - leasePollMs 20_000: match the heartbeat cadence.
- *   - idleIntervalMs 10_000: keep cold-start titles snappy. The user-
- *     visible latency floor on a fresh thread is roughly this number
- *     when the worker has just napped on an empty queue, so erring on
- *     the tight side here matters more than for reflection / summary
- *     where the queue moves slowly.
+ *   - idleIntervalMs 30_000: the user-visible latency floor on a
+ *     fresh thread's title is roughly this number when the
+ *     worker has just napped on an empty queue. Tighter
+ *     settings keep cold-start titles snappy but pay a steady
+ *     stream of "nothing to title" claim probes the entire
+ *     time the tab is open. 30s matches reflection / summary /
+ *     wiki and trades roughly 20s of title-arrival latency for
+ *     a 3x cut in idle poll traffic. A postMessage wake from
+ *     the chat-loop on new-thread save would let this go
+ *     longer with no UX cost; that's the right long-term fix.
  *   - errorBackoffMs 30_000: smooth over transient Venice / Supabase
  *     blips without hammering retries.
  */
@@ -47,7 +52,7 @@ const WORKER_DEFAULTS = {
   leaseHeartbeatMs: 20_000,
   threadClaimTtlSeconds: 60,
   leasePollMs: 20_000,
-  idleIntervalMs: 10_000,
+  idleIntervalMs: 30_000,
   errorBackoffMs: 30_000,
 };
 
