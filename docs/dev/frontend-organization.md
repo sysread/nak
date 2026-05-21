@@ -180,3 +180,52 @@ The two layers carry short READMEs at their roots
 (`src/lib/ui/README.md`, `src/components/README.md`) so the
 split is visible from inside the source tree. Both point
 back here for the long form.
+
+## Audit checklist
+
+The convention rots silently. A bug fix adds "just three
+lines" inline; a new affordance pulls a decision into the
+`.svelte` file "because it's only used there"; a refactor
+moves a `function foo()` from a primitives module into the
+component "to consolidate." Each is locally reasonable.
+The aggregate is a layer rebuilt one inch at a time.
+
+Periodically (and after any non-trivial UI work), walk
+`src/components/*.svelte` and ask, per file:
+
+1. **What's in the `<script>` block besides imports, prop
+   destructuring, `$state` / `$derived` declarations, and
+   event-handler glue?** Anything else is a candidate for
+   extraction.
+2. **Is there a `function` declaration that doesn't touch
+   runes, the DOM, or callback props?** That's a primitive
+   in disguise. Move it to `src/lib/ui/<feature>.ts`.
+3. **Is there an `{#if}` cascade in the markup branching
+   on a domain count, enum value, or persisted-shape
+   field?** Replace it with a primitive that returns the
+   right string / class / label. The template should pick
+   a value, not derive one.
+4. **Does the file have decision logic but no companion in
+   `src/lib/ui/`?** Create the companion - even if it
+   starts with one function. The companion's existence is
+   itself a signal to the next editor that decisions
+   belong on the other side.
+5. **Are there any `*.svelte.ts` files masquerading as
+   primitives?** Those are reactive stores, not UI
+   primitives. UI primitives are plain `.ts`.
+
+Things that are NOT creep and stay in the component:
+
+- `$state` / `$derived` declarations (framework-native).
+- `onMount` / `$effect` blocks wiring subscriptions or
+  one-shot priming.
+- DOM-ref bindings (`bind:this={el}`) and focus shuffles.
+- Event handlers that exist solely to call a callback prop
+  or mutate local `$state`.
+- Universal-arithmetic one-liners (`selected.length > 0`,
+  `new Set(items)`, `value ?? fallback`) where the reader
+  doesn't need feature-specific knowledge.
+
+The "would a port to React rewrite this?" test is the
+deciding question. If yes, the code stays in the
+`.svelte` file. If no, it belongs in `src/lib/ui/`.
