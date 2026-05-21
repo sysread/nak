@@ -117,9 +117,44 @@ export async function waitForProject(ref, { timeoutMs = 180_000, intervalMs = 50
 /**
  * Run SQL against a project via the Management API `query` endpoint. This
  * avoids needing a `supabase link`, which helps idempotency across machines.
+ *
+ * Retries on Postgres deadlock errors (SQLSTATE 40P01). Schema apply takes
+ * AccessExclusiveLock on every table it touches (every ALTER, DROP, CREATE
+ * INDEX without CONCURRENTLY), and the live app is always running queries
+ * holding RowShareLock / RowExclusiveLock via RLS-scoped SELECT/INSERT/
+ * UPDATE. A concurrent deploy + active user can hit a lock cycle that
+ * Postgres aborts as 40P01 - the contract is "retry the transaction" and
+ * the conflict almost always clears within a second once the losing
+ * backend rolls back. Without this retry, deploys randomly fail (CI shows
+ * exit 1 from `bail` in scripts/sync.mjs) and the new code never lands.
+ *
+ * Exponential backoff with jitter (500ms / 1s / 2s, +0-500ms randomized)
+ * so concurrent retries don't re-collide on the same lock window. Limit
+ * is 4 attempts total - if we deadlock 4 times in a row, something is
+ * holding a long lock and a human should look.
  */
-export async function runSql(ref, sql) {
-  return mgmt('POST', `/v1/projects/${ref}/database/query`, { query: sql });
+export async function runSql(ref, sql, { maxAttempts = 4 } = {}) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await mgmt('POST', `/v1/projects/${ref}/database/query`, { query: sql });
+    } catch (err) {
+      lastErr = err;
+      // The Management API returns 400 with a body like
+      // `{"message":"Failed to run sql query: ERROR:  40P01: deadlock detected..."}`.
+      // Match on the SQLSTATE code rather than the prose so we don't
+      // depend on the exact wording. Look at both `err.message` (which
+      // includes the body excerpt) and `err.body.message` (the parsed
+      // JSON, when present) to cover both shapes.
+      const haystack = `${err?.message ?? ''} ${err?.body?.message ?? ''}`;
+      const isDeadlock = haystack.includes('40P01');
+      if (!isDeadlock || attempt === maxAttempts) throw err;
+      const baseMs = 500 * Math.pow(2, attempt - 1);
+      const jitterMs = Math.floor(Math.random() * 500);
+      await new Promise((r) => setTimeout(r, baseMs + jitterMs));
+    }
+  }
+  throw lastErr;
 }
 
 // ---------------------------------------------------------------------------
