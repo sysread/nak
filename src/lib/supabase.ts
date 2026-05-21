@@ -125,6 +125,21 @@ export interface Thread {
    */
   topics: string[];
   /**
+   * Cross-device "this device is producing the response right now"
+   * claim. Stamped by `acquire_thread_response_claim` at the start of
+   * a chat turn, refreshed by `heartbeat_thread_response_claim`,
+   * cleared by `release_thread_response_claim`. Observer devices read
+   * these via the regular threads realtime subscription and use them
+   * to render a "responding on another device" indicator + disable
+   * their composer. Null on idle threads.
+   *
+   * See `acquire_thread_response_claim` and friends in
+   * `supabase/schema.sql`, plus `ThreadClaimCoordinator` in
+   * `src/lib/exchange/thread-claim-coordinator.ts`.
+   */
+  response_holder_id: string | null;
+  response_claim_expires_at: string | null;
+  /**
    * App-local flag: true when this thread exists only in memory (the user
    * clicked "new thread" but hasn't sent a message or renamed it yet).
    * Drafts are never sent to Supabase — they materialize on first save.
@@ -179,6 +194,22 @@ function coerceThread(row: Record<string, unknown>): Thread {
     // refresh runs on the next trigger.
     context_recall_payload: row.context_recall_payload ?? null,
     topics,
+    // Cross-device response-claim columns. Pass through unchanged so
+    // an observer device that reads a row mid-stream sees the claim
+    // immediately. A non-string holder is treated as null (drift-
+    // tolerant), and an expires_at without a holder is also treated
+    // as cleared since the holder is the authoritative half of the
+    // pair.
+    response_holder_id:
+      typeof row.response_holder_id === 'string' && row.response_holder_id.length > 0
+        ? row.response_holder_id
+        : null,
+    response_claim_expires_at:
+      typeof row.response_holder_id === 'string' && row.response_holder_id.length > 0
+        ? typeof row.response_claim_expires_at === 'string'
+          ? row.response_claim_expires_at
+          : null
+        : null,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
@@ -1520,6 +1551,8 @@ export class SupabaseService {
           intuition_payload: null,
           context_recall_payload: null,
           topics: [],
+          response_holder_id: null,
+          response_claim_expires_at: null,
           created_at: row.updated_at,
           updated_at: row.updated_at,
         },
@@ -3261,6 +3294,75 @@ export class SupabaseService {
   async releaseWorkerLease(workerKind: string, holderId: string): Promise<void> {
     const { error } = await this.client.rpc('release_worker_lease', {
       p_worker_kind: workerKind,
+      p_holder_id: holderId,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  // Thread response claim --------------------------------------------------
+  //
+  // Per-thread cross-device claim used by the chat-loop to mark "this
+  // device is producing the response right now." Observer devices see
+  // the claim on the threads realtime channel and gate their composer
+  // accordingly. See `acquire_thread_response_claim` and siblings in
+  // `supabase/schema.sql` for the atomic semantics, and
+  // `ThreadClaimCoordinator` in `src/lib/exchange/thread-claim-coordinator.ts`
+  // for the heartbeat-loop wrapper.
+  //
+  // Distinct from the worker_leases above: those are user-level
+  // singletons partitioned by `workerKind`; these are per-thread,
+  // keyed on the thread row itself.
+
+  /**
+   * Try to take the response claim on `threadId`. Returns true iff we
+   * hold it after the call. Atomic: the underlying SQL update only
+   * lands if the thread is unclaimed, ours already (harmless refresh),
+   * or carrying an expired claim. A `false` return means another
+   * device beat us to the claim and still owns a live TTL window.
+   */
+  async acquireThreadResponseClaim(
+    threadId: string,
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('acquire_thread_response_claim', {
+      p_thread_id: threadId,
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Extend our claim on `threadId`. Returns false when the claim has
+   * already lapsed or been taken over - the chat-loop must abort
+   * immediately in that case to avoid a double-response race with the
+   * new holder.
+   */
+  async heartbeatThreadResponseClaim(
+    threadId: string,
+    holderId: string,
+    ttlSeconds: number
+  ): Promise<boolean> {
+    const { data, error } = await this.client.rpc('heartbeat_thread_response_claim', {
+      p_thread_id: threadId,
+      p_holder_id: holderId,
+      p_ttl_seconds: ttlSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Release the claim on `threadId` explicitly on graceful end-of-turn
+   * (success, abort, error). Lets observer devices re-enable their
+   * composer instantly rather than waiting for the TTL to elapse.
+   * No-op when we don't actually hold the claim.
+   */
+  async releaseThreadResponseClaim(threadId: string, holderId: string): Promise<void> {
+    const { error } = await this.client.rpc('release_thread_response_claim', {
+      p_thread_id: threadId,
       p_holder_id: holderId,
     });
     if (error) throw new SupabaseError(error.message);

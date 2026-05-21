@@ -49,6 +49,8 @@ function mkThread(overrides: Partial<Thread> = {}): Thread {
     intuition_payload: null,
     context_recall_payload: null,
     topics: [],
+    response_holder_id: null,
+    response_claim_expires_at: null,
     created_at: 'now',
     updated_at: 'now',
     ...overrides,

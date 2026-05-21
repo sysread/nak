@@ -35,18 +35,28 @@
  * `sending` flips.
  */
 
+import { SvelteMap } from 'svelte/reactivity';
 import { ExchangeSlot } from './exchange-slot.svelte';
 import type { Message } from '../supabase';
 
 export class ExchangeStore {
   /**
-   * Reactive Map: Svelte 5 tracks `set` / `delete` / `get` calls on a
-   * $state-wrapped Map and re-runs derivations that read from it. So
-   * a screen-level `$derived(store.peek(activeThreadId))` updates
-   * automatically when `send()` allocates a slot for that thread,
-   * without the screen needing to bump a separate version counter.
+   * SvelteMap (not `$state(new Map())`): Svelte 5's `$state` only
+   * deep-proxies plain objects and arrays. Built-in collections -
+   * Map, Set, Date, URL - keep the operations they expose opaque
+   * unless you reach for the explicit reactive wrapper from
+   * `svelte/reactivity`. Without SvelteMap, `peek` and `slotFor`'s
+   * `map.get(threadId)` does not subscribe the caller's $derived,
+   * so a slot allocated by `send()` is invisible to the screen
+   * until something else triggers a re-render. The user-visible
+   * symptom: the streaming bubble never shows up and the
+   * "incomplete turn" banner appears under the user message while
+   * the assistant response is in flight, because the bubble is
+   * gated on `activeSlot?.sending` and the banner is suppressed
+   * by the same condition - both false-out when the map read
+   * silently misses the new slot.
    */
-  private readonly map = $state(new Map<string, ExchangeSlot>());
+  private readonly map = new SvelteMap<string, ExchangeSlot>();
 
   /**
    * Return the slot for `threadId`, creating it on first call.
