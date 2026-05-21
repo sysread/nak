@@ -3315,7 +3315,10 @@
         } else if (loopResult.finalText.length > 0) {
           notifyTurnComplete({
             threadId: ctx.threadId,
-            title: threadForNotif?.title || 'New reply',
+            // Pass the raw title (possibly empty); the notification
+            // function decides the heading shape based on whether
+            // there's a meaningful title to interpolate.
+            title: threadForNotif?.title ?? '',
             isActive: activeThreadId === ctx.threadId,
             onClick: (id) => {
               void selectThread(id);
