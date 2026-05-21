@@ -645,11 +645,16 @@ describe('validateCooklangSource', () => {
     expect(errors).toEqual([]);
   });
 
-  it('rejects markdown bold', () => {
+  it('no longer rejects markdown bold (the renderer styles it now)', () => {
+    // Inline emphasis is supported in step text via
+    // `renderInlineEmphasis` - the validator should leave it alone.
     const errors = validateCooklangSource('Cook for **5 hours** on low.');
-    expect(errors.length).toBe(1);
-    expect(errors[0]).toMatch(/markdown emphasis/);
-    expect(errors[0]).toMatch(/~\{N%unit\}/);
+    expect(errors).toEqual([]);
+  });
+
+  it('no longer rejects markdown italics either', () => {
+    expect(validateCooklangSource('Stir *gently* into the pot.')).toEqual([]);
+    expect(validateCooklangSource('Stir _gently_ into the pot.')).toEqual([]);
   });
 
   it('rejects backtick code spans', () => {
@@ -684,8 +689,75 @@ describe('validateCooklangSource', () => {
 
   it('collects multiple problems in one pass', () => {
     const errors = validateCooklangSource(
-      'Use @pre-minced @garlic{1%tbsp} and **stir** vigorously.',
+      'Use @pre-minced @garlic{1%tbsp} and `stir` vigorously.',
     );
     expect(errors.length).toBe(2);
+  });
+});
+
+describe('recipeToHtml — inline emphasis in step text', () => {
+  // The HTML renderer applies a narrow inline-markdown pass to step
+  // text only (not ingredient names, cookware, or metadata) so the
+  // LLM's `**bold**`-style emphasis renders the way a cook expects.
+  it('renders **bold** as <strong>', () => {
+    const html = cooklangToHtml('Cook on low for **5 hours**.');
+    const instr = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    expect(instr).toContain('<strong>5 hours</strong>');
+    expect(instr).not.toContain('**');
+  });
+
+  it('renders *italic* as <em>', () => {
+    const html = cooklangToHtml('Stir *gently*.');
+    const instr = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    expect(instr).toContain('<em>gently</em>');
+  });
+
+  it('renders _italic_ as <em> with word boundaries', () => {
+    const html = cooklangToHtml('Stir _gently_ into the pot.');
+    const instr = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    expect(instr).toContain('<em>gently</em>');
+  });
+
+  it('does NOT match underscores inside a word like `pre_minced`', () => {
+    // The word-boundary guards on `_..._` are what prevent this -
+    // CommonMark behaves the same way for the same reason.
+    const html = cooklangToHtml('Use pre_minced_garlic for speed.');
+    const instr = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    expect(instr).not.toContain('<em>');
+    expect(instr).toContain('pre_minced_garlic');
+  });
+
+  it('combines emphasis with timer parsing', () => {
+    // Original screenshot case: LLM wraps a duration in `**...**` for
+    // emphasis. The `~{...}` parses as a timer (contributes to the
+    // timer list, replaces the braces with the duration text), and
+    // the surrounding `**` wrap the resulting text in <strong>.
+    const html = cooklangToHtml('Cook for **~{4-5%hours}** on low.');
+    const instr = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    expect(instr).toContain('<strong>4-5 hours</strong>');
+  });
+
+  it('escapes HTML in the text before applying emphasis', () => {
+    // The emphasis pass runs AFTER `esc()`, so `<` is already `&lt;`
+    // by the time we see it. A user trying to inject `<script>` gets
+    // it escaped first; emphasis only wraps already-safe text.
+    const html = cooklangToHtml('Add **<script>**.');
+    const instr = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    expect(instr).toContain('<strong>&lt;script&gt;</strong>');
+    expect(instr).not.toContain('<script>');
+  });
+
+  it('leaves metadata values alone (only step text gets emphasis)', () => {
+    // The emphasis pass is wired into the instruction-list <li>
+    // render, not the metadata <dd>. A `>> note: **see page 5**`
+    // value lands as the literal text with asterisks - intentional,
+    // since metadata is a flat key/value, not prose.
+    const html = cooklangToHtml('>> note: see **page 5**\nMix.');
+    const metaBlock = html.slice(
+      html.indexOf('<dl class="cook-metadata">'),
+      html.indexOf('<h3>'),
+    );
+    expect(metaBlock).toContain('**page 5**');
+    expect(metaBlock).not.toContain('<strong>');
   });
 });
