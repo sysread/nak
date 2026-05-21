@@ -397,7 +397,6 @@ describe('buildLogSnapshot', () => {
     matchMode: 'or' as const,
     sourceFilter: '',
     search: '',
-    totalEntries: 2,
     visibleEntries: [
       entry({
         id: 1,
@@ -424,9 +423,11 @@ describe('buildLogSnapshot', () => {
     ).toBe('embed-worker');
   });
 
-  it('reports total vs shown entry counts', () => {
+  it('reports the count of visible entries', () => {
+    // The snapshot deliberately omits the unfiltered buffer total -
+    // the request "copy what is visible" means the metadata
+    // describes only the displayed slice.
     const out = buildLogSnapshot(args);
-    expect(out.totalEntries).toBe(2);
     expect(out.shownEntries).toBe(1);
   });
 

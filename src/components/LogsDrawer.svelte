@@ -140,7 +140,6 @@
         matchMode,
         sourceFilter,
         search,
-        totalEntries: logs.entries.length,
         visibleEntries: visible,
       }),
       null,
@@ -636,7 +635,7 @@
        rem-based are now em-based against this so a tweak here scales
        the badge, timestamp, source tag, message, and structured
        blocks together instead of pulling them out of proportion. */
-    font-size: 0.6rem;
+    font-size: 0.55rem;
     line-height: 1.4;
     background: var(--bg);
   }

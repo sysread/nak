@@ -324,7 +324,6 @@ export interface LogSnapshotArgs {
   matchMode: 'or' | 'and';
   sourceFilter: string;
   search: string;
-  totalEntries: number;
   visibleEntries: readonly LogEntry[];
 }
 
@@ -336,7 +335,6 @@ export function buildLogSnapshot(args: LogSnapshotArgs): {
   sourceFilter: string | null;
   searchFilter: string;
   searchMode: 'or' | 'and';
-  totalEntries: number;
   shownEntries: number;
   entries: Array<{
     id: number;
@@ -355,7 +353,6 @@ export function buildLogSnapshot(args: LogSnapshotArgs): {
     sourceFilter: args.sourceFilter === '' ? null : args.sourceFilter,
     searchFilter: args.search,
     searchMode: args.matchMode,
-    totalEntries: args.totalEntries,
     shownEntries: args.visibleEntries.length,
     entries: args.visibleEntries.map((e) => ({
       id: e.id,

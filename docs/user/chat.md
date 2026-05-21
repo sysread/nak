@@ -438,9 +438,14 @@ A few platform quirks worth knowing:
 - **Interrupted replies don't notify.** If you hit Stop on a
   reply, the partial text is saved but no notification fires -
   you already know the reply is done.
-- **The thread you're watching never notifies itself.** Only
-  replies in threads you've navigated away from trigger the
-  sidebar dot or the OS notification.
+- **A thread you're actively watching never notifies itself.**
+  "Actively watching" means the thread is selected AND the tab is
+  visible - you can see the stream. If the tab is hidden (you
+  switched to another app, locked the screen, minimized the window)
+  Nak fires the OS notification regardless of which thread is
+  selected, because you're not actually watching anything in that
+  case. Replies in threads you navigated away from inside the app
+  still get the sidebar dot whether the tab is hidden or not.
 - **Browser-level permission doesn't sync across devices.** The
   setting itself is on your account, so flipping the toggle on
   one device leaves it checked everywhere. The OS-level "allow
