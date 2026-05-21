@@ -24,6 +24,9 @@
  */
 
 import { app } from './state.svelte';
+import { createLogger } from './logger.svelte';
+
+const log = createLogger('notifications');
 
 interface NotificationsState {
   /** Thread ids that have received a completion while the user was elsewhere. */
@@ -93,15 +96,41 @@ export interface NotifyArgs {
  * to check the setting itself.
  */
 export function notifyTurnComplete(args: NotifyArgs): void {
-  if (args.isActive) return;
+  // Capture the gating state up front so the debug entry covers every
+  // factor the function will branch on. Same factors appear in
+  // notifyAskUser - keep them in sync. Read from runtime state rather
+  // than constants so the drawer reflects the actual decision being
+  // made on this call, not a stale snapshot.
+  const supported = isSupported();
+  const permission = supported ? Notification.permission : 'unsupported';
+  const hidden = typeof document !== 'undefined' && document.hidden === true;
+  const visibilityState =
+    typeof document !== 'undefined' ? document.visibilityState : 'unknown';
+  log.debug('notifyTurnComplete', {
+    threadId: args.threadId,
+    isActive: args.isActive,
+    notifyOnComplete: app.notifyOnComplete,
+    supported,
+    permission,
+    hidden,
+    visibilityState,
+  });
+  if (args.isActive) {
+    log.debug('notifyTurnComplete: skipped (thread is active)', {
+      threadId: args.threadId,
+    });
+    return;
+  }
   if (!app.notifyOnComplete) {
     // Feature disabled entirely - don't set an unread dot either. The
     // user has explicitly opted out of being told about background
     // completions.
+    log.debug('notifyTurnComplete: skipped (notifyOnComplete=false)', {
+      threadId: args.threadId,
+    });
     return;
   }
-  const hidden = typeof document !== 'undefined' && document.hidden === true;
-  if (hidden && isSupported() && Notification.permission === 'granted') {
+  if (hidden && supported && permission === 'granted') {
     try {
       const notif = new Notification(args.title || 'New reply', {
         body: 'Your reply is ready.',
@@ -119,12 +148,33 @@ export function notifyTurnComplete(args: NotifyArgs): void {
         args.onClick(args.threadId);
         notif.close();
       };
+      log.debug('notifyTurnComplete: fired OS notification', {
+        threadId: args.threadId,
+        tag: args.threadId,
+      });
       return;
-    } catch {
+    } catch (err) {
       // Notification constructor can throw on some Android embedded
       // browsers despite reporting permission=granted. Fall back to
       // the in-app dot so the completion still surfaces somewhere.
+      log.warn('notifyTurnComplete: Notification constructor threw', {
+        threadId: args.threadId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
+  } else {
+    // Spell out which precondition failed - the most common cause of
+    // "I don't see notifications" reports is one of these three:
+    // tab in foreground, browser missing the API entirely, or
+    // permission not granted on this device.
+    log.debug('notifyTurnComplete: falling back to unread dot', {
+      threadId: args.threadId,
+      reason: !hidden
+        ? 'document is visible (tab in foreground)'
+        : !supported
+          ? 'browser lacks Notification API'
+          : `permission is ${permission} (not granted)`,
+    });
   }
   markThreadUnread(args.threadId);
 }
@@ -164,10 +214,33 @@ export interface NotifyAskUserArgs {
  * notification of record.
  */
 export function notifyAskUser(args: NotifyAskUserArgs): void {
-  if (args.isActive) return;
-  if (!app.notifyOnComplete) return;
+  const supported = isSupported();
+  const permission = supported ? Notification.permission : 'unsupported';
   const hidden = typeof document !== 'undefined' && document.hidden === true;
-  if (hidden && isSupported() && Notification.permission === 'granted') {
+  const visibilityState =
+    typeof document !== 'undefined' ? document.visibilityState : 'unknown';
+  log.debug('notifyAskUser', {
+    threadId: args.threadId,
+    isActive: args.isActive,
+    notifyOnComplete: app.notifyOnComplete,
+    supported,
+    permission,
+    hidden,
+    visibilityState,
+  });
+  if (args.isActive) {
+    log.debug('notifyAskUser: skipped (thread is active)', {
+      threadId: args.threadId,
+    });
+    return;
+  }
+  if (!app.notifyOnComplete) {
+    log.debug('notifyAskUser: skipped (notifyOnComplete=false)', {
+      threadId: args.threadId,
+    });
+    return;
+  }
+  if (hidden && supported && permission === 'granted') {
     try {
       const truncated =
         args.question.length > ASK_USER_BODY_MAX_CHARS
@@ -191,12 +264,29 @@ export function notifyAskUser(args: NotifyAskUserArgs): void {
         args.onClick(args.threadId);
         notif.close();
       };
+      log.debug('notifyAskUser: fired OS notification', {
+        threadId: args.threadId,
+        tag: `ask:${args.threadId}`,
+      });
       return;
-    } catch {
+    } catch (err) {
       // Notification constructor occasionally throws on Android
       // embedded browsers despite reporting permission=granted; fall
       // back to the unread dot so the pending question still surfaces.
+      log.warn('notifyAskUser: Notification constructor threw', {
+        threadId: args.threadId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
+  } else {
+    log.debug('notifyAskUser: falling back to unread dot', {
+      threadId: args.threadId,
+      reason: !hidden
+        ? 'document is visible (tab in foreground)'
+        : !supported
+          ? 'browser lacks Notification API'
+          : `permission is ${permission} (not granted)`,
+    });
   }
   markThreadUnread(args.threadId);
 }
