@@ -441,6 +441,15 @@ A few platform quirks worth knowing:
 - **The thread you're watching never notifies itself.** Only
   replies in threads you've navigated away from trigger the
   sidebar dot or the OS notification.
+- **Browser-level permission doesn't sync across devices.** The
+  setting itself is on your account, so flipping the toggle on
+  one device leaves it checked everywhere. The OS-level "allow
+  notifications" grant, though, is per-origin-per-browser - your
+  desktop browser hasn't been asked just because your phone has.
+  When the setting is on but this browser hasn't been granted
+  permission yet, the Reply notifications section in Settings
+  shows an "Enable notifications for this browser" button that
+  asks for the grant on the spot.
 
 Off by default because enabling it triggers the browser's
 permission prompt, and prompting you for permissions without you
