@@ -83,7 +83,12 @@ function iconUrl(): string {
 
 export interface NotifyArgs {
   threadId: string;
-  /** Thread title, used as the notification heading. */
+  /**
+   * Raw thread title. May be the empty string for threads that haven't
+   * been auto-titled yet - the notification function interpolates a
+   * generic heading when that's the case rather than rendering an
+   * unhelpful "Nak replied to ''" line.
+   */
   title: string;
   /** True iff this thread is the one the user is currently viewing. */
   isActive: boolean;
@@ -143,7 +148,15 @@ export function notifyTurnComplete(args: NotifyArgs): void {
   }
   if (hidden && supported && permission === 'granted') {
     try {
-      const notif = new Notification(args.title || 'New reply', {
+      // Heading carries the full "Nak replied to X" sentence so the
+      // user sees the conversation name in the prominent bold line
+      // of the notification banner - macOS in particular collapses
+      // the body to a single line at the default banner style, so
+      // putting the title there would risk it being clipped.
+      const heading = args.title
+        ? `Nak replied to "${args.title}"`
+        : 'Nak replied';
+      const notif = new Notification(heading, {
         body: 'Your reply is ready.',
         icon: iconUrl(),
         tag: args.threadId,
