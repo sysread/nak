@@ -1,16 +1,21 @@
 /**
  * Thin wrapper around the Web Notifications API plus an in-app "unread
- * thread" Set. Owns the policy for "did a completion finish in a thread
- * the user isn't currently looking at, and if so, how do we tell them":
+ * thread" Set. Owns the policy for "did a completion finish, and if so,
+ * how do we tell the user":
  *
- *   - If the completed thread IS the active one, do nothing. The user
- *     is already watching the stream.
+ *   - If the completed thread is the active one AND the tab is visible,
+ *     do nothing. The user is sitting there watching the stream - they
+ *     don't need a popup for content they're already looking at.
  *   - If the document is hidden (tab backgrounded, PWA minimised, screen
  *     locked), and the user has both toggled the setting on AND granted
  *     Notification permission, fire an OS-level Notification tagged with
  *     the threadId. Same tag means a second completion on the same thread
  *     collapses into a single notification instead of stacking - the user
  *     only cares that SOMETHING landed, not how many rounds it took.
+ *     This fires regardless of which thread is "active" in the app -
+ *     when the tab is hidden the user isn't actually watching anything,
+ *     so the same-thread suppression would just deny them the nudge they
+ *     came here for.
  *   - Otherwise (document visible but on a different thread, or permission
  *     not granted, or browser has no Notification API), mark the thread
  *     unread. The sidebar renders a small dot on matching rows;
@@ -115,8 +120,14 @@ export function notifyTurnComplete(args: NotifyArgs): void {
     hidden,
     visibilityState,
   });
-  if (args.isActive) {
-    log.debug('notifyTurnComplete: skipped (thread is active)', {
+  // "Watching the stream" requires BOTH the thread being active AND
+  // the tab being visible. If the tab is hidden the user is elsewhere -
+  // they're not watching anything, and the OS notification is the only
+  // signal they'll get that the reply landed. Suppressing it here just
+  // because the active thread happens to match would silently deny the
+  // notification the user explicitly opted in to.
+  if (args.isActive && !hidden) {
+    log.debug('notifyTurnComplete: skipped (thread active + tab visible)', {
       threadId: args.threadId,
     });
     return;
@@ -228,8 +239,10 @@ export function notifyAskUser(args: NotifyAskUserArgs): void {
     hidden,
     visibilityState,
   });
-  if (args.isActive) {
-    log.debug('notifyAskUser: skipped (thread is active)', {
+  // Same "watching = active AND visible" rule as notifyTurnComplete.
+  // See that function's comment for the reasoning.
+  if (args.isActive && !hidden) {
+    log.debug('notifyAskUser: skipped (thread active + tab visible)', {
       threadId: args.threadId,
     });
     return;
