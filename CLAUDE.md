@@ -145,6 +145,54 @@ Not:
   existing comment rather than adding a parallel one. Stale comments are
   worse than missing ones.
 
+### Describe current reality, not change history
+
+Comments encode current behavior and the constraints it serves, not
+the change that produced them. Git logs the history; comments narrate
+the file as it stands. A future reader reading the comment needs to
+know what the code does now and why, not what it used to do.
+
+Phrases that mark this drift in a comment: "the earlier version," "the
+previous implementation," "originally," "we used to," "switched to,"
+"was changed to," "now we," "this commit," "this fix," any past-tense
+framing of the code's evolution. If you catch one of these in a comment
+you're writing, rewrite the comment as if you'd never seen the prior
+shape. The rationale stays, the history goes.
+
+The exception: comments that describe current code behavior in response
+to legacy state are not change-history. "Older rows in the database may
+still carry the v1 shape, so we coerce here before reading" is about
+the present (a current invariant against a legacy condition), not about
+a refactor narrative.
+
+### TODO and FIXME comments
+
+A TODO or FIXME describes the problem to solve, not the solution to
+apply. The future implementer has context the present caller doesn't;
+prescribing the fix from upstream cements an implementation choice in
+the marker and bleeds the caller's assumptions into work that hasn't
+been thought through yet. This is a specific application of the
+separation-of-concerns prime directive.
+
+Good:
+
+```ts
+// TODO: the recall fan-out result list grows unbounded across long
+// sessions; we want a windowing strategy before this becomes a memory
+// pressure issue.
+```
+
+Bad:
+
+```ts
+// TODO: cap the recall fan-out result list at 50 entries.
+```
+
+The first names the failure mode and leaves the implementer to weigh
+windowing vs eviction vs LRU vs something else entirely. The second
+prescribes a specific fix and forecloses on alternatives that may read
+better once the implementer actually has the context.
+
 ### Code review checklist (for yourself)
 
 Before handing work back:
@@ -154,6 +202,8 @@ Before handing work back:
 - [ ] Every browser-API quirk cites the quirk by observable behavior.
 - [ ] Every constant derived from a spec cites the spec.
 - [ ] No stale comments left pointing at removed code.
+- [ ] No past-tense narration of code evolution (no "we used to," "switched to," "this fix," etc.).
+- [ ] Every TODO/FIXME describes the problem, not the prescribed solution.
 
 ### False positives are a documentation signal
 
