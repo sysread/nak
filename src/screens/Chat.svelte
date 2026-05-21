@@ -1932,9 +1932,19 @@
       // message - meaning the assistant response never committed. If the
       // response DID commit, the draft was also deleted in the finally
       // block, so loadDraft returns null and nothing is shown.
+      //
+      // Skipped while THIS thread has a live in-flight exchange: the
+      // IDB draft we'd find is the one runExchange is currently
+      // updating from another tab/window into this same view (the
+      // user switched away mid-stream and came back). Treating that
+      // as orphaned would surface the "previous response was
+      // interrupted" banner while the response is, in fact, still
+      // arriving - which the user reads as a stale/contradictory UI.
+      // Slots persist across thread switches in Phase 2, so a peek
+      // is enough to detect "we're the device producing this turn."
       interruptedDraft = null;
       const lastMsg = fetched.at(-1);
-      if (lastMsg?.role === 'user') {
+      if (lastMsg?.role === 'user' && !exchangeStore.peek(id)?.sending) {
         const draft = await loadDraft(id);
         if (draft && draft.userMessageId === lastMsg.id && activeThreadId === id) {
           interruptedDraft = draft;
