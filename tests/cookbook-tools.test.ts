@@ -21,7 +21,7 @@ import { SupabaseService } from '../src/lib/supabase';
 import type { Recipe, RecipeVersion } from '../src/lib/supabase';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { VeniceClient } from '../src/lib/venice';
-import { MAX_RECIPE_COOKLANG_CHARS } from '../src/lib/cooklang';
+import { MAX_RECIPE_COOKLANG_CHARS } from '../src/lib/recipe-limits';
 
 function sampleRecipe(overrides: Partial<Recipe> = {}): Recipe {
   return {

@@ -1033,19 +1033,11 @@ export function recipeToMarkdown(
 // Limits
 // ---------------------------------------------------------------------------
 
-/**
- * Hard cap on a single recipe's source length. Not a spec limit — a
- * pragmatic ceiling that keeps the recipe_list tool's response under
- * context budget even with a few dozen recipes. A typical recipe is
- * 1-3 KiB of Cooklang; 20 KiB is headroom for a long multi-stage bread
- * recipe with extensive prose. Larger than that probably means the
- * LLM dumped prose into `cooklang` instead of parsing it to Cooklang —
- * rejecting is better than silently storing HTML.
- */
-export const MAX_RECIPE_COOKLANG_CHARS = 20_000;
-
-/** Title cap — mirrors memory label. */
-export const MAX_RECIPE_TITLE_CHARS = 160;
+// MAX_RECIPE_COOKLANG_CHARS and MAX_RECIPE_TITLE_CHARS used to live
+// here. They moved to `./recipe-limits` so the always-on recipe-save
+// tool schemas can reach them without dragging this 14 kB parser into
+// the main chunk. Cookbook.svelte and the recipe tools now import
+// directly from `./recipe-limits`.
 
 // ---------------------------------------------------------------------------
 // Authoring validation

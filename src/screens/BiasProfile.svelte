@@ -37,7 +37,8 @@
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
   import { route } from '$lib/routing.svelte';
-  import { BIAS_CATALOG, type BiasKey, isBiasKey } from '$lib/bias/catalog';
+  import { BIAS_CATALOG } from '$lib/bias/catalog';
+  import { type BiasKey, isBiasKey } from '$lib/bias/catalog-keys';
   import {
     ALPHA_PRIOR,
     BETA_PRIOR,

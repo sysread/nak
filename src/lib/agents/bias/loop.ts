@@ -46,7 +46,7 @@ import {
   type ConversationContribution,
   type FeedbackContribution,
 } from '../../bias/math';
-import { BIAS_KEYS } from '../../bias/catalog';
+import { BIAS_KEYS } from '../../bias/catalog-keys';
 
 const log = createLogger('bias-worker');
 

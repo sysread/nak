@@ -20,7 +20,13 @@
  * four by ciLower descending make it into the prompt. The debug
  * modal shows all rows regardless.
  */
-import { BIAS_CATALOG, type BiasKey, isBiasKey } from './catalog';
+// BIAS_CATALOG (the bulky descriptions object) is dynamic-imported
+// inside formatBiasProfileBlock so it doesn't ride into the main
+// chunk via the chat-loop -> bias/index -> format path. The keys
+// module is small enough to stay eager (it carries only the
+// closed-enum machinery the chat loop's validators need).
+import type { BiasKey } from './catalog-keys';
+import { isBiasKey } from './catalog-keys';
 import { RENDER_CAP, type BiasSummaryRow } from './types';
 
 /**
@@ -51,9 +57,17 @@ export function pickRenderable(rows: readonly BiasSummaryRow[]): BiasSummaryRow[
  * uses for the null state. The caller (buildSystemPrompt) omits
  * the section entirely rather than rendering a placeholder.
  */
-export function formatBiasProfileBlock(rows: readonly BiasSummaryRow[]): string | null {
+export async function formatBiasProfileBlock(
+  rows: readonly BiasSummaryRow[]
+): Promise<string | null> {
   const picks = pickRenderable(rows);
   if (picks.length === 0) return null;
+
+  // Pull the catalog only when we actually have biases to render -
+  // the chunk fetch is amortised across turns (browser module cache
+  // makes it a one-shot per session) and lets the bulky descriptions
+  // table stay out of main.
+  const { BIAS_CATALOG } = await import('./catalog');
 
   const bullets: string[] = [];
   for (const row of picks) {

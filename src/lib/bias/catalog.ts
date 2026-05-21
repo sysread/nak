@@ -6,6 +6,13 @@
  * aggregation works. Adding a catalog entry is a deliberate code
  * change, not an agent decision.
  *
+ * The closed enum (BIAS_KEYS, BiasKey, isBiasKey) lives in the
+ * sibling `./catalog-keys` so the chat-loop side can validate
+ * incoming bias strings without pulling this prose-heavy module
+ * into the main chunk. The `Record<BiasKey, BiasEntry>` type on
+ * BIAS_CATALOG below makes TS error if the keys here drift from
+ * `BIAS_KEYS` - missing or extra keys both surface at compile time.
+ *
  * Each entry ships four pieces:
  *
  *   - `definition`: one terse sentence the observer reads.
@@ -33,7 +40,17 @@
  * surface from a transcript.
  */
 
-export const BIAS_CATALOG = {
+import type { BiasKey } from './catalog-keys';
+
+export interface BiasEntry {
+  label: string;
+  definition: string;
+  example: string;
+  nearMiss: string;
+  guidance: string;
+}
+
+export const BIAS_CATALOG: Record<BiasKey, BiasEntry> = {
   confirmation_bias: {
     label: 'Confirmation bias',
     definition:
@@ -243,17 +260,4 @@ export const BIAS_CATALOG = {
     guidance:
       'When the user estimates their own timeline or cost, anchor against typical outcomes for similar projects rather than the inside-view plan.',
   },
-} as const;
-
-export type BiasKey = keyof typeof BIAS_CATALOG;
-
-export const BIAS_KEYS: readonly BiasKey[] = Object.keys(BIAS_CATALOG) as BiasKey[];
-
-/**
- * Type-narrowing guard. The observer agent emits strings; this is
- * how we validate them at ingest before they hit the DB enum check.
- * Unknown strings are dropped with a debug log; never coerced.
- */
-export function isBiasKey(s: string): s is BiasKey {
-  return Object.prototype.hasOwnProperty.call(BIAS_CATALOG, s);
-}
+};

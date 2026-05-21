@@ -33,9 +33,15 @@ import type { SupabaseService } from '../../supabase';
 import type { VeniceClient } from '../../venice';
 import { createLogger } from '../../logger.svelte';
 import { emitWikiChange } from '../../wiki-events';
-import { WikiLibrarianAgent } from './agent';
 import type { WikiLibrarianUserProfile } from './prompt';
 import { LIBRARIAN_EXCERPT_CHARS } from './types';
+
+// The agent class + its 25 kB prompt template are deliberately
+// dynamic-imported below so they ride in the wiki chunk instead of
+// inflating main. The worker bundle reaches agent.ts through its own
+// graph (manager.ts spawns it via `new Worker(new URL('./worker.ts',
+// ...))`), so this main-side dynamic-import has no static-importer
+// collision and the split takes effect.
 
 const log = createLogger('wiki-librarian-worker');
 
@@ -187,6 +193,7 @@ export async function runManually(
     // show before the model has produced anything.
     emit({ kind: 'preparing', articleCount: projection.length });
 
+    const { WikiLibrarianAgent } = await import('./agent');
     const agent = new WikiLibrarianAgent(
       opts.venice,
       opts.supabase,

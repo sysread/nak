@@ -40,9 +40,8 @@
     parseCooklang,
     recipeToMarkdown,
     recipeToPlainText,
-    MAX_RECIPE_COOKLANG_CHARS,
-    MAX_RECIPE_TITLE_CHARS,
   } from '$lib/cooklang';
+  import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '$lib/recipe-limits';
   import type { RecipeVersion } from '$lib/supabase';
   import {
     arrayBufferToBase64,

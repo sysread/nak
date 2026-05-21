@@ -9,11 +9,8 @@
  * signal it needs to shrink the source.
  */
 import type { ToolDef } from './types';
-import {
-  MAX_RECIPE_COOKLANG_CHARS,
-  MAX_RECIPE_TITLE_CHARS,
-  validateCooklangSource,
-} from '../cooklang';
+import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../recipe-limits';
+import { validateCooklangSource } from '../cooklang';
 // See recipe_save.ts — plain-.ts import, not the rune-using store.
 import { notifyCookbookChanged } from '../cookbook-events';
 import { recipeUpdateSchema } from './recipe_update.schema';

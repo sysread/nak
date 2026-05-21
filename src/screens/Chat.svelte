@@ -129,8 +129,6 @@
   type IntuitionComponent = typeof import('./Intuition.svelte').default;
   type BiasProfileComponent = typeof import('./BiasProfile.svelte').default;
   type RecallComponent = typeof import('./Recall.svelte').default;
-  import RecipeList from '../components/RecipeList.svelte';
-  import MemoryList from '../components/MemoryList.svelte';
   import WikiList from '../components/WikiList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
   import BiasPill from '../components/BiasPill.svelte';
@@ -170,14 +168,12 @@
     type ContextRecallPayload,
   } from '$lib/context-recall';
   import AssistantBody from '../components/AssistantBody.svelte';
-  import CohortPanel from '../components/CohortPanel.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
   import ReasoningPicker from '../components/ReasoningPicker.svelte';
   import VerbosityPicker from '../components/VerbosityPicker.svelte';
   import Scanner from '../components/Scanner.svelte';
   import ToolCalls from '../components/ToolCalls.svelte';
-  import AskUserCard from '../components/AskUserCard.svelte';
   import {
     parseAskUserContent,
     buildAskUserAnswerContent,
@@ -196,8 +192,18 @@
   type ExtractedTextDrawerComponent =
     typeof import('../components/ExtractedTextDrawer.svelte').default;
   type LogsDrawerComponent = typeof import('../components/LogsDrawer.svelte').default;
+  // Chat-surface companions lazy-loaded for the same reason as the
+  // drawers above: each is conditionally rendered (drawer tabs,
+  // expanded cohort panel, ask_user tool call) or late-firing
+  // (SamskaraToasts seeds from its own DB query on mount, so a
+  // post-first-paint load misses nothing). All five together carry
+  // ~19 kB gz of weight out of the main bundle.
+  type RecipeListComponent = typeof import('../components/RecipeList.svelte').default;
+  type MemoryListComponent = typeof import('../components/MemoryList.svelte').default;
+  type CohortPanelComponent = typeof import('../components/CohortPanel.svelte').default;
+  type AskUserCardComponent = typeof import('../components/AskUserCard.svelte').default;
+  type SamskaraToastsComponent = typeof import('../components/SamskaraToasts.svelte').default;
   import { extractedTextDrawer } from '$lib/extractedTextDrawer.svelte';
-  import SamskaraToasts from '../components/SamskaraToasts.svelte';
   import { logsDrawer, createLogger } from '$lib/logger.svelte';
 
   const log = createLogger('chat');
@@ -229,6 +235,11 @@
   // invisible thereafter.
   let ExtractedTextDrawerComp: ExtractedTextDrawerComponent | null = $state(null);
   let LogsDrawerComp: LogsDrawerComponent | null = $state(null);
+  let RecipeListComp: RecipeListComponent | null = $state(null);
+  let MemoryListComp: MemoryListComponent | null = $state(null);
+  let CohortPanelComp: CohortPanelComponent | null = $state(null);
+  let AskUserCardComp: AskUserCardComponent | null = $state(null);
+  let SamskaraToastsComp: SamskaraToastsComponent | null = $state(null);
   let AuthComp: AuthComponent | null = $state(null);
   let CookbookComp: CookbookComponent | null = $state(null);
   let MemoriesComp: MemoriesComponent | null = $state(null);
@@ -301,6 +312,53 @@
   $effect(() => {
     if (showRecall && !RecallComp) {
       void import('./Recall.svelte').then((m) => (RecallComp = m.default));
+    }
+  });
+  $effect(() => {
+    if (drawerTab === 'recipes' && !RecipeListComp) {
+      void import('../components/RecipeList.svelte').then(
+        (m) => (RecipeListComp = m.default)
+      );
+    }
+  });
+  $effect(() => {
+    if (drawerTab === 'memories' && !MemoryListComp) {
+      void import('../components/MemoryList.svelte').then(
+        (m) => (MemoryListComp = m.default)
+      );
+    }
+  });
+  // Cohort panels are collapsed by default; the first expand-click on
+  // any message triggers the chunk fetch. Subsequent panels for other
+  // messages reuse the cached module.
+  $effect(() => {
+    if (expandedCohortPanels.size > 0 && !CohortPanelComp) {
+      void import('../components/CohortPanel.svelte').then(
+        (m) => (CohortPanelComp = m.default)
+      );
+    }
+  });
+  // ask_user is rare - most threads never see it. Load on demand when
+  // an ask_user block first appears in the rendered transcript.
+  $effect(() => {
+    if (
+      !AskUserCardComp &&
+      messageBlocks.some((b) => b.kind === 'ask-user')
+    ) {
+      void import('../components/AskUserCard.svelte').then(
+        (m) => (AskUserCardComp = m.default)
+      );
+    }
+  });
+  // SamskaraToasts is always-on UI but late-firing: it seeds from its
+  // own samskaraGetLatestFireMood query on mount, so a chunk fetch
+  // that lands a tick or two after first paint misses nothing. The
+  // effect fires once after the initial render and never again.
+  $effect(() => {
+    if (!SamskaraToastsComp) {
+      void import('../components/SamskaraToasts.svelte').then(
+        (m) => (SamskaraToastsComp = m.default)
+      );
     }
   });
   // Trigger flag for the recipe "new" top-bar button. Chat.svelte
@@ -5317,13 +5375,19 @@
         <!-- Recipes tab. RecipeList owns the search, sort, and item
              rows. Clicking a recipe navigates to it inline in the main
              panel (no modal). onSelect closes the mobile drawer so the
-             newly-navigated panel is visible without a second tap. -->
-        <RecipeList onSelect={closeDrawerOnMobile} />
+             newly-navigated panel is visible without a second tap.
+             Lazy-loaded - the panel is empty for a tick on first
+             open. -->
+        {#if RecipeListComp}
+          <RecipeListComp onSelect={closeDrawerOnMobile} />
+        {/if}
       {:else if drawerTab === 'memories'}
         <!-- Memories tab. MemoryList owns the search and label rows.
              Clicking a label scrolls the panel-side card into view.
              onSelect mirrors the other tabs on mobile. -->
-        <MemoryList onSelect={closeDrawerOnMobile} />
+        {#if MemoryListComp}
+          <MemoryListComp onSelect={closeDrawerOnMobile} />
+        {/if}
       {:else}
         <!-- Wiki tab. WikiList owns the search and alphabetical
              listing. Clicking an article surfaces it in the main
@@ -5703,15 +5767,17 @@
                    and all the mobile-first wrap rules - see
                    AskUserCard.svelte for the layout discipline. -->
               <div class="msg assistant ask-user-host">
-                <AskUserCard
-                  mode={block.state}
-                  question={block.question}
-                  options={block.options}
-                  answer={block.answeredContent}
-                  busy={askUserSubmitBusy}
-                  onSubmit={(answer, via, optionIndex) =>
-                    answerAskUser(block.key, answer, via, optionIndex)}
-                />
+                {#if AskUserCardComp}
+                  <AskUserCardComp
+                    mode={block.state}
+                    question={block.question}
+                    options={block.options}
+                    answer={block.answeredContent}
+                    busy={askUserSubmitBusy}
+                    onSubmit={(answer, via, optionIndex) =>
+                      answerAskUser(block.key, answer, via, optionIndex)}
+                  />
+                {/if}
               </div>
             {:else if block.message.role === 'assistant'}
               <div
@@ -5794,9 +5860,9 @@
                       </svg>
                     </button>
                   </div>
-                  {#if cohortExpanded}
+                  {#if cohortExpanded && CohortPanelComp}
                     <div class="cohort-panel-host">
-                      <CohortPanel
+                      <CohortPanelComp
                         fires={firesForRound ?? []}
                         substrate={substrateForMsg}
                         clusterMap={cohortClusterMap}
@@ -6112,7 +6178,9 @@
              their backing data isn't present (no cached intuition
              payload / no samskara reading), so the column collapses
              gracefully on cold threads. -->
-        <SamskaraToasts />
+        {#if SamskaraToastsComp}
+          <SamskaraToastsComp />
+        {/if}
         <IntuitionPill payload={currentIntuitionPayload} />
         <BiasPill />
         <RecallPill payload={currentContextRecallPayload} />

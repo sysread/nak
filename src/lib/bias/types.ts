@@ -12,7 +12,7 @@
  * we don't want every consumer of a type (the worker, tests, the
  * debug modal) to drag those imports along.
  */
-import type { BiasKey } from './catalog';
+import type { BiasKey } from './catalog-keys';
 
 /**
  * Aggregate row per (user_id, bias). Mirrors `public.bias_summary`

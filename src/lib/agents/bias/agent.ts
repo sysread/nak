@@ -21,7 +21,7 @@ import {
   type BiasObservationResult,
   type BiasReactionResult,
 } from './prompts';
-import { isBiasKey } from '../../bias/catalog';
+import { isBiasKey } from '../../bias/catalog-keys';
 
 /** One transcript line passed to the agent. The agent only reads
  *  user and assistant turns; tool calls are not in the input. */

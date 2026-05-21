@@ -25,7 +25,7 @@
  * `src/lib/bias/math.ts` and `src/lib/agents/bias/` respectively.
  */
 import type { SupabaseService } from '../supabase';
-import { isBiasKey, type BiasKey } from './catalog';
+import { isBiasKey, type BiasKey } from './catalog-keys';
 import { formatBiasProfileBlock, pickRenderable } from './format';
 import type { BiasSummaryRow, Tier } from './types';
 import { createLogger } from '../logger.svelte';
@@ -92,7 +92,7 @@ export async function getBiasProfileBlock(
       computedAt: r.computedAt,
     });
   }
-  const block = formatBiasProfileBlock(rows);
+  const block = await formatBiasProfileBlock(rows);
   // Same rule the formatter applies internally; lifted out here so
   // the chat-loop snapshot writer sees the exact set that just
   // rendered (post tier filter, post render cap). If the formatter

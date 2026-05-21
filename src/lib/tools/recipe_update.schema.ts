@@ -1,7 +1,7 @@
 /**
  * Schema-only export for recipe_update. Impl lives in `./recipe_update`.
  */
-import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../cooklang';
+import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../recipe-limits';
 
 export const recipeUpdateSchema = {
   name: 'recipe_update',

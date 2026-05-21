@@ -44,7 +44,8 @@
  * The compensation-guidance block also pulls from the catalog so
  * the agent can recognise what the assistant was told to do.
  */
-import { BIAS_CATALOG, type BiasKey } from '../../bias/catalog';
+import { BIAS_CATALOG } from '../../bias/catalog';
+import type { BiasKey } from '../../bias/catalog-keys';
 
 function renderCatalog(): string {
   const lines: string[] = [];

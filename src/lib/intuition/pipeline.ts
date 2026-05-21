@@ -40,14 +40,13 @@
 import type { VeniceClient, VeniceMessage } from '../venice';
 import { VeniceError } from '../venice';
 import { createLogger } from '../logger.svelte';
-import {
-  PERCEPTION_PROMPT,
-  SYNTHESIS_PROMPT,
-  DRIVE_BASE_PROMPT,
-  DRIVE_PROMPTS,
-  DRIVE_NAMES,
-  type DriveName,
-} from './prompts';
+// The bulky template strings (PERCEPTION_PROMPT, SYNTHESIS_PROMPT,
+// DRIVE_BASE_PROMPT, DRIVE_PROMPTS) and DRIVE_NAMES live in
+// `./prompts`; they are only read when a turn actually triggers the
+// pipeline. Dynamic-importing them inside runIntuitionPipeline keeps
+// the ~10 kB raw prompt module out of the main chunk - chat-loop's
+// static import of `runIntuitionPipeline` itself stays cheap.
+import type { DriveName } from './prompts';
 import type { IntuitionPayload, IntuitionTrigger } from './types';
 
 const log = createLogger('intuition');
@@ -186,6 +185,16 @@ export async function runIntuitionPipeline(
     log.warn('skipped pipeline: empty transcript');
     return null;
   }
+
+  // Pull the prompt strings + drive list at run time; see the
+  // file-level comment for why this is dynamic.
+  const {
+    PERCEPTION_PROMPT,
+    SYNTHESIS_PROMPT,
+    DRIVE_BASE_PROMPT,
+    DRIVE_PROMPTS,
+    DRIVE_NAMES,
+  } = await import('./prompts');
 
   // Stage 1: perception. 2048 is the project-wide floor on agent
   // sub-call caps (see CLAUDE.md / analyze_image post-mortem); a

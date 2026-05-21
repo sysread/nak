@@ -10,11 +10,8 @@
  * whole point of using Cooklang as the source of truth.
  */
 import type { ToolDef } from './types';
-import {
-  MAX_RECIPE_COOKLANG_CHARS,
-  MAX_RECIPE_TITLE_CHARS,
-  validateCooklangSource,
-} from '../cooklang';
+import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../recipe-limits';
+import { validateCooklangSource } from '../cooklang';
 // Import from the plain-.ts sibling, not cookbook-store.svelte.ts —
 // this tool gets bundled into the reflection Web Worker via the
 // tool registry, and pulling a rune-using module in would crash the

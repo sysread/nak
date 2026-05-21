@@ -27,7 +27,7 @@ import { LeaseCoordinator, type LeaseTimers } from '../src/lib/embeddings/lease'
 import type { SupabaseService } from '../src/lib/supabase';
 import type { VeniceClient } from '../src/lib/venice';
 import type { BiasObserverAgent } from '../src/lib/agents/bias/agent';
-import { BIAS_KEYS } from '../src/lib/bias/catalog';
+import { BIAS_KEYS } from '../src/lib/bias/catalog-keys';
 
 function buildCoordinator(initiallyHolding = false): {
   coordinator: LeaseCoordinator;
