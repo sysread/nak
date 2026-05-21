@@ -34,6 +34,7 @@
   import {
     displayTitle,
     formatSkipTimestamp,
+    retryResultHeadline,
   } from '$lib/ui/wiki-skipped-panel';
 
   interface SkippedRow {
@@ -229,13 +230,7 @@
                  row was what confused users before this branch. -->
             <div class="wiki-skipped-result" role="status">
               <p class="wiki-skipped-result-headline">
-                {#if retryResult[row.threadId].toolCalls === 0}
-                  Retry done. The agent decided no edits were warranted.
-                {:else if retryResult[row.threadId].toolCalls === 1}
-                  Retry done. 1 wiki edit landed.
-                {:else}
-                  Retry done. {retryResult[row.threadId].toolCalls} wiki edits landed.
-                {/if}
+                {retryResultHeadline(retryResult[row.threadId].toolCalls)}
               </p>
               <p class="wiki-skipped-result-reasoning">
                 <span class="wiki-skipped-result-label">Reasoning:</span>

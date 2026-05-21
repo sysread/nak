@@ -30,6 +30,7 @@
     AskUserAnsweredContent,
     AskUserVia,
   } from '$lib/tools/ask_user';
+  import { answeredText, abandonedLabel } from '$lib/ui/ask-user-card';
 
   interface Props {
     /**
@@ -101,35 +102,6 @@
     }
   }
 
-  /**
-   * Render the chosen-answer line for the answered state. Prefers the
-   * persisted answer text; falls back to the option label looked up by
-   * option_index when answer.answer is null but option_index is set
-   * (defensive - the live path always writes answer.answer).
-   */
-  function answeredText(): string {
-    if (!answer) return '';
-    if (typeof answer.answer === 'string' && answer.answer.length > 0) {
-      return answer.answer;
-    }
-    if (typeof answer.option_index === 'number' && options[answer.option_index]) {
-      return options[answer.option_index].label;
-    }
-    return '';
-  }
-
-  function abandonedLabel(via: AskUserVia | undefined): string {
-    switch (via) {
-      case 'abandoned_on_refresh':
-        return '(skipped on reload)';
-      case 'abandoned_on_new_send':
-        return '(skipped - sent a new message instead)';
-      case 'cancelled_by_sibling_ask_user':
-        return '(cancelled - another question was asked at the same time)';
-      default:
-        return '(skipped)';
-    }
-  }
 </script>
 
 <div
@@ -202,7 +174,7 @@
   {:else if mode === 'answered'}
     <div class="ask-user-answer-line">
       <span class="ask-user-answer-prefix">Answered:</span>
-      <span class="ask-user-answer-text">{answeredText()}</span>
+      <span class="ask-user-answer-text">{answeredText(answer, options)}</span>
       {#if answer?.via === 'free_form'}
         <span class="ask-user-answer-tag">(free-form)</span>
       {/if}

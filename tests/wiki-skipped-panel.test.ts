@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import {
   displayTitle,
   formatSkipTimestamp,
+  retryResultHeadline,
 } from '../src/lib/ui/wiki-skipped-panel';
 
 describe('formatSkipTimestamp', () => {
@@ -43,5 +44,36 @@ describe('displayTitle', () => {
     // null), the user sees the empty button rather than the
     // sentinel.
     expect(displayTitle('')).toBe('');
+  });
+});
+
+describe('retryResultHeadline', () => {
+  it('calls out a zero-edit run distinctly so users know nothing landed', () => {
+    // The motivating fix: silently dropping the row when
+    // toolCalls === 0 left users wondering why Retry appeared
+    // to do nothing. The headline has to say "no edits" out
+    // loud, not just imply it by absence.
+    expect(retryResultHeadline(0)).toBe(
+      'Retry done. The agent decided no edits were warranted.',
+    );
+  });
+
+  it('uses the singular noun phrase for exactly one edit', () => {
+    expect(retryResultHeadline(1)).toBe('Retry done. 1 wiki edit landed.');
+  });
+
+  it('uses the plural noun phrase with the count for two or more', () => {
+    expect(retryResultHeadline(2)).toBe('Retry done. 2 wiki edits landed.');
+    expect(retryResultHeadline(7)).toBe('Retry done. 7 wiki edits landed.');
+  });
+
+  it('treats negative counts as the zero-edit case', () => {
+    // The agent path never returns a negative count, but
+    // rendering "Retry done. -1 wiki edits landed." would be
+    // the most embarrassing shape if the upstream contract ever
+    // shifts.
+    expect(retryResultHeadline(-1)).toBe(
+      'Retry done. The agent decided no edits were warranted.',
+    );
   });
 });

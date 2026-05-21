@@ -267,6 +267,69 @@ caller or assume intent. Context-agnostic contracts are fine.
 Special cases handled at integration points, not buried in
 lower-level functions.
 
+## Svelte components are glue, not feature specs
+
+The frontend is split into two layers on purpose. The full
+contract lives in
+[`docs/dev/frontend-organization.md`](docs/dev/frontend-organization.md);
+the short version, repeated here because it's the single
+most common drift vector in this codebase:
+
+```text
+src/lib/ui/<feature>.ts      pure UI-behavior primitives
+src/components/<X>.svelte    Svelte composition + DOM glue
+```
+
+A `.svelte` file's `<script>` block holds **only** what
+Svelte needs to express: prop destructuring, `$state` /
+`$derived` declarations, `$effect` / `onMount` subscription
+wiring, DOM-ref binds, event handlers that delegate to
+callback props or mutate local reactive state, and the
+markup. Everything else - option-list synthesis, display-
+label transforms, enum-to-string maps, count-to-noun
+pluralization, fallback chains over persisted shapes,
+selection mutators, domain sentinels - belongs in the
+companion `src/lib/ui/<feature>.ts` module as plain
+functions, tested via plain vitest.
+
+The test is **"would a port to React, Solid, or Vue rewrite
+this expression?"** If yes, it's framework-coupled and
+stays in the `.svelte` file. If no, it's a UI-behavior
+primitive and belongs in `src/lib/ui/`.
+
+Drift patterns to refuse, even when the local change feels
+trivial:
+
+- **"It's only three lines."** Three lines today; three
+  more next month; eight by the audit. The convention is
+  load-bearing precisely because each individual addition
+  reads as too small to bother extracting. Extract on the
+  first occurrence, not the second.
+- **"There's no companion module yet."** Create one. A
+  single-function `src/lib/ui/<feature>.ts` is fine, and
+  its existence is the signal to the next editor that
+  decisions live on the other side. Adding the inline
+  helper "for now" is what cements the wrong convention.
+- **"It's inline in the markup, not in `<script>`."** A
+  `{#if count === 0}...{:else if count === 1}...{:else}...
+  count edits landed{/if}` cascade is decision logic in
+  the markup. Templates pick a value; they don't derive
+  one. Move the cascade to a `headlineFor(count)` primitive
+  and call it from a single `{value}` expression.
+- **"The helper closes over component state."** Then it's
+  not a primitive. But check first - most "closes over
+  state" cases turn out to be "takes one extra argument,"
+  which is fine.
+
+When you finish a `.svelte` edit, scan the diff for any
+new `function` declarations, any expanded template
+branching on enum / count / shape fields, and any new
+inline arithmetic that requires feature knowledge to
+parse. If you find one, extract it before closing the
+task. The audit checklist in
+[`docs/dev/frontend-organization.md`](docs/dev/frontend-organization.md)
+walks the per-file scan.
+
 ## Dead-code hygiene
 
 AI-generated code leaves orphans easily - a helper extracted

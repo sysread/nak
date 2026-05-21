@@ -282,12 +282,18 @@ UI:
   Lists threads whose `wiki_last_skip_at` is non-null (the
   agent gave up after the per-thread failure cap) with the
   trimmed Venice error reason; clicking a row navigates to
-  the conversation. Subscribes to `onWikiChange` so a
-  successful run draining a skip marker is reflected without
-  reopening the panel. Composition-only: the timestamp
-  formatter and the "[untitled conversation]" title fallback
-  live in `src/lib/ui/wiki-skipped-panel.ts` and are unit-
-  tested at `tests/wiki-skipped-panel.test.ts`.
+  the conversation. Also offers a per-row Retry button that
+  spins up a `WikiAgent` against the single thread and shows
+  the resulting tool-call count + reasoning inline before
+  the user dismisses the row. Subscribes to `onWikiChange`
+  so a successful run draining a skip marker is reflected
+  without reopening the panel. Composition-only: the
+  timestamp formatter, the "[untitled conversation]" title
+  fallback, and the retry-success headline picker (the
+  "0 / 1 / N edits landed" copy that calls out a no-edit
+  retry distinctly) all live in
+  `src/lib/ui/wiki-skipped-panel.ts` and are unit-tested
+  at `tests/wiki-skipped-panel.test.ts`.
 - `src/screens/Chat.svelte` - new tab, drawer branch,
   main-panel branch, top-bar branch, change-event listener.
   Top-bar branch carries the `librarian-run-btn` (sparkles)

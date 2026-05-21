@@ -45,3 +45,31 @@ export function formatSkipTimestamp(iso: string): string {
 export function displayTitle(title: string | null): string {
   return title ?? '[untitled conversation]';
 }
+
+/**
+ * Headline for the green success strip that appears after a
+ * manual retry click. The toolCalls count is a load-bearing
+ * domain signal:
+ *
+ *   - 0  - skip cleared but the agent decided no edits were
+ *          warranted. Critical to call out distinctly: silently
+ *          dropping the row in this case left users wondering
+ *          why "Retry" appeared to do nothing (the fix that
+ *          motivated keeping the row visible until dismissed).
+ *   - 1  - singular noun phrase, "1 wiki edit".
+ *   - 2+ - plural noun phrase with the count.
+ *
+ * Negative counts are treated like zero - the agent path never
+ * produces a negative count, but rendering "Retry done. -1 wiki
+ * edits landed." would be the most embarrassing shape on the
+ * off chance the contract changes upstream.
+ */
+export function retryResultHeadline(toolCalls: number): string {
+  if (toolCalls <= 0) {
+    return 'Retry done. The agent decided no edits were warranted.';
+  }
+  if (toolCalls === 1) {
+    return 'Retry done. 1 wiki edit landed.';
+  }
+  return `Retry done. ${toolCalls} wiki edits landed.`;
+}
