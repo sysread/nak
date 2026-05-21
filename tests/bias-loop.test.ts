@@ -89,9 +89,11 @@ function buildContext(opts: {
   supabase: SupabaseService;
   agent?: BiasObserverAgent;
   excludeIds?: readonly string[];
-}): { ctx: CycleContext; signal: AbortSignal } {
+  aggregateDirty?: { value: boolean };
+}): { ctx: CycleContext; signal: AbortSignal; aggregateDirty: { value: boolean } } {
   const controller = new AbortController();
   const { coordinator } = buildCoordinator();
+  const aggregateDirty = opts.aggregateDirty ?? { value: true };
   return {
     ctx: {
       agent: opts.agent ?? fakeAgent(),
@@ -104,8 +106,10 @@ function buildContext(opts: {
       signal: controller.signal,
       onLeaseLost: () => {},
       excludeThreadIds: () => opts.excludeIds ?? [],
+      aggregateDirty,
     },
     signal: controller.signal,
+    aggregateDirty,
   };
 }
 
@@ -119,9 +123,14 @@ async function runUntilLeaseHeld(ctx: CycleContext): Promise<CycleResult> {
 describe('aggregate phase', () => {
   it('upserts one summary row per catalog entry on cold start', async () => {
     const supabase = fakeSupabase();
-    const { ctx } = buildContext({ phase: 'aggregate', supabase });
+    // Cold-start: worker seeds dirty=true so the first rotation
+    // actually fills the cache.
+    const { ctx, aggregateDirty } = buildContext({ phase: 'aggregate', supabase });
     const result = await runUntilLeaseHeld(ctx);
-    expect(result).toBe('progress');
+    // Cache maintenance reports as 'empty-phase' so the outer
+    // worker's idle-sleep gate stays correct - the upsert work
+    // happened, but nothing else inside the worker reacts to it.
+    expect(result).toBe('empty-phase');
     // 19 catalog entries -> 19 upserts; with no observations every
     // row reflects the prior alone (tier='elided').
     expect((supabase.biasUpsertSummary as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
@@ -130,6 +139,26 @@ describe('aggregate phase', () => {
     const firstCall = (supabase.biasUpsertSummary as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(firstCall.tier).toBe('elided');
     expect(firstCall.effectiveN).toBe(0);
+    // Aggregate consumed the dirty flag - the next rotation will
+    // short-circuit until analyze flags it again.
+    expect(aggregateDirty.value).toBe(false);
+  });
+
+  it('short-circuits with zero RPCs when the cache is clean', async () => {
+    // Reproduces the per-rotation idle case: analyze hasn't saved
+    // anything since the last aggregate, so the gate skips the
+    // N_catalog * 3 round-trips.
+    const supabase = fakeSupabase();
+    const { ctx } = buildContext({
+      phase: 'aggregate',
+      supabase,
+      aggregateDirty: { value: false },
+    });
+    const result = await runUntilLeaseHeld(ctx);
+    expect(result).toBe('empty-phase');
+    expect(supabase.biasUpsertSummary).not.toHaveBeenCalled();
+    expect(supabase.biasProcessedThreadsForBias).not.toHaveBeenCalled();
+    expect(supabase.biasReactionsForBias).not.toHaveBeenCalled();
   });
 
   it('runs the math with observations and lifts tier when evidence clears thresholds', async () => {
@@ -168,7 +197,7 @@ describe('aggregate phase', () => {
     });
     const { ctx } = buildContext({ phase: 'aggregate', supabase });
     const result = await runUntilLeaseHeld(ctx);
-    expect(result).toBe('progress');
+    expect(result).toBe('empty-phase');
     const upserts = (supabase.biasUpsertSummary as ReturnType<typeof vi.fn>).mock.calls.map(
       (c) => c[0]
     );
@@ -224,9 +253,19 @@ describe('analyze phase', () => {
         reactions: [],
       })),
     });
-    const { ctx } = buildContext({ phase: 'analyze', supabase, agent });
+    // Seed dirty=false so we can assert analyze flags it on the
+    // successful save. Without the flip, aggregate would never
+    // re-run and the cache would diverge from the saved
+    // observations.
+    const { ctx, aggregateDirty } = buildContext({
+      phase: 'analyze',
+      supabase,
+      agent,
+      aggregateDirty: { value: false },
+    });
     const result = await runUntilLeaseHeld(ctx);
     expect(result).toBe('progress');
+    expect(aggregateDirty.value).toBe(true);
     const saveCall = (supabase.biasSaveObservations as ReturnType<typeof vi.fn>).mock
       .calls[0];
     // [threadId, holderId, expectedMsgCount, observations, reactions]
