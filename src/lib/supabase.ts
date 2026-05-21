@@ -5558,6 +5558,40 @@ export class SupabaseService {
   }
 
   /**
+   * Worker: shape-and-freshness probe for `bias_summary`. Returns the
+   * row count and the oldest `computed_at` across the user's rows
+   * (RLS scopes the select). Used by the aggregate phase on worker
+   * bootstrap to decide whether the shared cache is recent enough
+   * to adopt without recomputing - the cache is per-user not
+   * per-device, so a sibling tab or another device may have just
+   * refreshed it.
+   *
+   * `count` ties forward-compatibility: if BIAS_KEYS gains a new
+   * entry, the cache is incomplete (count < N_biases) and the
+   * caller should rebuild even if every existing row is fresh.
+   *
+   * Payload is small (one timestamp per bias, ~19 rows) so the
+   * min-and-count derivation happens client-side; saves a custom
+   * RPC for the SQL aggregate.
+   */
+  async biasSummaryFreshness(): Promise<{
+    count: number;
+    oldestComputedAt: Date | null;
+  }> {
+    const { data, error } = await this.client
+      .from('bias_summary')
+      .select('computed_at');
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as { computed_at: string }[];
+    if (rows.length === 0) return { count: 0, oldestComputedAt: null };
+    let oldest = rows[0].computed_at;
+    for (let i = 1; i < rows.length; i++) {
+      if (rows[i].computed_at < oldest) oldest = rows[i].computed_at;
+    }
+    return { count: rows.length, oldestComputedAt: new Date(oldest) };
+  }
+
+  /**
    * Debug modal: per-bias raw observation counts across the user's
    * full history. Distinct from `effective_n` on the summary row -
    * effective_n is the recency-weighted sum of ALL processed

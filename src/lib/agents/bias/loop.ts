@@ -17,25 +17,43 @@
  *
  *   - `aggregate`: recompute `bias_summary` for every catalog
  *     entry. Cheap per-bias, but the full pass is N_catalog * 3
- *     round-trips (list contributions + list reactions + upsert),
- *     so we only run it when analyze has produced new
- *     observations since the last aggregate. The
- *     `aggregateDirty` flag on the CycleContext, owned and seeded
- *     by the worker, gates the work: analyze sets it on every
- *     successful save, aggregate clears it after running.
- *     Initial value is `true` so the very first rotation after
- *     worker startup (or after re-acquiring the lease from
- *     another device) re-fills the cache regardless of analyze
- *     activity. If no observations exist for a bias yet, the
- *     recomputed row reflects the prior alone (Beta(2, 8)) and
- *     tiers as 'elided'.
+ *     round-trips (list contributions + list reactions + upsert).
+ *     Two gates control when it actually runs:
  *
- * Rotation order: aggregate first, analyze second. The cold-start
- * dirty=true path means a fresh worker fills the cache on its
- * first rotation; subsequent rotations skip aggregate cheaply
- * (zero RPCs) until analyze flags a save. The dependency goes
- * one way - aggregate reads what analyze writes - so a save in
- * rotation N gets reflected in the cache on rotation N+1.
+ *       1. `aggregateDirty` flag (owned by the worker). analyze
+ *          sets it on every successful save; aggregate clears
+ *          it after running. Initial value is `true` so the
+ *          very first rotation after worker startup (or after
+ *          re-acquiring the lease from another device) is
+ *          eligible to refill the cache.
+ *
+ *       2. `aggregateThrottle.lastRunMs` (also worker-owned).
+ *          Two roles:
+ *
+ *          - Bootstrap (lastRunMs === 0): probe the shared
+ *            `bias_summary` cache once. If it's complete
+ *            (count >= N_biases) and fresh (oldest computed_at
+ *            within minIntervalMs), adopt it as our baseline
+ *            without recomputing - sibling tabs / other devices
+ *            may have just done the work.
+ *          - Steady-state: coalesce rapid analyze saves into one
+ *            aggregate per minIntervalMs. The chat-loop reads
+ *            bias_summary as a smoothed posterior tendency
+ *            block, so eventual consistency within a few
+ *            minutes is fine.
+ *
+ *     If no observations exist for a bias yet, the recomputed
+ *     row reflects the prior alone (Beta(2, 8)) and tiers as
+ *     'elided'.
+ *
+ * Rotation order: aggregate first, analyze second. The bootstrap
+ * gate means a fresh worker with a recently-written cache skips
+ * the full pass entirely; a fresh worker with a stale cache (or
+ * no cache) does one pass and then throttles subsequent
+ * dirty-driven rotations. The dependency goes one way - aggregate
+ * reads what analyze writes - so a save in rotation N is
+ * reflected in the cache on rotation N+k once the throttle
+ * window expires.
  */
 import type { SupabaseService } from '../../supabase';
 import type { VeniceClient } from '../../venice';
@@ -109,13 +127,29 @@ export interface CycleContext {
    * survives rotations. analyze sets `value=true` on every
    * successful save; aggregate consumes the flag (work + clear)
    * and otherwise short-circuits to 'empty-phase' without any
-   * RPCs. Seeded `true` at worker startup so cold-start fills the
-   * cache once. Without this gate the aggregate phase fires
-   * N_catalog * 3 RPCs every rotation forever, including idle,
-   * which is what the worker drawer surfaced as the "request
-   * spam" pattern.
+   * RPCs. Seeded `true` at worker startup so cold-start is
+   * eligible to fill the cache. Without this gate the aggregate
+   * phase fires N_catalog * 3 RPCs every rotation forever,
+   * including idle, which is what the worker drawer surfaced as
+   * the "request spam" pattern.
    */
   aggregateDirty: { value: boolean };
+  /**
+   * Cross-rotation throttle for aggregate. `lastRunMs === 0` is
+   * the bootstrap signal: the next aggregate attempt probes the
+   * shared cache freshness once before deciding to run. A
+   * non-zero value is the timestamp of the last completed
+   * aggregate pass (or the adopted cache age); subsequent
+   * attempts within `minIntervalMs` short-circuit so rapid
+   * analyze saves don't compound into per-save full passes.
+   * Worker resets to 0 on lease loss so a recovered device
+   * re-checks the shared cache rather than trusting its own
+   * potentially-stale timestamp.
+   */
+  aggregateThrottle: {
+    lastRunMs: number;
+    minIntervalMs: number;
+  };
 }
 
 export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
@@ -317,27 +351,87 @@ async function runAnalyzePhase(ctx: CycleContext): Promise<CycleResult> {
  * processed-thread contributions, run the math, upsert one
  * `bias_summary` row.
  *
- * Gated by `ctx.aggregateDirty.value`. When the flag is false the
- * phase short-circuits to 'empty-phase' with zero RPCs - analyze
- * hasn't saved anything since the last aggregate, so the cache is
- * known-current. When the flag is true we run the full N_catalog
- * pass, then clear the flag. Either way the phase returns
- * 'empty-phase' so the worker's idle-sleep accounting treats this
- * as cache-maintenance rather than work that needs to be drained
- * (nothing downstream of aggregate consumes its output inside the
- * same worker; the chat-loop reads bias_summary directly from
- * Supabase whenever it needs the block).
+ * Three gates in sequence:
  *
- * Without the gate this phase was the dominant idle-time request
- * source - 19 biases * 3 RPCs per rotation in a tight loop, since
- * `touched > 0` was always true on the prior-only writes and the
- * `'progress'` return prevented the outer worker from ever taking
- * its idle nap.
+ *   - dirty gate: if analyze hasn't flagged a save since the last
+ *     aggregate, the cache is known-current and we skip.
+ *   - bootstrap probe: on the very first aggregate of the worker
+ *     lifetime (lastRunMs === 0), read the shared cache's row
+ *     count and oldest computed_at. If the cache is complete and
+ *     within the throttle window, adopt it as our baseline
+ *     without re-running - another tab or device may have just
+ *     refreshed it, and bias_summary is per-user not per-device.
+ *     This is the gate that stops fresh-page-load spam: every
+ *     load used to do the full N_catalog * 3 pass regardless of
+ *     who-just-wrote-it.
+ *   - throttle gate: once we've adopted or written a baseline,
+ *     coalesce subsequent dirty flips into one pass per
+ *     minIntervalMs. Without this, processing a backlog of
+ *     unprocessed threads at startup multiplied: one aggregate
+ *     pass per analyze save, N_threads * N_catalog * 3 total.
+ *
+ * Either way the phase returns 'empty-phase' so the worker's
+ * idle-sleep accounting treats this as cache-maintenance rather
+ * than work that needs to be drained (nothing downstream of
+ * aggregate consumes its output inside the same worker; the
+ * chat-loop reads bias_summary directly from Supabase whenever
+ * it needs the block).
+ *
+ * Without the dirty gate this phase was the dominant idle-time
+ * request source - 19 biases * 3 RPCs per rotation in a tight
+ * loop, since `touched > 0` was always true on the prior-only
+ * writes and the `'progress'` return prevented the outer worker
+ * from ever taking its idle nap. The bootstrap + throttle gates
+ * added on top further suppress the fresh-load and backlog cases
+ * the dirty gate alone didn't cover.
  */
 async function runAggregatePhase(ctx: CycleContext): Promise<CycleResult> {
   if (!ctx.aggregateDirty.value) {
     log.trace('aggregate: cache clean, skipping');
     return 'empty-phase';
+  }
+  const now = Date.now();
+  if (ctx.aggregateThrottle.lastRunMs === 0) {
+    try {
+      const fresh = await ctx.supabase.biasSummaryFreshness();
+      const cacheComplete =
+        fresh.oldestComputedAt !== null && fresh.count >= BIAS_KEYS.length;
+      const cacheFresh =
+        fresh.oldestComputedAt !== null &&
+        now - fresh.oldestComputedAt.getTime() < ctx.aggregateThrottle.minIntervalMs;
+      if (cacheComplete && cacheFresh) {
+        // Adopt the cache's age as our baseline. Using the
+        // oldest computed_at (rather than `now`) means the
+        // throttle clock reflects real cache age, not worker
+        // boot time - so a borderline-fresh cache gets
+        // refreshed at the right cadence, not pushed out by
+        // however long the worker happens to live.
+        ctx.aggregateThrottle.lastRunMs = fresh.oldestComputedAt!.getTime();
+        ctx.aggregateDirty.value = false;
+        log.trace(
+          `aggregate: shared cache fresh ` +
+            `(${fresh.count} rows, oldest ` +
+            `${Math.round((now - fresh.oldestComputedAt!.getTime()) / 1000)}s old), skipping`
+        );
+        return 'empty-phase';
+      }
+    } catch (err) {
+      // Probe failure is non-fatal - falling through to a full
+      // pass costs at worst one extra aggregate, which is the
+      // pre-throttle behavior. Better that than skipping on a
+      // transient error and leaving the cache stale forever.
+      log.debug('aggregate: freshness probe failed, falling through', err);
+    }
+  } else {
+    const sinceLast = now - ctx.aggregateThrottle.lastRunMs;
+    if (sinceLast < ctx.aggregateThrottle.minIntervalMs) {
+      log.trace(
+        `aggregate: throttled ` +
+          `(last run ${Math.round(sinceLast / 1000)}s ago, ` +
+          `min interval ${Math.round(ctx.aggregateThrottle.minIntervalMs / 1000)}s)`
+      );
+      return 'empty-phase';
+    }
   }
   let touched = 0;
   for (const bias of BIAS_KEYS) {
@@ -391,11 +485,13 @@ async function runAggregatePhase(ctx: CycleContext): Promise<CycleResult> {
   log.trace(`aggregate: recomputed ${touched} summary row(s)`);
   // Clear the dirty flag whether or not any individual upsert
   // failed; partial failures will catch up next time analyze
-  // flags the cache. Returning 'empty-phase' (not 'progress')
-  // means cache maintenance doesn't block the outer worker's
-  // idle nap - nothing inside the worker reacts to the aggregate
-  // output, and the chat-loop reads bias_summary directly from
-  // Supabase per request.
+  // flags the cache. Stamp the throttle clock so subsequent
+  // dirty flips coalesce until the next interval. Returning
+  // 'empty-phase' (not 'progress') means cache maintenance
+  // doesn't block the outer worker's idle nap - nothing inside
+  // the worker reacts to the aggregate output, and the chat-loop
+  // reads bias_summary directly from Supabase per request.
+  ctx.aggregateThrottle.lastRunMs = now;
   ctx.aggregateDirty.value = false;
   return 'empty-phase';
 }

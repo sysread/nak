@@ -105,13 +105,46 @@ const activeConvIds = new Set<string>();
 /**
  * Cross-rotation gate for the aggregate phase. Seeded `true` so
  * the first rotation after worker start (or after re-acquiring
- * the lease) refills the bias_summary cache once; thereafter
- * analyze sets `value=true` on every successful save and
- * aggregate clears it. Without this gate the aggregate phase
+ * the lease) is eligible to refill the bias_summary cache;
+ * thereafter analyze sets `value=true` on every successful save
+ * and aggregate clears it. Without this gate the aggregate phase
  * spun N_catalog * 3 RPCs per rotation with no idle nap - see
  * `loop.ts` for the full failure mode.
  */
 const aggregateDirty = { value: true };
+
+/**
+ * How often the aggregate phase is allowed to run, at most. Five
+ * minutes coalesces backlog processing (each analyze save flips
+ * `aggregateDirty`, which without this throttle would trigger a
+ * fresh N_catalog * 3 pass per save) and also caps the
+ * fresh-page-load probe: the cache only counts as "fresh enough
+ * to adopt without recomputing" if it's within this window.
+ *
+ * Five minutes is well inside what the chat-loop tolerates -
+ * `bias_summary` is consumed as a smoothed posterior tendency
+ * block in the system prompt, so cache staleness up to a few
+ * minutes is invisible to the LLM consumer. Tighter (e.g. 60s)
+ * would refresh more often but also re-spam more aggressively on
+ * backlog burndown; looser (e.g. 30m) would suppress refreshes
+ * even when genuinely warranted.
+ */
+const AGGREGATE_MIN_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Cross-rotation throttle state for the aggregate phase.
+ * `lastRunMs === 0` marks bootstrap - the next aggregate attempt
+ * probes the shared cache once and either adopts it or runs a
+ * full pass. A non-zero value is the timestamp of the most
+ * recent aggregate (or adopted cache age) and gates subsequent
+ * rotations within `minIntervalMs`. Reset to 0 on lease loss so
+ * a recovered device re-probes the shared cache, since another
+ * device may have written observations during our gap.
+ */
+const aggregateThrottle = {
+  lastRunMs: 0,
+  minIntervalMs: AGGREGATE_MIN_INTERVAL_MS,
+};
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   if (ms <= 0) return Promise.resolve();
@@ -182,11 +215,13 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
       level: 'warn',
       message: 'bias lease lost - re-entering polling',
     });
-    // Re-flag the cache as dirty so the next acquire-and-rotate
-    // pass runs aggregate once: while we were leaseless the
-    // device that took over may have written observations we
-    // never saw, so our previous "clean" stance is stale.
+    // Re-flag the cache as dirty AND reset the throttle so the
+    // next acquire-and-rotate pass re-probes the shared cache.
+    // While we were leaseless the device that took over may
+    // have written observations we never saw; our previous
+    // "clean" stance and our last-run timestamp are both stale.
     aggregateDirty.value = true;
+    aggregateThrottle.lastRunMs = 0;
   };
 
   try {
@@ -207,6 +242,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
           onLeaseLost,
           excludeThreadIds: () => Array.from(activeConvIds),
           aggregateDirty,
+          aggregateThrottle,
         };
         const result = await runOneCycle(ctx);
         post({ type: 'progress', phase, result });

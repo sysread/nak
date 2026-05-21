@@ -80,6 +80,10 @@ function fakeSupabase(overrides: Partial<SupabaseService> = {}): SupabaseService
     biasReactionsForBias: vi.fn(async () => []),
     biasUpsertSummary: vi.fn(async () => undefined),
     listMessages: vi.fn(async () => []),
+    // Default to "no cache yet" so the aggregate bootstrap probe
+    // falls through to a full pass - preserves the cold-start
+    // behavior the older tests assert.
+    biasSummaryFreshness: vi.fn(async () => ({ count: 0, oldestComputedAt: null })),
   };
   return { ...defaults, ...overrides } as SupabaseService;
 }
@@ -90,10 +94,21 @@ function buildContext(opts: {
   agent?: BiasObserverAgent;
   excludeIds?: readonly string[];
   aggregateDirty?: { value: boolean };
-}): { ctx: CycleContext; signal: AbortSignal; aggregateDirty: { value: boolean } } {
+  aggregateThrottle?: { lastRunMs: number; minIntervalMs: number };
+}): {
+  ctx: CycleContext;
+  signal: AbortSignal;
+  aggregateDirty: { value: boolean };
+  aggregateThrottle: { lastRunMs: number; minIntervalMs: number };
+} {
   const controller = new AbortController();
   const { coordinator } = buildCoordinator();
   const aggregateDirty = opts.aggregateDirty ?? { value: true };
+  // Default throttle: bootstrap (lastRunMs=0) and a 5-minute
+  // window matching the worker. Tests that want to exercise the
+  // steady-state throttle override lastRunMs explicitly.
+  const aggregateThrottle =
+    opts.aggregateThrottle ?? { lastRunMs: 0, minIntervalMs: 5 * 60 * 1000 };
   return {
     ctx: {
       agent: opts.agent ?? fakeAgent(),
@@ -107,9 +122,11 @@ function buildContext(opts: {
       onLeaseLost: () => {},
       excludeThreadIds: () => opts.excludeIds ?? [],
       aggregateDirty,
+      aggregateThrottle,
     },
     signal: controller.signal,
     aggregateDirty,
+    aggregateThrottle,
   };
 }
 
@@ -159,6 +176,130 @@ describe('aggregate phase', () => {
     expect(supabase.biasUpsertSummary).not.toHaveBeenCalled();
     expect(supabase.biasProcessedThreadsForBias).not.toHaveBeenCalled();
     expect(supabase.biasReactionsForBias).not.toHaveBeenCalled();
+  });
+
+  it('adopts the shared cache on bootstrap when it is complete and fresh', async () => {
+    // Simulates a sibling tab / another device having just
+    // written every catalog row. The bootstrap probe finds a
+    // complete and recent cache and skips the full pass.
+    const supabase = fakeSupabase({
+      biasSummaryFreshness: vi.fn(async () => ({
+        count: BIAS_KEYS.length,
+        oldestComputedAt: new Date(Date.now() - 30_000), // 30s old
+      })),
+    });
+    const { ctx, aggregateDirty, aggregateThrottle } = buildContext({
+      phase: 'aggregate',
+      supabase,
+    });
+    const result = await runUntilLeaseHeld(ctx);
+    expect(result).toBe('empty-phase');
+    expect(supabase.biasUpsertSummary).not.toHaveBeenCalled();
+    expect(supabase.biasProcessedThreadsForBias).not.toHaveBeenCalled();
+    expect(supabase.biasReactionsForBias).not.toHaveBeenCalled();
+    // Dirty cleared so the next rotation doesn't keep re-probing.
+    expect(aggregateDirty.value).toBe(false);
+    // Throttle clock stamped at the adopted cache age, not at
+    // `now` - that way a borderline-fresh cache refreshes at the
+    // right cadence rather than being pushed out by however long
+    // this worker happens to live.
+    expect(aggregateThrottle.lastRunMs).toBeGreaterThan(0);
+    expect(aggregateThrottle.lastRunMs).toBeLessThan(Date.now());
+  });
+
+  it('runs a full pass on bootstrap when the shared cache is stale', async () => {
+    const supabase = fakeSupabase({
+      biasSummaryFreshness: vi.fn(async () => ({
+        count: BIAS_KEYS.length,
+        // Past the 5-minute throttle window.
+        oldestComputedAt: new Date(Date.now() - 6 * 60 * 1000),
+      })),
+    });
+    const { ctx, aggregateThrottle } = buildContext({
+      phase: 'aggregate',
+      supabase,
+    });
+    const result = await runUntilLeaseHeld(ctx);
+    expect(result).toBe('empty-phase');
+    expect((supabase.biasUpsertSummary as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      BIAS_KEYS.length
+    );
+    expect(aggregateThrottle.lastRunMs).toBeGreaterThan(0);
+  });
+
+  it('runs a full pass on bootstrap when the catalog has grown past the cache', async () => {
+    // Cache is "fresh" by age but only has half the current
+    // catalog - simulates the case where BIAS_KEYS gained a new
+    // entry since the cache was last written. Must rebuild.
+    const supabase = fakeSupabase({
+      biasSummaryFreshness: vi.fn(async () => ({
+        count: Math.floor(BIAS_KEYS.length / 2),
+        oldestComputedAt: new Date(Date.now() - 10_000),
+      })),
+    });
+    const { ctx } = buildContext({ phase: 'aggregate', supabase });
+    const result = await runUntilLeaseHeld(ctx);
+    expect(result).toBe('empty-phase');
+    expect((supabase.biasUpsertSummary as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      BIAS_KEYS.length
+    );
+  });
+
+  it('throttles steady-state dirty flips within the interval', async () => {
+    // Simulates: analyze just saved (dirty=true) and the
+    // previous aggregate completed 30s ago. The throttle window
+    // is 5 minutes, so this rotation must short-circuit even
+    // though dirty is set.
+    const supabase = fakeSupabase();
+    const { ctx, aggregateDirty } = buildContext({
+      phase: 'aggregate',
+      supabase,
+      aggregateThrottle: {
+        lastRunMs: Date.now() - 30_000,
+        minIntervalMs: 5 * 60 * 1000,
+      },
+    });
+    const result = await runUntilLeaseHeld(ctx);
+    expect(result).toBe('empty-phase');
+    expect(supabase.biasUpsertSummary).not.toHaveBeenCalled();
+    expect(supabase.biasSummaryFreshness).not.toHaveBeenCalled();
+    // Dirty stays set - the work is deferred, not skipped, so a
+    // later rotation past the window picks it up.
+    expect(aggregateDirty.value).toBe(true);
+  });
+
+  it('runs after the throttle interval expires', async () => {
+    const supabase = fakeSupabase();
+    const { ctx, aggregateDirty } = buildContext({
+      phase: 'aggregate',
+      supabase,
+      aggregateThrottle: {
+        lastRunMs: Date.now() - 10 * 60 * 1000, // 10m ago, past 5m window
+        minIntervalMs: 5 * 60 * 1000,
+      },
+    });
+    const result = await runUntilLeaseHeld(ctx);
+    expect(result).toBe('empty-phase');
+    expect((supabase.biasUpsertSummary as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      BIAS_KEYS.length
+    );
+    expect(aggregateDirty.value).toBe(false);
+  });
+
+  it('falls through to a full pass when the freshness probe fails', async () => {
+    // Better to do one extra aggregate than skip on a transient
+    // error and leave the cache stale forever.
+    const supabase = fakeSupabase({
+      biasSummaryFreshness: vi.fn(async () => {
+        throw new Error('network');
+      }),
+    });
+    const { ctx } = buildContext({ phase: 'aggregate', supabase });
+    const result = await runUntilLeaseHeld(ctx);
+    expect(result).toBe('empty-phase');
+    expect((supabase.biasUpsertSummary as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      BIAS_KEYS.length
+    );
   });
 
   it('runs the math with observations and lifts tier when evidence clears thresholds', async () => {
