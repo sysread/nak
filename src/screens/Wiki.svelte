@@ -320,14 +320,28 @@
       // Drop straight back to the rendered article. The form closing
       // is the success signal; a successful save followed by a stale
       // form sitting open invited "did it actually save?" doubt.
-      editingId = null;
-      editTitle = '';
-      editContent = '';
-      editMessage = '';
-      saveState = { kind: 'idle' };
+      //
+      // Guard the global-state clears on `editingId === id`. If the
+      // user navigated to a different article and clicked Edit on it
+      // before this save settled, `editingId` is now that other
+      // article's id and the textarea is bound to text the user just
+      // typed. Clearing here unconditionally would wipe their
+      // in-progress edit and close the form they're actively using.
+      // patchWikiRow above is id-keyed so the store write lands
+      // correctly regardless.
+      if (editingId === id) {
+        editingId = null;
+        editTitle = '';
+        editContent = '';
+        editMessage = '';
+        saveState = { kind: 'idle' };
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      saveState = { kind: 'error', message: msg };
+      // Same cross-row guard as the success path - a failure on
+      // article A's save shouldn't paint a red error banner under
+      // article B's edit form after the user has navigated away.
+      if (editingId === id) saveState = { kind: 'error', message: msg };
     }
   }
 
@@ -507,12 +521,26 @@
         }
       }
       emitWikiChange();
-      deletingId = null;
-      deleteMessage = '';
-      deleteError = null;
+      // Guard the global-state clears on `deletingId === id`. If the
+      // user navigated to a different article and clicked Delete on
+      // it before this delete settled, `deletingId` is now that
+      // other article's id and the user has typed a change message
+      // into the confirm strip. Clearing here unconditionally would
+      // close the strip they're filling out. removeWikiRow above is
+      // id-keyed so the store removal lands correctly regardless.
+      if (deletingId === id) {
+        deletingId = null;
+        deleteMessage = '';
+        deleteError = null;
+      }
       if (route.wiki_article_id === id) navigate({ wiki_article_id: null });
     } catch (err) {
-      deleteError = err instanceof Error ? err.message : String(err);
+      // Same cross-row guard as the success path - a failure on
+      // article A's delete shouldn't paint a red error banner inside
+      // article B's confirm strip after the user has navigated.
+      if (deletingId === id) {
+        deleteError = err instanceof Error ? err.message : String(err);
+      }
     }
   }
 
@@ -680,16 +708,40 @@
       await new Promise<void>((resolve) => window.setTimeout(resolve, FADE_OUT_MS));
       patchWikiRow(article.id, updated);
       emitWikiChange();
-      fadingArticleId = null;
-      cancelManualUpdate();
+      // Guard the manualX-state clears on `manualTargetId ===
+      // article.id`. If the user navigated to a different article
+      // and re-opened the Ask-agent form on it (or even started a
+      // fresh submit) before this accept settled, the global
+      // manualX state belongs to that new article. Calling
+      // cancelManualUpdate() unconditionally would abort the new
+      // article's in-flight controller and wipe the form the user
+      // is filling in. patchWikiRow above is id-keyed so the store
+      // patch lands correctly regardless.
+      if (manualTargetId === article.id) {
+        fadingArticleId = null;
+        cancelManualUpdate();
+      } else if (fadingArticleId === article.id) {
+        // Drop the stale fade flag without touching the new
+        // article's manualX state.
+        fadingArticleId = null;
+      }
     } catch (err) {
       // On error the fade was either never started or the panel is
       // unmounting; clearing here keeps the article visible at full
-      // opacity so the user can read the failure context.
-      fadingArticleId = null;
-      manualError = err instanceof Error ? err.message : String(err);
+      // opacity so the user can read the failure context. Same
+      // cross-row guard as the success path - a stale failure
+      // shouldn't paint a red banner under a different article's
+      // form.
+      if (fadingArticleId === article.id) fadingArticleId = null;
+      if (manualTargetId === article.id) {
+        manualError = err instanceof Error ? err.message : String(err);
+      }
     } finally {
-      manualAccepting = false;
+      // Same cross-row guard: only flip the busy flag if we're
+      // still the active accept. Otherwise the user's new submit
+      // on a different article would see its manualAccepting flag
+      // clobbered to false mid-flight.
+      if (manualTargetId === article.id) manualAccepting = false;
     }
   }
 
