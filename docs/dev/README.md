@@ -48,6 +48,11 @@ changing a contract that other features depend on.
   master-password envelope, session lifecycle, locking.
 - [Chat](./chat.md) — chat screen + chat-loop + models +
   realtime thread list.
+- [Exchange](./exchange.md) — per-thread streaming state
+  (`ExchangeSlot` / `ExchangeStore`) and the cross-device
+  "this device is producing the response" claim
+  (`ThreadClaimCoordinator` + the `threads.response_holder_id`
+  / `response_claim_expires_at` columns).
 - [Attachments](./attachments.md) — per-message file
   attachments, Venice text-parser integration, and the
   expiration worker.

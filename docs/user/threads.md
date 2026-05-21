@@ -58,6 +58,31 @@ Topics are assigned automatically by a background agent - see
 [What runs in the background](./background.md) for what it does and
 how the vocabulary stays consistent.
 
+## Responding on multiple devices
+
+If you have Nak open on more than one device or browser tab and
+start a reply on one of them, the others know about it. Open the
+same conversation on your phone while your laptop is still
+producing a response and the phone shows a "Responding on another
+device" indicator with the composer disabled until the response
+finishes. The reply itself streams in over the regular sync
+channel, so you'll see the assistant's message appear on the phone
+just like any other update - you just can't *send* a competing
+message from the second device while the first one is still
+working.
+
+The lock is per-conversation, not global. If your laptop is
+producing a reply in thread A and you switch your phone to thread
+B, the phone's composer is fully active there - only the
+conversation that's currently being responded to is gated.
+
+If the device producing the response crashes, loses its
+connection, or you close its tab mid-reply, the other devices
+detect the silence within about a minute and re-enable their
+composer automatically. You can also start a fresh response on
+another device once that timeout elapses - the new reply takes
+over from where things were left.
+
 ## Where to go next
 
 - [Search](./search.md) — find a specific thread.
