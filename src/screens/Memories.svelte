@@ -21,6 +21,7 @@
    * memory. The single-card detail shape parallels Cookbook (one
    * recipe at a time) and uses the sidebar list for navigation.
    */
+  import { onDestroy } from 'svelte';
   import { app } from '$lib/state.svelte';
   import { route, navigate } from '$lib/routing.svelte';
   import {
@@ -84,6 +85,15 @@
 
   // Delete confirmation - one row at a time, same reasoning as edits.
   let deletingId = $state<string | null>(null);
+
+  // Relation-deletion failures used to write into `memoriesStore.error`,
+  // which is the panel-wide "something is wrong with the listing"
+  // channel and renders at the top of the body regardless of which
+  // memory is open. A user who deleted a relation on memory A, then
+  // navigated to memory B before the RPC failed, would see B's view
+  // wear A's relation-delete error. Scoped to a local memoryId-tagged
+  // record so the message only renders on the memory it concerns.
+  let relationError = $state<{ memoryId: string; message: string } | null>(null);
 
   // Inline busy/feedback state for the per-card action buttons
   // (Reaffirm / Doubt / confirmed Delete). The previous shape ran the
@@ -204,6 +214,24 @@
   let pickerDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pickerAbort: AbortController | null = null;
 
+  // Tear down lingering side effects when the drawer tab flips away
+  // from Memories (the panel un-mounts on tab change). actionDoneTimer
+  // would otherwise fire a `state = idle` write into a destroyed
+  // component; pickerDebounceTimer + pickerAbort would similarly tick
+  // past the unmount. The picker's $effect already clears its timer on
+  // dependency change, but a clean unmount path leaves nothing pending.
+  onDestroy(() => {
+    clearActionDoneTimer();
+    if (pickerDebounceTimer !== null) {
+      clearTimeout(pickerDebounceTimer);
+      pickerDebounceTimer = null;
+    }
+    if (pickerAbort) {
+      pickerAbort.abort();
+      pickerAbort = null;
+    }
+  });
+
   // Initial load. Sidebar runs its own debounced search on every query
   // change; this effect only fires the very first list-fetch when the
   // panel mounts so the user lands on a non-empty list.
@@ -232,7 +260,16 @@
 
   async function reaffirmMemory(m: Memory): Promise<void> {
     if (!app.supabase) return;
-    if (actionStatus.kind === 'busy') return;
+    // Same-row stacking is already blocked by the per-row
+    // `disabled={isAnyActionBusyFor(m.id)}` on every action button -
+    // a disabled button doesn't fire its onclick. The previous
+    // global busy guard blocked CROSS-row clicks too: with a stale
+    // in-flight action on a memory the user has since navigated
+    // away from, clicking Reaffirm on the new memory was silently
+    // swallowed. Removing the global mutex lets the new click
+    // proceed; actionStatus does flicker as the two settle, but
+    // both writes (patchMemoryRow on each memory's own id) land
+    // correctly.
     clearActionDoneTimer();
     actionStatus = { kind: 'busy', action: 'reaffirm', memoryId: m.id };
     try {
@@ -264,7 +301,8 @@
 
   async function doubtMemory(m: Memory): Promise<void> {
     if (!app.supabase) return;
-    if (actionStatus.kind === 'busy') return;
+    // See reaffirmMemory for the rationale on dropping the global
+    // busy mutex; same shape applies here.
     clearActionDoneTimer();
     actionStatus = { kind: 'busy', action: 'doubt', memoryId: m.id };
     try {
@@ -422,11 +460,17 @@
     relationId: string,
   ): Promise<void> {
     if (!app.supabase) return;
+    // Clear any prior relation error on this memory so the new
+    // attempt's outcome is the only thing the user sees.
+    if (relationError?.memoryId === fromId) relationError = null;
     try {
       await app.supabase.deleteMemoryRelation(relationId);
       removeRelationEdge(fromId, relationId);
     } catch (err) {
-      memoriesStore.error = err instanceof Error ? err.message : String(err);
+      relationError = {
+        memoryId: fromId,
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 
@@ -540,7 +584,8 @@
 
   async function confirmDelete(): Promise<void> {
     if (!deletingId || !app.supabase) return;
-    if (actionStatus.kind === 'busy') return;
+    // See reaffirmMemory for the rationale on dropping the global
+    // busy mutex; same shape applies here.
     const id = deletingId;
     clearActionDoneTimer();
     actionStatus = { kind: 'busy', action: 'delete', memoryId: id };
@@ -719,6 +764,14 @@
                 <div class="memory-card-data">
                   <Markdown content={m.data} />
                 </div>
+                {#if relationError?.memoryId === m.id}
+                  <!-- Scoped to this memory only - see relationError
+                       declaration for why this isn't sharing the
+                       panel-wide memoriesStore.error channel. -->
+                  <p class="error memory-relation-error">
+                    Couldn't remove relation - {relationError.message}
+                  </p>
+                {/if}
                 {#if (memoriesStore.relations.get(m.id) ?? []).length > 0}
                   <ul class="memory-relations">
                     {#each memoriesStore.relations.get(m.id) ?? [] as edge (edge.id)}
@@ -1152,6 +1205,15 @@
   /* Relation list rendered under the memory body. Each row is one
      outbound edge: kind label, optional confidence tag on the target,
      the target's label, optional note, and a remove button. */
+  /* Scoped to the current memory (relationError.memoryId === m.id);
+     sits just above the relations list so a failure on one of the
+     listed edges reads next to the rows it concerns. Same visual
+     weight as the global .error helper. */
+  .memory-relation-error {
+    margin: 0.4rem 0 0;
+    font-size: 0.85rem;
+  }
+
   .memory-relations {
     list-style: none;
     margin: 0 0 0.6rem;
