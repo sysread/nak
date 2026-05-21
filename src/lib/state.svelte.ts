@@ -101,26 +101,14 @@ function lazyManager<
 const embeddings = lazyManager(() =>
   import('./embeddings/manager').then((m) => m.embeddingManager)
 );
-const reflection = lazyManager(() =>
-  import('./agents/reflection/manager').then((m) => m.reflectionManager)
-);
-const summary = lazyManager(() =>
-  import('./agents/summary/manager').then((m) => m.summaryManager)
-);
-const topics = lazyManager(() =>
-  import('./agents/topics/manager').then((m) => m.topicsManager)
-);
-const memoryTopics = lazyManager(() =>
-  import('./agents/memory_topics/manager').then((m) => m.memoryTopicsManager)
-);
-const recipeTopics = lazyManager(() =>
-  import('./agents/recipe_topics/manager').then((m) => m.recipeTopicsManager)
-);
-const attachmentExpiry = lazyManager(() =>
-  import('./agents/attachment_expiry/manager').then((m) => m.attachmentExpiryManager)
-);
-const autoTitle = lazyManager(() =>
-  import('./agents/auto_title/manager').then((m) => m.autoTitleManager)
+// Seven formerly-standalone workers (auto_title, summary, reflection,
+// topics, memory_topics, recipe_topics, attachment_expiry) are
+// consolidated under one supervisor worker. The supervisor owns one
+// lease, one heartbeat, one Supabase client, and one auth setup -
+// see src/lib/agents/supervisor/loop.ts for the rationale and which
+// workers stayed standalone.
+const supervisor = lazyManager(() =>
+  import('./agents/supervisor/manager').then((m) => m.supervisorManager)
 );
 const samskara = lazyManager(() =>
   import('./agents/samskara/manager').then((m) => m.samskaraManager)
@@ -696,13 +684,7 @@ function startBackgroundWorkers(config: AppConfig): void {
   // The samskara worker forms the chat model's progressively-built
   // predictive model of the user; see docs/dev/samskara.md.
   embeddings.start({ supabase: app.supabase, config });
-  reflection.start({ supabase: app.supabase, config });
-  summary.start({ supabase: app.supabase, config });
-  topics.start({ supabase: app.supabase, config });
-  memoryTopics.start({ supabase: app.supabase, config });
-  recipeTopics.start({ supabase: app.supabase, config });
-  attachmentExpiry.start({ supabase: app.supabase, config });
-  autoTitle.start({ supabase: app.supabase, config });
+  supervisor.start({ supabase: app.supabase, config });
   samskara.start({ supabase: app.supabase, config });
   // Bias-observer worker silently analyzes processed conversations
   // for cognitive-bias / System-1-heuristic evidence; the aggregated
@@ -811,13 +793,7 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
  */
 function stopBackgroundWorkers(): void {
   embeddings.stop();
-  reflection.stop();
-  summary.stop();
-  topics.stop();
-  memoryTopics.stop();
-  recipeTopics.stop();
-  attachmentExpiry.stop();
-  autoTitle.stop();
+  supervisor.stop();
   samskara.stop();
   bias.stop();
   wiki.stop();

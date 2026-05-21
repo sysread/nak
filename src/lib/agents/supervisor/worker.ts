@@ -1,18 +1,31 @@
 /**
- * Background recipe-topics worker - the Web Worker entry point.
- * Parallels `../memory_topics/worker.ts` in shape; the cycle work
- * lives in `./loop.ts` and the cross-tab singleton coordination
- * lives in the manager.
+ * Supervisor worker - the Web Worker entry point for the consolidated
+ * background fleet. The rotation driver lives in `./loop.ts` (testable
+ * state machine) and cross-tab singleton coordination lives in the
+ * manager. This file is the message boundary: construct ONE Supabase
+ * client + ONE Venice client + ONE LeaseCoordinator, instantiate the
+ * five agents the seven work units need, and drive `runOneCycle`
+ * until abort.
+ *
+ * See `./loop.ts` for the rationale on why the supervisor exists at
+ * all (heartbeat / auth amortisation across the formerly-separate
+ * per-feature workers) and which features it consolidates (the seven
+ * simple claim-based ones; embeddings / bias / samskara / wiki /
+ * wiki-librarian remain standalone).
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { VeniceClient } from '../../venice';
 import { SupabaseService } from '../../supabase';
 import { LeaseCoordinator } from '../../embeddings/lease';
-import { RecipeTopicsAgent } from './agent';
+import { ReflectionAgent } from '../reflection/agent';
+import { SummaryAgent } from '../summary/agent';
+import { TopicsAgent } from '../topics/agent';
+import { MemoryTopicsAgent } from '../memory_topics/agent';
+import { RecipeTopicsAgent } from '../recipe_topics/agent';
 import {
   runOneCycle,
   napForResult,
-  type CycleContext,
+  type SupervisorContext,
   type NapConfig,
 } from './loop';
 
@@ -25,14 +38,25 @@ interface StartMessage {
   userId: string;
   veniceApiKey: string;
   veniceBaseUrl?: string;
+  reflectionModel: string;
+  summaryModel: string;
+  topicsModel: string;
+  memoryTopicsModel: string;
   recipeTopicsModel: string;
   holderId: string;
-  /** Per-recipe claim TTL, seconds. One non-streaming Venice call; 60s is comfortable margin. */
-  recipeClaimTtlSeconds: number;
+  /** Per-thread claim TTL for the claim-based units (seconds). */
+  threadClaimTtlSeconds: number;
+  /** Attachment retention window, days. */
+  attachmentExpiryDays: number;
+  /** Supervisor lease TTL (seconds). */
   leaseTtlSeconds: number;
+  /** Supervisor lease heartbeat (ms). Must be < leaseTtlSeconds*1000. */
   leaseHeartbeatMs: number;
+  /** Sleep when supervisor doesn't hold the lease yet (ms). */
   leasePollMs: number;
+  /** Sleep when every unit reported empty-phase (ms). */
   idleIntervalMs: number;
+  /** Sleep on transient error (ms). */
   errorBackoffMs: number;
 }
 
@@ -50,14 +74,13 @@ type InboundMessage = StartMessage | StopMessage | SessionMessage;
 
 interface LogOutbound {
   type: 'log';
-  level: 'info' | 'warn' | 'error';
+  level: 'debug' | 'info' | 'warn' | 'error';
   message: string;
 }
 
 interface ProgressOutbound {
   type: 'progress';
   result: string;
-  recipeId?: string;
 }
 
 const workerGlobal = self as unknown as DedicatedWorkerGlobalScope;
@@ -66,9 +89,6 @@ function post(msg: LogOutbound | ProgressOutbound): void {
   workerGlobal.postMessage(msg);
 }
 
-// See `../reflection/worker.ts` for the rationale. Published by
-// runWorker after the initial setSession so the 'session' handler can
-// forward rotated tokens; cleared on teardown.
 let currentClient: SupabaseClient | null = null;
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -87,9 +107,10 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> {
-  // autoRefreshToken:false - see `../reflection/worker.ts` and
-  // `../../embeddings/worker.ts` for the full story. Main thread is
-  // the sole refresher; rotated tokens reach us via 'session'.
+  // autoRefreshToken:false: only the main thread refreshes; rotated
+  // tokens arrive here via 'session' messages. Same rationale as the
+  // standalone workers - multiple clients racing to refresh trips
+  // Supabase's replay-detection and revokes the session.
   const client: SupabaseClient = createClient(msg.supabaseUrl, msg.supabaseAnonKey, {
     auth: {
       persistSession: false,
@@ -105,7 +126,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     post({
       type: 'log',
       level: 'error',
-      message: `recipe-topics worker setSession failed: ${sessionError.message}`,
+      message: `supervisor setSession failed: ${sessionError.message}`,
     });
     return;
   }
@@ -119,17 +140,25 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     apiKey: msg.veniceApiKey,
     baseUrl: msg.veniceBaseUrl,
   });
-  const coordinator = new LeaseCoordinator(
-    supabase,
-    'recipe-topics',
-    msg.holderId,
-    {
-      ttlSeconds: msg.leaseTtlSeconds,
-      heartbeatMs: msg.leaseHeartbeatMs,
-    }
-  );
+  const coordinator = new LeaseCoordinator(supabase, 'supervisor', msg.holderId, {
+    ttlSeconds: msg.leaseTtlSeconds,
+    heartbeatMs: msg.leaseHeartbeatMs,
+  });
 
-  const agent = new RecipeTopicsAgent(venice, supabase, msg.recipeTopicsModel);
+  // Five agents instantiated once for the worker's lifetime. The
+  // sixth and seventh units (auto_title, attachment_expiry) don't
+  // need agents - title-gen uses the bare Venice client; attachment
+  // expiry is a pure SQL RPC.
+  //
+  // Each agent's model id comes from the start payload (resolved
+  // from AGENT_MODELS on the main thread) so a model swap in the
+  // registry takes effect on the next worker start without
+  // requiring a code change here.
+  const reflection = new ReflectionAgent(venice, supabase, msg.reflectionModel);
+  const summary = new SummaryAgent(venice, supabase, msg.summaryModel);
+  const topics = new TopicsAgent(venice, supabase, msg.topicsModel);
+  const memoryTopics = new MemoryTopicsAgent(venice, supabase, msg.memoryTopicsModel);
+  const recipeTopics = new RecipeTopicsAgent(venice, supabase, msg.recipeTopicsModel);
 
   const napConfig: NapConfig = {
     leasePollMs: msg.leasePollMs,
@@ -137,22 +166,28 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     errorBackoffMs: msg.errorBackoffMs,
   };
 
+  const onLeaseLost = (): void => {
+    post({
+      type: 'log',
+      level: 'warn',
+      message: 'supervisor lease lost - re-entering polling',
+    });
+  };
+
   try {
     while (!signal.aborted) {
-      const ctx: CycleContext = {
-        agent,
+      const ctx: SupervisorContext = {
         supabase,
+        venice,
         coordinator,
         holderId: msg.holderId,
         userId: msg.userId,
-        recipeClaimTtlSeconds: msg.recipeClaimTtlSeconds,
         signal,
-        onLeaseLost: () => {
-          post({
-            type: 'log',
-            level: 'warn',
-            message: 'recipe-topics lease lost - re-entering polling',
-          });
+        onLeaseLost,
+        agents: { reflection, summary, topics, memoryTopics, recipeTopics },
+        tunables: {
+          threadClaimTtlSeconds: msg.threadClaimTtlSeconds,
+          attachmentExpiryDays: msg.attachmentExpiryDays,
         },
       };
       const result = await runOneCycle(ctx);
@@ -176,7 +211,7 @@ workerGlobal.addEventListener('message', (evt: MessageEvent<InboundMessage>) => 
         post({
           type: 'log',
           level: 'error',
-          message: `recipe-topics worker loop crashed: ${err.message}`,
+          message: `supervisor loop crashed: ${err.message}`,
         });
       })
       .finally(() => {
@@ -195,7 +230,7 @@ workerGlobal.addEventListener('message', (evt: MessageEvent<InboundMessage>) => 
         post({
           type: 'log',
           level: 'warn',
-          message: `forwarded setSession failed: ${err.message}`,
+          message: `supervisor forwarded setSession failed: ${err.message}`,
         });
       });
   }
