@@ -294,6 +294,16 @@ const TIMER_NAMED_RE = new RegExp(
   'gu'
 );
 const TIMER_ANON_RE = /~\{([^}]*)\}/gu;
+// Bare braced duration: `{qty%unit}` with no `@`/`#`/`~` prefix. The
+// LLM frequently drops the `~` when writing a duration (especially when
+// it also wraps the duration in markdown bold like `**{4-5%hours}**`,
+// where the asterisks visually substitute for the missing prefix).
+// Without this, the parser would leave `{4-5%hours}` as literal prose
+// and the renderer would show curly braces in the step text. Requiring
+// `%` in the body keeps us from grabbing arbitrary `{...}` prose that
+// wasn't meant as a duration. The overlap check in `tokenizeLine`
+// guards against re-claiming spans inside an `@`/`#`/`~` reference.
+const TIMER_BARE_RE = /\{([^}]*%[^}]*)\}/gu;
 
 interface LineTokens {
   text: string;
@@ -346,6 +356,21 @@ function tokenizeLine(line: string): LineTokens {
   // above. We check overlap against the edits list rather than re-running
   // the named regex; the edits list is already authoritative.
   for (const m of line.matchAll(TIMER_ANON_RE)) {
+    const start = m.index!;
+    const end = start + m[0].length;
+    const overlaps = edits.some(([s, e]) => s <= start && e >= end);
+    if (overlaps) continue;
+    const { qty, unit } = parseQtyUnit(m[1]!);
+    timers.push({ name: null, duration: qty ?? '', unit });
+    const display = unit ? `${qty ?? ''} ${unit}`.trim() : (qty ?? '');
+    edits.push([start, end, display]);
+  }
+  // Bare-brace duration pass: `{qty%unit}` with no prefix. Runs LAST so
+  // it can't steal a span from `@ingredient{200%g}` (the ingredient
+  // pass already recorded an edit covering the whole `@...{...}` range,
+  // and our `{200%g}` match falls inside it). Same overlap guard as the
+  // anonymous-timer pass above.
+  for (const m of line.matchAll(TIMER_BARE_RE)) {
     const start = m.index!;
     const end = start + m[0].length;
     const overlaps = edits.some(([s, e]) => s <= start && e >= end);
@@ -1021,3 +1046,85 @@ export const MAX_RECIPE_COOKLANG_CHARS = 20_000;
 
 /** Title cap — mirrors memory label. */
 export const MAX_RECIPE_TITLE_CHARS = 160;
+
+// ---------------------------------------------------------------------------
+// Authoring validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Catch the LLM-authoring quirks the parser tolerates but the renderer
+ * can't make readable. Called from `recipe_save` and `recipe_update`
+ * BEFORE the write hits the DB, so a malformed save fails at the tool
+ * surface and the LLM gets a corrective error it can act on — far
+ * cheaper than silently storing source that renders wrong and waiting
+ * for the user to notice. Returns an array of error messages (empty =
+ * source is valid as far as these checks are concerned).
+ *
+ * The checks here are deliberately narrow. They target patterns we've
+ * observed the LLM produce, NOT a general "is this valid Cooklang"
+ * pass — the parser itself is the source of truth for parse validity
+ * (and never throws). A check that fires here means "this source will
+ * not look right to the cook," not "this source is unparseable."
+ *
+ * Current checks:
+ *
+ *   1. Markdown emphasis (`**bold**`, single-backtick spans). The
+ *      recipe HTML pipeline escapes step text and inserts it via
+ *      `{@html}` on a structured wrapper — there's no markdown pass.
+ *      So `**hot**` renders as literal asterisks. Reject so the LLM
+ *      drops the markdown habit.
+ *   2. `@modifier @ingredient{...}` pattern. The LLM sometimes reaches
+ *      for two adjacent `@` tokens to qualify an ingredient with a
+ *      leading modifier (`@pre-minced @garlic{1%tbsp}`). The parser
+ *      faithfully produces two ingredients — `pre-minced` (no qty)
+ *      and `garlic` (1 tbsp) — which shows in the list as a phantom
+ *      "pre-minced" row and a duplicate of an existing `@garlic`
+ *      entry. The right form is a single multi-word braced name:
+ *      `@pre-minced garlic{1%tbsp}`.
+ */
+export function validateCooklangSource(src: string): string[] {
+  const errors: string[] = [];
+
+  // `**bold**` — two asterisks, at least one non-asterisk char, two
+  // asterisks. Doesn't match a single `*` (could be a footnote marker,
+  // rare but legitimate) or `***` (also rare and probably intentional).
+  if (/\*\*[^*\n]+\*\*/.test(src)) {
+    errors.push(
+      'markdown emphasis (`**bold**`) is not valid Cooklang and renders ' +
+        'as literal asterisks. Remove the `**` markers. If you wanted to ' +
+        'highlight a duration, use the Cooklang timer syntax `~{N%unit}` ' +
+        '(e.g. `~{4-5%hours}`) and let the renderer style it.',
+    );
+  }
+
+  // Backtick code spans — `like this`. Single-line only so we don't
+  // misfire on a recipe that happens to have two backticks far apart.
+  if (/`[^`\n]+`/.test(src)) {
+    errors.push(
+      'markdown code spans (`like this`) are not valid Cooklang and ' +
+        'render as literal backticks. Remove the backticks; plain text ' +
+        'in a step is already prose.',
+    );
+  }
+
+  // `@modifier @ingredient{...}` — two `@`-tokens separated only by
+  // whitespace, with the SECOND one carrying a `{` body. Whitespace-
+  // only between is what marks this as "modifier + thing"; any prose
+  // between (`@salt and @pepper`) is a legitimate "two ingredients
+  // mentioned in the same sentence" pattern and shouldn't fire.
+  const NAME = "[\\p{L}\\p{N}\\-_']+";
+  const MODIFIER_PAIR_RE = new RegExp(`@${NAME}[ \\t]+@${NAME}\\{`, 'u');
+  if (MODIFIER_PAIR_RE.test(src)) {
+    errors.push(
+      'detected `@modifier @ingredient{...}` pattern (e.g. `@pre-minced ' +
+        '@garlic{1%tbsp}`). This produces two separate ingredient entries ' +
+        'because each `@token` is its own ingredient. Write modifier + ' +
+        'ingredient as a single multi-word name inside braces: ' +
+        '`@pre-minced garlic{1%tbsp}`. For "use X or Y" alternatives, put ' +
+        'only the primary on `@` and write the substitute as plain prose: ' +
+        '`@garlic{4%cloves} smashed (or 1 tbsp pre-minced garlic)`.',
+    );
+  }
+
+  return errors;
+}

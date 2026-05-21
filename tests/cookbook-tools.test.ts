@@ -157,6 +157,39 @@ describe('recipe_save', () => {
     ).rejects.toThrow(/change_message is required/);
     expect(createRecipe).not.toHaveBeenCalled();
   });
+
+  it('rejects cooklang with markdown emphasis and surfaces the corrective hint', async () => {
+    // The validator's whole point is to teach the LLM the right syntax
+    // via the tool error - so we assert the message reaches the caller
+    // unaltered, not just that the save was blocked.
+    const createRecipe = vi.fn();
+    await expect(
+      recipeSave.execute(
+        {
+          title: 'T',
+          cooklang: 'Cook for **5 hours** on low.',
+          change_message: 'init',
+        },
+        ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
+      )
+    ).rejects.toThrow(/markdown emphasis/);
+    expect(createRecipe).not.toHaveBeenCalled();
+  });
+
+  it('rejects cooklang with the `@modifier @ingredient{...}` pattern', async () => {
+    const createRecipe = vi.fn();
+    await expect(
+      recipeSave.execute(
+        {
+          title: 'T',
+          cooklang: 'Add @pre-minced @garlic{1%tbsp}.',
+          change_message: 'init',
+        },
+        ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
+      )
+    ).rejects.toThrow(/modifier @ingredient/);
+    expect(createRecipe).not.toHaveBeenCalled();
+  });
 });
 
 describe('recipe_list', () => {
@@ -361,6 +394,25 @@ describe('recipe_update', () => {
         ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
       )
     ).rejects.toThrow(/exceeds/);
+    expect(updateRecipe).not.toHaveBeenCalled();
+  });
+
+  it('rejects cooklang with authoring-quirks on update (validator wired)', async () => {
+    // Same validator the save tool runs - if the LLM is patching the
+    // cooklang field with markdown bold, the update fails at the tool
+    // surface and the LLM gets the corrective error rather than the
+    // cookbook silently regressing to literal asterisks.
+    const updateRecipe = vi.fn();
+    await expect(
+      recipeUpdate.execute(
+        {
+          id: 'r-1',
+          cooklang: 'Stir for **3 minutes**.',
+          change_message: 'add timing',
+        },
+        ctxFor({ updateRecipe } as unknown as Partial<SupabaseService>)
+      )
+    ).rejects.toThrow(/markdown emphasis/);
     expect(updateRecipe).not.toHaveBeenCalled();
   });
 

@@ -9,7 +9,11 @@
  * signal it needs to shrink the source.
  */
 import type { ToolDef } from './types';
-import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../cooklang';
+import {
+  MAX_RECIPE_COOKLANG_CHARS,
+  MAX_RECIPE_TITLE_CHARS,
+  validateCooklangSource,
+} from '../cooklang';
 // See recipe_save.ts — plain-.ts import, not the rune-using store.
 import { notifyCookbookChanged } from '../cookbook-events';
 import { recipeUpdateSchema } from './recipe_update.schema';
@@ -39,6 +43,15 @@ export const recipeUpdate: ToolDef = {
       if (args.cooklang.length > MAX_RECIPE_COOKLANG_CHARS) {
         throw new Error(
           `cooklang exceeds ${MAX_RECIPE_COOKLANG_CHARS}-char limit (got ${args.cooklang.length})`
+        );
+      }
+      // Same authoring-quirk gate recipe_save runs, for the same
+      // reason: corrective error at the tool surface beats a silently
+      // mis-rendered update landing in the user's cookbook.
+      const cooklangErrors = validateCooklangSource(args.cooklang);
+      if (cooklangErrors.length > 0) {
+        throw new Error(
+          `cooklang validation failed:\n- ${cooklangErrors.join('\n- ')}`
         );
       }
       patch.cooklang = args.cooklang;

@@ -12,6 +12,7 @@ import {
   cooklangToHtml,
   recipeToMarkdown,
   recipeToPlainText,
+  validateCooklangSource,
 } from '../src/lib/cooklang';
 
 describe('parseCooklang — ingredients', () => {
@@ -597,5 +598,94 @@ Whisk @eggs{3} with grated @pecorino{60%g} in a #bowl{}.`;
     const html = recipeToHtml(recipe);
     expect(html).toContain('spaghetti');
     expect(html).toContain('<dl class="cook-metadata">');
+  });
+});
+
+describe('parseCooklang — bare-brace durations', () => {
+  // The LLM frequently drops the `~` when writing a duration, especially
+  // when it also wraps the duration in markdown bold like
+  // `**{4-5%hours}**`. The bare-brace pass treats `{N%unit}` as an
+  // anonymous timer so the renderer doesn't show curly braces in prose.
+  it('treats bare `{N%unit}` as an anonymous timer', () => {
+    const r = parseCooklang('Cook for {30%minutes}.');
+    expect(r.timers).toEqual([{ name: null, duration: '30', unit: 'minutes' }]);
+    expect(r.steps[0]!.text).toBe('Cook for 30 minutes.');
+  });
+
+  it('handles a range duration like `{4-5%hours}`', () => {
+    const r = parseCooklang('Slow cook for {4-5%hours}.');
+    expect(r.timers).toEqual([{ name: null, duration: '4-5', unit: 'hours' }]);
+    expect(r.steps[0]!.text).toBe('Slow cook for 4-5 hours.');
+  });
+
+  it('does not steal `{...}` from a preceding `@ingredient{...}` reference', () => {
+    // Regression: `@flour{200%g}` must not also be re-claimed as a
+    // bare-brace timer. The overlap guard in `tokenizeLine` covers this.
+    const r = parseCooklang('Add @flour{200%g}.');
+    expect(r.ingredients).toEqual([{ name: 'flour', qty: '200', unit: 'g' }]);
+    expect(r.timers).toEqual([]);
+    expect(r.steps[0]!.text).toBe('Add flour.');
+  });
+
+  it('ignores braces with no `%` in the body', () => {
+    // `{just text}` is not a duration; leave the prose alone (it'll
+    // render as literal `{just text}`, which is a clear signal to the
+    // author that something is off without us guessing).
+    const r = parseCooklang('Garnish with a {sprinkle of salt}.');
+    expect(r.timers).toEqual([]);
+    expect(r.steps[0]!.text).toBe('Garnish with a {sprinkle of salt}.');
+  });
+});
+
+describe('validateCooklangSource', () => {
+  it('accepts a well-formed recipe', () => {
+    const errors = validateCooklangSource(
+      'Add @flour{200%g} and stir for ~{2%minutes}.',
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('rejects markdown bold', () => {
+    const errors = validateCooklangSource('Cook for **5 hours** on low.');
+    expect(errors.length).toBe(1);
+    expect(errors[0]).toMatch(/markdown emphasis/);
+    expect(errors[0]).toMatch(/~\{N%unit\}/);
+  });
+
+  it('rejects backtick code spans', () => {
+    const errors = validateCooklangSource('Set the dial to `low`.');
+    expect(errors.length).toBe(1);
+    expect(errors[0]).toMatch(/code spans/);
+  });
+
+  it('rejects the `@modifier @ingredient{...}` duplicate-pattern', () => {
+    const errors = validateCooklangSource(
+      'Use @pre-minced @garlic{1%tbsp} for speed.',
+    );
+    expect(errors.length).toBe(1);
+    expect(errors[0]).toMatch(/modifier @ingredient/);
+    expect(errors[0]).toMatch(/multi-word/);
+  });
+
+  it('does NOT flag legitimate two-ingredient prose like `@salt and @pepper`', () => {
+    // The trigger is "two `@`s with only whitespace between AND the
+    // second one braced." `@salt and @pepper` has prose between, and
+    // neither has braces — both pre-conditions absent.
+    const errors = validateCooklangSource('Season with @salt and @pepper.');
+    expect(errors).toEqual([]);
+  });
+
+  it('does NOT flag a bare `{N%unit}` duration on its own', () => {
+    // The parser already absorbs this as an anonymous timer; no need
+    // for validation to second-guess it.
+    const errors = validateCooklangSource('Simmer for {30%minutes}.');
+    expect(errors).toEqual([]);
+  });
+
+  it('collects multiple problems in one pass', () => {
+    const errors = validateCooklangSource(
+      'Use @pre-minced @garlic{1%tbsp} and **stir** vigorously.',
+    );
+    expect(errors.length).toBe(2);
   });
 });

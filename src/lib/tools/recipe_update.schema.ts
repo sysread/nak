@@ -9,8 +9,12 @@ export const recipeUpdateSchema = {
     'Update a recipe by id. Omit a field to leave it unchanged; pass ' +
     'null for source / source_url / rating to clear them. cooklang ' +
     `capped at ${MAX_RECIPE_COOKLANG_CHARS} chars; section / declaration / ` +
-    'continuation rules match recipe_save. change_message is REQUIRED ' +
-    'and lands in the recipe history. Returns the updated row.',
+    'continuation rules match recipe_save. Same authoring constraints ' +
+    'apply: no markdown (`**bold**`, backticks) in the source; use ' +
+    '`~{N%unit}` for durations; write modifier+ingredient as one ' +
+    'multi-word braced name (`@pre-minced garlic{1%tbsp}`), not two ' +
+    '`@` tokens. change_message is REQUIRED and lands in the recipe ' +
+    'history. Returns the updated row.',
   shortDescription: 'edit a saved recipe',
   parameters: {
     type: 'object',

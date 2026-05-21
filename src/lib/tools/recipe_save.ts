@@ -10,7 +10,11 @@
  * whole point of using Cooklang as the source of truth.
  */
 import type { ToolDef } from './types';
-import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../cooklang';
+import {
+  MAX_RECIPE_COOKLANG_CHARS,
+  MAX_RECIPE_TITLE_CHARS,
+  validateCooklangSource,
+} from '../cooklang';
 // Import from the plain-.ts sibling, not cookbook-store.svelte.ts —
 // this tool gets bundled into the reflection Web Worker via the
 // tool registry, and pulling a rune-using module in would crash the
@@ -47,6 +51,15 @@ export const recipeSave: ToolDef = {
       throw new Error(
         `cooklang exceeds ${MAX_RECIPE_COOKLANG_CHARS}-char limit (got ${cooklang.length}); trim prose or split into multiple recipes`
       );
+    }
+    // Catch LLM-authoring quirks (markdown emphasis, `@modifier
+    // @ingredient` pattern) BEFORE the row lands in the DB. Failing at
+    // the tool surface gives the LLM a corrective error it can act on;
+    // silently storing source that renders wrong wastes the user's
+    // attention later.
+    const cooklangErrors = validateCooklangSource(cooklang);
+    if (cooklangErrors.length > 0) {
+      throw new Error(`cooklang validation failed:\n- ${cooklangErrors.join('\n- ')}`);
     }
     if (title.length > MAX_RECIPE_TITLE_CHARS) {
       throw new Error(
