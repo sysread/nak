@@ -48,8 +48,8 @@ import {
  *     have zero UX urgency, so back off twice as long.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 45,
-  leaseHeartbeatMs: 20_000,
+  leaseTtlSeconds: 90,
+  leaseHeartbeatMs: 40_000,
   claimTtlSeconds: 300,
   leasePollMs: 30_000,
   idleIntervalMs: 120_000,

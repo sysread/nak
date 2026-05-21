@@ -39,8 +39,8 @@ export interface WikiStartOpts extends BaseStartOpts {
  * settled conversation) so identical knobs are fine.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 45,
-  leaseHeartbeatMs: 20_000,
+  leaseTtlSeconds: 90,
+  leaseHeartbeatMs: 40_000,
   threadClaimTtlSeconds: 600,
   leasePollMs: 20_000,
   idleIntervalMs: 30_000,

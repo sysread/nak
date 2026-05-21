@@ -14,8 +14,8 @@ import { agentModel } from '../../models';
 import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
 
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 45,
-  leaseHeartbeatMs: 20_000,
+  leaseTtlSeconds: 90,
+  leaseHeartbeatMs: 40_000,
   // Bounded single-recipe input; one fast-tier call with a 384-token
   // cap. 60s mirrors the memory-topics TTL and is comfortable margin.
   recipeClaimTtlSeconds: 60,

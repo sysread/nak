@@ -20,7 +20,7 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  * field names identical so grep finds both ends at once.
  *
  * Timing constants:
- *   - leaseTtlSeconds 45 / leaseHeartbeatMs 20_000: two attempts
+ *   - leaseTtlSeconds 90 / leaseHeartbeatMs 40_000: two attempts
  *     per expiry window; a single failed beat stays inside the
  *     margin. Same shape as the embeddings worker.
  *   - threadClaimTtlSeconds 600: 10 minutes is generous. A
@@ -39,8 +39,8 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  *     queue moves slowly anyway.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 45,
-  leaseHeartbeatMs: 20_000,
+  leaseTtlSeconds: 90,
+  leaseHeartbeatMs: 40_000,
   threadClaimTtlSeconds: 600,
   leasePollMs: 20_000,
   idleIntervalMs: 30_000,

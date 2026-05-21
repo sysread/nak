@@ -44,7 +44,7 @@ const traceLog = createLogger('samskara-worker');
  * field names identical means grep finds both ends at once.
  *
  * Timing constants:
- *   - leaseTtlSeconds 45 / leaseHeartbeatMs 20_000: same shape as
+ *   - leaseTtlSeconds 90 / leaseHeartbeatMs 40_000: same shape as
  *     the other workers; two beats per expiry window.
  *   - claimTtlSeconds 600: generous (10 min). Each phase claims one
  *     row and may run an LLM call; the TTL must outlast the slowest
@@ -69,8 +69,8 @@ const traceLog = createLogger('samskara-worker');
  *     pushes back.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 45,
-  leaseHeartbeatMs: 20_000,
+  leaseTtlSeconds: 90,
+  leaseHeartbeatMs: 40_000,
   claimTtlSeconds: 600,
   regenClaimTtlSeconds: 180,
   leasePollMs: 20_000,

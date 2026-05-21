@@ -28,7 +28,7 @@ import { VENICE_EMBEDDING_MODEL } from '../models';
  * at once.
  *
  * Timing constants picked to match the lease protocol:
- *   - leaseTtlSeconds 45 / leaseHeartbeatMs 20_000: two attempts
+ *   - leaseTtlSeconds 90 / leaseHeartbeatMs 40_000: two attempts
  *     per TTL window; a single failed beat is inside the margin.
  *   - rowClaimTtlSeconds 120: longer than leaseTtl so a row
  *     claimed by a dying worker isn't instantly grabbed by the
@@ -51,8 +51,8 @@ import { VENICE_EMBEDDING_MODEL } from '../models';
  *     standard retry-after; 30s is a polite default.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 45,
-  leaseHeartbeatMs: 20_000,
+  leaseTtlSeconds: 90,
+  leaseHeartbeatMs: 40_000,
   rowClaimTtlSeconds: 120,
   leasePollMs: 20_000,
   idleIntervalMs: 30_000,

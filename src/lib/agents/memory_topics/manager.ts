@@ -24,7 +24,7 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  * show up as silent undefineds at runtime.
  *
  * Timing constants:
- *   - leaseTtlSeconds 45 / leaseHeartbeatMs 20_000: same shape as the
+ *   - leaseTtlSeconds 90 / leaseHeartbeatMs 40_000: same shape as the
  *     other workers; two attempts per expiry window.
  *   - memoryClaimTtlSeconds 60: one non-streaming Venice call with a
  *     256-token cap. Shorter than the thread topics TTL (120s) because
@@ -39,8 +39,8 @@ import { BaseWorkerManager, type BaseStartOpts } from '../base-manager';
  *     blips without hammering retries.
  */
 const WORKER_DEFAULTS = {
-  leaseTtlSeconds: 45,
-  leaseHeartbeatMs: 20_000,
+  leaseTtlSeconds: 90,
+  leaseHeartbeatMs: 40_000,
   memoryClaimTtlSeconds: 60,
   leasePollMs: 20_000,
   idleIntervalMs: 60_000,
