@@ -42,12 +42,11 @@ Each row shows a horizontal bar scaled by total tokens
   shown. The gradient is driven by how each bucket compares to
   the median on a log scale, so one runaway workload stands out
   in red without flattening everything else into a single shade.
-- The last 7 days are refreshed in the background while the app
-  is unlocked, so opening the pane usually shows numbers right
-  away. If the cached view is more than 15 minutes old when you
-  land on the pane, Nak kicks off a fresh fetch automatically.
-  Change the dates and click **Refresh** to re-fetch a custom
-  range. While a refresh is in flight, a thin progress bar appears
+- The last 7 days are fetched the first time you open this pane
+  in a session and cached for 15 minutes; opening it again after
+  that triggers a fresh fetch automatically. Change the dates and
+  click **Refresh** to re-fetch a custom range. While a refresh is
+  in flight, a thin progress bar appears
   below the controls. It animates as an indeterminate marching
   pill until Venice returns the first page of data (the slow
   step - the server computes the page count there), then flips to

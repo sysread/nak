@@ -32,11 +32,13 @@ destination:
 - **Usage** — a date-ranged snapshot of per-model token spend
   against the Venice API key. Read-only: it calls Venice's beta
   `/billing/usage` endpoint and aggregates the rows client-side.
-  The default rolling-7-day window is warmed by an hourly
-  background poll from `usage-store.svelte.ts` so opening the pane
-  is typically instant; custom date ranges bypass the cache and
-  fetch on-demand. Nothing persists to disk — the cache is
-  in-memory only and gets wiped on `lock()`. While paging through
+  The default rolling-7-day window is cached in
+  `usage-store.svelte.ts` and fetched lazily the first time the
+  user lands on this pane in the session; opens within
+  `USAGE_STALE_MS` reuse the cache, opens after it re-fetch.
+  Custom date ranges bypass the cache and fetch on-demand. Nothing
+  persists to disk — the cache is in-memory only and gets wiped on
+  `lock()`. While paging through
   a wider window, `fetchUsage`'s `onProgress` callback feeds a
   `pagesLoaded`/`pagesTotal` pair into both the shared store and
   the pane's custom-range state. The pane renders a thin progress
@@ -84,11 +86,13 @@ every update) so it's covered here rather than in its own file.
   `/billing/usage` transparently up to `USAGE_MAX_PAGES`
   (20 × 500 rows = 10k rows) and coerces each row defensively
   before returning.
-- `src/lib/usage-store.svelte.ts` — reactive cache + hourly
-  background poller for the Usage pane's default rolling-7-day
-  window. Started by `state.svelte.ts::activate()` and stopped by
-  `lock()`. Exposes `usage` (the `$state` rune), `refreshUsage`,
-  `isUsageStale`, plus `USAGE_POLL_MS` / `USAGE_STALE_MS` constants.
+- `src/lib/usage-store.svelte.ts` — reactive cache for the Usage
+  pane's default rolling-7-day window. Nothing runs at boot; the
+  Settings pane drives the first fetch via `refreshUsage`. Wiped
+  by `state.svelte.ts::lock()` via `resetUsage` so rows tied to
+  the prior API key don't leak into a subsequent unlock. Exposes
+  `usage` (the `$state` rune), `refreshUsage`, `resetUsage`,
+  `isUsageStale`, plus the `USAGE_STALE_MS` constant.
 - `src/lib/config.ts` — `saveConfig` (keys pane) and
   `changePassword` (security pane).
 - `src/lib/theme.ts` — `ColorMode`, `Accent`, `applyTheme`,
@@ -113,24 +117,22 @@ every update) so it's covered here rather than in its own file.
   state synchronously, then fires
   `app.supabase.updateSettings` fire-and-forget for server
   persistence.
-- **Usage pane background poll + on-open refresh** —
-  `state.svelte.ts::activate()` calls `startUsagePolling(app.venice)`
-  from `$lib/usage-store.svelte` the moment the app unlocks. The
-  poller fires one fetch of the default rolling-7-day window
-  immediately and re-fires every `USAGE_POLL_MS` (1 hour). Rows
-  land in the reactive `usage` store that the pane reads from, so
-  opening Settings -> Usage typically shows data without a
-  loading flash. An `$effect` in `Settings.svelte` also watches
-  `group`: if the user lands on the Usage tab AND the cached
-  data is older than `USAGE_STALE_MS` (15 minutes), it calls
-  `refreshUsage` to top up. User-picked custom date ranges
-  bypass the store entirely — a second `usageSource = 'custom'`
-  branch fetches into component-local state so a non-default
-  fetch doesn't evict the cached default view. The Refresh button
-  routes through whichever source matches the current date
-  pickers. The cache is in-memory only and is wiped on `lock()`
-  so rows billed against the previous API key don't leak into a
-  subsequent unlock with a different config.
+- **Usage pane on-open fetch** — nothing runs at boot. An
+  `$effect` in `Settings.svelte` watches `group`: when the user
+  lands on the Usage tab AND the cached data is null OR older
+  than `USAGE_STALE_MS` (15 minutes), it calls `refreshUsage`
+  from `$lib/usage-store.svelte`. The pane reads from the
+  reactive `usage` store, so a re-open within the staleness
+  window shows the cached numbers without a loading flash; an
+  open after the window re-fetches automatically. User-picked
+  custom date ranges bypass the store entirely — a second
+  `usageSource = 'custom'` branch fetches into component-local
+  state so a non-default fetch doesn't evict the cached default
+  view. The Refresh button routes through whichever source
+  matches the current date pickers. The cache is in-memory only
+  and is wiped on `lock()` so rows billed against the previous
+  API key don't leak into a subsequent unlock with a different
+  config.
 - **Security pane submit** — `changePassword(old, new)` in
   config.ts. Settings catches errors and displays them inline.
 

@@ -1,20 +1,21 @@
 /**
- * Shared reactive state + background poller for the Venice billing
- * usage pane. Populated automatically while the app is unlocked so the
- * Settings -> Usage pane has recent data on hand and can render
- * without the first-open "Loading..." flash.
+ * Shared reactive state for the Venice billing usage pane. Populated
+ * lazily - the first time the user opens Settings -> Usage in this
+ * session, the pane fires `refreshUsage` and rows land in the
+ * reactive `usage` store. Subsequent opens within
+ * {@link USAGE_STALE_MS} reuse the cache; older opens trigger a
+ * fresh fetch.
  *
  * Scope: the store caches the DEFAULT rolling-7-day window only. The
  * window slides as the day rolls over because we recompute the date
- * bounds on every poll against the current `Date.now()`. User-picked
+ * bounds on every fetch against the current `Date.now()`. User-picked
  * custom date ranges in Settings.svelte stay a local, uncached fetch
  * and do not touch this module.
  *
- * Lifecycle: `state.svelte.ts::activate()` calls `startUsagePolling()`
- * with the freshly-built VeniceClient; `lock()` calls
- * `stopUsagePolling()` and wipes `usage.data` so rows tied to the
- * previous API key don't leak across an unlock-lock-unlock to a
- * different config.
+ * Lifecycle: nothing runs at app boot - the cache stays empty until
+ * the user lands on the Usage pane. `state.svelte.ts::lock()` calls
+ * `resetUsage()` so rows tied to the previous API key don't leak
+ * across an unlock-lock-unlock to a different config.
  *
  * No localStorage. Billing data stays in memory only - a full page
  * reload always costs one fetch when the pane is eventually opened.
@@ -24,13 +25,10 @@ import { createLogger } from './logger.svelte';
 
 const log = createLogger('usage');
 
-/** How often the background poll refires while the app is unlocked. */
-export const USAGE_POLL_MS = 60 * 60 * 1000;
-
 /**
  * Threshold for the Settings-pane staleness check. If the pane opens
- * and the cached data is older than this, the pane kicks off a refresh
- * so the user never reads numbers from a poll an hour and a half stale.
+ * and the cached data is older than this, the pane kicks off a
+ * refresh so the user never reads numbers from a fetch this old.
  */
 export const USAGE_STALE_MS = 15 * 60 * 1000;
 
@@ -107,13 +105,14 @@ function defaultRangeIso(): { startDate: string; endDate: string } {
 
 /**
  * Fetch the default rolling-7-day window and populate the store.
- * Used by both the background poll and the Settings pane (when its
- * date pickers match the defaults). Safe to call concurrently - a
- * second call while one is in flight simply overwrites with the newer
- * result; `usage.loading` tracks only the most recent caller.
+ * Called from the Settings pane's on-open effect and from the
+ * Refresh button when the date pickers match the defaults. Safe to
+ * call concurrently - a second call while one is in flight simply
+ * overwrites with the newer result; `usage.loading` tracks only the
+ * most recent caller.
  *
  * Errors are captured into `usage.error` and logged; prior
- * `usage.data` is preserved so a flaky poll doesn't wipe the display.
+ * `usage.data` is preserved so a flaky fetch doesn't wipe the display.
  */
 export async function refreshUsage(venice: VeniceClient): Promise<void> {
   usage.loading = true;
@@ -155,47 +154,12 @@ export async function refreshUsage(venice: VeniceClient): Promise<void> {
   }
 }
 
-// Module-scoped handles so start/stop are idempotent. Matches the
-// pattern in `update.svelte.ts` - start() after the first call is a
-// no-op until stop() runs.
-let pollIntervalId: ReturnType<typeof setInterval> | null = null;
-let activeVenice: VeniceClient | null = null;
-
 /**
- * Start polling the default usage window every
- * {@link USAGE_POLL_MS}. Fires one fetch immediately so the cache is
- * warm before the user ever opens Settings. Idempotent: a second call
- * while the poller is already running is a no-op, even if the passed
- * client object differs - callers that need to swap the client (e.g.
- * a lock-unlock cycle with a different API key) must call
- * {@link stopUsagePolling} first, which `state.svelte.ts::lock()`
- * does.
+ * Wipe the cached data. Called from `state.svelte.ts::lock()` so a
+ * subsequent unlock with a different API key starts from a clean
+ * slate rather than surfacing the prior user's billing rows.
  */
-export function startUsagePolling(venice: VeniceClient): void {
-  if (pollIntervalId !== null) return;
-  activeVenice = venice;
-  log.info('startUsagePolling', { intervalMs: USAGE_POLL_MS });
-  // Fire-and-forget: the first poll races the rest of `activate()` and
-  // we don't want to block the caller on a network round-trip. Errors
-  // land in `usage.error` inside `refreshUsage`.
-  void refreshUsage(venice);
-  pollIntervalId = setInterval(() => {
-    if (activeVenice) void refreshUsage(activeVenice);
-  }, USAGE_POLL_MS);
-}
-
-/**
- * Stop the background poller and clear the cached data. Called from
- * `state.svelte.ts::lock()` so a subsequent unlock with a different
- * API key starts from a clean slate rather than surfacing the prior
- * user's billing rows.
- */
-export function stopUsagePolling(): void {
-  if (pollIntervalId !== null) {
-    clearInterval(pollIntervalId);
-    pollIntervalId = null;
-  }
-  activeVenice = null;
+export function resetUsage(): void {
   usage.data = null;
   usage.lastFetchedAt = null;
   usage.loading = false;
@@ -203,5 +167,5 @@ export function stopUsagePolling(): void {
   usage.truncated = false;
   usage.pagesLoaded = 0;
   usage.pagesTotal = 0;
-  log.info('stopUsagePolling');
+  log.info('resetUsage');
 }

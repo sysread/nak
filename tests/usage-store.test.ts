@@ -1,9 +1,9 @@
 /**
- * Unit coverage for the Usage pane's background poller + cache. The
- * store exposes four state fields (data, lastFetchedAt, loading,
- * error, truncated) and three lifecycle entry points (refreshUsage,
- * startUsagePolling, stopUsagePolling). We exercise each through a
- * stubbed VeniceClient so the logic stays decoupled from the real
+ * Unit coverage for the Usage pane's on-demand cache. The store
+ * exposes a reactive state object (data, lastFetchedAt, loading,
+ * error, truncated, pagesLoaded, pagesTotal) and three entry points
+ * (refreshUsage, isUsageStale, resetUsage). We exercise each through
+ * a stubbed VeniceClient so the logic stays decoupled from the real
  * billing endpoint and from the page clock.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -13,9 +13,7 @@ import {
   usage,
   isUsageStale,
   refreshUsage,
-  startUsagePolling,
-  stopUsagePolling,
-  USAGE_POLL_MS,
+  resetUsage,
   USAGE_STALE_MS,
 } from '../src/lib/usage-store.svelte';
 
@@ -38,15 +36,13 @@ function mockVenice(impl: () => Promise<UsageRow[]>): VeniceClient {
 }
 
 beforeEach(() => {
-  // Every test gets a clean store + a stopped poller so state from a
-  // previous test can't bleed across. stopUsagePolling is idempotent
-  // (no-op when not running) and resets the rune fields to their init
-  // values as a side effect - exactly the reset the tests want.
-  stopUsagePolling();
+  // Every test gets a clean store so state from a previous test can't
+  // bleed across. resetUsage wipes every field back to its init value.
+  resetUsage();
 });
 
 afterEach(() => {
-  stopUsagePolling();
+  resetUsage();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -94,8 +90,8 @@ describe('refreshUsage', () => {
       throw new VeniceError('boom', 'network');
     });
     await refreshUsage(failVenice);
-    // Prior data is intentionally not wiped - a transient poll failure
-    // shouldn't blank the pane if a previous poll has data to show.
+    // Prior data is intentionally not wiped - a transient fetch failure
+    // shouldn't blank the pane if a previous fetch has data to show.
     expect(usage.data).toEqual([sampleRow({ sku: 'keep-me' })]);
     expect(usage.error).toBe('boom');
     expect(usage.loading).toBe(false);
@@ -173,7 +169,7 @@ describe('refreshUsage', () => {
 
 describe('isUsageStale', () => {
   it('returns true when there has been no successful fetch yet', () => {
-    // beforeEach stopUsagePolling() reset lastFetchedAt to null.
+    // beforeEach resetUsage() reset lastFetchedAt to null.
     expect(usage.lastFetchedAt).toBeNull();
     expect(isUsageStale()).toBe(true);
   });
@@ -194,69 +190,19 @@ describe('isUsageStale', () => {
   });
 });
 
-describe('startUsagePolling / stopUsagePolling', () => {
-  it('fires an immediate refresh on start and then every USAGE_POLL_MS', async () => {
-    vi.useFakeTimers();
-    const fetchUsage = vi.fn(async () => [sampleRow()] as UsageRow[]);
-    const venice = { fetchUsage } as unknown as VeniceClient;
-    startUsagePolling(venice);
-    // Flush microtasks queued by the immediate `void refreshUsage(...)`.
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchUsage).toHaveBeenCalledTimes(1);
-    // Advance to the next tick; the interval should fire one more
-    // refresh.
-    await vi.advanceTimersByTimeAsync(USAGE_POLL_MS);
-    expect(fetchUsage).toHaveBeenCalledTimes(2);
-  });
+describe('resetUsage', () => {
+  it('wipes the cache so rows from a prior API key do not leak across lock/unlock', async () => {
+    await refreshUsage(mockVenice(async () => [sampleRow({ sku: 'prior-key' })]));
+    expect(usage.data).not.toBeNull();
+    expect(usage.lastFetchedAt).not.toBeNull();
 
-  it('second startUsagePolling call is a no-op while already running', async () => {
-    vi.useFakeTimers();
-    const fetchUsage = vi.fn(async () => [] as UsageRow[]);
-    const venice = { fetchUsage } as unknown as VeniceClient;
-    startUsagePolling(venice);
-    await vi.advanceTimersByTimeAsync(0);
-    // Second call shouldn't re-fire the immediate refresh or install
-    // a parallel interval.
-    startUsagePolling(venice);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchUsage).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(USAGE_POLL_MS);
-    expect(fetchUsage).toHaveBeenCalledTimes(2);
-  });
+    resetUsage();
 
-  it('stopUsagePolling clears the interval and wipes the cache', async () => {
-    vi.useFakeTimers();
-    const fetchUsage = vi.fn(async () => [sampleRow()] as UsageRow[]);
-    const venice = { fetchUsage } as unknown as VeniceClient;
-    startUsagePolling(venice);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(usage.data).toEqual([sampleRow()]);
-
-    stopUsagePolling();
-    // Cache is scrubbed so rows from the previous API key don't leak
-    // into an unlock-with-different-config.
     expect(usage.data).toBeNull();
     expect(usage.lastFetchedAt).toBeNull();
     expect(usage.error).toBeNull();
     expect(usage.truncated).toBe(false);
-
-    // Interval is torn down: advancing the clock must not fire
-    // another fetchUsage.
-    fetchUsage.mockClear();
-    await vi.advanceTimersByTimeAsync(USAGE_POLL_MS * 3);
-    expect(fetchUsage).not.toHaveBeenCalled();
-  });
-
-  it('restart after stop works cleanly', async () => {
-    vi.useFakeTimers();
-    const fetchUsage = vi.fn(async () => [] as UsageRow[]);
-    const venice = { fetchUsage } as unknown as VeniceClient;
-    startUsagePolling(venice);
-    await vi.advanceTimersByTimeAsync(0);
-    stopUsagePolling();
-    startUsagePolling(venice);
-    await vi.advanceTimersByTimeAsync(0);
-    // Two "immediate" fetches, one per start() call.
-    expect(fetchUsage).toHaveBeenCalledTimes(2);
+    expect(usage.pagesLoaded).toBe(0);
+    expect(usage.pagesTotal).toBe(0);
   });
 });
