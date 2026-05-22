@@ -259,6 +259,45 @@ ride along automatically so it sees linked context without a second
 lookup. The Memories browser renders the edges inline under each
 memory; you can add or remove any edge yourself.
 
+## The memory librarian
+
+Reflection writes memories one thread at a time and never sees the
+store as a whole, so cross-thread duplicates accumulate over time
+and the relationships between memories stay sparse. The **memory
+librarian** is a pair of background passes that periodically tidy
+the store:
+
+- **Deep-sleep** (slow-wave consolidation). Every ~12 hours, picks
+  the memory that hasn't been visited in the longest time, finds
+  its similarity neighbors, and decides for each pair whether to
+  consolidate them (one fact written twice), relate them
+  (genuinely distinct but adjacent), or leave them alone.
+- **Rem** (associative integration). Also every ~12 hours, on a
+  staggered cadence. Looks at conversations where the recall
+  feature surfaced multiple memories together and asks whether
+  the memory graph captures the relationships your behavior
+  implies. Primary mode is drawing relation edges; rare cases
+  consolidate hidden duplicates that deep-sleep missed.
+
+Both passes use the same toolbox: search, consolidate, relate, and
+soft-invalidate. Neither can create new memories from nothing -
+their job is to reshape what already exists. Consolidation preserves
+the stronger of the two existing confidences (it does not
+manufacture new confidence on a merge), so memories that survive
+repeated consolidation passes don't drift artificially upward.
+
+Both passes are coordinated across devices so only one run happens
+per cycle, and they share a cross-device mutex so they can't run at
+the same time. The Memories panel's top bar has two icon buttons -
+**moon** for deep-sleep, **shuffle** for rem - that trigger a
+manual run when you want to see what the librarian would do
+without waiting for the next scheduled cycle. The panel shows a
+step-by-step progress strip and a one-sentence summary of what the
+agent did.
+
+The librarian can be disabled entirely under **Settings -> AI ->
+Memory librarian**.
+
 ## Forgetting
 
 Two tiers:
