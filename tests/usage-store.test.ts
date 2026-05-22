@@ -120,6 +120,55 @@ describe('refreshUsage', () => {
     await refreshUsage(mockVenice(async () => [sampleRow()]));
     expect(usage.truncated).toBe(false);
   });
+
+  it('plumbs pagesLoaded / pagesTotal from the fetchUsage onProgress callback', async () => {
+    // The store's progress fields are what the Settings pane reads to
+    // render the determinate "Loading… N/M" indicator. Drive the
+    // mock's onProgress hook the same way VeniceClient.fetchUsage
+    // does in production and assert the final pair lands in the
+    // store. Reset-to-zero on entry is covered by the next test.
+    const venice = {
+      fetchUsage: vi.fn(async (opts: { onProgress?: (info: { page: number; totalPages: number }) => void }) => {
+        opts.onProgress?.({ page: 1, totalPages: 3 });
+        opts.onProgress?.({ page: 2, totalPages: 3 });
+        opts.onProgress?.({ page: 3, totalPages: 3 });
+        return [sampleRow()];
+      }),
+    } as unknown as VeniceClient;
+    await refreshUsage(venice);
+    expect(usage.pagesLoaded).toBe(3);
+    expect(usage.pagesTotal).toBe(3);
+  });
+
+  it('resets pagesLoaded / pagesTotal at the start of every refresh', async () => {
+    // A second refresh that fails on the first network round-trip
+    // would otherwise leave the previous fetch's "5/5" pair in
+    // place, which a determinate progress bar would paint as
+    // "already done." The store resets both fields on entry so a
+    // mid-flight reader sees fresh zeros until the new fetch
+    // reports its first page.
+    const populate = {
+      fetchUsage: vi.fn(async (opts: { onProgress?: (info: { page: number; totalPages: number }) => void }) => {
+        opts.onProgress?.({ page: 5, totalPages: 5 });
+        return [sampleRow()];
+      }),
+    } as unknown as VeniceClient;
+    await refreshUsage(populate);
+    expect(usage.pagesLoaded).toBe(5);
+
+    let observedDuringFetch = { pagesLoaded: -1, pagesTotal: -1 };
+    const observe = {
+      fetchUsage: vi.fn(async (_opts: unknown) => {
+        observedDuringFetch = {
+          pagesLoaded: usage.pagesLoaded,
+          pagesTotal: usage.pagesTotal,
+        };
+        return [sampleRow()];
+      }),
+    } as unknown as VeniceClient;
+    await refreshUsage(observe);
+    expect(observedDuringFetch).toEqual({ pagesLoaded: 0, pagesTotal: 0 });
+  });
 });
 
 describe('isUsageStale', () => {

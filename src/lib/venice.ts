@@ -410,6 +410,18 @@ export interface UsageRequestOptions {
    */
   currency?: UsageCurrency;
   signal?: AbortSignal;
+  /**
+   * Fires once per page after Venice's response is parsed. `page` is
+   * the 1-based index of the page that just landed; `totalPages` is
+   * the server-reported page count (clamped to {@link USAGE_MAX_PAGES}
+   * by the safety cap). Callers use this to surface a progress hint in
+   * the Usage pane - the first tick teaches the UI how many pages to
+   * expect, subsequent ticks advance the counter.
+   *
+   * Best-effort: a throw inside the callback is swallowed so a
+   * misbehaving UI listener can't abort the paging loop mid-window.
+   */
+  onProgress?: (info: { page: number; totalPages: number }) => void;
 }
 
 export class VeniceError extends Error {
@@ -1141,8 +1153,18 @@ export class VeniceClient {
         const row = coerceUsageRow(raw);
         if (row) out.push(row);
       }
-      const totalPages = body.pagination?.totalPages ?? 1;
-      if (page >= totalPages || page >= USAGE_MAX_PAGES) break;
+      const reportedTotalPages = body.pagination?.totalPages ?? 1;
+      // Clamp at the safety cap so a progress UI reading "page 19 of
+      // 384" doesn't promise rows the loop will never return. The
+      // truncated-flag downstream is what tells the user the window
+      // was wider than the cap could pull.
+      const totalPages = Math.min(reportedTotalPages, USAGE_MAX_PAGES);
+      try {
+        opts.onProgress?.({ page, totalPages });
+      } catch {
+        // Best-effort: a listener throw must not abort paging.
+      }
+      if (page >= totalPages) break;
       page++;
     }
     return out;

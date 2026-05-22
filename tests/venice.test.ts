@@ -4,6 +4,7 @@ import {
   VeniceError,
   parseSseFrame,
   parseChatCompletion,
+  USAGE_MAX_PAGES,
 } from '../src/lib/venice';
 
 function encoder(): TextEncoder {
@@ -1268,6 +1269,65 @@ describe('VeniceClient.fetchUsage', () => {
     await expect(client.fetchUsage()).rejects.toMatchObject({
       kind: 'auth',
       status: 401,
+    });
+  });
+
+  it('reports per-page progress through onProgress', async () => {
+    // Two-page response: the callback must fire once per page with
+    // the 1-based page index and the server-reported totalPages so
+    // the Usage pane can render a determinate progress bar.
+    const row = {
+      timestamp: '2026-03-02T00:00:00Z',
+      sku: 'a',
+      pricePerUnitUsd: 0,
+      units: 1,
+      amount: 0.1,
+      currency: 'USD' as const,
+      notes: '',
+      inferenceDetails: null,
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(usagePage([row], 2))
+      .mockResolvedValueOnce(usagePage([row], 2));
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const ticks: { page: number; totalPages: number }[] = [];
+    await client.fetchUsage({ onProgress: (info) => ticks.push(info) });
+    expect(ticks).toEqual([
+      { page: 1, totalPages: 2 },
+      { page: 2, totalPages: 2 },
+    ]);
+  });
+
+  it('clamps the onProgress totalPages at USAGE_MAX_PAGES and survives a throwing listener', async () => {
+    // A pathologically large totalPages must not promise pages the
+    // safety cap will never let the loop pull. The callback should
+    // read the clamped value so a progress UI never shows a
+    // fraction that can't reach 100%. A factory mock (not a single
+    // mockResolvedValue) is required here because Response bodies
+    // can only be consumed once - the loop will paginate up to the
+    // cap and reuse would fail with a parse error.
+    const fetchImpl = vi.fn(async () => usagePage([], 9999));
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const ticks: { page: number; totalPages: number }[] = [];
+    await client.fetchUsage({
+      onProgress: (info) => {
+        ticks.push(info);
+        // A misbehaving UI listener must not abort the paging loop.
+        throw new Error('listener throws should not abort paging');
+      },
+    });
+    expect(ticks).toHaveLength(USAGE_MAX_PAGES);
+    expect(ticks[0]).toEqual({ page: 1, totalPages: USAGE_MAX_PAGES });
+    expect(ticks[ticks.length - 1]).toEqual({
+      page: USAGE_MAX_PAGES,
+      totalPages: USAGE_MAX_PAGES,
     });
   });
 });

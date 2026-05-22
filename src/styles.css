@@ -910,13 +910,55 @@ label {
   color: var(--muted);
 }
 
+/* The avg-per-day pill sits inline with the totals pill it derives
+   from. Same geometry as the spend pill so the strip stays visually
+   aligned; the subtler fill + italics says "secondary figure, not
+   the headline." Stays in the same flex row regardless of currency
+   so the pairing reads as "total + derived." */
+.usage-pill.per-day {
+  background: transparent;
+  border-style: dashed;
+  color: var(--muted);
+  font-style: italic;
+}
+
 .usage-pill-head,
 .usage-bar-head {
   text-align: end;
 }
 
+/* Determinate progress strip rendered while the Usage pane is paging
+   through /billing/usage. Width and color follow the page counter
+   the onProgress callback feeds in. Lives between the controls and
+   the totals strip so it reads as "this is what the Refresh button
+   is doing" rather than as part of the result. */
+.usage-progress {
+  height: 0.35rem;
+  width: 100%;
+  max-width: 24rem;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 0 0 0.6rem;
+}
+
+.usage-progress-fill {
+  display: block;
+  height: 100%;
+  width: var(--usage-progress-pct, 0%);
+  background: linear-gradient(
+    90deg,
+    hsl(220, 62%, 52%) 0%,
+    hsl(140, 62%, 52%) 100%
+  );
+  border-radius: 999px;
+  transition: width 180ms ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .usage-bar {
+  .usage-bar,
+  .usage-progress-fill {
     transition: none;
   }
 }

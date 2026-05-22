@@ -47,7 +47,14 @@ Each row shows a horizontal bar scaled by total tokens
   away. If the cached view is more than 15 minutes old when you
   land on the pane, Nak kicks off a fresh fetch automatically.
   Change the dates and click **Refresh** to re-fetch a custom
-  range.
+  range. While a refresh is in flight, the **Refresh** button
+  shows a `Loading… N/M` page counter and a thin progress bar
+  appears below the controls, so a wide window doesn't look hung
+  while Venice's billing endpoint pages through.
+- Next to each currency's total spend pill sits a dashed-outline
+  `$X/day` pill that divides the total by the inclusive day count
+  of the picked range. A weeklong window's spend reads both as the
+  headline figure and as the daily run rate it implies.
 - Spend is always dollar-formatted, e.g. `$0.07`. Rows billed in
   credits instead of cash (VCU, DIEM, or bundled credits) render
   as muted/grey pills so your eye skips past them to the cash
