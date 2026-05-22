@@ -3651,13 +3651,23 @@ button.composer-wharf-trigger {
   padding: 0.4rem 0.5rem 0.5rem;
 }
 
+/* The "arguments" / "result" section headers inside the
+   expanded detail panel. <h3> tags for semantic structure;
+   styled compact (small-caps, muted) so they read as section
+   dividers rather than competing with the surrounding chat
+   prose. Default browser <h3> font-size, font-family, and
+   margins are overridden explicitly because there is no
+   global h-tag reset above. */
 .tool-detail-label {
   color: var(--muted);
-  font-size: 0.72rem;
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin-top: 0.3rem;
-  margin-bottom: 0.15rem;
+  line-height: 1.4;
+  margin-top: 0.4rem;
+  margin-bottom: 0.2rem;
 }
 
 /* Row holding the "arguments" label and the view-mode toggle.

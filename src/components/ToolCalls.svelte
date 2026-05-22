@@ -152,7 +152,7 @@
         {@const formatters = formattersFor(call.function.name)}
         <div class="tool-detail">
           <div class="tool-detail-header">
-            <span class="tool-detail-label">arguments</span>
+            <h3 class="tool-detail-label">arguments</h3>
             <!-- Per-call view toggle. The button label names the
                  OTHER view (so a user reading markdown sees
                  "view: json" and knows what the click does). The
@@ -169,7 +169,7 @@
             </button>
           </div>
           <Markdown content={renderArgs(call, view, formatters)} />
-          <div class="tool-detail-label">result</div>
+          <h3 class="tool-detail-label">result</h3>
           <Markdown content={renderResult(call.id, resultsByCallId, view, formatters)} />
         </div>
       {/if}
