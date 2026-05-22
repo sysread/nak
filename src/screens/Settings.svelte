@@ -16,10 +16,11 @@
    *                 the default model.
    *   usage       — date-ranged snapshot of billed spend per model,
    *                 pulled from Venice's beta /billing/usage endpoint.
-   *                 The default rolling-7-day view is warmed by an
-   *                 hourly background poll from usage-store.svelte;
-   *                 custom date ranges fetch on demand. Read-only;
-   *                 nothing persists to disk.
+   *                 The default rolling-7-day view is cached in
+   *                 usage-store.svelte and fetched lazily on first
+   *                 open of this pane (and re-fetched when older
+   *                 than USAGE_STALE_MS); custom date ranges fetch
+   *                 on demand. Read-only; nothing persists to disk.
    *   export      — download the three keys as a plaintext JSON file
    *                 for import on another browser. See config.ts for
    *                 the file format.
@@ -508,10 +509,10 @@
     const isDefaultRange =
       usageStart === DEFAULT_USAGE_START && usageEnd === DEFAULT_USAGE_END;
     if (isDefaultRange) {
-      // Route the Refresh click through the shared store so a manual
-      // refresh and an hourly background poll land in the same cache.
-      // Other tabs / the next pane open see the new numbers without
-      // having to re-fetch.
+      // Route the Refresh click through the shared store so the
+      // manual refresh and the on-open refresh land in the same
+      // cache. The next pane open within USAGE_STALE_MS sees the
+      // new numbers without having to re-fetch.
       usageSource = 'store';
       await refreshUsage(app.venice);
       return;
@@ -1771,21 +1772,22 @@
           ledger for this API key. Hits Venice's beta
           `/billing/usage` endpoint, aggregates by (sku, currency),
           and renders a bar chart scaled by total tokens with a spend
-          pill per row. The default rolling-7-day view is warmed by
-          an hourly background poll (see `$lib/usage-store.svelte`),
-          so opening the pane typically shows data without a loading
-          flash; the `$effect` above still forces a refresh when the
-          cache is older than USAGE_STALE_MS. User-picked custom
-          ranges bypass the cache and fetch on-demand.
+          pill per row. The default rolling-7-day view is cached in
+          `$lib/usage-store.svelte` and fetched lazily on first open
+          of this pane in the session; the `$effect` above also
+          forces a refresh when the cache is older than
+          USAGE_STALE_MS. User-picked custom ranges bypass the cache
+          and fetch on-demand.
         -->
         <h2>Usage</h2>
         <p class="subtle">
           Token spend against your Venice API key. Pulled from
           Venice's billing ledger — the numbers below are what Venice
           reports, not a Nak-side tally. The default 7-day view
-          refreshes in the background and re-fetches on open if
-          it's more than 15 minutes stale; custom date ranges fetch
-          when you hit Refresh. Bars are scaled by
+          fetches the first time you open this pane and caches the
+          result for 15 minutes; opening the pane again after that
+          re-fetches automatically. Custom date ranges fetch when
+          you hit Refresh. Bars are scaled by
           prompt + completion tokens; the pill on the right is the
           raw billed amount in whatever currency each charge was
           denominated in.

@@ -24,7 +24,7 @@ import type { AppConfig } from './config';
 import { SupabaseService, type SystemPrompt, type UserSettings } from './supabase';
 import { VeniceClient } from './venice';
 import { saveSession, clearSession } from './session';
-import { startUsagePolling, stopUsagePolling } from './usage-store.svelte';
+import { resetUsage } from './usage-store.svelte';
 import { detectTimezone } from './timezone';
 import {
   DEFAULT_REASONING_EFFORT,
@@ -757,11 +757,6 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   // and could write an article with the wrong values during the few
   // hundred ms before Chat.svelte's settings fetch corrected them.
   void loadSettingsThenStartWorkers(config);
-  // Usage polling has no settings dependency, so it can start
-  // immediately. The poller fires once now and re-fires hourly;
-  // Settings still forces a refresh on open if the cached data is
-  // older than USAGE_STALE_MS.
-  startUsagePolling(app.venice);
 }
 
 async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
@@ -780,7 +775,7 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
 }
 
 /**
- * Tear down every background worker plus the usage poller. Each
+ * Tear down every background worker and wipe the usage cache. Each
  * manager handle's stop() is a no-op when start() never fired (module
  * never loaded) and dispatches through the captured import Promise
  * otherwise - so a teardown that races a still-loading manager chunk
@@ -789,7 +784,9 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
  *
  * Used by `lock()` (sign-out releases each Web Lock so a queued tab
  * can take over) and by `haltBackgroundWork()` (newer build detected,
- * stop processing on the old code until the user reloads).
+ * stop processing on the old code until the user reloads). The
+ * `resetUsage()` call here is what keeps billing rows from leaking
+ * across an unlock-lock-unlock to a different API key.
  */
 function stopBackgroundWorkers(): void {
   embeddings.stop();
@@ -798,7 +795,7 @@ function stopBackgroundWorkers(): void {
   bias.stop();
   wiki.stop();
   wikiLibrarian.stop();
-  stopUsagePolling();
+  resetUsage();
 }
 
 /**
