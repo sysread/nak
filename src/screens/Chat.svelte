@@ -525,6 +525,28 @@
   // Reset on thread switch.
   let expandedCohortPanels = $state<Set<string>>(new Set());
 
+  // Frontend-only history of context-recall injections, keyed by thread
+  // id. Each entry is the payload that was displaced when a fresher one
+  // landed via the chat-loop's onContextRecallUpdate callback. The
+  // currently-active payload still lives on the thread row itself (and
+  // therefore in the database); this Map only carries the previously-
+  // injected ones so the Recall modal can show them in descending order
+  // alongside the current one. Lost on full page reload by design - the
+  // user opted into in-memory retention, not persistence.
+  let contextRecallHistory = $state<Map<string, ContextRecallPayload[]>>(
+    new Map()
+  );
+
+  function pushContextRecallHistory(
+    threadId: string,
+    displaced: ContextRecallPayload
+  ): void {
+    const next = new Map(contextRecallHistory);
+    const prior = next.get(threadId) ?? [];
+    next.set(threadId, [...prior, displaced]);
+    contextRecallHistory = next;
+  }
+
   function toggleCohortPanel(userMessageId: string): void {
     const next = new Set(expandedCohortPanels);
     if (next.has(userMessageId)) next.delete(userMessageId);
@@ -2157,6 +2179,33 @@
       : null
   );
 
+  // Prior context-recall injections accumulated in this tab for the
+  // active thread, in landing order (earliest first). Drives the
+  // history section of the Recall modal; empty for cold / never-fired
+  // threads and for threads where only one injection has happened.
+  const currentContextRecallHistory = $derived<readonly ContextRecallPayload[]>(
+    activeThreadId === null
+      ? []
+      : (contextRecallHistory.get(activeThreadId) ?? [])
+  );
+
+  // Inverse of userRoundByMessageId: round number -> user Message row.
+  // Lets the Recall modal show the user prompt that triggered each
+  // injection without the modal having to walk the messages array
+  // itself. A round whose user message was edited away or deleted will
+  // be absent from the map - the modal renders a graceful fallback.
+  const userMessageByRound: Map<number, Message> = $derived.by(() => {
+    const map = new Map<number, Message>();
+    let n = 0;
+    for (const m of messages) {
+      if (m.role === 'user') {
+        n += 1;
+        map.set(n, m);
+      }
+    }
+    return map;
+  });
+
   const defaultTier = $derived<ModelTier>(app.defaultModel ?? DEFAULT_TIER);
   const currentTier = $derived<ModelTier>(
     resolveTier(currentThread?.model ?? null, defaultTier)
@@ -3159,6 +3208,27 @@
               // the realtime echo. The patch also keeps the in-memory
               // row consistent with the persisted row so a delayed
               // echo doesn't overwrite the fresher value with null.
+              //
+              // Before overwriting, capture the about-to-be-displaced
+              // payload into the per-thread history Map so the Recall
+              // modal can show it under the new one. We hook here
+              // (and not in rebucketThread) because this callback is
+              // the authoritative "a new injection just fired in this
+              // tab" signal; the realtime echo for the same write
+              // arrives later with the same computed_at_at and would
+              // otherwise re-trigger a duplicate push. Cross-tab
+              // injections won't appear in this tab's history - an
+              // accepted gap, same posture as cohortFires.
+              const existing = findThread(ctx.threadId);
+              const displaced = existing
+                ? coerceContextRecallPayload(existing.context_recall_payload)
+                : null;
+              if (
+                displaced !== null &&
+                displaced.computed_at_at !== payload.computed_at_at
+              ) {
+                pushContextRecallHistory(ctx.threadId, displaced);
+              }
               patchThread(ctx.threadId, {
                 context_recall_payload: payload,
               });
@@ -6904,6 +6974,8 @@
     <RecallComp
       onClose={() => navigate({ modal: null })}
       threads={loadedThreads}
+      history={currentContextRecallHistory}
+      userMessageByRound={userMessageByRound}
     />
   {/if}
   <!-- Cookbook, Memories, and Wiki now render inline in the main
