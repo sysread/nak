@@ -167,6 +167,11 @@
     pickFresherContextRecallPayload,
     type ContextRecallPayload,
   } from '$lib/context-recall';
+  import {
+    appendContextRecallHistory,
+    buildUserMessageByRound,
+    shouldRetainDisplaced,
+  } from '$lib/ui/recall';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -532,20 +537,12 @@
   // therefore in the database); this Map only carries the previously-
   // injected ones so the Recall modal can show them in descending order
   // alongside the current one. Lost on full page reload by design - the
-  // user opted into in-memory retention, not persistence.
+  // user opted into in-memory retention, not persistence. Next-state
+  // computation for the Map lives in src/lib/ui/recall.ts; the Svelte
+  // wire-up here is just "compute then reassign for reactivity."
   let contextRecallHistory = $state<Map<string, ContextRecallPayload[]>>(
     new Map()
   );
-
-  function pushContextRecallHistory(
-    threadId: string,
-    displaced: ContextRecallPayload
-  ): void {
-    const next = new Map(contextRecallHistory);
-    const prior = next.get(threadId) ?? [];
-    next.set(threadId, [...prior, displaced]);
-    contextRecallHistory = next;
-  }
 
   function toggleCohortPanel(userMessageId: string): void {
     const next = new Set(expandedCohortPanels);
@@ -2192,19 +2189,11 @@
   // Inverse of userRoundByMessageId: round number -> user Message row.
   // Lets the Recall modal show the user prompt that triggered each
   // injection without the modal having to walk the messages array
-  // itself. A round whose user message was edited away or deleted will
-  // be absent from the map - the modal renders a graceful fallback.
-  const userMessageByRound: Map<number, Message> = $derived.by(() => {
-    const map = new Map<number, Message>();
-    let n = 0;
-    for (const m of messages) {
-      if (m.role === 'user') {
-        n += 1;
-        map.set(n, m);
-      }
-    }
-    return map;
-  });
+  // itself. The walk lives in $lib/ui/recall as buildUserMessageByRound;
+  // this site is the rune wire-up.
+  const userMessageByRound: Map<number, Message> = $derived(
+    buildUserMessageByRound(messages)
+  );
 
   const defaultTier = $derived<ModelTier>(app.defaultModel ?? DEFAULT_TIER);
   const currentTier = $derived<ModelTier>(
@@ -3211,23 +3200,20 @@
               //
               // Before overwriting, capture the about-to-be-displaced
               // payload into the per-thread history Map so the Recall
-              // modal can show it under the new one. We hook here
-              // (and not in rebucketThread) because this callback is
-              // the authoritative "a new injection just fired in this
-              // tab" signal; the realtime echo for the same write
-              // arrives later with the same computed_at_at and would
-              // otherwise re-trigger a duplicate push. Cross-tab
-              // injections won't appear in this tab's history - an
-              // accepted gap, same posture as cohortFires.
+              // modal can show it under the new one. The retention
+              // decision (skip duplicates from cross-tab realtime
+              // echoes) and the next-Map computation both live in
+              // $lib/ui/recall; this site is glue.
               const existing = findThread(ctx.threadId);
               const displaced = existing
                 ? coerceContextRecallPayload(existing.context_recall_payload)
                 : null;
-              if (
-                displaced !== null &&
-                displaced.computed_at_at !== payload.computed_at_at
-              ) {
-                pushContextRecallHistory(ctx.threadId, displaced);
+              if (displaced !== null && shouldRetainDisplaced(displaced, payload)) {
+                contextRecallHistory = appendContextRecallHistory(
+                  contextRecallHistory,
+                  ctx.threadId,
+                  displaced
+                );
               }
               patchThread(ctx.threadId, {
                 context_recall_payload: payload,

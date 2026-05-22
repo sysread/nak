@@ -44,6 +44,11 @@
     coerceContextRecallPayload,
     type ContextRecallPayload,
   } from '$lib/context-recall';
+  import {
+    buildRecallEntries,
+    formatRecallTimestamp,
+    formatRecallTrigger,
+  } from '$lib/ui/recall';
   import type { Message, Thread } from '$lib/supabase';
 
   interface Props {
@@ -79,41 +84,12 @@
     return p;
   });
 
-  // Assemble the descending-by-turn list the body renders. The
-  // current payload (if any) leads; the in-memory history follows in
-  // reverse-landing order. Empty-note entries are dropped: an
-  // injection that resolved to "nothing to say" carries no
-  // diagnostic value here and just produces a hollow row.
-  const entries = $derived.by<readonly ContextRecallPayload[]>(() => {
-    const out: ContextRecallPayload[] = [];
-    if (payload) out.push(payload);
-    for (let i = history.length - 1; i >= 0; i--) {
-      const p = history[i];
-      if (p.note.trim().length > 0) out.push(p);
-    }
-    return out;
-  });
-
-  function formatTimestamp(ms: number): string {
-    try {
-      return new Date(ms).toLocaleString();
-    } catch {
-      return String(ms);
-    }
-  }
-
-  function formatTrigger(t: ContextRecallPayload['trigger']): string {
-    switch (t) {
-      case 'title':
-        return 'topic shift (title changed)';
-      case 'mood':
-        return 'mood shift';
-      case 'stale':
-        return 'staleness fuse';
-      case 'cold':
-        return 'first read on this thread';
-    }
-  }
+  // Decision logic for assembling the entries list lives in
+  // src/lib/ui/recall.ts as buildRecallEntries() - the rune call
+  // here is just the framework wire-up.
+  const entries = $derived<readonly ContextRecallPayload[]>(
+    buildRecallEntries(payload, history)
+  );
 </script>
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} />
@@ -208,7 +184,7 @@
             </p>
 
             <p class="entry-meta subtle">
-              {formatTrigger(entry.trigger)} · {formatTimestamp(entry.computed_at_at)}
+              {formatRecallTrigger(entry.trigger)} · {formatRecallTimestamp(entry.computed_at_at)}
             </p>
           </section>
         {/each}
