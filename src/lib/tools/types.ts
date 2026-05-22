@@ -84,6 +84,21 @@ export interface ToolContext {
    * search hit; the harness makes the call per caller.
    */
   conversationExcludeOwnThread?: boolean;
+  /**
+   * Opt-in hook for the recall agent's memory_search calls: when set,
+   * memory_search invokes it with the ids of every memory it
+   * returned. The recall path uses this to feed the rem librarian's
+   * hint queue (`memory_conversation`) - memories the recall agent
+   * surfaces during a conversation are evidence that they belong
+   * together from the user's perspective, even when their similarity
+   * neighborhoods don't make that obvious.
+   *
+   * Best-effort: memory_search wraps the call in a try/catch so a
+   * misbehaving recorder can't tear down the search. Carried on the
+   * ctx (not in the LLM-visible args schema) so the harness owns the
+   * tracking; the model has no signal that a recorder is attached.
+   */
+  recordRecalledMemoryIds?: (ids: readonly string[]) => void;
 }
 
 /**

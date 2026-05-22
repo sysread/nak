@@ -78,6 +78,15 @@ export interface RecallOutput {
    * cost profile than one over 3 turns.
    */
   inputMessageCount: number;
+  /**
+   * Every memory id memory_search returned during the agent's run -
+   * collected via the ctx.recordRecalledMemoryIds hook on each
+   * search call. The caller (memory_recall tool) uses this to feed
+   * the rem librarian's hint queue (memory_conversation table). De-
+   * duplicated across rounds; empty when no memory_search call ran
+   * or every call returned nothing.
+   */
+  recalledMemoryIds: readonly string[];
 }
 
 /**
@@ -233,9 +242,24 @@ export class RecallAgent implements Agent<RecallInput, RecallOutput> {
   ): Promise<AgentRunResult<RecallOutput>> {
     const signal = req.signal ?? new AbortController().signal;
 
+    // Collect every memory id surfaced by the agent's memory_search
+    // calls. Returned alongside the note so the calling tool can feed
+    // the rem librarian's hint queue. The Set dedupes across rounds
+    // (the recall agent often searches with multiple paraphrases that
+    // share top hits).
+    const recalledIds = new Set<string>();
+    const recordIds = (ids: readonly string[]): void => {
+      for (const id of ids) recalledIds.add(id);
+    };
+
     if (signal.aborted) {
       return {
-        output: { note: { kind: 'none' }, rawText: '', inputMessageCount: 0 },
+        output: {
+          note: { kind: 'none' },
+          rawText: '',
+          inputMessageCount: 0,
+          recalledMemoryIds: [],
+        },
         toolCalls: 0,
         stoppedReason: 'aborted',
       };
@@ -248,7 +272,12 @@ export class RecallAgent implements Agent<RecallInput, RecallOutput> {
       if (slice.length === 0) {
         // No user turn in the thread — nothing to recall for.
         return {
-          output: { note: { kind: 'none' }, rawText: '', inputMessageCount: 0 },
+          output: {
+            note: { kind: 'none' },
+            rawText: '',
+            inputMessageCount: 0,
+            recalledMemoryIds: [],
+          },
           toolCalls: 0,
           stoppedReason: 'done',
         };
@@ -274,6 +303,7 @@ export class RecallAgent implements Agent<RecallInput, RecallOutput> {
           // Forward the caller's depth; runHeadlessToolLoop bumps
           // and enforces MAX_AGENT_DEPTH internally.
           depth: req.depth,
+          recordRecalledMemoryIds: recordIds,
         },
         signal,
         responseFormat: RECALL_RESPONSE_FORMAT,
@@ -286,13 +316,19 @@ export class RecallAgent implements Agent<RecallInput, RecallOutput> {
           note,
           rawText: result.finalText,
           inputMessageCount: slice.length,
+          recalledMemoryIds: Array.from(recalledIds),
         },
         toolCalls: result.toolCalls,
         stoppedReason: signal.aborted ? 'aborted' : 'done',
       };
     } catch (err) {
       return {
-        output: { note: { kind: 'none' }, rawText: '', inputMessageCount: 0 },
+        output: {
+          note: { kind: 'none' },
+          rawText: '',
+          inputMessageCount: 0,
+          recalledMemoryIds: Array.from(recalledIds),
+        },
         toolCalls: 0,
         stoppedReason: 'error',
         error: err instanceof Error ? err.message : String(err),

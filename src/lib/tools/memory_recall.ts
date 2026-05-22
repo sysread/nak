@@ -53,6 +53,26 @@ export const memoryRecall: ToolDef = {
       depth: ctx.depth,
     });
 
+    // Best-effort feed for the rem librarian: every memory the recall
+    // agent surfaced during this thread becomes a (memory_id,
+    // conversation_id) row in memory_conversation. Rem queries this
+    // table on its 12h cycle to find conversations with new co-
+    // occurrence signal. Swallow failures so a transient DB error
+    // can't break recall - the queue is a hint, not a contract.
+    if (result.output.recalledMemoryIds.length > 0) {
+      try {
+        await ctx.supabase.upsertMemoryConversationRows(
+          ctx.threadId,
+          [...result.output.recalledMemoryIds]
+        );
+      } catch (err) {
+        log.debug(
+          'memory_conversation upsert failed - rem will miss this co-occurrence',
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+
     if (result.stoppedReason === 'error') {
       log.debug(
         `thread ${ctx.threadId} errored`,

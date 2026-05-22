@@ -86,6 +86,19 @@ export const memorySearch: ToolDef = {
         relationsByFrom = new Map();
       }
     }
+    // Best-effort feed for the rem librarian's hint queue. Only the
+    // recall agent's ctx sets this hook; the chat-side, reflection,
+    // and librarian callers leave it unset and pay nothing here.
+    // Wrap in a try/catch so a misbehaving recorder can't fail the
+    // search - the recorder is bookkeeping, the search result is the
+    // contract.
+    if (ctx.recordRecalledMemoryIds && memories.length > 0) {
+      try {
+        ctx.recordRecalledMemoryIds(memories.map((m) => m.id));
+      } catch {
+        // Swallow - see above. Best-effort by design.
+      }
+    }
     return memories.map((m) => {
       const tag: MemoryConfidenceTag = classifyMemoryConfidence(m.confidence);
       const edges = (relationsByFrom.get(m.id) ?? []).slice(
