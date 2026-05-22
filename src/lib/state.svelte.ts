@@ -122,6 +122,17 @@ const wiki = lazyManager(() =>
 const wikiLibrarian = lazyManager(() =>
   import('./agents/wiki-librarian/manager').then((m) => m.wikiLibrarianManager)
 );
+// Memory librarian workers. Two agents (deep-sleep and rem) share
+// the 'memory-librarian' lease partition so only one can run at a
+// time per user across devices; their cadence gates (deep_sleep_last_
+// run_at, rem_last_run_at) are independent so they run on naturally
+// staggered schedules. Toggled together by app.memoryLibrarianEnabled.
+const deepSleep = lazyManager(() =>
+  import('./agents/deep-sleep/manager').then((m) => m.deepSleepManager)
+);
+const rem = lazyManager(() =>
+  import('./agents/rem/manager').then((m) => m.remManager)
+);
 
 export type AppPhase = 'loading' | 'setup' | 'locked' | 'unlocked' | 'edit-config';
 
@@ -202,6 +213,15 @@ interface AppState {
    */
   wikiLibrarianEnabled: boolean;
   /**
+   * Memory librarian: when true, the deep-sleep and rem background
+   * agents run on their staggered 12h cadences. Default true;
+   * overwritten from Supabase `profiles.settings.memoryLibrarianEnabled`
+   * on unlock. The two agents start and stop together - they share
+   * the same cross-device lease partition and their work is
+   * complementary.
+   */
+  memoryLibrarianEnabled: boolean;
+  /**
    * IANA timezone the model sees when reasoning about "what time is
    * it for the user" in the per-turn metadata system message; also
    * used by the wiki worker to bucket day-eligible threads. Seeded
@@ -249,6 +269,7 @@ export const app = $state<AppState>({
   notifyOnComplete: false,
   wikiAutomaticEnabled: true,
   wikiLibrarianEnabled: true,
+  memoryLibrarianEnabled: true,
   displayTimezone: detectTimezone(),
   userName: '',
   userLocation: '',
@@ -374,6 +395,24 @@ function setWikiLibrarianEnabled(enabled: boolean): void {
     });
   } else {
     wikiLibrarian.stop();
+  }
+}
+
+/**
+ * Flip the memory librarian on/off. Toggles both deep-sleep and rem
+ * together - they share the cross-device 'memory-librarian' lease
+ * partition and their work is complementary, so the user-facing
+ * concept is a single "memory librarian" switch.
+ */
+function setMemoryLibrarianEnabled(enabled: boolean): void {
+  app.memoryLibrarianEnabled = enabled;
+  if (!app.supabase || !app.config) return;
+  if (enabled) {
+    deepSleep.start({ supabase: app.supabase, config: app.config });
+    rem.start({ supabase: app.supabase, config: app.config });
+  } else {
+    deepSleep.stop();
+    rem.stop();
   }
 }
 
@@ -551,6 +590,18 @@ export async function persistWikiLibrarianEnabled(enabled: boolean): Promise<voi
   }
 }
 
+export async function persistMemoryLibrarianEnabled(enabled: boolean): Promise<void> {
+  if (!app.supabase) throw new Error(NOT_CONNECTED);
+  const prev = app.memoryLibrarianEnabled;
+  setMemoryLibrarianEnabled(enabled);
+  try {
+    await app.supabase.updateSettings({ memoryLibrarianEnabled: enabled });
+  } catch (err) {
+    setMemoryLibrarianEnabled(prev);
+    throw err;
+  }
+}
+
 /**
  * Save the display timezone. Caller is responsible for normalizing
  * user input to a valid IANA name before calling - the helper trusts
@@ -631,6 +682,7 @@ export function applyServerSettings(s: UserSettings): void {
   // true).
   setWikiAutomaticEnabled(s.wikiAutomaticEnabled ?? true);
   setWikiLibrarianEnabled(s.wikiLibrarianEnabled ?? true);
+  setMemoryLibrarianEnabled(s.memoryLibrarianEnabled ?? true);
   if (s.displayTimezone) setDisplayTimezone(s.displayTimezone);
   // Profile: empty string is the "not set" sentinel; always
   // assign so explicit absence in the blob clears any value
@@ -709,6 +761,10 @@ function startBackgroundWorkers(config: AppConfig): void {
       userLocation: app.userLocation,
     });
   }
+  if (app.memoryLibrarianEnabled) {
+    deepSleep.start({ supabase: app.supabase, config });
+    rem.start({ supabase: app.supabase, config });
+  }
 }
 
 /**
@@ -742,6 +798,7 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.notifyOnComplete = false;
   app.wikiAutomaticEnabled = true;
   app.wikiLibrarianEnabled = true;
+  app.memoryLibrarianEnabled = true;
   app.displayTimezone = detectTimezone();
   app.userName = '';
   app.userLocation = '';
@@ -795,6 +852,8 @@ function stopBackgroundWorkers(): void {
   bias.stop();
   wiki.stop();
   wikiLibrarian.stop();
+  deepSleep.stop();
+  rem.stop();
   resetUsage();
 }
 
@@ -846,6 +905,7 @@ export function lock(): void {
   // the previous account's choices.
   app.wikiAutomaticEnabled = true;
   app.wikiLibrarianEnabled = true;
+  app.memoryLibrarianEnabled = true;
   app.displayTimezone = detectTimezone();
   // Profile: same rationale - never leak the previous account's
   // name/location across a lock-then-unlock-as-someone-else flow.

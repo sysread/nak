@@ -61,6 +61,7 @@
     persistNotifyOnComplete,
     persistWikiAutomaticEnabled,
     persistWikiLibrarianEnabled,
+    persistMemoryLibrarianEnabled,
     persistDisplayTimezone,
     persistSystemPrompts,
     persistTheme,
@@ -202,6 +203,9 @@
   // persists on `profiles.settings.wikiAutomaticEnabled`.
   let wikiAutomaticEnabled = $state<boolean>(app.wikiAutomaticEnabled);
   let wikiLibrarianEnabled = $state<boolean>(app.wikiLibrarianEnabled);
+  let memoryLibrarianEnabled = $state<boolean>(app.memoryLibrarianEnabled);
+  let memoryLibrarianInfo = $state<string | null>(null);
+  let memoryLibrarianError = $state<string | null>(null);
   let wikiError = $state<string | null>(null);
   let wikiInfo = $state<string | null>(null);
   let wikiResetBusy = $state(false);
@@ -1107,6 +1111,22 @@
     }
   }
 
+  async function onToggleMemoryLibrarian(next: boolean): Promise<void> {
+    memoryLibrarianError = null;
+    memoryLibrarianInfo = null;
+    const prev = memoryLibrarianEnabled;
+    memoryLibrarianEnabled = next;
+    try {
+      await persistMemoryLibrarianEnabled(next);
+      memoryLibrarianInfo = next
+        ? 'Memory librarian enabled.'
+        : 'Memory librarian disabled. Existing memories are unaffected.';
+    } catch (err) {
+      memoryLibrarianEnabled = prev;
+      memoryLibrarianError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   async function onChangeDisplayTimezone(next: string): Promise<void> {
     modelError = null;
     modelInfo = null;
@@ -1544,6 +1564,29 @@
         {/if}
         {#if modelError}<p class="error">{modelError}</p>{/if}
         {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
+
+        <h3 class="pane-section">Memory librarian</h3>
+        <label class="form-row toggle-row">
+          <input
+            type="checkbox"
+            name="memory-librarian"
+            checked={memoryLibrarianEnabled}
+            onchange={(e) => onToggleMemoryLibrarian(e.currentTarget.checked)}
+          />
+          <span>
+            Let Nak's memory librarian periodically reorganise your
+            memory store: consolidate cross-thread duplicates the
+            reflection agent couldn't see, fill in missing
+            relations between memories you've recalled together,
+            and soft-delete contradicted facts. Two passes run on
+            staggered 12h cadences (deep-sleep walks similarity
+            neighborhoods; rem walks recall co-occurrence
+            conversations); both are coordinated across devices so
+            only one run happens per cycle.
+          </span>
+        </label>
+        {#if memoryLibrarianError}<p class="error">{memoryLibrarianError}</p>{/if}
+        {#if memoryLibrarianInfo}<p class="subtle">{memoryLibrarianInfo}</p>{/if}
 
         <h3 class="pane-section">System prompts</h3>
         <p class="subtle">
