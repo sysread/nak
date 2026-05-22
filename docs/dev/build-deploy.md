@@ -62,7 +62,9 @@ docs imported via `import.meta.glob`.
   green CI job.
 - **`pnpm markdownlint`** (or `mise run markdownlint`) —
   standalone markdownlint-cli2 pass over `docs/**/*.md`,
-  `README.md`, and `CLAUDE.md`. Faster than the full test suite
+  `README.md`, `CLAUDE.md`, and any nested `src/**/CLAUDE.md`
+  files (loaded by Claude Code when working in those
+  subtrees). Faster than the full test suite
   when iterating on docs. The pnpm script is the primary entry
   point — `markdownlint-cli2` is a devDependency that
   `pnpm install` provisions; the mise task is kept as a thin
