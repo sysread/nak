@@ -51,6 +51,19 @@ interface UsageState {
    * the full picture.
    */
   truncated: boolean;
+  /**
+   * Page count reported by Venice on the most recent in-flight or
+   * completed fetch. Zero until the first page lands. Drives the
+   * Usage pane's progress indicator alongside {@link pagesLoaded}.
+   */
+  pagesTotal: number;
+  /**
+   * Number of pages that have arrived for the current fetch. Resets
+   * to zero on every {@link refreshUsage} entry so a stale total from
+   * the previous fetch can't read as "already finished" while the new
+   * one is still pulling page 1.
+   */
+  pagesLoaded: number;
 }
 
 export const usage = $state<UsageState>({
@@ -59,6 +72,8 @@ export const usage = $state<UsageState>({
   loading: false,
   error: null,
   truncated: false,
+  pagesTotal: 0,
+  pagesLoaded: 0,
 });
 
 /**
@@ -103,9 +118,20 @@ function defaultRangeIso(): { startDate: string; endDate: string } {
 export async function refreshUsage(venice: VeniceClient): Promise<void> {
   usage.loading = true;
   usage.error = null;
+  // Reset progress so the UI doesn't paint a stale "5/5 done" state
+  // while the new fetch is still on page 1.
+  usage.pagesLoaded = 0;
+  usage.pagesTotal = 0;
   try {
     const { startDate, endDate } = defaultRangeIso();
-    const rows = await venice.fetchUsage({ startDate, endDate });
+    const rows = await venice.fetchUsage({
+      startDate,
+      endDate,
+      onProgress: ({ page, totalPages }) => {
+        usage.pagesLoaded = page;
+        usage.pagesTotal = totalPages;
+      },
+    });
     usage.data = rows;
     usage.lastFetchedAt = Date.now();
     // Best-effort cap detection: if the response came back exactly at
@@ -175,5 +201,7 @@ export function stopUsagePolling(): void {
   usage.loading = false;
   usage.error = null;
   usage.truncated = false;
+  usage.pagesLoaded = 0;
+  usage.pagesTotal = 0;
   log.info('stopUsagePolling');
 }

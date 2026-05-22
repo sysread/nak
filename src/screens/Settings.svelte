@@ -454,6 +454,12 @@
   let customLoading = $state(false);
   let customError = $state<string | null>(null);
   let customTruncated = $state(false);
+  // Per-page progress for the custom-range fetch. Mirrors the
+  // pagesLoaded/pagesTotal pair on the shared store so the in-pane
+  // progress indicator can read from a single derived signal
+  // regardless of which source the pane is currently displaying.
+  let customPagesLoaded = $state(0);
+  let customPagesTotal = $state(0);
 
   const usageRows = $derived(
     usageSource === 'store' ? usage.data : customRows
@@ -466,6 +472,12 @@
   );
   const usageTruncated = $derived(
     usageSource === 'store' ? usage.truncated : customTruncated
+  );
+  const usagePagesLoaded = $derived(
+    usageSource === 'store' ? usage.pagesLoaded : customPagesLoaded
+  );
+  const usagePagesTotal = $derived(
+    usageSource === 'store' ? usage.pagesTotal : customPagesTotal
   );
 
   /**
@@ -508,6 +520,10 @@
     customError = null;
     customLoading = true;
     customTruncated = false;
+    // Reset progress so a previous custom fetch's "5/5" doesn't read
+    // as complete while the new one is still on page 1.
+    customPagesLoaded = 0;
+    customPagesTotal = 0;
     // Snapshot the requested range so a user who edits the date
     // pickers and re-clicks Refresh before this fetch settles
     // doesn't see the prior range's rows land as if they were the
@@ -527,6 +543,14 @@
       const rows = await app.venice.fetchUsage({
         startDate: startIso,
         endDate: endIso,
+        onProgress: ({ page, totalPages }) => {
+          // Late progress ticks from a stale fetch must not overwrite
+          // the counters the newer in-flight request is updating - the
+          // same staleness guard the row-assignment block below uses.
+          if (isStale()) return;
+          customPagesLoaded = page;
+          customPagesTotal = totalPages;
+        },
       });
       if (isStale()) return;
       customRows = rows;
@@ -665,6 +689,36 @@
   function formatAmount(amount: number, _currency: UsageCurrency): string {
     void _currency;
     return `$${amount.toFixed(2)}`;
+  }
+
+  /**
+   * Inclusive day count for the picked range. The date pickers read
+   * as yyyy-mm-dd in the user's local calendar; "from May 1 to May 7"
+   * intuitively covers 7 days, not 6 (the diff between midnights) and
+   * not 8 (the exclusive upper bound the fetch uses). The clamp at 1
+   * keeps a same-day selection from dividing by zero.
+   */
+  function daysInPickedRange(start: string, end: string): number {
+    const startMs = new Date(`${start}T00:00:00Z`).getTime();
+    const endMs = new Date(`${end}T00:00:00Z`).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return 1;
+    const diffDays = Math.round((endMs - startMs) / (24 * 60 * 60 * 1000));
+    return Math.max(1, diffDays + 1);
+  }
+
+  /**
+   * Sub-cent precision for the avg-per-day pill. The totals pill
+   * rounds to two decimals because dollars and cents is the usual
+   * display unit, but daily averages from a 7-day window of light
+   * traffic can easily land at fractions of a cent - rounding those
+   * to `$0.00` defeats the pill's purpose. Three decimals keeps the
+   * pill readable while still showing signal on a sub-cent average.
+   */
+  function formatAmountPerDay(amount: number, _currency: UsageCurrency): string {
+    void _currency;
+    if (amount === 0) return '$0/day';
+    if (amount < 0.005) return `$${amount.toFixed(3)}/day`;
+    return `$${amount.toFixed(2)}/day`;
   }
 
   /**
@@ -1761,9 +1815,37 @@
             onclick={onUsageRefresh}
             disabled={usageLoading}
           >
-            {usageLoading ? 'Loading…' : 'Refresh'}
+            {#if usageLoading && usagePagesTotal > 0}
+              Loading… {usagePagesLoaded}/{usagePagesTotal}
+            {:else if usageLoading}
+              Loading…
+            {:else}
+              Refresh
+            {/if}
           </button>
         </div>
+        {#if usageLoading && usagePagesTotal > 0}
+          <!--
+            Determinate progress bar. Only renders once Venice has
+            reported a totalPages on the first page response - until
+            then we show the bare "Loading…" spinner-text in the
+            button and skip the bar. ARIA fields make the bar
+            announceable for screen readers.
+          -->
+          <div
+            class="usage-progress"
+            role="progressbar"
+            aria-label="Loading usage pages"
+            aria-valuemin="0"
+            aria-valuemax={usagePagesTotal}
+            aria-valuenow={usagePagesLoaded}
+          >
+            <span
+              class="usage-progress-fill"
+              style="--usage-progress-pct:{(usagePagesLoaded / usagePagesTotal) * 100}%"
+            ></span>
+          </div>
+        {/if}
         {#if usageError}<p class="error">{usageError}</p>{/if}
         {#if usageRows !== null && !usageError}
           {@const buckets = aggregateUsage(usageRows)}
@@ -1778,6 +1860,7 @@
             reuse the same .credit muting the per-row pills do —
             the USD total pops, credit totals fade.
           -->
+          {@const rangeDays = daysInPickedRange(usageStart, usageEnd)}
           <p class="subtle usage-totals">
             {#if buckets.length === 0}
               No usage in this range.
@@ -1790,6 +1873,22 @@
                   class:credit={t.currency !== 'USD'}
                   title={t.currency !== 'USD' ? currencyTitle(t.currency) : undefined}
                 >{formatAmount(t.amount, t.currency)}</span>
+                <!--
+                  Avg-per-day pill paired with each currency's total.
+                  Divides the inclusive day count of the picked range
+                  into the same total the pill on the left is
+                  showing, so a user can read "spent $X in this
+                  window, averaging $X/day across it" without doing
+                  the math themselves. Per-currency rather than a
+                  single number because mixed USD + credits plans
+                  would otherwise collapse two units into one
+                  meaningless figure.
+                -->
+                <span
+                  class="usage-pill per-day"
+                  class:credit={t.currency !== 'USD'}
+                  title={`Average per day over ${rangeDays} day${rangeDays === 1 ? '' : 's'}${t.currency !== 'USD' ? ' - ' + currencyTitle(t.currency) : ''}`}
+                >{formatAmountPerDay(t.amount / rangeDays, t.currency)}</span>
               {/each}
             {/if}
           </p>

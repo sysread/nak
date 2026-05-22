@@ -36,7 +36,14 @@ destination:
   background poll from `usage-store.svelte.ts` so opening the pane
   is typically instant; custom date ranges bypass the cache and
   fetch on-demand. Nothing persists to disk — the cache is
-  in-memory only and gets wiped on `lock()`.
+  in-memory only and gets wiped on `lock()`. While paging through
+  a wider window, `fetchUsage`'s `onProgress` callback feeds a
+  `pagesLoaded`/`pagesTotal` pair into both the shared store and
+  the pane's custom-range state, which renders as a `Loading… N/M`
+  button label plus a determinate progress bar between the
+  controls and the totals strip. The totals strip itself pairs
+  each currency's total spend pill with an avg-per-day pill that
+  divides the total by the inclusive day count of the picked range.
 - **Export** — downloads the three keys as a plaintext JSON
   file. No persistence change.
 - **Security** — rotates the master password. Re-encrypts the
