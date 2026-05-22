@@ -206,6 +206,64 @@ describe('recipe_save', () => {
     ).rejects.toThrow(/modifier @ingredient/);
     expect(createRecipe).not.toHaveBeenCalled();
   });
+
+  describe('formatArgs override (tool-card pretty view)', () => {
+    it('promotes cooklang into a fenced block below the metadata bullets', () => {
+      // The generic formatter would auto-promote the cooklang
+      // string (it has newlines) but would interleave the
+      // metadata bullets in unspecified order. The override
+      // pins the reading order: activity, scalar metadata,
+      // cooklang block.
+      const out = recipeSave.formatArgs?.({
+        activity: 'Saving Sazerac',
+        title: 'Sazerac Old Fashioned',
+        source: 'Reservation Bar',
+        source_url: 'https://example.com/sazerac',
+        rating: 5,
+        change_message: 'Imported from menu',
+        cooklang: '@rye{2%oz}\n@bitters{2%dashes}\nStir and strain.',
+      });
+      expect(out).toBe(
+        [
+          '> Saving Sazerac',
+          '',
+          '- **title:** Sazerac Old Fashioned',
+          '- **source:** Reservation Bar',
+          '- **source_url:** <https://example.com/sazerac>',
+          '- **rating:** 5',
+          '- **change_message:** Imported from menu',
+          '',
+          '**cooklang:**',
+          '',
+          '```',
+          '@rye{2%oz}',
+          '@bitters{2%dashes}',
+          'Stir and strain.',
+          '```',
+        ].join('\n')
+      );
+    });
+
+    it('skips optional scalar fields when the model omitted them', () => {
+      const out = recipeSave.formatArgs?.({
+        title: 'Toast',
+        change_message: 'init',
+        cooklang: 'Toast @bread{2%slices}.',
+      });
+      expect(out).toBe(
+        [
+          '- **title:** Toast',
+          '- **change_message:** init',
+          '',
+          '**cooklang:**',
+          '',
+          '```',
+          'Toast @bread{2%slices}.',
+          '```',
+        ].join('\n')
+      );
+    });
+  });
 });
 
 describe('recipe_list', () => {

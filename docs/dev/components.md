@@ -46,7 +46,10 @@ interface Props { content: string; }
   handler.
 
 Consumers: `Chat.svelte` (user + assistant messages), `Help.svelte`
-(rendered docs), `ToolCalls.svelte` (JSON-fenced tool payloads).
+(rendered docs), `ToolCalls.svelte` (tool-call detail panel - the
+generic JSON-as-markdown formatter is in `src/lib/ui/tool-format.ts`,
+with per-tool overrides as optional `formatArgs` / `formatResult`
+schema fields on `ToolDef`).
 
 ## `<Scanner>`
 
@@ -178,8 +181,28 @@ File: `src/components/ToolCalls.svelte`.
 Collapsible tool-call log rendered inside an assistant bubble
 when that turn invoked tools. One row per call: status glyph,
 tool name, plus a duration or live-ticker pill. Clicking a row
-expands into a detail panel with the arguments and result,
-both rendered as `json` fenced blocks via `<Markdown>`.
+expands into a detail panel with the arguments and result.
+
+The detail panel renders in one of two views, per-call:
+
+- **markdown** (default) - the readable shape produced by
+  `src/lib/ui/tool-format.ts`'s generic JSON-as-markdown
+  formatter, or by a per-tool override declared on the tool's
+  schema (see `formatArgs` / `formatResult` on `ToolDef`).
+  Long fields wrap, identifiers render as inline code, URLs
+  linkify, and nested objects/array elements get bracket-path
+  section headers. `recipe_save` ships an override that
+  surfaces the cooklang source as a labelled fenced block
+  below the metadata; new tools can opt in the same way when
+  the generic shape doesn't read well for their payload.
+- **json** - the raw pretty-printed wire shape inside a `json`
+  fence (the historical look). Reachable via the "view: json"
+  toggle at the top right of the detail panel. The override
+  is ignored in this view; what you see is exactly what the
+  model sent or received.
+
+The toggle is per-call - one card can sit in JSON while
+another sits in markdown.
 
 ```ts
 interface Props {
@@ -204,11 +227,15 @@ only, no duration pill — historical latency wasn't worth the
 storage cost.
 
 Decision logic (the 4-source status tree, the live-vs-final
-duration pill, the JSON fence builders, the activity-narration
+duration pill, the args/result renderers that resolve view
+mode + per-tool formatter overrides, the activity-narration
 extractor that tolerates partial streaming JSON) lives in
 `src/lib/ui/tool-calls.ts` and is unit-tested at
-`tests/tool-calls.test.ts`. The `.svelte` file owns the
-per-call `expanded` rune and the markup.
+`tests/tool-calls.test.ts`. The generic JSON-as-markdown
+formatter that powers the default "markdown" view lives in
+`src/lib/ui/tool-format.ts` (unit tests at
+`tests/tool-format.test.ts`). The `.svelte` file owns the
+per-call `expanded` and `viewMode` runes and the markup.
 
 Consumers: assistant bubble in `Chat.svelte`.
 

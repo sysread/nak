@@ -45,11 +45,15 @@
   import Markdown from './Markdown.svelte';
   import {
     activityFor,
+    DEFAULT_DETAIL_VIEW,
     durationPill,
-    fencedArgs,
-    fencedResult,
+    flipDetailView,
+    formattersFor,
+    renderArgs,
+    renderResult,
     statusFor,
     type CallTiming,
+    type DetailView,
   } from '$lib/ui/tool-calls';
 
   interface Props {
@@ -79,9 +83,20 @@
   let { calls, resultsByCallId, timings, nowMs, sending }: Props = $props();
 
   let expanded = $state<Record<string, boolean>>({});
+  // Per-call view mode for the detail panel. Defaults to the
+  // readable markdown rendering; the in-panel button flips a
+  // single call into raw-JSON view without disturbing siblings.
+  // Keyed by call.id so a card's mode survives collapse/expand
+  // within the same conversation render.
+  let viewMode = $state<Record<string, DetailView>>({});
 
   function toggle(callId: string): void {
     expanded[callId] = !expanded[callId];
+  }
+
+  function flipView(callId: string): void {
+    const current = viewMode[callId] ?? DEFAULT_DETAIL_VIEW;
+    viewMode[callId] = flipDetailView(current);
   }
 </script>
 
@@ -133,11 +148,29 @@
         </span>
       </button>
       {#if isOpen}
+        {@const view = viewMode[call.id] ?? DEFAULT_DETAIL_VIEW}
+        {@const formatters = formattersFor(call.function.name)}
         <div class="tool-detail">
-          <div class="tool-detail-label">arguments</div>
-          <Markdown content={fencedArgs(call)} />
+          <div class="tool-detail-header">
+            <span class="tool-detail-label">arguments</span>
+            <!-- Per-call view toggle. The button label names the
+                 OTHER view (so a user reading markdown sees
+                 "view: json" and knows what the click does). The
+                 markdown shape covers the common reading case;
+                 JSON stays one click away for users who want the
+                 raw wire payload (debugging, copy-paste). -->
+            <button
+              type="button"
+              class="tool-detail-view-toggle"
+              onclick={() => flipView(call.id)}
+              aria-label="Switch tool-call view"
+            >
+              view: {view === 'markdown' ? 'json' : 'pretty'}
+            </button>
+          </div>
+          <Markdown content={renderArgs(call, view, formatters)} />
           <div class="tool-detail-label">result</div>
-          <Markdown content={fencedResult(call.id, resultsByCallId)} />
+          <Markdown content={renderResult(call.id, resultsByCallId, view, formatters)} />
         </div>
       {/if}
     </div>

@@ -89,6 +89,26 @@ export interface ToolDef {
   /** JSON Schema for the args — shipped verbatim to the model. */
   parameters: Record<string, unknown>;
   execute(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
+  /**
+   * Optional override: turn this tool's parsed argument object into
+   * the markdown the detail panel renders for the "pretty" view.
+   * The generic formatter in `src/lib/ui/tool-format.ts` covers the
+   * common JSON-tree shape; supply this only when a tool has a
+   * domain-specific payload that benefits from a hand-rolled
+   * rendering (e.g. cooklang source belongs in a fenced block, not
+   * a wrapping bullet). Lives on the schema half of the ToolDef so
+   * the UI can reach it without resolving the lazy-loaded impl
+   * chunk.
+   */
+  formatArgs?(args: Record<string, unknown>): string;
+  /**
+   * Optional override for the tool's result content. Same rationale
+   * as `formatArgs`. Receives the parsed result (whatever the tool
+   * returned from `execute`) - if the tool returned a string, that
+   * raw string is the argument. Callers fall back to the generic
+   * formatter when this is undefined.
+   */
+  formatResult?(result: unknown): string;
 }
 
 /**

@@ -542,6 +542,28 @@ export async function executeToolCall(
   return tool.execute(args, ctx);
 }
 
+/**
+ * Look up the optional pretty-formatter overrides a tool may
+ * declare on its schema. Used by the tool-call detail panel
+ * (`src/components/ToolCalls.svelte` via `src/lib/ui/tool-calls.ts`)
+ * to render args/results in a tool-specific shape when one is
+ * available, falling back to the generic JSON-as-markdown
+ * formatter otherwise. Unknown names return `undefined` so the
+ * caller can fall back cleanly - a persisted call referencing
+ * a tool that was renamed or removed since the row was written
+ * should still render readably.
+ */
+export interface ToolFormatters {
+  formatArgs?(args: Record<string, unknown>): string;
+  formatResult?(result: unknown): string;
+}
+
+export function getToolFormatters(name: string): ToolFormatters | undefined {
+  const tool = byName(name);
+  if (!tool) return undefined;
+  return { formatArgs: tool.formatArgs, formatResult: tool.formatResult };
+}
+
 // Re-export the agent-only toolboxes whose definitions live in their
 // own leaf files (`./memory_toolbox`, `./recall_toolbox`,
 // `./conversation_recall_toolbox`). `memoryToolbox` moved out of this

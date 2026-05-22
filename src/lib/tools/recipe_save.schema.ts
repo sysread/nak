@@ -1,7 +1,49 @@
 /**
  * Schema-only export for recipe_save. Impl lives in `./recipe_save`.
+ *
+ * Carries a `formatArgs` override read by the tool-call detail
+ * panel (`src/components/ToolCalls.svelte` via
+ * `src/lib/ui/tool-calls.ts`). The generic JSON-as-markdown
+ * formatter would render the cooklang source as a fenced block
+ * automatically because it contains newlines, but the surrounding
+ * shape (a top-level bullet for every other field with cooklang
+ * buried among them) reads worse than promoting the cooklang
+ * block to a labelled section below the metadata. The override
+ * orders the fields the way a reader would scan them - activity,
+ * title, source, rating, change_message, then the recipe body
+ * itself.
  */
 import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '../recipe-limits';
+
+function formatRecipeSaveArgs(args: Record<string, unknown>): string {
+  const lines: string[] = [];
+  const scalar: Array<[string, string]> = [];
+  for (const key of ['title', 'source', 'source_url', 'rating', 'change_message'] as const) {
+    const v = args[key];
+    if (v === undefined || v === null || v === '') continue;
+    if (key === 'source_url' && typeof v === 'string') {
+      scalar.push([key, '<' + v + '>']);
+    } else {
+      scalar.push([key, String(v)]);
+    }
+  }
+  if (typeof args.activity === 'string' && args.activity.trim().length > 0) {
+    lines.push('> ' + args.activity.trim());
+    lines.push('');
+  }
+  for (const [k, v] of scalar) {
+    lines.push('- **' + k + ':** ' + v);
+  }
+  if (typeof args.cooklang === 'string' && args.cooklang.length > 0) {
+    if (scalar.length > 0) lines.push('');
+    lines.push('**cooklang:**');
+    lines.push('');
+    lines.push('```');
+    lines.push(args.cooklang);
+    lines.push('```');
+  }
+  return lines.join('\n');
+}
 
 export const recipeSaveSchema = {
   name: 'recipe_save',
@@ -79,4 +121,5 @@ export const recipeSaveSchema = {
     required: ['title', 'cooklang', 'change_message'],
     additionalProperties: false,
   },
+  formatArgs: formatRecipeSaveArgs,
 } as const;
