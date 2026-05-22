@@ -119,17 +119,27 @@ function formatScalar(v: unknown): string {
 
 /**
  * Render a multi-line or over-threshold string as its own block,
- * labelled with the parent key. Multi-line strings go into a
- * fenced code block so the producer's line breaks are preserved
- * (cookbook entries, JSON-in-string error bodies, multi-paragraph
- * notes); single-line-but-long strings go into a blockquote so
- * the prose wraps and reads as text rather than monospace.
+ * labelled with the parent key. Always a blockquote - never a
+ * fence - because the whole point of promoting a string out of
+ * the inline bullet is to let it wrap to the panel width, and
+ * fenced ` ``` ` content sits inside `<pre>` which defeats
+ * wrapping. Multi-line content is preserved by prefixing every
+ * line with `> ` (paragraph breaks survive as blank `>` lines);
+ * single-line content gets a single quoted line.
+ *
+ * Tools whose result is structured text where the line breaks
+ * carry meaning (cooklang source, code, tracebacks, JSON-in-a-
+ * string error payloads) should declare a `formatArgs` /
+ * `formatResult` override on their schema and emit a fenced
+ * block themselves. The generic path optimises for prose,
+ * which is the common case in tool-call payloads.
  */
 function formatLongStringBlock(label: string, v: string): string[] {
-  if (v.includes('\n')) {
-    return ['**' + label + ':**', '', '```', v, '```'];
-  }
-  return ['**' + label + ':**', '', '> ' + v];
+  const quoted = v
+    .split('\n')
+    .map((line) => (line.length > 0 ? '> ' + line : '>'))
+    .join('\n');
+  return ['**' + label + ':**', '', quoted];
 }
 
 /**

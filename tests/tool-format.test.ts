@@ -75,14 +75,20 @@ describe('formatJsonAsMarkdown', () => {
     );
   });
 
-  it('promotes multi-line strings to a fenced code block', () => {
-    // recipe_save cooklang source has authored line breaks; the
-    // generic path falls back to a fence even before the per-tool
-    // override fires.
-    const cooklang = '@butter{50%g}\n@flour{200%g}\nMix and knead.';
-    const out = formatJsonAsMarkdown({ cooklang });
+  it('promotes multi-line strings to a multi-line blockquote so each line wraps to the panel width', () => {
+    // Web-search citation content and memory data fields arrive
+    // as paragraph-broken prose; rendering them in a fenced
+    // ` ``` ` block puts them inside `<pre>` and defeats
+    // wrapping, which was the whole reason for promoting the
+    // string out of the inline bullet. The generic path quotes
+    // every line and lets marked render the blockquote. Tools
+    // whose multi-line strings carry structural meaning
+    // (cooklang, code) opt into a fence via their schema's
+    // `formatArgs` / `formatResult` override.
+    const content = 'First paragraph.\n\nSecond paragraph.';
+    const out = formatJsonAsMarkdown({ content });
     expect(out).toBe(
-      ['**cooklang:**', '', '```', cooklang, '```'].join('\n')
+      ['**content:**', '', '> First paragraph.', '>', '> Second paragraph.'].join('\n')
     );
   });
 
