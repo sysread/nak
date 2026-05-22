@@ -51,6 +51,27 @@ export interface ToolContext {
    * exploding.
    */
   depth?: number;
+  /**
+   * Opt-in filter for `wiki_search`: when true, the tool drops any
+   * article whose ONLY source row in `wiki_article_sources` is
+   * `ctx.threadId`. Articles linked to multiple threads (or to no
+   * thread at all) still come through. Set by callers that should not
+   * see this thread's own synthesised output echoed back as recall -
+   * the main chat-loop and `WikiRecallAgent`'s inner tool loop. Left
+   * unset by the autonomous wiki agent and the wiki librarian, both
+   * of which need to FIND articles derived from the thread they are
+   * processing in order to decide update-vs-create.
+   *
+   * Carried on the ctx (not in the LLM-visible args schema) so the
+   * model cannot pass or strip it - the harness owns the decision.
+   * Scoped specifically to wiki because that is the only layer with
+   * a join table tying articles to source threads; `conversation_
+   * search` already excludes the current thread unconditionally with
+   * an LLM-facing `include_current: true` opt-out, and `memories`
+   * has no source-thread tracking yet (see the planned schema work
+   * if a future change adds one).
+   */
+  wikiExcludeOwnThreadSoleSources?: boolean;
 }
 
 /**

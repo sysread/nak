@@ -25,7 +25,30 @@ export interface SearchWikiDeps {
   supabase: SupabaseService;
   venice: VeniceClient | null;
   signal?: AbortSignal;
+  /**
+   * Sole-source exclusion. When set, drop any article whose ONLY row
+   * in `wiki_article_sources` is `thread_id = excludeSoleSourceThreadId`.
+   * Articles linked to other threads (or with no source rows at all)
+   * still come through. Used by the `wiki_search` tool when ctx flags
+   * recall-hygiene mode so a thread does not see its own synthesised
+   * article echoed back as recall.
+   *
+   * The UI callers (WikiList.svelte, Wiki.svelte) leave this absent -
+   * the browse surface wants every article regardless of provenance.
+   */
+  excludeSoleSourceThreadId?: string | null;
 }
+
+/**
+ * Modest overfetch when the sole-source filter is active: ask the DB
+ * for this many extra rows so trimming the excluded ones rarely drops
+ * the final list under `limit`. A small constant rather than a
+ * proportional bump because the typical filter drops 0-1 articles per
+ * call (only the article(s) literally synthesised from this one thread
+ * qualify); a fixed cushion covers the common case without inflating
+ * the embedding-search payload.
+ */
+const SOLE_SOURCE_FILTER_OVERFETCH = 3;
 
 /**
  * Length ceiling on the article title. Defensive cap so a corrupt or
@@ -56,42 +79,82 @@ export async function searchWikiArticlesSemantic(
   limit: number,
   deps: SearchWikiDeps,
 ): Promise<WikiArticle[]> {
-  const { supabase, venice, signal } = deps;
+  const { supabase, venice, signal, excludeSoleSourceThreadId } = deps;
   const trimmed = query.trim();
+  const filtering =
+    typeof excludeSoleSourceThreadId === 'string' &&
+    excludeSoleSourceThreadId.length > 0;
+  // Overfetch a small constant when filtering so trimming the excluded
+  // rows rarely drops below the caller's requested limit. Done at the
+  // search layer (not the DB layer) because `searchWikiArticles`'
+  // contract doesn't expose a sole-source exclusion - the per-article-
+  // source join lives one query away.
+  const fetchLimit = filtering ? limit + SOLE_SOURCE_FILTER_OVERFETCH : limit;
 
-  // Empty query: alphabetical listing. searchWikiArticles short-
-  // circuits to listWikiArticles in this branch.
+  let rows: WikiArticle[];
   if (trimmed.length === 0) {
-    return supabase.searchWikiArticles({ query: '', queryEmbedding: null, limit });
-  }
-
-  // No Venice client: ILIKE-only.
-  if (!venice) {
-    return supabase.searchWikiArticles({ query: trimmed, queryEmbedding: null, limit });
-  }
-
-  let rawEmbedding: number[] | undefined;
-  try {
-    const response = await venice.embed({
-      model: VENICE_EMBEDDING_MODEL,
-      input: trimmed,
-      signal,
+    // Empty query: alphabetical listing. searchWikiArticles short-
+    // circuits to listWikiArticles in this branch.
+    rows = await supabase.searchWikiArticles({
+      query: '',
+      queryEmbedding: null,
+      limit: fetchLimit,
     });
-    rawEmbedding = response.data[0]?.embedding;
-  } catch {
-    // Silent fallback - see file-level comment.
-    return supabase.searchWikiArticles({ query: trimmed, queryEmbedding: null, limit });
+  } else if (!venice) {
+    // No Venice client: ILIKE-only.
+    rows = await supabase.searchWikiArticles({
+      query: trimmed,
+      queryEmbedding: null,
+      limit: fetchLimit,
+    });
+  } else {
+    let rawEmbedding: number[] | undefined;
+    try {
+      const response = await venice.embed({
+        model: VENICE_EMBEDDING_MODEL,
+        input: trimmed,
+        signal,
+      });
+      rawEmbedding = response.data[0]?.embedding;
+    } catch {
+      // Silent fallback - see file-level comment.
+      rawEmbedding = undefined;
+    }
+
+    if (!rawEmbedding || rawEmbedding.length === 0) {
+      rows = await supabase.searchWikiArticles({
+        query: trimmed,
+        queryEmbedding: null,
+        limit: fetchLimit,
+      });
+    } else {
+      // Pad to the column's storage dim (2048). Cosine-invariant.
+      const queryEmbedding = padEmbeddingForStorage(rawEmbedding);
+      rows = await supabase.searchWikiArticles({
+        query: trimmed,
+        queryEmbedding,
+        limit: fetchLimit,
+      });
+    }
   }
 
-  if (!rawEmbedding || rawEmbedding.length === 0) {
-    return supabase.searchWikiArticles({ query: trimmed, queryEmbedding: null, limit });
-  }
+  if (!filtering || rows.length === 0) return rows.slice(0, limit);
 
-  // Pad to the column's storage dim (2048). Cosine-invariant.
-  const queryEmbedding = padEmbeddingForStorage(rawEmbedding);
-  return supabase.searchWikiArticles({
-    query: trimmed,
-    queryEmbedding,
-    limit,
-  });
+  // Sole-source filter: drop articles whose only source row is the
+  // excluded thread. Articles with multiple sources (cross-thread
+  // syntheses) and orphans (no source rows at all - absent from the
+  // returned map) both stay.
+  const sourcesByArticle = await supabase.listSourceThreadIdsForArticles(
+    rows.map((a) => a.id)
+  );
+  const kept: WikiArticle[] = [];
+  for (const article of rows) {
+    const sources = sourcesByArticle.get(article.id);
+    if (sources && sources.size === 1 && sources.has(excludeSoleSourceThreadId)) {
+      continue;
+    }
+    kept.push(article);
+    if (kept.length >= limit) break;
+  }
+  return kept;
 }

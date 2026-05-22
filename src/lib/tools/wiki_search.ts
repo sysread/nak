@@ -7,6 +7,16 @@
  *
  * Wiki articles are NEVER auto-injected into the chat - this tool is
  * the only path the assistant has to reach them.
+ *
+ * Sole-source exclusion: when the caller's ToolContext sets
+ * `wikiExcludeOwnThreadSoleSources`, the tool passes `ctx.threadId`
+ * down as the sole-source filter so an article synthesised solely from
+ * the current conversation doesn't get echoed back as recall context.
+ * The main chat-loop and the wiki-recall agent's inner tool loop set
+ * the flag; the autonomous wiki agent and the wiki librarian leave it
+ * unset because they need to FIND articles derived from the thread
+ * they're processing in order to decide update-vs-create. The flag is
+ * read off the ctx, not the args, so the model can't toggle it.
  */
 import type { ToolDef } from './types';
 import { searchWikiArticlesSemantic } from '../wiki';
@@ -32,6 +42,9 @@ export const wikiSearch: ToolDef = {
       supabase: ctx.supabase,
       venice: ctx.venice,
       signal: ctx.signal,
+      excludeSoleSourceThreadId: ctx.wikiExcludeOwnThreadSoleSources
+        ? ctx.threadId
+        : null,
     });
     return rows.map((a) => ({
       id: a.id,

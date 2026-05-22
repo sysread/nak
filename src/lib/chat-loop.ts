@@ -1673,6 +1673,12 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         // agent passes this through so `runHeadlessToolLoop` can
         // compute the bumped depth and apply the MAX_AGENT_DEPTH cap.
         depth: 0,
+        // Recall hygiene for wiki_search drill-downs from the main
+        // chat: drop articles whose only source is this thread. The
+        // autonomous wiki agent and the librarian leave this off so
+        // they can find articles to update; the main model surfacing
+        // its own thread's synthesis as recall would be circular.
+        wikiExcludeOwnThreadSoleSources: true,
       };
       let args: Record<string, unknown>;
       try {

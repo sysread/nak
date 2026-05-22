@@ -2772,6 +2772,41 @@ export class SupabaseService {
   }
 
   /**
+   * Batched source-thread lookup for a candidate set of article ids.
+   * Returns a Map keyed by article id whose value is the set of thread
+   * ids that fed that article. Articles with no rows in
+   * `wiki_article_sources` are absent from the map (orphan articles -
+   * never written from a recorded conversation).
+   *
+   * Powers the `wiki_search` sole-source exclusion (see ToolContext's
+   * `wikiExcludeOwnThreadSoleSources`): the recall path needs to know
+   * "is the current thread the ONLY source of this article?", which is
+   * cheaper to answer against an in-memory map of all sources for the
+   * returned candidates than as a per-article round-trip. Empty input
+   * returns an empty Map without a round-trip.
+   */
+  async listSourceThreadIdsForArticles(
+    articleIds: readonly string[]
+  ): Promise<Map<string, Set<string>>> {
+    const out = new Map<string, Set<string>>();
+    if (articleIds.length === 0) return out;
+    const { data, error } = await this.client
+      .from('wiki_article_sources')
+      .select('article_id, thread_id')
+      .in('article_id', [...articleIds]);
+    if (error) throw new SupabaseError(error.message);
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      const articleId = row.article_id;
+      const threadId = row.thread_id;
+      if (typeof articleId !== 'string' || typeof threadId !== 'string') continue;
+      const set = out.get(articleId);
+      if (set) set.add(threadId);
+      else out.set(articleId, new Set([threadId]));
+    }
+    return out;
+  }
+
+  /**
    * See Also for an article. Single RPC call; the floor calculation
    * (minimum cosine similarity between the article and its source
    * conversations) lives server-side so the client never has to fetch

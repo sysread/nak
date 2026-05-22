@@ -163,6 +163,12 @@ export class WikiRecallAgent
           // Forward the caller's depth; runHeadlessToolLoop bumps and
           // enforces MAX_AGENT_DEPTH internally.
           depth: req.depth,
+          // Recall hygiene: when wiki_search runs underneath this agent,
+          // skip articles whose only source is the current thread - this
+          // pipeline exists to surface what the conversation doesn't
+          // already have, and an article synthesised solely from this
+          // thread is the same content the main model is already reading.
+          wikiExcludeOwnThreadSoleSources: true,
         },
         signal,
         responseFormat: WIKI_RECALL_RESPONSE_FORMAT,
