@@ -1824,27 +1824,42 @@
             {/if}
           </button>
         </div>
-        {#if usageLoading && usagePagesTotal > 0}
+        {#if usageLoading}
           <!--
-            Determinate progress bar. Only renders once Venice has
-            reported a totalPages on the first page response - until
-            then we show the bare "Loading…" spinner-text in the
-            button and skip the bar. ARIA fields make the bar
-            announceable for screen readers.
+            The bar renders the moment the fetch starts so the user
+            isn't left staring at a frozen "Loading..." button while
+            Venice works on the first page (the slowest step - the
+            server computes the count + sort there, subsequent pages
+            return quickly). Until `pagesTotal` lands from the first
+            response we show an indeterminate marching bar; once the
+            count is known the bar flips to a determinate fill that
+            tracks `pagesLoaded / pagesTotal`. ARIA attributes drop
+            the value fields in the indeterminate phase per the WAI-
+            ARIA spec for an unknown-progress bar.
           -->
-          <div
-            class="usage-progress"
-            role="progressbar"
-            aria-label="Loading usage pages"
-            aria-valuemin="0"
-            aria-valuemax={usagePagesTotal}
-            aria-valuenow={usagePagesLoaded}
-          >
-            <span
-              class="usage-progress-fill"
-              style="--usage-progress-pct:{(usagePagesLoaded / usagePagesTotal) * 100}%"
-            ></span>
-          </div>
+          {#if usagePagesTotal > 0}
+            <div
+              class="usage-progress"
+              role="progressbar"
+              aria-label="Loading usage pages"
+              aria-valuemin="0"
+              aria-valuemax={usagePagesTotal}
+              aria-valuenow={usagePagesLoaded}
+            >
+              <span
+                class="usage-progress-fill"
+                style="--usage-progress-pct:{(usagePagesLoaded / usagePagesTotal) * 100}%"
+              ></span>
+            </div>
+          {:else}
+            <div
+              class="usage-progress"
+              role="progressbar"
+              aria-label="Loading first page of usage data"
+            >
+              <span class="usage-progress-fill indeterminate"></span>
+            </div>
+          {/if}
         {/if}
         {#if usageError}<p class="error">{usageError}</p>{/if}
         {#if usageRows !== null && !usageError}

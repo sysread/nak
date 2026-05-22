@@ -47,10 +47,12 @@ Each row shows a horizontal bar scaled by total tokens
   away. If the cached view is more than 15 minutes old when you
   land on the pane, Nak kicks off a fresh fetch automatically.
   Change the dates and click **Refresh** to re-fetch a custom
-  range. While a refresh is in flight, the **Refresh** button
-  shows a `Loading… N/M` page counter and a thin progress bar
-  appears below the controls, so a wide window doesn't look hung
-  while Venice's billing endpoint pages through.
+  range. While a refresh is in flight, a thin progress bar appears
+  below the controls. It animates as an indeterminate marching
+  pill until Venice returns the first page of data (the slow
+  step - the server computes the page count there), then flips to
+  a determinate fill and the **Refresh** button label adds a
+  `Loading… N/M` page counter as the rest of the pages arrive.
 - Next to each currency's total spend pill sits a dashed-outline
   `$X/day` pill that divides the total by the inclusive day count
   of the picked range. A weeklong window's spend reads both as the

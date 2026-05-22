@@ -39,10 +39,14 @@ destination:
   in-memory only and gets wiped on `lock()`. While paging through
   a wider window, `fetchUsage`'s `onProgress` callback feeds a
   `pagesLoaded`/`pagesTotal` pair into both the shared store and
-  the pane's custom-range state, which renders as a `Loading… N/M`
-  button label plus a determinate progress bar between the
-  controls and the totals strip. The totals strip itself pairs
-  each currency's total spend pill with an avg-per-day pill that
+  the pane's custom-range state. The pane renders a thin progress
+  bar between the controls and the totals strip the moment loading
+  starts: an indeterminate marching variant while `pagesTotal`
+  is still 0 (the wait on Venice's first-page response, which is
+  the slowest step), then a determinate fill once the count is
+  known, with the **Refresh** button label adding `Loading… N/M`
+  in the determinate phase. The totals strip itself pairs each
+  currency's total spend pill with an avg-per-day pill that
   divides the total by the inclusive day count of the picked range.
 - **Export** — downloads the three keys as a plaintext JSON
   file. No persistence change.

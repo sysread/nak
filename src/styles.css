@@ -941,6 +941,11 @@ label {
   border-radius: 999px;
   overflow: hidden;
   margin: 0 0 0.6rem;
+  /* `position: relative` is load-bearing for the indeterminate
+     variant - the marching pill is absolutely positioned inside this
+     track so it can slide past both edges without expanding the
+     parent's flow. */
+  position: relative;
 }
 
 .usage-progress-fill {
@@ -956,10 +961,43 @@ label {
   transition: width 180ms ease-out;
 }
 
+/* Indeterminate marching variant. Used between "fetch started" and
+   "first page landed" - the longest leg of the wait, because Venice
+   does the count + sort on page 1 and returns subsequent pages
+   quickly. A pill that slides edge-to-edge tells the user the
+   request is alive without lying about how many pages are coming. */
+.usage-progress-fill.indeterminate {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 35%;
+  height: 100%;
+  animation: usage-progress-march 1.2s ease-in-out infinite;
+}
+
+@keyframes usage-progress-march {
+  /* Slide from "fully off the left edge" to "fully off the right
+     edge." Track width is the 100% reference, pill is 35% of that,
+     so the right-edge exit point is translateX(100%/35% × 100%) ≈
+     286%. Round to 290% for headroom. */
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(290%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .usage-bar,
   .usage-progress-fill {
     transition: none;
+  }
+  .usage-progress-fill.indeterminate {
+    /* Fall back to a stationary half-width pill so the user still
+       sees a "something is loading" marker without motion. */
+    animation: none;
+    left: 32%;
   }
 }
 
