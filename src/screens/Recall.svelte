@@ -321,26 +321,43 @@
 
   /* Italic prose with a floated-left light bulb acting as a drop
      cap. The float pulls subsequent lines to wrap around the bulb's
-     right edge, exactly the printed-chapter effect requested. The
-     line-height is bumped slightly so the wrapped lines don't crowd
-     the bulb on the left. */
+     right edge - the printed-chapter effect from the brief. The
+     surrounding box (padding + tinted background + accent left
+     border) mirrors the .user-prompt blockquote above so the two
+     halves of an entry read as parallel artifacts: your input on
+     one side, the assistant's prior thought on the other. Without
+     the container, the italic prose read as a wall of text against
+     the modal background; the box gives the eye somewhere to land
+     and matches the visual weight of the user-prompt block. The
+     line-height is bumped well past body copy so the wrapped
+     italic lines have room to breathe. */
   .recall-prose {
     margin: 0;
+    padding: 0.65rem 0.85rem;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+    border-radius: 0 6px 6px 0;
     font-style: italic;
-    line-height: 1.55;
+    line-height: 1.7;
     color: var(--text);
     /* white-space:pre-wrap so paragraph breaks in the stitched note
        survive into the rendered card. The stitch is single-paragraph
        in practice but we don't want to lose the seam between layers
        if the agents emit one. */
     white-space: pre-wrap;
+    /* Contain the floated bulb so it can't hang out the bottom of
+       the colored box on a short note. flow-root establishes a
+       block formatting context without overflow:hidden's clipping
+       side-effects, which matters because a very long URL inside
+       the note shouldn't get cut off at the box edge. */
+    display: flow-root;
   }
 
   .recall-bulb {
     float: left;
-    width: 3rem;
-    height: 3rem;
-    margin: 0.15rem 0.65rem 0 0;
+    width: 2.4rem;
+    height: 2.4rem;
+    margin: 0.1rem 0.6rem 0 0;
     color: color-mix(in srgb, var(--accent) 75%, var(--text));
     /* Soft glow so the bulb reads as illuminated rather than just a
        large icon. The shadow uses currentColor via the same accent
@@ -351,9 +368,6 @@
   .entry-meta {
     margin: 0.6rem 0 0;
     font-size: 0.78rem;
-    /* Clear the floated bulb above so the meta line sits beneath the
-       prose block rather than wrapping next to the bulb. */
-    clear: both;
   }
 
   .empty {
