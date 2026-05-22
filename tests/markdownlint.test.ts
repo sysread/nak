@@ -26,7 +26,17 @@ import { describe, it, expect } from 'vitest';
 // itself — we pass them as literals so pnpm + node don't pre-expand.
 // Keep this in sync with the invocation documented in
 // `docs/dev/build-deploy.md`.
-const TARGETS = ['docs/**/*.md', 'README.md', 'CLAUDE.md'];
+const TARGETS = [
+  'docs/**/*.md',
+  'README.md',
+  'CLAUDE.md',
+  // Nested CLAUDE.md files in the source tree (e.g.
+  // src/screens/CLAUDE.md, src/components/CLAUDE.md) are loaded by
+  // Claude Code when files in their subtree are touched - same
+  // rendering surface as the root CLAUDE.md, so they need the same
+  // lint guardrail.
+  'src/**/CLAUDE.md',
+];
 
 const REPO_ROOT = join(__dirname, '..');
 

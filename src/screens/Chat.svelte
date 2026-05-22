@@ -167,6 +167,11 @@
     pickFresherContextRecallPayload,
     type ContextRecallPayload,
   } from '$lib/context-recall';
+  import {
+    appendContextRecallHistory,
+    buildUserMessageByRound,
+    shouldRetainDisplaced,
+  } from '$lib/ui/recall';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -524,6 +529,20 @@
   // user messages and the round count would shift but the id wouldn't.
   // Reset on thread switch.
   let expandedCohortPanels = $state<Set<string>>(new Set());
+
+  // Frontend-only history of context-recall injections, keyed by thread
+  // id. Each entry is the payload that was displaced when a fresher one
+  // landed via the chat-loop's onContextRecallUpdate callback. The
+  // currently-active payload still lives on the thread row itself (and
+  // therefore in the database); this Map only carries the previously-
+  // injected ones so the Recall modal can show them in descending order
+  // alongside the current one. Lost on full page reload by design - the
+  // user opted into in-memory retention, not persistence. Next-state
+  // computation for the Map lives in src/lib/ui/recall.ts; the Svelte
+  // wire-up here is just "compute then reassign for reactivity."
+  let contextRecallHistory = $state<Map<string, ContextRecallPayload[]>>(
+    new Map()
+  );
 
   function toggleCohortPanel(userMessageId: string): void {
     const next = new Set(expandedCohortPanels);
@@ -2157,6 +2176,25 @@
       : null
   );
 
+  // Prior context-recall injections accumulated in this tab for the
+  // active thread, in landing order (earliest first). Drives the
+  // history section of the Recall modal; empty for cold / never-fired
+  // threads and for threads where only one injection has happened.
+  const currentContextRecallHistory = $derived<readonly ContextRecallPayload[]>(
+    activeThreadId === null
+      ? []
+      : (contextRecallHistory.get(activeThreadId) ?? [])
+  );
+
+  // Inverse of userRoundByMessageId: round number -> user Message row.
+  // Lets the Recall modal show the user prompt that triggered each
+  // injection without the modal having to walk the messages array
+  // itself. The walk lives in $lib/ui/recall as buildUserMessageByRound;
+  // this site is the rune wire-up.
+  const userMessageByRound: Map<number, Message> = $derived(
+    buildUserMessageByRound(messages)
+  );
+
   const defaultTier = $derived<ModelTier>(app.defaultModel ?? DEFAULT_TIER);
   const currentTier = $derived<ModelTier>(
     resolveTier(currentThread?.model ?? null, defaultTier)
@@ -3159,6 +3197,24 @@
               // the realtime echo. The patch also keeps the in-memory
               // row consistent with the persisted row so a delayed
               // echo doesn't overwrite the fresher value with null.
+              //
+              // Before overwriting, capture the about-to-be-displaced
+              // payload into the per-thread history Map so the Recall
+              // modal can show it under the new one. The retention
+              // decision (skip duplicates from cross-tab realtime
+              // echoes) and the next-Map computation both live in
+              // $lib/ui/recall; this site is glue.
+              const existing = findThread(ctx.threadId);
+              const displaced = existing
+                ? coerceContextRecallPayload(existing.context_recall_payload)
+                : null;
+              if (displaced !== null && shouldRetainDisplaced(displaced, payload)) {
+                contextRecallHistory = appendContextRecallHistory(
+                  contextRecallHistory,
+                  ctx.threadId,
+                  displaced
+                );
+              }
               patchThread(ctx.threadId, {
                 context_recall_payload: payload,
               });
@@ -6904,6 +6960,8 @@
     <RecallComp
       onClose={() => navigate({ modal: null })}
       threads={loadedThreads}
+      history={currentContextRecallHistory}
+      userMessageByRound={userMessageByRound}
     />
   {/if}
   <!-- Cookbook, Memories, and Wiki now render inline in the main

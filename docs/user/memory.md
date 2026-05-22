@@ -98,18 +98,24 @@ per invocation, at most.
 There's a light-bulb glyph (💡) at the top of the bottom-right pill
 column on the conversation pane, stacked above the bias chart, the
 intuition brain, the mood pill, and the scroll-to-latest arrow.
-Click it to open the **Recall** modal, which shows the stitched
-first-person note that was most recently injected as the
-assistant's prior thought — verbatim, in italic, the way a chapter
-opens with an illuminated initial. The modal also reports when the
-recall fired, which user round it landed on, and what triggered it
-(cold start, topic shift, mood shift, or staleness fuse).
+Click it to open the **Recall** modal. Each injection is shown
+verbatim, in italic, the way a chapter opens with an illuminated
+initial, paired with the user prompt that triggered it. The most
+recent injection sits at the top; earlier injections from this
+session follow below, in descending order by turn, separated by
+horizontal rules. Each entry reports the trigger (cold start,
+topic shift, mood shift, or staleness fuse) and the timestamp it
+landed.
 
-Only one recall is kept per thread at a time, so the modal always
-reflects what the assistant remembered before its most recent
-reply. When a new recall fires, the modal's content updates in
-place. The light bulb stays disabled until a recall has actually
-landed for the active thread.
+Recall injections are per-turn and ephemeral — each fire is only
+used by the round it was computed for; nothing about the
+injection survives into later turns of the conversation. The
+in-memory history exists only so you can audit what Nak was
+thinking on each prior turn while the tab is open; reload the
+page and the history clears down to the most recent injection
+(which is the one cached on the thread row). The light bulb
+stays disabled until a recall has actually landed for the active
+thread.
 
 ## Browsing memories directly
 
