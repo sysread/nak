@@ -1539,6 +1539,7 @@
               <textarea
                 name="prompt-body-{p.id}"
                 class="prompt-body"
+                rows={8}
                 value={p.body}
                 placeholder="The system prompt text… (e.g. 'Be concise.')"
                 oninput={(e) => updatePrompt(p.id, { body: (e.currentTarget as HTMLTextAreaElement).value })}
