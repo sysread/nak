@@ -10,8 +10,10 @@
  * `OpenAIToolCall` and `Message` shapes the primitives operate
  * over.
  */
-import type { OpenAIToolCall } from '../tools';
+import { getToolFormatters } from '../tools';
+import type { OpenAIToolCall, ToolFormatters } from '../tools';
 import type { Message } from '../supabase';
+import { formatJsonStringAsMarkdown } from './tool-format';
 
 export type Status = 'pending' | 'ok' | 'error';
 
@@ -107,28 +109,106 @@ export function prettyJson(raw: string): string {
 }
 
 /**
- * The `arguments` JSON wrapped in a `json` markdown fence so
- * `<Markdown>` can hand it to highlight.js. Empty arguments
- * default to `{}` so the fence has something well-formed inside.
+ * View mode for the tool-call detail panel. `markdown` is the
+ * default human-readable rendering (`tool-format.ts`'s
+ * TOML-ish output, or a per-tool override when the tool's
+ * schema declared one); `json` is the raw pretty-printed JSON
+ * fence, useful when the user wants the wire shape. The toggle
+ * lives in `ToolCalls.svelte` and is per-call - one row can be
+ * in markdown view while another sits in JSON.
  */
-export function fencedArgs(call: OpenAIToolCall): string {
-  return '```json\n' + prettyJson(call.function.arguments || '{}') + '\n```';
+export type DetailView = 'markdown' | 'json';
+
+/**
+ * Render the `arguments` JSON for the detail panel. In `json`
+ * mode the output is a `json`-fenced block (highlight.js
+ * styling); in `markdown` mode we prefer the tool's own
+ * `formatArgs` override when declared and fall back to the
+ * generic JSON-as-markdown formatter otherwise. Empty arguments
+ * default to `{}` so the parse never throws.
+ */
+export function renderArgs(
+  call: OpenAIToolCall,
+  view: DetailView,
+  formatters: ToolFormatters | undefined
+): string {
+  const raw = call.function.arguments || '{}';
+  if (view === 'json') {
+    return '```json\n' + prettyJson(raw) + '\n```';
+  }
+  if (formatters?.formatArgs) {
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      return formatters.formatArgs(parsed);
+    } catch {
+      // Partial-stream args or malformed JSON: fall through to
+      // the generic path, which shows the raw text in a fence
+      // rather than crashing the panel.
+    }
+  }
+  return formatJsonStringAsMarkdown(raw);
 }
 
 /**
- * The tool-result content wrapped in a `json` fence, or the
- * in-progress placeholder when the result has not yet landed.
- * The placeholder italics render via the markdown's emphasis
- * pass.
+ * Render the tool-result content for the detail panel. Same
+ * shape as `renderArgs`: JSON-fenced in `json` mode; in
+ * `markdown` mode we honour the tool's `formatResult` override
+ * when present and fall back to the generic formatter. The
+ * "in progress" placeholder is identical in both views - there's
+ * no payload yet to differ on.
  */
-export function fencedResult(
+export function renderResult(
   callId: string,
-  resultsByCallId: Record<string, Message>
+  resultsByCallId: Record<string, Message>,
+  view: DetailView,
+  formatters: ToolFormatters | undefined
 ): string {
   const result = resultsByCallId[callId];
   if (!result) return '_In progress…_';
-  return '```json\n' + prettyJson(result.content) + '\n```';
+  if (view === 'json') {
+    return '```json\n' + prettyJson(result.content) + '\n```';
+  }
+  if (formatters?.formatResult) {
+    try {
+      const parsed = JSON.parse(result.content) as unknown;
+      return formatters.formatResult(parsed);
+    } catch {
+      // Non-JSON tool returns are uncommon but valid; let the
+      // generic path render the raw string as a fenced block.
+    }
+  }
+  return formatJsonStringAsMarkdown(result.content);
 }
+
+/**
+ * Default view mode for a freshly-expanded call. Markdown is
+ * the readable shape we want users to land on; the toggle in
+ * the detail panel flips it to JSON for the wire-shape case.
+ */
+export const DEFAULT_DETAIL_VIEW: DetailView = 'markdown';
+
+/**
+ * Flip the current view to the other side. Centralised so the
+ * `.svelte` file's button handler stays a one-liner and so the
+ * two-state set is the only thing this module exports.
+ */
+export function flipDetailView(current: DetailView): DetailView {
+  return current === 'markdown' ? 'json' : 'markdown';
+}
+
+/**
+ * Resolve the tool's per-call formatter overrides at render
+ * time. The lookup goes through the eagerly-loaded tool
+ * registry, so it doesn't pull in any lazy impl chunks - the
+ * `formatArgs` / `formatResult` fields ride on the schema half
+ * of the ToolDef. Returns `undefined` for unknown tool names
+ * (renamed/removed tools in persisted history); the renderer
+ * falls back to the generic formatter in that case.
+ */
+export function formattersFor(name: string): ToolFormatters | undefined {
+  return getToolFormatters(name);
+}
+
 
 /**
  * Pull the narration sentence out of a call's arguments JSON.

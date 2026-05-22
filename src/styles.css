@@ -3660,6 +3660,39 @@ button.composer-wharf-trigger {
   margin-bottom: 0.15rem;
 }
 
+/* Row holding the "arguments" label and the view-mode toggle.
+   Flex layout pushes the button to the right edge of the panel
+   while the label stays left-aligned with the result label below
+   it - the result label keeps the original stacked layout, since
+   only one toggle controls both views per call. */
+.tool-detail-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* Subtle text-style toggle button. Inherits the muted/upper-case
+   styling of the detail labels so it reads as part of the same
+   row rather than a primary action. */
+.tool-detail-view-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.1rem 0.45rem;
+  cursor: pointer;
+}
+
+.tool-detail-view-toggle:hover {
+  background: var(--bg-2);
+  color: var(--text);
+}
+
 /* Composer toggle buttons - the tools master switch and the inline-
    citations override. Grey when off; --ok green (color + border) when
    on. The tools button also uses `.toolbox-btn.flash` to pulse when

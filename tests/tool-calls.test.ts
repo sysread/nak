@@ -9,9 +9,11 @@ import type { OpenAIToolCall } from '../src/lib/tools';
 import type { Message } from '../src/lib/supabase';
 import {
   activityFor,
+  DEFAULT_DETAIL_VIEW,
   durationPill,
-  fencedArgs,
-  fencedResult,
+  flipDetailView,
+  renderArgs,
+  renderResult,
   statusFor,
   type CallTiming,
 } from '../src/lib/ui/tool-calls';
@@ -116,33 +118,106 @@ describe('durationPill', () => {
   });
 });
 
-describe('fencedArgs', () => {
-  it('wraps pretty-printed JSON in a json fence', () => {
-    const call = makeCall('c1', '{"a":1}');
-    expect(fencedArgs(call)).toBe('```json\n{\n  "a": 1\n}\n```');
+describe('flipDetailView', () => {
+  it('flips between the two modes', () => {
+    expect(flipDetailView('markdown')).toBe('json');
+    expect(flipDetailView('json')).toBe('markdown');
   });
 
-  it('defaults missing arguments to {}', () => {
-    const call = makeCall('c1', '');
-    expect(fencedArgs(call)).toBe('```json\n{}\n```');
-  });
-
-  it('passes the raw string through when it isn\'t valid JSON', () => {
-    // The LLM occasionally emits invalid JSON; the user still
-    // needs to see what it sent.
-    const call = makeCall('c1', '{a:1}');
-    expect(fencedArgs(call)).toBe('```json\n{a:1}\n```');
+  it('defaults to the readable markdown shape', () => {
+    expect(DEFAULT_DETAIL_VIEW).toBe('markdown');
   });
 });
 
-describe('fencedResult', () => {
-  it('shows the in-progress placeholder when no result has landed', () => {
-    expect(fencedResult('c1', {})).toBe('_In progress…_');
+describe('renderArgs', () => {
+  it('wraps pretty-printed JSON in a json fence in json view', () => {
+    const call = makeCall('c1', '{"a":1}');
+    expect(renderArgs(call, 'json', undefined)).toBe(
+      '```json\n{\n  "a": 1\n}\n```'
+    );
   });
 
-  it('wraps pretty-printed JSON in a json fence', () => {
+  it('defaults missing arguments to {} in json view', () => {
+    const call = makeCall('c1', '');
+    expect(renderArgs(call, 'json', undefined)).toBe('```json\n{}\n```');
+  });
+
+  it("falls back to a fenced block when the LLM emitted invalid JSON in json view", () => {
+    // The LLM occasionally emits invalid JSON; the user still
+    // needs to see what it sent.
+    const call = makeCall('c1', '{a:1}');
+    expect(renderArgs(call, 'json', undefined)).toBe('```json\n{a:1}\n```');
+  });
+
+  it('renders the generic markdown shape in markdown view', () => {
+    const call = makeCall('c1', '{"limit":5}');
+    expect(renderArgs(call, 'markdown', undefined)).toBe('- **limit:** 5');
+  });
+
+  it("prefers the tool's formatArgs override when present in markdown view", () => {
+    // The override gets called with the parsed argument object
+    // and its return value is the rendered markdown verbatim.
+    const call = makeCall('c1', '{"x":1}');
+    const formatArgs = (args: Record<string, unknown>): string =>
+      'custom: ' + JSON.stringify(args);
+    expect(renderArgs(call, 'markdown', { formatArgs })).toBe('custom: {"x":1}');
+  });
+
+  it('falls back to the generic formatter when an override exists but the JSON is partial', () => {
+    // Mid-stream args arrive as fragments. The override expects
+    // a parsed object; we should not call it with garbage. The
+    // generic path renders the raw string as a fenced block.
+    const call = makeCall('c1', '{"x":1');
+    const formatArgs = (): string => 'should not see this';
+    expect(renderArgs(call, 'markdown', { formatArgs })).toBe(
+      '```\n{"x":1\n```'
+    );
+  });
+
+  it('ignores the override in json view so the raw wire shape is visible', () => {
+    const call = makeCall('c1', '{"x":1}');
+    const formatArgs = (): string => 'should not appear';
+    expect(renderArgs(call, 'json', { formatArgs })).toBe(
+      '```json\n{\n  "x": 1\n}\n```'
+    );
+  });
+});
+
+describe('renderResult', () => {
+  it('shows the in-progress placeholder when no result has landed', () => {
+    expect(renderResult('c1', {}, 'markdown', undefined)).toBe('_In progress…_');
+    expect(renderResult('c1', {}, 'json', undefined)).toBe('_In progress…_');
+  });
+
+  it('wraps pretty-printed JSON in a json fence in json view', () => {
     const results = { c1: makeResultMessage('{"x":1}') };
-    expect(fencedResult('c1', results)).toBe('```json\n{\n  "x": 1\n}\n```');
+    expect(renderResult('c1', results, 'json', undefined)).toBe(
+      '```json\n{\n  "x": 1\n}\n```'
+    );
+  });
+
+  it('renders the generic markdown shape in markdown view', () => {
+    const results = { c1: makeResultMessage('{"found":true}') };
+    expect(renderResult('c1', results, 'markdown', undefined)).toBe(
+      '- **found:** `true`'
+    );
+  });
+
+  it("prefers the tool's formatResult override when present in markdown view", () => {
+    const results = { c1: makeResultMessage('{"x":1}') };
+    const formatResult = (result: unknown): string =>
+      'custom: ' + JSON.stringify(result);
+    expect(renderResult('c1', results, 'markdown', { formatResult })).toBe(
+      'custom: {"x":1}'
+    );
+  });
+
+  it('falls back to the generic formatter when an override exists but the result is not JSON', () => {
+    const results = { c1: makeResultMessage('hello world') };
+    const formatResult = (): string => 'should not see this';
+    expect(renderResult('c1', results, 'markdown', { formatResult })).toBe(
+      '```\nhello world\n```'
+    );
   });
 });
 
