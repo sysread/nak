@@ -18,14 +18,16 @@
  * order. Cost is one extra query; the payoff is the recall agent can
  * actually tell what each thread was about without opening it.
  *
- * Current-thread filter: by default we exclude `ctx.threadId` from
- * results. The whole point is "what did we talk about in OTHER
- * threads" — returning the current thread pollutes the result set
- * with content the main model already has in its context window. An
- * explicit `include_current: true` flag opts back in for the rare
- * case the model wants to find a prior turn from the same thread
- * (e.g. "earlier you said…" where the earlier turn was dropped from
- * the working context by compaction).
+ * Current-thread filter: when the caller's ToolContext sets
+ * `conversationExcludeOwnThread`, hits whose `thread.id` equals
+ * `ctx.threadId` are dropped post-fetch. The flag rides on the ctx
+ * (not in the LLM-visible args schema) so the model cannot toggle
+ * it; the harness decides per caller. Set by the main chat-loop and
+ * `ConversationRecallAgent`'s inner tool loop - both want OTHER
+ * conversations, not the live one echoed back. Left unset by callers
+ * that are not thread-scoped (the wiki librarian passes
+ * `threadId: ''` and so doesn't need the flag - the empty id
+ * matches nothing anyway).
  *
  * Schema lives in `./conversation_search.schema.ts`.
  */
@@ -70,7 +72,7 @@ export const conversationSearch: ToolDef = {
       1,
       Math.min(CONVERSATION_SEARCH_MAX_LIMIT, Math.floor(rawLimit))
     );
-    const includeCurrent = args.include_current === true;
+    const excludeOwn = ctx.conversationExcludeOwnThread === true;
 
     let queryEmbedding: number[] | null = null;
     try {
@@ -94,17 +96,17 @@ export const conversationSearch: ToolDef = {
       // us under `limit`. `searchThreads` caps its own output at the
       // limit it's given, so asking for limit+1 is enough to survive
       // a single self-exclusion.
-      limit: includeCurrent ? limit : limit + 1,
+      limit: excludeOwn ? limit + 1 : limit,
     });
 
-    // Exclude the current thread unless explicitly opted in. Done
-    // after the search call rather than as a DB filter because
+    // Drop the current thread when the caller asked for own-thread
+    // exclusion. Done post-fetch rather than as a DB filter because
     // `searchThreads`' contract doesn't expose an exclusion param -
     // adding one to the drawer-shared method for this one caller is
     // scope creep.
-    const filtered = includeCurrent
-      ? hits
-      : hits.filter((h) => h.thread.id !== ctx.threadId);
+    const filtered = excludeOwn
+      ? hits.filter((h) => h.thread.id !== ctx.threadId)
+      : hits;
     const trimmed = filtered.slice(0, limit);
     if (trimmed.length === 0) return [];
 

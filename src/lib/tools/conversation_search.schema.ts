@@ -29,12 +29,6 @@ export const conversationSearchSchema = {
         maximum: CONVERSATION_SEARCH_MAX_LIMIT,
         description: `Max results (default ${CONVERSATION_SEARCH_DEFAULT_LIMIT}, max ${CONVERSATION_SEARCH_MAX_LIMIT}).`,
       },
-      include_current: {
-        type: 'boolean',
-        description:
-          'Include the current thread. Defaults to false - the ' +
-          "current thread's content is already in your context.",
-      },
     },
     required: ['query'],
     additionalProperties: false,

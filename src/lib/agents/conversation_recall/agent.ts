@@ -159,6 +159,11 @@ export class ConversationRecallAgent
           // Forward the caller's depth; runHeadlessToolLoop bumps
           // and enforces MAX_AGENT_DEPTH internally.
           depth: req.depth,
+          // Recall hygiene: when conversation_search runs underneath
+          // this agent, skip the live thread. We're looking for what
+          // OTHER conversations have on this topic; the current one
+          // is already in the messages array above.
+          conversationExcludeOwnThread: true,
         },
         signal,
         responseFormat: CONVERSATION_RECALL_RESPONSE_FORMAT,

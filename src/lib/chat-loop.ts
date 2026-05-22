@@ -1679,6 +1679,11 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         // they can find articles to update; the main model surfacing
         // its own thread's synthesis as recall would be circular.
         wikiExcludeOwnThreadSoleSources: true,
+        // Same hygiene for conversation_search: when the main chat
+        // reaches for prior conversations as a drill-down, surface
+        // OTHER threads. The current thread's content is already in
+        // the working context.
+        conversationExcludeOwnThread: true,
       };
       let args: Record<string, unknown>;
       try {

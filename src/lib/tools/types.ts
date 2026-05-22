@@ -64,14 +64,26 @@ export interface ToolContext {
    *
    * Carried on the ctx (not in the LLM-visible args schema) so the
    * model cannot pass or strip it - the harness owns the decision.
-   * Scoped specifically to wiki because that is the only layer with
-   * a join table tying articles to source threads; `conversation_
-   * search` already excludes the current thread unconditionally with
-   * an LLM-facing `include_current: true` opt-out, and `memories`
-   * has no source-thread tracking yet (see the planned schema work
-   * if a future change adds one).
+   * `memories` has no equivalent flag because it lacks source-thread
+   * tracking; if a future schema change adds one, the equivalent ctx
+   * flag goes here.
    */
   wikiExcludeOwnThreadSoleSources?: boolean;
+  /**
+   * Opt-in filter for `conversation_search`: when true, the tool
+   * drops any hit whose `thread.id` equals `ctx.threadId`. Set by
+   * every caller that should be searching OTHER conversations rather
+   * than the live one - the main chat-loop and `ConversationRecallAgent`'s
+   * inner tool loop. Left unset by callers that are not thread-scoped
+   * (e.g. the wiki librarian, which runs over the whole wiki and
+   * passes `threadId: ''` - the empty id matches nothing so the
+   * filter would be a no-op even if set).
+   *
+   * Same ctx-vs-args rationale as the wiki flag: the model does not
+   * get to control whether its own conversation echoes back as a
+   * search hit; the harness makes the call per caller.
+   */
+  conversationExcludeOwnThread?: boolean;
 }
 
 /**
