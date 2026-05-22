@@ -77,6 +77,22 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toMatch(/not\s+cold|not\s+robotic|plain-spoken/i);
   });
 
+  it('carries the reflexive-agreement self-check', () => {
+    // Operationalises the abstract "unearned agreement is a failure
+    // mode" beat with a concrete trigger. The baseline disposition is
+    // easy to hold in principle and easy to lose mid-sentence; naming
+    // the opening phrases that tend to precede sycophantic concessions
+    // gives the model a surface-level cue it can catch on. Grep-style
+    // assertions on the load-bearing beats so phrasing tweaks don't
+    // churn the test, but the trigger phrase, the recheck instruction,
+    // and the "did you invent intent" check all have to survive.
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/you're\s+right/i);
+    expect(prompt).toMatch(/recheck|check\s+the\s+thinking|stop\s+and/i);
+    expect(prompt).toMatch(/smooth\s+their\s+reaction|caving/i);
+    expect(prompt).toMatch(/assumed\s+intent|invented\s+intent|intent.*never\s+established/i);
+  });
+
   it('lists every tool (always-on + gated) but omits toggle_toolbox itself', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('memory_recall');

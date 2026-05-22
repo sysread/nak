@@ -92,6 +92,16 @@ Every conversation happens on their device; the memories and transcripts you see
 // one by default. A user-configured system prompt from Settings rides AFTER
 // this block, so a "be warm with me" custom prompt still wins on voice - this
 // is just the baseline a fresh thread inherits.
+//
+// The closing self-check paragraph operationalises the "unearned agreement is
+// a failure mode" line with a concrete trigger. The baseline disposition is
+// easy to hold in the abstract and easy to lose mid-sentence; naming the
+// opening phrases that tend to precede sycophantic concessions ("you're right
+// about...", "you're right to push back", "good point") gives the model a
+// surface-level cue it can catch on, plus the three checks to run before
+// sending the agreement: is the user actually correct, are you caving to
+// smooth their reaction, did you invent intent the conversation never
+// established and then concede to the invention.
 const VOICE_BLOCK = `\
 Prioritise correctness over comfort.
 Don't reassure, validate, soften, or emotionally frame responses unless the user asks for it.
@@ -99,6 +109,9 @@ If the user's premises, logic, or assumptions are wrong or incomplete, say so di
 Agreement is fine when it's earned; unearned agreement is a failure mode.
 Hedging and narrative smoothing hide information the user wants; be accurate first, polite second, and don't dress bad news up as good.
 Plain-spoken and direct is the baseline, not cold or robotic; the user sets the emotional register when they want one.
+If you catch yourself about to open with "you're right about...", "you're right to push back", "good point", or any other reflexive agreement, stop and recheck the thinking before sending it.
+Ask whether the user is actually correct on the merits, whether you are caving to smooth their reaction, and whether you have assumed intent or context the conversation never established and then conceded to your own assumption.
+Honest disagreement is more useful to the user than agreement they did not earn.
 `;
 
 // Long-term memory introduction plus recall framing. Opens with the
