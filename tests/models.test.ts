@@ -108,17 +108,21 @@ describe('AGENT_MODELS (background agents)', () => {
     }
   });
   it('groups roles by model id as expected', () => {
-    // Three deepseek slots: reflection, web search, research docs.
+    // Deepseek slots: reflection, web search, research docs, and the
+    // three recall agents (memory, conversation, wiki). The recall
+    // trio rides the foreground capacity pool because grounded recall
+    // is fabrication-sensitive under json_object pressure - see the
+    // per-slot rationale block in src/lib/models/index.ts.
     expect(AGENT_MODELS.reflection).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.webSearch).toBe('deepseek-v4-flash');
     expect(AGENT_MODELS.researchDocs).toBe('deepseek-v4-flash');
+    expect(AGENT_MODELS.recall).toBe('deepseek-v4-flash');
+    expect(AGENT_MODELS.conversationRecall).toBe('deepseek-v4-flash');
+    expect(AGENT_MODELS.wikiRecall).toBe('deepseek-v4-flash');
     // Three mistral-small slots: intuition, summary, samskara.
     expect(AGENT_MODELS.intuition).toBe('mistral-small-3-2-24b-instruct');
     expect(AGENT_MODELS.summary).toBe('mistral-small-3-2-24b-instruct');
     expect(AGENT_MODELS.samskara).toBe('mistral-small-3-2-24b-instruct');
-    // Two qwen recall slots.
-    expect(AGENT_MODELS.recall).toBe('qwen3-5-35b-a3b');
-    expect(AGENT_MODELS.conversationRecall).toBe('qwen3-5-35b-a3b');
     // Vision sub-call.
     expect(AGENT_MODELS.visionAnalysis).toBe('e2ee-qwen3-5-122b-a10b');
     // Auto-title: Chat.svelte's parallel background completion that
@@ -299,7 +303,7 @@ describe('padEmbeddingForStorage', () => {
 describe('findModelById', () => {
   it('returns the spec for currently-active ids', () => {
     expect(findModelById('deepseek-v4-flash')).toBe(MODELS['deepseek-v4-flash']);
-    expect(findModelById('qwen3-5-35b-a3b')).toBe(MODELS['qwen3-5-35b-a3b']);
+    expect(findModelById('qwen-3-6-plus')).toBe(MODELS['qwen-3-6-plus']);
     expect(findModelById('mistral-small-3-2-24b-instruct')).toBe(
       MODELS['mistral-small-3-2-24b-instruct']
     );
@@ -310,6 +314,7 @@ describe('findModelById', () => {
     expect(findModelById('kimi-k2-5')).toBeNull();
     expect(findModelById('zai-org-glm-5-1')).toBeNull();
     expect(findModelById('deepseek-v4-pro')).toBeNull();
+    expect(findModelById('qwen3-5-35b-a3b')).toBeNull();
   });
   it('returns null for unknown / empty inputs', () => {
     expect(findModelById('never-existed')).toBeNull();
@@ -322,7 +327,7 @@ describe('findModelById', () => {
 describe('findContextWindowById', () => {
   it('returns the window for a currently-active id', () => {
     expect(findContextWindowById('deepseek-v4-flash')).toBe(MODELS['deepseek-v4-flash'].contextWindow);
-    expect(findContextWindowById('qwen3-5-35b-a3b')).toBe(MODELS['qwen3-5-35b-a3b'].contextWindow);
+    expect(findContextWindowById('qwen-3-6-plus')).toBe(MODELS['qwen-3-6-plus'].contextWindow);
   });
 
   // Historical assistant rows carry ids that used to front a tier - if
@@ -337,6 +342,7 @@ describe('findContextWindowById', () => {
     expect(findContextWindowById('minimax-m27')).toBe(198_000);
     expect(findContextWindowById('grok-41-fast')).toBe(1_000_000);
     expect(findContextWindowById('zai-org-glm-5-1')).toBe(200_000);
+    expect(findContextWindowById('qwen3-5-35b-a3b')).toBe(256_000);
     expect(findContextWindowById('zai-org-glm-5')).toBe(198_000);
     expect(findContextWindowById('zai-org-glm-4.7')).toBe(198_000);
     expect(findContextWindowById('deepseek-v4-pro')).toBe(1_000_000);

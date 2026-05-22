@@ -186,13 +186,6 @@ export const MODELS = {
     supportsVision: false,
     supportsResponseFormat: true,
   },
-  'qwen3-5-35b-a3b': {
-    id: 'qwen3-5-35b-a3b',
-    contextWindow: 256_000,
-    supportsReasoning: true,
-    supportsVision: false,
-    supportsResponseFormat: true,
-  },
   'e2ee-qwen3-5-122b-a10b': {
     id: 'e2ee-qwen3-5-122b-a10b',
     contextWindow: 128_000,
@@ -351,8 +344,9 @@ export type AgentRole =
  *     with foreground tiers" has been deliberately relaxed. If
  *     overload errors return under the shared-capacity shape, the
  *     next move is repointing the background agents (reflection,
- *     wiki, wikiLibrarian, webSearch, researchDocs) to a non-
- *     foreground id, NOT downgrading the foreground tiers.
+ *     wiki, wikiLibrarian, webSearch, researchDocs, recall,
+ *     conversationRecall, wikiRecall) to a non-foreground id, NOT
+ *     downgrading the foreground tiers.
  *
  *   wiki - deepseek-v4-flash. Autonomous wiki agent: read a settled
  *     thread the day after, decide which topics warrant a new article
@@ -418,20 +412,28 @@ export type AgentRole =
  *     with maxTokens 200-500 per phase. Structured output on bounded
  *     context; mistral-small handles it comfortably.
  *
- *   recall - qwen3-5-35b-a3b. Memory-recall agent: read the live
- *     conversation, search memories, produce a short note. Bounded
- *     synthesis with a wire-level response_format pin. Distinct
- *     constant from conversationRecall so the two recall surfaces
- *     can be tuned independently if one regresses.
+ *   recall - deepseek-v4-flash. Memory-recall agent: read the live
+ *     conversation, search memories, produce a short JSON note.
+ *     Pinned to the same id as reflection / wiki / webSearch /
+ *     researchDocs because grounded recall over a real DB surface
+ *     (memory_search) is sensitive to model-side fabrication - small
+ *     MoE models under json_object pressure will confabulate
+ *     plausible-shaped notes rather than emit the empty signal. A
+ *     dense reasoning model with the large window is the cheapest
+ *     fix; the cost is that recall now shares capacity with the
+ *     foreground Balanced/Fast tiers. Distinct constant from
+ *     conversationRecall so the two recall surfaces can be retuned
+ *     independently if one regresses.
  *
- *   conversationRecall - qwen3-5-35b-a3b. Conversation-recall agent;
- *     same shape and rationale as recall.
+ *   conversationRecall - deepseek-v4-flash. Conversation-recall
+ *     agent; same shape and rationale as recall.
  *
- *   wikiRecall - qwen3-5-35b-a3b. Wiki-recall agent: read the live
+ *   wikiRecall - deepseek-v4-flash. Wiki-recall agent: read the live
  *     conversation, search the user's wiki articles, produce a short
- *     first-person note. Same bounded-synthesis JSON-out shape as
- *     recall / conversationRecall; distinct slot so the three recall
- *     surfaces can be tuned independently if one regresses.
+ *     first-person note. Same bounded-synthesis JSON-out shape and
+ *     fabrication-sensitivity profile as recall / conversationRecall;
+ *     distinct slot so the three recall surfaces can be retuned
+ *     independently if one regresses.
  *
  *   visionAnalysis - e2ee-qwen3-5-122b-a10b. Vision sub-completion
  *     for the analyze_image tool. Decoupled from any user-facing
@@ -466,9 +468,9 @@ export const AGENT_MODELS = {
   recipeTopics:       'mistral-small-3-2-24b-instruct',
   samskara:           'mistral-small-3-2-24b-instruct',
   bias:               'mistral-small-3-2-24b-instruct',
-  recall:             'qwen3-5-35b-a3b',
-  conversationRecall: 'qwen3-5-35b-a3b',
-  wikiRecall:         'qwen3-5-35b-a3b',
+  recall:             'deepseek-v4-flash',
+  conversationRecall: 'deepseek-v4-flash',
+  wikiRecall:         'deepseek-v4-flash',
   visionAnalysis:     'e2ee-qwen3-5-122b-a10b',
   autoTitle:          'e2ee-gpt-oss-20b-p',
 } as const satisfies Record<AgentRole, ModelId>;

@@ -59,4 +59,12 @@ export const LEGACY_MODELS: Readonly<Record<string, LegacyModelSpec>> = {
   'qwen3-235b-a22b-instruct-2507':     { id: 'qwen3-235b-a22b-instruct-2507', contextWindow: 128_000 },
   'zai-org-glm-4.7-flash':             { id: 'zai-org-glm-4.7-flash', contextWindow: 128_000 },
   'nvidia-nemotron-cascade-2-30b-a3b': { id: 'nvidia-nemotron-cascade-2-30b-a3b', contextWindow: 256_000 },
+
+  // Retired recall-trio id (memory / conversation / wiki recall).
+  // MoE / json_object pressure produced grounded-content fabrication
+  // (confabulated user facts emitted as kind:'note' without consulting
+  // memory_search / wiki_search); the three recall slots were repointed
+  // at deepseek-v4-flash to share the dense reasoning capacity used by
+  // reflection and the other tool-driven background agents.
+  'qwen3-5-35b-a3b':                   { id: 'qwen3-5-35b-a3b', contextWindow: 256_000 },
 };
