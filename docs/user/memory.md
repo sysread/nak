@@ -195,7 +195,9 @@ From the panel you can:
   memories* section sits collapsed. Expanding it runs a one-off
   semantic search for the memory's closest neighbours - the same
   vector match the search box and the assistant's recall use - and
-  lists them by label. Click a label to open that memory. Nothing
+  lists them by label, each prefixed with a match-score pill (higher
+  is closer; the pill is the value the list is ordered by). Click a
+  label to open that memory. Nothing
   is fetched until you expand the section, and a memory the
   background worker hasn't embedded yet (one written moments ago)
   shows nothing until its vector is ready.

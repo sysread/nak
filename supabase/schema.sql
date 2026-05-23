@@ -3049,6 +3049,14 @@ $$;
 -- empty state rather than erroring. `confidence >= 0.05` mirrors the
 -- other search RPCs: rows the reflection agent has decayed into
 -- oblivion stay hidden.
+--
+-- `similarity` rides the return row so the disclosure can show each
+-- neighbour's match score in a pill. It is the same boosted-cosine value
+-- the ORDER BY ranks on (raw cosine similarity times the bounded
+-- confidence boost), so the displayed numbers are monotonic with the
+-- list order - a higher pill never sorts below a lower one. The boost
+-- multiplier tops out around 1.36, so the value can edge above 1.0 for a
+-- near-identical, highly-corroborated neighbour.
 drop function if exists public.search_memories_similar(uuid, int);
 create or replace function public.search_memories_similar(
   p_memory_id uuid,
@@ -3060,11 +3068,14 @@ create or replace function public.search_memories_similar(
   confidence real,
   topics text[],
   created_at timestamptz,
-  updated_at timestamptz
+  updated_at timestamptz,
+  similarity real
 )
 language sql stable security invoker as $$
   select m.id, m.label, m.data, m.confidence, m.topics,
-         m.created_at, m.updated_at
+         m.created_at, m.updated_at,
+         ((1 - (m.embedding <=> src.embedding))
+           * (1 + 0.15 * ln(1 + m.confidence)))::real as similarity
     from public.memories m
    cross join (
      select embedding

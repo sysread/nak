@@ -250,6 +250,18 @@ export interface Memory {
 }
 
 /**
+ * A memory plus its match score, returned by `search_memories_similar`.
+ * `similarity` is the boosted-cosine value the RPC ranks on (raw cosine
+ * times the bounded confidence boost), so it's monotonic with the result
+ * order and can edge slightly above 1.0 for a near-identical, highly-
+ * corroborated neighbour. The extra field is harmless where a plain
+ * `Memory` is expected, so these rows feed `upsertMemoryRow` directly.
+ */
+export interface SimilarMemory extends Memory {
+  similarity: number;
+}
+
+/**
  * A directed edge between two memories in the volitional-memory graph.
  * The LLM draws these via the memory_relate tool; the user can add and
  * remove them in the Memories UI. Retrieval traverses outbound edges
@@ -4513,19 +4525,20 @@ export class SupabaseService {
    * `searchMemoriesByEmbedding`; the source is excluded server-side so
    * it never lists itself. Returns an empty array when the source
    * hasn't been embedded yet (the worker hasn't caught up) - the caller
-   * shows an empty state. Same shape as the other memory list calls, so
-   * the rows are plain `Memory` objects (no embedding column shipped).
+   * shows an empty state. Each row carries its `similarity` match score
+   * (the value the RPC ranks on); the embedding column itself is never
+   * shipped.
    */
   async searchSimilarMemories(
     memoryId: string,
     limit: number
-  ): Promise<Memory[]> {
+  ): Promise<SimilarMemory[]> {
     const { data, error } = await this.client.rpc('search_memories_similar', {
       p_memory_id: memoryId,
       match_limit: limit,
     });
     if (error) throw new SupabaseError(error.message);
-    return (data ?? []) as Memory[];
+    return (data ?? []) as SimilarMemory[];
   }
 
   /**

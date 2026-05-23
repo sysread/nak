@@ -39,7 +39,7 @@
   } from '$lib/memories-store.svelte';
   import { searchMemoriesSemantic } from '$lib/memories';
   import { MAX_MEMORY_DATA_CHARS } from '$lib/embeddings/types';
-  import type { Memory, MemoryRelation } from '$lib/supabase';
+  import type { Memory, MemoryRelation, SimilarMemory } from '$lib/supabase';
   import Markdown from '../components/Markdown.svelte';
   import { deepSleepRunner } from '$lib/agents/deep-sleep/runner.svelte';
   import { remRunner } from '$lib/agents/rem/runner.svelte';
@@ -106,7 +106,7 @@
   type SimilarState =
     | { kind: 'idle' }
     | { kind: 'loading' }
-    | { kind: 'loaded'; rows: Memory[] }
+    | { kind: 'loaded'; rows: SimilarMemory[] }
     | { kind: 'error'; message: string };
   let similarOpen = $state(false);
   let similarState = $state<SimilarState>({ kind: 'idle' });
@@ -578,7 +578,7 @@
   // result set first so the detail panel can resolve it even when the
   // active search/browse window doesn't contain it - otherwise the link
   // lands on the "not in the current results" empty state.
-  function openSimilar(mem: Memory): void {
+  function openSimilar(mem: SimilarMemory): void {
     upsertMemoryRow(mem);
     navigate({ memory: mem.id });
   }
@@ -1275,7 +1275,11 @@
                         {:else}
                           <ul class="memory-similar-list">
                             {#each similarState.rows as row (row.id)}
-                              <li>
+                              <li class="memory-similar-row">
+                                <span
+                                  class="memory-similar-score"
+                                  title="Match score"
+                                >{row.similarity.toFixed(3)}</span>
                                 <button
                                   type="button"
                                   class="memory-similar-link"
@@ -1860,6 +1864,25 @@
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
+  }
+
+  .memory-similar-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+
+  /* Match-score pill. tabular-nums keeps the fixed 0.000 format from
+     jittering as digit widths change down the list, so the pills stack
+     in a clean column to the left of the labels. */
+  .memory-similar-score {
+    flex: none;
+    padding: 0.05rem 0.4rem;
+    border-radius: 0.4rem;
+    background: var(--bg-2);
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
   }
 
   .memory-similar-link {
