@@ -300,7 +300,7 @@ without waiting for the next scheduled cycle. The panel shows a
 step-by-step progress strip and a one-sentence summary of what the
 agent did.
 
-The librarian can be disabled entirely under **Settings -> AI ->
+The librarian can be disabled entirely under **Settings -> Memory ->
 Memory librarian**.
 
 ## Forgetting
