@@ -240,6 +240,9 @@ the dropdown shows the topics you've collected so far, plus an
 **untagged** row that filters to recipes the worker hasn't reached
 yet.
 
+- **Each row shows a count.** `chicken (12)` means twelve recipes
+  carry that topic; the untagged row's count is how many recipes are
+  still waiting on the worker.
 - **Multi-select is OR semantics.** Picking "chicken" + "dessert"
   shows recipes tagged with either - useful for "what are my
   chicken or dessert options."

@@ -141,9 +141,16 @@ threads tagged with either.
   `topics_claim_holder = $me AND topics_claim_expires > now()`.
   Does NOT bump `updated_at` (tagging is a side-effect; bumping
   would re-promote the thread in the drawer).
-- `list_user_topics` RPC — returns the distinct sorted vocabulary
-  for the calling user. Empty array on accounts where the agent
-  hasn't run yet.
+- `list_user_topics` RPC — returns the sorted vocabulary for the
+  calling user as a jsonb object `{ topics: [{topic, count}],
+  untagged }`. `count` is the per-topic corpus tally the dropdown
+  shows in parens; `untagged` backs the synthetic `(untagged)` row's
+  count. Computed server-side because the thread list is paginated -
+  a client tally would only see the loaded page. Empty `topics` on
+  accounts where the agent hasn't run yet. The supabase-service
+  wrapper parses it into a `TopicVocabulary` (see `supabase.ts`); the
+  sibling `list_user_memory_topics` / `list_user_recipe_topics` RPCs
+  return the same shape.
 - `topicsFilterClause(selected)` (helper in `supabase.ts`) — turns
   a `selectedTopics` array into a PostgREST `or(...)` clause.
   Handles the untagged sentinel specially (`topics.eq.{}`) and

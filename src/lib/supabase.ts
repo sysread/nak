@@ -717,6 +717,51 @@ export interface ThreadPage {
 export const UNTAGGED_TOPIC_SENTINEL = '(untagged)';
 
 /**
+ * One row of a topic-vocabulary listing: a topic name plus how many of
+ * the user's items (threads / memories / recipes, depending on the RPC)
+ * carry it. `count` is the number the topic dropdown shows in parens.
+ */
+export interface TopicCount {
+  topic: string;
+  count: number;
+}
+
+/**
+ * Return shape of the three `list_user_*_topics` RPCs. `topics` is the
+ * alphabetised real-topic vocabulary with per-topic corpus counts;
+ * `untagged` is how many items have no topics at all (backs the
+ * synthesised "(untagged)" dropdown row). Counts are corpus-wide on
+ * purpose - the memory and thread lists are paginated/capped client-
+ * side, so a client tally would undercount.
+ */
+export interface TopicVocabulary {
+  topics: TopicCount[];
+  untagged: number;
+}
+
+/**
+ * Coerce the jsonb a `list_user_*_topics` RPC returns into a
+ * `TopicVocabulary`. This is a system boundary (the Supabase wire), so
+ * it validates rather than trusting the shape: a missing/garbage field
+ * collapses to the empty vocabulary instead of throwing, keeping the
+ * dropdown usable across a malformed response.
+ */
+function parseTopicVocabulary(data: unknown): TopicVocabulary {
+  if (!data || typeof data !== 'object') return { topics: [], untagged: 0 };
+  const obj = data as { topics?: unknown; untagged?: unknown };
+  const topics = Array.isArray(obj.topics)
+    ? obj.topics.flatMap((entry): TopicCount[] => {
+        if (!entry || typeof entry !== 'object') return [];
+        const { topic, count } = entry as { topic?: unknown; count?: unknown };
+        if (typeof topic !== 'string') return [];
+        return [{ topic, count: typeof count === 'number' ? count : 0 }];
+      })
+    : [];
+  const untagged = typeof obj.untagged === 'number' ? obj.untagged : 0;
+  return { topics, untagged };
+}
+
+/**
  * Split a selectedTopics list into the two predicates the query
  * builder needs: real topics for the `&&` overlap test, plus a
  * boolean for "also include rows with no topics at all". Centralised
@@ -3929,18 +3974,17 @@ export class SupabaseService {
   }
 
   /**
-   * Distinct topic vocabulary for the current user. Backs the drawer's
-   * topic-filter dropdown; called on drawer mount and refreshed after
-   * a tagging event. Returns the unique flat sorted list of topics
-   * the worker has assigned across all threads. The "(untagged)"
-   * pseudo-topic the UI offers is NOT in this list - the UI
-   * synthesises it from the existence of zero-topic rows.
+   * Topic vocabulary + per-topic counts for the current user. Backs the
+   * drawer's topic-filter dropdown; called on drawer mount and
+   * refreshed after a tagging event. Returns the alphabetised topics
+   * the worker has assigned across all threads, each with its corpus
+   * count, plus the count of zero-topic threads (the "(untagged)"
+   * dropdown row the UI synthesises - never a member of `topics`).
    */
-  async listUserTopics(): Promise<string[]> {
+  async listUserTopics(): Promise<TopicVocabulary> {
     const { data, error } = await this.client.rpc('list_user_topics');
     if (error) throw new SupabaseError(error.message);
-    if (!Array.isArray(data)) return [];
-    return data.filter((t): t is string => typeof t === 'string');
+    return parseTopicVocabulary(data);
   }
 
   /**
@@ -4025,17 +4069,17 @@ export class SupabaseService {
   }
 
   /**
-   * Distinct memory-topic vocabulary for the current user. Backs the
-   * Memories drawer's topic-filter dropdown; called on drawer mount
-   * and refreshed after a tagging event. The "(untagged)" pseudo-
-   * topic is NOT in this list - the UI synthesises it from the
-   * existence of zero-topic rows.
+   * Memory-topic vocabulary + per-topic counts for the current user.
+   * Backs the Memories drawer's topic-filter dropdown; called on drawer
+   * mount and refreshed after a tagging event. Counts span the whole
+   * memory corpus, not the capped search-result set the panel holds.
+   * The "(untagged)" pseudo-topic is NOT in `topics` - the UI
+   * synthesises it from the `untagged` count.
    */
-  async listUserMemoryTopics(): Promise<string[]> {
+  async listUserMemoryTopics(): Promise<TopicVocabulary> {
     const { data, error } = await this.client.rpc('list_user_memory_topics');
     if (error) throw new SupabaseError(error.message);
-    if (!Array.isArray(data)) return [];
-    return data.filter((t): t is string => typeof t === 'string');
+    return parseTopicVocabulary(data);
   }
 
   /**
@@ -4118,16 +4162,15 @@ export class SupabaseService {
   }
 
   /**
-   * Distinct recipe-topic vocabulary for the current user. Backs
-   * the Cookbook drawer's topic-filter dropdown. Distinct from
+   * Recipe-topic vocabulary + per-topic counts for the current user.
+   * Backs the Cookbook drawer's topic-filter dropdown. Distinct from
    * `listUserTopics` (threads) and `listUserMemoryTopics`
    * (memories) so a user's vocabularies don't cross-pollute.
    */
-  async listUserRecipeTopics(): Promise<string[]> {
+  async listUserRecipeTopics(): Promise<TopicVocabulary> {
     const { data, error } = await this.client.rpc('list_user_recipe_topics');
     if (error) throw new SupabaseError(error.message);
-    if (!Array.isArray(data)) return [];
-    return data.filter((t): t is string => typeof t === 'string');
+    return parseTopicVocabulary(data);
   }
 
   /**

@@ -27,7 +27,7 @@
  * `onCookbookChange` / `notifyCookbookChanged` from the events
  * module directly.
  */
-import type { Recipe, RecipePhoto, SupabaseService } from './supabase';
+import type { Recipe, RecipePhoto, SupabaseService, TopicVocabulary } from './supabase';
 
 interface CookbookState {
   recipes: Recipe[];
@@ -54,14 +54,15 @@ interface CookbookState {
    */
   selectedTopics: string[];
   /**
-   * Per-user topic vocabulary - the flat sorted list returned by
+   * Per-user topic vocabulary + per-topic counts returned by
    * `list_user_recipe_topics`. Drives the TopicsFilter dropdown
-   * options. Refreshed on every successful `loadRecipes` so a
-   * newly-minted topic from the background worker shows up in the
-   * dropdown the next time the list reloads (which fires on tool
-   * mutations, modal opens, and tab switches).
+   * options and the count each row shows in parens. Refreshed on every
+   * successful `loadRecipes` so a newly-minted topic from the
+   * background worker shows up in the dropdown the next time the list
+   * reloads (which fires on tool mutations, modal opens, and tab
+   * switches).
    */
-  topicsVocabulary: string[];
+  topicsVocabulary: TopicVocabulary;
 }
 
 export const cookbook = $state<CookbookState>({
@@ -70,7 +71,7 @@ export const cookbook = $state<CookbookState>({
   error: null,
   photos: {},
   selectedTopics: [],
-  topicsVocabulary: [],
+  topicsVocabulary: { topics: [], untagged: 0 },
 });
 
 /**

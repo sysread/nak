@@ -18,7 +18,7 @@
  * debounce timer + AbortController so rapid typing doesn't fire one
  * embedding request per character.
  */
-import type { Memory, MemoryRelation, SupabaseService } from './supabase';
+import type { Memory, MemoryRelation, SupabaseService, TopicVocabulary } from './supabase';
 import type { VeniceClient } from './venice';
 import { searchMemoriesSemantic } from './memories';
 
@@ -44,13 +44,14 @@ interface MemoriesStore {
    */
   selectedTopics: string[];
   /**
-   * Per-user topic vocabulary - the flat sorted list returned by
+   * Per-user topic vocabulary + per-topic counts returned by
    * `list_user_memory_topics`. Drives the TopicsFilter dropdown's
-   * options. Refreshed on first load and after a tagging realtime
-   * event lands. The "(untagged)" sentinel is NOT in this list - the
-   * TopicsFilter component synthesises it from the dropdown.
+   * options and the count each row shows in parens. Refreshed on first
+   * load and after a tagging realtime event lands. The "(untagged)"
+   * sentinel is NOT in `topics` - the TopicsFilter component synthesises
+   * that row from the `untagged` count.
    */
-  topicsVocabulary: string[];
+  topicsVocabulary: TopicVocabulary;
 }
 
 export const memoriesStore = $state<MemoriesStore>({
@@ -61,7 +62,7 @@ export const memoriesStore = $state<MemoriesStore>({
   error: null,
   query: '',
   selectedTopics: [],
-  topicsVocabulary: [],
+  topicsVocabulary: { topics: [], untagged: 0 },
 });
 
 // Match the assistant's `memory_search` per-call cap so the human UI

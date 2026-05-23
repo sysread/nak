@@ -113,7 +113,7 @@
   </div>
   <div class="memory-list-topics">
     <TopicsFilter
-      topics={memoriesStore.topicsVocabulary}
+      vocabulary={memoriesStore.topicsVocabulary}
       selected={memoriesStore.selectedTopics}
       onChange={setTopics}
     />
