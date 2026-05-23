@@ -60,6 +60,7 @@
     type NewAttachment,
     type SamskaraFireDiagnosticRow,
     type SamskaraSubstrateDiagnosticRow,
+    type TopicVocabulary,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
   import { ExchangeStore, mergeMessagesById } from '$lib/exchange/exchange-store.svelte';
@@ -783,15 +784,16 @@
   // Topic-filter state. `selectedTopics` carries the user's current
   // checkbox selections in the drawer's topic dropdown - including the
   // `(untagged)` sentinel when active. `topicsVocabulary` is the
-  // distinct list the background topics agent has assembled across
-  // the user's threads; refreshed on drawer mount and after we see
-  // the realtime subscription fire on a thread row (which is the
-  // proxy we use for "the agent just tagged something"). Both start
-  // empty - a brand-new account has nothing selected and an empty
-  // vocabulary, and the dropdown still functions (it offers only
-  // the sentinel until the worker catches up).
+  // distinct topic list + per-topic thread counts the background
+  // topics agent has assembled across the user's threads (the counts
+  // drive the "(7)" the dropdown shows next to each topic); refreshed
+  // on drawer mount and after we see the realtime subscription fire on
+  // a thread row (which is the proxy we use for "the agent just tagged
+  // something"). Both start empty - a brand-new account has nothing
+  // selected and an empty vocabulary, and the dropdown still functions
+  // (it offers only the sentinel until the worker catches up).
   let selectedTopics = $state<string[]>([]);
-  let topicsVocabulary = $state<string[]>([]);
+  let topicsVocabulary = $state<TopicVocabulary>({ topics: [], untagged: 0 });
 
   /** All threads currently loaded into any bucket, drafts included. */
   const loadedThreads = $derived<Thread[]>([
@@ -1586,7 +1588,7 @@
         recentThreads = [];
         olderThreads = [];
         archivedPage = [];
-        topicsVocabulary = [];
+        topicsVocabulary = { topics: [], untagged: 0 };
         selectedTopics = [];
         // Sign-out: abort every in-flight exchange. Without this a
         // background chat-loop kept running until its next tool/round
@@ -5254,7 +5256,7 @@
              rows down rather than overflowing. -->
         <div class="thread-list-topics">
           <TopicsFilter
-            topics={topicsVocabulary}
+            vocabulary={topicsVocabulary}
             selected={selectedTopics}
             onChange={(next) => (selectedTopics = next)}
           />

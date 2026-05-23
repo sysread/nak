@@ -42,6 +42,13 @@ more to narrow the list to only threads tagged with any of those
 topics. Selections are joined with OR, so checking `baking` and
 `bread` shows everything tagged with either.
 
+Each row shows a count in parens - `baking (7)` means seven of your
+active conversations carry that topic. The count spans all your
+active conversations, not just the ones currently loaded in the list,
+but it excludes archived ones - so it matches what you'll see when you
+pick the topic. A topic that lives only on archived conversations
+drops off the list.
+
 Each active filter shows up as a pill below the dropdown. Click the
 **×** on a pill to remove that one topic from the filter without
 reopening the dropdown; **clear** removes all of them at once. The
@@ -51,8 +58,8 @@ within these topics".
 
 A special `untagged` row at the top of the dropdown filters to
 threads the background agent hasn't reached yet, or threads where
-the agent decided no topic fit. It's useful when you want to see
-the backlog draining.
+the agent decided no topic fit; its count tells you how many that
+is. It's useful when you want to see the backlog draining.
 
 Topics are assigned automatically by a background agent - see
 [What runs in the background](./background.md) for what it does and

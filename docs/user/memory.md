@@ -149,7 +149,10 @@ the listing to memories about a particular subject area
 each memory with one to four short topic strings as you accumulate
 them; the dropdown shows the topics you've collected so far,
 plus an **untagged** row that filters to memories the worker
-hasn't reached yet (or chose not to tag). Picking multiple topics
+hasn't reached yet (or chose not to tag). Each row carries a count
+in parens - the total number of memories with that topic across your
+whole collection, not just the ones the current search turned up.
+Picking multiple topics
 is OR semantics - "allergies" + "food" shows memories tagged with
 either. Pills below the dropdown carry the active selection;
 each pill's × clears just that one. Tags are managed for you -

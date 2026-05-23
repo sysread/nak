@@ -10,10 +10,14 @@
  */
 import { describe, it, expect } from 'vitest';
 import { UNTAGGED_TOPIC_SENTINEL } from '../src/lib/supabase';
+import type { TopicVocabulary } from '../src/lib/supabase';
 import {
   computeOptions,
+  optionNames,
+  countsByOption,
   isUntagged,
   labelFor,
+  optionLabelFor,
   selectionAfterClearOne,
   selectionAfterToggle,
 } from '../src/lib/ui/topics-filter';
@@ -39,6 +43,46 @@ describe('computeOptions', () => {
   });
 });
 
+describe('optionNames', () => {
+  it('pulls the topic names out in vocabulary order', () => {
+    const vocab: TopicVocabulary = {
+      topics: [
+        { topic: 'baking', count: 7 },
+        { topic: 'bread', count: 3 },
+      ],
+      untagged: 12,
+    };
+    expect(optionNames(vocab)).toEqual(['baking', 'bread']);
+  });
+
+  it('is empty for a vocabulary with no real topics', () => {
+    expect(optionNames({ topics: [], untagged: 5 })).toEqual([]);
+  });
+});
+
+describe('countsByOption', () => {
+  it('keys real topics by name and maps the sentinel to the untagged tally', () => {
+    const vocab: TopicVocabulary = {
+      topics: [
+        { topic: 'baking', count: 7 },
+        { topic: 'bread', count: 3 },
+      ],
+      untagged: 12,
+    };
+    expect(countsByOption(vocab)).toEqual({
+      [UNTAGGED_TOPIC_SENTINEL]: 12,
+      baking: 7,
+      bread: 3,
+    });
+  });
+
+  it('still carries the sentinel count when there are no real topics', () => {
+    expect(countsByOption({ topics: [], untagged: 4 })).toEqual({
+      [UNTAGGED_TOPIC_SENTINEL]: 4,
+    });
+  });
+});
+
 describe('labelFor', () => {
   it('renders the sentinel as plain "untagged" without parens', () => {
     expect(labelFor(UNTAGGED_TOPIC_SENTINEL)).toBe('untagged');
@@ -47,6 +91,22 @@ describe('labelFor', () => {
   it('passes real topic names through unchanged', () => {
     expect(labelFor('baking')).toBe('baking');
     expect(labelFor('home renovation')).toBe('home renovation');
+  });
+});
+
+describe('optionLabelFor', () => {
+  const counts = { [UNTAGGED_TOPIC_SENTINEL]: 32, baking: 7 };
+
+  it('appends the count in parens to a real topic', () => {
+    expect(optionLabelFor('baking', counts)).toBe('baking (7)');
+  });
+
+  it('renders the sentinel as "untagged" with its count', () => {
+    expect(optionLabelFor(UNTAGGED_TOPIC_SENTINEL, counts)).toBe('untagged (32)');
+  });
+
+  it('falls back to (0) for a topic missing from the count map', () => {
+    expect(optionLabelFor('pasta', counts)).toBe('pasta (0)');
   });
 });
 

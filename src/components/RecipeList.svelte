@@ -210,7 +210,7 @@
        the main listing uniformly. -->
   <div class="recipe-list-topics">
     <TopicsFilter
-      topics={cookbook.topicsVocabulary}
+      vocabulary={cookbook.topicsVocabulary}
       selected={cookbook.selectedTopics}
       onChange={setTopics}
     />

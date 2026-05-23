@@ -45,21 +45,26 @@
   import { onMount, onDestroy } from 'svelte';
   import {
     computeOptions,
+    optionNames,
+    countsByOption,
     labelFor,
+    optionLabelFor,
     isUntagged,
     selectionAfterToggle,
     selectionAfterClearOne,
   } from '$lib/ui/topics-filter';
+  import type { TopicVocabulary } from '$lib/supabase';
 
   interface Props {
     /**
-     * Distinct topic vocabulary - typically `await listUserTopics()`
-     * from the parent. Empty array on accounts where the agent
-     * hasn't run yet; the dropdown still works (only the
-     * "(untagged)" sentinel is offered) so the user can experiment
-     * before the worker catches up.
+     * Topic vocabulary + per-topic counts - typically `await
+     * listUserTopics()` from the parent. Empty `topics` on accounts
+     * where the agent hasn't run yet; the dropdown still works (only
+     * the "(untagged)" sentinel is offered) so the user can experiment
+     * before the worker catches up. Each row's label shows the count in
+     * parens ("baking (7)"); `untagged` backs the sentinel row's count.
      */
-    topics: readonly string[];
+    vocabulary: TopicVocabulary;
     /**
      * Selected topic names - including the `(untagged)` sentinel
      * when active. Two-way bound from the parent so a URL-restore
@@ -75,13 +80,14 @@
      */
     onChange: (next: string[]) => void;
   }
-  const { topics, selected, onChange }: Props = $props();
+  const { vocabulary, selected, onChange }: Props = $props();
 
   let open = $state(false);
   let buttonEl: HTMLButtonElement | undefined = $state();
   let popoverEl: HTMLDivElement | undefined = $state();
 
-  const options = $derived(computeOptions(topics));
+  const options = $derived(computeOptions(optionNames(vocabulary)));
+  const counts = $derived(countsByOption(vocabulary));
   const selectedSet = $derived(new Set(selected));
   const hasActive = $derived(selected.length > 0);
 
@@ -183,11 +189,11 @@
             onchange={() => toggle(opt)}
           />
           <span class="topics-filter-row-text" class:untagged={isUntagged(opt)}>
-            {labelFor(opt)}
+            {optionLabelFor(opt, counts)}
           </span>
         </label>
       {/each}
-      {#if topics.length === 0}
+      {#if vocabulary.topics.length === 0}
         <!-- Account hasn't accumulated any tags yet. Surface the
              explanation so the empty state doesn't read as broken.
              The (untagged) row above this message is still

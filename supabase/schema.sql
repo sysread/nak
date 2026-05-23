@@ -3590,22 +3590,53 @@ begin
      and topics_claim_holder = p_holder_id;
 end $$;
 
--- Distinct topic vocabulary for the current user. Used by the drawer's
--- topic-filter dropdown on mount and after a tagging event. The
--- aggregate is cheap per user (a few hundred rows at most, each with
--- 1-4 short strings); no need for materialisation. Returns an empty
--- list on a brand-new account. The "(untagged)" pseudo-topic the UI
--- offers separately is NOT in this list - the UI synthesises it from
--- a "rows where topics = '{}' exist" predicate (which the existing
--- listRecentThreads call already establishes, no extra query needed).
+-- Topic vocabulary + per-topic corpus counts for the current user.
+-- Used by the drawer's topic-filter dropdown on mount and after a
+-- tagging event. The aggregate is cheap per user (a few hundred rows
+-- at most, each with 1-4 short strings); no need for materialisation.
+--
+-- Returns a jsonb object rather than the bare text[] the dropdown used
+-- before counts: `{ "topics": [{"topic": t, "count": n}, ...],
+-- "untagged": m }`. `topics` is alphabetised and each entry's `count`
+-- is how many of the user's threads carry that topic - the number the
+-- dropdown shows in parens, eg "baking (7)". `untagged` is the count of
+-- threads with no topics at all and backs the "(untagged)" row the UI
+-- synthesises (that pseudo-topic is never a member of `topics`). Counts
+-- span the whole corpus, not a loaded page, because the thread list is
+-- paginated client-side - a client-side tally would undercount.
+--
+-- Both the vocabulary and its counts exclude archived threads
+-- (`archived = false`). The drawer the dropdown lives in shows the
+-- active list; counting archived threads would inflate the number past
+-- what the user sees when they pick the topic. Because the `topics`
+-- array is built from this same active-only aggregation, a topic that
+-- lives only on archived threads drops out of the dropdown entirely
+-- rather than showing a "(0)" - which is correct, since filtering by it
+-- would yield an empty active list.
 drop function if exists public.list_user_topics();
 create or replace function public.list_user_topics()
-returns text[]
+returns jsonb
 language sql security invoker as $$
-  select coalesce(array_agg(distinct topic order by topic), '{}'::text[])
-    from public.threads t, unnest(t.topics) as topic
-   where t.user_id = auth.uid()
-     and t.topics <> '{}'::text[];
+  select jsonb_build_object(
+    'topics', coalesce((
+      select jsonb_agg(jsonb_build_object('topic', topic, 'count', n) order by topic)
+        from (
+          select topic, count(*) as n
+            from public.threads t, unnest(t.topics) as topic
+           where t.user_id = auth.uid()
+             and t.archived = false
+             and t.topics <> '{}'::text[]
+           group by topic
+        ) counted
+    ), '[]'::jsonb),
+    'untagged', (
+      select count(*)
+        from public.threads t
+       where t.user_id = auth.uid()
+         and t.archived = false
+         and t.topics = '{}'::text[]
+    )
+  );
 $$;
 
 -- Memory topic-tagging pipeline RPCs ------------------------------------
@@ -3716,19 +3747,38 @@ begin
      and topics_claim_holder = p_holder_id;
 end $$;
 
--- Distinct memory-topic vocabulary for the current user. Used by the
--- Memories drawer's topic-filter dropdown on mount and after a tagging
--- event arrives via realtime. Distinct from list_user_topics() (which
--- targets threads) so a user can have separate vocabularies on each
--- surface without one polluting the other.
+-- Memory-topic vocabulary + per-topic counts for the current user.
+-- Used by the Memories drawer's topic-filter dropdown on mount and
+-- after a tagging event arrives via realtime. Distinct from
+-- list_user_topics() (which targets threads) so a user can have
+-- separate vocabularies on each surface without one polluting the
+-- other. Same jsonb shape as list_user_topics: `{ "topics":
+-- [{"topic": t, "count": n}], "untagged": m }`. Counts span the whole
+-- memory corpus, not the (capped) search-result set the panel holds
+-- client-side, so the dropdown shows true totals rather than "how many
+-- matched the current search".
 drop function if exists public.list_user_memory_topics();
 create or replace function public.list_user_memory_topics()
-returns text[]
+returns jsonb
 language sql security invoker as $$
-  select coalesce(array_agg(distinct topic order by topic), '{}'::text[])
-    from public.memories m, unnest(m.topics) as topic
-   where m.user_id = auth.uid()
-     and m.topics <> '{}'::text[];
+  select jsonb_build_object(
+    'topics', coalesce((
+      select jsonb_agg(jsonb_build_object('topic', topic, 'count', n) order by topic)
+        from (
+          select topic, count(*) as n
+            from public.memories m, unnest(m.topics) as topic
+           where m.user_id = auth.uid()
+             and m.topics <> '{}'::text[]
+           group by topic
+        ) counted
+    ), '[]'::jsonb),
+    'untagged', (
+      select count(*)
+        from public.memories m
+       where m.user_id = auth.uid()
+         and m.topics = '{}'::text[]
+    )
+  );
 $$;
 
 -- Recipe topic-tagging pipeline RPCs ------------------------------------
@@ -3829,19 +3879,37 @@ begin
      and topics_claim_holder = p_holder_id;
 end $$;
 
--- Distinct recipe-topic vocabulary for the current user. Backs the
--- Cookbook drawer's topic-filter dropdown. Distinct from
+-- Recipe-topic vocabulary + per-topic counts for the current user.
+-- Backs the Cookbook drawer's topic-filter dropdown. Distinct from
 -- list_user_topics (threads) and list_user_memory_topics (memories)
 -- so a user can have separate vocabularies on each surface without
--- one polluting another.
+-- one polluting another. Same jsonb shape as the sibling RPCs:
+-- `{ "topics": [{"topic": t, "count": n}], "untagged": m }`. The
+-- Cookbook loads its full row set client-side so a client tally would
+-- be exact here, but the count is computed server-side anyway to keep
+-- all three dropdowns on one contract.
 drop function if exists public.list_user_recipe_topics();
 create or replace function public.list_user_recipe_topics()
-returns text[]
+returns jsonb
 language sql security invoker as $$
-  select coalesce(array_agg(distinct topic order by topic), '{}'::text[])
-    from public.recipes r, unnest(r.topics) as topic
-   where r.user_id = auth.uid()
-     and r.topics <> '{}'::text[];
+  select jsonb_build_object(
+    'topics', coalesce((
+      select jsonb_agg(jsonb_build_object('topic', topic, 'count', n) order by topic)
+        from (
+          select topic, count(*) as n
+            from public.recipes r, unnest(r.topics) as topic
+           where r.user_id = auth.uid()
+             and r.topics <> '{}'::text[]
+           group by topic
+        ) counted
+    ), '[]'::jsonb),
+    'untagged', (
+      select count(*)
+        from public.recipes r
+       where r.user_id = auth.uid()
+         and r.topics = '{}'::text[]
+    )
+  );
 $$;
 
 -- Thread embedding pipeline RPCs ----------------------------------------
