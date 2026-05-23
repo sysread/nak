@@ -43,8 +43,11 @@ topics. Selections are joined with OR, so checking `baking` and
 `bread` shows everything tagged with either.
 
 Each row shows a count in parens - `baking (7)` means seven of your
-conversations carry that topic. The count is the total across every
-conversation, not just the ones currently loaded in the list.
+active conversations carry that topic. The count spans all your
+active conversations, not just the ones currently loaded in the list,
+but it excludes archived ones - so it matches what you'll see when you
+pick the topic. A topic that lives only on archived conversations
+drops off the list.
 
 Each active filter shows up as a pill below the dropdown. Click the
 **×** on a pill to remove that one topic from the filter without

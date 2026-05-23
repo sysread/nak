@@ -143,14 +143,19 @@ threads tagged with either.
   would re-promote the thread in the drawer).
 - `list_user_topics` RPC — returns the sorted vocabulary for the
   calling user as a jsonb object `{ topics: [{topic, count}],
-  untagged }`. `count` is the per-topic corpus tally the dropdown
-  shows in parens; `untagged` backs the synthetic `(untagged)` row's
-  count. Computed server-side because the thread list is paginated -
-  a client tally would only see the loaded page. Empty `topics` on
-  accounts where the agent hasn't run yet. The supabase-service
-  wrapper parses it into a `TopicVocabulary` (see `supabase.ts`); the
-  sibling `list_user_memory_topics` / `list_user_recipe_topics` RPCs
-  return the same shape.
+  untagged }`. `count` is the per-topic tally the dropdown shows in
+  parens; `untagged` backs the synthetic `(untagged)` row's count.
+  Computed server-side because the thread list is paginated - a client
+  tally would only see the loaded page. Scoped to `archived = false`:
+  the dropdown filters the active list, so both the counts and the
+  vocabulary itself exclude archived threads (a topic living only on
+  archived threads drops off the dropdown rather than showing "(0)").
+  This is the one place threads diverge from the memory/recipe
+  siblings, which have no archived dimension and count their whole
+  corpus. Empty `topics` on accounts where the agent hasn't run yet.
+  The supabase-service wrapper parses it into a `TopicVocabulary` (see
+  `supabase.ts`); the sibling `list_user_memory_topics` /
+  `list_user_recipe_topics` RPCs return the same shape.
 - `topicsFilterClause(selected)` (helper in `supabase.ts`) — turns
   a `selectedTopics` array into a PostgREST `or(...)` clause.
   Handles the untagged sentinel specially (`topics.eq.{}`) and

@@ -3604,6 +3604,15 @@ end $$;
 -- synthesises (that pseudo-topic is never a member of `topics`). Counts
 -- span the whole corpus, not a loaded page, because the thread list is
 -- paginated client-side - a client-side tally would undercount.
+--
+-- Both the vocabulary and its counts exclude archived threads
+-- (`archived = false`). The drawer the dropdown lives in shows the
+-- active list; counting archived threads would inflate the number past
+-- what the user sees when they pick the topic. Because the `topics`
+-- array is built from this same active-only aggregation, a topic that
+-- lives only on archived threads drops out of the dropdown entirely
+-- rather than showing a "(0)" - which is correct, since filtering by it
+-- would yield an empty active list.
 drop function if exists public.list_user_topics();
 create or replace function public.list_user_topics()
 returns jsonb
@@ -3615,6 +3624,7 @@ language sql security invoker as $$
           select topic, count(*) as n
             from public.threads t, unnest(t.topics) as topic
            where t.user_id = auth.uid()
+             and t.archived = false
              and t.topics <> '{}'::text[]
            group by topic
         ) counted
@@ -3623,6 +3633,7 @@ language sql security invoker as $$
       select count(*)
         from public.threads t
        where t.user_id = auth.uid()
+         and t.archived = false
          and t.topics = '{}'::text[]
     )
   );
