@@ -181,52 +181,69 @@ already (refresh), or carrying an expired claim. Partial index
 `threads_response_claim_idx` keeps lookups cheap under the steady
 state of zero live claims.
 
-### Per-tab `holderId`
+### Per-device `holderId`
 
 `Chat.svelte` resolves the `holderId` at screen mount via
-`resolveHolderId()` in `src/lib/exchange/holder-id.ts`, composed as
-`${browserId}:${tabSeq}`:
+`resolveHolderId()` in `src/lib/exchange/holder-id.ts`: a single UUID
+stamped into `localStorage` (`nak:holder:id`) on first visit and reused
+on every later mount. `localStorage` survives page refresh, app-update
+reload, and browser restart on every platform we target.
 
-- `browserId` lives in `localStorage` (`nak:holder:browser`) and persists
-  across browser restarts. Every tab of the same profile reads the
-  same value, so logs across refreshes share a recognisable identity.
-- `tabSeq` is an integer in `sessionStorage` (`nak:holder:tab`)
-  allocated by incrementing a counter in `localStorage`
-  (`nak:holder:counter`) on first mount within a tab. `sessionStorage`
-  survives refresh but starts empty in every new tab, so two tabs of
-  the same browser get different `tabSeq` values and remain
-  distinguishable as holders.
-
-The shape exists because of a refresh-during-completion bug. The old
-per-mount `crypto.randomUUID()` left the post-refresh page minting a
-brand-new holderId, which then saw its OWN stale claim on the
+The stable id exists because of a refresh-during-completion bug. The
+original per-mount `crypto.randomUUID()` left the post-refresh page
+minting a brand-new holderId, which then saw its OWN stale claim on the
 `threads` row as "another device is responding" - the
 `respondingElsewhere` derivation rendered a spurious "Responding on
 another device" Scanner bubble, and the user's retry click hit the
-acquire RPC's not-our-holder branch and failed with the same message.
-Stable-across-refresh holderId makes `acquire_thread_response_claim`
+acquire RPC's not-our-holder branch and failed with the same message
+for the full 60s TTL. A stable id makes `acquire_thread_response_claim`
 take its same-holder branch (the `response_holder_id = p_holder_id`
-clause in `supabase/schema.sql:3097`) and refresh the expiry, so the
-retry succeeds and no spurious bubble appears.
+clause in `supabase/schema.sql`) and refresh the expiry, so the retry
+resumes the turn and no spurious bubble appears.
+
+**Why `localStorage`, not `sessionStorage`.** A first attempt scoped
+the id per-tab as `${browserId}:${tabSeq}` with `tabSeq` in
+`sessionStorage` to keep two tabs distinguishable. That broke in
+installed PWAs: `sessionStorage` was observed to NOT survive a reload
+(reproduced on an Android Chrome PWA install), so the `tabSeq`
+regenerated on refresh and reintroduced the exact stale-claim bug.
+`localStorage` is durable across reloads everywhere, so the
+device-level id is the robust unit - and "device" is
+also the right granularity for the cross-device guard the claim provides
+(`respondingElsewhere` should fire for a different browser/device, which
+a per-profile `localStorage` UUID identifies exactly).
 
 Known edges:
 
-- **Chrome's Duplicate Tab** copies sessionStorage, so the duplicated
-  tab shares the source tab's holderId. The atomic message-commit RPC
-  dedupes assistant rows on user-message-id, so the worst case is two
-  parallel completions racing - one wins, the other's tokens are
-  discarded. Accepted over the complexity of a BroadcastChannel
-  collision check.
-- **Tab close + reopen** has no surviving sessionStorage, so the new
-  tab gets a fresh `tabSeq`. The prior claim still has to wait out
-  its 60s TTL before the new tab can take it - same as before this
-  module existed.
+- **Two tabs of the same browser** now share the id, so they no longer
+  recognise each other as separate holders. Two tabs streaming the same
+  thread at once both pass the same-holder acquire and race to commit;
+  the atomic message-commit RPC dedupes assistant rows on
+  user-message-id, so the worst case is one wasted completion. Accepted:
+  this is the rare case, refresh-during-response is the common one, and
+  the BroadcastChannel collision check that would close the corner isn't
+  worth the complexity.
+- **New browser profile / cache clear** starts with empty `localStorage`
+  and mints a fresh id - correctly a distinct holder.
 - **Storage unavailable** (sandboxed iframe, disabled cookies,
   private-mode quirk that throws on read) falls back to a per-mount
-  random id, regressing to the old behaviour in that environment.
+  random id, regressing to the refresh-loses-claim behaviour only in
+  that environment.
 
 A signed-out tab's holder identity is irrelevant - `disposeAll()`
 aborts any in-flight exchange before the next sign-in.
+
+### Retry affordances suppressed under `respondingElsewhere`
+
+The `incompleteTurnTail` derivation and the orphaned-draft
+(`interruptedDraft`) banner both return / render nothing while
+`respondingElsewhere` is true. A foreign device holding a live claim is
+actively producing the reply, so a transcript that ends on a user row
+only LOOKS incomplete from the observer side - the assistant row arrives
+over realtime. Offering retry there invites a competing turn the claim
+exists to prevent (and whose acquire would just fail with "another
+device is responding"). The observer Scanner bubble covers the wait
+instead.
 
 ## Contracts
 

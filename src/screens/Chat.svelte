@@ -687,15 +687,14 @@
    */
   const exchangeStore = new ExchangeStore();
   /**
-   * Stable holder id for every thread-response claim this screen
-   * acquires. Composed as `${browserId}:${tabSeq}` so a page refresh
-   * keeps the same id (sessionStorage survives refresh) and the chat-
-   * loop's stale claim from before the refresh reads as ours, not as
-   * "another device is responding". Different tabs of the same browser
-   * get different tabSeq values, so two tabs competing for the same
-   * thread still see each other as separate holders. See
-   * `src/lib/exchange/holder-id.ts` for the full rationale and edge
-   * cases (Chrome's Duplicate Tab, storage-unavailable fallback).
+   * Stable per-device holder id for every thread-response claim this
+   * screen acquires. A localStorage UUID that survives refresh, app-
+   * update reload, and browser restart - so the chat-loop's stale claim
+   * from before a refresh reads as ours, not as "another device is
+   * responding", and the user's retry resumes the turn instead of
+   * failing for the 60s TTL. Device-level (not per-tab) on purpose: see
+   * `src/lib/exchange/holder-id.ts` for why, the two-tab trade-off, and
+   * the storage-unavailable fallback.
    */
   const holderId: string = resolveHolderId();
   /**
@@ -4821,11 +4820,18 @@
    * the live streaming bubble), and while `activeSlot?.streamingError` is set
    * (its own banner already offers a retry where applicable, and
    * double-rendering two retry prompts for the same failure is
-   * noisy).
+   * noisy). Also suppressed while `respondingElsewhere` is true: a
+   * different device holds a live claim and is actively producing the
+   * reply, so the tail only LOOKS incomplete from here - the persisted
+   * assistant row will arrive over realtime. Offering retry in that
+   * window invites a competing turn that the claim is specifically
+   * there to prevent (and whose acquire would just fail with "another
+   * device is responding"), so we show the observer Scanner instead.
    */
   const incompleteTurnTail = $derived.by<Message | null>(() => {
     if (activeSlot?.sending) return null;
     if (activeSlot?.streamingError) return null;
+    if (respondingElsewhere) return null;
     if (messages.length === 0) return null;
     const last = messages[messages.length - 1];
     if (last.role === 'tool') return last;
@@ -6021,7 +6027,7 @@
               </div>
             </div>
           {/if}
-          {#if interruptedDraft}
+          {#if interruptedDraft && !respondingElsewhere}
             <!-- Orphaned-draft recovery banner. Shown when thread load
                  finds an IndexedDB streaming draft whose user message
                  has no committed assistant response - meaning the prior
@@ -6030,7 +6036,13 @@
                  one-click retry (re-runs the exchange against the same
                  user message) and a dismiss to discard the draft and
                  move on. Rendered at the tail of the transcript so it
-                 sits right after the orphaned user message. -->
+                 sits right after the orphaned user message.
+
+                 Suppressed while `respondingElsewhere` is true: a
+                 different device holds a live claim and is producing the
+                 reply right now, so this isn't an orphan to recover -
+                 the observer Scanner below covers the wait, and the
+                 assistant row will arrive over realtime. -->
             <div class="msg assistant msg-incomplete" role="note">
               <div class="msg-incomplete-body">
                 <div class="msg-incomplete-text">
