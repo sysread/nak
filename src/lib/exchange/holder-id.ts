@@ -1,59 +1,52 @@
 /**
- * Stable holder identity for thread response claims.
+ * Stable per-device holder identity for thread response claims.
  *
- * Composed as `${browserId}:${tabSeq}`:
+ * A single UUID stamped into localStorage under `nak:holder:id` on first
+ * visit and reused on every later mount. localStorage persists across
+ * page refreshes, app-update reloads, and browser restarts on every
+ * platform we target - including installed PWAs, where sessionStorage
+ * has been observed to NOT survive a reload (the bug that motivated this
+ * was reproduced on an Android Chrome PWA install). So the id a tab
+ * presents before a refresh is the same id it presents after.
  *
- *   - browserId: UUID stamped into localStorage on first visit. Persists
- *     across browser restarts and is shared by every tab of the same
- *     profile. Gives logs a recognisable identity across refreshes.
+ * Why this matters: the chat-loop acquires a per-thread response claim
+ * keyed on (threadId, holderId) and heartbeats it while streaming. A
+ * refresh tears the chat-loop down WITHOUT releasing the claim, so the
+ * `threads` row keeps holderId + a future expires_at for the rest of the
+ * 60s TTL. If the post-refresh page presents a NEW holderId, it reads its
+ * own stale claim as "another device is responding" - the
+ * respondingElsewhere bubble shows and the user's retry hits
+ * acquire_thread_response_claim's not-our-holder branch and fails for the
+ * full TTL. A stable id makes the stale row read as ours: acquire takes
+ * the same-holder branch (`response_holder_id = p_holder_id` in
+ * supabase/schema.sql) and refreshes the expiry, so the retry resumes the
+ * turn cleanly.
  *
- *   - tabSeq: integer allocated by atomically incrementing a counter
- *     in localStorage on first mount within a tab, then stamped into
- *     sessionStorage. Survives refresh within the tab; a brand-new tab
- *     starts with empty sessionStorage and bumps the counter to claim
- *     a fresh number.
+ * Why device-level and not per-tab: "device" is the right granularity for
+ * the cross-device guard the claim exists to provide - respondingElsewhere
+ * should fire when a DIFFERENT browser/device is producing the response,
+ * and a localStorage UUID is exactly per-browser-profile. An earlier
+ * attempt composed `${browserId}:${tabSeq}` with the tabSeq in
+ * sessionStorage to keep two tabs distinguishable, but sessionStorage's
+ * unreliability across PWA reloads (reproduced on Android Chrome) meant
+ * the tabSeq regenerated on refresh and reintroduced the exact
+ * stale-claim bug this module exists to prevent.
  *
- * Why this shape: the chat-loop acquires a per-thread response claim
- * keyed on (threadId, holderId). A refresh tears down the chat-loop
- * without releasing the claim - the row in `threads` keeps the holderId
- * and a future expires_at until the 60s TTL sweeps it. If the next
- * mount mints a brand-new holderId (the prior `crypto.randomUUID()`
- * path), the page sees its OWN stale claim as "another device is
- * responding" and renders a spurious Scanner bubble plus refuses the
- * user's retry. Keeping the holderId stable across refresh makes the
- * stale row read as ours - acquire_thread_response_claim takes the
- * same-holder branch and refreshes the expiry instead of refusing.
+ * Trade-off - two tabs of the same browser now share this id, so they no
+ * longer recognise each other as separate holders. Two tabs streaming the
+ * same thread at once would both pass the same-holder acquire and race to
+ * commit; the atomic message-commit RPC dedupes assistant rows by
+ * user-message-id, so the worst case is one wasted completion. That is the
+ * rare case; refresh-during-response is the common one (every deploy
+ * reload, every manual refresh), and we optimise for the common one.
  *
- * Behaviour by scenario:
- *
- *   - Refresh same tab: both parts persist -> same holderId. Claim
- *     resumes cleanly.
- *   - New tab: sessionStorage empty, fresh tabSeq from the counter ->
- *     different holderId. Two tabs of the same browser correctly see
- *     each other as separate holders.
- *   - Close + reopen tab: sessionStorage cleared, fresh tabSeq ->
- *     different holderId. The prior claim still has to wait out its
- *     60s TTL before the new tab can take it; same as today.
- *   - New browser profile / new device: empty localStorage, fresh
- *     browserId. Naturally distinct.
- *
- * Known edge: Chrome's "Duplicate Tab" command copies sessionStorage,
- * so a duplicated tab shares the source tab's holderId. The atomic
- * message-commit RPC dedupes assistant rows on user-message-id, so the
- * worst-case symptom is two parallel completions racing - one wins,
- * the other's tokens are discarded. We accept this over the complexity
- * of a BroadcastChannel collision check; duplicate-tab is rare and the
- * cost ceiling is one wasted completion.
- *
- * Storage failure path: a sandboxed iframe / disabled cookies / private
- * mode quirk that throws on localStorage access falls back to a
- * per-mount random id. That regresses to the old refresh-loses-claim
- * behaviour but keeps the chat usable.
+ * Storage-unavailable path (sandboxed iframe, disabled cookies, a
+ * private-mode quirk that throws on access): fall back to a per-mount
+ * random id. Refresh-survival is lost in that environment, but the chat
+ * stays usable.
  */
 
-const BROWSER_KEY = 'nak:holder:browser';
-const TAB_KEY = 'nak:holder:tab';
-const COUNTER_KEY = 'nak:holder:counter';
+const HOLDER_KEY = 'nak:holder:id';
 
 function randomId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -63,36 +56,19 @@ function randomId(): string {
 }
 
 /**
- * Resolve the holderId for this tab. Idempotent within a tab: a second
- * call returns the same value because both storage reads hit the
- * previously-written entries. Safe to call from a component mount.
- *
- * The counter increment is not atomic across tabs - two tabs opened at
- * exactly the same moment can each read the counter at N and both
- * write N+1, ending up with the same tabSeq. Treated the same as the
- * duplicate-tab case above: the commit RPC catches the resulting race.
+ * Resolve the holderId for this device. Idempotent: a second call
+ * returns the same value because the read hits the entry the first call
+ * wrote. Safe to call from a component mount.
  */
 export function resolveHolderId(): string {
   try {
     const local = window.localStorage;
-    const session = window.sessionStorage;
-
-    let browserId = local.getItem(BROWSER_KEY);
-    if (browserId === null || browserId.length === 0) {
-      browserId = randomId();
-      local.setItem(BROWSER_KEY, browserId);
+    let id = local.getItem(HOLDER_KEY);
+    if (id === null || id.length === 0) {
+      id = randomId();
+      local.setItem(HOLDER_KEY, id);
     }
-
-    let tabSeq = session.getItem(TAB_KEY);
-    if (tabSeq === null || tabSeq.length === 0) {
-      const prev = Number.parseInt(local.getItem(COUNTER_KEY) ?? '0', 10);
-      const next = Number.isFinite(prev) && prev >= 0 ? prev + 1 : 1;
-      tabSeq = String(next);
-      local.setItem(COUNTER_KEY, tabSeq);
-      session.setItem(TAB_KEY, tabSeq);
-    }
-
-    return `${browserId}:${tabSeq}`;
+    return id;
   } catch {
     // Storage unavailable - sandboxed iframe, disabled cookies, private
     // mode quirk. Fall back to a per-mount random id so the chat stays
