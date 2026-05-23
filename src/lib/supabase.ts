@@ -3701,19 +3701,28 @@ export class SupabaseService {
   /**
    * Atomically claim the oldest thread in need of reflection. Returns
    * null when no thread qualifies (already-reflected, under the token
-   * threshold, or currently claimed by another device). The returned
-   * `terminalMsgId` is the specific assistant message we should
-   * reflect up to; we pass it back to `markThreadReflectedIfClaimed`
-   * after a successful run so a race where the user adds more turns
-   * mid-reflection simply queues the thread for the next cycle.
+   * threshold, currently claimed by another device, or lands on
+   * today in the user's timezone - the day-gate lets in-flight
+   * conversations settle before the autonomous agent reads them).
+   * The returned `terminalMsgId` is the specific assistant message
+   * we should reflect up to; we pass it back to
+   * `markThreadReflectedIfClaimed` after a successful run so a race
+   * where the user adds more turns mid-reflection simply queues the
+   * thread for the next cycle.
+   *
+   * `timezone` is the user's display timezone (Settings -> AI ->
+   * About you); when null/omitted the SQL falls back to UTC. The
+   * caller is responsible for normalising input to a valid IANA name.
    */
   async claimNextThreadForReflection(
     holderId: string,
-    ttlSeconds: number
+    ttlSeconds: number,
+    timezone: string | null
   ): Promise<{ threadId: string; terminalMsgId: string } | null> {
     const { data, error } = await this.client.rpc('claim_next_thread_for_reflection', {
       p_holder_id: holderId,
       p_ttl_seconds: ttlSeconds,
+      p_timezone: timezone ?? 'UTC',
     });
     if (error) throw new SupabaseError(error.message);
     const rows = (data ?? []) as { thread_id: string; terminal_msg_id: string }[];

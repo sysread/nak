@@ -61,6 +61,12 @@ export interface CycleContext {
    * result as 'claim-lost'.
    */
   threadClaimTtlSeconds: number;
+  /**
+   * User's display timezone (IANA) - threaded through to the claim
+   * RPC so the day-gate buckets on the user's calendar. Null falls
+   * back to UTC server-side. Same shape as the wiki worker.
+   */
+  timezone: string | null;
   signal: AbortSignal;
   onLeaseLost: () => void;
 }
@@ -88,7 +94,8 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   try {
     claim = await ctx.supabase.claimNextThreadForReflection(
       ctx.holderId,
-      ctx.threadClaimTtlSeconds
+      ctx.threadClaimTtlSeconds,
+      ctx.timezone
     );
   } catch {
     // Transient Supabase failure. Bail to the error back-off; the

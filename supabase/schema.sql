@@ -3174,17 +3174,33 @@ end $$;
 -- removes an entire class of wrong answer from the corner where two
 -- devices briefly both think they hold the lease.
 drop function if exists public.claim_next_thread_for_reflection(text, int);
+drop function if exists public.claim_next_thread_for_reflection(text, int, text);
 create or replace function public.claim_next_thread_for_reflection(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- User's display timezone from Settings -> AI -> About you;
+  -- determines the calendar day the eligibility gate buckets on.
+  -- Same shape as claim_next_thread_for_wiki - we want the
+  -- reflection pass to leave in-flight conversations alone so a
+  -- memory derived from a half-finished thought doesn't land
+  -- before the user has a chance to correct or extend it. The
+  -- memory_recall tool has no per-conversation source attribution
+  -- on memories, so a same-day write could ride straight back into
+  -- the conversation that produced it.
+  p_timezone text default 'UTC'
 ) returns table (thread_id uuid, terminal_msg_id uuid)
 language sql security invoker as $$
   with candidate as (
     -- Oldest thread (by updated_at ascending) that has a terminal
     -- assistant message newer than what we've reflected on, passes the
-    -- token-volume guard, and isn't currently claimed. The terminal-
-    -- message lookup is a lateral join so we get both the thread row
-    -- AND the specific msg id to mark up to, in one round trip.
+    -- token-volume guard, lands on a calendar day strictly before
+    -- today in the user's timezone, and isn't currently claimed. The
+    -- terminal-message lookup is a lateral join so we get both the
+    -- thread row AND the specific msg id to mark up to, in one
+    -- round trip. The newest-message lookup is a second lateral so
+    -- the day-gate buckets on messages.created_at - same source
+    -- the wiki claim uses, stable against unrelated bumps to
+    -- threads.updated_at.
     select t.id as thread_id, term.msg_id as terminal_msg_id
       from public.threads t
       cross join lateral (
@@ -3200,10 +3216,19 @@ language sql security invoker as $$
          order by m.created_at desc
          limit 1
       ) term
+      cross join lateral (
+        select m2.created_at
+          from public.messages m2
+         where m2.thread_id = t.id
+         order by m2.created_at desc
+         limit 1
+      ) newest
      where t.user_id = auth.uid()
        and term.msg_id is distinct from t.last_reflected_msg_id
        and (t.reflection_claim_expires_at is null
             or t.reflection_claim_expires_at < now())
+       and (newest.created_at at time zone p_timezone)::date
+             < (now() at time zone p_timezone)::date
        and (
          -- At least two user messages on the thread. A single user
          -- prompt + assistant reply is a one-shot Q&A; we only want

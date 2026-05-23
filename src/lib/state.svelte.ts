@@ -354,6 +354,7 @@ function setUserLocation(location: string): void {
 function setDisplayTimezone(tz: string): void {
   app.displayTimezone = tz;
   wiki.whenLoaded((m) => m.setTimezone(tz || null));
+  supervisor.whenLoaded((m) => m.setTimezone(tz || null));
 }
 
 /**
@@ -736,7 +737,11 @@ function startBackgroundWorkers(config: AppConfig): void {
   // The samskara worker forms the chat model's progressively-built
   // predictive model of the user; see docs/dev/samskara.md.
   embeddings.start({ supabase: app.supabase, config });
-  supervisor.start({ supabase: app.supabase, config });
+  supervisor.start({
+    supabase: app.supabase,
+    config,
+    timezone: app.displayTimezone || null,
+  });
   samskara.start({ supabase: app.supabase, config });
   // Bias-observer worker silently analyzes processed conversations
   // for cognitive-bias / System-1-heuristic evidence; the aggregated
