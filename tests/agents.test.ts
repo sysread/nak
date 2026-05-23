@@ -79,7 +79,7 @@ class EchoAgent implements Agent<EchoRequest, EchoResponse> {
       const created = (await executeToolboxCall(
         this.toolbox,
         'memory_create',
-        { label: req.input.label, data: req.input.data },
+        { label: req.input.label, data: req.input.data, message: 'echo create' },
         ctx
       )) as { id: string };
       return {

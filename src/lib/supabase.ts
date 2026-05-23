@@ -250,6 +250,52 @@ export interface Memory {
 }
 
 /**
+ * One row of the memory changelog: a single content-affecting mutation
+ * (create / update / delete, plus librarian consolidations recorded as
+ * an 'update' on the survivor) captured at the time of the change.
+ * `memory_id` is null when the underlying memory has since been
+ * hard-deleted (the FK uses ON DELETE SET NULL); `label_at_change` is
+ * the snapshot taken at write time so the row still reads meaningfully
+ * without a join. See the matching table + RLS in
+ * `supabase/schema.sql:memory_changelog`. Parallel to WikiChangelogEntry.
+ */
+export type MemoryChangelogKind = 'create' | 'update' | 'delete';
+export interface MemoryChangelogEntry {
+  id: string;
+  memory_id: string | null;
+  kind: MemoryChangelogKind;
+  label_at_change: string;
+  message: string;
+  created_at: string;
+}
+
+function coerceMemoryChangelogKind(raw: unknown): MemoryChangelogKind | null {
+  if (raw === 'create' || raw === 'update' || raw === 'delete') return raw;
+  return null;
+}
+
+function coerceMemoryChangelogEntry(
+  raw: Record<string, unknown>
+): MemoryChangelogEntry | null {
+  const id = raw.id;
+  const kind = coerceMemoryChangelogKind(raw.kind);
+  if (typeof id !== 'string' || !kind) return null;
+  const memoryIdRaw = raw.memory_id;
+  return {
+    id,
+    memory_id:
+      typeof memoryIdRaw === 'string' && memoryIdRaw.length > 0
+        ? memoryIdRaw
+        : null,
+    kind,
+    label_at_change:
+      typeof raw.label_at_change === 'string' ? raw.label_at_change : '',
+    message: typeof raw.message === 'string' ? raw.message : '',
+    created_at: String(raw.created_at ?? ''),
+  };
+}
+
+/**
  * A memory plus its match score, returned by `search_memories_similar`.
  * `similarity` is the boosted-cosine value the RPC ranks on (raw cosine
  * times the bounded confidence boost), so it's monotonic with the result
@@ -2003,6 +2049,88 @@ export class SupabaseService {
   async deleteMemory(id: string): Promise<void> {
     const { error } = await this.client.from('memories').delete().eq('id', id);
     if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Fetch a single memory by id, or null when it doesn't exist (or is
+   * owned by another user - RLS filters those rows out, so a not-found
+   * and a not-owned are indistinguishable here, which is the intended
+   * privacy posture). Used by the changelog write paths that need a
+   * `label_at_change` snapshot before a destructive mutation: the
+   * delete tool (snapshot before the row is gone) and the consolidate
+   * tool (snapshot the loser's label for the merge message).
+   */
+  async getMemoryById(id: string): Promise<Memory | null> {
+    const { data, error } = await this.client
+      .from('memories')
+      .select('id, label, data, confidence, topics, created_at, updated_at')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    return (data as Memory | null) ?? null;
+  }
+
+  /**
+   * Append a memory-changelog row. Called by every content-affecting
+   * memory write path: the create/update/delete tools, the user's
+   * direct edits in Memories.svelte, and the librarian's consolidate.
+   * Throws on a failed insert so callers can decide whether to surface
+   * or swallow it - the tool/UI paths currently swallow (the mutation
+   * already landed; a missed changelog row is a smaller harm than a
+   * confusing post-success error).
+   *
+   * `memory_id` is null for hard deletes (the memory is already gone by
+   * the time this lands). For create/update/consolidate it points at
+   * the live memory; if that memory is later deleted the FK cascades to
+   * null but `label_at_change` keeps the row meaningful.
+   */
+  async createMemoryChangelogEntry(args: {
+    memory_id: string | null;
+    kind: MemoryChangelogKind;
+    label_at_change: string;
+    message: string;
+  }): Promise<void> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const label = args.label_at_change.trim();
+    const message = args.message.trim();
+    if (label.length === 0 || message.length === 0) return;
+    const { error } = await this.client.from('memory_changelog').insert({
+      user_id: session.user.id,
+      memory_id: args.memory_id,
+      kind: args.kind,
+      label_at_change: label,
+      message,
+    });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Paged listing of the memory changelog, newest first. `before` is the
+   * exclusive cursor in `created_at desc` order - pass the last entry's
+   * `created_at` from the prior page to fetch the next one. The
+   * (user_id, created_at desc) index makes this a range scan rather than
+   * a sort, so the panel can lazy-load deep history cheaply.
+   */
+  async listMemoryChangelog(opts: {
+    limit?: number;
+    before?: string | null;
+  } = {}): Promise<MemoryChangelogEntry[]> {
+    const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
+    let q = this.client
+      .from('memory_changelog')
+      .select('id, memory_id, kind, label_at_change, message, created_at')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (opts.before) q = q.lt('created_at', opts.before);
+    const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    const out: MemoryChangelogEntry[] = [];
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      const entry = coerceMemoryChangelogEntry(row);
+      if (entry) out.push(entry);
+    }
+    return out;
   }
 
   /**

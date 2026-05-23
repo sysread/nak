@@ -13,15 +13,24 @@
  */
 import type { ToolDef } from './types';
 import { MAX_MEMORY_DATA_CHARS } from '../embeddings/types';
+import { MAX_MEMORY_CHANGELOG_MESSAGE_CHARS } from '../memories';
 import { memoryCreateSchema } from './memory_create.schema';
+import { emitMemoryChange } from '../memory-events';
 
 export const memoryCreate: ToolDef = {
   ...memoryCreateSchema,
   async execute(args, ctx) {
     const label = typeof args.label === 'string' ? args.label.trim() : '';
     const data = typeof args.data === 'string' ? args.data : '';
+    const message = typeof args.message === 'string' ? args.message.trim() : '';
     if (!label) throw new Error('label is required');
     if (!data) throw new Error('data is required');
+    if (!message) throw new Error('message is required');
+    if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
+      throw new Error(
+        `message exceeds ${MAX_MEMORY_CHANGELOG_MESSAGE_CHARS}-char limit (got ${message.length})`
+      );
+    }
     // The model may ignore the schema's maxLength hint, so enforce here.
     // Rejecting (rather than silently truncating) gives the LLM an error
     // it can act on — it'll split the memory rather than getting a
@@ -48,6 +57,22 @@ export const memoryCreate: ToolDef = {
       }
       confidence = args.confidence;
     }
-    return ctx.supabase.createMemory(label, data, confidence);
+    const memory = await ctx.supabase.createMemory(label, data, confidence);
+    // Append the changelog row. Best-effort - the memory is already
+    // saved at this point; a failure here would leave a memory without
+    // a matching changelog entry, which is a smaller harm than throwing
+    // back to the agent and tempting it into a duplicate-create retry.
+    try {
+      await ctx.supabase.createMemoryChangelogEntry({
+        memory_id: memory.id,
+        kind: 'create',
+        label_at_change: memory.label,
+        message,
+      });
+    } catch {
+      // best-effort; see comment above.
+    }
+    emitMemoryChange();
+    return memory;
   },
 };

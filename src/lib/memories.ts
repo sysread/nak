@@ -49,6 +49,15 @@ export const MEMORY_CONFIDENCE_CORROBORATED = 5.0;
 export const MEMORY_CONFIDENCE_NEUTRAL = 1.5;
 export const MEMORY_CONFIDENCE_HEDGED = 0.5;
 
+/**
+ * Max length of the commit-message-style change line that lands in the
+ * memory_changelog. Mirrors the column-level CHECK (char_length between
+ * 1 and 200) in supabase/schema.sql:memory_changelog - keep the two in
+ * sync. The create/update/delete tools and the Memories.svelte edit and
+ * delete flows all validate against this before writing.
+ */
+export const MAX_MEMORY_CHANGELOG_MESSAGE_CHARS = 200;
+
 export type MemoryConfidenceTag = 'corroborated' | 'hedged' | 'shaky' | null;
 
 /**

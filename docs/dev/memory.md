@@ -149,8 +149,18 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   conversation_search. Deliberately omits create / update /
   reaffirm (the design rules from the librarian discussion).
 - `src/lib/memory-events.ts` — window-level event bus the
-  librarians use to notify the in-page memories store of writes
-  that bypass it.
+  librarians and the content-write tools use to notify the
+  in-page memories store and the changelog panel of writes.
+- `src/components/MemoryChangelogPanel.svelte` — the Memories
+  tab's default surface when no memory is selected. Renders
+  `memory_changelog` newest-first with cursor-paged "Load more",
+  clickable entry labels (fetch + upsert the row into the store,
+  then `navigate({ memory })`), and a live refresh on
+  `onMemoryChange`. Parallel to `WikiChangelogPanel.svelte`.
+- `src/lib/ui/memory-changelog-panel.ts` — pure UI-behavior
+  primitives for the panel (`PAGE_SIZE`, `kindLabel`,
+  `formatChangelogStamp`, `canOpenMemory`, `isExhausted`).
+  Parallel to `src/lib/ui/wiki-changelog-panel.ts`.
 - `src/lib/ui/memory-librarian.ts` — step-list bookkeeping
   primitives the Memories panel uses to render the manual-run
   progress strip. Unit-tested at
@@ -162,10 +172,13 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   `memories` drawer tab is active; sibling of `Cookbook.svelte`
   / `Journal.svelte`. Renders exactly one memory at a time -
   the row whose id is in `route.memory`. With no selection
-  shows an empty-state hint pointing at the sidebar list; with
-  a selection that's not in the active search results shows a
-  "clear the search to find it" hint. Owns the inline edit /
-  save / delete / reaffirm / doubt / relate UX, plus the `+
+  shows the `MemoryChangelogPanel` (the tab's default surface);
+  with a selection that's not in the active search results shows
+  a "clear the search to find it" hint. Owns the inline edit /
+  save / delete / reaffirm / doubt / relate UX - the edit and
+  delete flows now require a one-line change message that lands
+  in the changelog, mirroring the tools' `message` param - plus
+  the `+
   Relate` candidate picker (debounced semantic search of its
   own). Reads results and relations from `memoriesStore`;
   mutations call the store-level helpers (`patchMemoryRow`,
@@ -328,6 +341,29 @@ in `docs/user/memory.md`. The dev side has four moving parts:
 - **Librarian lease** — `worker_leases` row with
   `worker_kind='memory-librarian'`. Shared between deep-sleep
   and rem so only one of them can run per user across devices.
+- **`memory_changelog` table** — append-only audit trail of
+  content-affecting mutations, parallel in shape and intent to
+  `wiki_changelog`. Columns: `id`, `user_id`, `memory_id`
+  (`on delete set null` so a hard delete doesn't take its history
+  with it), `kind in ('create','update','delete')`,
+  `label_at_change` (snapshot so a row whose memory was deleted
+  still reads without a join), `message` (commit-style, 1-200
+  char CHECK mirroring `MAX_MEMORY_CHANGELOG_MESSAGE_CHARS` in
+  `src/lib/memories.ts`), `created_at`. Index on `(user_id,
+  created_at desc)` for the panel's newest-first cursor paging.
+  RLS is select + insert only - no update/delete policy.
+  **What gets logged**: create / update / delete (from the
+  volitional tools and the user's direct edits in
+  `Memories.svelte`) plus librarian `memory_consolidate`, which
+  records an `update` on the survivor with an auto-generated
+  "Merged X into this" message. **What does NOT**: confidence-
+  only operations (reaffirm / doubt / invalidate / the reflection
+  auto-bump) and relation edges - they'd swamp the "what did I
+  learn / forget / revise" signal with nudge churn. Writes are
+  best-effort: a failed changelog insert never rolls back the
+  mutation that already landed. Surfaced by
+  `MemoryChangelogPanel.svelte` (the Memories tab's default
+  no-selection surface) via `supabase.listMemoryChangelog`.
 
 ## Contracts
 
@@ -336,15 +372,28 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   rows. Result shape: `{ id, label, data, updated_at }[]`. The
   model can't tell vector from ILIKE apart; the fallback is
   pure plumbing.
-- `memory_create.execute({ label, data })` — inserts. The trigger
-  nulls the embedding; the worker embeds it on its next cycle.
-- `memory_update.execute({ id, label?, data? })` — writes
-  changed fields, calls `bump_memory_confidence`, and relies
-  on the trigger to null the embedding if either text changed.
+- `memory_create.execute({ label, data, message })` — inserts.
+  The trigger nulls the embedding; the worker embeds it on its
+  next cycle. `message` is required (commit-style) and appends a
+  `create` changelog row.
+- `memory_update.execute({ id, label?, data?, message })` —
+  writes changed fields, calls `bump_memory_confidence`, and
+  relies on the trigger to null the embedding if either text
+  changed. `message` is required and appends an `update`
+  changelog row.
 - `memory_invalidate.execute({ id })` — halves confidence via
-  `decay_memory_confidence` RPC. Not destructive.
-- `memory_delete.execute({ id })` — hard delete. User-directed
-  only; the reflection agent's toolbox excludes this tool.
+  `decay_memory_confidence` RPC. Not destructive. No changelog
+  entry (confidence-only).
+- `memory_delete.execute({ id, message })` — hard delete.
+  User-directed only; the reflection agent's toolbox excludes
+  this tool. `message` is required; snapshots the label before
+  deleting and appends a `delete` changelog row (with
+  `memory_id` null).
+- `memory_consolidate.execute({ survivor_id, loser_id, label,
+  data })` — librarian-only merge. Appends an `update` changelog
+  row on the survivor with an auto-generated "Merged X into this"
+  message (no `message` param on this tool - the label snapshot
+  of the merged-away memory supplies the text).
 - `memory_reaffirm.execute({ id })` — +0.5 cap 10.0 via
   `reaffirm_memory_confidence`. Gentler than the reflection
   agent's bump (+1.0). Returns `{id, confidence}` post-bump.

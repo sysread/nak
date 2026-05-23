@@ -89,9 +89,10 @@ describe('volitional memory tools — registry scoping', () => {
 describe('memory_create — optional confidence parameter', () => {
   it('defers to the schema default when confidence is omitted', async () => {
     const createMemory = vi.fn().mockResolvedValue(sampleMemory());
+    const createMemoryChangelogEntry = vi.fn().mockResolvedValue(undefined);
     await memoryCreate.execute(
-      { label: 'L', data: 'D' },
-      ctxFor({ createMemory } as unknown as Partial<SupabaseService>)
+      { label: 'L', data: 'D', message: 'saved a thing' },
+      ctxFor({ createMemory, createMemoryChangelogEntry } as unknown as Partial<SupabaseService>)
     );
     // Third arg is undefined (not passed through as explicit number).
     expect(createMemory).toHaveBeenCalledWith('L', 'D', undefined);
@@ -99,24 +100,52 @@ describe('memory_create — optional confidence parameter', () => {
 
   it('forwards a supplied confidence value to createMemory', async () => {
     const createMemory = vi.fn().mockResolvedValue(sampleMemory({ confidence: 3.0 }));
+    const createMemoryChangelogEntry = vi.fn().mockResolvedValue(undefined);
     await memoryCreate.execute(
-      { label: 'L', data: 'D', confidence: 3.0 },
-      ctxFor({ createMemory } as unknown as Partial<SupabaseService>)
+      { label: 'L', data: 'D', confidence: 3.0, message: 'saved a thing' },
+      ctxFor({ createMemory, createMemoryChangelogEntry } as unknown as Partial<SupabaseService>)
     );
     expect(createMemory).toHaveBeenCalledWith('L', 'D', 3.0);
+  });
+
+  it('appends a create changelog entry with the saved label', async () => {
+    const created = sampleMemory({ id: 'm-9', label: 'Saved label' });
+    const createMemory = vi.fn().mockResolvedValue(created);
+    const createMemoryChangelogEntry = vi.fn().mockResolvedValue(undefined);
+    await memoryCreate.execute(
+      { label: 'Saved label', data: 'D', message: 'why I saved it' },
+      ctxFor({ createMemory, createMemoryChangelogEntry } as unknown as Partial<SupabaseService>)
+    );
+    expect(createMemoryChangelogEntry).toHaveBeenCalledWith({
+      memory_id: 'm-9',
+      kind: 'create',
+      label_at_change: 'Saved label',
+      message: 'why I saved it',
+    });
+  });
+
+  it('requires a changelog message', async () => {
+    const createMemory = vi.fn();
+    await expect(
+      memoryCreate.execute(
+        { label: 'L', data: 'D' },
+        ctxFor({ createMemory } as unknown as Partial<SupabaseService>)
+      )
+    ).rejects.toThrow(/message is required/);
+    expect(createMemory).not.toHaveBeenCalled();
   });
 
   it('rejects out-of-range confidence instead of clamping', async () => {
     const createMemory = vi.fn();
     await expect(
       memoryCreate.execute(
-        { label: 'L', data: 'D', confidence: 0.5 },
+        { label: 'L', data: 'D', confidence: 0.5, message: 'm' },
         ctxFor({ createMemory } as unknown as Partial<SupabaseService>)
       )
     ).rejects.toThrow(/\[1\.0, 10\.0\]/);
     await expect(
       memoryCreate.execute(
-        { label: 'L', data: 'D', confidence: 11.0 },
+        { label: 'L', data: 'D', confidence: 11.0, message: 'm' },
         ctxFor({ createMemory } as unknown as Partial<SupabaseService>)
       )
     ).rejects.toThrow(/\[1\.0, 10\.0\]/);
@@ -127,7 +156,7 @@ describe('memory_create — optional confidence parameter', () => {
     const createMemory = vi.fn();
     await expect(
       memoryCreate.execute(
-        { label: 'L', data: 'D', confidence: 'high' as unknown as number },
+        { label: 'L', data: 'D', confidence: 'high' as unknown as number, message: 'm' },
         ctxFor({ createMemory } as unknown as Partial<SupabaseService>)
       )
     ).rejects.toThrow(/finite number/);

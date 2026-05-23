@@ -182,7 +182,7 @@ describe('ReflectionAgent — run() happy path', () => {
             type: 'function',
             function: {
               name: 'memory_create',
-              arguments: JSON.stringify({ label: 'birthday', data: 'June' }),
+              arguments: JSON.stringify({ label: 'birthday', data: 'June', message: 'noted birthday' }),
             },
           },
         ],
