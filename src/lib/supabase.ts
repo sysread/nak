@@ -6018,6 +6018,69 @@ export class SupabaseService {
   }
 
   /**
+   * Debug modal: list every observation for one bias key across
+   * every thread the user has, joined to the source thread's
+   * title so each row can render as a navigable link. Drives the
+   * per-bias drill-down ("which conversations triggered this?")
+   * on the bias-profile screen.
+   *
+   * Sorted newest-first - the user's mental model is "what got
+   * flagged recently for this bias?", not chronological reading
+   * order. RLS scopes the read to the current user; deleted
+   * threads have already cascaded their observations away, so a
+   * missing thread title here means the auto-titler hasn't run
+   * yet, not a dangling reference.
+   */
+  async biasListObservationsForBiasKey(biasKey: string): Promise<
+    {
+      id: string;
+      threadId: string;
+      threadTitle: string | null;
+      confidence: number;
+      reasoning: string;
+      createdAt: string;
+    }[]
+  > {
+    const { data, error } = await this.client
+      .from('bias_observations')
+      .select('id, thread_id, confidence, reasoning, created_at, threads(title)')
+      .eq('bias', biasKey)
+      .order('created_at', { ascending: false });
+    if (error) throw new SupabaseError(error.message);
+    const out: {
+      id: string;
+      threadId: string;
+      threadTitle: string | null;
+      confidence: number;
+      reasoning: string;
+      createdAt: string;
+    }[] = [];
+    for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+      const id = row.id;
+      const threadId = row.thread_id;
+      if (typeof id !== 'string' || typeof threadId !== 'string') continue;
+      // PostgREST returns a many-to-one embed as a single object,
+      // but the supabase-js type inference treats it as either an
+      // object or array depending on FK metadata. Mirror the
+      // unwrap pattern from listWikiArticleSources so this stays
+      // robust against either shape.
+      const thread = row.threads as { title?: unknown } | { title?: unknown }[] | null;
+      const threadObj = Array.isArray(thread) ? thread[0] : thread;
+      const title =
+        threadObj && typeof threadObj.title === 'string' ? threadObj.title : null;
+      out.push({
+        id,
+        threadId,
+        threadTitle: title,
+        confidence: typeof row.confidence === 'number' ? row.confidence : 0,
+        reasoning: typeof row.reasoning === 'string' ? row.reasoning : '',
+        createdAt: typeof row.created_at === 'string' ? row.created_at : '',
+      });
+    }
+    return out;
+  }
+
+  /**
    * Debug modal: list the most-recently-processed threads with
    * counts of observations and the message-count token. Drives the
    * "Processed conversations" table on the bias-profile screen.

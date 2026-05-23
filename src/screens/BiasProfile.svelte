@@ -36,9 +36,10 @@
    */
   import { onMount } from 'svelte';
   import { app } from '$lib/state.svelte';
-  import { route } from '$lib/routing.svelte';
+  import { navigate, route } from '$lib/routing.svelte';
   import { BIAS_CATALOG } from '$lib/bias/catalog';
   import { type BiasKey, isBiasKey } from '$lib/bias/catalog-keys';
+  import { displayThreadTitle, observationsLabel } from '$lib/ui/bias-profile';
   import {
     ALPHA_PRIOR,
     BETA_PRIOR,
@@ -94,8 +95,29 @@
     createdAt: string;
   }
 
+  /** One observation surfaced in the per-bias drill-down. Carries
+   *  the source thread's title for the navigable link plus the
+   *  agent's reasoning string for the inline blockquote. */
+  interface BiasObservationRow {
+    id: string;
+    threadId: string;
+    threadTitle: string | null;
+    confidence: number;
+    reasoning: string;
+    createdAt: string;
+  }
+
   let summary = $state<SummaryRow[]>([]);
   let processed = $state<ProcessedThreadRow[]>([]);
+  // Per-bias drill-down expansion state. `expandedBiasKey` is the
+  // bias whose observations are currently shown inline under its
+  // row in the per-bias evidence table (only one open at a time).
+  // `expandedBiasObs` holds the loaded rows; `null` means "fetch
+  // in flight", `[]` means "loaded but empty" (rare - implies the
+  // worker cleared the observations between the counts load and
+  // the per-bias fetch).
+  let expandedBiasKey = $state<string | null>(null);
+  let expandedBiasObs = $state<BiasObservationRow[] | null>(null);
   // Per-bias count of raw observations across the user's history.
   // Zero means the worker has analyzed conversations but never
   // flagged this bias - the summary row's ci_lower is just the
@@ -158,6 +180,49 @@
       loading = false;
     }
   });
+
+  /**
+   * Expand or collapse the per-bias evidence drill-down for a
+   * single bias row. Lazy-fetches observations on first expand so
+   * the modal's initial mount stays cheap regardless of how much
+   * history the user has accumulated. The in-flight guard handles
+   * a quick re-click on a different row landing the stale
+   * response under the new row's expansion.
+   */
+  async function toggleBiasObservations(biasKey: string): Promise<void> {
+    if (expandedBiasKey === biasKey) {
+      expandedBiasKey = null;
+      expandedBiasObs = null;
+      return;
+    }
+    expandedBiasKey = biasKey;
+    expandedBiasObs = null;
+    const supabase = app.supabase;
+    if (!supabase) {
+      expandedBiasObs = [];
+      return;
+    }
+    try {
+      const obs = await supabase.biasListObservationsForBiasKey(biasKey);
+      if (expandedBiasKey !== biasKey) return;
+      expandedBiasObs = obs;
+    } catch {
+      if (expandedBiasKey !== biasKey) return;
+      expandedBiasObs = [];
+    }
+  }
+
+  /**
+   * Navigate to a thread from inside the modal. Closes the modal
+   * and clears the drawer in the same route patch so the
+   * conversation surface is what the user lands on - leaving the
+   * modal open behind a thread switch would re-render the modal's
+   * "Current conversation" section against the new thread mid-
+   * interaction, which is more confusing than helpful.
+   */
+  function openThread(threadId: string): void {
+    navigate({ cid: threadId, modal: null, drawer: null });
+  }
 
   async function toggleThread(threadId: string): Promise<void> {
     if (expandedThreadId === threadId) {
@@ -701,6 +766,53 @@
                 <p class="bias-interpretation">
                   {interpretBias(row, rendered.has(row.bias))}
                 </p>
+                {#if hasEvidence(row.bias)}
+                  <!-- Per-bias drill-down. Surfacing this only on
+                       rows the worker has actually flagged - rows
+                       with no observations have nothing to show
+                       and the toggle would read as broken. -->
+                  <button
+                    type="button"
+                    class="bias-evidence-toggle"
+                    onclick={() => toggleBiasObservations(row.bias)}
+                    aria-expanded={expandedBiasKey === row.bias}
+                  >
+                    {expandedBiasKey === row.bias ? 'Hide' : 'View'}
+                    {observationsLabel(observationCounts[row.bias] ?? 0)}
+                  </button>
+                  {#if expandedBiasKey === row.bias}
+                    {#if expandedBiasObs === null}
+                      <p class="bias-evidence-empty subtle">Loading...</p>
+                    {:else if expandedBiasObs.length === 0}
+                      <!-- Race window: the count loaded on mount
+                           said >0, but the per-bias fetch came
+                           back empty. The worker likely cleared
+                           the source thread's observations after
+                           a new message arrived in it. -->
+                      <p class="bias-evidence-empty subtle">
+                        No observations available - the worker may
+                        have re-analyzed the source conversations
+                        since this modal opened.
+                      </p>
+                    {:else}
+                      <ul class="bias-evidence-list">
+                        {#each expandedBiasObs as o (o.id)}
+                          <li class="bias-evidence-item">
+                            <button
+                              type="button"
+                              class="bias-evidence-link"
+                              onclick={() => openThread(o.threadId)}
+                              title="Open this conversation"
+                            >{displayThreadTitle(o.threadTitle)}</button>
+                            <blockquote class="bias-evidence-reason">
+                              {o.reasoning}
+                            </blockquote>
+                          </li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  {/if}
+                {/if}
               </li>
             {/each}
           </ul>
@@ -1204,6 +1316,81 @@
     margin: 0;
     font-size: 0.82rem;
     line-height: 1.4;
+  }
+
+  /* Per-bias drill-down. The toggle is a text-link affordance
+     under the interpretation paragraph; expanded list lives
+     inside the bias-row card, so it inherits the card's
+     boundary rather than spawning its own panel. */
+  .bias-evidence-toggle {
+    margin: 0.55rem 0 0;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 0.78rem;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .bias-evidence-toggle:hover {
+    text-decoration: underline;
+  }
+
+  .bias-evidence-empty {
+    margin: 0.5rem 0 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+  }
+
+  .bias-evidence-list {
+    list-style: none;
+    margin: 0.5rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.55rem;
+  }
+
+  .bias-evidence-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.65rem;
+  }
+
+  .bias-evidence-link {
+    display: inline-block;
+    max-width: 100%;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--link, var(--accent));
+    text-decoration: underline;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .bias-evidence-link:hover {
+    color: var(--link-hover, var(--accent));
+  }
+
+  /* Blockquote-styled reasoning line under the title link. The
+     left border + indent reads like the markdown `> reason`
+     idiom the surface emulates - title on top, agent's reasoning
+     visually nested beneath. */
+  .bias-evidence-reason {
+    margin: 0.3rem 0 0;
+    padding: 0 0 0 0.65rem;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: color-mix(in srgb, var(--text) 82%, transparent);
   }
 
   .bias-footer {

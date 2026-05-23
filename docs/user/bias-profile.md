@@ -80,7 +80,12 @@ The modal has three sections:
   never flagged in any analyzed conversation read as "no
   evidence" rather than a number - their CI lower would just be
   the prior's 10th-percentile (~5%), and surfacing that as a
-  percentage misreads as a real measurement.
+  percentage misreads as a real measurement. Rows with at least
+  one observation expose a "View N observations" toggle: clicking
+  it lists every conversation the worker flagged for that bias,
+  with the agent's reasoning quoted underneath. The conversation
+  title is a link - clicking jumps to that thread and closes the
+  modal.
 - **Recently processed conversations.** The latest threads the
   worker has analyzed. Click any thread to expand and see the
   individual observations it found.
