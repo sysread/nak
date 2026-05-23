@@ -886,6 +886,14 @@
   const librarianConfirmInfo = $derived(
     librarianConfirm ? librarianPassInfo(librarianConfirm) : null,
   );
+  // True whenever a button-triggered librarian strip (the confirm
+  // prompt OR the progress/result strip) occupies the top of the panel.
+  // The changelog default-surface yields to it while it's up, so the
+  // strip the user just summoned isn't competing with a full history
+  // list below it.
+  const librarianStripVisible = $derived(
+    librarianConfirm !== null || librarianRun.active,
+  );
 
   // The top-bar buttons set the trigger flags; we translate that into
   // "open the confirm strip for this pass" rather than running. The
@@ -1038,10 +1046,13 @@
       <!-- Drawer tab is open but the user hasn't picked a row yet. The
            changelog is the default surface here (parallel to the Wiki
            tab) - a "what did I learn / forget / revise" log, with each
-           row clickable to open the underlying memory. The librarian
-           strip, when a run is active, renders above this in the body,
-           so a consolidation lands in the list live. -->
-      <MemoryChangelogPanel />
+           row clickable to open the underlying memory. Suppressed while
+           a librarian confirm/progress strip is up so the button-
+           triggered form isn't competing with a full history list; the
+           changelog reappears once the strip is dismissed. -->
+      {#if !librarianStripVisible}
+        <MemoryChangelogPanel />
+      {/if}
     {:else if !selectedMemory}
       <!-- route.memory points at a memory that isn't in the current
            search results. Most likely the user followed a sidebar

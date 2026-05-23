@@ -152,11 +152,14 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   librarians and the content-write tools use to notify the
   in-page memories store and the changelog panel of writes.
 - `src/components/MemoryChangelogPanel.svelte` — the Memories
-  tab's default surface when no memory is selected. Renders
-  `memory_changelog` newest-first with cursor-paged "Load more",
-  clickable entry labels (fetch + upsert the row into the store,
-  then `navigate({ memory })`), and a live refresh on
-  `onMemoryChange`. Parallel to `WikiChangelogPanel.svelte`.
+  tab's default surface when no memory is selected (suppressed
+  while a librarian confirm/progress strip is up, gated by
+  `librarianStripVisible`, so the button-triggered form isn't
+  competing with a full history list). Renders `memory_changelog`
+  newest-first with cursor-paged "Load more", clickable entry
+  labels (fetch + upsert the row into the store, then
+  `navigate({ memory })`), and a live refresh on `onMemoryChange`.
+  Parallel to `WikiChangelogPanel.svelte`.
 - `src/lib/ui/memory-changelog-panel.ts` — pure UI-behavior
   primitives for the panel (`PAGE_SIZE`, `kindLabel`,
   `formatChangelogStamp`, `canOpenMemory`, `isExhausted`).
@@ -172,9 +175,10 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   `memories` drawer tab is active; sibling of `Cookbook.svelte`
   / `Journal.svelte`. Renders exactly one memory at a time -
   the row whose id is in `route.memory`. With no selection
-  shows the `MemoryChangelogPanel` (the tab's default surface);
-  with a selection that's not in the active search results shows
-  a "clear the search to find it" hint. Owns the inline edit /
+  shows the `MemoryChangelogPanel` (the tab's default surface,
+  hidden while a librarian strip is up); with a selection that's
+  not in the active search results shows a "clear the search to
+  find it" hint. Owns the inline edit /
   save / delete / reaffirm / doubt / relate UX - the edit and
   delete flows now require a one-line change message that lands
   in the changelog, mirroring the tools' `message` param - plus
