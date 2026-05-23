@@ -9,8 +9,31 @@ import {
   settleTrailingPending,
   deepSleepResultLine,
   remResultLine,
+  librarianPassInfo,
   type MemoryLibrarianStep,
 } from '../src/lib/ui/memory-librarian';
+
+describe('librarianPassInfo', () => {
+  it('returns a deep-sleep title and description', () => {
+    const info = librarianPassInfo('deep-sleep');
+    expect(info.title).toMatch(/deep-sleep/i);
+    expect(info.description.length).toBeGreaterThan(0);
+    expect(info.description).toMatch(/consolidat/i);
+  });
+
+  it('returns a rem title and description', () => {
+    const info = librarianPassInfo('rem');
+    expect(info.title).toMatch(/rem/i);
+    expect(info.description.length).toBeGreaterThan(0);
+    expect(info.description).toMatch(/connection|link|graph/i);
+  });
+
+  it('distinguishes the two passes', () => {
+    expect(librarianPassInfo('deep-sleep').title).not.toBe(
+      librarianPassInfo('rem').title,
+    );
+  });
+});
 
 describe('pushStep', () => {
   it('opens a pending row on deep-sleep preparing', () => {
