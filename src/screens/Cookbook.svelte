@@ -291,6 +291,14 @@
 
   function openNew(): void {
     activeId = null;
+    // Clear the routed recipe too. Without this, opening "new" while a
+    // recipe is already open leaves route.recipe pointing at the old
+    // recipe; the URL-sync effect then sees route.recipe !== activeId
+    // (now null) and immediately snaps activeId/pane back to that
+    // recipe's detail view, so the new-recipe form never appears. A
+    // brand-new unsaved recipe is correctly unrouted until the save
+    // navigates to its id.
+    navigate({ recipe: null });
     draftTitle = '';
     draftSource = '';
     draftSourceUrl = '';
