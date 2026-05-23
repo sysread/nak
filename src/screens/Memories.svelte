@@ -26,6 +26,7 @@
   import { route, navigate } from '$lib/routing.svelte';
   import {
     classifyMemoryConfidence,
+    MAX_MEMORY_CHANGELOG_MESSAGE_CHARS,
     type MemoryConfidenceTag,
   } from '$lib/memories';
   import {
@@ -41,6 +42,7 @@
   import { MAX_MEMORY_DATA_CHARS } from '$lib/embeddings/types';
   import type { Memory, MemoryRelation, SimilarMemory } from '$lib/supabase';
   import Markdown from '../components/Markdown.svelte';
+  import MemoryChangelogPanel from '../components/MemoryChangelogPanel.svelte';
   import { deepSleepRunner } from '$lib/agents/deep-sleep/runner.svelte';
   import { remRunner } from '$lib/agents/rem/runner.svelte';
   import { librarianRun } from '$lib/agents/memory-librarian-run.svelte';
@@ -128,6 +130,10 @@
   let editingId = $state<string | null>(null);
   let editLabel = $state('');
   let editData = $state('');
+  // Required one-line "what changed and why" note that lands in the
+  // memory changelog for this edit - the user's manual equivalent of the
+  // `message` param the memory_update tool requires of the assistant.
+  let editMessage = $state('');
   // Three-state save indicator, mirroring the pattern in Settings'
   // system-prompts pane (see Settings.svelte line 109). The goal is
   // that the user never has to guess whether their edit is live -
@@ -142,6 +148,9 @@
 
   // Delete confirmation - one row at a time, same reasoning as edits.
   let deletingId = $state<string | null>(null);
+  // Required changelog note captured in the delete confirm strip, same
+  // contract as the memory_delete tool's `message` param.
+  let deleteMessage = $state('');
 
   // Relation-deletion failures used to write into `memoriesStore.error`,
   // which is the panel-wide "something is wrong with the listing"
@@ -587,6 +596,7 @@
     editingId = m.id;
     editLabel = m.label;
     editData = m.data;
+    editMessage = '';
     saveState = { kind: 'idle' };
     // Cancel any pending delete confirmation when the user pivots to
     // edit mode - two open prompts at once is confusing.
@@ -601,6 +611,7 @@
     editingId = null;
     editLabel = '';
     editData = '';
+    editMessage = '';
     saveState = { kind: 'idle' };
   }
 
@@ -632,9 +643,37 @@
       };
       return;
     }
+    const message = editMessage.trim();
+    if (!message) {
+      saveState = {
+        kind: 'error',
+        message: 'Add a one-line change message before saving.',
+      };
+      return;
+    }
+    if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
+      saveState = {
+        kind: 'error',
+        message: `Change message must be ${MAX_MEMORY_CHANGELOG_MESSAGE_CHARS} chars or fewer.`,
+      };
+      return;
+    }
     saveState = { kind: 'saving' };
     try {
       const updated = await app.supabase.updateMemory(id, { label, data });
+      // Append the changelog row with the post-update label. Best-effort
+      // - the mutation already landed; a missed changelog entry is a
+      // smaller harm than surfacing a confusing post-save error.
+      try {
+        await app.supabase.createMemoryChangelogEntry({
+          memory_id: updated.id,
+          kind: 'update',
+          label_at_change: updated.label,
+          message,
+        });
+      } catch {
+        // best-effort; the edit succeeded regardless.
+      }
       // Replace the row in-place so the list doesn't visually reorder
       // mid-edit. The updated_at bump is reflected on next re-search;
       // not re-querying here keeps the edit affordance stable (the
@@ -686,6 +725,7 @@
 
   function requestDelete(m: Memory): void {
     deletingId = m.id;
+    deleteMessage = '';
     // Clear any lingering action status from a previous attempt against
     // this row so the confirm strip opens clean.
     if (
@@ -702,6 +742,7 @@
 
   function cancelDelete(): void {
     deletingId = null;
+    deleteMessage = '';
   }
 
   async function confirmDelete(): Promise<void> {
@@ -709,10 +750,51 @@
     // See reaffirmMemory for the rationale on dropping the global
     // busy mutex; same shape applies here.
     const id = deletingId;
+    // Require a changelog note before the destructive write. Surfaced
+    // through actionStatus so it renders in the same slot next to the
+    // confirm buttons that RPC errors use.
+    const message = deleteMessage.trim();
+    if (!message) {
+      actionStatus = {
+        kind: 'error',
+        action: 'delete',
+        memoryId: id,
+        message: 'Add a one-line change message before deleting.',
+      };
+      return;
+    }
+    if (message.length > MAX_MEMORY_CHANGELOG_MESSAGE_CHARS) {
+      actionStatus = {
+        kind: 'error',
+        action: 'delete',
+        memoryId: id,
+        message: `Change message must be ${MAX_MEMORY_CHANGELOG_MESSAGE_CHARS} chars or fewer.`,
+      };
+      return;
+    }
+    // Snapshot the label before the row leaves the store - the changelog
+    // entry needs it for `label_at_change` and removeMemoryRow below
+    // drops the row.
+    const doomed = memoriesStore.results.find((m) => m.id === id);
     clearActionDoneTimer();
     actionStatus = { kind: 'busy', action: 'delete', memoryId: id };
     try {
       await app.supabase.deleteMemory(id);
+      // Append the changelog row. memory_id is null - the memory is gone
+      // - so the label snapshot is what keeps the entry readable.
+      // Best-effort; the delete already landed.
+      if (doomed) {
+        try {
+          await app.supabase.createMemoryChangelogEntry({
+            memory_id: null,
+            kind: 'delete',
+            label_at_change: doomed.label,
+            message,
+          });
+        } catch {
+          // best-effort; the delete succeeded regardless.
+        }
+      }
       removeMemoryRow(id);
       // If the deleted row was also the one being edited (e.g. the
       // user hit Delete from inside the editor), tear the editor
@@ -730,7 +812,10 @@
       // unconditionally would close the confirm strip the user is
       // about to interact with on B. removeMemoryRow above is
       // id-keyed so the store removal lands regardless.
-      if (deletingId === id) deletingId = null;
+      if (deletingId === id) {
+        deletingId = null;
+        deleteMessage = '';
+      }
       // Clear our own busy state. Without this it would linger as
       // a stale spinner if anything re-renders the row before the
       // navigation away from the deleted memory completes. The
@@ -800,14 +885,6 @@
   let librarianConfirm = $state<MemoryLibrarianPass | null>(null);
   const librarianConfirmInfo = $derived(
     librarianConfirm ? librarianPassInfo(librarianConfirm) : null,
-  );
-  // True whenever any librarian strip (confirm OR progress/result) is
-  // occupying the top of the panel. The empty-state "Pick a memory"
-  // hint is suppressed while this is true so it doesn't compete with
-  // the strip for attention through the whole run, not just the
-  // confirm step.
-  const librarianStripVisible = $derived(
-    librarianConfirm !== null || librarianRun.active,
   );
 
   // The top-bar buttons set the trigger flags; we translate that into
@@ -958,18 +1035,13 @@
         </p>
       {/if}
     {:else if !route.memory}
-      <!-- Drawer tab is open but the user hasn't picked a row yet.
-           Point them at the sidebar list rather than dumping every
-           card into the panel - see the History note in the file
-           preamble for why this shape replaced the all-cards view.
-           Suppressed for the whole librarian flow (confirm strip,
-           run-in-progress, and result) so the hint doesn't compete
-           with the strip for attention. -->
-      {#if !librarianStripVisible}
-        <p class="subtle memories-empty">
-          Pick a memory from the list on the left to view it.
-        </p>
-      {/if}
+      <!-- Drawer tab is open but the user hasn't picked a row yet. The
+           changelog is the default surface here (parallel to the Wiki
+           tab) - a "what did I learn / forget / revise" log, with each
+           row clickable to open the underlying memory. The librarian
+           strip, when a run is active, renders above this in the body,
+           so a consolidation lands in the list live. -->
+      <MemoryChangelogPanel />
     {:else if !selectedMemory}
       <!-- route.memory points at a memory that isn't in the current
            search results. Most likely the user followed a sidebar
@@ -1007,6 +1079,22 @@
                   ></textarea>
                   <span class="subtle char-count">
                     {editData.length}/{MAX_MEMORY_DATA_CHARS}
+                  </span>
+                </div>
+                <!-- Required changelog note for this edit. Mirrors the
+                     memory_update tool's `message` param so a human edit
+                     and an assistant edit leave the same kind of trail. -->
+                <div class="form-row">
+                  <label for="mem-message-{m.id}">Change message</label>
+                  <input
+                    id="mem-message-{m.id}"
+                    type="text"
+                    maxlength={MAX_MEMORY_CHANGELOG_MESSAGE_CHARS}
+                    placeholder="What changed and why"
+                    bind:value={editMessage}
+                  />
+                  <span class="subtle char-count">
+                    {editMessage.length}/{MAX_MEMORY_CHANGELOG_MESSAGE_CHARS}
                   </span>
                 </div>
                 <div class="memory-edit-footer">
@@ -1130,6 +1218,16 @@
                   >+ Relate</button>
                   {#if deletingId === m.id}
                     <span class="subtle memory-delete-prompt">Really delete?</span>
+                    <!-- Required changelog note for the deletion, same
+                         contract as the memory_delete tool's `message`. -->
+                    <input
+                      type="text"
+                      class="memory-delete-message"
+                      maxlength={MAX_MEMORY_CHANGELOG_MESSAGE_CHARS}
+                      placeholder="Why delete this?"
+                      bind:value={deleteMessage}
+                      disabled={isActionBusyForRow(m.id, 'delete')}
+                    />
                     <button
                       type="button"
                       class="secondary"
@@ -1496,6 +1594,11 @@
   .memory-delete-prompt {
     font-size: 0.85rem;
     margin-right: 0.25rem;
+  }
+
+  .memory-delete-message {
+    flex: 1 1 14rem;
+    min-width: 10rem;
   }
 
   /* Busy state for the action buttons (Reaffirm / Doubt / confirmed

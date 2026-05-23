@@ -29,6 +29,7 @@
 import type { ToolDef } from './types';
 import { MAX_MEMORY_DATA_CHARS } from '../embeddings/types';
 import { memoryConsolidateSchema } from './memory_consolidate.schema';
+import { emitMemoryChange } from '../memory-events';
 
 export const memoryConsolidate: ToolDef = {
   ...memoryConsolidateSchema,
@@ -52,12 +53,43 @@ export const memoryConsolidate: ToolDef = {
           'consolidation needs a single condensed body, not the concatenation of two'
       );
     }
+    // Snapshot the loser's label before the merge so the changelog
+    // message reads "Merged X into this". Best-effort and resilient: the
+    // label is only used to phrase the message, so a fetch failure (or a
+    // stale loser id) must not abort the consolidation - it just falls
+    // back to generic phrasing. Kept outside the consolidate call so the
+    // RPC's own errors still propagate verbatim.
+    let loserLabel: string | undefined;
+    try {
+      const loser = await ctx.supabase.getMemoryById(loserId);
+      loserLabel = loser?.label.trim() || undefined;
+    } catch {
+      // best-effort; generic phrasing below covers the missing label.
+    }
     const confidence = await ctx.supabase.consolidateMemories(
       survivorId,
       loserId,
       label,
       data
     );
+    // Record the merge as an 'update' on the survivor - consolidation is
+    // the librarian's only content-write, and "combining" is exactly the
+    // change the user wants visible in the changelog. The message is
+    // auto-generated (the librarian tool carries no message param);
+    // best-effort, like the other write paths.
+    try {
+      await ctx.supabase.createMemoryChangelogEntry({
+        memory_id: survivorId,
+        kind: 'update',
+        label_at_change: label,
+        message: loserLabel
+          ? `Merged "${loserLabel}" into this memory.`
+          : 'Merged a duplicate memory into this one.',
+      });
+    } catch {
+      // best-effort; see the matching comment in memory_create.ts.
+    }
+    emitMemoryChange();
     return { survivor_id: survivorId, confidence };
   },
 };

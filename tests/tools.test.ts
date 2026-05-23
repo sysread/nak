@@ -49,6 +49,8 @@ function mockSupabase(): {
     createMemory: ReturnType<typeof vi.fn>;
     updateMemory: ReturnType<typeof vi.fn>;
     deleteMemory: ReturnType<typeof vi.fn>;
+    getMemoryById: ReturnType<typeof vi.fn>;
+    createMemoryChangelogEntry: ReturnType<typeof vi.fn>;
     decayMemoryConfidence: ReturnType<typeof vi.fn>;
     renameThread: ReturnType<typeof vi.fn>;
   };
@@ -77,6 +79,16 @@ function mockSupabase(): {
       updated_at: 't',
     })),
     deleteMemory: vi.fn(async () => undefined),
+    getMemoryById: vi.fn(async (id: string) => ({
+      id,
+      label: 'snapshot',
+      data: 'body',
+      confidence: 1.0,
+      topics: [],
+      created_at: 't',
+      updated_at: 't',
+    })),
+    createMemoryChangelogEntry: vi.fn(async () => undefined),
     // Reflection-agent soft delete: server returns the post-decay
     // confidence. Default mock returns 0.5 — one halving from the 1.0
     // seed value.
@@ -604,7 +616,7 @@ describe('memory_create', () => {
 
   it('trims label and forwards data', async () => {
     const { svc, spies } = mockSupabase();
-    await tool.execute({ label: '  note  ', data: 'body' }, ctxFor(svc));
+    await tool.execute({ label: '  note  ', data: 'body', message: 'note it' }, ctxFor(svc));
     // Third arg is `confidence`, optional; omitting passes undefined
     // through so the DB default (1.0) applies.
     expect(spies.createMemory).toHaveBeenCalledWith('note', 'body', undefined);
@@ -630,25 +642,25 @@ describe('memory_update', () => {
 
   it('forwards a label-only patch', async () => {
     const { svc, spies } = mockSupabase();
-    await tool.execute({ id: 'm1', label: 'new' }, ctxFor(svc));
+    await tool.execute({ id: 'm1', label: 'new', message: 'rename' }, ctxFor(svc));
     expect(spies.updateMemory).toHaveBeenCalledWith('m1', { label: 'new' });
   });
 
   it('forwards a data-only patch', async () => {
     const { svc, spies } = mockSupabase();
-    await tool.execute({ id: 'm1', data: 'new' }, ctxFor(svc));
+    await tool.execute({ id: 'm1', data: 'new', message: 'reword' }, ctxFor(svc));
     expect(spies.updateMemory).toHaveBeenCalledWith('m1', { data: 'new' });
   });
 
   it('forwards both fields when given both', async () => {
     const { svc, spies } = mockSupabase();
-    await tool.execute({ id: 'm1', label: 'a', data: 'b' }, ctxFor(svc));
+    await tool.execute({ id: 'm1', label: 'a', data: 'b', message: 'edit' }, ctxFor(svc));
     expect(spies.updateMemory).toHaveBeenCalledWith('m1', { label: 'a', data: 'b' });
   });
 
   it('rejects an empty patch', async () => {
     const { svc } = mockSupabase();
-    await expect(tool.execute({ id: 'm1' }, ctxFor(svc))).rejects.toThrow(
+    await expect(tool.execute({ id: 'm1', message: 'm' }, ctxFor(svc))).rejects.toThrow(
       /at least one/
     );
   });
@@ -666,7 +678,7 @@ describe('memory_delete', () => {
 
   it('forwards the id', async () => {
     const { svc, spies } = mockSupabase();
-    const result = await tool.execute({ id: 'm1' }, ctxFor(svc));
+    const result = await tool.execute({ id: 'm1', message: 'remove it' }, ctxFor(svc));
     expect(spies.deleteMemory).toHaveBeenCalledWith('m1');
     expect(result).toEqual({ deleted: true });
   });
@@ -906,7 +918,7 @@ describe('buildToolboxWireList', () => {
 describe('executeToolboxCall', () => {
   it('dispatches to the named tool within the given toolbox', async () => {
     const { svc, spies } = mockSupabase();
-    await executeToolboxCall(memoryToolbox, 'memory_create', { label: 'x', data: 'y' }, ctxFor(svc));
+    await executeToolboxCall(memoryToolbox, 'memory_create', { label: 'x', data: 'y', message: 'note' }, ctxFor(svc));
     // createMemory now takes an optional third `confidence` arg; the
     // tool passes `undefined` when the caller doesn't supply one.
     expect(spies.createMemory).toHaveBeenCalledWith('x', 'y', undefined);

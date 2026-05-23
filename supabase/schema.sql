@@ -941,6 +941,65 @@ drop policy if exists "memories are self-deletable" on public.memories;
 create policy "memories are self-deletable" on public.memories
   for delete using (auth.uid() = user_id);
 
+-- memory_changelog -------------------------------------------------------
+--
+-- One row per content-affecting memory mutation - create, update,
+-- delete, or a librarian consolidation (recorded as an 'update' on the
+-- survivor). Written by the volitional create/update/delete tools, the
+-- user's direct edits in Memories.svelte, and the librarian's
+-- memory_consolidate. Confidence-only operations (reaffirm / doubt /
+-- invalidate / the reflection auto-bump) are deliberately NOT logged -
+-- they'd drown the "what did I learn / forget / revise" signal in
+-- nudge churn. Parallel in shape and intent to wiki_changelog below.
+--
+-- The `message` column is the commit-message-style one-line summary the
+-- writer supplied; for consolidations it is auto-generated from the
+-- merged-away memory's label.
+--
+-- `memory_id` is `on delete set null` so a hard-deleted memory doesn't
+-- take its history with it. The `label_at_change` snapshot is captured
+-- at write time so a row whose memory has been deleted still reads
+-- meaningfully in the changelog UI without a join.
+--
+-- Rows are append-only - no policy allowing update or delete.
+create table if not exists public.memory_changelog (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  memory_id uuid references public.memories(id) on delete set null,
+  -- 'create' | 'update' | 'delete'. Constrained at the column level so a
+  -- typo'd kind value can't land silently.
+  kind text not null check (kind in ('create', 'update', 'delete')),
+  -- Snapshot of the memory label as it was at the time of this change.
+  -- For create/update this is the new label; for delete it's the label
+  -- the memory had immediately before deletion. Allows the changelog UI
+  -- to render meaningfully even when memory_id has been nulled by the FK
+  -- cascade.
+  label_at_change text not null,
+  -- The commit-message-style explanation supplied by the writer. Capped
+  -- at 200 chars to match MAX_MEMORY_CHANGELOG_MESSAGE_CHARS on the
+  -- client; longer prose belongs in the memory body, not here.
+  message text not null check (char_length(message) between 1 and 200),
+  created_at timestamptz not null default now()
+);
+
+-- Primary access pattern is "page through the user's history newest-
+-- first", so the chronological index is the one that pays its way.
+create index if not exists memory_changelog_user_created_idx
+  on public.memory_changelog (user_id, created_at desc);
+
+alter table public.memory_changelog enable row level security;
+
+drop policy if exists "memory_changelog are self-selectable" on public.memory_changelog;
+create policy "memory_changelog are self-selectable" on public.memory_changelog
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "memory_changelog are self-insertable" on public.memory_changelog;
+create policy "memory_changelog are self-insertable" on public.memory_changelog
+  for insert with check (auth.uid() = user_id);
+
+-- No update or delete policies. The changelog is append-only from the
+-- client's perspective.
+
 -- memory_relations -------------------------------------------------------
 --
 -- The volitional-memory layer's graph. Each row is a directed edge the

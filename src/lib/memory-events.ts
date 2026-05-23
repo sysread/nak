@@ -1,11 +1,13 @@
 /**
  * Window-level event bus for cross-surface notification of memory
- * writes that bypass the in-page memoriesStore. Parallel to
- * `wiki-events.ts`. Today the only emitters are the memory librarian
+ * writes. Parallel to `wiki-events.ts`. Emitters: the memory librarian
  * agents (deep-sleep and rem), which write to memories /
- * memory_relations / memory_conversation directly via supabase and
- * never touch the store's results. The Memories panel and sidebar
- * listen and re-run their search to refresh.
+ * memory_relations / memory_conversation directly via supabase, and
+ * the content-write tools (memory_create / _update / _delete /
+ * _consolidate) which fire it after appending their changelog row. The
+ * Memories panel and sidebar re-run their search to refresh; the
+ * MemoryChangelogPanel reloads its first page so a write that lands
+ * while the panel is open shows up without a manual refresh.
  *
  * Single-tab consistency only - Supabase realtime is not subscribed
  * for memory tables. A future realtime subscriber can fire this

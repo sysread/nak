@@ -122,7 +122,8 @@ thread.
 The **Memories** tab in the left drawer is the entry point - same
 row of tabs as Chats, Recipes, and Wiki. Pick it and the
 sidebar fills with your memories, most recent first; the main
-panel waits for you to pick one. The list loads in pages as you
+panel shows the **memory changelog** until you pick one (see
+*The memory changelog* below). The list loads in pages as you
 scroll - more memories load automatically as you reach the
 bottom, so a large account never stops at a fixed cap.
 
@@ -164,11 +165,14 @@ worker re-tags it on its next pass.
 From the panel you can:
 
 - **Edit a memory in place.** Clicking *Edit* swaps the row into
-  label + body fields with character counters and an explicit
-  *Save* button. A save-state badge under the fields shows
-  *Unsaved changes*, *Saving…*, *Saved ✓*, or the error message
-  if the write failed, so you never have to guess whether an edit
-  landed on the server.
+  label + body fields with character counters, a required
+  one-line *Change message* ("what changed and why"), and an
+  explicit *Save* button. The change message lands in the memory
+  changelog, so your edits leave the same trail the assistant's
+  do; *Save* won't go through without one. A save-state badge
+  under the fields shows *Unsaved changes*, *Saving…*, *Saved ✓*,
+  or the error message if the write failed, so you never have to
+  guess whether an edit landed on the server.
 - **Reaffirm or doubt a memory.** *Reaffirm* nudges confidence up
   by 0.5; *Doubt* multiplies it by 0.7. While the request is in
   flight the button label flips to *Reaffirming…* / *Doubting…*
@@ -187,10 +191,12 @@ From the panel you can:
   next to an edge removes it.
 - **Delete a memory.** *Delete* asks you to confirm inline before
   issuing a hard delete (the same operation the assistant's
-  `memory_delete` tool performs). The confirmed *Delete* button
-  flips to *Deleting…* while the request is in flight; if the
-  server refuses, the error surfaces next to the buttons rather
-  than in the global banner.
+  `memory_delete` tool performs). The confirm strip includes a
+  required *Why delete this?* note that lands in the changelog -
+  the deletion won't go through without it. The confirmed
+  *Delete* button flips to *Deleting…* while the request is in
+  flight; if the server refuses, the error surfaces next to the
+  buttons rather than in the global banner.
 - **Jump to similar memories.** At the foot of the card a *Similar
   memories* section sits collapsed. Expanding it runs a one-off
   semantic search for the memory's closest neighbours - the same
@@ -213,6 +219,37 @@ exposed here — the browser only offers hard delete, because an
 explicit human decision to remove a memory is the stronger signal
 of the two. If you want to just hide a memory without erasing it,
 tell the assistant to forget it instead.
+
+## The memory changelog
+
+Open the Memories tab without picking a memory and the main panel
+shows the **memory changelog** - a running, newest-first log of
+what was learned, revised, and forgotten, much like the wiki's
+changelog. Each entry carries a colored chip (*Added* / *Edited* /
+*Deleted*), the memory's label at the time of the change, a
+timestamp, and a one-line note explaining the change. Click a
+label to jump straight to that memory; entries for deleted
+memories show the label in plain text, since there's nothing left
+to open.
+
+The log is deliberately about *content*, not confidence churn. It
+records:
+
+- memories the assistant or you **added**,
+- **edits** - rewording, renaming, or correcting a memory,
+- **deletes**, and
+- **merges** by the memory librarian, when it folds two duplicate
+  memories into one (shown as an edit on the survivor, noting which
+  memory was merged in).
+
+It does **not** record the constant background nudges to a memory's
+confidence (reaffirm, doubt, the soft-delete the assistant uses),
+or the relation links between memories - those would bury the
+signal you actually want, which is "what did I learn, change my
+mind about, or forget." Every entry - whether written by you, the
+assistant, or the librarian - carries a short note, so the log
+reads like a commit history for your memory. *Load more* at the
+bottom pages back through older history.
 
 ## Talking to memory
 
