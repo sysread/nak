@@ -1731,6 +1731,13 @@ h1 {
 .messages {
   flex: 1;
   overflow: auto;
+  /* Stop scroll chaining to the document. While a response streams the
+     view is pinned to the bottom (followBottom), so a wheel/touch flick
+     lands on the bottom scroll boundary immediately; without containment
+     the leftover delta chains to the ancestor and scrolls the whole app
+     shell (the root only clamps overflow-x, not overflow-y), which reads
+     as the entire application sliding upward behind the throbber. */
+  overscroll-behavior: contain;
   padding: 1rem 1.2rem;
   display: flex;
   flex-direction: column;
