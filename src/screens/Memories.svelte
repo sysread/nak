@@ -33,6 +33,7 @@
     runMemoriesSearch,
     patchMemoryRow,
     removeMemoryRow,
+    upsertMemoryRow,
     addRelationEdge,
     removeRelationEdge,
   } from '$lib/memories-store.svelte';
@@ -73,6 +74,11 @@
   // store uses for its main search.
   const SEARCH_DEBOUNCE_MS = 200;
 
+  // How many neighbours the "Similar memories" disclosure pulls. Small
+  // on purpose - the section is a quick lateral jump to closely-related
+  // memories, not a second search surface.
+  const SIMILAR_MEMORIES_LIMIT = 10;
+
   // The single memory currently displayed. Selection lives on
   // `route.memory` so it survives a refresh / back / forward and can
   // be set from the sidebar `MemoryList`. The card resolves against
@@ -84,6 +90,36 @@
       ? memoriesStore.results.find((m) => m.id === route.memory) ?? null
       : null,
   );
+
+  // The open memory's id, isolated from its object identity. A reaffirm
+  // / doubt / edit replaces the row object in `memoriesStore.results`
+  // (same id, new reference); deriving the bare string means the
+  // similar-memories reset effect below fires only on a real navigation,
+  // not on every in-place mutation of the current card.
+  const selectedMemoryId = $derived(selectedMemory?.id ?? null);
+
+  // "Similar memories" disclosure - collapsed by default, fetches top-k
+  // cosine neighbours of the open memory on first expand. Results cache
+  // for the lifetime of the selection so a collapse/re-expand doesn't
+  // refetch; navigating to a different memory resets back to idle (see
+  // the effect below).
+  type SimilarState =
+    | { kind: 'idle' }
+    | { kind: 'loading' }
+    | { kind: 'loaded'; rows: Memory[] }
+    | { kind: 'error'; message: string };
+  let similarOpen = $state(false);
+  let similarState = $state<SimilarState>({ kind: 'idle' });
+
+  // Reset the disclosure whenever the open memory changes. Reads only
+  // `selectedMemoryId` (a primitive) so it doesn't re-run on same-id
+  // row replacements; the writes here aren't read in this effect, so
+  // there's no feedback loop.
+  $effect(() => {
+    selectedMemoryId;
+    similarOpen = false;
+    similarState = { kind: 'idle' };
+  });
 
   // Which row (if any) is currently in edit mode. Only one row edits
   // at a time - simplifies the "unsaved changes" semantics and stops
@@ -507,6 +543,44 @@
         message: err instanceof Error ? err.message : String(err),
       };
     }
+  }
+
+  // Toggle the "Similar memories" disclosure. The first expand fires
+  // the fetch; collapse/re-expand reuses the cached result (or the
+  // error, so a failed load shows its message again rather than
+  // silently refetching). The id is captured before the await and
+  // re-checked after so a navigation mid-flight can't write another
+  // memory's neighbours into this card.
+  async function toggleSimilar(): Promise<void> {
+    similarOpen = !similarOpen;
+    if (!similarOpen || similarState.kind !== 'idle') return;
+    if (!app.supabase) return;
+    const id = selectedMemoryId;
+    if (!id) return;
+    similarState = { kind: 'loading' };
+    try {
+      const rows = await app.supabase.searchSimilarMemories(
+        id,
+        SIMILAR_MEMORIES_LIMIT,
+      );
+      if (selectedMemoryId !== id) return;
+      similarState = { kind: 'loaded', rows };
+    } catch (err) {
+      if (selectedMemoryId !== id) return;
+      similarState = {
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+
+  // Navigate to a neighbour from the similar list. Upsert it into the
+  // result set first so the detail panel can resolve it even when the
+  // active search/browse window doesn't contain it - otherwise the link
+  // lands on the "not in the current results" empty state.
+  function openSimilar(mem: Memory): void {
+    upsertMemoryRow(mem);
+    navigate({ memory: mem.id });
   }
 
   function startEdit(m: Memory): void {
@@ -1173,6 +1247,48 @@
                     </div>
                   </div>
                 {/if}
+                <div class="memory-similar">
+                  <button
+                    type="button"
+                    class="memory-similar-toggle"
+                    aria-expanded={similarOpen}
+                    onclick={toggleSimilar}
+                  >
+                    <span class="memory-similar-caret" class:is-open={similarOpen}>
+                      &#9656;
+                    </span>
+                    Similar memories
+                  </button>
+                  {#if similarOpen}
+                    <div class="memory-similar-body">
+                      {#if similarState.kind === 'loading'}
+                        <p class="subtle memory-similar-loading">Loading…</p>
+                      {:else if similarState.kind === 'error'}
+                        <p class="error memory-similar-error">
+                          Couldn't load similar memories - {similarState.message}
+                        </p>
+                      {:else if similarState.kind === 'loaded'}
+                        {#if similarState.rows.length === 0}
+                          <p class="subtle memory-similar-empty">
+                            No similar memories found.
+                          </p>
+                        {:else}
+                          <ul class="memory-similar-list">
+                            {#each similarState.rows as row (row.id)}
+                              <li>
+                                <button
+                                  type="button"
+                                  class="memory-similar-link"
+                                  onclick={() => openSimilar(row)}
+                                >{row.label}</button>
+                              </li>
+                            {/each}
+                          </ul>
+                        {/if}
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
               </div>
             {/if}
         </li>
@@ -1682,5 +1798,81 @@
   .memory-relate-empty {
     margin: 0.25rem 0;
     font-size: 0.85rem;
+  }
+
+  /* Similar-memories disclosure - sits at the foot of the card. Top
+     border separates it from the action row above so the collapsed
+     toggle reads as its own zone rather than another action. */
+  .memory-similar {
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .memory-similar-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--text-subtle);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .memory-similar-toggle:hover {
+    color: var(--text);
+  }
+
+  .memory-similar-caret {
+    display: inline-block;
+    font-size: 0.7rem;
+    transition: transform 0.15s ease;
+  }
+
+  .memory-similar-caret.is-open {
+    transform: rotate(90deg);
+  }
+
+  .memory-similar-body {
+    margin-top: 0.6rem;
+  }
+
+  .memory-similar-loading {
+    margin: 0.25rem 0;
+    /* Reuse the librarian pulse so the "Loading" cue reads as in-flight
+       rather than a static label while the neighbour fetch runs. */
+    animation: librarian-pulse 1.4s ease-in-out infinite;
+  }
+
+  .memory-similar-error,
+  .memory-similar-empty {
+    margin: 0.25rem 0;
+    font-size: 0.9rem;
+  }
+
+  .memory-similar-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .memory-similar-link {
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 0.95rem;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .memory-similar-link:hover {
+    text-decoration: underline;
   }
 </style>

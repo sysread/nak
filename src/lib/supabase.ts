@@ -4507,6 +4507,28 @@ export class SupabaseService {
   }
 
   /**
+   * Top-k memories most similar to a given memory, via the
+   * `search_memories_similar` RPC. The source row's own stored
+   * embedding is the query vector, so the ranking matches
+   * `searchMemoriesByEmbedding`; the source is excluded server-side so
+   * it never lists itself. Returns an empty array when the source
+   * hasn't been embedded yet (the worker hasn't caught up) - the caller
+   * shows an empty state. Same shape as the other memory list calls, so
+   * the rows are plain `Memory` objects (no embedding column shipped).
+   */
+  async searchSimilarMemories(
+    memoryId: string,
+    limit: number
+  ): Promise<Memory[]> {
+    const { data, error } = await this.client.rpc('search_memories_similar', {
+      p_memory_id: memoryId,
+      match_limit: limit,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as Memory[];
+  }
+
+  /**
    * Insert a new edge in the memory-relations graph. The unique
    * constraint on (user_id, from_memory_id, to_memory_id, kind) means a
    * repeated call for the same edge raises; the tool-side handler maps

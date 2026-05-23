@@ -317,6 +317,23 @@ export function removeMemoryRow(id: string): void {
   memoriesStore.relations = nextMap;
 }
 
+/**
+ * Ensure a memory is present in `results` so the detail panel can
+ * resolve it from a cross-link. The panel derives the open card from
+ * `route.memory` against `results`; following a "Similar memories" link
+ * to a row outside the active search/browse window would otherwise land
+ * on the "not in the current results" empty state. Replaces an existing
+ * row by id (keeping the freshest copy), otherwise prepends. The new row
+ * shows no outbound relations until the next browse/search load hydrates
+ * the relations map - acceptable, the graph layer is best-effort here.
+ */
+export function upsertMemoryRow(mem: Memory): void {
+  const exists = memoriesStore.results.some((m) => m.id === mem.id);
+  memoriesStore.results = exists
+    ? memoriesStore.results.map((m) => (m.id === mem.id ? mem : m))
+    : [mem, ...memoriesStore.results];
+}
+
 /** Append a freshly-created edge into the relations map. */
 export function addRelationEdge(edge: MemoryRelation): void {
   const nextMap = new Map(memoriesStore.relations);
