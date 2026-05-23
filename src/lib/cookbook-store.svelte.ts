@@ -27,10 +27,37 @@
  * `onCookbookChange` / `notifyCookbookChanged` from the events
  * module directly.
  */
-import type { Recipe, RecipePhoto, SupabaseService, TopicVocabulary } from './supabase';
+import {
+  DEFAULT_LIST_PAGE_SIZE,
+  type Recipe,
+  type RecipePhoto,
+  type SupabaseService,
+  type TopicVocabulary,
+} from './supabase';
+import type { SortMode } from './ui/recipe-list';
 
 interface CookbookState {
+  /**
+   * One offset window of the "All recipes" browse list - the rows the
+   * sidebar has paged in so far, in `sort` order. NOT the whole
+   * cookbook: a heavy account pages through this list rather than
+   * loading every recipe at once. The Upcoming and Favorites buckets
+   * live in their own complete arrays below because they render above
+   * this list and a partial page would misrepresent them.
+   */
   recipes: Recipe[];
+  /** Every `upcoming`-flagged recipe (complete, not paged). */
+  upcoming: Recipe[];
+  /** Every `favorite`-flagged recipe (complete, not paged). */
+  favorites: Recipe[];
+  /** Sort applied to the paginated "All recipes" list. Drives the query. */
+  sort: SortMode;
+  /** Row count fetched into `recipes` so far - the next page's offset. */
+  offset: number;
+  /** False once the "All recipes" list has been paged to the end. */
+  hasMore: boolean;
+  /** True while a `loadMoreRecipes` page is in flight (drives the sentinel spinner). */
+  loadingMore: boolean;
   loading: boolean;
   /** Last error from a load attempt. Cleared on the next successful load. */
   error: string | null;
@@ -45,12 +72,14 @@ interface CookbookState {
   photos: Record<string, RecipePhoto[] | null | undefined>;
   /**
    * Active topic filter. Empty array = no filter. Includes the
-   * UNTAGGED_TOPIC_SENTINEL when the user selected "untagged" in
-   * the dropdown. The RecipeList sidebar narrows both the bucket
-   * list and the search results by this selection - applied client-
-   * side because the recipe set is bounded (~200 rows loaded into
-   * `recipes`) and server-side filtering would add scope for no
-   * perf win.
+   * UNTAGGED_TOPIC_SENTINEL when the user selected "untagged" in the
+   * dropdown. Applied two ways depending on the surface: server-side
+   * for the paginated "All recipes" list (a partial page has to be
+   * narrowed before it's sliced or the page count would be wrong), and
+   * client-side over the complete Upcoming / Favorites buckets and the
+   * capped search results (those are whole sets in memory, so the
+   * client predicate is enough). Both paths share the same OR-overlap
+   * semantics so the filter narrows every section identically.
    */
   selectedTopics: string[];
   /**
@@ -67,6 +96,12 @@ interface CookbookState {
 
 export const cookbook = $state<CookbookState>({
   recipes: [],
+  upcoming: [],
+  favorites: [],
+  sort: 'updated',
+  offset: 0,
+  hasMore: false,
+  loadingMore: false,
   loading: false,
   error: null,
   photos: {},
@@ -75,18 +110,36 @@ export const cookbook = $state<CookbookState>({
 });
 
 /**
- * Refresh `cookbook.recipes` from Supabase. Safe to call concurrently —
- * a second call while the first is in flight just overwrites with the
- * newer result. We don't debounce because refresh triggers (modal
- * open, tool completion) are already low-frequency.
+ * Reload the cookbook from the first page. Resets the "All recipes"
+ * pagination window to page one (current `sort` + `selectedTopics`),
+ * refetches the complete Upcoming / Favorites buckets, and refreshes
+ * the topic vocabulary. This is the entry point every refresh trigger
+ * uses (sidebar mount, modal open, tool completion, sort / topic
+ * change) - "refresh" always means "start over at the top," never
+ * "append."
+ *
+ * Safe to call concurrently - a second call while the first is in
+ * flight just overwrites with the newer result. We don't debounce
+ * because the triggers are already low-frequency.
  */
 export async function loadRecipes(supabase: SupabaseService): Promise<void> {
   cookbook.loading = true;
   try {
-    // No query, generous limit — a personal cookbook sits well under
-    // 200 rows in practice. If someone grows past that, we'll paginate.
-    const rows = await supabase.listRecipes('', 200);
-    cookbook.recipes = rows;
+    const [page, upcoming, favorites] = await Promise.all([
+      supabase.listRecipesPage({
+        offset: 0,
+        pageSize: DEFAULT_LIST_PAGE_SIZE,
+        sort: cookbook.sort,
+        selectedTopics: cookbook.selectedTopics,
+      }),
+      supabase.listUpcomingRecipes(),
+      supabase.listFavoriteRecipes(),
+    ]);
+    cookbook.recipes = page.rows;
+    cookbook.offset = page.rows.length;
+    cookbook.hasMore = page.hasMore;
+    cookbook.upcoming = upcoming;
+    cookbook.favorites = favorites;
     cookbook.error = null;
     // Piggy-back a vocabulary refresh so a newly-minted topic from
     // the background worker shows up in the dropdown the next time
@@ -98,6 +151,34 @@ export async function loadRecipes(supabase: SupabaseService): Promise<void> {
     cookbook.error = err instanceof Error ? err.message : String(err);
   } finally {
     cookbook.loading = false;
+  }
+}
+
+/**
+ * Append the next page of the "All recipes" list. No-op when a page is
+ * already in flight or the list is drained, so the sidebar sentinel
+ * can fire it freely on every intersection without guarding. A failed
+ * page is swallowed onto `error` and leaves `hasMore` intact so the
+ * next scroll retries rather than stranding the user mid-list.
+ */
+export async function loadMoreRecipes(supabase: SupabaseService): Promise<void> {
+  if (cookbook.loadingMore || !cookbook.hasMore) return;
+  cookbook.loadingMore = true;
+  try {
+    const page = await supabase.listRecipesPage({
+      offset: cookbook.offset,
+      pageSize: DEFAULT_LIST_PAGE_SIZE,
+      sort: cookbook.sort,
+      selectedTopics: cookbook.selectedTopics,
+    });
+    cookbook.recipes = [...cookbook.recipes, ...page.rows];
+    cookbook.offset += page.rows.length;
+    cookbook.hasMore = page.hasMore;
+    cookbook.error = null;
+  } catch (err) {
+    cookbook.error = err instanceof Error ? err.message : String(err);
+  } finally {
+    cookbook.loadingMore = false;
   }
 }
 

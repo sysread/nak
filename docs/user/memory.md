@@ -121,8 +121,10 @@ thread.
 
 The **Memories** tab in the left drawer is the entry point - same
 row of tabs as Chats, Recipes, and Wiki. Pick it and the
-sidebar fills with every memory on your account, most recent
-first; the main panel waits for you to pick one.
+sidebar fills with your memories, most recent first; the main
+panel waits for you to pick one. The list loads in pages as you
+scroll - more memories load automatically as you reach the
+bottom, so a large account never stops at a fixed cap.
 
 The search box at the top of the sidebar runs a semantic match -
 paraphrases and synonyms count, not just substrings - and falls

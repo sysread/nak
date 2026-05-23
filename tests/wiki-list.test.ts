@@ -5,81 +5,15 @@
  * debounced `$effect` and the markup.
  */
 import { describe, it, expect } from 'vitest';
-import type { WikiArticle } from '../src/lib/supabase';
 import {
   SEARCH_DEBOUNCE_MS,
   emptyMessage,
-  pickSortedArticles,
   scannerLabel,
 } from '../src/lib/ui/wiki-list';
-
-function makeArticle(
-  id: string,
-  title: string,
-  overrides: Partial<WikiArticle> = {}
-): WikiArticle {
-  return {
-    id,
-    title,
-    content: '',
-    user_id: 'u1',
-    created_at: '2026-05-19T12:00:00Z',
-    updated_at: '2026-05-19T12:00:00Z',
-    ...overrides,
-  } as WikiArticle;
-}
 
 describe('SEARCH_DEBOUNCE_MS', () => {
   it('matches the cross-drawer 200ms convention', () => {
     expect(SEARCH_DEBOUNCE_MS).toBe(200);
-  });
-});
-
-describe('pickSortedArticles', () => {
-  it('sorts alphabetically by title (case-insensitive) on empty query', () => {
-    // The wiki is meant to be browsed by topic, not by edit
-    // time - the alphabetic sort is the contract that
-    // distinguishes this listing from the recency-biased
-    // conversation drawer.
-    const a = makeArticle('a', 'Espresso');
-    const b = makeArticle('b', 'apple pie');
-    const c = makeArticle('c', 'Banana bread');
-    const out = pickSortedArticles({ articles: [a, b, c], query: '' });
-    expect(out.map((x) => x.id)).toEqual(['b', 'c', 'a']);
-  });
-
-  it('treats whitespace-only queries as the empty case', () => {
-    const a = makeArticle('a', 'Zebra');
-    const b = makeArticle('b', 'Apple');
-    const out = pickSortedArticles({ articles: [a, b], query: '   ' });
-    expect(out.map((x) => x.id)).toEqual(['b', 'a']);
-  });
-
-  it('passes server order through verbatim during an active search', () => {
-    // The semantic-search RPC returns hits in ascending cosine
-    // distance; the primitive must not re-sort that ordering
-    // alphabetically just because some titles compare lower.
-    const top = makeArticle('top', 'Zucchini');
-    const mid = makeArticle('mid', 'Apricot');
-    const bot = makeArticle('bot', 'Banana');
-    const out = pickSortedArticles({
-      articles: [top, mid, bot],
-      query: 'green vegetables',
-    });
-    expect(out.map((x) => x.id)).toEqual(['top', 'mid', 'bot']);
-  });
-
-  it('does not mutate the input array', () => {
-    const a = makeArticle('a', 'Zebra');
-    const b = makeArticle('b', 'Apple');
-    const input = [a, b];
-    pickSortedArticles({ articles: input, query: '' });
-    expect(input.map((x) => x.id)).toEqual(['a', 'b']);
-  });
-
-  it('returns an empty array for an empty input', () => {
-    expect(pickSortedArticles({ articles: [], query: '' })).toEqual([]);
-    expect(pickSortedArticles({ articles: [], query: 'x' })).toEqual([]);
   });
 });
 

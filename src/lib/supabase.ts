@@ -859,6 +859,31 @@ export interface ThreadSummaryRow {
 export const DEFAULT_THREAD_PAGE_SIZE = 25;
 
 /**
+ * One page of an offset-paginated browse listing (recipes, memories,
+ * wiki articles). `hasMore` is derived from a `pageSize + 1` probe -
+ * the query asks for one extra row and the method strips it, so the
+ * caller learns there's a next page without a second count query.
+ *
+ * Why offset and not the keyset cursors the thread drawer uses
+ * (ThreadCursor / ThreadPage): threads bump their `updated_at`
+ * constantly under the realtime feed, so a keyset cursor is the only
+ * way to page them without dropping or duplicating a row that moved
+ * across the boundary mid-scroll. The cookbook / memory / wiki lists
+ * are personal, low-write collections that nobody is mutating while
+ * you scroll them, so offset is safe - and it pages an arbitrary
+ * ORDER BY (the recipe sort picker's rating-nulls-last and
+ * alphabetical modes) without the composite-cursor predicate a keyset
+ * scheme would need for each sort key.
+ */
+export interface OffsetPage<T> {
+  rows: T[];
+  hasMore: boolean;
+}
+
+/** Default page size for the offset-paginated browse listings. */
+export const DEFAULT_LIST_PAGE_SIZE = 50;
+
+/**
  * Recent-bucket cutoff. 3 days = roughly the "still actively working
  * on it" window for most users — anything newer is something they're
  * likely to want one click away at the top of the drawer, anything
@@ -1968,6 +1993,35 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
   }
 
+  /**
+   * One offset page of the memory browse list (most-recent first).
+   * Powers the sidebar's infinite scroll for the empty-query case;
+   * an active search still goes through `searchMemories` (capped, not
+   * paged) so relevance order stays intact. `id` is the final tiebreak
+   * so rows colliding on `updated_at` keep a stable cross-page order.
+   * `selectedTopics` is filtered server-side - a partial page must be
+   * narrowed before it's sliced.
+   */
+  async listMemoriesPage(opts: {
+    offset: number;
+    pageSize: number;
+    selectedTopics?: readonly string[];
+  }): Promise<OffsetPage<Memory>> {
+    let q = this.client
+      .from('memories')
+      .select('id, label, data, confidence, topics, created_at, updated_at')
+      .order('updated_at', { ascending: false })
+      .order('id', { ascending: false });
+    const topicsClause = topicsFilterClause(opts.selectedTopics ?? []);
+    if (topicsClause) q = q.or(topicsClause);
+    q = q.range(opts.offset, opts.offset + opts.pageSize);
+    const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as Memory[];
+    const hasMore = rows.length > opts.pageSize;
+    return { rows: hasMore ? rows.slice(0, opts.pageSize) : rows, hasMore };
+  }
+
   // recipes --------------------------------------------------------------
   //
   // Same RLS posture as memories: every query is scoped to the signed-in
@@ -2020,6 +2074,98 @@ export class SupabaseService {
       q = q.ilike('title', `%${safe}%`);
     }
     const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as Recipe[];
+  }
+
+  /**
+   * One offset page of the "All recipes" browse list. Powers the
+   * sidebar's infinite scroll: the empty-query listing pages through
+   * the whole cookbook instead of truncating at a fixed cap.
+   *
+   * `sort` matches the sidebar picker. Each mode ends with `id` as a
+   * final tiebreak so rows that collide on the primary key (two
+   * recipes with the same rating + updated_at) keep a stable order
+   * across page boundaries - without it an offset window could drop or
+   * repeat a colliding row.
+   *
+   * `selectedTopics` is applied server-side (the older client-side
+   * filter only worked because the whole cookbook was in memory; a
+   * partial page has to be filtered before it's sliced or the page
+   * count would be wrong).
+   */
+  async listRecipesPage(opts: {
+    offset: number;
+    pageSize: number;
+    sort: 'updated' | 'rating' | 'alphabetical';
+    selectedTopics?: readonly string[];
+  }): Promise<OffsetPage<Recipe>> {
+    let q = this.client
+      .from('recipes')
+      .select(
+        'id, title, source, source_url, cooklang, rating, upcoming, favorite, topics, created_at, updated_at'
+      );
+    if (opts.sort === 'rating') {
+      q = q
+        .order('rating', { ascending: false, nullsFirst: false })
+        .order('updated_at', { ascending: false })
+        .order('id', { ascending: false });
+    } else if (opts.sort === 'alphabetical') {
+      // Ordered by the column's collation rather than a JS
+      // localeCompare so the server's page boundaries match what the
+      // client renders - paginating an arbitrary client-side sort would
+      // shuffle rows across the seam.
+      // TODO: untitled drafts (empty title) sort to the head under a
+      // raw `title ASC`, where the user expects them at the tail of an
+      // A-Z list, and the collation's case/accent handling may diverge
+      // from the dictionary order users expect. Both want a sort key
+      // the offset window can page deterministically.
+      q = q.order('title', { ascending: true }).order('id', { ascending: true });
+    } else {
+      q = q
+        .order('updated_at', { ascending: false })
+        .order('id', { ascending: false });
+    }
+    const topicsClause = topicsFilterClause(opts.selectedTopics ?? []);
+    if (topicsClause) q = q.or(topicsClause);
+    // Inclusive range: ask for pageSize + 1 rows so a full extra row
+    // signals "another page exists" without a separate count query.
+    q = q.range(opts.offset, opts.offset + opts.pageSize);
+    const { data, error } = await q;
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as Recipe[];
+    const hasMore = rows.length > opts.pageSize;
+    return { rows: hasMore ? rows.slice(0, opts.pageSize) : rows, hasMore };
+  }
+
+  /**
+   * Every recipe flagged `upcoming` (the current grocery cycle).
+   * Fetched whole rather than paged - the flagged subset is small and
+   * the sidebar renders it as a complete bucket above the paginated
+   * "All recipes" list, so a partial page would misrepresent it. The
+   * topic filter stays client-side over this complete set.
+   */
+  async listUpcomingRecipes(): Promise<Recipe[]> {
+    const { data, error } = await this.client
+      .from('recipes')
+      .select(
+        'id, title, source, source_url, cooklang, rating, upcoming, favorite, topics, created_at, updated_at'
+      )
+      .eq('upcoming', true)
+      .order('updated_at', { ascending: false });
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []) as Recipe[];
+  }
+
+  /** Every recipe flagged `favorite`. Same complete-bucket rationale as listUpcomingRecipes. */
+  async listFavoriteRecipes(): Promise<Recipe[]> {
+    const { data, error } = await this.client
+      .from('recipes')
+      .select(
+        'id, title, source, source_url, cooklang, rating, upcoming, favorite, topics, created_at, updated_at'
+      )
+      .eq('favorite', true)
+      .order('updated_at', { ascending: false });
     if (error) throw new SupabaseError(error.message);
     return (data ?? []) as Recipe[];
   }
@@ -2688,6 +2834,37 @@ export class SupabaseService {
       .limit(opts.limit ?? 500);
     if (error) throw new SupabaseError(error.message);
     return (data ?? []).map((row) => coerceWikiArticle(row as Record<string, unknown>));
+  }
+
+  /**
+   * One offset page of the wiki browse list, alphabetical by title.
+   * Powers the sidebar's infinite scroll for the empty-query case; an
+   * active search still goes through `searchWikiArticles` (capped, not
+   * paged). `id` is the final tiebreak so articles colliding on title
+   * keep a stable cross-page order.
+   *
+   * Ordering is the DB collation's `title ASC`, so the sidebar renders
+   * server order verbatim rather than re-sorting with a JS
+   * `localeCompare` - a client re-sort over a partial page would
+   * disagree with the server's page boundaries and shuffle rows across
+   * the seam mid-scroll.
+   */
+  async listWikiArticlesPage(opts: {
+    offset: number;
+    pageSize: number;
+  }): Promise<OffsetPage<WikiArticle>> {
+    const { data, error } = await this.client
+      .from('wiki_articles')
+      .select('id, title, content, created_at, updated_at')
+      .order('title', { ascending: true })
+      .order('id', { ascending: true })
+      .range(opts.offset, opts.offset + opts.pageSize);
+    if (error) throw new SupabaseError(error.message);
+    const all = (data ?? []).map((row) =>
+      coerceWikiArticle(row as Record<string, unknown>)
+    );
+    const hasMore = all.length > opts.pageSize;
+    return { rows: hasMore ? all.slice(0, opts.pageSize) : all, hasMore };
   }
 
   async getWikiArticleById(id: string): Promise<WikiArticle | null> {

@@ -42,7 +42,7 @@
     recipeToPlainText,
   } from '$lib/cooklang';
   import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '$lib/recipe-limits';
-  import type { RecipeVersion } from '$lib/supabase';
+  import type { Recipe, RecipeVersion } from '$lib/supabase';
   import {
     arrayBufferToBase64,
     dataUrlFor,
@@ -81,9 +81,47 @@
 
   // --- detail / edit pane state ---
   let activeId = $state<string | null>(route.recipe);
-  const activeRecipe = $derived.by(() =>
-    activeId ? (cookbook.recipes.find((r) => r.id === activeId) ?? null) : null
-  );
+  // The "All recipes" list is paginated, so the selected recipe may
+  // live past the window the sidebar has paged in - reached via a deep
+  // link or a navigation from a tool result rather than a click on a
+  // loaded row. This holds a by-id fetch for exactly that case so the
+  // detail pane resolves instead of falling back to the empty state.
+  let fetchedRecipe = $state<Recipe | null>(null);
+  $effect(() => {
+    const id = activeId;
+    if (!id || !app.supabase) {
+      fetchedRecipe = null;
+      return;
+    }
+    // Store row present (the common case) - no fallback fetch needed,
+    // and the store copy stays authoritative below.
+    if (cookbook.recipes.some((r) => r.id === id)) {
+      fetchedRecipe = null;
+      return;
+    }
+    let cancelled = false;
+    void app.supabase
+      .getRecipe(id)
+      .then((r) => {
+        if (!cancelled) fetchedRecipe = r;
+      })
+      .catch(() => {
+        if (!cancelled) fetchedRecipe = null;
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+  // Store row wins when present - it's the freshest copy after an edit;
+  // the by-id fallback only fills in when the row is outside the loaded
+  // page window.
+  const activeRecipe = $derived.by(() => {
+    if (!activeId) return null;
+    return (
+      cookbook.recipes.find((r) => r.id === activeId) ??
+      (fetchedRecipe && fetchedRecipe.id === activeId ? fetchedRecipe : null)
+    );
+  });
 
   // --- edit pane draft state (shared across new + edit) ---
   let draftTitle = $state('');

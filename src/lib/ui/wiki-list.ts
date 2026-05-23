@@ -3,14 +3,12 @@
  * functions only - no runes, no Svelte imports, no DOM. The
  * companion `src/components/WikiList.svelte` composes these
  * with its own framework-native reactivity (the debounced
- * `$effect` that re-runs `runWikiSearch`, the markup, and the
- * Scanner mount).
- *
- * Type imports from `$lib/supabase` carry the `WikiArticle`
- * shape; a port to another framework would consume it
- * unchanged.
+ * `$effect` that re-runs `runWikiSearch`, the infinite-scroll
+ * sentinel that pages the browse list, the markup, and the
+ * Scanner mount). The listing itself is rendered in server
+ * order - title ASC for browse, relevance for search - so there
+ * is no client-side sort primitive here.
  */
-import type { WikiArticle } from '../supabase';
 
 /**
  * Debounce window between the user's last keystroke and the
@@ -19,31 +17,6 @@ import type { WikiArticle } from '../supabase';
  * drawer tabs.
  */
 export const SEARCH_DEBOUNCE_MS = 200;
-
-/**
- * Sort decision for the listing area:
- *
- *   - Empty query - alphabetical by title (case-insensitive),
- *     so the drawer reads as a wiki listing rather than a
- *     recency ranking. The wiki is meant to be browsed by topic.
- *   - Active query - pass server order through verbatim. The
- *     semantic-search RPC returns hits in ascending cosine
- *     distance (closest first), then ILIKE hits the vector
- *     pass missed. That's what "ordered by closest match"
- *     means here.
- *
- * Returns a fresh array; the input store reference is never
- * mutated.
- */
-export function pickSortedArticles(args: {
-  articles: readonly WikiArticle[];
-  query: string;
-}): WikiArticle[] {
-  if (args.query.trim().length > 0) return [...args.articles];
-  return [...args.articles].sort((a, b) =>
-    a.title.toLowerCase().localeCompare(b.title.toLowerCase())
-  );
-}
 
 /**
  * Scanner-label decision. Both states render the K.I.T.T.

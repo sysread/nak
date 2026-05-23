@@ -21,14 +21,16 @@
   import { navigate, route } from '$lib/routing.svelte';
   import {
     cookbook,
+    loadRecipes,
+    loadMoreRecipes,
     refreshRecipesTopicsVocabulary,
   } from '$lib/cookbook-store.svelte';
   import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from '$lib/models';
   import type { Recipe } from '$lib/supabase';
+  import { infiniteScroll } from '$lib/actions/infinite-scroll';
   import {
     RECIPE_SEARCH_LIMIT,
     SEARCH_DEBOUNCE_MS,
-    type SortMode,
     computeListView,
     isSearching as isSearchingFn,
     pickFavoriteRecipes,
@@ -47,12 +49,6 @@
   const { onSelect }: Props = $props();
 
   let query = $state('');
-  // 'updated' keeps the most-recently-edited recipe at the top;
-  // 'rating' bubbles the user's favourites up; 'alphabetical'
-  // sorts by title for when you remember the name but not when
-  // you last touched it. Only consulted when query is empty; an
-  // active search uses server-returned relevance order.
-  let sortMode = $state<SortMode>('updated');
 
   let searchResults = $state<Recipe[]>([]);
   let searchBusy = $state(false);
@@ -137,26 +133,46 @@
     cookbook.selectedTopics = next;
   }
 
+  // Reload the "All recipes" list from page one whenever the sort or
+  // topic filter changes. Both are threaded into the server query, so
+  // a change has to refetch from the top - the loaded window is only a
+  // slice of the cookbook, and re-sorting or re-filtering it in place
+  // would disagree with the server's page boundaries on the next
+  // scroll. This also fires on mount, which is the sidebar's initial
+  // load; concurrent calls are safe (a later result overwrites). A
+  // failure surfaces on cookbook.error.
+  $effect(() => {
+    const _sort = cookbook.sort;
+    const _topics = cookbook.selectedTopics;
+    void _sort;
+    void _topics;
+    if (!app.supabase) return;
+    void loadRecipes(app.supabase);
+  });
+
   const searching = $derived(isSearchingFn(query));
   const visibleRecipes = $derived(
     pickVisibleRecipes({
       searching,
       searchResults,
       storeRecipes: cookbook.recipes,
-      sortMode,
       selectedTopics: cookbook.selectedTopics,
     })
   );
+  // Buckets read the complete `upcoming` / `favorites` arrays, NOT the
+  // paginated `recipes` window - a partial page would hide a flagged
+  // recipe that hasn't been scrolled into the main list yet. Topic
+  // filtering stays client-side here because these sets are whole.
   const upcomingRecipes = $derived(
     pickUpcomingRecipes(
-      cookbook.recipes,
+      cookbook.upcoming,
       searching,
       cookbook.selectedTopics
     )
   );
   const favoriteRecipes = $derived(
     pickFavoriteRecipes(
-      cookbook.recipes,
+      cookbook.favorites,
       searching,
       cookbook.selectedTopics
     )
@@ -194,7 +210,7 @@
         <select
           id="rl-sort"
           class="recipe-sort"
-          bind:value={sortMode}
+          bind:value={cookbook.sort}
           aria-label="Sort recipes"
         >
           <option value="updated">Recent</option>
@@ -328,6 +344,22 @@
     {#each visibleRecipes as r (r.id)}
       {@render recipeRow(r)}
     {/each}
+    {#if !searching && cookbook.hasMore}
+      <!-- Infinite-scroll sentinel for the "All recipes" list. Only in
+           browse mode - an active search returns a capped, unpaged set,
+           so there's nothing more to fetch. The action fires
+           loadMoreRecipes when this scrolls into view; the store guards
+           against re-entrancy so a fast scroll can't double-fetch. -->
+      <div
+        class="recipe-list-sentinel"
+        use:infiniteScroll={{ onHit: () => app.supabase && loadMoreRecipes(app.supabase) }}
+        aria-hidden="true"
+      >
+        {#if cookbook.loadingMore}
+          <Scanner label="Loading more recipes" size={0.85} />
+        {/if}
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -413,5 +445,13 @@
   }
   .recipe-list-rating {
     opacity: 0.8;
+  }
+  /* Pagination sentinel. Needs a little height so the
+     IntersectionObserver has a real box to catch as it nears the
+     viewport; the Scanner (when loadingMore) gives it visible
+     feedback, otherwise it's an empty spacer at the list tail. */
+  .recipe-list-sentinel {
+    min-height: 1px;
+    padding: 0.5rem 0;
   }
 </style>

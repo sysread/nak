@@ -23,6 +23,17 @@ import type { VeniceClient } from './venice';
 import { searchMemoriesSemantic } from './memories';
 
 interface MemoriesStore {
+  /**
+   * The memory rows currently shown. Two regimes feed this list:
+   *
+   *   - Browse (empty query): an offset window paged in from
+   *     `listMemoriesPage`, most-recent first, grown by the sidebar's
+   *     infinite-scroll sentinel via `loadMoreMemories`.
+   *   - Search (non-empty query): a capped, unpaged relevance set from
+   *     `searchMemoriesSemantic` - the same contract the assistant's
+   *     `memory_search` tool uses. `hasMore` is forced false here; you
+   *     refine the query rather than paging search hits.
+   */
   results: Memory[];
   /**
    * Outbound relations keyed by source memory id. Hydrated alongside
@@ -31,11 +42,21 @@ interface MemoriesStore {
    */
   relations: Map<string, MemoryRelation[]>;
   loading: boolean;
-  /** Set true after the first `runSearch` resolves, success or error. */
+  /** Set true after the first load resolves, success or error. */
   loaded: boolean;
   error: string | null;
   /** Bound to the sidebar search input. */
   query: string;
+  /** Row count paged into `results` so far - the next browse page's offset. */
+  offset: number;
+  /**
+   * False once the browse list is drained, or whenever a search is
+   * active (search results are capped, not paged). Gates the sidebar's
+   * infinite-scroll sentinel.
+   */
+  hasMore: boolean;
+  /** True while a `loadMoreMemories` page is in flight (drives the sentinel spinner). */
+  loadingMore: boolean;
   /**
    * Active topic filter. Empty array = no filter. Includes the
    * UNTAGGED_TOPIC_SENTINEL when the user selected "untagged" in the
@@ -61,12 +82,15 @@ export const memoriesStore = $state<MemoriesStore>({
   loaded: false,
   error: null,
   query: '',
+  offset: 0,
+  hasMore: false,
+  loadingMore: false,
   selectedTopics: [],
   topicsVocabulary: { topics: [], untagged: 0 },
 });
 
-// Match the assistant's `memory_search` per-call cap so the human UI
-// never hides rows the assistant can reach.
+// Match the assistant's `memory_search` per-call cap so a search never
+// hides rows the assistant can reach.
 const MEMORIES_LIST_LIMIT = 100;
 
 // Cancel the in-flight semantic search if the user keeps typing.
@@ -74,14 +98,125 @@ const MEMORIES_LIST_LIMIT = 100;
 let currentAbort: AbortController | null = null;
 
 /**
- * Run a fresh search against `memoriesStore.query`. Callers should
- * debounce - this runs immediately. Cancels any in-flight request so a
- * stale result can't clobber the latest query.
+ * Hydrate outbound relation edges for a set of memory ids into a map
+ * keyed by source memory id. Best-effort: a failure returns an empty
+ * map rather than throwing - the list matters more than the graph
+ * layer, and the next load retries. Shared by the browse-page and
+ * search paths so both render edges per-card without an await-per-row.
+ */
+async function fetchRelationsMap(
+  supabase: SupabaseService,
+  ids: string[],
+): Promise<Map<string, MemoryRelation[]>> {
+  const map = new Map<string, MemoryRelation[]>();
+  if (ids.length === 0) return map;
+  try {
+    const edges = await supabase.listMemoryRelationsFor(ids);
+    for (const edge of edges) {
+      const list = map.get(edge.from_memory_id);
+      if (list) list.push(edge);
+      else map.set(edge.from_memory_id, [edge]);
+    }
+  } catch {
+    // Swallow - see doc comment.
+  }
+  return map;
+}
+
+/**
+ * Load the memory browse list from the first page (empty-query
+ * regime). Resets the offset window, hydrates relations for the page,
+ * and refreshes the topic vocabulary. Called by the sidebar when the
+ * query is empty - on mount, on clearing a search, and on a topic-
+ * filter change.
+ */
+export async function loadMemoriesFirstPage(
+  supabase: SupabaseService,
+): Promise<void> {
+  // Supersede any in-flight semantic search so a slow embed from a
+  // just-cleared query can't clobber the fresh browse list.
+  if (currentAbort) currentAbort.abort();
+  memoriesStore.loading = true;
+  memoriesStore.error = null;
+  try {
+    const page = await supabase.listMemoriesPage({
+      offset: 0,
+      pageSize: MEMORIES_LIST_LIMIT,
+      selectedTopics: memoriesStore.selectedTopics,
+    });
+    memoriesStore.results = page.rows;
+    memoriesStore.offset = page.rows.length;
+    memoriesStore.hasMore = page.hasMore;
+    memoriesStore.relations = await fetchRelationsMap(
+      supabase,
+      page.rows.map((m) => m.id),
+    );
+    void refreshMemoriesTopicsVocabulary(supabase);
+  } catch (err) {
+    memoriesStore.error = err instanceof Error ? err.message : String(err);
+  } finally {
+    memoriesStore.loading = false;
+    memoriesStore.loaded = true;
+  }
+}
+
+/**
+ * Append the next browse page. No-op while a page is in flight, when
+ * the list is drained, or when a search is active (search results
+ * aren't paged), so the sidebar sentinel can fire it freely. A failed
+ * page leaves `hasMore` intact so the next scroll retries.
+ */
+export async function loadMoreMemories(
+  supabase: SupabaseService,
+): Promise<void> {
+  if (memoriesStore.loadingMore || !memoriesStore.hasMore) return;
+  if (memoriesStore.query.trim().length > 0) return;
+  memoriesStore.loadingMore = true;
+  try {
+    const page = await supabase.listMemoriesPage({
+      offset: memoriesStore.offset,
+      pageSize: MEMORIES_LIST_LIMIT,
+      selectedTopics: memoriesStore.selectedTopics,
+    });
+    memoriesStore.results = [...memoriesStore.results, ...page.rows];
+    memoriesStore.offset += page.rows.length;
+    memoriesStore.hasMore = page.hasMore;
+    // Merge the new page's edges into the existing map rather than
+    // replacing it - the already-loaded rows keep their edges.
+    const more = await fetchRelationsMap(
+      supabase,
+      page.rows.map((m) => m.id),
+    );
+    if (more.size > 0) {
+      const merged = new Map(memoriesStore.relations);
+      for (const [from, edges] of more) merged.set(from, edges);
+      memoriesStore.relations = merged;
+    }
+    memoriesStore.error = null;
+  } catch (err) {
+    memoriesStore.error = err instanceof Error ? err.message : String(err);
+  } finally {
+    memoriesStore.loadingMore = false;
+  }
+}
+
+/**
+ * Drive `memoriesStore` from the bound query. The single entry point
+ * every caller uses; it dispatches on the query:
+ *
+ *   - Empty query -> the paginated browse list (`loadMemoriesFirstPage`).
+ *   - Non-empty query -> the capped semantic search below.
+ *
+ * Callers should debounce - this runs immediately. Cancels any
+ * in-flight search so a stale result can't clobber the latest query.
  */
 export async function runMemoriesSearch(
   supabase: SupabaseService,
   venice: VeniceClient | null,
 ): Promise<void> {
+  if (memoriesStore.query.trim().length === 0) {
+    return loadMemoriesFirstPage(supabase);
+  }
   if (currentAbort) currentAbort.abort();
   const ctl = new AbortController();
   currentAbort = ctl;
@@ -96,27 +231,18 @@ export async function runMemoriesSearch(
     });
     if (ctl.signal.aborted) return;
     memoriesStore.results = hits;
+    // Search results are capped, not paged - close the sentinel so a
+    // scroll to the bottom of a search doesn't try to "load more."
+    memoriesStore.offset = hits.length;
+    memoriesStore.hasMore = false;
 
     // Hydrate outbound edges in one batched RPC. A failure here just
     // leaves the relations map empty - the list is more important than
     // the graph layer, and a follow-up search will retry.
-    const nextMap = new Map<string, MemoryRelation[]>();
-    if (hits.length > 0) {
-      try {
-        const edges = await supabase.listMemoryRelationsFor(
-          hits.map((m) => m.id),
-        );
-        if (!ctl.signal.aborted) {
-          for (const edge of edges) {
-            const list = nextMap.get(edge.from_memory_id);
-            if (list) list.push(edge);
-            else nextMap.set(edge.from_memory_id, [edge]);
-          }
-        }
-      } catch {
-        // Swallow - see comment above.
-      }
-    }
+    const nextMap = await fetchRelationsMap(
+      supabase,
+      hits.map((m) => m.id),
+    );
     if (!ctl.signal.aborted) memoriesStore.relations = nextMap;
 
     // Piggy-back a vocabulary refresh on every search resolution.

@@ -16,13 +16,9 @@
    */
   import { app } from '$lib/state.svelte';
   import { route, navigate } from '$lib/routing.svelte';
-  import { wikiStore, runWikiSearch } from '$lib/wiki-store.svelte';
-  import {
-    SEARCH_DEBOUNCE_MS,
-    emptyMessage,
-    pickSortedArticles,
-    scannerLabel,
-  } from '$lib/ui/wiki-list';
+  import { wikiStore, runWikiSearch, loadMoreWiki } from '$lib/wiki-store.svelte';
+  import { SEARCH_DEBOUNCE_MS, emptyMessage, scannerLabel } from '$lib/ui/wiki-list';
+  import { infiniteScroll } from '$lib/actions/infinite-scroll';
   import Scanner from './Scanner.svelte';
 
   interface Props {
@@ -49,13 +45,6 @@
       }
     };
   });
-
-  const sorted = $derived(
-    pickSortedArticles({
-      articles: wikiStore.results,
-      query: wikiStore.query,
-    })
-  );
 
   function pickArticle(id: string): void {
     navigate({ wiki_article_id: id });
@@ -88,12 +77,16 @@
     <p class="error" style="padding:0.75rem">
       Couldn't load wiki: {wikiStore.error}
     </p>
-  {:else if sorted.length === 0}
+  {:else if wikiStore.results.length === 0}
     <p class="subtle" style="padding:0.75rem">
       {emptyMessage(wikiStore.query)}
     </p>
   {:else}
-    {#each sorted as a (a.id)}
+    <!-- Rendered in server order (title ASC for browse, relevance for
+         search). No client re-sort: a localeCompare pass over a partial
+         page would disagree with the server's page boundaries and
+         shuffle rows across the pagination seam mid-scroll. -->
+    {#each wikiStore.results as a (a.id)}
       <div class="row thread-row" data-wiki-id-link={a.id}>
         <button
           class="thread grow"
@@ -106,6 +99,19 @@
         </button>
       </div>
     {/each}
+    {#if wikiStore.hasMore}
+      <!-- Infinite-scroll sentinel for the browse list. hasMore is
+           forced false during a search (capped, unpaged). -->
+      <div
+        class="wiki-list-sentinel"
+        use:infiniteScroll={{ onHit: () => app.supabase && loadMoreWiki(app.supabase) }}
+        aria-hidden="true"
+      >
+        {#if wikiStore.loadingMore}
+          <Scanner label="Loading more articles" size={0.85} />
+        {/if}
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -130,5 +136,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 100%;
+  }
+  /* Pagination sentinel - a small box at the list tail the
+     IntersectionObserver can catch as it nears the viewport. */
+  .wiki-list-sentinel {
+    min-height: 1px;
+    padding: 0.5rem 0;
   }
 </style>

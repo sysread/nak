@@ -179,9 +179,12 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   shows `label + classifyMemoryConfidence` chip and an
   `.active` marker when its id matches `route.memory`. Clicking
   a row calls `navigate({ memory: id })` and (on mobile) closes
-  the drawer. Composition-only: the `SEARCH_DEBOUNCE_MS`
-  tunable and the empty-state message decision live in the
-  primitives module next door.
+  the drawer. An infinite-scroll sentinel (`use:infiniteScroll`)
+  at the list tail pages the browse list - shown only when
+  `memoriesStore.hasMore`, which is forced false during a search.
+  Composition-only: the `SEARCH_DEBOUNCE_MS` tunable and the
+  empty-state message decision live in the primitives module
+  next door.
 - `src/lib/ui/memories-list.ts` — pure UI-behavior primitives
   for the sidebar listing. `SEARCH_DEBOUNCE_MS` (shared with
   the recipe / wiki drawer tabs) and `emptyMessage(query)`
@@ -193,11 +196,18 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   `tests/memories-list.test.ts`.
 - `src/lib/memories-store.svelte.ts` — shared reactive state
   (`results`, `relations`, `loading`, `loaded`, `error`,
-  `query`) plus `runMemoriesSearch`, `patchMemoryRow`,
-  `removeMemoryRow`, `addRelationEdge`, `removeRelationEdge`.
-  Owns the AbortController for the in-flight semantic search
-  so rapid typing doesn't fire one embedding request per
-  character.
+  `query`, `offset`, `hasMore`, `loadingMore`) plus
+  `runMemoriesSearch`, `loadMemoriesFirstPage`,
+  `loadMoreMemories`, `patchMemoryRow`, `removeMemoryRow`,
+  `addRelationEdge`, `removeRelationEdge`. `runMemoriesSearch`
+  dispatches on the query: an empty query routes to the
+  paginated browse list (`loadMemoriesFirstPage`, served by
+  `listMemoriesPage` most-recent-first), a non-empty query runs
+  the capped semantic search and forces `hasMore` false.
+  `loadMoreMemories` appends the next offset page and merges its
+  relation edges into the existing map. Owns the AbortController
+  for the in-flight semantic search so rapid typing doesn't fire
+  one embedding request per character.
 - `supabase/schema.sql` (memory section + reflection section) —
   table shape, triggers, RLS policies, reflection claim columns
   on `threads`.

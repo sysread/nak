@@ -64,7 +64,8 @@ Data layer (main thread + workers):
 
 - `src/lib/supabase.ts` - `WikiArticle` interface,
   `coerceWikiArticle`, plus the `SupabaseService` methods:
-  `listWikiArticles`, `getWikiArticleById`, `getWikiArticleByTitle`,
+  `listWikiArticles`, `listWikiArticlesPage`, `getWikiArticleById`,
+  `getWikiArticleByTitle`,
   `createWikiArticle`, `updateWikiArticle`, `deleteWikiArticle`,
   `searchWikiArticles`, `claimNextThreadForWiki`,
   `markThreadWikiProcessedIfClaimed`,
@@ -79,9 +80,16 @@ Data layer (main thread + workers):
   (`searchWikiArticlesSemantic`) plus the `MAX_WIKI_TITLE_CHARS`
   (200), `MAX_WIKI_CONTENT_CHARS` (16000), and
   `MAX_WIKI_CHANGELOG_MESSAGE_CHARS` (200) ceilings.
-- `src/lib/wiki-store.svelte.ts` - the shared `wikiStore`,
-  `runWikiSearch`, and the `patchWikiRow` / `removeWikiRow` /
-  `addWikiRow` mutators the panel and tools call.
+- `src/lib/wiki-store.svelte.ts` - the shared `wikiStore`
+  (`results`, `loading`, `loaded`, `error`, `query`, `offset`,
+  `hasMore`, `loadingMore`), `runWikiSearch`, `loadWikiFirstPage`,
+  `loadMoreWiki`, and the `patchWikiRow` / `removeWikiRow` /
+  `addWikiRow` mutators the panel and tools call. `runWikiSearch`
+  dispatches on the query: empty routes to the paginated
+  alphabetical browse list (`loadWikiFirstPage`, served by
+  `listWikiArticlesPage`), non-empty runs the capped semantic
+  search and forces `hasMore` false. `loadMoreWiki` appends the
+  next offset page.
 - `src/lib/wiki-events.ts` - the `WIKI_CHANGE_EVENT` window-event
   bus parallel to `journal-events.ts` / `cookbook-events.ts`.
 
@@ -205,18 +213,21 @@ Main-thread plumbing:
 UI:
 
 - `src/components/WikiList.svelte` - drawer listing. Search
-  input + alphabetical sort. Composition-only: the sort
-  decision (alphabetical on empty query, server-relevance
-  order on active search), the scanner-label and empty-
-  message strings, and the `SEARCH_DEBOUNCE_MS` tunable all
+  input + an infinite-scroll sentinel (`use:infiniteScroll`)
+  that pages the browse list, shown only when `wikiStore.hasMore`
+  (forced false during a search). Rows are rendered in server
+  order verbatim - title ASC for browse, relevance for search -
+  with no client re-sort, which would disagree with the server's
+  page boundaries mid-scroll. Composition-only: the scanner-label
+  and empty-message strings and the `SEARCH_DEBOUNCE_MS` tunable
   live in the primitives module next door.
 - `src/lib/ui/wiki-list.ts` - pure UI-behavior primitives for
-  the sidebar listing. `pickSortedArticles({articles, query})`
-  carries the sort decision; `scannerLabel(query)` picks
-  between "Searching wiki" and "Loading wiki" for the
-  in-flight scanner; `emptyMessage(query)` picks between
-  "No matches." and the cold-account explainer. Unit-tested
-  at `tests/wiki-list.test.ts`.
+  the sidebar listing. `scannerLabel(query)` picks between
+  "Searching wiki" and "Loading wiki" for the in-flight scanner;
+  `emptyMessage(query)` picks between "No matches." and the
+  cold-account explainer. No sort primitive: the listing is
+  rendered in server order. Unit-tested at
+  `tests/wiki-list.test.ts`.
 - `src/screens/Wiki.svelte` - main-panel article view, edit
   form, create form, delete confirmation, and the "ask agent
   to update" preview/accept/cancel flow. Each direct-edit flow
@@ -727,18 +738,23 @@ verification list):
    three new `threads` columns land. Re-run for
    idempotency.
 2. **Drawer alphabetical sort.** Add "Zebra", "Apple",
-   "Mango" via the panel. Tab reads Apple, Mango, Zebra.
-3. **Search.** Type "ze" -> "Zebra" only. Clear ->
-   alphabetical returns.
-4. **Create / edit / delete** round-trip via the panel.
+   "Mango" via the panel. Tab reads Apple, Mango, Zebra
+   (server `title ASC`, paged in by `listWikiArticlesPage`).
+3. **Infinite scroll.** With more than one page of articles,
+   scroll the drawer to the bottom and confirm the next page
+   loads automatically (no duplicate or skipped rows at the
+   seam).
+4. **Search.** Type "ze" -> "Zebra" only. Clear ->
+   alphabetical browse list returns.
+5. **Create / edit / delete** round-trip via the panel.
    The drawer reflects each change via `WIKI_CHANGE_EVENT`.
-5. **Ask agent to update - preview / accept / cancel /
+6. **Ask agent to update - preview / accept / cancel /
    try again.** Open an article, type instructions ->
    preview populates with the agent's `reason` rendered above
    the body -> Accept persists and writes a changelog row
    using the agent's `reason` as the message; Cancel
    dismisses; Try again regenerates.
-6. **Changelog page.** Open the Wiki tab with no article
+7. **Changelog page.** Open the Wiki tab with no article
    selected (or click the clock icon next to the sparkles
    librarian button in the Wiki top bar to clear an existing
    selection). The panel renders the user's
@@ -748,26 +764,26 @@ verification list):
    non-interactive. "Load more" appends the next 50 rows; the
    button hides once the tail is reached. The header's
    "+ new article" button flips the panel into compose mode.
-7. **Required commit messages.** The direct create / edit /
+8. **Required commit messages.** The direct create / edit /
    delete strips on the Wiki panel all require a one-line
    change message before the destructive action enables; the
    agent tools enforce the same via the `message` parameter
    on each schema.
-8. **Autonomous agent fires the day after.** Substantive
+9. **Autonomous agent fires the day after.** Substantive
    conversation today: `claim_next_thread_for_wiki` returns
    nothing. Thread whose newest message is yesterday-in-tz:
    agent runs, `wiki_search` then `wiki_create` /
    `wiki_update` lands, `last_wiki_processed_msg_id`
    advances.
-9. **Eligibility re-opens after continuation.** New
-   message in that thread today -> RPC returns nothing
-   again until tomorrow.
-10. **Recall tool.** Ask the chat "what do you know about
+10. **Eligibility re-opens after continuation.** New
+    message in that thread today -> RPC returns nothing
+    again until tomorrow.
+11. **Recall tool.** Ask the chat "what do you know about
     my green tea preference?" - the model issues
     `wiki_search` and grounds its answer.
-11. **Embeddings filled.** New article -> `embedding is
+12. **Embeddings filled.** New article -> `embedding is
     null` initially, populates ~30s later.
-12. **Settings toggle.** Disable "Automatic wiki" ->
+13. **Settings toggle.** Disable "Automatic wiki" ->
     worker stops, no claims. Enable -> resumes.
-13. `mise run check` green; no `(!)` build warnings or
+14. `mise run check` green; no `(!)` build warnings or
     `plugin:vite:reporter` chunking warnings introduced.
