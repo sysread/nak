@@ -996,10 +996,15 @@
       <!-- Drawer tab is open but the user hasn't picked a row yet.
            Point them at the sidebar list rather than dumping every
            card into the panel - see the History note in the file
-           preamble for why this shape replaced the all-cards view. -->
-      <p class="subtle memories-empty">
-        Pick a memory from the list on the left to view it.
-      </p>
+           preamble for why this shape replaced the all-cards view.
+           Suppressed while a librarian confirmation strip is up, so
+           the "pick a memory" hint doesn't compete with the
+           confirm copy the user is reading. -->
+      {#if librarianConfirm === null}
+        <p class="subtle memories-empty">
+          Pick a memory from the list on the left to view it.
+        </p>
+      {/if}
     {:else if !selectedMemory}
       <!-- route.memory points at a memory that isn't in the current
            search results. Most likely the user followed a sidebar

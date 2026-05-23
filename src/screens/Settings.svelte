@@ -116,6 +116,7 @@
   type Group =
     | 'keys'
     | 'ai'
+    | 'memory'
     | 'wiki'
     | 'appearance'
     | 'usage'
@@ -123,6 +124,7 @@
     | 'about';
   const GROUPS: { id: Group; label: string }[] = [
     { id: 'ai', label: 'AI' },
+    { id: 'memory', label: 'Memory' },
     { id: 'wiki', label: 'Wiki' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'usage', label: 'Usage' },
@@ -1565,29 +1567,6 @@
         {#if modelError}<p class="error">{modelError}</p>{/if}
         {#if modelInfo}<p class="subtle">{modelInfo}</p>{/if}
 
-        <h3 class="pane-section">Memory librarian</h3>
-        <label class="form-row toggle-row">
-          <input
-            type="checkbox"
-            name="memory-librarian"
-            checked={memoryLibrarianEnabled}
-            onchange={(e) => onToggleMemoryLibrarian(e.currentTarget.checked)}
-          />
-          <span>
-            Let Nak's memory librarian periodically reorganise your
-            memory store: consolidate cross-thread duplicates the
-            reflection agent couldn't see, fill in missing
-            relations between memories you've recalled together,
-            and soft-delete contradicted facts. Two passes run on
-            staggered 12h cadences (deep-sleep walks similarity
-            neighborhoods; rem walks recall co-occurrence
-            conversations); both are coordinated across devices so
-            only one run happens per cycle.
-          </span>
-        </label>
-        {#if memoryLibrarianError}<p class="error">{memoryLibrarianError}</p>{/if}
-        {#if memoryLibrarianInfo}<p class="subtle">{memoryLibrarianInfo}</p>{/if}
-
         <h3 class="pane-section">System prompts</h3>
         <p class="subtle">
           Named prompts you can toggle on or off from the chat composer. The
@@ -1673,6 +1652,40 @@
           </div>
         </div>
         {#if promptsError}<p class="error">{promptsError}</p>{/if}
+      {:else if group === 'memory'}
+        <h2>Memory</h2>
+        <p class="subtle">
+          Memories are short facts Nak records about you as you chat -
+          preferences, projects, people, recurring details. The
+          assistant reaches them through the always-on
+          <code>memory_recall</code> and <code>memory_search</code>
+          tools; you can browse and edit them from the Memories drawer
+          tab. See the Help modal's Memory page for the full picture.
+        </p>
+
+        <h3 class="pane-section">Memory librarian</h3>
+        <label class="form-row toggle-row">
+          <input
+            type="checkbox"
+            name="memory-librarian"
+            checked={memoryLibrarianEnabled}
+            onchange={(e) => onToggleMemoryLibrarian(e.currentTarget.checked)}
+          />
+          <span>
+            Let Nak's memory librarian periodically reorganise your
+            memory store: consolidate cross-thread duplicates the
+            reflection agent couldn't see, fill in missing
+            relations between memories you've recalled together,
+            and soft-delete contradicted facts. Two passes run on
+            staggered 12h cadences (deep-sleep walks similarity
+            neighborhoods; rem walks recall co-occurrence
+            conversations); both are coordinated across devices so
+            only one run happens per cycle. You can also trigger
+            either pass on demand from the Memories drawer tab.
+          </span>
+        </label>
+        {#if memoryLibrarianError}<p class="error">{memoryLibrarianError}</p>{/if}
+        {#if memoryLibrarianInfo}<p class="subtle">{memoryLibrarianInfo}</p>{/if}
       {:else if group === 'wiki'}
         <h2>Wiki</h2>
         <p class="subtle">
