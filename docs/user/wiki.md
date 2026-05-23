@@ -87,7 +87,10 @@ articles by meaning, not just by literal substring. Substring matches
 are merged in too, so an article you wrote ten seconds ago (before the
 embedding worker has caught up) still surfaces.
 
-Clearing the search returns the alphabetical listing.
+Clearing the search returns the alphabetical listing. That listing
+loads in pages as you scroll - more articles load automatically as
+you reach the bottom, so a large wiki never stops at a fixed cap.
+Search is separate: it shows the closest matches without paging.
 
 ## Adding an article
 

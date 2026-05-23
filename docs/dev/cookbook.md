@@ -29,9 +29,15 @@ unaffected.
   `recipeToMarkdown`, and the size constants the tools and the modal
   share.
 - `src/lib/cookbook-store.svelte.ts` — module-level `$state` for the
-  recipe list, plus `loadRecipes` and `notifyCookbookChanged`. The
-  bridge between the tool layer and the UI is a window `CustomEvent`
-  (`nak:recipes:changed`) so tools stay UI-unaware.
+  recipe list. Holds the paginated "All recipes" window (`recipes`,
+  `offset`, `hasMore`, `loadingMore`, `sort`), the complete `upcoming`
+  / `favorites` bucket arrays, the topic selection, and the vocabulary.
+  `loadRecipes` reloads page one (current sort + topic filter) and
+  refetches the buckets; `loadMoreRecipes` appends the next offset
+  page. The bridge between the tool layer and the UI is a window
+  `CustomEvent` (`nak:recipes:changed`) so tools stay UI-unaware - its
+  handler calls `loadRecipes`, i.e. a tool mutation resets the list to
+  the top rather than trying to patch a row in the middle of a page.
 - `src/lib/tools/recipe_save.ts`, `recipe_list.ts`, `recipe_get.ts`,
   `recipe_update.ts`, `recipe_delete.ts`, `recipe_photos_attach.ts`,
   `recipe_photos_remove.ts`, `recipe_photos_reorder.ts`,
@@ -40,6 +46,7 @@ unaffected.
 - `src/lib/supabase.ts` — `Recipe`, `RecipeVersion`, `RecipePhoto`,
   `RecipePhotoMeta`, and `RecipePhotoInput` types + `createRecipe /
   updateRecipe / deleteRecipe / getRecipe / listRecipes /
+  listRecipesPage / listUpcomingRecipes / listFavoriteRecipes /
   listRecipeVersions / getRecipeVersion / revertRecipe /
   upsertRecipeImage / listRecipePhotos / listRecipePhotoMeta /
   listRecipeVersionPhotoInputs / attachRecipePhotos /
@@ -64,28 +71,37 @@ unaffected.
   `COOKBOOK_CHANGE_EVENT` listener in `onMount`.
 - `src/components/RecipeList.svelte` — the sidebar listing
   rendered by the Recipes drawer tab. Owns the search input, the
-  sort selector, the topic-filter dropdown mount, the debounced
-  embed-then-search round trip with abort-controller supersede,
-  and the buckets-plus-main-list markup. Composition-only: every
-  UI-behavior decision lives in the primitives module next door.
+  sort selector (bound to `cookbook.sort`), the topic-filter
+  dropdown mount, the debounced embed-then-search round trip with
+  abort-controller supersede, an `$effect` that reloads page one
+  whenever the sort or topic filter changes, and the buckets-plus-
+  main-list markup with an infinite-scroll sentinel at the tail of
+  the "All recipes" list (browse mode only). Composition-only:
+  every UI-behavior decision lives in the primitives module next
+  door.
 - `src/lib/ui/recipe-list.ts` — pure UI-behavior primitives for
   the recipe sidebar. `isSearching(query)`,
-  `pickVisibleRecipes(args)` (server-order on search, rating sort
-  with null-rank/recency tie-break, alphabetical sort by title
-  with untitled drafts sinking and recency tie-break, or
-  default store order),
-  `pickUpcomingRecipes` and `pickFavoriteRecipes` (filter +
-  recency sort, empty during a search),
-  `matchesTopicFilter(recipe, selected)` (client-side topic
-  predicate; the bounded cookbook size makes server-side
-  filtering not worth the round trip, and the same predicate
-  has to narrow Upcoming, Favorites, search results, and the
-  main listing uniformly), and `computeListView(args)` returning
-  a tagged union for the listing area's 5-state render decision
+  `pickVisibleRecipes(args)` (client-side topic filter over the
+  capped search results on search; the server-sorted, server-topic-
+  filtered page window rendered verbatim on browse - no client
+  re-sort, which would disagree with the server's page boundaries
+  mid-scroll), `pickUpcomingRecipes` and `pickFavoriteRecipes`
+  (topic filter + recency sort over the complete bucket arrays,
+  empty during a search), `matchesTopicFilter(recipe, selected)`
+  (the client-side topic predicate, used for the search results
+  and the buckets - the paginated "All recipes" list filters
+  server-side instead, since a partial page has to be narrowed
+  before it is sliced), and `computeListView(args)` returning a
+  tagged union for the listing area's 5-state render decision
   (scanner-search / error / scanner-loading / empty / list). The
   `SEARCH_DEBOUNCE_MS` and `RECIPE_SEARCH_LIMIT` tunables also
   live here. Unit-tested at `tests/recipe-list.test.ts` with
-  plain vitest.
+  plain vitest. The sort itself (updated / rating / alphabetical)
+  is pushed into the Supabase query, NOT computed here.
+- `src/lib/actions/infinite-scroll.ts` — shared Svelte `use:`
+  action wrapping an IntersectionObserver; fires `onHit` when the
+  sentinel nears the viewport. Used by the RecipeList, MemoryList,
+  and WikiList sidebars to page their browse lists.
 - `src/styles.css` — `.sidebar-nav`, `.recipe-drawer-list`,
   `.recipe-drawer-footer`. The nav section reuses `.thread` and
   `.thread-row` for the button chrome and lives with the rest of
@@ -131,10 +147,16 @@ unaffected.
     touch `updated_at` (so the recency sort stays stable across
     toggles). The two flags are independent. The drawer's
     `RecipeList.svelte` renders an "Upcoming" section at the top
-    by filtering `cookbook.recipes` on `r.upcoming === true`, then
-    a "Favorites" section below it (filtered on `r.favorite ===
-    true`); rows in either section ALSO appear in their natural
-    position in the main "All recipes" listing below (the
+    from the complete `cookbook.upcoming` array (fetched whole by
+    `listUpcomingRecipes`), then a "Favorites" section below it
+    from `cookbook.favorites` (`listFavoriteRecipes`). These are
+    fetched separately from the paginated "All recipes" list
+    precisely because they must be complete - a flagged recipe that
+    lives past the loaded page window would otherwise vanish from
+    its bucket. The partial `recipes_user_upcoming_idx` /
+    `recipes_user_favorite_idx` indexes keep those whole-bucket
+    fetches cheap. Rows in either section ALSO appear in their
+    natural position in the main "All recipes" listing below (the
     duplication is intentional - the user wants both "what's
     bookmarked" and "where it lives normally"). The LLM tools do
     NOT expose a way to toggle either flag - both are strictly
@@ -320,8 +342,12 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   course, and technique. The Cookbook drawer mounts the same
   `TopicsFilter.svelte` component the conversation and Memories
   drawers use; the filter narrows the Upcoming / Favorites / All /
-  search buckets uniformly. Tags are managed by the worker - no
-  manual tagging tool exposed to the LLM or the user, by design.
+  search buckets uniformly - server-side for the paginated "All
+  recipes" list (so each page is filtered before it is sliced),
+  client-side for the complete buckets and the capped search
+  results. Changing the selection reloads the "All recipes" list
+  from page one. Tags are managed by the worker - no manual tagging
+  tool exposed to the LLM or the user, by design.
 
 ## Gotchas
 

@@ -21,10 +21,13 @@
   import {
     memoriesStore,
     runMemoriesSearch,
+    loadMoreMemories,
     refreshMemoriesTopicsVocabulary,
   } from '$lib/memories-store.svelte';
   import { classifyMemoryConfidence } from '$lib/memories';
   import { SEARCH_DEBOUNCE_MS, emptyMessage } from '$lib/ui/memories-list';
+  import { infiniteScroll } from '$lib/actions/infinite-scroll';
+  import Scanner from './Scanner.svelte';
   import TopicsFilter from './TopicsFilter.svelte';
 
   // Parent (Chat shell) passes a callback that dismisses the mobile
@@ -78,13 +81,11 @@
     void refreshMemoriesTopicsVocabulary(app.supabase);
   });
 
-  // Refetch the search whenever the topic selection changes. The
-  // store's `runMemoriesSearch` already reads the selection from the
-  // store inside its body, so we just trigger another call. Cursors
-  // / pagination aren't a thing on the memories surface (there's no
-  // bucketing, just a single results list), so no cursor reset is
-  // needed - this is the lighter-weight analogue of the threads
-  // drawer's filter-change effect.
+  // Refetch whenever the topic selection changes. `runMemoriesSearch`
+  // reads the selection from the store inside its body and dispatches
+  // on the query - empty re-pages the browse list from the top
+  // (resetting the offset window), non-empty re-runs the capped
+  // search - so we just trigger another call.
   $effect(() => {
     // Read for reactive tracking.
     const _sel = memoriesStore.selectedTopics;
@@ -146,6 +147,20 @@
         </button>
       </div>
     {/each}
+    {#if memoriesStore.hasMore}
+      <!-- Infinite-scroll sentinel for the browse list. hasMore is
+           forced false during a search (capped, unpaged), so this only
+           appears in the empty-query regime. -->
+      <div
+        class="memory-list-sentinel"
+        use:infiniteScroll={{ onHit: () => app.supabase && loadMoreMemories(app.supabase) }}
+        aria-hidden="true"
+      >
+        {#if memoriesStore.loadingMore}
+          <Scanner label="Loading more memories" size={0.85} />
+        {/if}
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -189,6 +204,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 100%;
+  }
+  /* Pagination sentinel - a small box at the list tail the
+     IntersectionObserver can catch as it nears the viewport. */
+  .memory-list-sentinel {
+    min-height: 1px;
+    padding: 0.5rem 0;
   }
   /* Confidence-tinted rows. Green for the affirmed band, red shades
      for the doubted bands (hedged = light, shaky = stronger). The

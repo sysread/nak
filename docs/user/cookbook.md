@@ -170,9 +170,16 @@ by most-recent edit; unrated recipes sink to the bottom so the
 sort is honest about which recipes you've actually tried.
 
 The same selector also offers **A-Z**, which sorts the list by
-title (case- and accent-insensitive). Useful when you remember the
-name of a recipe but not when you last opened it. Untitled drafts
-sink to the bottom; ties fall back to most-recent edit.
+title. Useful when you remember the name of a recipe but not when
+you last opened it.
+
+The list loads in pages as you scroll - the first batch of recipes
+appears right away, and more load automatically as you reach the
+bottom, so a large cookbook never silently stops at a fixed cap.
+Switching the sort or the topic filter reloads from the top in the
+new order. Search is separate: typing in the box replaces the list
+with the closest matches (it does not page), and clearing the box
+returns to the scrollable browse list.
 
 ## Marking recipes as "upcoming"
 

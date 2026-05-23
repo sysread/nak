@@ -3,11 +3,11 @@
  * - no runes, no DOM, no reactive state - tested via plain vitest.
  *
  * The companion `src/components/RecipeList.svelte` is the only
- * caller that wires these into Svelte reactivity (the `query` /
- * `sortMode` runes, the debounced `$effect` that orchestrates the
- * embed-then-search round trip, the AbortController that
- * supersedes stale calls). A port to another framework would re-
- * use this module untouched.
+ * caller that wires these into Svelte reactivity (the `query` rune,
+ * the debounced `$effect` that orchestrates the embed-then-search
+ * round trip, the AbortController that supersedes stale calls, and
+ * the infinite-scroll sentinel that pages the browse list). A port
+ * to another framework would re-use this module untouched.
  */
 import { describe, it, expect } from 'vitest';
 import type { Recipe } from '../src/lib/supabase';
@@ -68,9 +68,8 @@ describe('isSearching', () => {
 
 describe('pickVisibleRecipes', () => {
   it('returns server-order results when searching', () => {
-    // Relevance ranking comes pre-sorted by the supabase RPC;
-    // the primitive must preserve that order verbatim, including
-    // skipping any local sortMode the user has selected.
+    // Relevance ranking comes pre-sorted by the supabase RPC; the
+    // primitive must preserve that order verbatim.
     const a = makeRecipe('a', { rating: 1 });
     const b = makeRecipe('b', { rating: 5 });
     const c = makeRecipe('c', { rating: 3 });
@@ -78,172 +77,56 @@ describe('pickVisibleRecipes', () => {
       searching: true,
       searchResults: [a, b, c],
       storeRecipes: [c, b, a],
-      sortMode: 'rating',
       selectedTopics: [],
     });
     expect(out.map((r) => r.id)).toEqual(['a', 'b', 'c']);
   });
 
-  it('falls back to store order when not searching and sort is updated', () => {
-    const a = makeRecipe('a');
-    const b = makeRecipe('b');
+  it('narrows search results by the active topic filter, preserving relevance order', () => {
+    // Search hits come back capped and unfiltered by topic (the
+    // search RPC takes no topic argument), so the filter is applied
+    // here client-side AFTER the server ranked them.
+    const a = makeRecipe('a', { topics: ['italian'] });
+    const b = makeRecipe('b', { topics: ['mexican'] });
+    const c = makeRecipe('c', { topics: ['italian'] });
     const out = pickVisibleRecipes({
-      searching: false,
-      searchResults: [],
-      storeRecipes: [a, b],
-      sortMode: 'updated',
-      selectedTopics: [],
-    });
-    expect(out.map((r) => r.id)).toEqual(['a', 'b']);
-  });
-
-  it('sorts by rating desc with the null-rank/recency tie-break', () => {
-    const unrated = makeRecipe('unrated', {
-      rating: null,
-      updated_at: '2026-05-19T15:00:00Z',
-    });
-    const r1 = makeRecipe('r1', {
-      rating: 1,
-      updated_at: '2026-05-19T10:00:00Z',
-    });
-    const r5_old = makeRecipe('r5_old', {
-      rating: 5,
-      updated_at: '2026-05-01T00:00:00Z',
-    });
-    const r5_new = makeRecipe('r5_new', {
-      rating: 5,
-      updated_at: '2026-05-19T11:00:00Z',
-    });
-    const out = pickVisibleRecipes({
-      searching: false,
-      searchResults: [],
-      storeRecipes: [unrated, r1, r5_old, r5_new],
-      sortMode: 'rating',
-      selectedTopics: [],
-    });
-    // 5-star recent first, then 5-star old (tie broken by recency),
-    // then 1-star, then unrated last (null rank below the lowest
-    // real rating).
-    expect(out.map((r) => r.id)).toEqual(['r5_new', 'r5_old', 'r1', 'unrated']);
-  });
-
-  it('does not mutate the input store array', () => {
-    const a = makeRecipe('a', { rating: 1 });
-    const b = makeRecipe('b', { rating: 5 });
-    const store = [a, b];
-    pickVisibleRecipes({
-      searching: false,
-      searchResults: [],
-      storeRecipes: store,
-      sortMode: 'rating',
-      selectedTopics: [],
-    });
-    expect(store.map((r) => r.id)).toEqual(['a', 'b']);
-  });
-
-  it('sorts alphabetically by title, case- and accent-insensitive', () => {
-    // "Espresso" must collate with "espresso" (sensitivity "base"),
-    // and the leading article is left alone - we sort by raw title,
-    // not by a "stripped" form. The diacritic test guards against a
-    // future refactor that drops the localeCompare options.
-    const apple = makeRecipe('apple', { title: 'apple pie' });
-    const espresso = makeRecipe('espresso', { title: 'Espresso' });
-    const creme = makeRecipe('creme', { title: 'creme brulee' });
-    const banana = makeRecipe('banana', { title: 'Banana bread' });
-    const out = pickVisibleRecipes({
-      searching: false,
-      searchResults: [],
-      storeRecipes: [espresso, apple, creme, banana],
-      sortMode: 'alphabetical',
-      selectedTopics: [],
-    });
-    expect(out.map((r) => r.id)).toEqual([
-      'apple',
-      'banana',
-      'creme',
-      'espresso',
-    ]);
-  });
-
-  it('sinks untitled drafts to the bottom of the alphabetical sort', () => {
-    // An untitled draft has no useful collation key. Floating it
-    // above every titled recipe just because empty string sorts
-    // first would not match what "sort A-Z" means to the user.
-    const blank = makeRecipe('blank', { title: '' });
-    const whitespace = makeRecipe('whitespace', { title: '   ' });
-    const zucchini = makeRecipe('zucchini', { title: 'zucchini fritters' });
-    const apple = makeRecipe('apple', { title: 'apple pie' });
-    const out = pickVisibleRecipes({
-      searching: false,
-      searchResults: [],
-      storeRecipes: [blank, zucchini, whitespace, apple],
-      sortMode: 'alphabetical',
-      selectedTopics: [],
-    });
-    // Apple, then zucchini, then the two empty-title drafts in
-    // some order at the end. The relative order of the two
-    // untitled drafts is not load-bearing for the user; the
-    // contract is that they sink, not that they sort against
-    // each other.
-    expect(out.slice(0, 2).map((r) => r.id)).toEqual(['apple', 'zucchini']);
-    expect(out.slice(2).map((r) => r.id).sort()).toEqual([
-      'blank',
-      'whitespace',
-    ]);
-  });
-
-  it('breaks alphabetical ties by updated_at desc', () => {
-    // Two recipes share a title (a duplicate the user has not
-    // cleaned up yet). The newer edit wins the tie so the order
-    // is stable across reloads - matches the rating sort's
-    // tie-break rule.
-    const old = makeRecipe('old', {
-      title: 'omelette',
-      updated_at: '2026-05-01T00:00:00Z',
-    });
-    const fresh = makeRecipe('fresh', {
-      title: 'Omelette',
-      updated_at: '2026-05-19T12:00:00Z',
-    });
-    const out = pickVisibleRecipes({
-      searching: false,
-      searchResults: [],
-      storeRecipes: [old, fresh],
-      sortMode: 'alphabetical',
-      selectedTopics: [],
-    });
-    expect(out.map((r) => r.id)).toEqual(['fresh', 'old']);
-  });
-
-  it('narrows the alphabetical sort by the active topic filter', () => {
-    // The topic filter must compose with the alphabetical sort
-    // the same way it composes with the rating and updated
-    // branches - filter first, then sort the surviving subset.
-    const a = makeRecipe('a', { title: 'aglio e olio', topics: ['italian'] });
-    const b = makeRecipe('b', { title: 'birria tacos', topics: ['mexican'] });
-    const c = makeRecipe('c', { title: 'cacio e pepe', topics: ['italian'] });
-    const out = pickVisibleRecipes({
-      searching: false,
-      searchResults: [],
-      storeRecipes: [b, c, a],
-      sortMode: 'alphabetical',
+      searching: true,
+      searchResults: [a, b, c],
+      storeRecipes: [],
       selectedTopics: ['italian'],
     });
     expect(out.map((r) => r.id)).toEqual(['a', 'c']);
   });
 
-  it('does not mutate the input store array when sorting alphabetically', () => {
-    const z = makeRecipe('z', { title: 'zucchini' });
-    const a = makeRecipe('a', { title: 'apple' });
-    const store = [z, a];
-    pickVisibleRecipes({
+  it('renders the browse page window verbatim (server already sorted + topic-filtered)', () => {
+    // The store holds the paginated, server-ordered window; the
+    // primitive must not re-sort or re-filter it - that would
+    // disagree with the server's page boundaries mid-scroll.
+    const a = makeRecipe('a', { topics: ['mexican'] });
+    const b = makeRecipe('b', { topics: ['italian'] });
+    const out = pickVisibleRecipes({
+      searching: false,
+      searchResults: [],
+      storeRecipes: [a, b],
+      // A non-empty selection must NOT re-filter the browse window -
+      // the server already applied it before slicing the page.
+      selectedTopics: ['italian'],
+    });
+    expect(out.map((r) => r.id)).toEqual(['a', 'b']);
+  });
+
+  it('does not mutate the input store array', () => {
+    const a = makeRecipe('a');
+    const b = makeRecipe('b');
+    const store = [a, b];
+    const out = pickVisibleRecipes({
       searching: false,
       searchResults: [],
       storeRecipes: store,
-      sortMode: 'alphabetical',
       selectedTopics: [],
     });
-    expect(store.map((r) => r.id)).toEqual(['z', 'a']);
+    out.reverse();
+    expect(store.map((r) => r.id)).toEqual(['a', 'b']);
   });
 });
 

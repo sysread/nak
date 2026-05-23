@@ -42,44 +42,6 @@ export function isSearching(query: string): boolean {
 }
 
 /**
- * Comparator for the rating sort. Null ratings rank below any
- * rated row (treated as -1); ties break by `updated_at` desc so
- * the most recently edited recipe at each rating tier floats up.
- */
-function compareByRating(a: Recipe, b: Recipe): number {
-  const ar = a.rating ?? -1;
-  const br = b.rating ?? -1;
-  if (ar !== br) return br - ar;
-  return (b.updated_at ?? '').localeCompare(a.updated_at ?? '');
-}
-
-/**
- * Comparator for the alphabetical sort. Case- and accent-
- * insensitive title compare via `localeCompare` with sensitivity
- * "base", so "Espresso" / "espresso" and "creme" / "creme" collate
- * together regardless of how the diacritics got typed. Titles are
- * trimmed before comparison so a stray leading space cannot float
- * a row above its peers.
- *
- * Untitled drafts (empty or whitespace-only `title`) sink to the
- * bottom - they would otherwise leapfrog every real recipe whose
- * name starts with a letter, which is not what "sort alphabetically"
- * means to the user.
- *
- * Ties fall back to `updated_at` desc so the order is stable
- * across reloads even when two recipes share a title.
- */
-function compareByTitle(a: Recipe, b: Recipe): number {
-  const at = (a.title ?? '').trim();
-  const bt = (b.title ?? '').trim();
-  if (!at && bt) return 1;
-  if (at && !bt) return -1;
-  const cmp = at.localeCompare(bt, undefined, { sensitivity: 'base' });
-  if (cmp !== 0) return cmp;
-  return (b.updated_at ?? '').localeCompare(a.updated_at ?? '');
-}
-
-/**
  * Topic-filter predicate applied client-side over the bounded
  * cookbook (~200 rows on a heavy account; server-side filtering
  * would add scope for no perceptible perf win, and the same
@@ -110,42 +72,32 @@ export function matchesTopicFilter(
 }
 
 /**
- * Top of the visible listing. Four modes, in precedence:
+ * The main "All recipes" listing. Two modes:
  *
- *   - Searching - server-returned hits in relevance order win;
- *     ranking is exactly what the user asked for.
- *   - sortMode === 'rating' - rating descending with the null-rank
- *     / recency tie-break.
- *   - sortMode === 'alphabetical' - title compare (case- and
- *     accent-insensitive) with untitled drafts sinking to the
- *     bottom and recency as the tie-break.
- *   - Default ('updated') - the store's existing order (most-
- *     recently-edited first; the cookbook store sorts on insert).
- *
- * The active topic filter narrows whichever source is in play -
- * the search ranking stays intact (the filter is applied AFTER
- * the server returns hits, so it does not perturb relevance
- * order), and the sort/default branches filter before sorting so
- * the chosen order is computed over only the matching subset.
+ *   - Searching - the server-returned hits in relevance order. They
+ *     come back capped (not paged) and the search RPC takes no topic
+ *     argument, so the active topic filter is applied here, client-
+ *     side, AFTER the server returns hits so it does not perturb the
+ *     relevance ranking.
+ *   - Browsing - `storeRecipes` is already the server-sorted (per the
+ *     sidebar's sort picker, threaded into the query) and server-
+ *     topic-filtered page window the cookbook store paged in. It is
+ *     rendered verbatim: a client re-sort or re-filter would disagree
+ *     with the server's page boundaries and shuffle or drop rows
+ *     across the pagination seam as the user scrolls.
  */
 export function pickVisibleRecipes(args: {
   searching: boolean;
   searchResults: readonly Recipe[];
   storeRecipes: readonly Recipe[];
-  sortMode: SortMode;
   selectedTopics: readonly string[];
 }): Recipe[] {
-  const match = (r: Recipe): boolean =>
-    matchesTopicFilter(r, args.selectedTopics);
-  if (args.searching) return args.searchResults.filter(match);
-  const filtered = args.storeRecipes.filter(match);
-  if (args.sortMode === 'alphabetical') {
-    return filtered.sort(compareByTitle);
+  if (args.searching) {
+    return args.searchResults.filter((r) =>
+      matchesTopicFilter(r, args.selectedTopics)
+    );
   }
-  if (args.sortMode === 'rating') {
-    return filtered.sort(compareByRating);
-  }
-  return filtered;
+  return [...args.storeRecipes];
 }
 
 /**
