@@ -956,7 +956,17 @@ export class VeniceClient {
       // without devtools depend on this breadcrumb to tell a stream
       // failure apart from a later persistence failure - they have
       // identical downstream symptoms without it.
-      log.error('streamChat SSE loop failed', err);
+      //
+      // Exception: a user-initiated abort (stop button, or aborting
+      // the in-flight stream to retry a response) rejects read() with
+      // an AbortError ("BodyStreamBuffer was aborted"). That's the
+      // expected outcome of a cancel, not a failure - chat-loop's
+      // AbortError branch swallows it downstream - so don't log it as
+      // an error. Rethrow regardless so that branch still fires.
+      const isAbort =
+        req.signal?.aborted === true ||
+        (err instanceof Error && err.name === 'AbortError');
+      if (!isAbort) log.error('streamChat SSE loop failed', err);
       throw err;
     } finally {
       reader.releaseLock();
