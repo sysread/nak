@@ -3183,6 +3183,85 @@ button.composer-wharf-trigger {
   font-size: 0.95rem;
 }
 
+/* Section action cluster in the top-bar (TopBarActions.svelte). Anchors
+   the mobile overflow dropdown; flex-shrink:0 keeps the cluster from
+   collapsing when the title slot grows. */
+.top-bar-actions {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+/* Desktop: Bootstrap-style merged button group. Non-first children pull
+   left 1px so adjacent 1px borders collapse into a single seam; inner
+   corners square off so the row reads as one unit. Mirrors the recipe-
+   detail `.cookbook-action-group` treatment. Hidden at the mobile
+   breakpoint, where `.top-bar-overflow-btn` takes over. */
+.top-bar-group {
+  display: inline-flex;
+  gap: 0;
+}
+.top-bar-group > button.icon-btn:not(:first-child) {
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.top-bar-group > button.icon-btn:not(:last-child) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+/* Lift the hovered / focused button above its neighbors so its full
+   border shows across the seam instead of being clipped by the next
+   button's left border. */
+.top-bar-group > button.icon-btn:hover,
+.top-bar-group > button.icon-btn:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
+/* The overflow trigger and its dropdown only exist on mobile; the
+   `button.` prefix matches `button.icon-btn`'s specificity so this
+   wins on source order rather than losing the display race. */
+button.top-bar-overflow-btn {
+  display: none;
+}
+.top-bar-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.35rem;
+  min-width: 12rem;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+  z-index: 30;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.top-bar-menu-icon {
+  display: inline-flex;
+  width: 1.1rem;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+@media (max-width: 720px) {
+  .top-bar-group {
+    display: none;
+  }
+  button.top-bar-overflow-btn {
+    display: inline-flex;
+  }
+  /* Gated on `.top-bar-menu`'s `{#if menuOpen}` in markup; this just
+     restores the flex layout the desktop base rule suppresses, so a
+     menu left open across a resize back to desktop stays hidden. */
+  .top-bar-menu {
+    display: flex;
+  }
+}
+
 /* Three-button tier toggle in the top bar (smart / balanced / fast).
    Rendered as a single bordered group with no internal gaps so the
    buttons share edges, Bootstrap-style. The active tier fills with the

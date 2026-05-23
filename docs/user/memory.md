@@ -303,10 +303,12 @@ repeated consolidation passes don't drift artificially upward.
 
 Both passes are coordinated across devices so only one run happens
 per cycle, and they share a cross-device mutex so they can't run at
-the same time. The Memories panel's top bar has two icon buttons -
-**moon** for deep-sleep, **shuffle** for rem - that trigger a
-manual run when you want to see what the librarian would do
-without waiting for the next scheduled cycle. The panel shows a
+the same time. The Memories panel's top bar groups two icon
+actions - **moon** for deep-sleep, **shuffle** for rem - that trigger
+a manual run when you want to see what the librarian would do
+without waiting for the next scheduled cycle. On a narrow screen the
+pair collapses into a single overflow (**...**) menu to keep the bar
+uncluttered. The panel shows a
 step-by-step progress strip and a one-sentence summary of what the
 agent did.
 
