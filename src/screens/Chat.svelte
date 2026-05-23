@@ -192,6 +192,7 @@
     type AskUserPendingContent,
   } from '$lib/tools/ask_user';
   import MessageAttachments from '../components/MessageAttachments.svelte';
+  import TopBarActions from '../components/TopBarActions.svelte';
   // ExtractedTextDrawer + LogsDrawer are toggled overlays - the
   // user has to deliberately open them via a button or an
   // attachment-text affordance, so their content only matters
@@ -5579,22 +5580,96 @@
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
+        <!-- Section action icons. The per-tab `actions` array below maps
+             each one to a TopBarAction; TopBarActions renders them as a
+             merged button group on desktop and collapses them behind a
+             single overflow menu on mobile (the icons are render-only
+             snippets, shared by both layouts). The title slot stays out
+             of the cluster - it owns its own flex space. -->
+        {#snippet newThreadIcon()}
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+        {/snippet}
+        {#snippet newRecipeIcon()}
+          <!-- Feather "file-text" - document with lines, reads as
+               "new document with content" / recipe card. -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+            <line x1="10" y1="9" x2="8" y2="9" />
+          </svg>
+        {/snippet}
+        {#snippet deepSleepIcon()}
+          <!-- Feather "moon" - reads as "slow-wave sleep / deep
+               consolidation". -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+          </svg>
+        {/snippet}
+        {#snippet remIcon()}
+          <!-- Feather "shuffle" - reads as "associative recombination /
+               reshuffling memories". -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="16 3 21 3 21 8" />
+            <line x1="4" y1="20" x2="21" y2="3" />
+            <polyline points="21 16 21 21 16 21" />
+            <line x1="15" y1="15" x2="21" y2="21" />
+            <line x1="4" y1="4" x2="9" y2="9" />
+          </svg>
+        {/snippet}
+        {#snippet librarianIcon()}
+          <!-- Feather "sparkles" - reads as "agent / clean up". -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3l1.9 4.6L18 9l-4.1 1.4L12 15l-1.9-4.6L6 9l4.1-1.4L12 3z" />
+            <path d="M5 17l.8 2L8 19.5l-2.2.5L5 22l-.8-2L2 19.5l2.2-.5L5 17z" />
+            <path d="M19 14l.6 1.5L21 16l-1.4.5L19 18l-.6-1.5L17 16l1.4-.5L19 14z" />
+          </svg>
+        {/snippet}
+        {#snippet changelogIcon()}
+          <!-- Feather "clock" - reads as "history / audit log". -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+        {/snippet}
+        {#snippet skippedIcon()}
+          <!-- Feather "alert-triangle" - reads as "something needs your
+               attention" without the error tone; a skip is an FYI, not a
+               broken state. -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+        {/snippet}
         {#if drawerTab === 'chats'}
           <!-- Chats top-bar: new-thread + title (inline-renameable). The
                logs-toggle that used to live here moved out of the per-tab
                branches so it appears on every section. -->
-          <button
-            class="secondary icon-btn new-thread-mini"
-            onclick={newThread}
-            disabled={currentIsEmpty}
-            title={currentIsEmpty ? "You're already on an empty thread." : 'Start a new conversation'}
-            aria-label="Start a new conversation"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-          </button>
+          {@const actions = [
+            {
+              id: 'new-thread',
+              label: 'New conversation',
+              title: currentIsEmpty
+                ? "You're already on an empty thread."
+                : 'Start a new conversation',
+              class: 'new-thread-mini',
+              disabled: currentIsEmpty,
+              onclick: newThread,
+              icon: newThreadIcon,
+            },
+          ]}
+          <TopBarActions {actions} menuLabel="Chat actions" />
           <div class="title-wrap">
             {#if currentThread}
               {#if renaming}
@@ -5621,77 +5696,53 @@
                button in the chats top-bar. Triggers the Cookbook panel
                to open the edit form for a fresh recipe via the
                $bindable cookbookTriggerNew prop. -->
-          <button
-            class="secondary icon-btn new-thread-mini"
-            onclick={() => (cookbookTriggerNew = true)}
-            title="New recipe"
-            aria-label="New recipe"
-          >
-            <!-- Feather "file-text" — document with lines, reads as
-                 "new document with content" / recipe card. -->
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="16" y1="13" x2="8" y2="13" />
-              <line x1="16" y1="17" x2="8" y2="17" />
-              <line x1="10" y1="9" x2="8" y2="9" />
-            </svg>
-          </button>
+          {@const actions = [
+            {
+              id: 'new-recipe',
+              label: 'New recipe',
+              title: 'New recipe',
+              class: 'new-thread-mini',
+              onclick: () => (cookbookTriggerNew = true),
+              icon: newRecipeIcon,
+            },
+          ]}
+          <TopBarActions {actions} menuLabel="Recipe actions" />
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Recipes</span>
           </div>
 
         {:else if drawerTab === 'memories'}
-          <!-- Memories top-bar. Two manual-trigger buttons for the
+          <!-- Memories top-bar. Two manual-trigger actions for the
                memory librarian's two passes (deep-sleep =
                similarity-sweep consolidation; rem = conversation-
-               batched associative integration). Same icon-button
-               pattern the wiki librarian uses. Disabled while the
+               batched associative integration). Disabled while the
                scheduled worker or a previous manual run is in
                flight - the runners' .busy getter ORs both. The
                panel itself owns the progress strip and the result
-               line; these buttons are just the launchers. -->
-          <button
-            class="secondary icon-btn librarian-run-btn"
-            onclick={() => (deepSleepTrigger = true)}
-            disabled={deepSleepRunner.busy}
-            title={deepSleepRunner.busy
-              ? 'Deep-sleep is already running'
-              : 'Run the deep-sleep pass now (similarity-sweep consolidation)'}
-            aria-label={deepSleepRunner.busy
-              ? 'Deep-sleep is already running'
-              : 'Run the deep-sleep pass now'}
-          >
-            <!-- Feather "moon" - reads as "slow-wave sleep / deep
-                 consolidation". -->
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-            </svg>
-          </button>
-          <button
-            class="secondary icon-btn librarian-run-btn"
-            onclick={() => (remTrigger = true)}
-            disabled={remRunner.busy}
-            title={remRunner.busy
-              ? 'Rem is already running'
-              : 'Run the rem pass now (associative integration over recent recall)'}
-            aria-label={remRunner.busy
-              ? 'Rem is already running'
-              : 'Run the rem pass now'}
-          >
-            <!-- Feather "shuffle" - reads as "associative
-                 recombination / reshuffling memories". -->
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <polyline points="16 3 21 3 21 8" />
-              <line x1="4" y1="20" x2="21" y2="3" />
-              <polyline points="21 16 21 21 16 21" />
-              <line x1="15" y1="15" x2="21" y2="21" />
-              <line x1="4" y1="4" x2="9" y2="9" />
-            </svg>
-          </button>
+               line; these are just the launchers. -->
+          {@const actions = [
+            {
+              id: 'deep-sleep',
+              label: 'Deep-sleep pass',
+              title: deepSleepRunner.busy
+                ? 'Deep-sleep is already running'
+                : 'Run the deep-sleep pass now (similarity-sweep consolidation)',
+              disabled: deepSleepRunner.busy,
+              onclick: () => (deepSleepTrigger = true),
+              icon: deepSleepIcon,
+            },
+            {
+              id: 'rem',
+              label: 'Rem pass',
+              title: remRunner.busy
+                ? 'Rem is already running'
+                : 'Run the rem pass now (associative integration over recent recall)',
+              disabled: remRunner.busy,
+              onclick: () => (remTrigger = true),
+              icon: remIcon,
+            },
+          ]}
+          <TopBarActions {actions} menuLabel="Memory actions" />
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Memories</span>
           </div>
@@ -5702,79 +5753,46 @@
                case. Static label in the title slot keeps the chrome
                consistent with the other tabs.
 
-               Manual-librarian button: opens the Wiki panel's
-               confirmation strip (with an optional custom-instructions
-               textarea). Disabled while either the scheduled worker
-               is mid-run or a previous manual run is still in flight -
-               we never want two librarian agents writing to the wiki
-               concurrently. The strip itself, the run, and the post-
-               run summary live in Wiki.svelte; this button is just
-               the launcher. -->
-          <button
-            class="secondary icon-btn librarian-run-btn"
-            onclick={() => (wikiLibrarianTrigger = true)}
-            disabled={wikiLibrarianRunner.busy}
-            title={wikiLibrarianRunner.busy
-              ? 'The librarian is already running'
-              : 'Run the wiki librarian now'}
-            aria-label={wikiLibrarianRunner.busy
-              ? 'The librarian is already running'
-              : 'Run the wiki librarian now'}
-          >
-            <!-- Feather "sparkles" - reads as "agent / clean up". -->
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 3l1.9 4.6L18 9l-4.1 1.4L12 15l-1.9-4.6L6 9l4.1-1.4L12 3z" />
-              <path d="M5 17l.8 2L8 19.5l-2.2.5L5 22l-.8-2L2 19.5l2.2-.5L5 17z" />
-              <path d="M19 14l.6 1.5L21 16l-1.4.5L19 18l-.6-1.5L17 16l1.4-.5L19 14z" />
-            </svg>
-          </button>
-          <!-- Wiki changelog jump. The changelog is the wiki tab's
-               default surface (rendered inline by Wiki.svelte when
-               no article is selected and the librarian isn't open),
-               so this button asks the panel to land there - a one-
-               click "back to wiki home" affordance from the article
-               view OR the librarian page. Routed through a
-               $bindable trigger (rather than a direct navigate())
-               because the librarian's open/closed state lives in
-               Wiki.svelte; closing it requires touching that local
-               flag alongside the route. Sits next to the librarian
-               button so the two "audit the wiki agent's behavior"
-               affordances (run it now / see what it has been
-               doing) live side by side. -->
-          <button
-            class="secondary icon-btn wiki-changelog-btn"
-            onclick={() => (wikiChangelogTrigger = true)}
-            title="Wiki changelog"
-            aria-label="Wiki changelog"
-          >
-            <!-- Feather "clock" - reads as "history / audit log". -->
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
-          </button>
-          <!-- Wiki skipped-threads jump. Mirrors the changelog button
-               next door: a one-click affordance to land on a sibling
-               page inside the wiki tab. Feather "alert-triangle"
-               reads as "something needs your attention" without
-               overcommitting to an error tone - the panel itself is
-               often empty, and a skip is a "FYI" not a "broken"
-               state. -->
-          <button
-            class="secondary icon-btn wiki-skipped-btn"
-            onclick={() => (wikiSkippedTrigger = true)}
-            title="Wiki skipped threads"
-            aria-label="Wiki skipped threads"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-              <line x1="12" y1="9" x2="12" y2="13" />
-              <line x1="12" y1="17" x2="12.01" y2="17" />
-            </svg>
-          </button>
+               librarian: opens the Wiki panel's confirmation strip
+               (with an optional custom-instructions textarea). Disabled
+               while either the scheduled worker is mid-run or a previous
+               manual run is still in flight - we never want two
+               librarian agents writing to the wiki concurrently.
+               changelog: the wiki tab's default surface, so this is a
+               one-click "back to wiki home" from an article or the
+               librarian page. skipped: a sibling FYI page for threads
+               the agent passed over. All three route through $bindable
+               triggers (rather than direct navigate()) because the
+               librarian's open/closed state lives in Wiki.svelte and
+               must be touched alongside the route. The strips, runs, and
+               summaries all live in Wiki.svelte; these are launchers. -->
+          {@const actions = [
+            {
+              id: 'librarian',
+              label: 'Run librarian',
+              title: wikiLibrarianRunner.busy
+                ? 'The librarian is already running'
+                : 'Run the wiki librarian now',
+              disabled: wikiLibrarianRunner.busy,
+              onclick: () => (wikiLibrarianTrigger = true),
+              icon: librarianIcon,
+            },
+            {
+              id: 'changelog',
+              label: 'Changelog',
+              title: 'Wiki changelog',
+              onclick: () => (wikiChangelogTrigger = true),
+              icon: changelogIcon,
+            },
+            {
+              id: 'skipped',
+              label: 'Skipped threads',
+              title: 'Wiki skipped threads',
+              onclick: () => (wikiSkippedTrigger = true),
+              icon: skippedIcon,
+            },
+          ]}
+          <TopBarActions {actions} menuLabel="Wiki actions" />
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Wiki</span>
           </div>

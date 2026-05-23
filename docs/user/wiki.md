@@ -229,8 +229,9 @@ If the fallback **also** can't process the conversation (rare - a
 real model error, a transient network issue, or an unsalvageable
 body), the agent gives up on that conversation rather than retrying
 forever and burning quota. Skipped conversations land in a dedicated
-**Skipped** panel inside the Wiki tab. The **alert-triangle** button
-in the Wiki top bar (next to the changelog clock button) opens it.
+**Skipped** panel inside the Wiki tab. The **alert-triangle** action
+in the Wiki top bar (grouped with the librarian and changelog
+actions) opens it.
 Each row shows:
 
 - The **conversation title** as a link - clicking it switches to the
@@ -323,9 +324,14 @@ can run one without the other.
 
 ### Running the librarian on demand
 
-The Wiki top bar has a **sparkles** button next to the logs toggle.
-Clicking it opens a confirmation strip with an optional instructions
-textarea, then runs the librarian against your wiki immediately.
+The Wiki top bar groups three actions - **sparkles** (run the
+librarian), **clock** (the [changelog](#changelog)), and
+**alert-triangle** (the [Skipped](#skipped-conversations) panel). On
+a wide screen they sit side by side as a button group; on a narrow
+screen they collapse into a single overflow (**...**) menu so the bar
+stays uncluttered. Clicking **sparkles** opens a confirmation strip
+with an optional instructions textarea, then runs the librarian
+against your wiki immediately.
 
 - **Leave the instructions empty** to run the normal periodic sweep
   (the consolidate / fact-check / boundary-tighten pass described
@@ -377,9 +383,9 @@ Every change to the wiki - article added, edited, deleted, by you or
 by either agent - is recorded as a one-line entry in the **wiki
 changelog**. The changelog is the Wiki tab's default view - open the
 **Wiki** tab with no article selected and it fills the panel. While
-reading an article, the **clock** button in the Wiki top bar (next
-to the sparkles librarian button) clears the selection and lands you
-back on the changelog.
+reading an article, the **clock** action in the Wiki top bar (grouped
+with the librarian and skipped actions) clears the selection and
+lands you back on the changelog.
 
 Each entry shows:
 
