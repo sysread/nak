@@ -64,6 +64,7 @@
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
   import { ExchangeStore, mergeMessagesById } from '$lib/exchange/exchange-store.svelte';
   import { ThreadClaimCoordinator } from '$lib/exchange/thread-claim-coordinator';
+  import { resolveHolderId } from '$lib/exchange/holder-id';
   import { isRecoveryMessage } from '$lib/conversation-recovery';
   import {
     saveDraft,
@@ -686,19 +687,17 @@
    */
   const exchangeStore = new ExchangeStore();
   /**
-   * Stable per-tab identifier used as the holder id for every
-   * thread-response claim acquired by this screen. Different tabs of
-   * the same user get different ids, so two tabs competing for the
-   * same thread are visible to each other as separate holders.
-   * `crypto.randomUUID` is universal in modern browsers; the fallback
-   * is for the test environment where jsdom sometimes lacks it.
+   * Stable holder id for every thread-response claim this screen
+   * acquires. Composed as `${browserId}:${tabSeq}` so a page refresh
+   * keeps the same id (sessionStorage survives refresh) and the chat-
+   * loop's stale claim from before the refresh reads as ours, not as
+   * "another device is responding". Different tabs of the same browser
+   * get different tabSeq values, so two tabs competing for the same
+   * thread still see each other as separate holders. See
+   * `src/lib/exchange/holder-id.ts` for the full rationale and edge
+   * cases (Chrome's Duplicate Tab, storage-unavailable fallback).
    */
-  const holderId: string = (() => {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-      return crypto.randomUUID();
-    }
-    return `holder-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  })();
+  const holderId: string = resolveHolderId();
   /**
    * The slot for the thread the user is currently viewing, or null
    * when no thread is selected or nothing has ever been sent on it.
