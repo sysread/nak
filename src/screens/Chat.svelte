@@ -150,6 +150,8 @@
   } from '$lib/wiki-store.svelte';
   import { onWikiChange } from '$lib/wiki-events';
   import { wikiLibrarianRunner } from '$lib/agents/wiki-librarian/runner.svelte';
+  import { deepSleepRunner } from '$lib/agents/deep-sleep/runner.svelte';
+  import { remRunner } from '$lib/agents/rem/runner.svelte';
   import { moodState } from '$lib/samskara/mood.svelte';
   import {
     bandIndexFor,
@@ -391,6 +393,14 @@
   // landed there and why. Same $bindable trigger shape as the other
   // two wiki panel buttons.
   let wikiSkippedTrigger = $state(false);
+
+  // Trigger flags for the memory librarian top-bar buttons. Two
+  // separate buttons because the user might want to run one pass
+  // without the other (deep-sleep is the cosine-similarity sweep;
+  // rem is the conversation-batched associative pass). Same
+  // $bindable pattern as the wiki librarian trigger.
+  let deepSleepTrigger = $state(false);
+  let remTrigger = $state(false);
   /**
    * Sidebar drawer tab. Backed by `route.drawer` - absent in the URL
    * means "chats" (the default). 'recipes' and 'memories' render
@@ -5626,13 +5636,55 @@
           </div>
 
         {:else if drawerTab === 'memories'}
-          <!-- Memories top-bar. No new-row affordance (memories are
-               written by the reflection agent and the assistant's
-               volitional memory tools, not by direct human compose),
-               and no per-row navigation - editing happens inline on
-               the panel. The label keeps the top-bar visually
-               consistent with Recipes, where a static label sits in
-               the title slot. -->
+          <!-- Memories top-bar. Two manual-trigger buttons for the
+               memory librarian's two passes (deep-sleep =
+               similarity-sweep consolidation; rem = conversation-
+               batched associative integration). Same icon-button
+               pattern the wiki librarian uses. Disabled while the
+               scheduled worker or a previous manual run is in
+               flight - the runners' .busy getter ORs both. The
+               panel itself owns the progress strip and the result
+               line; these buttons are just the launchers. -->
+          <button
+            class="secondary icon-btn librarian-run-btn"
+            onclick={() => (deepSleepTrigger = true)}
+            disabled={deepSleepRunner.busy}
+            title={deepSleepRunner.busy
+              ? 'Deep-sleep is already running'
+              : 'Run the deep-sleep pass now (similarity-sweep consolidation)'}
+            aria-label={deepSleepRunner.busy
+              ? 'Deep-sleep is already running'
+              : 'Run the deep-sleep pass now'}
+          >
+            <!-- Feather "moon" - reads as "slow-wave sleep / deep
+                 consolidation". -->
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          </button>
+          <button
+            class="secondary icon-btn librarian-run-btn"
+            onclick={() => (remTrigger = true)}
+            disabled={remRunner.busy}
+            title={remRunner.busy
+              ? 'Rem is already running'
+              : 'Run the rem pass now (associative integration over recent recall)'}
+            aria-label={remRunner.busy
+              ? 'Rem is already running'
+              : 'Run the rem pass now'}
+          >
+            <!-- Feather "shuffle" - reads as "associative
+                 recombination / reshuffling memories". -->
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="16 3 21 3 21 8" />
+              <line x1="4" y1="20" x2="21" y2="3" />
+              <polyline points="21 16 21 21 16 21" />
+              <line x1="15" y1="15" x2="21" y2="21" />
+              <line x1="4" y1="4" x2="9" y2="9" />
+            </svg>
+          </button>
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Memories</span>
           </div>
@@ -6880,9 +6932,18 @@
         <!-- Memories panel. Same shape as Cookbook: inline,
              no modal chrome. The sidebar MemoryList shares the same
              `memoriesStore` so a search keystroke filters this list
-             too. Editing happens inline on the cards. -->
+             too. Editing happens inline on the cards.
+
+             Two $bindable trigger props wire the top-bar buttons to
+             the panel: `triggerDeepSleep` for the slow-wave
+             consolidation pass, `triggerRem` for the associative
+             integration pass. Same trigger-then-reset pattern the
+             wiki librarian uses. -->
         {#if MemoriesComp}
-          <MemoriesComp />
+          <MemoriesComp
+            bind:triggerDeepSleep={deepSleepTrigger}
+            bind:triggerRem={remTrigger}
+          />
         {/if}
       {:else}
         <!-- Wiki panel. Same inline-no-modal-chrome shape. The sidebar

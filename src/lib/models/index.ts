@@ -309,6 +309,8 @@ export type AgentRole =
   | 'reflection'
   | 'wiki'
   | 'wikiLibrarian'
+  | 'deepSleep'
+  | 'rem'
   | 'webSearch'
   | 'researchDocs'
   | 'autoTitle'
@@ -358,6 +360,24 @@ export type AgentRole =
  *     big window swallows the conversation and the JSON pin works
  *     on the manual path. See the reflection entry above for the
  *     shared-capacity-with-foreground note.
+ *
+ *   deepSleep - deepseek-v4-flash. Memory librarian's slow-wave
+ *     consolidation pass: every ~12h, picks a longest-unvisited
+ *     seed memory, fetches its top-k similarity neighbors above the
+ *     medium threshold, and decides consolidate-vs-relate-vs-leave
+ *     for each pair. Needs the big window so the batch + the
+ *     consolidated body fit alongside any conversation_search /
+ *     memory_search results the agent pulls for fact-checking.
+ *     Pinned to the same id as the other librarian-tier agents so
+ *     a future swap flows through all of them.
+ *
+ *   rem - deepseek-v4-flash. Memory librarian's associative-
+ *     integration pass: every ~12h, picks the oldest eligible
+ *     conversation from memory_conversation and looks at the batch
+ *     of memories the recall agent surfaced on that conversation.
+ *     Primary mode is memory_relate (drawing graph edges); rare
+ *     consolidation handled via the same RPC. Same model rationale
+ *     as deepSleep.
  *
  *   wikiLibrarian - deepseek-v4-flash. The wiki agent's bigger
  *     sibling: every ~12 hours it reads the full alphabetical list
@@ -459,6 +479,8 @@ export const AGENT_MODELS = {
   reflection:         'deepseek-v4-flash',
   wiki:               'deepseek-v4-flash',
   wikiLibrarian:      'deepseek-v4-flash',
+  deepSleep:          'deepseek-v4-flash',
+  rem:                'deepseek-v4-flash',
   webSearch:          'deepseek-v4-flash',
   researchDocs:       'deepseek-v4-flash',
   intuition:          'mistral-small-3-2-24b-instruct',

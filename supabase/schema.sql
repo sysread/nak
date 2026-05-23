@@ -1015,6 +1015,366 @@ create policy "memory_relations are self-deletable"
   on public.memory_relations
   for delete using (auth.uid() = user_id);
 
+-- Memory librarian -------------------------------------------------------
+--
+-- Two background agents that periodically reorganise the memory store.
+-- Their job is the cross-thread consolidation reflection structurally
+-- can't do: reflection sees one thread at a time and never sees the
+-- store as a whole, so duplicates from different sessions accumulate,
+-- the relations graph stays sparse, and old high-confidence memories
+-- can stay corroborated even when the user has moved on.
+--
+-- The two layers - same toolbox, same model, same 12h cadence,
+-- different seed-selection strategies:
+--
+--   deep-sleep (slow-wave consolidation): pick the longest-unvisited
+--     memory as a seed, find its similarity neighbors above a medium
+--     threshold, hand the batch to the agent with similarity scores.
+--     The agent consolidates duplicates (via memory_consolidate),
+--     draws relation edges, doubts stale facts, or leaves them alone.
+--
+--   rem (associative integration): pick the oldest eligible
+--     conversation from memory_conversation, fetch the set of memories
+--     referenced during recall on that conversation, hand the batch to
+--     the agent. The signal here is user behavior - the user's recall
+--     queries already treat these memories as belonging together; the
+--     librarian looks for missed relations and hidden duplicates that
+--     only surface when memories appear together in conversation.
+--
+-- Both agents acquire the SAME lease partition ('memory-librarian'),
+-- which is the cross-device mutex - only one of them can run at a time
+-- per user. Cadence drift naturally separates them most of the time;
+-- the lease catches the rare overlap.
+--
+-- Schema additions for this feature, applied here:
+--
+--   - memories.last_librarian_visit_at: per-row "when did deep-sleep
+--     last inspect this neighborhood." Reset when label/data change.
+--   - memory_conversation: hint queue for rem; one row per memory
+--     referenced during recall on a conversation. last_seen_at /
+--     last_processed_at gate the eligibility predicate.
+--   - profiles.deep_sleep_last_run_at, profiles.rem_last_run_at:
+--     cross-device cadence gates, modelled on
+--     profiles.wiki_librarian_last_run_at.
+--   - claim_deep_sleep_run / claim_rem_run: atomic claim RPCs, same
+--     shape as claim_wiki_librarian_run.
+--   - consolidate_memories: the agent's content-write primitive. Single
+--     RPC so the (survivor confidence, loser invalidate, memory_conversation
+--     redirect, memory_relations redirect) sequence is one atomic
+--     transaction - the agent dispatch happens client-side; this is
+--     just the bookkeeping the agent doesn't need to think about.
+
+alter table public.memories
+  add column if not exists last_librarian_visit_at timestamptz;
+
+-- Mark a memory as "deep-sleep just looked at this neighborhood" -
+-- runs after a successful agent cycle for the seed and every
+-- similarity neighbor it considered. Confidence-only updates (bump /
+-- decay / reaffirm / doubt) don't touch last_librarian_visit_at; only
+-- label/data changes do (via the trigger below), so re-embedded
+-- memories naturally re-enter the queue but a librarian visit
+-- followed by a quiet period doesn't.
+create index if not exists memories_librarian_visit_idx
+  on public.memories (user_id, last_librarian_visit_at nulls first);
+
+-- Re-queue a memory for librarian visit whenever its text changes.
+-- Parallel to clear_memory_embedding_on_change and
+-- clear_memory_topics_on_change above - separate triggers so a
+-- future change to one path doesn't drag the others. Confidence-only
+-- updates leave last_librarian_visit_at alone.
+create or replace function public.clear_memory_librarian_visit_on_change()
+  returns trigger language plpgsql as $$
+begin
+  if new.label is distinct from old.label or new.data is distinct from old.data then
+    new.last_librarian_visit_at := null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists clear_memory_librarian_visit_on_change on public.memories;
+create trigger clear_memory_librarian_visit_on_change
+  before update on public.memories
+  for each row execute function public.clear_memory_librarian_visit_on_change();
+
+-- memory_conversation: rem's hint queue. One row per (memory,
+-- conversation) pair where the memory was referenced during recall on
+-- the conversation. The recall path upserts on every recall; rem
+-- queries for conversations with at least one row where
+-- `last_processed_at is null or last_processed_at < last_seen_at` and
+-- processes them in FIFO order on its 12h cycle.
+--
+-- The (memory_id, conversation_id) unique constraint lets the recall
+-- path use `on conflict do update set last_seen_at = now()` without
+-- caring whether the row already exists.
+--
+-- Cascade semantics: on hard-delete of either side, the row goes too.
+-- The memory_consolidate RPC handles the redirect-on-merge case in
+-- application code so the unique constraint can't fire mid-sequence.
+
+create table if not exists public.memory_conversation (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  memory_id uuid not null references public.memories(id) on delete cascade,
+  conversation_id uuid not null references public.threads(id) on delete cascade,
+  last_seen_at timestamptz not null default now(),
+  last_processed_at timestamptz,
+  unique (memory_id, conversation_id)
+);
+
+-- Partial index over rows where rem still has work to do. The full
+-- table includes already-processed rows too; this index narrows to
+-- the eligibility predicate the worker actually queries with.
+create index if not exists memory_conversation_eligible_idx
+  on public.memory_conversation (user_id, conversation_id, last_seen_at)
+  where last_processed_at is null or last_processed_at < last_seen_at;
+
+-- Plain index for the redirect-on-merge path (UPDATE ... WHERE
+-- memory_id = $old). Without this the consolidate RPC sequence-scans
+-- the whole table on every merge.
+create index if not exists memory_conversation_memory_idx
+  on public.memory_conversation (memory_id);
+
+alter table public.memory_conversation enable row level security;
+
+drop policy if exists "memory_conversation is self-selectable" on public.memory_conversation;
+create policy "memory_conversation is self-selectable" on public.memory_conversation
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "memory_conversation is self-insertable" on public.memory_conversation;
+create policy "memory_conversation is self-insertable" on public.memory_conversation
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "memory_conversation is self-updatable" on public.memory_conversation;
+create policy "memory_conversation is self-updatable" on public.memory_conversation
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "memory_conversation is self-deletable" on public.memory_conversation;
+create policy "memory_conversation is self-deletable" on public.memory_conversation
+  for delete using (auth.uid() = user_id);
+
+-- Cadence gates for the two librarian workers. Modelled on
+-- profiles.wiki_librarian_last_run_at - same UPDATE-with-WHERE
+-- atomic claim, same 12h default interval enforced by the RPC.
+
+alter table public.profiles
+  add column if not exists deep_sleep_last_run_at timestamptz,
+  add column if not exists rem_last_run_at timestamptz;
+
+-- Atomic claim for the deep-sleep agent. Mirrors
+-- claim_wiki_librarian_run exactly; see the wiki librarian section
+-- below for the rationale on the UPDATE-with-WHERE shape and why
+-- this is the cross-device coordination primitive.
+drop function if exists public.claim_deep_sleep_run(int);
+create or replace function public.claim_deep_sleep_run(
+  p_min_interval_seconds int
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  if auth.uid() is null then
+    return false;
+  end if;
+  update public.profiles
+     set deep_sleep_last_run_at = now()
+   where user_id = auth.uid()
+     and (
+       deep_sleep_last_run_at is null
+       or deep_sleep_last_run_at
+            < now() - make_interval(secs => p_min_interval_seconds)
+     );
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+drop function if exists public.claim_rem_run(int);
+create or replace function public.claim_rem_run(
+  p_min_interval_seconds int
+) returns boolean
+language plpgsql security invoker as $$
+declare
+  updated int;
+begin
+  if auth.uid() is null then
+    return false;
+  end if;
+  update public.profiles
+     set rem_last_run_at = now()
+   where user_id = auth.uid()
+     and (
+       rem_last_run_at is null
+       or rem_last_run_at
+            < now() - make_interval(secs => p_min_interval_seconds)
+     );
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+-- consolidate_memories: the deep-sleep / rem agents' single content-
+-- write primitive. The agent decides "memories A and B are the same
+-- fact" and calls this with (survivor_id, loser_id, new_label,
+-- new_data). The RPC atomically:
+--
+--   1. Sets the survivor's label, data, and confidence. The new
+--      confidence is greatest(survivor.confidence, loser.confidence) -
+--      NOT a bump via bump_memory_confidence. Two threads
+--      independently producing the same fact IS corroboration, but
+--      we preserve the strongest existing evidence rather than
+--      manufacturing new evidence. This avoids systematic inflation
+--      as memories survive repeated consolidation passes.
+--
+--      If future fidelity issues surface - the librarian failing to
+--      consolidate because confidence drift is hiding genuine
+--      duplicates - revisit by giving the librarian an explicit
+--      bump path here.
+--
+--   2. Halves the loser's confidence (the standard invalidate
+--      semantic from decay_memory_confidence). Soft-delete; the row
+--      stays on disk below the search floor, recoverable if the
+--      librarian later decides the consolidation was wrong.
+--
+--   3. Redirects memory_conversation rows from loser_id to
+--      survivor_id, with on-conflict-do-nothing so the survivor's
+--      existing rows in shared conversations win.
+--
+--   4. Redirects memory_relations edges from loser_id to survivor_id.
+--      Self-loops (an edge that would now point survivor->survivor)
+--      and duplicates (an edge that already exists with the survivor
+--      as the same endpoint) are dropped rather than created. Both
+--      memory_relations endpoints (from_memory_id and to_memory_id)
+--      are redirected.
+--
+--   5. Touches survivor.last_librarian_visit_at so the survivor
+--      doesn't immediately re-enter the deep-sleep candidate pool.
+--
+-- security invoker so RLS scopes every write to the calling user.
+-- Both memories rows must belong to the caller or the function
+-- raises (RLS catches the read, not the update; we re-check in
+-- application code via the row count).
+--
+-- Returns the survivor's post-update confidence so the tool can echo
+-- it to the LLM.
+
+drop function if exists public.consolidate_memories(uuid, uuid, text, text);
+create or replace function public.consolidate_memories(
+  p_survivor_id uuid,
+  p_loser_id uuid,
+  p_new_label text,
+  p_new_data text
+) returns real
+language plpgsql security invoker as $$
+declare
+  v_survivor_confidence real;
+  v_loser_confidence real;
+  v_max_confidence real;
+  v_owner uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+  if p_survivor_id = p_loser_id then
+    raise exception 'survivor_id and loser_id must differ';
+  end if;
+
+  -- Read both rows and confirm ownership. RLS scopes the select to
+  -- the caller; a row for another user returns null, which we treat
+  -- as "not found."
+  select confidence, user_id into v_survivor_confidence, v_owner
+    from public.memories where id = p_survivor_id;
+  if v_owner is null then
+    raise exception 'survivor memory % not found or not owned by caller', p_survivor_id;
+  end if;
+  if v_owner <> auth.uid() then
+    raise exception 'survivor memory % is not owned by the caller', p_survivor_id;
+  end if;
+
+  select confidence, user_id into v_loser_confidence, v_owner
+    from public.memories where id = p_loser_id;
+  if v_owner is null then
+    raise exception 'loser memory % not found or not owned by caller', p_loser_id;
+  end if;
+  if v_owner <> auth.uid() then
+    raise exception 'loser memory % is not owned by the caller', p_loser_id;
+  end if;
+
+  v_max_confidence := greatest(v_survivor_confidence, v_loser_confidence);
+
+  -- Step 1+5: rewrite the survivor's content + confidence + librarian
+  -- timestamp in one update. The clear_memory_embedding_on_change
+  -- trigger fires here when label/data change, which is correct -
+  -- the consolidated text deserves a fresh embedding. The
+  -- clear_memory_librarian_visit_on_change trigger would null
+  -- last_librarian_visit_at; we set it explicitly to now() afterward
+  -- in the same statement so the trigger's null doesn't leak.
+  update public.memories
+     set label = p_new_label,
+         data = p_new_data,
+         confidence = v_max_confidence,
+         updated_at = now(),
+         last_librarian_visit_at = now()
+   where id = p_survivor_id;
+
+  -- Step 2: halve loser confidence. Same semantic as
+  -- decay_memory_confidence; inlined here so the whole consolidation
+  -- is one transaction.
+  update public.memories
+     set confidence = confidence * 0.5
+   where id = p_loser_id;
+
+  -- Step 3: redirect memory_conversation rows. The unique
+  -- constraint on (memory_id, conversation_id) would fire when the
+  -- survivor and loser both already had rows for the same
+  -- conversation; we drop the loser's row in that case (survivor's
+  -- row wins) before the update.
+  delete from public.memory_conversation
+   where memory_id = p_loser_id
+     and conversation_id in (
+       select conversation_id from public.memory_conversation
+        where memory_id = p_survivor_id
+     );
+  update public.memory_conversation
+     set memory_id = p_survivor_id
+   where memory_id = p_loser_id;
+
+  -- Step 4: redirect memory_relations edges. Both endpoints. Drop
+  -- the loser's edge BEFORE redirecting if it would create a self-
+  -- loop or duplicate the survivor's edge - the unique constraint
+  -- on (user_id, from_memory_id, to_memory_id, kind) would
+  -- otherwise fire.
+  -- from_memory_id half:
+  delete from public.memory_relations
+   where from_memory_id = p_loser_id
+     and (
+       to_memory_id = p_survivor_id  -- would become self-loop
+       or exists (
+         select 1 from public.memory_relations s
+          where s.from_memory_id = p_survivor_id
+            and s.to_memory_id = public.memory_relations.to_memory_id
+            and s.kind = public.memory_relations.kind
+       )
+     );
+  update public.memory_relations
+     set from_memory_id = p_survivor_id
+   where from_memory_id = p_loser_id;
+  -- to_memory_id half:
+  delete from public.memory_relations
+   where to_memory_id = p_loser_id
+     and (
+       from_memory_id = p_survivor_id  -- would become self-loop
+       or exists (
+         select 1 from public.memory_relations s
+          where s.to_memory_id = p_survivor_id
+            and s.from_memory_id = public.memory_relations.from_memory_id
+            and s.kind = public.memory_relations.kind
+       )
+     );
+  update public.memory_relations
+     set to_memory_id = p_survivor_id
+   where to_memory_id = p_loser_id;
+
+  return v_max_confidence;
+end $$;
+
 -- recipes ----------------------------------------------------------------
 --
 -- Cooklang recipes the user authors in Nak (often by asking the model to
@@ -2814,17 +3174,33 @@ end $$;
 -- removes an entire class of wrong answer from the corner where two
 -- devices briefly both think they hold the lease.
 drop function if exists public.claim_next_thread_for_reflection(text, int);
+drop function if exists public.claim_next_thread_for_reflection(text, int, text);
 create or replace function public.claim_next_thread_for_reflection(
   p_holder_id text,
-  p_ttl_seconds int
+  p_ttl_seconds int,
+  -- User's display timezone from Settings -> AI -> About you;
+  -- determines the calendar day the eligibility gate buckets on.
+  -- Same shape as claim_next_thread_for_wiki - we want the
+  -- reflection pass to leave in-flight conversations alone so a
+  -- memory derived from a half-finished thought doesn't land
+  -- before the user has a chance to correct or extend it. The
+  -- memory_recall tool has no per-conversation source attribution
+  -- on memories, so a same-day write could ride straight back into
+  -- the conversation that produced it.
+  p_timezone text default 'UTC'
 ) returns table (thread_id uuid, terminal_msg_id uuid)
 language sql security invoker as $$
   with candidate as (
     -- Oldest thread (by updated_at ascending) that has a terminal
     -- assistant message newer than what we've reflected on, passes the
-    -- token-volume guard, and isn't currently claimed. The terminal-
-    -- message lookup is a lateral join so we get both the thread row
-    -- AND the specific msg id to mark up to, in one round trip.
+    -- token-volume guard, lands on a calendar day strictly before
+    -- today in the user's timezone, and isn't currently claimed. The
+    -- terminal-message lookup is a lateral join so we get both the
+    -- thread row AND the specific msg id to mark up to, in one
+    -- round trip. The newest-message lookup is a second lateral so
+    -- the day-gate buckets on messages.created_at - same source
+    -- the wiki claim uses, stable against unrelated bumps to
+    -- threads.updated_at.
     select t.id as thread_id, term.msg_id as terminal_msg_id
       from public.threads t
       cross join lateral (
@@ -2840,10 +3216,19 @@ language sql security invoker as $$
          order by m.created_at desc
          limit 1
       ) term
+      cross join lateral (
+        select m2.created_at
+          from public.messages m2
+         where m2.thread_id = t.id
+         order by m2.created_at desc
+         limit 1
+      ) newest
      where t.user_id = auth.uid()
        and term.msg_id is distinct from t.last_reflected_msg_id
        and (t.reflection_claim_expires_at is null
             or t.reflection_claim_expires_at < now())
+       and (newest.created_at at time zone p_timezone)::date
+             < (now() at time zone p_timezone)::date
        and (
          -- At least two user messages on the thread. A single user
          -- prompt + assistant reply is a one-shot Q&A; we only want

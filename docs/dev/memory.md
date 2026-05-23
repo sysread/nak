@@ -114,6 +114,47 @@ in `docs/user/memory.md`. The dev side has four moving parts:
 - `src/lib/agents/reflection/{agent,prompt,loop,worker,manager}.ts`
   — the reflection worker. Background, write-scoped, no return
   value (side effects = memory tool calls).
+- `src/lib/agents/deep-sleep/{agent,prompt,loop,worker,manager,
+  runner.svelte,types}.ts` — the memory librarian's slow-wave
+  consolidation pass. Background worker; every ~12h it picks a
+  longest-unvisited memory, embeds it, fetches similarity
+  neighbors via `searchMemoriesByEmbeddingScored`, and runs the
+  agent on the seed + neighbors batch. The agent has the
+  `memoryLibrarianToolbox` (search, consolidate, relate,
+  invalidate, doubt) and decides for each pair whether to
+  consolidate, relate, or leave. Marks the entire batch
+  visited after a successful run so the next sweep moves on.
+- `src/lib/agents/rem/{agent,prompt,loop,worker,manager,
+  runner.svelte,types}.ts` — the memory librarian's associative
+  integration pass. Background worker; every ~12h it picks the
+  oldest eligible conversation from `memory_conversation`,
+  fetches the batch of memories the recall agent surfaced on
+  that conversation, and runs the agent on it. Primary mode is
+  `memory_relate`; rare consolidations handled via the same
+  toolbox. Marks the conversation's `memory_conversation` rows
+  processed after a successful run. Shares the
+  'memory-librarian' lease partition with deep-sleep so the two
+  passes can't run concurrently across devices.
+- `src/lib/tools/memory_consolidate.ts` and
+  `memory_consolidate.schema.ts` — the librarian's content-write
+  primitive. Wraps the `consolidate_memories` RPC which atomically
+  rewrites the survivor's content + confidence (max of the two
+  inputs, NOT a bump), halves the loser's confidence, redirects
+  `memory_conversation` rows from loser to survivor, and
+  redirects `memory_relations` edges (dropping self-loops and
+  duplicates).
+- `src/lib/tools/memory_librarian_toolbox.ts` — toolbox shared
+  by both librarian agents. Includes `memory_consolidate`,
+  search, relate/unrelate, invalidate, doubt, and
+  conversation_search. Deliberately omits create / update /
+  reaffirm (the design rules from the librarian discussion).
+- `src/lib/memory-events.ts` — window-level event bus the
+  librarians use to notify the in-page memories store of writes
+  that bypass it.
+- `src/lib/ui/memory-librarian.ts` — step-list bookkeeping
+  primitives the Memories panel uses to render the manual-run
+  progress strip. Unit-tested at
+  `tests/memory-librarian-ui.test.ts`.
 - `src/lib/tools/recall_toolbox.ts` — the read-only toolbox the
   recall agent uses. Standalone file to break an import cycle.
 - `src/screens/Memories.svelte` — human-facing browser, panel
@@ -247,6 +288,36 @@ in `docs/user/memory.md`. The dev side has four moving parts:
 - **Reflection lease** — `worker_leases` row with
   `worker_kind='reflection'`. Runs concurrently with the
   `'embedding'` and `'summary'` leases.
+- **`memories.last_librarian_visit_at timestamptz`** — per-row
+  "when did deep-sleep last visit this neighborhood." Picked
+  oldest-first (nulls first) as the seed for the next cycle.
+  Trigger `clear_memory_librarian_visit_on_change` resets it on
+  label/data change (so a memory whose text moved re-enters the
+  pool); confidence-only nudges leave it alone.
+- **`memory_conversation` table** — `(memory_id, conversation_id,
+  user_id, last_seen_at, last_processed_at)` with unique on
+  `(memory_id, conversation_id)`. The recall path upserts on
+  every recall (memories the recall agent surfaced during a
+  conversation are evidence of co-occurrence). Rem's
+  eligibility predicate is
+  `last_processed_at is null or last_processed_at < last_seen_at`.
+  Cascade on delete from both `memories` and `threads`; merge-on-
+  consolidation handled in the `consolidate_memories` RPC.
+- **`profiles.deep_sleep_last_run_at`,
+  `profiles.rem_last_run_at`** — singleton cadence gates,
+  mirroring `wiki_librarian_last_run_at`. `claim_deep_sleep_run`
+  and `claim_rem_run` RPCs perform the atomic UPDATE-with-WHERE.
+- **`consolidate_memories(survivor_id, loser_id, label, data)`
+  RPC** — the librarian's atomic content-write. Sets survivor
+  confidence to `greatest(survivor, loser)` (preserves stronger
+  evidence; does NOT bump), halves loser, redirects
+  `memory_conversation` rows and `memory_relations` edges, drops
+  self-loops and unique-constraint duplicates from the
+  redirected edges. Single transaction; no client-side
+  coordination needed.
+- **Librarian lease** — `worker_leases` row with
+  `worker_kind='memory-librarian'`. Shared between deep-sleep
+  and rem so only one of them can run per user across devices.
 
 ## Contracts
 

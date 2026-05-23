@@ -909,6 +909,15 @@ export interface UserSettings {
    */
   wikiLibrarianEnabled?: boolean;
   /**
+   * Memory librarian: when true, the deep-sleep and rem background
+   * agents run on their staggered 12h cadences, consolidating
+   * cross-thread duplicate memories and populating the relations
+   * graph. Independent of the wiki librarian; default-on like the
+   * other librarian toggles. See src/lib/agents/deep-sleep and
+   * src/lib/agents/rem.
+   */
+  memoryLibrarianEnabled?: boolean;
+  /**
    * Free-form display name the user wants the model to address them
    * by. Optional - absent / empty string means "no name supplied,
    * the model has nothing to reach for." When present, chat-loop
@@ -1002,6 +1011,9 @@ export function coerceSettings(raw: unknown): UserSettings {
   }
   if (typeof r.wikiLibrarianEnabled === 'boolean') {
     out.wikiLibrarianEnabled = r.wikiLibrarianEnabled;
+  }
+  if (typeof r.memoryLibrarianEnabled === 'boolean') {
+    out.memoryLibrarianEnabled = r.memoryLibrarianEnabled;
   }
   // displayTimezone is the canonical key. We also read the legacy
   // `journalTimezone` key so a profile written before the rename
@@ -1222,6 +1234,13 @@ export class SupabaseService {
         delete merged.wikiLibrarianEnabled;
       } else if (typeof patch.wikiLibrarianEnabled === 'boolean') {
         merged.wikiLibrarianEnabled = patch.wikiLibrarianEnabled;
+      }
+    }
+    if ('memoryLibrarianEnabled' in patch) {
+      if (patch.memoryLibrarianEnabled === undefined) {
+        delete merged.memoryLibrarianEnabled;
+      } else if (typeof patch.memoryLibrarianEnabled === 'boolean') {
+        merged.memoryLibrarianEnabled = patch.memoryLibrarianEnabled;
       }
     }
     if ('displayTimezone' in patch) {
@@ -3249,6 +3268,238 @@ export class SupabaseService {
     return data === true;
   }
 
+  /**
+   * Atomic claim for one deep-sleep run. Same shape as
+   * claimWikiLibrarianRun - cross-device coordination via an UPDATE-
+   * with-WHERE on profiles.deep_sleep_last_run_at. Deep-sleep and rem
+   * share the 'memory-librarian' lease partition (mutex), but the
+   * cadence gates are independent so the two agents can run on
+   * staggered schedules.
+   */
+  async claimDeepSleepRun(minIntervalSeconds: number): Promise<boolean> {
+    const { data, error } = await this.client.rpc('claim_deep_sleep_run', {
+      p_min_interval_seconds: minIntervalSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  async claimRemRun(minIntervalSeconds: number): Promise<boolean> {
+    const { data, error } = await this.client.rpc('claim_rem_run', {
+      p_min_interval_seconds: minIntervalSeconds,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return data === true;
+  }
+
+  /**
+   * Consolidate two memories into one. The agent decides "A and B are
+   * the same fact" and calls this with (survivorId, loserId,
+   * newLabel, newData). Server-side RPC handles the four-step
+   * sequence atomically: max-confidence survivor write, loser halve,
+   * memory_conversation redirect, memory_relations redirect. See
+   * schema.sql consolidate_memories for the full rationale.
+   *
+   * Returns the survivor's post-update confidence so the calling tool
+   * can echo it to the LLM. Throws if either row is missing, not
+   * owned by the caller, or if survivor_id == loser_id.
+   */
+  async consolidateMemories(
+    survivorId: string,
+    loserId: string,
+    newLabel: string,
+    newData: string
+  ): Promise<number> {
+    const { data, error } = await this.client.rpc('consolidate_memories', {
+      p_survivor_id: survivorId,
+      p_loser_id: loserId,
+      p_new_label: newLabel,
+      p_new_data: newData,
+    });
+    if (error) throw new SupabaseError(error.message);
+    if (typeof data !== 'number') {
+      throw new SupabaseError(
+        `consolidate_memories returned non-numeric: ${JSON.stringify(data)}`
+      );
+    }
+    return data;
+  }
+
+  /**
+   * Upsert one or more (memory_id, conversation_id) rows into
+   * memory_conversation. Bumps last_seen_at to now() on conflict so
+   * the eligibility predicate (`last_processed_at < last_seen_at`)
+   * re-fires for any pair whose memories were recently referenced
+   * again.
+   *
+   * Caller passes the rows already keyed to a single conversation;
+   * we stamp user_id from the session so the RLS check passes
+   * without the caller needing to thread the user id through.
+   *
+   * Best-effort by contract: the recall path swallows errors here -
+   * a missed upsert just means rem doesn't see this co-occurrence
+   * this cycle. Not worth blocking the recall path.
+   */
+  async upsertMemoryConversationRows(
+    conversationId: string,
+    memoryIds: string[]
+  ): Promise<void> {
+    if (memoryIds.length === 0) return;
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const now = new Date().toISOString();
+    const rows = memoryIds.map((memory_id) => ({
+      user_id: session.user.id,
+      memory_id,
+      conversation_id: conversationId,
+      last_seen_at: now,
+    }));
+    const { error } = await this.client
+      .from('memory_conversation')
+      .upsert(rows, { onConflict: 'memory_id,conversation_id' });
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Update last_librarian_visit_at = now() for a batch of memory ids.
+   * Deep-sleep calls this after a successful agent run on the seed +
+   * its similarity neighbors, so the next sweep picks a different
+   * neighborhood. Confidence-only nudges don't reset the timestamp;
+   * label/data changes do (via the trigger).
+   */
+  async markMemoriesLibrarianVisited(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const { error } = await this.client
+      .from('memories')
+      .update({ last_librarian_visit_at: new Date().toISOString() })
+      .in('id', ids);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Pick the next deep-sleep seed: oldest last_librarian_visit_at,
+   * nulls (never-visited) first. The partial-style index
+   * memories_librarian_visit_idx is configured `nulls first` so this
+   * query is an index scan.
+   *
+   * Confidence floor of 0.05 mirrors the memory_search hide threshold;
+   * memories that have decayed below the floor are effectively retired
+   * and not worth the agent's attention. Returns null when the user
+   * has no eligible memories (empty store, or every memory below
+   * floor).
+   */
+  async pickDeepSleepSeed(): Promise<{
+    id: string;
+    label: string;
+    data: string;
+    confidence: number;
+    updated_at: string;
+    last_librarian_visit_at: string | null;
+  } | null> {
+    const { data, error } = await this.client
+      .from('memories')
+      .select('id, label, data, confidence, updated_at, last_librarian_visit_at')
+      .gte('confidence', 0.05)
+      .order('last_librarian_visit_at', { ascending: true, nullsFirst: true })
+      .order('updated_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    if (!data) return null;
+    return data as {
+      id: string;
+      label: string;
+      data: string;
+      confidence: number;
+      updated_at: string;
+      last_librarian_visit_at: string | null;
+    };
+  }
+
+  /**
+   * Pick the oldest conversation that has unprocessed
+   * memory_conversation rows for the rem agent. Returns at most
+   * `limit` conversation ids ordered by their oldest unprocessed
+   * row's last_seen_at - so a single conversation that recalled
+   * twice in a row doesn't queue-jump one that recalled once a long
+   * time ago.
+   */
+  async pickRemEligibleConversations(limit: number): Promise<string[]> {
+    const { data, error } = await this.client
+      .from('memory_conversation')
+      .select('conversation_id, last_seen_at, last_processed_at')
+      .or('last_processed_at.is.null,last_processed_at.lt.last_seen_at')
+      .order('last_seen_at', { ascending: true })
+      .limit(limit * 10); // overfetch; dedup conversation_ids client-side
+    if (error) throw new SupabaseError(error.message);
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const row of (data ?? []) as Array<{ conversation_id: string }>) {
+      if (seen.has(row.conversation_id)) continue;
+      seen.add(row.conversation_id);
+      out.push(row.conversation_id);
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  /**
+   * Fetch every memory_conversation row for one conversation - rem
+   * uses this as the batch of memories to hand to the agent. Joined
+   * against memories so the agent gets the label/data/confidence in
+   * one round-trip. Filters out memories below the search floor
+   * (same 0.05 cutoff as deep-sleep seed selection) - a memory the
+   * user has effectively retired isn't worth the agent's attention
+   * even if it was recalled recently.
+   */
+  async fetchMemoriesForConversation(
+    conversationId: string
+  ): Promise<
+    Array<{
+      memory_id: string;
+      label: string;
+      data: string;
+      confidence: number;
+    }>
+  > {
+    const { data, error } = await this.client
+      .from('memory_conversation')
+      .select(
+        'memory_id, memories!inner(id, label, data, confidence, user_id)'
+      )
+      .eq('conversation_id', conversationId)
+      .gte('memories.confidence', 0.05);
+    if (error) throw new SupabaseError(error.message);
+    type Row = {
+      memory_id: string;
+      memories: {
+        id: string;
+        label: string;
+        data: string;
+        confidence: number;
+      };
+    };
+    return ((data ?? []) as unknown as Row[]).map((r) => ({
+      memory_id: r.memory_id,
+      label: r.memories.label,
+      data: r.memories.data,
+      confidence: r.memories.confidence,
+    }));
+  }
+
+  /**
+   * Mark every memory_conversation row for one conversation as
+   * processed (last_processed_at = now()). Rem calls this after a
+   * successful agent run on the conversation's batch.
+   */
+  async markMemoryConversationProcessed(conversationId: string): Promise<void> {
+    const { error } = await this.client
+      .from('memory_conversation')
+      .update({ last_processed_at: new Date().toISOString() })
+      .eq('conversation_id', conversationId);
+    if (error) throw new SupabaseError(error.message);
+  }
+
   // Background-worker pipeline --------------------------------------------
   //
   // Methods in this block drive the background workers in
@@ -3450,19 +3701,28 @@ export class SupabaseService {
   /**
    * Atomically claim the oldest thread in need of reflection. Returns
    * null when no thread qualifies (already-reflected, under the token
-   * threshold, or currently claimed by another device). The returned
-   * `terminalMsgId` is the specific assistant message we should
-   * reflect up to; we pass it back to `markThreadReflectedIfClaimed`
-   * after a successful run so a race where the user adds more turns
-   * mid-reflection simply queues the thread for the next cycle.
+   * threshold, currently claimed by another device, or lands on
+   * today in the user's timezone - the day-gate lets in-flight
+   * conversations settle before the autonomous agent reads them).
+   * The returned `terminalMsgId` is the specific assistant message
+   * we should reflect up to; we pass it back to
+   * `markThreadReflectedIfClaimed` after a successful run so a race
+   * where the user adds more turns mid-reflection simply queues the
+   * thread for the next cycle.
+   *
+   * `timezone` is the user's display timezone (Settings -> AI ->
+   * About you); when null/omitted the SQL falls back to UTC. The
+   * caller is responsible for normalising input to a valid IANA name.
    */
   async claimNextThreadForReflection(
     holderId: string,
-    ttlSeconds: number
+    ttlSeconds: number,
+    timezone: string | null
   ): Promise<{ threadId: string; terminalMsgId: string } | null> {
     const { data, error } = await this.client.rpc('claim_next_thread_for_reflection', {
       p_holder_id: holderId,
       p_ttl_seconds: ttlSeconds,
+      p_timezone: timezone ?? 'UTC',
     });
     if (error) throw new SupabaseError(error.message);
     const rows = (data ?? []) as { thread_id: string; terminal_msg_id: string }[];

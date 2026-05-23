@@ -83,6 +83,15 @@ export interface SupervisorContext {
   coordinator: LeaseCoordinator;
   holderId: string;
   userId: string;
+  /**
+   * User's display timezone (IANA), live-updateable. Read on every
+   * unit cycle so a Settings edit that mutates the holder cell
+   * reaches the next claim without restarting the worker. The
+   * reflection unit threads it into its claim RPC's day-gate;
+   * other units ignore it for now (auto_title, summary, topics
+   * don't have day-gates).
+   */
+  timezone: { value: string | null };
   signal: AbortSignal;
   onLeaseLost: () => void;
   agents: {
@@ -191,6 +200,7 @@ async function runReflectionUnit(
     holderId: ctx.holderId,
     userId: ctx.userId,
     threadClaimTtlSeconds: ctx.tunables.threadClaimTtlSeconds,
+    timezone: ctx.timezone.value,
     signal: ctx.signal,
     onLeaseLost: noLeaseLost,
   });

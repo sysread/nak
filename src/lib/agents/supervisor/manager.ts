@@ -46,7 +46,17 @@ const WORKER_DEFAULTS = {
   errorBackoffMs: 30_000,
 };
 
-class SupervisorManager extends BaseWorkerManager {
+export interface SupervisorStartOpts extends BaseStartOpts {
+  /**
+   * User's display timezone (IANA) - threaded into the reflection
+   * unit's day-gate. Null falls back to UTC server-side. Live-
+   * updated via `setTimezone()` so a Settings edit reaches the
+   * worker without a restart.
+   */
+  timezone: string | null;
+}
+
+class SupervisorManager extends BaseWorkerManager<SupervisorStartOpts> {
   protected readonly lockName = 'nak:supervisor-worker';
   protected readonly loggerSource = 'supervisor-worker';
 
@@ -57,7 +67,7 @@ class SupervisorManager extends BaseWorkerManager {
     });
   }
 
-  protected buildStartPayload(opts: BaseStartOpts, session: Session): Record<string, unknown> {
+  protected buildStartPayload(opts: SupervisorStartOpts, session: Session): Record<string, unknown> {
     return {
       supabaseUrl: opts.config.supabaseUrl,
       supabaseAnonKey: opts.config.supabaseAnonKey,
@@ -70,8 +80,20 @@ class SupervisorManager extends BaseWorkerManager {
       topicsModel: agentModel('topics').id,
       memoryTopicsModel: agentModel('memoryTopics').id,
       recipeTopicsModel: agentModel('recipeTopics').id,
+      timezone: opts.timezone,
       ...WORKER_DEFAULTS,
     };
+  }
+
+  /**
+   * Live-update the worker's timezone without a restart. Mirrors
+   * `wikiManager.setTimezone`. The worker reads the next value off
+   * its holder cell on every cycle, so the day-gate moves with the
+   * user's Settings edit.
+   */
+  setTimezone(timezone: string | null): void {
+    if (!this.worker) return;
+    this.worker.postMessage({ type: 'timezone', timezone });
   }
 }
 

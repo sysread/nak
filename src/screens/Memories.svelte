@@ -40,6 +40,37 @@
   import { MAX_MEMORY_DATA_CHARS } from '$lib/embeddings/types';
   import type { Memory, MemoryRelation } from '$lib/supabase';
   import Markdown from '../components/Markdown.svelte';
+  import {
+    deepSleepRunner,
+    runManually as runDeepSleepManually,
+    type RunManuallyResult as DeepSleepResult,
+  } from '$lib/agents/deep-sleep/runner.svelte';
+  import {
+    remRunner,
+    runManually as runRemManually,
+    type RunManuallyResult as RemResult,
+  } from '$lib/agents/rem/runner.svelte';
+  import {
+    pushStep,
+    deepSleepResultLine,
+    remResultLine,
+    type MemoryLibrarianProgress,
+    type MemoryLibrarianStep,
+  } from '$lib/ui/memory-librarian';
+  import { onMemoryChange } from '$lib/memory-events';
+
+  /**
+   * $bindable trigger flags from the Chat shell's top-bar buttons.
+   * Set true on click; this component resets to false after handling
+   * the event. Same pattern Wiki.svelte uses for its librarian trigger.
+   */
+  let {
+    triggerDeepSleep = $bindable(false),
+    triggerRem = $bindable(false),
+  }: {
+    triggerDeepSleep?: boolean;
+    triggerRem?: boolean;
+  } = $props();
 
   // Label length is capped at 80 by the memory_create/update tool
   // schemas; mirror it here so the UI rejects early instead of
@@ -688,10 +719,208 @@
     const diffYr = Math.round(diffDay / 365);
     return `${diffYr} yr${diffYr === 1 ? '' : 's'} ago`;
   }
+
+  // --- Memory librarian manual-run flow --------------------------------
+  //
+  // Two runners (deep-sleep and rem) wired through to the Memories
+  // top-bar buttons via $bindable triggers. Single shared step list
+  // because the two runners never run simultaneously on the manual
+  // path (each runner's .busy flag disables its own button, and the
+  // background workers share the 'memory-librarian' lease so only one
+  // can be active across devices). The step list and result strip
+  // render at the top of the panel below.
+  let librarianRunner = $state<'deep-sleep' | 'rem' | null>(null);
+  let librarianSteps = $state<MemoryLibrarianStep[]>([]);
+  let librarianResultLine = $state<string | null>(null);
+  let librarianResultText = $state<string | null>(null);
+  let librarianError = $state<string | null>(null);
+
+  function emitLibrarianStep(event: MemoryLibrarianProgress): void {
+    pushStep(librarianSteps, event);
+  }
+
+  async function runDeepSleep(): Promise<void> {
+    if (!app.supabase || !app.venice) return;
+    if (deepSleepRunner.busy) return;
+    librarianRunner = 'deep-sleep';
+    librarianSteps = [];
+    librarianResultLine = null;
+    librarianResultText = null;
+    librarianError = null;
+    let result: DeepSleepResult;
+    try {
+      const session = await app.supabase.getSession();
+      if (!session) {
+        librarianError = 'Not signed in.';
+        return;
+      }
+      result = await runDeepSleepManually({
+        supabase: app.supabase,
+        venice: app.venice,
+        userId: session.user.id,
+        onProgress: (event) => {
+          if (event.kind === 'preparing') {
+            emitLibrarianStep({
+              kind: 'deep-sleep-preparing',
+              batchSize: event.batchSize,
+            });
+          } else {
+            emitLibrarianStep(event);
+          }
+        },
+      });
+    } catch (err) {
+      librarianError = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    librarianResultLine = deepSleepResultLine({
+      kind: result.kind,
+      batchSize: result.batchSize,
+      toolCalls: result.toolCalls,
+    });
+    if (result.kind === 'error') {
+      librarianError = result.error ?? 'Deep-sleep run failed.';
+    } else if (result.finalText.trim().length > 0) {
+      librarianResultText = result.finalText.trim();
+    }
+  }
+
+  async function runRem(): Promise<void> {
+    if (!app.supabase || !app.venice) return;
+    if (remRunner.busy) return;
+    librarianRunner = 'rem';
+    librarianSteps = [];
+    librarianResultLine = null;
+    librarianResultText = null;
+    librarianError = null;
+    let result: RemResult;
+    try {
+      const session = await app.supabase.getSession();
+      if (!session) {
+        librarianError = 'Not signed in.';
+        return;
+      }
+      result = await runRemManually({
+        supabase: app.supabase,
+        venice: app.venice,
+        userId: session.user.id,
+        onProgress: (event) => {
+          if (event.kind === 'preparing') {
+            emitLibrarianStep({
+              kind: 'rem-preparing',
+              conversationCount: event.conversationCount,
+            });
+          } else {
+            emitLibrarianStep(event);
+          }
+        },
+      });
+    } catch (err) {
+      librarianError = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    librarianResultLine = remResultLine({
+      kind: result.kind,
+      conversationsProcessed: result.conversationsProcessed,
+      toolCalls: result.toolCalls,
+    });
+    if (result.kind === 'error') {
+      librarianError = result.error ?? 'Rem run failed.';
+    } else if (result.finalText.trim().length > 0) {
+      librarianResultText = result.finalText.trim();
+    }
+  }
+
+  // Watch the top-bar triggers. Reset the flag so subsequent clicks
+  // re-fire cleanly.
+  $effect(() => {
+    if (triggerDeepSleep) {
+      void runDeepSleep();
+      triggerDeepSleep = false;
+    }
+  });
+  $effect(() => {
+    if (triggerRem) {
+      void runRem();
+      triggerRem = false;
+    }
+  });
+
+  // Refresh the memories store when a librarian run lands. The
+  // librarians write directly via supabase (consolidate / invalidate /
+  // relate) and bypass the in-page store, so without this the panel
+  // would show stale results until the next manual search.
+  onDestroy(
+    onMemoryChange(() => {
+      if (!app.supabase) return;
+      void runMemoriesSearch(app.supabase, app.venice);
+    })
+  );
 </script>
 
 <section class="memories-panel" aria-label="Memories">
   <div class="memories-body">
+    {#if librarianRunner !== null && (librarianSteps.length > 0 || librarianResultLine || librarianError)}
+      <!-- Memory librarian progress strip. Renders during a manual
+           run and after it finishes, showing the step list (each
+           tool call narrates itself via the dispatcher-injected
+           `activity` field) and the result summary line. Dismissable
+           via the close button so the user can scroll back to their
+           memories. -->
+      <aside
+        class="librarian-strip"
+        aria-live="polite"
+        aria-label={librarianRunner === 'deep-sleep'
+          ? 'Deep-sleep run progress'
+          : 'Rem run progress'}
+      >
+        <header class="librarian-strip-head">
+          <strong>
+            {librarianRunner === 'deep-sleep'
+              ? 'Deep-sleep'
+              : 'Rem'}
+            {deepSleepRunner.manualBusy || remRunner.manualBusy ? 'running' : 'finished'}
+          </strong>
+          <button
+            type="button"
+            class="link-btn librarian-strip-close"
+            onclick={() => {
+              librarianRunner = null;
+              librarianSteps = [];
+              librarianResultLine = null;
+              librarianResultText = null;
+              librarianError = null;
+            }}
+            disabled={deepSleepRunner.manualBusy || remRunner.manualBusy}
+            aria-label="Dismiss librarian progress"
+          >
+            Dismiss
+          </button>
+        </header>
+        {#if librarianSteps.length > 0}
+          <ol class="librarian-steps">
+            {#each librarianSteps as step (step.label + step.status)}
+              <li class="librarian-step librarian-step-{step.status}">
+                <span class="librarian-step-icon" aria-hidden="true">
+                  {#if step.status === 'pending'}…{:else if step.status === 'ok'}✓{:else}✗{/if}
+                </span>
+                <span class="librarian-step-label">{step.label}</span>
+              </li>
+            {/each}
+          </ol>
+        {/if}
+        {#if librarianResultLine}
+          <p class="librarian-result-line">{librarianResultLine}</p>
+        {/if}
+        {#if librarianResultText}
+          <p class="librarian-result-text">{librarianResultText}</p>
+        {/if}
+        {#if librarianError}
+          <p class="error librarian-error">{librarianError}</p>
+        {/if}
+      </aside>
+    {/if}
+
     {#if memoriesStore.error}
       <p class="error">{memoriesStore.error}</p>
     {/if}
@@ -1024,6 +1253,89 @@
 
   .memories-empty {
     margin: 1rem 0;
+  }
+
+  /* Memory librarian progress strip - renders at the top of the
+     panel during a manual run and through the result handoff. Same
+     visual language the wiki librarian uses. The strip sits above
+     the memory list inside .memories-body so it scrolls with the
+     content rather than pinning to the top. */
+  .librarian-strip {
+    border: 1px solid var(--border-subtle);
+    border-radius: 0.5rem;
+    background: var(--surface-subtle);
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    max-width: 52rem;
+  }
+
+  .librarian-strip-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .librarian-strip-close {
+    font-size: 0.85rem;
+  }
+
+  .librarian-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .librarian-step {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+  }
+
+  .librarian-step-icon {
+    flex: 0 0 1rem;
+    color: var(--text-subtle);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .librarian-step-ok .librarian-step-icon {
+    color: var(--accent);
+  }
+
+  .librarian-step-error .librarian-step-icon {
+    color: var(--text-error);
+  }
+
+  .librarian-step-pending .librarian-step-icon {
+    /* The "…" glyph reads as in-flight; subtle pulse keeps the user
+       reassured the run hasn't hung. Animation is one of the few
+       places a small reactive cue beats a static glyph. */
+    animation: librarian-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes librarian-pulse {
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 1; }
+  }
+
+  .librarian-result-line {
+    margin: 0.5rem 0 0 0;
+    font-weight: 600;
+  }
+
+  .librarian-result-text {
+    margin: 0.25rem 0 0 0;
+    color: var(--text-subtle);
+    font-size: 0.95rem;
+  }
+
+  .librarian-error {
+    margin-top: 0.5rem;
   }
 
   .memory-list {

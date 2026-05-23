@@ -137,6 +137,7 @@ function buildCtx(overrides: Partial<CycleContext> = {}): CycleContext {
     holderId: 'holder-test',
     userId: 'u',
     threadClaimTtlSeconds: 600,
+    timezone: 'UTC',
     signal: new AbortController().signal,
     onLeaseLost: () => {},
     ...overrides,
@@ -201,7 +202,7 @@ describe('runOneCycle — holding lease, work path', () => {
     const result = await runOneCycle(ctx);
 
     expect(result).toBe<CycleResult>('empty-queue');
-    expect(svcSpies.claimNextThreadForReflection).toHaveBeenCalledWith('holder-test', 600);
+    expect(svcSpies.claimNextThreadForReflection).toHaveBeenCalledWith('holder-test', 600, 'UTC');
     expect(runSpy).not.toHaveBeenCalled();
   });
 
