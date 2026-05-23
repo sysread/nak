@@ -3033,6 +3033,55 @@ language sql stable security invoker as $$
    limit match_limit
 $$;
 
+-- Neighbours of one memory: the top-k other memories most similar to a
+-- given source row, used by the Memories detail panel's "Similar
+-- memories" disclosure. The source row's own stored embedding is the
+-- query vector, so this is the same boosted-cosine ranking
+-- search_memories_by_embedding uses - just keyed off a memory id
+-- instead of a client-supplied vector. Keeping it server-side means the
+-- 2048-float embedding never has to ship to the client and back just to
+-- find a memory's neighbours.
+--
+-- The source row is excluded by id (`m.id <> p_memory_id`) so a memory
+-- never lists itself as its own nearest neighbour. When the source has
+-- no embedding yet (the worker hasn't reached a just-written row), the
+-- cross join against `src` yields no rows and the caller renders an
+-- empty state rather than erroring. `confidence >= 0.05` mirrors the
+-- other search RPCs: rows the reflection agent has decayed into
+-- oblivion stay hidden.
+drop function if exists public.search_memories_similar(uuid, int);
+create or replace function public.search_memories_similar(
+  p_memory_id uuid,
+  match_limit int
+) returns table (
+  id uuid,
+  label text,
+  data text,
+  confidence real,
+  topics text[],
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language sql stable security invoker as $$
+  select m.id, m.label, m.data, m.confidence, m.topics,
+         m.created_at, m.updated_at
+    from public.memories m
+   cross join (
+     select embedding
+       from public.memories
+      where id = p_memory_id
+        and user_id = auth.uid()
+   ) src
+   where m.user_id = auth.uid()
+     and m.embedding is not null
+     and src.embedding is not null
+     and m.id <> p_memory_id
+     and m.confidence >= 0.05
+   order by (1 - (m.embedding <=> src.embedding))
+          * (1 + 0.15 * ln(1 + m.confidence)) desc
+   limit match_limit
+$$;
+
 -- Thread response claim --------------------------------------------------
 --
 -- Cross-device coordination for "one device is currently producing the

@@ -191,6 +191,14 @@ From the panel you can:
   flips to *Deleting…* while the request is in flight; if the
   server refuses, the error surfaces next to the buttons rather
   than in the global banner.
+- **Jump to similar memories.** At the foot of the card a *Similar
+  memories* section sits collapsed. Expanding it runs a one-off
+  semantic search for the memory's closest neighbours - the same
+  vector match the search box and the assistant's recall use - and
+  lists them by label. Click a label to open that memory. Nothing
+  is fetched until you expand the section, and a memory the
+  background worker hasn't embedded yet (one written moments ago)
+  shows nothing until its vector is ready.
 
 A freshly edited memory briefly falls back to substring search
 while the background embedding worker recomputes its vector — the
