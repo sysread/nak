@@ -54,6 +54,8 @@
     pushStep,
     deepSleepResultLine,
     remResultLine,
+    librarianPassInfo,
+    type MemoryLibrarianPass,
     type MemoryLibrarianProgress,
     type MemoryLibrarianStep,
   } from '$lib/ui/memory-librarian';
@@ -734,9 +736,33 @@
   let librarianResultLine = $state<string | null>(null);
   let librarianResultText = $state<string | null>(null);
   let librarianError = $state<string | null>(null);
+  // Which pass (if any) is awaiting confirmation. The top-bar
+  // buttons open this strip rather than firing the run directly -
+  // on mobile there's no hover-title, so the user has no way to
+  // tell the two icon buttons apart until they see the confirm copy.
+  let librarianConfirm = $state<MemoryLibrarianPass | null>(null);
+  const librarianConfirmInfo = $derived(
+    librarianConfirm ? librarianPassInfo(librarianConfirm) : null,
+  );
 
   function emitLibrarianStep(event: MemoryLibrarianProgress): void {
     pushStep(librarianSteps, event);
+  }
+
+  // The top-bar buttons set the trigger flags; we translate that into
+  // "open the confirm strip for this pass" rather than running. The
+  // actual run starts when the user confirms via confirmLibrarianRun.
+  function openLibrarianConfirm(pass: MemoryLibrarianPass): void {
+    // Don't stack a confirm on top of an in-flight run.
+    if (deepSleepRunner.busy || remRunner.busy) return;
+    librarianConfirm = pass;
+  }
+
+  function confirmLibrarianRun(): void {
+    const pass = librarianConfirm;
+    librarianConfirm = null;
+    if (pass === 'deep-sleep') void runDeepSleep();
+    else if (pass === 'rem') void runRem();
   }
 
   async function runDeepSleep(): Promise<void> {
@@ -832,16 +858,17 @@
   }
 
   // Watch the top-bar triggers. Reset the flag so subsequent clicks
-  // re-fire cleanly.
+  // re-fire cleanly. A click opens the confirmation strip rather than
+  // running immediately - see openLibrarianConfirm for why.
   $effect(() => {
     if (triggerDeepSleep) {
-      void runDeepSleep();
+      openLibrarianConfirm('deep-sleep');
       triggerDeepSleep = false;
     }
   });
   $effect(() => {
     if (triggerRem) {
-      void runRem();
+      openLibrarianConfirm('rem');
       triggerRem = false;
     }
   });
@@ -860,6 +887,33 @@
 
 <section class="memories-panel" aria-label="Memories">
   <div class="memories-body">
+    {#if librarianConfirm !== null && librarianConfirmInfo}
+      <!-- Confirmation strip. The top-bar icon buttons have no
+           hover-title on touch devices, so this is where the user
+           learns which pass they're about to run and what it does
+           before any tokens get spent. Mutually exclusive with the
+           progress strip below - opening a confirm only happens when
+           no run is in flight. -->
+      <aside class="librarian-strip" aria-label="Confirm librarian run">
+        <header class="librarian-strip-head">
+          <strong>{librarianConfirmInfo.title}</strong>
+        </header>
+        <p class="librarian-confirm-desc">{librarianConfirmInfo.description}</p>
+        <div class="librarian-confirm-actions">
+          <button type="button" onclick={confirmLibrarianRun}>
+            {librarianConfirm === 'deep-sleep' ? 'Run deep-sleep' : 'Run rem'}
+          </button>
+          <button
+            type="button"
+            class="secondary"
+            onclick={() => (librarianConfirm = null)}
+          >
+            Cancel
+          </button>
+        </div>
+      </aside>
+    {/if}
+
     {#if librarianRunner !== null && (librarianSteps.length > 0 || librarianResultLine || librarianError)}
       <!-- Memory librarian progress strip. Renders during a manual
            run and after it finishes, showing the step list (each
@@ -1279,6 +1333,18 @@
 
   .librarian-strip-close {
     font-size: 0.85rem;
+  }
+
+  .librarian-confirm-desc {
+    margin: 0 0 0.75rem 0;
+    color: var(--text-subtle);
+    font-size: 0.95rem;
+  }
+
+  .librarian-confirm-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
   }
 
   .librarian-steps {

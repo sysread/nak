@@ -20,6 +20,49 @@ export interface MemoryLibrarianStep {
 }
 
 /**
+ * The two librarian passes the manual buttons can trigger. Shared
+ * with the runner module's progress event names, but a distinct type
+ * because this one is the user-facing identity (confirm strip,
+ * progress header) rather than an event tag.
+ */
+export type MemoryLibrarianPass = 'deep-sleep' | 'rem';
+
+/**
+ * Title + plain-language description for a pass, shown in the
+ * confirmation strip before a manual run. Lives here rather than
+ * inline in the markup because on mobile there's no hover-title to
+ * fall back on - the confirm step IS how the user learns what the
+ * button does, so the copy is load-bearing and worth a tested home.
+ */
+export interface MemoryLibrarianPassInfo {
+  title: string;
+  description: string;
+}
+
+export function librarianPassInfo(
+  pass: MemoryLibrarianPass
+): MemoryLibrarianPassInfo {
+  if (pass === 'deep-sleep') {
+    return {
+      title: 'Run deep-sleep?',
+      description:
+        'Deep-sleep walks a cluster of similar memories and consolidates ' +
+        'duplicates, links related ones, and flags anything that looks ' +
+        'contradicted or stale. It picks the memory that has gone the ' +
+        'longest without review as the starting point.',
+    };
+  }
+  return {
+    title: 'Run rem?',
+    description:
+      'Rem looks at memories that came up together while you were ' +
+      'chatting and fills in the connections between them - drawing ' +
+      'links in the memory graph, and occasionally merging a duplicate ' +
+      'that slipped past deep-sleep.',
+  };
+}
+
+/**
  * Discriminated union of the progress events the deep-sleep and rem
  * runners emit. Different `preparing` payload per runner (deep-sleep
  * carries `batchSize`, rem carries `conversationCount`); the rest of
