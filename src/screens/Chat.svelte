@@ -405,6 +405,12 @@
   // $bindable pattern as the wiki librarian trigger.
   let deepSleepTrigger = $state(false);
   let remTrigger = $state(false);
+  // Trigger flag for the Memories "changelog" top-bar button - the
+  // leftmost action, ahead of the two librarian-pass buttons. Flips the
+  // panel back to its changelog default surface (deselects the open
+  // memory, dismisses a finished librarian strip). Same $bindable
+  // pattern as the wiki changelog button.
+  let memoriesChangelogTrigger = $state(false);
   /**
    * Sidebar drawer tab. Backed by `route.drawer` - absent in the URL
    * means "chats" (the default). 'recipes' and 'memories' render
@@ -5713,15 +5719,23 @@
           </div>
 
         {:else if drawerTab === 'memories'}
-          <!-- Memories top-bar. Two manual-trigger actions for the
-               memory librarian's two passes (deep-sleep =
-               similarity-sweep consolidation; rem = conversation-
-               batched associative integration). Disabled while the
-               scheduled worker or a previous manual run is in
-               flight - the runners' .busy getter ORs both. The
-               panel itself owns the progress strip and the result
+          <!-- Memories top-bar. A changelog launcher (leftmost, mirrors
+               the wiki tab's changelog button) plus two manual-trigger
+               actions for the memory librarian's two passes (deep-sleep
+               = similarity-sweep consolidation; rem = conversation-
+               batched associative integration). The librarian buttons
+               disable while the scheduled worker or a previous manual
+               run is in flight - the runners' .busy getter ORs both.
+               The panel itself owns the progress strip and the result
                line; these are just the launchers. -->
           {@const actions = [
+            {
+              id: 'changelog',
+              label: 'Changelog',
+              title: 'Memory changelog',
+              onclick: () => (memoriesChangelogTrigger = true),
+              icon: changelogIcon,
+            },
             {
               id: 'deep-sleep',
               label: 'Deep-sleep pass',
@@ -6979,8 +6993,9 @@
              `memoriesStore` so a search keystroke filters this list
              too. Editing happens inline on the cards.
 
-             Two $bindable trigger props wire the top-bar buttons to
-             the panel: `triggerDeepSleep` for the slow-wave
+             Three $bindable trigger props wire the top-bar buttons to
+             the panel: `triggerChangelog` flips back to the changelog
+             default surface, `triggerDeepSleep` for the slow-wave
              consolidation pass, `triggerRem` for the associative
              integration pass. Same trigger-then-reset pattern the
              wiki librarian uses. -->
@@ -6988,6 +7003,7 @@
           <MemoriesComp
             bind:triggerDeepSleep={deepSleepTrigger}
             bind:triggerRem={remTrigger}
+            bind:triggerChangelog={memoriesChangelogTrigger}
           />
         {/if}
       {:else}
