@@ -2712,22 +2712,43 @@ create index if not exists recipes_topics_claim_idx
   on public.recipes (topics_claim_expires)
   where topics_claim_holder is not null;
 
--- Re-queue a recipe for tagging whenever the text the tags were
--- derived from changes. Title and cooklang are the substance; source
--- and source_url are metadata about WHERE the recipe came from (a
--- magazine, a website) and don't change WHAT the dish is, so they
--- intentionally do NOT trigger a re-tag - the embedding trigger
--- above includes source because the embedded blob folds it in, but
--- the topic agent reads title + cooklang only.
+-- Re-queue a recipe for tagging whenever ANY of the recipe's own data
+-- changes - title, cooklang, source, source_url, rating, the bookmark
+-- flags. We detect "anything changed" by comparing the whole OLD and
+-- NEW rows rather than naming a column subset, so a future column is
+-- covered without revisiting this trigger.
 --
--- The bookmark flags (upcoming, favorite) and the rating column also
--- don't fire this trigger - those are workflow state, not content,
--- same way they don't bump updated_at on the recipes table.
+-- The exception that makes this safe is the mask below: before the
+-- comparison we copy NEW's async-pipeline bookkeeping columns over
+-- OLD's, so churn confined to those columns reads as "no change."
+-- Two pipelines write them as background machinery, not recipe edits:
+--
+--   - The topic columns (topics / last_topics_at / topics_claim_*)
+--     are written by THIS pipeline's own claim + save RPCs. Without
+--     the mask, save_recipe_topics_if_claimed setting topics would
+--     look like a change and re-queue the row it just tagged, forever.
+--     This is the recursion guard.
+--   - The embedding columns (embedding / embedding_model /
+--     embedding_claim_*) are written by the embeddings worker. An
+--     embedding compute or claim is not a recipe edit, so masking
+--     them keeps the embeddings pipeline from churning the tags every
+--     time it touches a row.
 create or replace function public.clear_recipe_topics_on_change()
   returns trigger language plpgsql as $$
+declare
+  old_cmp public.recipes;
 begin
-  if new.title is distinct from old.title
-     or new.cooklang is distinct from old.cooklang then
+  old_cmp := old;
+  old_cmp.topics := new.topics;
+  old_cmp.last_topics_at := new.last_topics_at;
+  old_cmp.topics_claim_holder := new.topics_claim_holder;
+  old_cmp.topics_claim_expires := new.topics_claim_expires;
+  old_cmp.embedding := new.embedding;
+  old_cmp.embedding_model := new.embedding_model;
+  old_cmp.embedding_claim_holder := new.embedding_claim_holder;
+  old_cmp.embedding_claim_expires := new.embedding_claim_expires;
+
+  if new is distinct from old_cmp then
     new.topics := '{}'::text[];
     new.last_topics_at := null;
     new.topics_claim_holder := null;

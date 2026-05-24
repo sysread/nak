@@ -292,14 +292,19 @@ the Cookbook drawer can offer its own topic-filter dropdown. Three
 pieces differ vs the other two surfaces:
 
 - **Eligibility trigger.** A `clear_recipe_topics_on_change` trigger
-  nulls `last_topics_at` + claim columns when `title` or `cooklang`
-  changes. Deliberately NOT on `source` / `source_url` (those are
-  metadata about where the recipe came from, not what the dish IS)
-  and NOT on the bookmark / rating columns (`upcoming`, `favorite`,
-  `rating` - workflow state, not content). The existing
-  `clear_recipe_embedding_on_change` trigger DOES include source in
-  its dependency set because the embedded blob folds source in for
-  semantic search; the topic agent reads title + cooklang only.
+  nulls `topics` + `last_topics_at` + claim columns whenever ANY of
+  the recipe's own data changes - title, cooklang, source,
+  source_url, rating, the bookmark flags. It compares the whole OLD
+  and NEW rows instead of naming a column subset, so a new column is
+  covered for free. The safety mask: before comparing it copies
+  NEW's async-pipeline bookkeeping columns onto OLD, so churn
+  confined to them reads as "no change." That covers this pipeline's
+  own topic columns (otherwise `save_recipe_topics_if_claimed` would
+  re-queue the row it just tagged - the recursion guard) and the
+  embeddings worker's `embedding*` columns (an embed compute/claim is
+  not a recipe edit). Contrast `clear_recipe_embedding_on_change`,
+  which fires only on title / cooklang / source because the embedded
+  blob is built from just those three.
 
 - **Cap is 1-6 instead of 1-4.** Recipes legitimately span four
   dimensions - primary ingredients, cuisine, course, technique -
