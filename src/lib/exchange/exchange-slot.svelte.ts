@@ -83,6 +83,21 @@ interface StreamingError {
   retry?: () => void;
 }
 
+/**
+ * A discarded streaming attempt, surfaced as a transient "oops, all
+ * slop!" notice card. Created when an output guard re-rolls a junk
+ * completion (e.g. a leaked special token; see stream-guards.ts) and
+ * removed - with a CRT-power-off animation - once the replacement
+ * response persists. Never written to Supabase; lives only for the
+ * duration of the exchange. `dying` flips true to trigger the removal
+ * animation just before the card unmounts.
+ */
+export interface SlopNotice {
+  id: string;
+  guard: string;
+  dying: boolean;
+}
+
 interface ToolTiming {
   startedAt: number;
   endedAt?: number;
@@ -123,6 +138,13 @@ export class ExchangeSlot {
    */
   streamingContentStarted = false;
   streamingError = $state<StreamingError | null>(null);
+  /**
+   * Transient "oops, all slop!" cards for streaming attempts an output
+   * guard discarded this exchange. Pushed by the onGuardRetry handler,
+   * animated out once the replacement response persists. $state because
+   * the transcript renders them live as the re-roll happens.
+   */
+  slopNotices = $state<SlopNotice[]>([]);
   rateLimitWaitUntil = $state<number | null>(null);
   rateLimitAttempt = $state(0);
   abortCtl = $state<AbortController | null>(null);
@@ -161,6 +183,7 @@ export class ExchangeSlot {
     this.streamingReasoningOpen = false;
     this.streamingContentStarted = false;
     this.streamingError = null;
+    this.slopNotices = [];
     this.rateLimitWaitUntil = null;
     this.rateLimitAttempt = 0;
     this.abortCtl = null;

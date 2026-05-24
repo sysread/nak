@@ -63,7 +63,10 @@
     type TopicVocabulary,
   } from '$lib/supabase';
   import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
+  import { GuardExhaustedError } from '$lib/stream-guards';
+  import { slopNoticeCopy } from '$lib/ui/slop-notice';
   import { ExchangeStore, mergeMessagesById } from '$lib/exchange/exchange-store.svelte';
+  import type { ExchangeSlot } from '$lib/exchange/exchange-slot.svelte';
   import { ThreadClaimCoordinator } from '$lib/exchange/thread-claim-coordinator';
   import { resolveHolderId } from '$lib/exchange/holder-id';
   import { isRecoveryMessage } from '$lib/conversation-recovery';
@@ -1413,6 +1416,29 @@
       updated[existingIdx] = msg;
       messages = updated;
     }
+  }
+
+  /**
+   * Total time the slop-notice CRT-power-off animation runs before the
+   * card unmounts. Must stay >= the `crt-power-off` keyframe duration in
+   * styles.css so the animation finishes before the node is removed.
+   */
+  const SLOP_NOTICE_CRT_MS = 560;
+
+  /**
+   * Retire a slot's "oops, all slop!" notice cards. Flips each into its
+   * `dying` state (which runs the CRT-power-off animation via the
+   * `.crt-off` class) and removes them from the slot once the animation
+   * has played. Safe to call when there are no notices - it's a no-op.
+   * Called when the replacement response persists, and on the
+   * exchange's terminal paths so a notice can't outlive its turn.
+   */
+  function dismissSlopNotices(slot: ExchangeSlot): void {
+    if (slot.slopNotices.length === 0) return;
+    for (const notice of slot.slopNotices) notice.dying = true;
+    window.setTimeout(() => {
+      slot.slopNotices = [];
+    }, SLOP_NOTICE_CRT_MS);
   }
 
   /**
@@ -3140,6 +3166,10 @@
                 window.clearTimeout(reasoningCloseTimer);
                 reasoningCloseTimer = 0;
               }
+              // The replacement response for any discarded slop attempts
+              // has now landed - retire their notice cards with the
+              // CRT-power-off animation.
+              dismissSlopNotices(slot);
             },
             onToolResultPersisted: (msg) => {
               slot.recordPersistedRow(msg);
@@ -3256,6 +3286,29 @@
               // re-populate these for the next wait window.
               slot.rateLimitWaitUntil = null;
               slot.rateLimitAttempt = 0;
+            },
+            onGuardRetry: ({ guard }) => {
+              // An output guard discarded this attempt (e.g. a leaked
+              // special token) and the loop is re-rolling. Drop an
+              // "oops, all slop!" notice card and clear the streaming
+              // buffers so the replacement renders into a clean bubble.
+              // None of the discarded text reached us, so there's
+              // nothing to strike through - the notice stands in for
+              // the junk. The card is animated away by
+              // dismissSlopNotices once the replacement persists.
+              cancelPending();
+              pending = null;
+              slot.slopNotices.push({
+                id:
+                  globalThis.crypto?.randomUUID?.() ??
+                  `slop-${Date.now()}-${slot.slopNotices.length}`,
+                guard,
+                dying: false,
+              });
+              slot.streamingText = '';
+              slot.streamingReasoning = '';
+              slot.streamingReasoningOpen = false;
+              slot.streamingContentStarted = false;
             },
           },
         });
@@ -3485,10 +3538,28 @@
             void runExchange(ctx);
           },
         };
+      } else if (err instanceof GuardExhaustedError) {
+        // The model kept emitting a junk completion (e.g. a leaked
+        // special token) past the output guard's re-roll cap. Re-sending
+        // is the right move - the failure is stochastic, so a fresh
+        // request usually clears it - so park a retry closure next to
+        // the message, same as the rate-limit path.
+        slot.streamingError = {
+          text: `The model kept returning a malformed response (${err.attempts} attempts). Try again.`,
+          retry: () => {
+            void runExchange(ctx);
+          },
+        };
       } else {
         slot.streamingError = { text: describeError(err) };
       }
     } finally {
+      // Retire any slop-notice cards still showing - on the success
+      // path onAssistantPersisted already animated them out, but a
+      // terminal path that never persisted a replacement (conflict,
+      // stopped-by-limit, guard exhaustion, abort) would otherwise
+      // leave them stranded above the transcript.
+      dismissSlopNotices(slot);
       // Release the cross-device claim before clearing screen state.
       // `release` swallows RPC errors and stops the heartbeat
       // unconditionally, so a sign-out / network failure here doesn't
@@ -6172,6 +6243,26 @@
               </div>
             </div>
           {/if}
+          <!-- Discarded "oops, all slop!" notice cards. One per streaming
+               attempt an output guard rejected this turn (e.g. a leaked
+               special token; see stream-guards.ts). Rendered above the
+               live bubble so the failed attempt reads as having come
+               before the replacement now streaming in below. Gated on
+               the array, NOT on `sending`, so a card can finish its
+               CRT-power-off animation even after the exchange ends.
+               `dismissSlopNotices` flips `dying` to run the animation,
+               then unmounts. Keyed by id so Svelte animates the right
+               nodes out. -->
+          {#each activeSlot?.slopNotices ?? [] as notice (notice.id)}
+            <div
+              class="msg assistant msg-slop-notice"
+              class:crt-off={notice.dying}
+              role="note"
+            >
+              <div class="msg-slop-notice-headline">{slopNoticeCopy(notice.guard).headline}</div>
+              <div class="msg-slop-notice-detail">{slopNoticeCopy(notice.guard).detail}</div>
+            </div>
+          {/each}
           <!-- Streaming bubble visibility is gated on `activeSlot?.sending` alone -
                the master flag for "chat loop is running". This
                guarantees the KITT Scanner inside stays on screen for

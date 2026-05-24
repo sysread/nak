@@ -26,6 +26,15 @@
  */
 
 import type { ReasoningEffort, Verbosity } from './models';
+import { specialTokenStopIdsFor } from './models';
+import {
+  combineVerdicts,
+  GuardExhaustedError,
+  MAX_STREAM_GUARD_RETRIES,
+  streamGuardsFor,
+  type AttemptProgress,
+  type StreamGuard,
+} from './stream-guards';
 import type {
   SupabaseService,
   Message,
@@ -634,6 +643,132 @@ async function* streamChatWithRateLimitRetry(
   }
 }
 
+/**
+ * Wrap {@link streamChatWithRateLimitRetry} in a generic output-guard
+ * retry loop. A guard inspects each streaming attempt and can reject it
+ * ("this completion is junk, re-roll") before any of its events reach
+ * the consumer - so a discarded attempt never corrupts the round's
+ * accumulated text. The first consumer is the special-token-leak guard
+ * (see stream-guards.ts); the mechanism itself is guard-agnostic so
+ * future model/provider gotchas plug in without touching this loop.
+ *
+ * How the buffering works: events from an attempt are held in a buffer
+ * until the guards collectively 'keep' the attempt, at which point the
+ * buffer is flushed and the rest of the stream passes through live. If
+ * the guards 'retry' instead, the buffered events are dropped, this
+ * attempt's stream is torn down (its child AbortController fires), and
+ * the request is re-issued with whatever mutation the guard applied
+ * (the leak guard bumps temperature so the re-roll samples
+ * differently). The buffer window is short in the healthy case - the
+ * first reasoning delta, tool call, or few characters of non-leak text
+ * commits the attempt - so live streaming is preserved for real
+ * replies.
+ *
+ * Nesting: this wraps the rate-limit retry, so each guard attempt gets
+ * the full 429 handling. A re-roll re-enters with a fresh rate-limit
+ * budget, which is correct - it's a brand-new request.
+ *
+ * Cap: MAX_STREAM_GUARD_RETRIES re-rolls, then a GuardExhaustedError
+ * propagates for the UI to surface with a manual-retry affordance.
+ *
+ * Fires `handlers.onGuardRetry` once per re-roll, before the next
+ * attempt starts, so the UI can mark the discarded attempt (the "oops,
+ * all slop!" notice card) and reset its streaming buffers.
+ *
+ * With no armed guards the wrapper is a transparent pass-through - no
+ * buffering, no behavioral change for models without configured
+ * gotchas.
+ */
+async function* streamChatWithGuards(
+  venice: VeniceClient,
+  req: ChatRequest,
+  handlers: ChatLoopHandlers | undefined,
+  guards: StreamGuard[],
+): AsyncGenerator<StreamEvent, void, void> {
+  const outerSignal = req.signal;
+  if (!outerSignal) {
+    throw new Error('streamChatWithGuards requires req.signal');
+  }
+  if (guards.length === 0) {
+    yield* streamChatWithRateLimitRetry(venice, req, handlers);
+    return;
+  }
+
+  let attemptReq = req;
+  let attempt = 0;
+  for (;;) {
+    // Scope each attempt to a child controller so a guard rejecting it
+    // can tear down that attempt's in-flight fetch immediately - we
+    // stop paying for a leak that's still streaming - without aborting
+    // the user's whole turn (the outer signal).
+    const child = childController(outerSignal);
+    const progress: AttemptProgress = {
+      visibleText: '',
+      sawReasoning: false,
+      sawToolCall: false,
+      ended: false,
+    };
+    const buffer: StreamEvent[] = [];
+    let committed = false;
+    let retryGuard: string | null = null;
+    try {
+      for await (const ev of streamChatWithRateLimitRetry(
+        venice,
+        { ...attemptReq, signal: child.signal },
+        handlers,
+      )) {
+        if (committed) {
+          yield ev;
+          continue;
+        }
+        buffer.push(ev);
+        if (ev.type === 'text') progress.visibleText += ev.delta;
+        else if (ev.type === 'reasoning') progress.sawReasoning = true;
+        else if (ev.type === 'tool_call') progress.sawToolCall = true;
+        const verdicts = guards.map((g) => g.verdict(progress));
+        const combined = combineVerdicts(verdicts);
+        if (combined === 'retry') {
+          retryGuard = guards[verdicts.indexOf('retry')].name;
+          break;
+        }
+        if (combined === 'keep') {
+          committed = true;
+          for (const b of buffer) yield b;
+          buffer.length = 0;
+        }
+      }
+    } finally {
+      // No-op when the attempt already finished cleanly; decisive when
+      // we broke out early on a retry. Breaking the for-await above also
+      // runs the inner generator's return() (releasing its reader), so
+      // this just severs the underlying fetch.
+      child.abort();
+    }
+
+    if (committed) return;
+
+    if (retryGuard === null) {
+      // Stream ended while still buffering (every guard was undecided).
+      // Resolve with `ended` set so a guard can give a final verdict on
+      // a short-but-legitimate reply.
+      progress.ended = true;
+      const verdicts = guards.map((g) => g.verdict(progress));
+      if (combineVerdicts(verdicts) !== 'retry') {
+        for (const b of buffer) yield b;
+        return;
+      }
+      retryGuard = guards[verdicts.indexOf('retry')].name;
+    }
+
+    if (attempt >= MAX_STREAM_GUARD_RETRIES) {
+      throw new GuardExhaustedError(retryGuard, attempt + 1);
+    }
+    attempt += 1;
+    handlers?.onGuardRetry?.({ guard: retryGuard, attempt });
+    attemptReq = guards.reduce((r, g) => g.prepareRetry(r, attempt), attemptReq);
+  }
+}
+
 /** Event surface consumed by the UI. Each callback is best-effort. */
 export interface ChatLoopHandlers {
   /** Cumulative text for the current round; fires on every text delta. */
@@ -721,6 +856,18 @@ export interface ChatLoopHandlers {
    * indicator back to the normal streaming spinner.
    */
   onRateLimitResolved?(): void;
+  /**
+   * An output guard rejected the current streaming attempt as junk
+   * (e.g. a leaked special token) and the loop is re-rolling. Fires
+   * once per re-roll, before the next attempt's stream opens, with the
+   * tripping guard's name and the 1-based retry number. None of the
+   * discarded attempt's text reached the consumer, so the UI's job is
+   * cosmetic: drop a stylized "discarded a glitch, regenerating" notice
+   * (the "oops, all slop!" card) and reset the streaming buffers so the
+   * replacement renders cleanly. The notice is animated away once the
+   * replacement persists.
+   */
+  onGuardRetry?(info: { guard: string; attempt: number }): void;
 }
 
 export interface ChatLoopOptions {
@@ -1394,6 +1541,16 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     intuitionMessageIdx = history.length - 1;
   }
 
+  // Output-guard config for this turn's model. Constant across rounds,
+  // so resolve once. `stopTokenIds` halts the model server-side the
+  // instant it leaks a known special token; `streamGuards` is the
+  // client-side detector + re-roll that catches the leak even when the
+  // server-side stop didn't fire. Both come from the same model config,
+  // so a model with no configured gotchas gets an empty guard list and
+  // the wrapper is a pass-through.
+  const stopTokenIds = specialTokenStopIdsFor(modelId);
+  const streamGuards = streamGuardsFor(modelId);
+
   for (let round = 0; round < MAX_ROUNDS; round++) {
     // Phase B abort exit: the prior round reached tool execution, then
     // the user clicked stop while tools were running. Promise.all
@@ -1466,7 +1623,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // re-issuing. A non-retryable error or a final 429 propagates here
     // identically to a raw venice.streamChat call, so the abort and
     // generic-error branches below need no special-casing for retries.
-    const stream = streamChatWithRateLimitRetry(
+    const stream = streamChatWithGuards(
       venice,
       {
         model: modelId,
@@ -1476,8 +1633,10 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         reasoningEffort,
         disableThinking,
         verbosity,
+        stopTokenIds,
       },
-      handlers
+      handlers,
+      streamGuards,
     );
 
     let roundText = '';
@@ -2025,4 +2184,8 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 // runChatLoop fixture per bucket.
 export const __test = {
   formatRelativeDuration,
+  // The output-guard wrapper is otherwise only reachable through a full
+  // runChatLoop fixture; exposing it lets the buffering / retry / cap
+  // edge cases be driven directly with a fake stream and fake guards.
+  streamChatWithGuards,
 };

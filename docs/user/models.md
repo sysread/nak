@@ -118,6 +118,25 @@ reply reads as plain prose.
 
 ## System prompts
 
+## Automatic glitch recovery
+
+Some models occasionally emit an internal control token (and a burst
+of unrelated text) at the very start of a reply instead of answering -
+a known quirk of the DeepSeek family that fronts the Balanced and Fast
+tiers. Nak detects this, throws the bad attempt away, and regenerates -
+automatically, without you doing anything.
+
+- When it happens you'll briefly see a small **"oops, all slop!"**
+  notice card where the answer would be, while the real reply streams
+  in below it. The notice then powers off (a little CRT-style collapse
+  animation) and disappears once the good reply lands.
+- Nak re-rolls up to twice, nudging the sampling temperature each time
+  so the retry doesn't reproduce the same glitch. If all attempts still
+  come back malformed, you'll get an error with a **Retry** button -
+  sending again almost always clears it, since the glitch is random.
+- This only kicks in for models known to have the quirk; everything
+  else streams through untouched.
+
 ## Where to go next
 
 - [Settings overview](./settings.md) — the pane this lives in.

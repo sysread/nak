@@ -146,6 +146,25 @@ export interface ModelSpec {
    * documentation only; no call site reads it programmatically yet.
    */
   readonly supportsResponseFormat: boolean;
+  /**
+   * Vocabulary ids of special tokens this model is known to leak into
+   * the content stream. Sent as `stop_token_ids` so the provider halts
+   * generation the instant the model emits one (cheap server-side
+   * stop), and the presence of this field also arms the client-side
+   * special-token-leak guard for the model (see
+   * `streamGuardsFor` in ../stream-guards.ts).
+   *
+   * DeepSeek-family models on Venice sometimes open a response with
+   * their own `<｜begin▁of▁sentence｜>` token instead of answering. The
+   * ids below are DeepSeek's BOS (0) and EOS (1) from its tokenizer
+   * config. They're best-effort: we can't confirm from a dev box that
+   * Venice honors `stop_token_ids` for this model, so the wire-level
+   * stop is an optimization and the client-side guard is the load-
+   * bearing detector. If the ids turn out wrong the guard still catches
+   * the leak as it streams; the only cost is a few wasted tokens before
+   * the client aborts.
+   */
+  readonly leakedSpecialTokenIds?: readonly number[];
 }
 
 /**
@@ -175,6 +194,11 @@ export const MODELS = {
     supportsReasoning: true,
     supportsVision: false,
     supportsResponseFormat: true,
+    // DeepSeek BOS (0) / EOS (1). This model occasionally leaks
+    // `<｜begin▁of▁sentence｜>` at the head of a reply; arming these
+    // stops the leak server-side and switches on the client-side
+    // special-token-leak guard. See ModelSpec.leakedSpecialTokenIds.
+    leakedSpecialTokenIds: [0, 1],
   },
   'mistral-small-3-2-24b-instruct': {
     id: 'mistral-small-3-2-24b-instruct',
@@ -655,4 +679,18 @@ export function findContextWindowById(id: string | null | undefined): number | n
   const active = (MODELS as Readonly<Record<string, ModelSpec>>)[id];
   if (active) return active.contextWindow;
   return LEGACY_MODELS[id]?.contextWindow ?? null;
+}
+
+/**
+ * Special-token ids a model is known to leak, for use as
+ * `stop_token_ids` on the wire. Returns undefined when the model has
+ * no configured leak (the common case), which also means the client-
+ * side special-token-leak guard stays disarmed for it. Only active ids
+ * carry this config; a retired id resolves to undefined.
+ */
+export function specialTokenStopIdsFor(
+  id: string | null | undefined
+): readonly number[] | undefined {
+  if (typeof id !== 'string' || id.length === 0) return undefined;
+  return (MODELS as Readonly<Record<string, ModelSpec>>)[id]?.leakedSpecialTokenIds;
 }

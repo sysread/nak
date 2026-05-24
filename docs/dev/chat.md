@@ -172,8 +172,35 @@ A chat turn goes:
 - `ChatLoopHandlers` - the event surface the UI uses: text
   updates, tool start/done/error, persistence events,
   `onToolboxesEnabledChange` (for the composer toolbox flash when
-  `toggle_toolbox` fires). Every handler is optional; the loop
-  runs cleanly with none of them.
+  `toggle_toolbox` fires), `onGuardRetry` (an output guard
+  discarded a junk attempt and is re-rolling - see below). Every
+  handler is optional; the loop runs cleanly with none of them.
+- **Output guards** (`src/lib/stream-guards.ts` +
+  `streamChatWithGuards` in `chat-loop.ts`) - generic "the
+  completion came back wrong, re-roll it" machinery wrapping the
+  rate-limit retry. Each round's stream runs through a list of
+  `StreamGuard`s; the wrapper buffers the opening events of an
+  attempt until the guards collectively `keep` it (then flushes and
+  passes the rest through live) or `retry` it (drops the buffer,
+  tears down that attempt's child-controller stream, and re-issues
+  with the guard's request mutation). A discarded attempt's events
+  never reach the round consumer, so junk can't corrupt `roundText`.
+  Cap `MAX_STREAM_GUARD_RETRIES` (2); exhaustion throws
+  `GuardExhaustedError` for the UI to surface with a manual-retry
+  button. First consumer: the **special-token-leak** guard, armed on
+  models whose `ModelSpec.leakedSpecialTokenIds` is set
+  (`deepseek-v4-flash` today). It sends those ids as
+  `stop_token_ids` (cheap server-side halt) and client-side detects
+  the leak by the `<｜` / `<|` opener (the load-bearing path, since
+  we can't confirm Venice honors `stop_token_ids` for the model);
+  on retry it bumps temperature so the re-roll samples differently.
+  The leak manifests as an empty completion (server stop fired) or a
+  reply opening with the delimiter (stop didn't); either way the
+  guard re-rolls. Models with no configured gotchas get an empty
+  guard list and the wrapper is a transparent pass-through. UI side:
+  `onGuardRetry` drops a transient "oops, all slop!" notice card
+  (`ExchangeSlot.slopNotices`, copy from `src/lib/ui/slop-notice.ts`)
+  that CRT-powers-off once the replacement persists.
 - `MAX_ROUNDS = 5` — guardrail on runaway tool loops. Exits with
   `stoppedByLimit: true`; the UI shows a "tool-use round cap
   reached" banner.
