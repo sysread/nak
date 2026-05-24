@@ -133,6 +133,16 @@ If the regenerated turn fails partway (network drop, rate limit, you
 hit Stop), the greyed messages restore to normal and nothing is
 deleted. Try again, or carry on as if you hadn't clicked.
 
+## Message timestamps
+
+Every message card carries the time it was created at the left edge of
+its action row, as a small `yyyy-mm-dd HH:mm` stamp (24-hour clock).
+Assistant replies show it alongside the copy, sources, and regenerate
+buttons; your own messages show it on their own row even when there's
+nothing else there. The time is rendered in your display timezone -
+the same setting the context-window detail row uses - which Nak
+detects from your browser and you can override in Settings.
+
 ## Copying, editing, and deleting messages
 
 ## Stop and resume
