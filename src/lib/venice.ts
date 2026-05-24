@@ -271,20 +271,6 @@ export interface ChatRequest {
    * full off switch.
    */
   disableThinking?: boolean;
-  /**
-   * Vocabulary ids the provider should treat as stop tokens, forwarded
-   * as the top-level `stop_token_ids` array. Used to halt generation
-   * the instant a model emits a special token it's known to leak into
-   * the content stream (see ModelSpec.leakedSpecialTokenIds and
-   * stream-guards.ts). Omitted from the wire when unset, same
-   * discipline as the other optional knobs.
-   *
-   * Matched at the token-id layer, so unlike a `stop` string it can't
-   * be tripped by a user or model legitimately typing the token's
-   * characters as text - which matters here, since nak users discuss
-   * these very tokens.
-   */
-  stopTokenIds?: readonly number[];
 }
 
 /**
@@ -729,13 +715,6 @@ export class VeniceClient {
     // the safer default.
     if (req.responseFormat) {
       body.response_format = req.responseFormat;
-    }
-    // Only forward stop_token_ids when the caller armed them (a model
-    // with known leaked special tokens). Halts generation at the token-
-    // id layer the instant the model emits one, which is how the leak
-    // shows up as an empty completion rather than a wall of junk.
-    if (req.stopTokenIds && req.stopTokenIds.length > 0) {
-      body.stop_token_ids = req.stopTokenIds;
     }
     // Venice-specific: request web-search behavior via venice_parameters.
     // We send the field only when the caller passed an explicit mode so

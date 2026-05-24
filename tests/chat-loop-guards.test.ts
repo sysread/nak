@@ -65,9 +65,9 @@ describe('streamChatWithGuards', () => {
     expect(calls()).toBe(1);
   });
 
-  it('discards an empty (server-stopped) leak attempt and re-rolls', async () => {
+  it('discards a leak attempt, re-rolls, and bumps the temperature', async () => {
     const { venice, temps } = fakeVenice([
-      [], // leak: server-side stop_token_ids halted it -> empty completion
+      [text('<｜begin▁of▁sentence｜>')], // leak: opens with the token
       [text('Real answer')],
     ]);
     const onGuardRetry = vi.fn();
@@ -81,6 +81,19 @@ describe('streamChatWithGuards', () => {
     // forced to the schedule's first step.
     expect(temps[0]).toBeUndefined();
     expect(temps[1]).toBe(0.8);
+  });
+
+  it('keeps an empty completion rather than re-rolling it', async () => {
+    // Without a server-side stop, an empty completion is not a leak -
+    // it passes through untouched.
+    const { venice, calls } = fakeVenice([[], [text('unreached')]]);
+    const onGuardRetry = vi.fn();
+    const out = await collect(
+      streamChatWithGuards(venice, req(), { onGuardRetry }, [specialTokenLeakGuard()])
+    );
+    expect(out).toEqual([]);
+    expect(onGuardRetry).not.toHaveBeenCalled();
+    expect(calls()).toBe(1);
   });
 
   it('discards a leak that streamed as text without forwarding the junk', async () => {
@@ -110,9 +123,9 @@ describe('streamChatWithGuards', () => {
   });
 
   it('throws GuardExhaustedError after the retry cap', async () => {
-    // Every attempt leaks (empty completion). 1 initial + 2 retries = 3
-    // attempts, then exhaustion.
-    const { venice, calls } = fakeVenice([[]]);
+    // Every attempt leaks (opens with the token). 1 initial + 2 retries
+    // = 3 attempts, then exhaustion.
+    const { venice, calls } = fakeVenice([[text('<｜begin▁of▁sentence｜>')]]);
     const onGuardRetry = vi.fn();
     await expect(
       collect(streamChatWithGuards(venice, req(), { onGuardRetry }, [specialTokenLeakGuard()]))

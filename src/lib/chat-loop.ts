@@ -26,7 +26,6 @@
  */
 
 import type { ReasoningEffort, Verbosity } from './models';
-import { specialTokenStopIdsFor } from './models';
 import {
   combineVerdicts,
   GuardExhaustedError,
@@ -1541,14 +1540,13 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     intuitionMessageIdx = history.length - 1;
   }
 
-  // Output-guard config for this turn's model. Constant across rounds,
-  // so resolve once. `stopTokenIds` halts the model server-side the
-  // instant it leaks a known special token; `streamGuards` is the
-  // client-side detector + re-roll that catches the leak even when the
-  // server-side stop didn't fire. Both come from the same model config,
-  // so a model with no configured gotchas gets an empty guard list and
-  // the wrapper is a pass-through.
-  const stopTokenIds = specialTokenStopIdsFor(modelId);
+  // Output guards for this turn's model. Constant across rounds, so
+  // resolve once. A model with no configured gotchas gets an empty
+  // guard list and the wrapper is a pass-through. The guard detects
+  // junk completions (e.g. a leaked special token) client-side and
+  // re-rolls - there's no server-side stop, deliberately, so a reply
+  // that legitimately mentions one of these sequences mid-stream isn't
+  // truncated.
   const streamGuards = streamGuardsFor(modelId);
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -1633,7 +1631,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         reasoningEffort,
         disableThinking,
         verbosity,
-        stopTokenIds,
       },
       handlers,
       streamGuards,

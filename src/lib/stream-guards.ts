@@ -6,10 +6,19 @@
  * response that isn't an error on the wire (no 4xx, a clean `[DONE]`)
  * but is useless to show the user. The first such case this module
  * handles is a leaked special token: DeepSeek-family models on Venice
- * sometimes start a response by emitting their own
+ * sometimes start a response by emitting the literal text of their own
  * `<｜begin▁of▁sentence｜>` token (and then a stretch of unrelated Go
  * code) instead of answering. See docs/dev/chat.md for the failure
- * mode and the wire-level fix (server-side `stop_token_ids`).
+ * mode.
+ *
+ * Detection is purely client-side and anchored to the opening of the
+ * reply: a guard checks whether the response STARTS with a known token
+ * delimiter, not whether one appears anywhere. We deliberately do NOT
+ * arm a server-side `stop` for this - `stop` matches anywhere in the
+ * output, so it would truncate a legitimate reply that mentions one of
+ * these sequences mid-stream (a real case for nak, whose users discuss
+ * these tokens). Anchoring to the opening confines the guard to the
+ * actual failure mode.
  *
  * A guard inspects an in-flight attempt and returns a verdict; the
  * async wrapper that drives the verdicts lives in chat-loop.ts
@@ -26,12 +35,11 @@
  *
  * Interacts with: chat-loop.ts (the async wrapper + the round consumer),
  * models/index.ts (which models arm the special-token guard, via
- * `specialTokenStopIdsFor`), venice.ts (`ChatRequest.stopTokenIds`,
- * `StreamEvent`).
+ * `modelLeaksSpecialTokens`), venice.ts (`StreamEvent`).
  */
 
 import type { ChatRequest } from './venice';
-import { specialTokenStopIdsFor } from './models';
+import { modelLeaksSpecialTokens } from './models';
 
 /**
  * What we know about one streaming attempt at the moment a guard is
@@ -141,22 +149,21 @@ function couldStillBecomeLeak(text: string): boolean {
 }
 
 /**
- * Guard for the leaked-special-token failure mode. Armed only on models
- * configured with `specialTokenStopIdsFor` (see `streamGuardsFor`), so
- * the empty-completion branch can't misfire on a model that simply had
- * nothing to say.
+ * Guard for the leaked-special-token failure mode. Anchored to the
+ * opening of the reply, so it only fires when the response STARTS with
+ * a leaked token - never on a legitimate mid-stream mention of one.
  *
  * Verdict logic, in order:
- *   - any reasoning or tool-call output -> 'keep'. A leak emits its
- *     token at position 0 with no reasoning and no tool call, so the
- *     presence of either means this is a real attempt.
- *   - visible text opens with a leak delimiter -> 'retry'. This is the
- *     load-bearing detector: it fires even when the server-side
- *     `stop_token_ids` halt didn't (provider honored it differently),
- *     catching the leak as it streams.
- *   - no visible text yet: 'undecided' until the stream ends, then
- *     'retry'. With the server-side stop armed, a leak manifests as an
- *     empty completion (the model was halted at its first token).
+ *   - any reasoning or tool-call output -> 'keep'. A leak opens with
+ *     its token at position 0 with no reasoning and no tool call, so
+ *     the presence of either means this is a real attempt.
+ *   - visible text opens with a leak delimiter -> 'retry'. The leak
+ *     streams as ordinary text (the model writes the token's surface
+ *     characters), so this opening-prefix match is the whole detector.
+ *   - no visible text yet -> 'undecided' until the stream ends (so we
+ *     keep buffering in case the first delta turns out to be the leak),
+ *     then 'keep'. An empty completion is not this guard's concern -
+ *     without a server-side stop, a leak always produces visible text.
  *   - a bare partial that could still become a leak opener ->
  *     'undecided' (buffer one more delta).
  *   - otherwise -> 'keep'.
@@ -168,7 +175,7 @@ export function specialTokenLeakGuard(): StreamGuard {
       if (p.sawReasoning || p.sawToolCall) return 'keep';
       const text = leftTrim(p.visibleText);
       if (startsWithSpecialTokenLeak(text)) return 'retry';
-      if (text.length === 0) return p.ended ? 'retry' : 'undecided';
+      if (text.length === 0) return p.ended ? 'keep' : 'undecided';
       if (!p.ended && couldStillBecomeLeak(text)) return 'undecided';
       return 'keep';
     },
@@ -193,13 +200,13 @@ export function combineVerdicts(verdicts: readonly GuardVerdict[]): GuardVerdict
 
 /**
  * The guards to arm for a given concrete model id. A model gets the
- * special-token guard exactly when it's configured with leaked-token
- * stop ids, so the wire-level stop and the client-side detector stay in
- * lockstep from one source of truth. Models with no configured gotchas
- * get an empty list and the wrapper degenerates to a pass-through.
+ * special-token guard exactly when it's flagged as leaking special
+ * tokens (see `modelLeaksSpecialTokens`). Models with no configured
+ * gotchas get an empty list and the wrapper degenerates to a
+ * pass-through.
  */
 export function streamGuardsFor(modelId: string): StreamGuard[] {
-  return specialTokenStopIdsFor(modelId) ? [specialTokenLeakGuard()] : [];
+  return modelLeaksSpecialTokens(modelId) ? [specialTokenLeakGuard()] : [];
 }
 
 /**

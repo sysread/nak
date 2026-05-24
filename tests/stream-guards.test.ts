@@ -84,8 +84,10 @@ describe('specialTokenLeakGuard.verdict', () => {
     expect(guard.verdict(progress({ visibleText: '' }))).toBe('undecided');
   });
 
-  it('retries an empty completion once the stream ends (server-side stop fired)', () => {
-    expect(guard.verdict(progress({ visibleText: '', ended: true }))).toBe('retry');
+  it('keeps an empty completion that ends without text (not this guard\'s concern)', () => {
+    // Without a server-side stop, a leak always produces visible text;
+    // a genuinely empty reply is left for the round consumer to handle.
+    expect(guard.verdict(progress({ visibleText: '', ended: true }))).toBe('keep');
   });
 
   it('waits one more delta on a bare "<" that could still become a leak', () => {

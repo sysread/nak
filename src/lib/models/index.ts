@@ -147,24 +147,23 @@ export interface ModelSpec {
    */
   readonly supportsResponseFormat: boolean;
   /**
-   * Vocabulary ids of special tokens this model is known to leak into
-   * the content stream. Sent as `stop_token_ids` so the provider halts
-   * generation the instant the model emits one (cheap server-side
-   * stop), and the presence of this field also arms the client-side
-   * special-token-leak guard for the model (see
-   * `streamGuardsFor` in ../stream-guards.ts).
+   * True when this model is known to leak its own special tokens into
+   * the content stream - opening a reply with the literal text of a
+   * control token (and usually a burst of unrelated code) instead of
+   * answering. Arms the client-side special-token-leak guard for the
+   * model (see `streamGuardsFor` in ../stream-guards.ts), which detects
+   * the leak by the token's opening delimiter and re-rolls.
    *
-   * DeepSeek-family models on Venice sometimes open a response with
-   * their own `<｜begin▁of▁sentence｜>` token instead of answering. The
-   * ids below are DeepSeek's BOS (0) and EOS (1) from its tokenizer
-   * config. They're best-effort: we can't confirm from a dev box that
-   * Venice honors `stop_token_ids` for this model, so the wire-level
-   * stop is an optimization and the client-side guard is the load-
-   * bearing detector. If the ids turn out wrong the guard still catches
-   * the leak as it streams; the only cost is a few wasted tokens before
-   * the client aborts.
+   * DeepSeek-family models on Venice sometimes open with their own
+   * `<｜begin▁of▁sentence｜>` token. We deliberately do NOT also send a
+   * server-side `stop` / `stop_token_ids`: `stop` matches anywhere in
+   * the output, so it would truncate a legitimate reply that mentions
+   * one of these sequences mid-stream (a real case for nak, whose users
+   * discuss these tokens), and we have no verified token ids for the
+   * model. The client guard is anchored to the opening, so it only
+   * fires on the actual failure mode.
    */
-  readonly leakedSpecialTokenIds?: readonly number[];
+  readonly leaksSpecialTokens?: boolean;
 }
 
 /**
@@ -194,11 +193,10 @@ export const MODELS = {
     supportsReasoning: true,
     supportsVision: false,
     supportsResponseFormat: true,
-    // DeepSeek BOS (0) / EOS (1). This model occasionally leaks
-    // `<｜begin▁of▁sentence｜>` at the head of a reply; arming these
-    // stops the leak server-side and switches on the client-side
-    // special-token-leak guard. See ModelSpec.leakedSpecialTokenIds.
-    leakedSpecialTokenIds: [0, 1],
+    // This model occasionally leaks `<｜begin▁of▁sentence｜>` at the
+    // head of a reply; arm the client-side special-token-leak guard.
+    // See ModelSpec.leaksSpecialTokens.
+    leaksSpecialTokens: true,
   },
   'mistral-small-3-2-24b-instruct': {
     id: 'mistral-small-3-2-24b-instruct',
@@ -682,15 +680,12 @@ export function findContextWindowById(id: string | null | undefined): number | n
 }
 
 /**
- * Special-token ids a model is known to leak, for use as
- * `stop_token_ids` on the wire. Returns undefined when the model has
- * no configured leak (the common case), which also means the client-
- * side special-token-leak guard stays disarmed for it. Only active ids
- * carry this config; a retired id resolves to undefined.
+ * True when the model is known to leak its own special tokens into the
+ * content stream, which arms the client-side special-token-leak guard
+ * for it (see `streamGuardsFor`). False for unconfigured ids - including
+ * retired ids, which don't carry the flag.
  */
-export function specialTokenStopIdsFor(
-  id: string | null | undefined
-): readonly number[] | undefined {
-  if (typeof id !== 'string' || id.length === 0) return undefined;
-  return (MODELS as Readonly<Record<string, ModelSpec>>)[id]?.leakedSpecialTokenIds;
+export function modelLeaksSpecialTokens(id: string | null | undefined): boolean {
+  if (typeof id !== 'string' || id.length === 0) return false;
+  return (MODELS as Readonly<Record<string, ModelSpec>>)[id]?.leaksSpecialTokens === true;
 }

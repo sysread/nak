@@ -188,19 +188,20 @@ A chat turn goes:
   Cap `MAX_STREAM_GUARD_RETRIES` (2); exhaustion throws
   `GuardExhaustedError` for the UI to surface with a manual-retry
   button. First consumer: the **special-token-leak** guard, armed on
-  models whose `ModelSpec.leakedSpecialTokenIds` is set
-  (`deepseek-v4-flash` today). It sends those ids as
-  `stop_token_ids` (cheap server-side halt) and client-side detects
-  the leak by the `<｜` / `<|` opener (the load-bearing path, since
-  we can't confirm Venice honors `stop_token_ids` for the model);
-  on retry it bumps temperature so the re-roll samples differently.
-  The leak manifests as an empty completion (server stop fired) or a
-  reply opening with the delimiter (stop didn't); either way the
-  guard re-rolls. Models with no configured gotchas get an empty
-  guard list and the wrapper is a transparent pass-through. UI side:
-  `onGuardRetry` drops a transient "oops, all slop!" notice card
-  (`ExchangeSlot.slopNotices`, copy from `src/lib/ui/slop-notice.ts`)
-  that CRT-powers-off once the replacement persists.
+  models flagged `ModelSpec.leaksSpecialTokens` (`deepseek-v4-flash`
+  today). Detection is client-side and **anchored to the opening** of
+  the reply: it re-rolls when the response STARTS with a `<｜` / `<|`
+  delimiter, bumping temperature each time so the re-roll samples
+  differently. We deliberately do NOT send a server-side `stop` for
+  this - `stop` matches anywhere in the output, so it would truncate a
+  legitimate reply that mentions one of these sequences mid-stream (a
+  real case for nak, whose users discuss these tokens); anchoring to
+  the opening confines the guard to the actual failure mode. Models
+  with no configured gotchas get an empty guard list and the wrapper
+  is a transparent pass-through. UI side: `onGuardRetry` drops a
+  transient "oops, all slop!" notice card (`ExchangeSlot.slopNotices`,
+  copy from `src/lib/ui/slop-notice.ts`) that CRT-powers-off once the
+  replacement persists.
 - `MAX_ROUNDS = 5` — guardrail on runaway tool loops. Exits with
   `stoppedByLimit: true`; the UI shows a "tool-use round cap
   reached" banner.
