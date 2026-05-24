@@ -176,6 +176,7 @@
     buildUserMessageByRound,
     shouldRetainDisplaced,
   } from '$lib/ui/recall';
+  import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -5949,6 +5950,9 @@
               {@const cohortExpanded = isUser
                 ? expandedCohortPanels.has(block.message.id)
                 : false}
+              {@const userStamp = isUser
+                ? formatMessageStamp(block.message.created_at, app.displayTimezone)
+                : null}
               <div
                 class="msg {block.message.role}"
                 class:regen-target={pendingDeleteSet.has(block.message.id)}
@@ -5959,7 +5963,7 @@
                 {#if block.message.role === 'user' && block.message.attachments && block.message.attachments.length > 0}
                   <MessageAttachments attachments={block.message.attachments} />
                 {/if}
-                {#if isUser && hasInlineCohort}
+                {#if isUser}
                   <!-- User-message action row. Mirrors the assistant
                        message's .msg-actions strip but lives outside
                        AssistantBody since user messages are rendered
@@ -5968,33 +5972,43 @@
                        weight matches the assistant row's copy /
                        citations / regenerate buttons (14px outline
                        SVG, 2px stroke, hover ramps from muted to
-                       text). Only mounts when this turn actually
-                       fired samskaras or wrote a substrate stub - we
-                       don't surface an empty toggle on cold-start
-                       messages. -->
+                       text). Always renders for user rows so the
+                       left-aligned timestamp has a home even on
+                       cold-start turns; the cohort toggle only joins
+                       the row when this turn actually fired samskaras
+                       or wrote a substrate stub. -->
                   <div class="msg-actions">
-                    <button
-                      type="button"
-                      class="copy-btn cohort-toggle"
-                      aria-expanded={cohortExpanded}
-                      title={cohortExpanded
-                        ? 'Hide what samskaras fired on this turn'
-                        : 'Show what samskaras fired on this turn'}
-                      aria-label={cohortExpanded
-                        ? 'Hide samskara fires for this turn'
-                        : 'Show samskara fires for this turn'}
-                      onclick={() => toggleCohortPanel(block.message.id)}
-                    >
-                      <!-- Feather "activity" pulse line - reads as a
-                           heartbeat / signal trace, matching the
-                           assistant action row's outline-stroke icons
-                           (14px, 2px stroke). -->
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-                           stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                           stroke-linejoin="round" aria-hidden="true">
-                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-                      </svg>
-                    </button>
+                    {#if userStamp}
+                      <!-- Left-aligned timestamp. `margin-right: auto`
+                           on `.msg-time` pushes any buttons to the
+                           right edge; with no cohort toggle it simply
+                           sits alone on the left. -->
+                      <span class="msg-time">{userStamp}</span>
+                    {/if}
+                    {#if hasInlineCohort}
+                      <button
+                        type="button"
+                        class="copy-btn cohort-toggle"
+                        aria-expanded={cohortExpanded}
+                        title={cohortExpanded
+                          ? 'Hide what samskaras fired on this turn'
+                          : 'Show what samskaras fired on this turn'}
+                        aria-label={cohortExpanded
+                          ? 'Hide samskara fires for this turn'
+                          : 'Show samskara fires for this turn'}
+                        onclick={() => toggleCohortPanel(block.message.id)}
+                      >
+                        <!-- Feather "activity" pulse line - reads as a
+                             heartbeat / signal trace, matching the
+                             assistant action row's outline-stroke icons
+                             (14px, 2px stroke). -->
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                             stroke-linejoin="round" aria-hidden="true">
+                          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                        </svg>
+                      </button>
+                    {/if}
                   </div>
                   {#if cohortExpanded && CohortPanelComp}
                     <div class="cohort-panel-host">

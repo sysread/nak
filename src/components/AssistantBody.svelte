@@ -36,6 +36,7 @@
   import CitationsPanel from './CitationsPanel.svelte';
   import type { Snippet } from 'svelte';
   import type { Message } from '$lib/supabase';
+  import { app } from '$lib/state.svelte';
   import { findContextWindowById } from '$lib/models';
   import {
     citationFlashDelay,
@@ -44,6 +45,7 @@
     parseCitationRefHref,
     showCitationsControls,
   } from '$lib/ui/assistant-body';
+  import { formatMessageStamp } from '$lib/ui/message-timestamp';
 
   interface Props {
     content: string;
@@ -114,6 +116,8 @@
     usage ? findContextWindowById(model ?? undefined) : null
   );
 
+  const stamp = $derived(formatMessageStamp(createdAt, app.displayTimezone));
+
   /**
    * Click delegation for `^N^` citation links inside the markdown
    * render. The citation extension (src/lib/markdown.ts) emits
@@ -168,6 +172,12 @@
 
 {#if content}
   <div class="msg-actions">
+    {#if stamp}
+      <!-- Left-aligned timestamp. `margin-right: auto` on `.msg-time`
+           absorbs the free space so the action buttons stay pinned to
+           the right edge of the bar. -->
+      <span class="msg-time">{stamp}</span>
+    {/if}
     <CopyButton text={content} ariaLabel="Copy message" {disabled} />
     {#if controlsVisible}
       <!-- Citations toggle — numbered badge doubles as count AND the

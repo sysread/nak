@@ -2263,6 +2263,24 @@ h1 {
   flex-wrap: wrap;
 }
 
+/* Left-aligned message timestamp (yyyy-mm-dd HH:mm) at the head of the
+   action bar. `margin-right: auto` consumes the free space so the
+   right-aligned buttons keep their position; on a user row with no
+   cohort toggle the stamp is the bar's only content and sits alone on
+   the left. The app body font (Lekton) is already monospace, so the
+   stamp lines up column-for-column without an explicit family - the
+   `var(--font-mono)` fallback just makes that intent explicit and
+   matches the .tool-name-sub treatment. Muted + small so it reads as
+   supporting metadata rather than competing with the buttons. */
+.msg-time {
+  margin-right: auto;
+  align-self: center;
+  font-family: var(--font-mono, inherit);
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* Re-apply the mobile full-width rule here, *after* the base
    .msg.user/.msg.assistant declarations above. Without this duplicate
    block, the base rules — same specificity, later in source order —
