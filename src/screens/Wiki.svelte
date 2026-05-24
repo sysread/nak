@@ -1697,6 +1697,9 @@
   }
   .wiki-content {
     line-height: 1.6;
+    /* The reader-content text-shadow thickener is applied globally in
+       src/styles.css (see "Main-section reader-content thickener"), not
+       here, so all main-section content shares one weight step. */
   }
   .wiki-edit,
   .wiki-compose,

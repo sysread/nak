@@ -1795,19 +1795,37 @@ h1 {
      handling inside .md (the `overflow-x: auto` on pre, tables, KaTeX)
      can take over and scroll their own content sideways. */
   min-width: 0;
-  /* Thicken message copy a notch past the body baseline. Lekton ships
-     only 400 and 700 faces (see @font-face at top of file), so an
-     intermediate font-weight would route through the browser's
-     synthesized faux-bold - the exact path the pixel-bitmap
-     predecessor was retired to avoid. The body-level thickener uses a
-     sub-pixel text-shadow instead; we step it up here so chat cards
-     read slightly heavier than surrounding chrome. Light mode keeps
-     the extra boost it gets on body (see the override below) because
-     the near-white bg renders the same regular face visibly thinner. */
+}
+
+/* ---------- Main-section reader-content thickener ----------
+   Every readable body the user reads inside <main class="chat"> gets a
+   uniform weight step above the body baseline: chat bubbles (.msg), wiki
+   articles (.wiki-content), memory cards (.memory-card-data), and recipe
+   renders (.cookbook-render). Chrome (top bar, composer, action buttons,
+   sidebar) deliberately stays at the body weight so content reads heavier
+   than the controls around it.
+
+   Lekton ships only 400 and 700 faces (see @font-face at top of file), so
+   an intermediate font-weight would route through the browser's
+   synthesized faux-bold - the exact path the pixel-bitmap predecessor was
+   retired to avoid. The body-level thickener uses a sub-pixel text-shadow
+   instead; we step it up one notch here. Light mode keeps the extra boost
+   it gets on body (see the body rule near the top) because the near-white
+   bg renders the same regular face visibly thinner.
+
+   .wiki-content / .memory-card-data / .cookbook-render carry their own
+   component-scoped styles in Wiki/Memories/Cookbook .svelte; this global
+   rule reaches them by class name (Svelte scoping only constrains a
+   component's own selectors, not external global CSS). Each of those
+   scoped blocks carries a pointer comment back here. */
+.msg,
+.wiki-content,
+.memory-card-data,
+.cookbook-render {
   text-shadow: 0 0 0.02em currentColor;
 }
 
-:root[data-theme='light'] .msg {
+:root[data-theme='light'] :is(.msg, .wiki-content, .memory-card-data, .cookbook-render) {
   text-shadow: 0 0 0.03em currentColor;
 }
 
