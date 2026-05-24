@@ -176,9 +176,12 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   / `Journal.svelte`. Renders exactly one memory at a time -
   the row whose id is in `route.memory`. With no selection
   shows the `MemoryChangelogPanel` (the tab's default surface,
-  hidden while a librarian strip is up); with a selection that's
-  not in the active search results shows a "clear the search to
-  find it" hint. Owns the inline edit /
+  hidden while a librarian strip is up); the leftmost top-bar
+  button (a `triggerChangelog` $bindable, ahead of the two
+  librarian-pass buttons) jumps back to it by deselecting the open
+  memory and dismissing a finished librarian strip. With a
+  selection that's not in the active search results shows a "clear
+  the search to find it" hint. Owns the inline edit /
   save / delete / reaffirm / doubt / relate UX - the edit and
   delete flows now require a one-line change message that lands
   in the changelog, mirroring the tools' `message` param - plus

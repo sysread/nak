@@ -222,15 +222,18 @@ tell the assistant to forget it instead.
 
 ## The memory changelog
 
-Open the Memories tab without picking a memory and the main panel
-shows the **memory changelog** - a running, newest-first log of
-what was learned, revised, and forgotten, much like the wiki's
-changelog. Each entry carries a colored chip (*Added* / *Edited* /
-*Deleted*), the memory's label at the time of the change, a
-timestamp, and a one-line note explaining the change. Click a
-label to jump straight to that memory; entries for deleted
-memories show the label in plain text, since there's nothing left
-to open.
+The main panel shows the **memory changelog** whenever no memory is
+picked - a running, newest-first log of what was learned, revised,
+and forgotten, much like the wiki's changelog. The clock button at
+the left of the Memories top bar (ahead of the deep-sleep and rem
+pass buttons) jumps you back to it from any open memory; on a narrow
+screen the top-bar buttons collapse into a single overflow menu, and
+the changelog is its first entry. Each changelog entry carries a
+colored chip (*Added* / *Edited* / *Deleted*), the memory's label at
+the time of the change, a timestamp, and a one-line note explaining
+the change. Click a label to jump straight to that memory; entries
+for deleted memories show the label in plain text, since there's
+nothing left to open.
 
 The log is deliberately about *content*, not confidence churn. It
 records:

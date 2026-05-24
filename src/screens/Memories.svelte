@@ -60,9 +60,11 @@
   let {
     triggerDeepSleep = $bindable(false),
     triggerRem = $bindable(false),
+    triggerChangelog = $bindable(false),
   }: {
     triggerDeepSleep?: boolean;
     triggerRem?: boolean;
+    triggerChangelog?: boolean;
   } = $props();
 
   // Label length is capped at 80 by the memory_create/update tool
@@ -929,6 +931,20 @@
     if (triggerRem) {
       openLibrarianConfirm('rem');
       triggerRem = false;
+    }
+  });
+  // Watch the changelog button. Flips the panel back to its changelog
+  // default surface: deselect the open memory and dismiss whatever
+  // would suppress the changelog - the confirm prompt, and a librarian
+  // run strip that has already finished (a still-running pass is left
+  // alone; its strip stays until it settles). With no memory selected
+  // and no strip up, the body cascade lands on MemoryChangelogPanel.
+  $effect(() => {
+    if (triggerChangelog) {
+      librarianConfirm = null;
+      if (librarianRun.active && !librarianRun.running) librarianRun.clear();
+      if (route.memory) navigate({ memory: null });
+      triggerChangelog = false;
     }
   });
 
