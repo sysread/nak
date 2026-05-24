@@ -146,6 +146,24 @@ export interface ModelSpec {
    * documentation only; no call site reads it programmatically yet.
    */
   readonly supportsResponseFormat: boolean;
+  /**
+   * True when this model is known to leak its own special tokens into
+   * the content stream - opening a reply with the literal text of a
+   * control token (and usually a burst of unrelated code) instead of
+   * answering. Arms the client-side special-token-leak guard for the
+   * model (see `streamGuardsFor` in ../stream-guards.ts), which detects
+   * the leak by the token's opening delimiter and re-rolls.
+   *
+   * DeepSeek-family models on Venice sometimes open with their own
+   * `<｜begin▁of▁sentence｜>` token. We deliberately do NOT also send a
+   * server-side `stop` / `stop_token_ids`: `stop` matches anywhere in
+   * the output, so it would truncate a legitimate reply that mentions
+   * one of these sequences mid-stream (a real case for nak, whose users
+   * discuss these tokens), and we have no verified token ids for the
+   * model. The client guard is anchored to the opening, so it only
+   * fires on the actual failure mode.
+   */
+  readonly leaksSpecialTokens?: boolean;
 }
 
 /**
@@ -175,6 +193,10 @@ export const MODELS = {
     supportsReasoning: true,
     supportsVision: false,
     supportsResponseFormat: true,
+    // This model occasionally leaks `<｜begin▁of▁sentence｜>` at the
+    // head of a reply; arm the client-side special-token-leak guard.
+    // See ModelSpec.leaksSpecialTokens.
+    leaksSpecialTokens: true,
   },
   'mistral-small-3-2-24b-instruct': {
     id: 'mistral-small-3-2-24b-instruct',
@@ -655,4 +677,15 @@ export function findContextWindowById(id: string | null | undefined): number | n
   const active = (MODELS as Readonly<Record<string, ModelSpec>>)[id];
   if (active) return active.contextWindow;
   return LEGACY_MODELS[id]?.contextWindow ?? null;
+}
+
+/**
+ * True when the model is known to leak its own special tokens into the
+ * content stream, which arms the client-side special-token-leak guard
+ * for it (see `streamGuardsFor`). False for unconfigured ids - including
+ * retired ids, which don't carry the flag.
+ */
+export function modelLeaksSpecialTokens(id: string | null | undefined): boolean {
+  if (typeof id !== 'string' || id.length === 0) return false;
+  return (MODELS as Readonly<Record<string, ModelSpec>>)[id]?.leaksSpecialTokens === true;
 }
