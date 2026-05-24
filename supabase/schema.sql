@@ -1269,6 +1269,39 @@ begin
   return updated > 0;
 end $$;
 
+-- pick_rem_eligible_conversations: the conversation queue rem pulls
+-- from. Returns up to p_limit conversation ids that still have
+-- unprocessed memory_conversation rows, oldest first by each
+-- conversation's earliest unprocessed last_seen_at - so a conversation
+-- that recalled twice recently doesn't queue-jump one that recalled
+-- once a long time ago.
+--
+-- The eligibility predicate (last_processed_at is null or
+-- last_processed_at < last_seen_at) compares two columns, which
+-- PostgREST's filter syntax cannot express: a .or('...lt.last_seen_at')
+-- filter sends "last_seen_at" as a literal value and Postgres rejects
+-- it with `invalid input syntax for type timestamp with time zone:
+-- "last_seen_at"`. The comparison only reads as a column-vs-column in
+-- SQL, so the query lives here. Predicate matches the partial index
+-- memory_conversation_eligible_idx.
+--
+-- security invoker + the explicit user_id = auth.uid() filter scope the
+-- read to the caller and let the (user_id, conversation_id,
+-- last_seen_at) index serve the query.
+drop function if exists public.pick_rem_eligible_conversations(int);
+create or replace function public.pick_rem_eligible_conversations(
+  p_limit int
+) returns table (conversation_id uuid)
+language sql security invoker as $$
+  select mc.conversation_id
+    from public.memory_conversation mc
+   where mc.user_id = auth.uid()
+     and (mc.last_processed_at is null or mc.last_processed_at < mc.last_seen_at)
+   group by mc.conversation_id
+   order by min(mc.last_seen_at) asc
+   limit p_limit;
+$$;
+
 -- consolidate_memories: the deep-sleep / rem agents' single content-
 -- write primitive. The agent decides "memories A and B are the same
 -- fact" and calls this with (survivor_id, loser_id, new_label,

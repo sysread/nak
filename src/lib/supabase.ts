@@ -3779,30 +3779,29 @@ export class SupabaseService {
   }
 
   /**
-   * Pick the oldest conversation that has unprocessed
+   * Pick the oldest conversations that have unprocessed
    * memory_conversation rows for the rem agent. Returns at most
    * `limit` conversation ids ordered by their oldest unprocessed
    * row's last_seen_at - so a single conversation that recalled
    * twice in a row doesn't queue-jump one that recalled once a long
    * time ago.
+   *
+   * The eligibility predicate is `last_processed_at < last_seen_at`, a
+   * column-vs-column comparison PostgREST's filter syntax can't
+   * express - it would send "last_seen_at" as a literal and Postgres
+   * rejects it as a bad timestamp. The dedup + FIFO ordering live in
+   * the pick_rem_eligible_conversations RPC so the comparison can read
+   * as SQL.
    */
   async pickRemEligibleConversations(limit: number): Promise<string[]> {
-    const { data, error } = await this.client
-      .from('memory_conversation')
-      .select('conversation_id, last_seen_at, last_processed_at')
-      .or('last_processed_at.is.null,last_processed_at.lt.last_seen_at')
-      .order('last_seen_at', { ascending: true })
-      .limit(limit * 10); // overfetch; dedup conversation_ids client-side
+    const { data, error } = await this.client.rpc(
+      'pick_rem_eligible_conversations',
+      { p_limit: limit }
+    );
     if (error) throw new SupabaseError(error.message);
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const row of (data ?? []) as Array<{ conversation_id: string }>) {
-      if (seen.has(row.conversation_id)) continue;
-      seen.add(row.conversation_id);
-      out.push(row.conversation_id);
-      if (out.length >= limit) break;
-    }
-    return out;
+    return ((data ?? []) as Array<{ conversation_id: string }>).map(
+      (r) => r.conversation_id
+    );
   }
 
   /**
