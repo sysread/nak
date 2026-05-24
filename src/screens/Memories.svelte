@@ -886,6 +886,16 @@
   const librarianConfirmInfo = $derived(
     librarianConfirm ? librarianPassInfo(librarianConfirm) : null,
   );
+  // True whenever a button-triggered librarian strip (the confirm
+  // prompt OR the progress/result strip) occupies the top of the panel.
+  // While it's up, the panel's informational content below it - the
+  // changelog default-surface and every empty-state hint - is
+  // suppressed so the strip the user just summoned isn't competing with
+  // noise. An actually-selected memory card is the one exception (it's
+  // content, not a hint); see the leading branch of the body cascade.
+  const librarianStripVisible = $derived(
+    librarianConfirm !== null || librarianRun.active,
+  );
 
   // The top-bar buttons set the trigger flags; we translate that into
   // "open the confirm strip for this pass" rather than running. The
@@ -1021,7 +1031,15 @@
       <p class="error">{memoriesStore.error}</p>
     {/if}
 
-    {#if memoriesStore.loading && memoriesStore.results.length === 0}
+    {#if librarianStripVisible && !selectedMemory}
+      <!-- A librarian confirm/progress strip is up and there's no
+           selected memory card to show. Render nothing in the content
+           area: the changelog and every empty-state hint below would
+           just compete with the button-triggered form for attention.
+           The strip above is the whole content until it's dismissed.
+           (A selected memory card falls through to the {:else} below -
+           it's real content, not a hint, so the strip coexists w/ it.) -->
+    {:else if memoriesStore.loading && memoriesStore.results.length === 0}
       <p class="subtle">Loading memories…</p>
     {:else if memoriesStore.results.length === 0}
       {#if memoriesStore.query.trim().length > 0}
@@ -1038,9 +1056,9 @@
       <!-- Drawer tab is open but the user hasn't picked a row yet. The
            changelog is the default surface here (parallel to the Wiki
            tab) - a "what did I learn / forget / revise" log, with each
-           row clickable to open the underlying memory. The librarian
-           strip, when a run is active, renders above this in the body,
-           so a consolidation lands in the list live. -->
+           row clickable to open the underlying memory. Suppression
+           while a librarian strip is up is handled by the leading
+           branch of this cascade, not here. -->
       <MemoryChangelogPanel />
     {:else if !selectedMemory}
       <!-- route.memory points at a memory that isn't in the current
