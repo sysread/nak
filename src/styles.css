@@ -1795,6 +1795,20 @@ h1 {
      handling inside .md (the `overflow-x: auto` on pre, tables, KaTeX)
      can take over and scroll their own content sideways. */
   min-width: 0;
+  /* Thicken message copy a notch past the body baseline. Lekton ships
+     only 400 and 700 faces (see @font-face at top of file), so an
+     intermediate font-weight would route through the browser's
+     synthesized faux-bold - the exact path the pixel-bitmap
+     predecessor was retired to avoid. The body-level thickener uses a
+     sub-pixel text-shadow instead; we step it up here so chat cards
+     read slightly heavier than surrounding chrome. Light mode keeps
+     the extra boost it gets on body (see the override below) because
+     the near-white bg renders the same regular face visibly thinner. */
+  text-shadow: 0 0 0.02em currentColor;
+}
+
+:root[data-theme='light'] .msg {
+  text-shadow: 0 0 0.03em currentColor;
 }
 
 /* ---------- Markdown content inside a message ----------
