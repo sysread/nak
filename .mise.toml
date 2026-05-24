@@ -1,6 +1,7 @@
 [tools]
 node = "20.11.1"
 pnpm = "10.33.4"
+deno = "2.8.0"
 # gh and supabase are installed via mise's `aqua` backend, which pulls from
 # the curated aqua registry so binary names resolve correctly across
 # platforms. If aqua fails for you, comment these out and install manually
