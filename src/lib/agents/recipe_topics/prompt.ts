@@ -28,9 +28,12 @@
  *     describe the dish by ("the chicken thing", "the eggplant
  *     thing").
  *
- *   - CUISINE. The dish's cultural family when obvious. "italian",
- *     "thai", "mexican", "indian". Skip when the recipe is
- *     deliberately cross-cultural or generic.
+ *   - CUISINE. The dish's cultural family - tag this generously.
+ *     Most dishes lean on at least one ("italian", "thai", "mexican",
+ *     "indian"), and a fusion or cross-cultural dish gets a tag for
+ *     EACH cuisine it draws on (Korean-Mexican bulgogi tacos are both
+ *     "korean" and "mexican"). Skip only when the dish has no
+ *     cultural lean at all.
  *
  *   - COURSE. "breakfast", "dinner", "dessert", "side", "snack",
  *     "appetizer". The slot the dish fits into in a meal.
@@ -61,9 +64,13 @@ Pick tags across these four dimensions (skip any that don't apply):
    tag. Pick the ingredients a hungry user would describe the dish
    by ("the chicken thing", "the eggplant thing").
 
-2. CUISINE. The dish's cultural family when obvious. "italian",
-   "thai", "indian", "mexican". Skip when the recipe is cross-
-   cultural or generically western.
+2. CUISINE. The dish's cultural family - tag this generously. Most
+   recipes lean on at least one ("italian", "thai", "indian",
+   "mexican"), so reach for a cuisine tag whenever a dish has any
+   cultural identity. A fusion or cross-cultural dish should get a
+   tag for EACH cuisine it draws on - a Korean-Mexican taco is both
+   "korean" and "mexican", not neither. Skip cuisine only when the
+   dish is genuinely generic with no cultural lean.
 
 3. COURSE. "breakfast", "dinner", "dessert", "side", "snack",
    "appetizer". The slot the dish fills in a meal.
@@ -81,6 +88,8 @@ Examples to calibrate:
   -> ["romaine", "salad", "side", "no-cook"]
 - TITLE "Pad Thai", rice noodle/shrimp/peanut/tamarind in cooklang
   -> ["shrimp", "noodles", "thai", "dinner", "stir-fry"]
+- TITLE "Korean BBQ Tacos", bulgogi/tortilla/kimchi in cooklang
+  -> ["beef", "korean", "mexican", "dinner"]
 - TITLE "Overnight Oats", oats/milk/honey in cooklang
   -> ["oats", "breakfast", "no-cook"]
 - TITLE "Roasted Brussels Sprouts", sprouts/olive oil/lemon

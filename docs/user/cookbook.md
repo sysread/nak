@@ -262,10 +262,12 @@ yet.
   those are too ubiquitous to differentiate one recipe from
   another. Tags are the headline protein or vegetable, plus
   cuisine, course, and technique when each applies.
-- **Tags are managed for you.** No manual tagging UI; edit a
-  recipe's title or cooklang and the worker re-tags it on its next
-  pass. Bookmarking a recipe as upcoming or favorite, or changing
-  its rating, does not re-tag it.
+- **Cuisine is tagged generously.** Any dish with a cultural lean
+  gets a cuisine tag, and a fusion dish gets one for each cuisine it
+  draws on - Korean-Mexican tacos land under both "korean" and
+  "mexican".
+- **Tags are managed for you.** No manual tagging UI; any edit to a
+  recipe re-queues it, and the worker re-tags it on its next pass.
 
 The pill row below the dropdown carries the active selection; each
 pill's × clears just that one tag, and a "clear" link appears when
