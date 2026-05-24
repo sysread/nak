@@ -1643,7 +1643,12 @@
      honest preview of the saved view. Every color below resolves
      through theme variables (`--accent`, `--accent-weak`, `--bg-2`,
      `--border`, `--muted`, `--text`), so the six accent palettes ×
-     light/dark combinations all flow through without extra work. */
+     light/dark combinations all flow through without extra work.
+
+     The reader-content text-shadow thickener for `.cookbook-render` is
+     applied globally in src/styles.css (see "Main-section reader-content
+     thickener"), not here, so all main-section content shares one weight
+     step. */
 
   /* Metadata strip — a row of chip-cards. Each `.cook-meta-item`
      stacks a tiny uppercase label (dt) over a bolder value (dd).

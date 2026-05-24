@@ -1606,6 +1606,9 @@
     line-height: 1.6;
     color: var(--text);
     word-wrap: break-word;
+    /* The reader-content text-shadow thickener is applied globally in
+       src/styles.css (see "Main-section reader-content thickener"), not
+       here, so all main-section content shares one weight step. */
   }
   /* The wrapper owns the bottom margin between the body and the
      relations / actions row, so collapse the margins on the
