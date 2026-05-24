@@ -3364,7 +3364,23 @@
         // actually looking at this thread; for a background exchange
         // we skip the animation and let the next selectThread reload
         // see the deleted rows missing from listMessages.
-        const deletePromise = app.supabase.deleteMessages(idsToDelete);
+        //
+        // Exclude synthetic recovery rows from the DB delete. When the
+        // regenerated turn's tail was an interrupted exchange,
+        // listMessages synthesized in-memory recovery rows whose ids
+        // are sentinels ("synthetic-recovery-asst-0"), not uuids - they
+        // were never written to the DB (regenerate replaces the turn,
+        // so unlike the send path it never persists them first).
+        // Passing a sentinel id to `.in('id', ...)` makes Postgres
+        // reject the whole delete with `invalid input syntax for type
+        // uuid`. They still need to leave the in-memory view below, so
+        // only the DB id list is narrowed; `idsToDelete` stays whole
+        // for the fade-out and the `messages` filter.
+        const syntheticIds = new Set(
+          messages.filter((m) => m.synthetic).map((m) => m.id)
+        );
+        const dbIdsToDelete = idsToDelete.filter((id) => !syntheticIds.has(id));
+        const deletePromise = app.supabase.deleteMessages(dbIdsToDelete);
         if (ctx.threadId === activeThreadId) {
           const indexOfId = new Map(
             idsToDelete.map((id) => [id, messages.findIndex((m) => m.id === id)] as const)
