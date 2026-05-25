@@ -116,6 +116,14 @@ the next reply. The main model can also call `memory_recall` and
 specific up; those are the explicit-lookup escape hatches alongside
 the automatic topic-boundary path.
 
+What you see: while a recall fire runs, the in-progress assistant
+bubble shows a brief **Remembering past interactions...** status line
+with a spinner, so the pre-reply pause has a visible cause. It clears
+once the recollection is stitched and the reply begins. The sibling
+[intuition](./intuition.md) and samskara layers surface their own
+status lines (**Predicting outcomes...** and **Reacting to the
+situation...**) the same way when they fire on a turn.
+
 No toggle for either. If you want recall to skip a specific turn,
 tell the model directly ("don't look up prior context for this
 one") and it will.
