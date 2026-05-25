@@ -3988,22 +3988,61 @@ button.top-bar-overflow-btn {
   opacity: 0.85;
 }
 
-/* Subconscious-priming throbbers: one row per pre-response pipeline
-   (samskara fire, intuition, context recall) the chat-loop is running
-   before the answer streams. Same subordinate treatment as the
-   rate-limit row - muted, centered, sitting under the primary
-   "Thinking" Scanner - so the rows read as a quiet "here's which
-   internal layer is busy" annotation rather than competing with the
-   main spinner. The inline Scanner is scaled down (size=0.7 on the
-   component) so the KITT bars sit at caption scale next to the text. */
-.msg.assistant > .subconscious-status {
+/* Subconscious-priming checklist: one row per pre-response pipeline
+   (samskara fire, intuition, context recall) that fired this turn,
+   shown under the primary "Thinking" Scanner before the answer streams.
+   Each row is a spinner (running) or checkmark (done) plus a label, and
+   the whole group ease-fades out via Svelte's `transition:fade` once the
+   reply starts. Same subordinate, muted, centered treatment as the
+   rate-limit row so it reads as a quiet "which internal layer is busy"
+   annotation rather than competing with the main spinner. */
+.msg.assistant > .subconscious-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.15rem 0 0;
+}
+.subconscious-checklist > .subconscious-status {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
-  padding: 0.15rem 0 0;
   font-size: 0.85rem;
   color: var(--muted);
+}
+/* Classic ring spinner: a faint full ring with one brighter quadrant
+   that rotates. Sized to sit on the cap height of the 0.85rem label
+   beside it. */
+.subconscious-status > .spinner {
+  width: 0.8rem;
+  height: 0.8rem;
+  flex: 0 0 auto;
+  border: 2px solid var(--border);
+  border-top-color: var(--muted);
+  border-radius: 50%;
+  animation: subconscious-spin 0.7s linear infinite;
+}
+@keyframes subconscious-spin {
+  to { transform: rotate(360deg); }
+}
+/* Checkmark pops in when a row flips done - the Svelte {#if} swaps the
+   spinner element for this one, so the pop plays on mount. Green ok
+   token, matching the tool-call success glyph. */
+.subconscious-status > .check {
+  flex: 0 0 auto;
+  color: var(--ok);
+  animation: subconscious-check-pop 0.24s ease-out;
+}
+.subconscious-status.done {
+  color: var(--text);
+}
+@keyframes subconscious-check-pop {
+  from { transform: scale(0.4); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .subconscious-status > .spinner { animation: none; }
+  .subconscious-status > .check { animation: none; }
 }
 
 /* ---------- Help modal ----------
