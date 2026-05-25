@@ -4216,8 +4216,26 @@
     const el = messagesEl;
     if (!el) return;
     if (el.scrollTop < lastScrollTop) {
-      if (!isNearBottom(el)) followBottom = false;
-      lastScrollTop = el.scrollTop;
+      // Only act - disengage AND advance the watermark - when the
+      // backward move is the user actually scrolling up and away from
+      // the bottom. When the backward move lands near the bottom it's
+      // a browser clamp, not user intent: the streaming bubble
+      // collapses at completion (reasoning panel closes, streaming text
+      // is replaced by the persisted row), scrollHeight drops, and the
+      // browser pins scrollTop down to the new max. That benign drop
+      // must NOT lower lastScrollTop, because onMessagesScroll's
+      // clamp-rejection guard depends on lastScrollTop still holding the
+      // pre-clamp value when the clamp's own deferred 'scroll' event
+      // fires - it rejects the re-engage precisely because
+      // newScrollTop < lastScrollTop. Lowering the watermark here would
+      // make that 'scroll' event read as "at bottom and not backwards"
+      // and silently flip followBottom back to true, yanking the view to
+      // the bottom of the just-finished response even though the user
+      // had scrolled up to read.
+      if (!isNearBottom(el)) {
+        followBottom = false;
+        lastScrollTop = el.scrollTop;
+      }
     }
   }
 
