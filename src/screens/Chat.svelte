@@ -4974,7 +4974,19 @@
     if (respondingElsewhere) return null;
     if (messages.length === 0) return null;
     const last = messages[messages.length - 1];
-    if (last.role === 'tool') return last;
+    if (last.role === 'tool') {
+      // A pending ask_user sentinel is the chat loop intentionally
+      // suspended waiting for the user to answer - not a cut-off
+      // response. The AskUserCard already owns this interaction, so
+      // offering a "response was cut off, retry?" prompt below it is
+      // wrong (retrying would relaunch the turn out from under the
+      // open question). The answered/abandoned sentinel is a different
+      // story: that tail genuinely lacks a follow-up assistant turn and
+      // stays retry-able, so only the pending shape is suppressed here.
+      const parsed = parseAskUserContent(last.content);
+      if (parsed && ASK_USER_PENDING_FLAG in parsed) return null;
+      return last;
+    }
     if (last.role === 'assistant' && last.tool_calls && last.tool_calls.length > 0) {
       return last;
     }
