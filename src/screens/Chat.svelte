@@ -5898,30 +5898,20 @@
                case. Static label in the title slot keeps the chrome
                consistent with the other tabs.
 
-               librarian: opens the Wiki panel's confirmation strip
-               (with an optional custom-instructions textarea). Disabled
-               while either the scheduled worker is mid-run or a previous
-               manual run is still in flight - we never want two
-               librarian agents writing to the wiki concurrently.
                changelog: the wiki tab's default surface, so this is a
                one-click "back to wiki home" from an article or the
                librarian page. skipped: a sibling FYI page for threads
-               the agent passed over. All three route through $bindable
+               the agent passed over. librarian: opens the Wiki panel's
+               confirmation strip (with an optional custom-instructions
+               textarea). Disabled while either the scheduled worker is
+               mid-run or a previous manual run is still in flight - we
+               never want two librarian agents writing to the wiki
+               concurrently. All three route through $bindable
                triggers (rather than direct navigate()) because the
                librarian's open/closed state lives in Wiki.svelte and
                must be touched alongside the route. The strips, runs, and
                summaries all live in Wiki.svelte; these are launchers. -->
           {@const actions = [
-            {
-              id: 'librarian',
-              label: 'Run librarian',
-              title: wikiLibrarianRunner.busy
-                ? 'The librarian is already running'
-                : 'Run the wiki librarian now',
-              disabled: wikiLibrarianRunner.busy,
-              onclick: () => (wikiLibrarianTrigger = true),
-              icon: librarianIcon,
-            },
             {
               id: 'changelog',
               label: 'Changelog',
@@ -5935,6 +5925,16 @@
               title: 'Wiki skipped threads',
               onclick: () => (wikiSkippedTrigger = true),
               icon: skippedIcon,
+            },
+            {
+              id: 'librarian',
+              label: 'Run librarian',
+              title: wikiLibrarianRunner.busy
+                ? 'The librarian is already running'
+                : 'Run the wiki librarian now',
+              disabled: wikiLibrarianRunner.busy,
+              onclick: () => (wikiLibrarianTrigger = true),
+              icon: librarianIcon,
             },
           ]}
           <TopBarActions {actions} menuLabel="Wiki actions" />
