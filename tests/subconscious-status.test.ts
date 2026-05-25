@@ -24,9 +24,9 @@ function statusMap(
 
 describe('subconsciousLabel', () => {
   it('maps each op to its felt-activity status line', () => {
-    expect(subconsciousLabel('samskara')).toBe('Reacting to the situation');
-    expect(subconsciousLabel('intuition')).toBe('Predicting outcomes');
-    expect(subconsciousLabel('recall')).toBe('Remembering past interactions');
+    expect(subconsciousLabel('samskara')).toBe('Reacting');
+    expect(subconsciousLabel('intuition')).toBe('Predicting');
+    expect(subconsciousLabel('recall')).toBe('Recalling');
   });
 });
 
