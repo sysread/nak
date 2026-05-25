@@ -117,12 +117,11 @@ specific up; those are the explicit-lookup escape hatches alongside
 the automatic topic-boundary path.
 
 What you see: while a recall fire runs, the in-progress assistant
-bubble shows a brief checklist row - a spinner next to **Remembering
-past interactions** that ticks over to a checkmark once the
-recollection is stitched. The sibling [intuition](./intuition.md) and
-samskara layers get their own rows (**Predicting outcomes** and
-**Reacting to the situation**) when they fire, and the whole checklist
-ease-fades out as the reply starts streaming.
+bubble shows a brief checklist row - a spinner next to **Recalling**
+that ticks over to a checkmark once the recollection is stitched. The
+sibling [intuition](./intuition.md) and samskara layers get their own
+rows (**Predicting** and **Reacting**) when they fire, and the whole
+checklist ease-fades out as the reply starts streaming.
 
 No toggle for either. If you want recall to skip a specific turn,
 tell the model directly ("don't look up prior context for this

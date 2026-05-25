@@ -30,23 +30,21 @@ export interface SubconsciousRow {
 }
 
 /**
- * Human-readable status line for each pipeline. Phrased as a bare
- * present-progressive activity ("Predicting outcomes") so the row reads
- * as the model's own pre-response thinking rather than a system log
- * line. No trailing ellipsis: the spinner carries the "in progress"
- * signal and the checkmark carries "done", so the label stays constant
- * as the icon swaps - the classic checklist read. The wording describes
- * the felt activity, not the implementation ("Remembering past
- * interactions", not "Running memory + conversation recall").
+ * Human-readable status line for each pipeline. A single bare gerund -
+ * the spinner carries "in progress" and the checkmark carries "done",
+ * so the label stays a constant one-word activity as the icon swaps
+ * (the classic checklist read). The wording describes the felt
+ * activity, not the implementation ("Recalling", not "Running memory +
+ * conversation recall").
  */
 export function subconsciousLabel(op: SubconsciousOp): string {
   switch (op) {
     case 'samskara':
-      return 'Reacting to the situation';
+      return 'Reacting';
     case 'intuition':
-      return 'Predicting outcomes';
+      return 'Predicting';
     case 'recall':
-      return 'Remembering past interactions';
+      return 'Recalling';
   }
 }
 
