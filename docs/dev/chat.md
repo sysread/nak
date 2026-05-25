@@ -250,11 +250,11 @@ A chat turn goes:
 - **Wiki / journal recall** — `wiki_recall` and `journal_recall`
   are their per-layer counterparts; same executor path, dedicated
   sub-agents. See `./context-recall.md`.
-- **Umbrella `context` tool** — fans out all four recall agents in
-  parallel (`runRecallFanOut`) and returns a single stitched note;
-  the system prompt nudges the model to consider this first when
-  it wants broad context on the user. Same executor path. See
-  `./context-recall.md`.
+- **Umbrella `context` tool** — runs the deterministic three-layer
+  gather (`gatherContextIndex`) and returns a structured index
+  (memory facts verbatim; conversations + wiki by id); the system
+  prompt nudges the model to consider this first when it wants broad
+  context on the user. Same executor path. See `./context-recall.md`.
 - **Summaries / reflection / journal** — no direct call;
   their triggers watch for a terminal assistant message
   newer than `last_summarised_msg_id` /

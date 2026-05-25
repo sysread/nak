@@ -118,32 +118,38 @@ Honest disagreement is more useful to the user than agreement they did not earn.
 // memory-loop intro that used to ride in IDENTITY_BLOCK so the model knows
 // it has persistent state about this user before any of the recall framing
 // makes sense. Then explains the chat-loop's context-recall pipeline (see
-// src/lib/context-recall/) which auto-injects a stitched first-person
-// <think> note on cold-start, title shift, mood-band shift, and the
-// staleness fuse - the model does NOT need a per-turn reflex to fire those.
-// Critically the block also tells the model that the auto-injected note
-// is a topic-relevance projection, NOT the full memory store: when the
-// user explicitly asks what is remembered (or what was talked about
-// before), it must reach for memory_search / conversation_search rather
-// than answering from the projection. An earlier version omitted this
-// distinction and the model treated the auto-injection as exhaustive,
-// answering "I don't remember anything specific" to questions like "what
-// do you remember about me" while the memory store was full.
+// src/lib/context-recall/) which auto-injects a <think> block on cold-start,
+// title shift, mood-band shift, and the staleness fuse - the model does NOT
+// need a per-turn reflex to fire those. The block is an INDEX, not a
+// synthesis: matching memory facts inline (verbatim) plus a by-id list of
+// related conversations and wiki articles, which the model drills into with
+// conversation_get / wiki_get on demand. Spelling out "leads, not content"
+// is load-bearing: otherwise the model treats a conversation/wiki title as
+// if it had read the thread and confabulates the contents.
+// Critically the block also tells the model that the auto-injection is a
+// topic-relevance projection, NOT the full memory store: when the user
+// explicitly asks what is remembered (or what was talked about before), it
+// must reach for memory_search / conversation_search rather than answering
+// from the projection. An earlier version omitted this distinction and the
+// model treated the auto-injection as exhaustive, answering "I don't
+// remember anything specific" to questions like "what do you remember about
+// me" while the memory store was full.
 //
-// The final paragraph introduces the umbrella `context` tool as the
-// preferred first move when the model wants broad context about the
-// user across all three persistent layers (memories, prior conversations,
-// the wiki). Moderate framing - "consider this first" not
-// "always call this first" - so cheap chitchat turns still get to
-// answer directly, but the model has a single round-trip available
-// instead of fanning out three per-layer calls in series whenever it
-// does need broad context.
+// The umbrella `context` tool is framed as the preferred first move when the
+// model wants broad context about the user across all three persistent
+// layers (memories, prior conversations, the wiki). Moderate framing -
+// "consider this first" not "always call this first" - so cheap chitchat
+// turns still answer directly, but the model has a single round-trip
+// available instead of three separate searches whenever it does need broad
+// context. The per-layer *_recall tools stay as the LLM-distilled
+// drill-down tier above the deterministic index.
 const RECALL_BLOCK = `\
 You have persistent long-term memory about this user, organised in three parallel layers: atomic facts and preferences (memories), the prior conversations those were worked out in, and an encyclopedic wiki of articles ABOUT topics in the user's life (projects, people, places).
-Topic-boundary recall is handled for you automatically: at the start of a thread, after a topic shift, or after a long stretch without a refresh, the system pre-injects relevant context from all three layers as a stitched <think> block above.
-That auto-injection is a topic-relevance projection, not a full inventory of what is stored: it surfaces what looks relevant to the live conversation, not everything the persistent stores contain.
-When you want broad context about the user, their past, their projects, or what you have worked through together, consider calling \`context\` first - it fans out all three recall agents in parallel and returns one stitched paragraph. One round-trip beats three sequential ones.
-For targeted drill-downs on a single layer use memory_recall, conversation_recall, or wiki_recall - especially when the auto-injected context is stale at a topic shift or you only need one layer refreshed. For raw lookups by phrase (including "what do you remember about me?", "what does my wiki say about Y?") use memory_search, conversation_search, or wiki_search to read the actual store rather than answering from the projection.
+Topic-boundary recall is handled for you automatically: at the start of a thread, after a topic shift, or after a long stretch without a refresh (the staleness fuse), the system pre-injects relevant context as a <think> block above. That block is an index, not a synthesis: matching memory facts inline (verbatim), plus a short list of related prior conversations and wiki articles by title and id.
+That auto-injection is a topic-relevance projection, not a full inventory of what is stored: it surfaces what looked relevant to the live conversation, not everything the persistent stores contain.
+The conversation and wiki entries in that block are leads, not the content: when one looks relevant, call conversation_get or wiki_get with its id to read the actual transcript or article body before relying on it.
+When you want broad context about the user, their past, their projects, or what you have worked through together, consider calling \`context\` first - it searches all three layers in parallel and returns the same kind of index in one round-trip instead of three separate searches.
+For an LLM-distilled read of a single layer use memory_recall, conversation_recall, or wiki_recall - when you want the store summarised rather than indexed. For raw lookups by phrase (including "what do you remember about me?", "what does my wiki say about Y?") use memory_search, conversation_search, or wiki_search to read the actual store rather than answering from the projection.
 Cheap conversational turns (small talk, "what time is it?", a quick code question) do not need persistent context - skip the recall step entirely on those.
 `;
 

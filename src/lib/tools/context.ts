@@ -1,55 +1,43 @@
 /**
  * Umbrella `context` tool - the single point of entry for broad
- * lookups of persistent RAG about the user. Fans out the three
- * recall agents in parallel (memory, conversation, wiki) and
- * stitches their first-person notes into one paragraph the main
- * model reads as its own recollection.
+ * lookups of persistent RAG about the user. Runs the same deterministic
+ * gather the auto-injection pipeline uses (memories verbatim, plus a
+ * by-id index of related conversations and wiki articles) and returns
+ * it structured for the main model to read and drill into.
  *
- * Why a tool rather than always-on injection: the chat-loop's
- * context-recall pipeline ALREADY auto-injects a stitched note on
- * topic boundaries (cold-start, title shift, mood shift, stale
- * fuse). That auto-injection is a topic-relevance projection - what
- * the three recall agents thought was worth surfacing for the live
- * conversation. The `context` tool is the explicit, model-driven
- * counterpart: when the main model wants to look up broad context
- * about the user (not just what's relevant to the current topic
- * boundary), it calls this tool with an optional topic hint and
- * gets the same kind of stitched paragraph synchronously.
+ * Why a tool rather than only auto-injection: the chat-loop's context-
+ * recall pipeline ALREADY auto-injects this index on topic boundaries
+ * (cold-start, title shift, mood shift, stale fuse). That auto-
+ * injection is keyed off the live conversation. The `context` tool is
+ * the explicit, model-driven counterpart: when the main model wants a
+ * broad lookup right now - optionally biased toward a specific topic it
+ * passes - it calls this tool and gets the same kind of index
+ * synchronously, regardless of whether a topic boundary fired.
  *
- * Why an umbrella rather than three separate tool calls: round-trips
- * compound. The three per-layer recall tools (memory_recall,
- * conversation_recall, wiki_recall) each fire one sub-agent and
- * wait. Calling all three in series is three sequential waits;
- * calling them in parallel is what this tool does internally
- * (`Promise.all` across the agents). The umbrella collapses three
- * round-trips at the main-model level into one tool result.
+ * Why an umbrella rather than three separate searches: round-trips
+ * compound. memory_search, conversation_search, and wiki_search each
+ * cost the model a tool call; the umbrella runs all three in parallel
+ * internally and returns one result, collapsing three round-trips at
+ * the main-model level into one.
  *
- * The per-layer recall tools stay available as targeted drill-downs.
- * If the model has already used the umbrella and decided one layer
- * needs more specific exploration ("the wiki note hinted at an
- * article on X but didn't include the detail I need"), it can
- * follow up with the per-layer tool with a sharper topic hint.
+ * Drill-down: the result inlines memory facts verbatim (no follow-up
+ * needed) but references conversations and wiki articles by id only.
+ * The model reads a specific one with `conversation_get` / `wiki_get`
+ * when it wants the transcript / article body. The per-layer recall
+ * tools (memory_recall, conversation_recall, wiki_recall) stay
+ * available as the LLM-synthesized, targeted drill-down tier.
  *
- * Toolbox scoping: lives in the main chat's TOOLS list. NOT
- * available in any of the agent-only toolboxes - background agents
- * have no business calling a three-way umbrella recall, and the
- * recall agents themselves must never recurse.
- *
- * Return shape mirrors the per-layer recall tools so the main model
- * can use the same handling pattern across them: either
- * `{kind:"none", reason?:"..."}` or `{kind:"note", note:"..."}`.
- * When every layer returns the empty signal, this tool returns the
- * empty signal with a synthesised reason naming all three layers'
- * silence; otherwise the stitched paragraph is the note.
+ * Toolbox scoping: lives in the main chat's TOOLS list. NOT available
+ * in any agent-only toolbox - background agents have no business
+ * calling a three-way umbrella recall.
  *
  * Schema lives in `./context.schema.ts`.
  */
 import type { ToolDef } from './types';
 import {
-  runRecallFanOut,
-  stitchRecallNotes,
-} from '../context-recall/pipeline';
-import type { RecallNote } from '../agents/recall/agent';
+  gatherContextIndex,
+  type ContextIndex,
+} from '../context-recall/gather';
 import { createLogger } from '../logger.svelte';
 import { contextSchema } from './context.schema';
 
@@ -57,60 +45,33 @@ const log = createLogger('context-tool');
 
 export const contextTool: ToolDef = {
   ...contextSchema,
-  async execute(args, ctx): Promise<RecallNote> {
+  async execute(args, ctx): Promise<ContextIndex> {
     const topic =
       typeof args.topic === 'string' && args.topic.trim().length > 0
         ? args.topic.trim()
         : null;
 
-    // Breadcrumb matches the other recall agents - having consistent
-    // log prefixes lets the log drawer be eyeballed for "something
-    // is happening on a recall right now" without remembering
-    // distinct tags per surface.
+    // Breadcrumb matches the other recall surfaces - consistent log
+    // prefixes let the log drawer be eyeballed for "a recall is
+    // happening right now" without remembering distinct tags.
     log.info(`picked up thread ${ctx.threadId}`);
     const startedAt = Date.now();
 
-    const fanOut = await runRecallFanOut({
+    const index = await gatherContextIndex({
       venice: ctx.venice,
       supabase: ctx.supabase,
       threadId: ctx.threadId,
-      userId: ctx.userId,
       signal: ctx.signal,
-      depth: ctx.depth,
-      topic,
+      query: topic,
     });
-
-    const noteText = stitchRecallNotes(fanOut);
 
     log.info(
       `finished thread ${ctx.threadId} ` +
-        `(memory=${fanOut.memory.kind}, conversation=${fanOut.conversation.kind}, ` +
-        `wiki=${fanOut.wiki.kind}, ` +
-        `noteLength=${noteText.length}, elapsedMs=${Date.now() - startedAt})`
+        `(memories=${index.memories.length}, ` +
+        `conversations=${index.conversations.length}, ` +
+        `wiki=${index.wiki.length}, elapsedMs=${Date.now() - startedAt})`
     );
 
-    if (noteText.length === 0) {
-      // Every layer returned the empty signal. Surface ALL three
-      // reasons in one concatenated diagnostic so the main model
-      // can tell whether "nothing relevant" was uniform across
-      // surfaces or whether one layer is broken / always silent.
-      const reasons: string[] = [];
-      for (const [layer, note] of [
-        ['memory', fanOut.memory],
-        ['conversation', fanOut.conversation],
-        ['wiki', fanOut.wiki],
-      ] as const) {
-        if (note.kind === 'none' && note.reason) {
-          reasons.push(`${layer}: ${note.reason}`);
-        }
-      }
-      const reason =
-        reasons.length > 0
-          ? reasons.join('; ')
-          : 'every layer returned the empty signal';
-      return { kind: 'none', reason };
-    }
-
-    return { kind: 'note', note: noteText };
+    return index;
   },
 };

@@ -153,6 +153,7 @@ describe('tool registry', () => {
         'analyze_image',
         'ask_user',
         'context',
+        'conversation_get',
         'conversation_recall',
         'conversation_search',
         'memory_recall',

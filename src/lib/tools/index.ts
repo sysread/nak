@@ -90,6 +90,7 @@ import { memoryDoubtSchema } from './memory_doubt.schema';
 import { memoryRelateSchema } from './memory_relate.schema';
 import { memoryUnrelateSchema } from './memory_unrelate.schema';
 import { conversationSearchSchema } from './conversation_search.schema';
+import { conversationGetSchema } from './conversation_get.schema';
 import { recipeListSchema } from './recipe_list.schema';
 import { recipeGetSchema } from './recipe_get.schema';
 import { recipeSaveSchema } from './recipe_save.schema';
@@ -168,6 +169,11 @@ const conversationSearch = lazyTool(
   conversationSearchSchema,
   () => import('./conversation_search'),
   'conversationSearch'
+);
+const conversationGet = lazyTool(
+  conversationGetSchema,
+  () => import('./conversation_get'),
+  'conversationGet'
 );
 const recipeList = lazyTool(
   recipeListSchema,
@@ -256,21 +262,27 @@ const wikiLibrarian = lazyTool(
  *
  * Members in catalog order:
  *   - `toggle_toolbox` - the gating mechanism for the write boxes.
- *   - `context` - the umbrella recall tool that fans out across all
- *     three persistent layers (memories, prior conversations, wiki)
- *     in parallel and returns one stitched first-person note.
- *     PREFERRED first step when the model wants broad context on the
- *     user; the per-layer recall tools below stay as targeted
- *     drill-downs.
+ *   - `context` - the umbrella recall tool that searches all three
+ *     persistent layers (memories, prior conversations, wiki) in
+ *     parallel and returns a works-cited index: memory facts verbatim
+ *     plus related conversations and wiki articles by id. PREFERRED
+ *     first step when the model wants broad context on the user; the
+ *     per-layer recall tools below stay as targeted drill-downs.
  *   - `memory_recall`, `conversation_recall`, `wiki_recall` -
- *     per-layer recall passes, each returning a structured note from
- *     one store. Drill-downs after `context`, or first-line picks
- *     when the model already knows which layer it wants.
+ *     per-layer recall passes, each running an LLM sub-agent that
+ *     returns a synthesized note from one store. The targeted,
+ *     more-expensive drill-down tier above the deterministic `context`
+ *     survey; first-line picks when the model already knows which
+ *     layer it wants a considered read of.
  *   - `memory_search` - direct semantic search over the user's
  *     long-term memories. Returns rows with ids so the model can
  *     hand them to the gated write tools.
  *   - `conversation_search` - direct semantic search over prior
  *     conversation titles + summaries.
+ *   - `conversation_get` - primary-key fetch of one prior thread
+ *     (title, summary, windowed transcript) once the model knows the
+ *     id, from a search hit or an auto-injected context block. The
+ *     conversation-layer counterpart to `wiki_get`.
  *   - `wiki_search` - semantic search over the user's flat wiki
  *     (encyclopedic articles about topics in their life). Articles
  *     are never auto-injected; this and the two reads below are the
@@ -305,7 +317,8 @@ export const alwaysOnToolbox: Toolbox = {
     'toggled. The umbrella `context` recall, the three per-layer ' +
     'recall tools, and read-only surfaces (search across ' +
     'memories / conversations / wiki / cookbook / app docs; ' +
-    'plus list/get for wiki and cookbook) plus web search, ' +
+    'plus get for conversations and wiki, and list/get for cookbook) ' +
+    'plus web search, ' +
     'update_title, analyze_image, ask_user, and the toggle_toolbox meta-tool.',
   tools: [
     toggleToolbox,
@@ -315,6 +328,7 @@ export const alwaysOnToolbox: Toolbox = {
     wikiRecall,
     memorySearch,
     conversationSearch,
+    conversationGet,
     wikiSearch,
     wikiList,
     wikiGet,
