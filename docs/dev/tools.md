@@ -128,11 +128,15 @@ The gated `research` toolbox carries:
 - `src/lib/tools/wiki_recall.ts`, `wiki_recall_toolbox.ts` - the
   wiki-recall tool (main-chat) and the read-only toolbox the
   wiki-recall agent uses internally.
-- `src/lib/tools/context.ts` - the umbrella recall tool: fans out
-  all three recall agents in parallel via `runRecallFanOut` (see
-  `src/lib/context-recall/pipeline.ts`) and returns the stitched
-  paragraph. Thin wrapper; the heavy lifting is shared with the
-  reflexive pipeline.
+- `src/lib/tools/context.ts` - the umbrella recall tool: runs the
+  deterministic three-layer gather via `gatherContextIndex` (see
+  `src/lib/context-recall/gather.ts`) and returns the structured
+  index (memory facts verbatim; conversations + wiki by id). Thin
+  wrapper; the gather is shared with the reflexive pipeline.
+- `src/lib/tools/conversation_get.ts` - primary-key fetch of one
+  prior thread (title, summary, windowed transcript) by id; the
+  conversation-layer counterpart to `wiki_get`, and what makes the
+  conversation ids in the index / `context` result actionable.
 - `src/lib/tools/recipe_*.ts` - five cookbook tools (`save`,
   `list`, `get`, `update`, `delete`). Mutating ones fire
   `notifyCookbookChanged` from `cookbook-store.svelte.ts` so the
@@ -319,10 +323,10 @@ The gated `research` toolbox carries:
 - **Wiki recall** - `wiki_recall` follows the same pattern as the
   memory and conversation recall tools: an always-on entry in the
   main chat, backed by a dedicated sub-agent whose toolbox carries
-  only `wiki_search`. The umbrella `context` tool wraps all three
-  recall agents (via `runRecallFanOut`) so a single tool
-  call surfaces broad context across every persistent layer. See
-  `./context-recall.md`.
+  only `wiki_search`. The umbrella `context` tool does NOT use these
+  agents - it runs the deterministic `gatherContextIndex` so a single
+  tool call surfaces broad context across every persistent layer
+  cheaply. See `./context-recall.md`.
 - **Cookbook** - five `recipe_*` tools gated by the `cooking`
   toolbox. The store in `cookbook-store.svelte.ts` owns the
   reactive recipe list; mutating tools fire a `window`

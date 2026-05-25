@@ -2,45 +2,55 @@
 
 A topic-boundary recall pipeline that runs alongside intuition: at
 the start of a thread, after a title shift, after a mood shift, or
-after a long stretch without a refresh, the chat-loop fans out to
-three recall agents in parallel (memory, conversation, wiki),
-stitches their first-person notes into one short paragraph, and
-injects the result as a synthetic `<think>` assistant turn that
-the conscious response sees as its own prior thought.
+after a long stretch without a refresh, the chat-loop searches the
+three persistent layers (memories, prior conversations, wiki),
+assembles a works-cited index, and injects it as a synthetic
+`<think>` assistant turn that the conscious response sees as its own
+prior recollection.
 
-The same fan-out plus stitch is also exposed to the main model as
-the umbrella `context` tool - the preferred first step when the
-model wants broad persistent context about the user across every
-layer. One round-trip in place of three sequential per-layer recall
-calls. The per-layer recall tools (`memory_recall`,
-`conversation_recall`, `wiki_recall`) and the underlying search
-tools stay available as targeted drill-downs.
+The index is deterministic - raw search, no LLM. Matching memory
+facts are inlined verbatim; related conversations and wiki articles
+come in as a `title (id: ...)` list that the model opens on demand
+with `conversation_get` / `wiki_get`. The same gather is exposed to
+the main model as the umbrella `context` tool, which returns the
+index structured rather than rendered.
 
-The motivation is the same as opening-recall ([./memory.md](./memory.md))
-generalised to every topic boundary, plus a calibration drive that
-broadens what each child agent considers worth surfacing - not just
-"facts not already in-thread" but also "what the user already knows
-about this topic, when that would change how the main model pitches
-the answer." That second drive folds into the child prompts; the
-context-recall pipeline is the orchestrator.
+## Why deterministic, not synthesized
 
-## The four layers
+An earlier design fanned out three headless recall sub-agents
+(`RecallAgent`, `ConversationRecallAgent`, `WikiRecallAgent`) that
+each read the thread, ran their own searches, and synthesized a
+first-person note, which the pipeline stitched together. Two
+problems drove the rewrite:
+
+- **Hallucination.** The synthesis step paraphrased - and sometimes
+  invented - facts the stores never held. Injecting that as the
+  model's own recollection is the worst place for a confabulation.
+- **Latency / cost.** Three headless tool-loops fired on every topic
+  boundary, on the live turn's critical path.
+
+Inlining memory facts verbatim removes the hallucination surface
+(verbatim text cannot drift) and the per-layer searches replace three
+model round-trips with three vector queries. Conversations and wiki
+articles are large, so they ride as references rather than inline
+content: the model pays the drill-down cost (`conversation_get` /
+`wiki_get`) only when a lead looks worth pulling, instead of paying a
+synthesis cost on every boundary.
+
+The size-appropriate split is the design rule: small payloads
+(memory facts) inline; large payloads (transcripts, article bodies)
+by id.
+
+## The three layers
 
 Each layer answers a different question and lives in a different
 table; nothing substitutes for any of the others.
 
-| Layer | Table | What it carries | Right surface when |
+| Layer | Table | What it carries | In the index |
 |---|---|---|---|
-| Memory | `memories` | Atomic facts and preferences ("Maya is the user's sister", "the user prefers tabs") | The model needs standing facts that don't change turn to turn |
-| Conversation | `threads` (titles + summaries) | What was worked through in prior threads ("we landed on async/await for the parser pipeline") | The model wants to pick up an arc the user has iterated on before |
-| Wiki | `wiki_articles` | Encyclopedic prose ABOUT topics in the user's life (projects, people, places) | The model wants the synthesised "what is X in the user's life" view that spans many conversations |
-
-Memory carries the densest signal per row but the narrowest view;
-the wiki carries the longest-form synthesis but only on topics the
-user has invested in; conversation carries the topical arcs they
-were worked out in. The umbrella `context` tool collapses the three
-into one tool result; the auto-injected `<think>` block does the
-same on every topic boundary without the model having to ask.
+| Memory | `memories` | Atomic facts and preferences ("Maya is the user's sister", "the user prefers tabs") | inline, verbatim (with a confidence tag on low-confidence rows) |
+| Conversation | `threads` (titles + summaries) | What was worked through in prior threads | `title (id)` reference -> `conversation_get` |
+| Wiki | `wiki_articles` | Encyclopedic prose ABOUT topics in the user's life (projects, people, places) | `title (id)` reference -> `wiki_get` |
 
 ## Role in the app
 
@@ -55,13 +65,11 @@ treats it like the intuition cache: reuse if current, refresh if a
 trigger fires, and rebuild the synthetic `<think>` block from the
 cache at request time.
 
-When both pipelines fire on the same trigger evaluation (e.g.
-cold-start on a fresh thread; mid-turn title shift after the model
-renamed the thread), they run in parallel via `Promise.all`. Wall-
-clock cost is `max(intuition, context_recall) + persist`, not
-additive. The three child agents (memory-recall, conversation-recall,
-wiki-recall) inside `runContextRecallPipeline`
-likewise run in parallel via `runRecallFanOut`.
+When both pipelines fire on the same trigger evaluation they run in
+parallel via `Promise.all`. Wall-clock cost is `max(intuition,
+context_recall) + persist`, not additive. Inside the context-recall
+pipeline the three layer searches likewise run in parallel via
+`Promise.all` (see `gatherContextIndex`).
 
 ## Triggers
 
@@ -80,18 +88,29 @@ All four trigger reasons fire context recall:
 - **`title`** - the model called `update_title` mid-turn. Topic
   shift is the strongest signal we have.
 - **`mood`** - the user's valence band or confidence column changed
-  since the last write. Mood is part of the predictive world model
-  the samskara substrate maintains; treating it as a topic-adjacent
-  signal keeps recall priming in step with the conscious agent's
-  affective context.
+  since the last write.
 - **`stale`** - `STALE_FUSE_ROUNDS` (8 user-rounds) have passed
-  without a refresh. Catches slow-drifting topics that never tripped
-  the title or mood paths.
+  without a refresh.
 
 The same-round debounce primitive (`computed_at_round`) is shared:
-two triggers landing in the same round collapse to one run, so a
-turn that already refreshed via the pre-round trigger won't refresh
-again via the title trigger.
+two triggers landing in the same round collapse to one run.
+
+## Query derivation
+
+The pipeline has no explicit topic, so `gatherContextIndex` derives
+the search query from the live thread via `deriveRecallQuery`: the
+last user turn plus the assistant response immediately before it. The
+prior assistant turn carries the context the user's latest message is
+responding to, which sharpens retrieval on short follow-ups ("what
+about the second option?") that would embed to noise on their own.
+The query is anchored on the last USER turn, so any in-flight
+assistant / tool tail the chat-loop persisted on its way into recall
+is ignored. The query is capped at a character budget (keeping the
+tail, where the user's message sits) so an unbounded assistant turn
+doesn't blow the embedding model's window.
+
+The umbrella `context` tool substitutes the caller's explicit `topic`
+for the derived query; everything downstream is identical.
 
 ## Files
 
@@ -99,23 +118,25 @@ again via the title trigger.
   `coerceContextRecallPayload`, `pickFresherContextRecallPayload`.
   Schema-versioned (`v: 1`); a drift / unknown-version row reads as
   null and triggers a fresh refresh. An empty `note` is a VALID
-  cached state representing "every child returned the empty signal
-  this round" - cached so the same-round debounce holds.
+  cached state representing "nothing matched this round" - cached so
+  the same-round debounce holds.
+- `src/lib/context-recall/gather.ts` - the deterministic retrieval +
+  render core, shared by the pipeline and the `context` tool.
+  `deriveRecallQuery` (query from messages), `gatherContextIndex`
+  (the three parallel searches -> `ContextIndex`), `renderContextThink`
+  (index -> the `<think>` body). Per-layer caps live here
+  (`CONTEXT_MEMORY_LIMIT`, `CONTEXT_CONVERSATION_LIMIT`,
+  `CONTEXT_WIKI_LIMIT`). Each layer degrades independently: a search
+  that throws or returns nothing contributes an empty list.
 - `src/lib/context-recall/pipeline.ts` -
-  `runContextRecallPipeline` (the cached / triggered entry point)
-  and `runRecallFanOut` (the parallel-agent helper it delegates to,
-  also reused by the umbrella `context` tool in
-  `src/lib/tools/context.ts`). Fans out `RecallAgent`,
-  `ConversationRecallAgent`, and `WikiRecallAgent` in parallel via
-  `Promise.all`, stitches their notes via `stitchRecallNotes`,
-  returns a cache-ready payload.
-  Every child already collapses its own errors to `{kind: 'none'}`,
-  so a child failure surfaces as the empty signal we stitch over.
+  `runContextRecallPipeline`, the cached / triggered entry point. Runs
+  `gatherContextIndex`, renders the note via `renderContextThink`,
+  returns a cache-ready payload (with `note: ''` when every layer was
+  empty).
 - `src/lib/context-recall/cache.ts` - `readContextRecallCache` /
   `writeContextRecallCache` plus `withContextRecallInflight`, a
   tab-local registry that collapses two near-simultaneous triggers
-  onto one Promise. Distinct from the intuition inflight registry -
-  the two pipelines run independently.
+  onto one Promise. Distinct from the intuition inflight registry.
 - `src/lib/context-recall/ephemeral.ts` -
   `buildContextRecallThinkMessage`, the wire-shape projection from
   cached payload to ephemeral assistant message
@@ -125,71 +146,57 @@ again via the title trigger.
 - `src/lib/context-recall/index.ts` - public re-exports. Chat-loop
   and Chat.svelte import only from here.
 
-## Stitching
+## The injected `<think>` body
 
-`stitchRecallNotes` is a pure function over the three-layer fan-out
-result. Three rules cover the cross-product:
+`renderContextThink` assembles up to three sections, omitting any
+empty layer (an all-empty index renders to the empty string):
 
-- **All three notes empty** -> empty string (cached negative result).
-- **Exactly one non-empty note** -> that note verbatim, no hinge.
-  The note's own first-person voice carries the framing on its own.
-- **Two or more non-empty notes** -> walked in layer order (memory,
-  conversation, wiki). The first non-empty is emitted verbatim (the
-  anchor); each subsequent non-empty gets its layer hinge prepended:
+- **Memories** - "I recall some related things about this topic:"
+  followed by each fact verbatim as a bullet. A `hedged` / `shaky`
+  confidence tag is appended inline so the model can hedge or verify
+  rather than asserting; `corroborated` / untagged rows read as plain
+  facts.
+- **Conversations** - a line naming `conversation_get` plus a
+  `- title (id: ...)` bullet per related thread.
+- **Wiki** - a line naming `wiki_get` plus a `- title (id: ...)`
+  bullet per related article.
 
-  | Layer | Hinge |
-  |---|---|
-  | memory | (none; anchor) |
-  | conversation | `From earlier conversations,` |
-  | wiki | `From the wiki,` |
+The voice is first-person recollection plus an explicit offer to look
+the referenced items up - the framing that makes the ids read as
+actionable leads, not as content the model has already read.
 
-  The hinges are short on purpose: memory anchors on standing facts
-  ("I remember the user prefers X"), conversation on prior threads
-  ("last time this came up, we landed on Y"), and wiki on the
-  encyclopedic articles ("we have a detailed entry on Z"). Without
-  distinct hinges the three notes read as one undifferentiated
-  recollection; with them, the consuming model can
-  tell which kind of context each clause carries.
+## The two recall tiers
 
-The walk order is fixed: memory leads when present because it is
-the densest layer of standing facts; the rest follow with their
-hinges. If memory is empty and conversation is the first non-empty,
-conversation goes verbatim (no hinge) and the remaining layers
-follow with theirs - the unprefixed slot is always the first
-non-empty in layer order.
+The deterministic gather is the **cheap survey tier**. The per-layer
+recall tools (`memory_recall`, `conversation_recall`, `wiki_recall`)
+remain LLM sub-agents - the **targeted drill-down tier**:
 
-An LLM-based assimilator could replace the stitch when real outputs
-overlap or contradict in ways the heuristic can't resolve. We
-deliberately don't pay for that round-trip until the case shows up;
-the stitch handles the happy paths cleanly.
+- `memory_recall` / `conversation_recall` / `wiki_recall` each fire a
+  headless sub-agent (`RecallAgent`, `ConversationRecallAgent`,
+  `WikiRecallAgent`) that reads the thread, runs its own search
+  rounds, and returns a synthesized first-person note. These carry
+  the two-channel calibration contract described below.
+- The pipeline and the `context` tool do NOT use those agents. They
+  use `gatherContextIndex` instead.
 
-## Calibration drive on the children
+This divergence is deliberate: the automatic, every-boundary path is
+cheap and verbatim; the model reaches for an agent only when it wants
+one layer distilled rather than indexed. Don't "fix" the
+inconsistency by routing the pipeline back through the agents - that
+reintroduces the synthesis hallucination and the per-boundary cost
+the rewrite removed.
 
-All three child prompts (`src/lib/agents/recall/prompt.ts`,
+### Calibration drive on the recall agents
+
+The three recall-agent prompts (`src/lib/agents/recall/prompt.ts`,
 `src/lib/agents/conversation_recall/prompt.ts`, and
-`src/lib/agents/wiki_recall/prompt.ts`) carry a two-channel
-contract:
-
-1. **FACTS / DETAILS** the main model needs but doesn't already
-   have in-thread. The bar is HIGH - parroting in-thread context is
-   worse than emitting the empty signal.
-2. **CALIBRATION** about what the user already knows about the
-   topic. The bar is "would it change how the main model frames
-   the answer?" - depth, expertise, prior iterations on the same
-   material. Calibration is NOT preference-bending; we are not
-   tailoring facts to user taste, we are telling the main model
-   "the user is past the intro on X, skip the basics."
-
-When both channels have signal, the child blends them in one
-paragraph - one short sentence on each channel - in the same
-first-person voice. When neither channel has signal, the child
-emits the empty signal.
-
-The two-bar split exists to keep the conservatism on FACTS intact
-while opening a calibrated lane for context that would otherwise
-get discounted as off-topic. Folding both into one prompt with one
-"be conservative" framing would either degrade the facts path or
-suppress calibration entirely.
+`src/lib/agents/wiki_recall/prompt.ts`) carry a two-channel contract
+(FACTS/DETAILS plus CALIBRATION about what the user already knows).
+That contract governs the `*_recall` TOOLS, not the deterministic
+pipeline - the index has no calibration channel (titles + counts are
+its only proxy for depth). Calibration is NOT preference-bending:
+surface what the user already knows when it would change how the main
+model pitches the answer; do not list interests for their own sake.
 
 ## Data model
 
@@ -206,7 +213,7 @@ Shape (see `ContextRecallPayload` in
 ```ts
 {
   v: 1,
-  note: string,                                       // empty string when every child returned the empty signal
+  note: string,                                       // empty string when every layer was empty
   computed_at_round: number,
   computed_at_band: number | null,
   computed_at_column: 'confident' | 'tentative' | null,
@@ -215,8 +222,10 @@ Shape (see `ContextRecallPayload` in
 }
 ```
 
-Same `pickFresher` discipline as intuition for the realtime echo
-race - see `pickFresherContextRecallPayload`.
+The `note` is the already-rendered `<think>` body, not the structured
+index - the cache stores the cheap-to-replay string. Same
+`pickFresher` discipline as intuition for the realtime echo race -
+see `pickFresherContextRecallPayload`.
 
 ## Contracts
 
@@ -225,124 +234,113 @@ race - see `pickFresherContextRecallPayload`.
   time. Same posture as intuition.
 - **Empty note is a real state, not a missing one.** A coercion
   that collapsed empty-note to null would defeat the same-round
-  debounce - the trigger evaluator would re-fire on every
-  subsequent trigger evaluation in the same turn. Tests pin this.
+  debounce. Tests pin this.
 - **Round id is monotonic-per-thread.** Same as intuition. A
   regenerate-from-here flow that rolls user messages back is
   currently unhandled.
 - **Two parallel pipelines, one trigger evaluator, one debounce.**
-  The trigger logic is shared; the caches are not. Each pipeline
-  has its own `inflight` registry, its own jsonb column, its own
-  handler callback. A future surface that wants to ride the same
-  trigger machinery (a third "subconscious priming" pipeline) just
-  reads `RoundCacheSnapshot` and writes its own column.
+  The trigger logic is shared; the caches are not.
 
 ## The `context` umbrella tool
 
 `src/lib/tools/context.ts` is the main-chat surface for an on-demand
-fan-out across the same four agents. The chat-loop's reflexive
-pipeline handles topic-boundary recall automatically; the umbrella
-tool is the explicit path for "I need broad context on the user
-right now, regardless of whether a topic boundary fired."
+gather. The chat-loop's reflexive pipeline handles topic-boundary
+recall automatically; the umbrella tool is the explicit path for "I
+need broad context on the user right now, regardless of whether a
+topic boundary fired."
 
-Implementation is thin: `contextTool.execute` calls `runRecallFanOut`
-with the optional `topic` argument forwarded, then runs the same
-`stitchRecallNotes` the pipeline uses. Return shape mirrors the
-per-layer recall tools so the main model handles all five
-uniformly:
+Implementation is thin: `contextTool.execute` calls
+`gatherContextIndex` with the optional `topic` forwarded as the query,
+and returns the `ContextIndex` structured (no `<think>` wrapper - a
+tool result is not a synthetic turn):
 
-- `{kind: 'note', note: '<stitched paragraph>'}` when at least one
-  layer carried signal.
-- `{kind: 'none', reason: '<layer1: ...; layer2: ...; ...>'}` when
-  every layer returned the empty signal. The synthesised reason
-  concatenates each per-layer reason so a "context keeps emitting
-  empty" diagnostic can see which surfaces are silent and why.
+```ts
+{
+  memories: [{ id, label, data, confidence_tag }],   // verbatim
+  conversations: [{ id, title }],                     // -> conversation_get
+  wiki: [{ id, title }],                              // -> wiki_get
+}
+```
 
-No caching at the tool layer: the umbrella runs the four agents
-fresh on every call. If the model wants the cached projection it
-already has it - it's auto-injected as the `<think>` block at
-topic boundaries. The umbrella tool exists for the case where the
-model wants fresh recall with a sharper topic hint than the
-pipeline's "infer from the live conversation" default.
+Empty arrays mean nothing matched that layer. No caching at the tool
+layer: the umbrella runs the searches fresh on every call.
 
 The system prompt nudges the model to "consider calling `context`
-first" when it needs broad persistent context - moderate framing,
-not strong. Cheap conversational turns skip recall entirely. The
-per-layer recall tools and the search tools stay available as
-drill-downs after the umbrella, or as first-line picks when the
-model already knows which layer it wants.
+first" when it needs broad persistent context - moderate framing, not
+strong. Cheap conversational turns skip recall entirely.
+
+## conversation_get
+
+`src/lib/tools/conversation_get.ts` is the conversation-layer
+counterpart to `wiki_get`: a primary-key fetch of one prior thread by
+id, returning `{found, conversation: {id, title, summary, updated_at,
+archived, truncated, messages}}`. It is what makes the conversation
+ids in the index (and in `context` / `conversation_search` results)
+actionable.
+
+Unlike a wiki article (bounded by `MAX_WIKI_CONTENT_CHARS`), a thread
+transcript is unbounded, so the transcript is windowed to the most
+recent messages within a character budget; `truncated: true` flags
+when older turns were dropped, and the always-present `summary`
+covers the part that didn't fit. Only user and assistant turns with
+real text survive - tool-call rows and empty assistant rows carry no
+readable content. Registered in the always-on toolbox.
 
 ## Interactions
 
 - **Chat ([./chat.md](./chat.md))** - the chat-loop is the only
-  caller of `runContextRecallPipeline`. Both trigger sites (pre-
-  round and mid-turn title) handle context-recall and intuition in
-  the same `Promise.all` fan-out. The `contextRecallEnabled`
-  boolean on `ChatLoopOptions` is how the caller wires the feature
-  on; older callers / tests that don't pass it run the chat loop
-  without context recall (the cache is left untouched).
+  caller of `runContextRecallPipeline`. Both trigger sites (pre-round
+  and mid-turn title) handle context-recall and intuition in the same
+  `Promise.all` fan-out. The `contextRecallEnabled` boolean on
+  `ChatLoopOptions` is how the caller wires the feature on.
 - **Intuition ([./intuition.md](./intuition.md))** - shares the
-  trigger evaluator. Independent caches, independent failure modes,
-  but always co-fired via `Promise.all` to keep wall-clock cost
-  bounded by the slower of the two.
-- **Memory ([./memory.md](./memory.md))** - the pipeline reuses
-  `RecallAgent` from `src/lib/agents/recall/agent.ts` as one of its
-  four children. The agent's prompt was broadened with the
-  calibration channel; behaviour for explicit `memory_recall` tool
-  calls (the LLM-callable surface) is unchanged - the broadening
-  lives in the prompt, which both paths share.
+  trigger evaluator. Independent caches, always co-fired via
+  `Promise.all` to keep wall-clock cost bounded by the slower of the
+  two.
+- **Memory ([./memory.md](./memory.md))** - the pipeline reads the
+  memory layer via `searchMemoriesSemantic` and inlines hits verbatim
+  with `classifyMemoryConfidence` tags. The `memory_recall` TOOL still
+  wraps `RecallAgent` for the distilled read.
 - **Conversation recall ([./conversation-recall.md](./conversation-recall.md))** -
-  same story for `ConversationRecallAgent`.
-- **Wiki ([./wiki.md](./wiki.md))** - the pipeline (and the
-  umbrella `context` tool) reach `WikiRecallAgent`, which uses a
-  read-only `wiki_search` toolbox. The autonomous wiki agent and
-  wiki-librarian keep article mutation owned by background work;
-  recall is reader-only.
-- **Tools ([./tools.md](./tools.md))** - the three per-layer recall
-  tools (`memory_recall`, `conversation_recall`, `wiki_recall`)
-  and the umbrella `context` tool are all registered in the
-  always-on toolbox. The system prompt's recall cadence block was
-  rewritten: topic-boundary recall is described as "handled for you
-  automatically", the umbrella `context` tool is framed as the
-  preferred first step for broad lookups, and the per-layer recall
-  and search tools are framed as drill-downs.
+  the pipeline reads the conversation layer via `searchThreads`
+  (current thread excluded) and the model drills in with
+  `conversation_get`. The `conversation_recall` TOOL still wraps
+  `ConversationRecallAgent`.
+- **Wiki ([./wiki.md](./wiki.md))** - the pipeline reads the wiki
+  layer via `searchWikiArticlesSemantic` (sole-source-from-this-thread
+  articles excluded, same hygiene as `wiki_search` in recall mode) and
+  the model drills in with `wiki_get`. The `wiki_recall` TOOL still
+  wraps `WikiRecallAgent`.
+- **Tools ([./tools.md](./tools.md))** - the umbrella `context`, the
+  three per-layer `*_recall` tools, the `*_search` tools, and the new
+  `conversation_get` are all in the always-on toolbox. The system
+  prompt's recall block frames the auto-injection as an INDEX (leads,
+  not content) and points the model at `conversation_get` / `wiki_get`
+  for drill-down.
 - **Logging ([./logging.md](./logging.md))** - uses
-  `createLogger('context-recall')`. Pipeline start and complete
-  log lines mirror the intuition pipeline's, with `memoryKind`,
-  `conversationKind`, and `wikiKind` ('note' / 'none') so a debug
-  eye can see which sides carried signal on a given run. The
-  umbrella tool logs under
-  `createLogger('context-tool')` with the same three kinds plus
-  total elapsed time.
+  `createLogger('context-recall')`; the pipeline's complete log line
+  carries per-layer hit counts (`memoryCount`, `conversationCount`,
+  `wikiCount`) so a debug eye can see which layers carried signal. The
+  umbrella tool logs under `createLogger('context-tool')`.
 
 ## Gotchas
 
-- **Empty-note injection short-circuits.** When every child
-  returns the empty signal, the pipeline writes a payload with
-  `note: ''` (cached negative result), but
-  `buildContextRecallThinkMessage` returns `null` so the chat-loop
-  doesn't push an empty `<think>` block. Tests pin this - empty
-  injection would burn tokens for no information.
+- **Empty-note injection short-circuits.** When every layer is empty
+  the pipeline writes a payload with `note: ''` (cached negative
+  result), but `buildContextRecallThinkMessage` returns `null` so the
+  chat-loop doesn't push an empty `<think>` block. Tests pin this.
 - **The two pipelines have independent inflight registries.** A
   context-recall refresh in flight does NOT block an intuition
-  refresh on the same thread (or vice versa). Two near-
-  simultaneous triggers on context-recall alone DO collapse via the
-  context-recall registry.
-- **The trigger evaluator's `cache` parameter is structural.**
-  Both `IntuitionPayload` and `ContextRecallPayload` satisfy
-  `RoundCacheSnapshot`. If you add a third subconscious-priming
-  cache, give it the same `computed_at_round` /
-  `computed_at_band` / `computed_at_column` fields and it'll flow
-  through the same evaluator without a cast.
-- **The mid-turn title trigger replaces both blocks.** Same
-  rationale as intuition: a stale `<think>` block computed against
-  the pre-rename perception fights the fresh one for influence.
-  Each surface owns its own slot index
+  refresh on the same thread (or vice versa).
+- **The mid-turn title trigger replaces both blocks.** A stale
+  `<think>` block computed against the pre-rename perception fights
+  the fresh one for influence. Each surface owns its own slot index
   (`intuitionMessageIdx`, `contextRecallMessageIdx`); the refresh
-  splices into the same index, or appends if the slot was empty
-  before.
-- **Calibration is NOT preference-bending.** The child prompts
-  spell this out: surface what the user already knows when it
-  would change how the main model pitches the answer; do NOT list
-  interests for their own sake. Treating "the user likes X" as a
-  reason to weight X in the answer is the sycophancy trap.
+  splices into the same index, or appends if the slot was empty.
+- **Conversation/wiki ids are leads, not content.** The system
+  prompt spells out that the model must `conversation_get` / `wiki_get`
+  before relying on a referenced thread or article - otherwise it
+  confabulates contents from the title alone.
+- **The survey tier and drill-down tier diverge on purpose.** The
+  pipeline / `context` tool are deterministic; the `*_recall` tools
+  are LLM agents. See "The two recall tiers" above.

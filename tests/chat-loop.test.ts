@@ -77,6 +77,12 @@ interface MockSupabase {
   searchMemories: ReturnType<typeof vi.fn>;
   searchMemoriesByEmbedding: ReturnType<typeof vi.fn>;
   searchUnembeddedMemoriesByText: ReturnType<typeof vi.fn>;
+  // Context-recall gather reads the conversation + wiki layers through
+  // these (see src/lib/context-recall/gather.ts). Defaults return
+  // empty so threads with no matching history produce an empty index.
+  searchThreads: ReturnType<typeof vi.fn>;
+  searchWikiArticles: ReturnType<typeof vi.fn>;
+  listSourceThreadIdsForArticles: ReturnType<typeof vi.fn>;
   createMemory: ReturnType<typeof vi.fn>;
   updateMemory: ReturnType<typeof vi.fn>;
   deleteMemory: ReturnType<typeof vi.fn>;
@@ -141,6 +147,9 @@ function mockSupabase(overrides: Partial<MockSupabase> = {}): {
     searchMemories: vi.fn(async () => []),
     searchMemoriesByEmbedding: vi.fn(async () => []),
     searchUnembeddedMemoriesByText: vi.fn(async () => []),
+    searchThreads: vi.fn(async () => []),
+    searchWikiArticles: vi.fn(async () => []),
+    listSourceThreadIdsForArticles: vi.fn(async () => new Map()),
     createMemory: vi.fn(async (label: string, data: string) => ({
       id: 'mem-1',
       label,
@@ -2137,70 +2146,6 @@ describe('runChatLoop', () => {
   });
 
   describe('context-recall wiring', () => {
-    /**
-     * Build a Venice that handles BOTH the conscious chat-loop's
-     * streamChat (one terminal text round, optionally with a tool call
-     * the test asks for) and the recall agents' completeChat calls.
-     * The intuition pipeline is NOT exercised here - these tests
-     * deliberately leave intuitionModelId unset so we can assert the
-     * context-recall path in isolation. The intuition + context-recall
-     * parallel test below uses a richer mock that handles both.
-     *
-     * Disambiguation by message content: each recall agent appends its
-     * own prompt as the final user turn. Memory-recall mentions
-     * `memory_search`; conversation-recall mentions `conversation_search`;
-     * wiki-recall mentions `wiki_search`. The mock keys off those
-     * tokens to know which agent is asking. Notes default to null
-     * (empty signal) for any layer the caller doesn't override.
-     */
-    interface RecallVeniceNotes {
-      memory?: string | null;
-      conversation?: string | null;
-      wiki?: string | null;
-    }
-    function recallVenice(
-      recallCalls: ChatRequest[],
-      notes: RecallVeniceNotes = {},
-      streamRound: StreamEvent[] = [{ type: 'text', delta: 'ok' }]
-    ): VeniceClient {
-      const memoryNote = notes.memory ?? null;
-      const conversationNote = notes.conversation ?? null;
-      const wikiNote = notes.wiki ?? null;
-      return {
-        async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
-          for (const ev of streamRound) yield ev;
-        },
-        async completeChat(req: ChatRequest): Promise<ChatCompletion> {
-          recallCalls.push(req);
-          const lastUser = [...req.messages]
-            .reverse()
-            .find((m) => m.role === 'user');
-          const content =
-            typeof lastUser?.content === 'string' ? lastUser.content : '';
-          const pick = (n: string | null): string =>
-            n === null
-              ? '{"kind":"none"}'
-              : `{"kind":"note","note":${JSON.stringify(n)}}`;
-          let text = '';
-          if (content.includes('memory_search')) {
-            text = pick(memoryNote);
-          } else if (content.includes('conversation_search')) {
-            text = pick(conversationNote);
-          } else if (content.includes('wiki_search')) {
-            text = pick(wikiNote);
-          }
-          return {
-            text,
-            reasoning: '',
-            toolCalls: [],
-            usage: null,
-            citations: [],
-            finishReason: 'stop',
-          };
-        },
-      } as unknown as VeniceClient;
-    }
-
     function userRow(content: string): Message {
       return {
         id: 'm-1',
@@ -2211,32 +2156,61 @@ describe('runChatLoop', () => {
       };
     }
 
+    // Minimal search-result factories for the deterministic gather. The
+    // pipeline no longer makes model calls - it reads the memory /
+    // conversation / wiki layers via supabase searches and renders the
+    // index, so these stand in for "the store had a hit."
+    function memRow(id: string, data: string) {
+      return {
+        id,
+        label: id,
+        data,
+        confidence: 5,
+        topics: [],
+        created_at: '1',
+        updated_at: '1',
+      };
+    }
+    function threadHit(id: string, title: string) {
+      return { thread: { id, title }, kind: 'semantic', similarity: 0.9 };
+    }
+
+    // A streaming-only Venice for the conscious round. Context recall
+    // makes no model calls, so unless a test also exercises intuition a
+    // plain single-text-round client is all the loop needs; completeChat
+    // is a no-op fallback for the per-turn samskara calls.
+    function streamCaptureVenice(seen: ChatRequest[]): VeniceClient {
+      return {
+        async *streamChat(req: ChatRequest) {
+          seen.push(req);
+          yield { type: 'text', delta: 'ok' } as StreamEvent;
+        },
+        async completeChat(): Promise<ChatCompletion> {
+          return {
+            text: '',
+            reasoning: '',
+            toolCalls: [],
+            usage: null,
+            citations: [],
+            finishReason: 'stop',
+          };
+        },
+      } as unknown as VeniceClient;
+    }
+
     it('fires the pipeline on a cold thread, persists, calls handler, injects <think>', async () => {
-      const recallCalls: ChatRequest[] = [];
-      const venice = recallVenice(recallCalls, {
-        memory: 'I remember the user is past the basics on Haskell.',
-        conversation: 'we landed on monad transformers last time.',
-        // Wiki stays silent (default null) so the stitched note here
-        // is just the two-layer memory + conversation case.
-      });
       const { svc, mocks } = mockSupabase({
-        // Both recall agents call listMessages; return one user turn so
-        // they reach the Venice round rather than short-circuiting.
+        // gather derives its query from the thread's last user turn.
         listMessages: vi.fn(async () => [userRow('hi')]),
+        searchMemories: vi.fn(async () => [
+          memRow('mem-1', 'The user is past the basics on Haskell.'),
+        ]),
+        searchThreads: vi.fn(async () => [threadHit('c-1', 'Monad transformers')]),
       });
       const updates: unknown[] = [];
       const seenStreamRequests: ChatRequest[] = [];
-      // Capture the final streamChat request shape to assert the
-      // synthetic <think> block landed in history before the round.
-      const wrappedVenice: VeniceClient = {
-        ...venice,
-        async *streamChat(req: ChatRequest) {
-          seenStreamRequests.push(req);
-          yield { type: 'text', delta: 'ok' } as StreamEvent;
-        },
-      } as unknown as VeniceClient;
       await runChatLoop({
-        venice: wrappedVenice,
+        venice: streamCaptureVenice(seenStreamRequests),
         supabase: svc,
         thread: mkThread(),
         userId: 'u-1',
@@ -2249,10 +2223,6 @@ describe('runChatLoop', () => {
           onContextRecallUpdate: (payload) => updates.push(payload),
         },
       });
-      // Three completeChat calls = one per child agent (all three single-
-      // round settle since the agents don't issue tool calls in this
-      // test). Pipeline fans out memory, conversation, wiki in parallel.
-      expect(recallCalls).toHaveLength(3);
       // The chat-loop fires onContextRecallUpdate exactly once per
       // refresh, with the freshly-computed payload.
       expect(updates).toHaveLength(1);
@@ -2264,9 +2234,12 @@ describe('runChatLoop', () => {
         v: 1,
         trigger: 'cold',
         computed_at_round: 1,
-        // Stitched note: memory-side, hinge phrase, conversation-side.
-        note: 'I remember the user is past the basics on Haskell. From earlier conversations, we landed on monad transformers last time.',
       });
+      // Rendered index: memory fact verbatim + conversation by title+id.
+      expect(persistedArg.note).toContain(
+        'The user is past the basics on Haskell.'
+      );
+      expect(persistedArg.note).toContain('Monad transformers (id: c-1)');
       // The synthetic <think> block must have landed in the streamChat
       // history. Find an assistant message whose content contains the
       // marker.
@@ -2279,24 +2252,24 @@ describe('runChatLoop', () => {
       );
       expect(synthetic).toBeDefined();
       expect(synthetic?.content).toContain(
-        'we landed on monad transformers last time.'
+        'The user is past the basics on Haskell.'
       );
     });
 
     it('skips the pipeline entirely when contextRecallEnabled is omitted', async () => {
       // Older callers / tests that don't pass contextRecallEnabled run
       // the chat loop without the context-recall layer. The cache must
-      // be left untouched, no completeChat calls fire, and
+      // be left untouched, the gather must not run, and
       // onContextRecallUpdate never invokes - identical pre-feature
       // behaviour.
-      const recallCalls: ChatRequest[] = [];
-      const venice = recallVenice(recallCalls, { memory: 'A', conversation: 'B' });
       const { svc, mocks } = mockSupabase({
         listMessages: vi.fn(async () => [userRow('hi')]),
+        searchMemories: vi.fn(async () => [memRow('m1', 'a fact.')]),
+        searchThreads: vi.fn(async () => [threadHit('c1', 'a thread')]),
       });
       const updates: unknown[] = [];
       await runChatLoop({
-        venice,
+        venice: streamCaptureVenice([]),
         supabase: svc,
         thread: mkThread(),
         userId: 'u-1',
@@ -2308,32 +2281,25 @@ describe('runChatLoop', () => {
           onContextRecallUpdate: (payload) => updates.push(payload),
         },
       });
-      expect(recallCalls).toHaveLength(0);
       expect(updates).toHaveLength(0);
       expect(mocks.setThreadContextRecallPayload).not.toHaveBeenCalled();
+      // The gather's conversation search never ran - the pipeline didn't
+      // fire at all.
+      expect(mocks.searchThreads).not.toHaveBeenCalled();
     });
 
     it('caches the empty-note negative result without injecting a <think> block', async () => {
-      // When both children return the empty signal, the pipeline still
-      // writes the cache (with note: '') so the same-round debounce
-      // can hold on subsequent triggers - but it must NOT push an
-      // empty <think> block onto history. Empty injection would just
-      // burn tokens.
-      const recallCalls: ChatRequest[] = [];
-      const venice = recallVenice(recallCalls, {});
+      // When every layer is empty, the pipeline still writes the cache
+      // (with note: '') so the same-round debounce can hold on
+      // subsequent triggers - but it must NOT push an empty <think>
+      // block onto history. Empty injection would just burn tokens.
       const { svc, mocks } = mockSupabase({
         listMessages: vi.fn(async () => [userRow('hi')]),
+        // All searches default to [] -> empty index -> empty note.
       });
       const seenStreamRequests: ChatRequest[] = [];
-      const wrappedVenice: VeniceClient = {
-        ...venice,
-        async *streamChat(req: ChatRequest) {
-          seenStreamRequests.push(req);
-          yield { type: 'text', delta: 'ok' } as StreamEvent;
-        },
-      } as unknown as VeniceClient;
       await runChatLoop({
-        venice: wrappedVenice,
+        venice: streamCaptureVenice(seenStreamRequests),
         supabase: svc,
         thread: mkThread(),
         userId: 'u-1',
@@ -2342,7 +2308,6 @@ describe('runChatLoop', () => {
         signal: new AbortController().signal,
         contextRecallEnabled: true,
       });
-      expect(recallCalls).toHaveLength(3); // all three children ran
       expect(mocks.setThreadContextRecallPayload).toHaveBeenCalledTimes(1);
       const persistedArg = mocks.setThreadContextRecallPayload.mock.calls[0][1];
       expect(persistedArg).toMatchObject({ v: 1, note: '' });
@@ -2359,22 +2324,20 @@ describe('runChatLoop', () => {
 
     it('runs both subconscious-priming pipelines in parallel on cold start', async () => {
       // The latency win of the parallel design only earns its keep when
-      // both pipelines are active and the chat-loop fires them with
-      // Promise.all. A serial implementation would still pass the
-      // call-count assertion below; we add a per-call timestamp record
-      // so the test fails if intuition's 7 calls all land before any
-      // recall call (or vice versa).
-      const allCalls: { sys: string; lastUser: string; at: number }[] = [];
-      // Gate the LAST recall call so the recall side resolves last.
-      // If the chat-loop runs the two pipelines serially, the slow
-      // gate would block the fast one too and the test would deadlock
-      // (the gate is released by an intuition call that only fires
-      // when intuition starts, which a serial impl wouldn't do until
-      // recall finished).
+      // both pipelines fire via Promise.all. Context recall makes no
+      // model calls now, so we gate its memory search on an intuition-
+      // side event: the gather's searchMemories blocks until intuition's
+      // perception call releases the gate. A serial impl that ran recall
+      // FULLY before intuition would deadlock (the gate releaser never
+      // runs); concurrent execution lets perception fire and unblock the
+      // search. The search completing only after perception ran is the
+      // concurrency proof.
       let resolveRecallGate!: () => void;
       const recallGate = new Promise<void>((r) => {
         resolveRecallGate = r;
       });
+      let perceptionAt = 0;
+      let memorySearchAt = 0;
       const venice: VeniceClient = {
         async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
           yield { type: 'text', delta: 'ok' };
@@ -2382,15 +2345,8 @@ describe('runChatLoop', () => {
         async completeChat(req: ChatRequest): Promise<ChatCompletion> {
           const sys = req.messages.find((m) => m.role === 'system');
           const sysText = typeof sys?.content === 'string' ? sys.content : '';
-          const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
-          const lastUserText =
-            typeof lastUser?.content === 'string' ? lastUser.content : '';
-          allCalls.push({ sys: sysText, lastUser: lastUserText, at: Date.now() });
-          // Intuition perception fires very early in its pipeline -
-          // use it as the gate-release signal so recall can proceed.
-          // A serial impl would never reach this point because recall
-          // would still be waiting on its own gate.
           if (sysText.includes('objective *perception*')) {
+            perceptionAt = Date.now();
             queueMicrotask(() => resolveRecallGate());
             return {
               text: 'Classification: chitchat\n\nThe user is saying hi.',
@@ -2421,44 +2377,6 @@ describe('runChatLoop', () => {
               finishReason: 'stop',
             };
           }
-          if (lastUserText.includes('memory_search')) {
-            await recallGate;
-            return {
-              text: '{"kind":"note","note":"recall fact."}',
-              reasoning: '',
-              toolCalls: [],
-              usage: null,
-              citations: [],
-              finishReason: 'stop',
-            };
-          }
-          if (lastUserText.includes('conversation_search')) {
-            await recallGate;
-            return {
-              text: '{"kind":"note","note":"recall convo."}',
-              reasoning: '',
-              toolCalls: [],
-              usage: null,
-              citations: [],
-              finishReason: 'stop',
-            };
-          }
-          // The wiki recall agent also gates on the same
-          // perception-released signal. We don't need a note from it
-          // for the assertions below; the empty signal is fine. It
-          // exists so the test correctly captures the three-way fan-out
-          // the pipeline now performs.
-          if (lastUserText.includes('wiki_search')) {
-            await recallGate;
-            return {
-              text: '{"kind":"none"}',
-              reasoning: '',
-              toolCalls: [],
-              usage: null,
-              citations: [],
-              finishReason: 'stop',
-            };
-          }
           return {
             text: '',
             reasoning: '',
@@ -2471,6 +2389,11 @@ describe('runChatLoop', () => {
       } as unknown as VeniceClient;
       const { svc, mocks } = mockSupabase({
         listMessages: vi.fn(async () => [userRow('hi')]),
+        searchMemories: vi.fn(async () => {
+          await recallGate;
+          memorySearchAt = Date.now();
+          return [memRow('m1', 'recall fact.')];
+        }),
       });
       await runChatLoop({
         venice,
@@ -2487,32 +2410,12 @@ describe('runChatLoop', () => {
       // Both caches written.
       expect(mocks.setThreadIntuitionPayload).toHaveBeenCalledTimes(1);
       expect(mocks.setThreadContextRecallPayload).toHaveBeenCalledTimes(1);
-      // Total calls = 7 intuition + 3 recall agents (memory,
-      // conversation, wiki).
-      expect(allCalls.length).toBe(10);
-      // The three recall calls were gated on an intuition-side event -
-      // if the chat-loop had run intuition first and recall second
-      // (serial), the gate-release would have happened during the
-      // intuition phase, AFTER recall would have already settled.
-      // The recall calls landing AFTER perception (the gate releaser)
-      // started is what proves they were running concurrently.
-      const perceptionAt = allCalls.find((c) =>
-        c.sys.includes('objective *perception*')
-      )?.at;
-      const recallTimes = allCalls
-        .filter(
-          (c) =>
-            c.lastUser.includes('memory_search') ||
-            c.lastUser.includes('conversation_search') ||
-            c.lastUser.includes('wiki_search')
-        )
-        .map((c) => c.at);
-      expect(perceptionAt).toBeDefined();
-      // Three-way fan-out: memory + conversation + wiki.
-      expect(recallTimes.length).toBe(3);
-      for (const t of recallTimes) {
-        expect(t).toBeGreaterThanOrEqual(perceptionAt!);
-      }
+      // The recall-side memory search resolved only after the
+      // intuition-side perception call ran - if the loop had run recall
+      // fully before intuition, the gate would never release and this
+      // test would have timed out.
+      expect(perceptionAt).toBeGreaterThan(0);
+      expect(memorySearchAt).toBeGreaterThanOrEqual(perceptionAt);
     });
 
     it('replaces both <think> blocks on a mid-turn title trigger', async () => {
@@ -2526,7 +2429,6 @@ describe('runChatLoop', () => {
       // synthetic <think> blocks rather than appending.
       const allCalls: ChatRequest[] = [];
       const seenStreamRequests: ChatRequest[] = [];
-      let recallCallCount = 0;
       const venice: VeniceClient = {
         async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
           seenStreamRequests.push(req);
@@ -2544,9 +2446,6 @@ describe('runChatLoop', () => {
           allCalls.push(req);
           const sys = req.messages.find((m) => m.role === 'system');
           const sysText = typeof sys?.content === 'string' ? sys.content : '';
-          const lastUser = [...req.messages].reverse().find((m) => m.role === 'user');
-          const lastUserText =
-            typeof lastUser?.content === 'string' ? lastUser.content : '';
           if (sysText.includes('objective *perception*')) {
             return {
               text: 'Classification: chitchat\n\nA topic.',
@@ -2577,28 +2476,8 @@ describe('runChatLoop', () => {
               finishReason: 'stop',
             };
           }
-          if (lastUserText.includes('memory_search')) {
-            recallCallCount++;
-            return {
-              text: `{"kind":"note","note":"memory-${recallCallCount}"}`,
-              reasoning: '',
-              toolCalls: [],
-              usage: null,
-              citations: [],
-              finishReason: 'stop',
-            };
-          }
-          if (lastUserText.includes('conversation_search')) {
-            recallCallCount++;
-            return {
-              text: `{"kind":"note","note":"convo-${recallCallCount}"}`,
-              reasoning: '',
-              toolCalls: [],
-              usage: null,
-              citations: [],
-              finishReason: 'stop',
-            };
-          }
+          // Context recall no longer makes model calls; its fresh
+          // content comes from the searchMemories override below.
           return {
             text: '',
             reasoning: '',
@@ -2611,6 +2490,11 @@ describe('runChatLoop', () => {
       } as unknown as VeniceClient;
       const { svc, mocks } = mockSupabase({
         listMessages: vi.fn(async () => [userRow('hi')]),
+        // The title-triggered refresh gathers fresh context; this fact
+        // is what must replace the warm-cache note in round 2.
+        searchMemories: vi.fn(async () => [
+          memRow('m-fresh', 'fresh recall fact from the refresh.'),
+        ]),
       });
       const intuitionUpdates: unknown[] = [];
       const recallUpdates: unknown[] = [];
@@ -2707,9 +2591,9 @@ describe('runChatLoop', () => {
       const recallContent = recallThinkBlocks[0].content as string;
       expect(intuitionContent).not.toContain('WARM SYNTHESIS');
       expect(recallContent).not.toContain('WARM RECALL NOTE');
-      // Refreshed recall content matches one of the new memory-N /
-      // convo-N tokens the mock minted on call 1 and 2.
-      expect(recallContent).toMatch(/(memory|convo)-[12]/);
+      // Refreshed recall content carries the fresh fact the gather's
+      // searchMemories override minted during the title refresh.
+      expect(recallContent).toContain('fresh recall fact from the refresh.');
     });
   });
 

@@ -1,14 +1,13 @@
 /**
  * Unit coverage for the umbrella `context` tool. Tests its registry
  * presence, that it is excluded from every agent-only toolbox, and
- * that execute() fans out across the three recall agents and returns
- * a stitched note (or the synthesised empty signal when every layer
- * is silent).
+ * that execute() runs the deterministic three-layer gather and returns
+ * the structured index (memory facts verbatim; conversations + wiki as
+ * a title/id index for drill-down).
  *
- * The heavy fan-out + stitch logic is tested in
- * `context-recall-pipeline.test.ts`; this file checks the tool
- * surface itself: how it wraps `runRecallFanOut` and `stitchRecallNotes`
- * and how it shapes the tool result.
+ * The gather + render assembly logic is tested in
+ * `context-recall-pipeline.test.ts`; this file checks the tool surface
+ * itself: how it wraps `gatherContextIndex` and shapes the result.
  */
 import { describe, it, expect, vi } from 'vitest';
 import {
@@ -21,65 +20,75 @@ import {
   type ToolDef,
 } from '../src/lib/tools';
 import { contextTool } from '../src/lib/tools/context';
-import type { SupabaseService, Message } from '../src/lib/supabase';
 import type {
-  ChatCompletion,
-  ChatRequest,
-  StreamEvent,
-  VeniceClient,
-} from '../src/lib/venice';
-import type { RecallNote } from '../src/lib/agents/recall/agent';
+  SupabaseService,
+  Message,
+  Memory,
+  WikiArticle,
+  ThreadSearchHit,
+  Thread,
+} from '../src/lib/supabase';
+import type { VeniceClient } from '../src/lib/venice';
 
-function ctxFor(svc: SupabaseService, venice: VeniceClient): ToolContext {
+// Venice whose embed throws, so every search helper takes its
+// text-search fallback - the tool assembles the index identically
+// regardless of search path.
+const veniceNoEmbed = {
+  embed: vi.fn(async () => {
+    throw new Error('offline');
+  }),
+} as unknown as VeniceClient;
+
+function ctxFor(svc: SupabaseService): ToolContext {
   return {
     supabase: svc,
-    venice,
+    venice: veniceNoEmbed,
     userId: 'u-1',
     threadId: 't-1',
     signal: new AbortController().signal,
   };
 }
 
-function fakeVeniceForRecall(
-  responseFor: (lastUser: string) => RecallNote
-): VeniceClient {
+function mem(id: string, data: string, confidence = 5): Memory {
   return {
-    async *streamChat(_req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
-      yield { type: 'text', delta: '' };
-    },
-    completeChat: async (req: ChatRequest): Promise<ChatCompletion> => {
-      const lastUser = [...req.messages]
-        .reverse()
-        .find((m) => m.role === 'user');
-      const content =
-        typeof lastUser?.content === 'string' ? lastUser.content : '';
-      const result = responseFor(content);
-      const text =
-        result.kind === 'none'
-          ? `{"kind":"none","reason":${JSON.stringify(result.reason ?? 'none')}}`
-          : `{"kind":"note","note":${JSON.stringify(result.note)}}`;
-      return {
-        text,
-        reasoning: '',
-        toolCalls: [],
-        usage: null,
-        citations: [],
-        finishReason: 'stop',
-      };
-    },
-  } as unknown as VeniceClient;
+    id,
+    label: id,
+    data,
+    confidence,
+    topics: [],
+    created_at: '1',
+    updated_at: '1',
+  };
 }
 
-function recallSupabase(messages: Message[]): SupabaseService {
+function threadHit(id: string, title: string): ThreadSearchHit {
   return {
-    listMessages: vi.fn(async () => messages),
-    searchMemories: vi.fn(async () => []),
+    thread: { id, title } as unknown as Thread,
+    kind: 'semantic',
+    similarity: 0.9,
+  };
+}
+
+function wikiArt(id: string, title: string): WikiArticle {
+  return { id, title, content: 'body' } as unknown as WikiArticle;
+}
+
+function gatherSupabase(opts: {
+  messages?: Message[];
+  memories?: Memory[];
+  threads?: ThreadSearchHit[];
+  wiki?: WikiArticle[];
+}): SupabaseService {
+  return {
+    listMessages: vi.fn(async () => opts.messages ?? []),
+    searchMemories: vi.fn(async () => opts.memories ?? []),
     searchMemoriesByEmbedding: vi.fn(async () => []),
     searchUnembeddedMemoriesByText: vi.fn(async () => []),
-    searchConversationsByEmbedding: vi.fn(async () => []),
-    searchConversationsByText: vi.fn(async () => []),
-    searchWikiArticlesByEmbedding: vi.fn(async () => []),
-    searchWikiArticlesByText: vi.fn(async () => []),
+    searchWikiArticles: vi.fn(async () => opts.wiki ?? []),
+    listSourceThreadIdsForArticles: vi.fn(
+      async () => new Map<string, Set<string>>()
+    ),
+    searchThreads: vi.fn(async () => opts.threads ?? []),
   } as unknown as SupabaseService;
 }
 
@@ -100,17 +109,15 @@ describe('context - registry scoping', () => {
   });
 
   it('description frames itself as the preferred first step for broad lookups', () => {
-    // The system prompt nudges the model to "consider calling context
-    // first." For that to actually move behaviour, the tool description
-    // also has to carry the framing - the model reads the description
-    // when deciding whether to fire the tool, not just the system
-    // prompt.
     expect(contextTool.description.toLowerCase()).toContain('preferred first');
     // And mentions every layer it spans, so the model knows what it
     // gets in exchange for the round-trip.
     expect(contextTool.description.toLowerCase()).toContain('memor');
     expect(contextTool.description.toLowerCase()).toContain('conversation');
     expect(contextTool.description.toLowerCase()).toContain('wiki');
+    // And names the drill-down tools the id index is meant to feed.
+    expect(contextTool.description).toContain('conversation_get');
+    expect(contextTool.description).toContain('wiki_get');
   });
 
   it('accepts an optional topic argument and nothing else', () => {
@@ -127,115 +134,72 @@ describe('context - registry scoping', () => {
   });
 });
 
-describe('context - execute() fans out across the three recall agents', () => {
-  it('returns a stitched note when at least one layer carries signal', async () => {
-    const messages: Message[] = [
-      {
-        id: 'u1',
-        thread_id: 't-1',
-        role: 'user',
-        content: 'how is the garden going?',
-        created_at: '2024-01-01T00:00:00Z',
-      } as Message,
-    ];
-    const venice = fakeVeniceForRecall((lastUser) => {
-      // Two layers carry signal; the third returns the empty signal
-      // so we can verify the stitch composes them correctly.
-      if (lastUser.includes('memory_search')) {
-        return { kind: 'note', note: 'I remember the user grows basil.' };
-      }
-      if (lastUser.includes('wiki_search')) {
-        return {
-          kind: 'note',
-          note: 'the gardening article lists a perennial bed plan.',
-        };
-      }
-      return { kind: 'none', reason: 'nothing here' };
+describe('context - execute() gathers the three-layer index', () => {
+  it('returns memory facts verbatim and conversations + wiki by id', async () => {
+    const svc = gatherSupabase({
+      memories: [mem('m1', 'The user grows basil.', 5)],
+      threads: [threadHit('c1', 'Garden planning')],
+      wiki: [wikiArt('w1', 'The herb garden')],
     });
-    const svc = recallSupabase(messages);
 
-    const result = await contextTool.execute({}, ctxFor(svc, venice));
+    const result = await contextTool.execute({ topic: 'the garden' }, ctxFor(svc));
 
     expect(result).toEqual({
-      kind: 'note',
-      note:
-        'I remember the user grows basil. From the wiki, the gardening article lists a perennial bed plan.',
+      memories: [
+        {
+          id: 'm1',
+          label: 'm1',
+          data: 'The user grows basil.',
+          confidence_tag: 'corroborated',
+        },
+      ],
+      conversations: [{ id: 'c1', title: 'Garden planning' }],
+      wiki: [{ id: 'w1', title: 'The herb garden' }],
     });
   });
 
-  it('returns {kind:"none"} with concatenated per-layer reasons when every layer is silent', async () => {
-    const messages: Message[] = [
-      {
-        id: 'u1',
-        thread_id: 't-1',
-        role: 'user',
-        content: 'hi',
-        created_at: '2024-01-01T00:00:00Z',
-      } as Message,
-    ];
-    const venice = fakeVeniceForRecall((lastUser) => {
-      if (lastUser.includes('memory_search')) {
-        return { kind: 'none', reason: 'no memories matched' };
-      }
-      if (lastUser.includes('conversation_search')) {
-        return { kind: 'none', reason: 'no prior threads' };
-      }
-      if (lastUser.includes('wiki_search')) {
-        return { kind: 'none', reason: 'no relevant articles' };
-      }
-      return { kind: 'none', reason: 'unknown' };
-    });
-    const svc = recallSupabase(messages);
+  it('uses the explicit topic as the query without reading the thread', async () => {
+    const svc = gatherSupabase({ memories: [mem('m1', 'A fact.')] });
 
-    const result = (await contextTool.execute(
-      {},
-      ctxFor(svc, venice)
-    )) as RecallNote;
+    await contextTool.execute({ topic: 'my dad' }, ctxFor(svc));
 
-    expect(result.kind).toBe('none');
-    // The synthesised reason concatenates each per-layer reason so a
-    // diagnostic loop can see which surfaces are silent and why.
-    if (result.kind === 'none') {
-      expect(result.reason).toContain('memory: no memories matched');
-      expect(result.reason).toContain('conversation: no prior threads');
-      expect(result.reason).toContain('wiki: no relevant articles');
-    }
+    // Explicit topic -> no need to derive a query from the thread.
+    expect(svc.listMessages).not.toHaveBeenCalled();
+    expect(svc.searchMemories).toHaveBeenCalledWith(
+      'my dad',
+      expect.any(Number),
+      expect.anything()
+    );
   });
 
-  it('forwards the topic hint to the layers that accept one', async () => {
-    // Memory has no topic field by contract; the other two append
-    // "The main assistant flagged this topic specifically: <topic>"
-    // to the prompt when one is passed.
-    const seenTopicForLayer: Record<string, boolean> = {
-      memory: false,
-      conversation: false,
-      wiki: false,
-    };
-    const venice = fakeVeniceForRecall((lastUser) => {
-      let layer: 'memory' | 'conversation' | 'wiki' | 'unknown' = 'unknown';
-      if (lastUser.includes('memory_search')) layer = 'memory';
-      else if (lastUser.includes('conversation_search')) layer = 'conversation';
-      else if (lastUser.includes('wiki_search')) layer = 'wiki';
-      if (layer !== 'unknown') {
-        seenTopicForLayer[layer] =
-          lastUser.includes('flagged this topic specifically: my dad');
-      }
-      return { kind: 'none', reason: 'check only' };
+  it('derives the query from the thread when no topic is passed', async () => {
+    const svc = gatherSupabase({
+      messages: [
+        {
+          id: 'u1',
+          thread_id: 't-1',
+          role: 'user',
+          content: 'tell me about the move',
+          created_at: '1',
+        } as Message,
+      ],
     });
-    const svc = recallSupabase([
-      {
-        id: 'u1',
-        thread_id: 't-1',
-        role: 'user',
-        content: 'I have been thinking about my dad again',
-        created_at: '2024-01-01T00:00:00Z',
-      } as Message,
-    ]);
 
-    await contextTool.execute({ topic: 'my dad' }, ctxFor(svc, venice));
+    await contextTool.execute({}, ctxFor(svc));
 
-    expect(seenTopicForLayer.memory).toBe(false);
-    expect(seenTopicForLayer.conversation).toBe(true);
-    expect(seenTopicForLayer.wiki).toBe(true);
+    expect(svc.listMessages).toHaveBeenCalledWith('t-1');
+    expect(svc.searchMemories).toHaveBeenCalledWith(
+      'tell me about the move',
+      expect.any(Number),
+      expect.anything()
+    );
+  });
+
+  it('returns empty arrays when every layer is silent', async () => {
+    const svc = gatherSupabase({ messages: [] });
+
+    const result = await contextTool.execute({}, ctxFor(svc));
+
+    expect(result).toEqual({ memories: [], conversations: [], wiki: [] });
   });
 });

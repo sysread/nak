@@ -107,18 +107,24 @@ and uses the memory tools to write or update memory rows.
 Recall fires automatically at topic boundaries: at the start of a
 fresh thread, after the model renames the conversation (the strongest
 "topic shift" signal), after your mood band shifts, and after a long
-stretch without a refresh. Each fire runs two parallel passes — one
-over your stored memories, one over the topical summaries of your
-prior conversations — and stitches the findings into a short
-recollection the assistant reads as its own prior thought before
-the next reply. The main model can also call `memory_recall` and
-`conversation_recall` directly when you ask it to look something
+stretch without a refresh. Each fire searches three layers in
+parallel — your stored memories, the topical summaries of your prior
+conversations, and your [wiki](./wiki.md) articles — and assembles a
+short index the assistant reads as its own prior recollection before
+the next reply. Matching memory facts are dropped in verbatim;
+related conversations and wiki articles come in as a short list of
+titles the assistant can open in full (with `conversation_get` /
+`wiki_get`) if a lead looks worth pulling. There is no extra model
+step massaging the findings into prose, so what the assistant recalls
+is exactly what the stores hold. The main model can also call
+`memory_recall`, `conversation_recall`, `wiki_recall`, or the
+umbrella `context` directly when you ask it to look something
 specific up; those are the explicit-lookup escape hatches alongside
 the automatic topic-boundary path.
 
 What you see: while a recall fire runs, the in-progress assistant
 bubble shows a brief checklist row - a spinner next to **Recalling**
-that ticks over to a checkmark once the recollection is stitched. The
+that ticks over to a checkmark once the recollection is assembled. The
 sibling [intuition](./intuition.md) and samskara layers get their own
 rows (**Predicting** and **Reacting**) when they fire, and the whole
 checklist ease-fades out as the reply starts streaming.

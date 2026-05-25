@@ -1,11 +1,12 @@
 /**
  * Schema-only export for the `context` tool. Impl lives in `./context`.
  *
- * The umbrella over the three per-layer recall tools (memory_recall,
- * conversation_recall, wiki_recall). One call, three agents in
- * parallel, one stitched first-person paragraph back. The preferred
- * first step when the main model wants to look up broad persistent
- * context about the user.
+ * The umbrella over the three persistent layers (memories, prior
+ * conversations, wiki). One call runs all three searches in parallel
+ * and returns a works-cited index: memory facts verbatim, plus related
+ * conversations and wiki articles by id for drill-down. The preferred
+ * first step when the main model wants broad persistent context about
+ * the user.
  */
 export const contextSchema = {
   name: 'context',
@@ -15,16 +16,18 @@ export const contextSchema = {
     'prior conversations (what was worked through together), and the ' +
     'wiki (encyclopedic articles about projects, people, places, and ' +
     'topics in their life). ' +
-    'Returns either `{kind:"none"}` (nothing worth injecting) or ' +
-    '`{kind:"note", note:"<first-person paragraph>"}` stitched across ' +
-    'whichever layers carried signal, ready to fold into your next reply ' +
-    'as your own recollection. ' +
+    'Returns {memories: [{id, label, data, confidence_tag}], ' +
+    'conversations: [{id, title}], wiki: [{id, title}]}. Memory facts ' +
+    'are inlined verbatim - use them directly. Conversations and wiki ' +
+    'articles come back as a title + id index: call conversation_get ' +
+    'or wiki_get with an id to read the transcript or article body when ' +
+    'one looks relevant. Empty arrays mean nothing matched that layer. ' +
     'PREFERRED FIRST STEP when you need broad context on the user, ' +
     'their past, their projects, or what you have worked through ' +
-    'together - a single round-trip instead of three separate recall ' +
-    'calls. For targeted drill-downs on one layer use memory_recall, ' +
-    'conversation_recall, or wiki_recall; for raw search hits by ' +
-    'phrase use memory_search, conversation_search, or wiki_search.',
+    'together - a single round-trip instead of three separate searches. ' +
+    'For an LLM-synthesized read of one layer use memory_recall, ' +
+    'conversation_recall, or wiki_recall; for raw search hits by phrase ' +
+    'use memory_search, conversation_search, or wiki_search.',
   shortDescription:
     'broad persistent context about the user across memories, ' +
     'conversations, and the wiki',
@@ -34,11 +37,10 @@ export const contextSchema = {
       topic: {
         type: 'string',
         description:
-          'Optional phrase to seed every layer\'s first search. Pass the ' +
+          'Optional phrase to seed every layer\'s search. Pass the ' +
           'user-facing topic ("the herb garden", "my dad", "the move ' +
-          'to Lisbon") so all three agents bias toward it. Omit to let ' +
-          'each agent infer from the conversation; the memory layer ' +
-          'always infers regardless.',
+          'to Lisbon") so all three searches bias toward it. Omit to ' +
+          'derive the query from the current conversation.',
       },
     },
     additionalProperties: false,
