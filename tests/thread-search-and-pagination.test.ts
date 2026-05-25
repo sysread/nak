@@ -186,6 +186,42 @@ describe('searchThreads', () => {
   });
 });
 
+describe('ILIKE pattern escaping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Regression: a chatty recall query carries commas and parens (e.g.
+  // "...simmering liquid, so they (probably) plump..."). PostgREST's
+  // `.or(…)` grammar reads a bare comma as a condition separator, so the
+  // raw value used to split into a malformed second condition and the
+  // request died with "failed to parse logic tree" - breaking every
+  // completion that ran context recall. The value must ride inside
+  // double quotes with the comma/parens intact.
+  it('double-quotes the .or() logic-tree value so commas/parens survive the parser', async () => {
+    const captured = { lastFromCall: {} as Record<string, unknown[]> };
+    const svc = makeService(makeClient({ captured }));
+    await svc.searchMemories('simmering liquid, so they (probably) plump', 10);
+    expect(captured.lastFromCall.or).toEqual([
+      'label.ilike."%simmering liquid, so they (probably) plump%",' +
+        'data.ilike."%simmering liquid, so they (probably) plump%"',
+    ]);
+  });
+
+  it('double-quotes single-column .ilike() values too, and escapes embedded quotes/backslashes', async () => {
+    const captured = { lastFromCall: {} as Record<string, unknown[]> };
+    const svc = makeService(makeClient({ captured }));
+    await svc.searchThreads({
+      query: 'say "hi" \\o/, then go',
+      queryEmbedding: null,
+    });
+    expect(captured.lastFromCall.ilike).toEqual([
+      'title',
+      '"%say \\"hi\\" \\\\o/, then go%"',
+    ]);
+  });
+});
+
 describe('pagination cursors', () => {
   it('reports hasMore + derives the next cursor from the last row when an overfetch hit', async () => {
     // Request pageSize=2 → fetch 3, get 3 → last-of-page becomes the cursor.

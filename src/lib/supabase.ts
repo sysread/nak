@@ -882,6 +882,31 @@ function topicsFilterClause(selected: readonly string[]): string | null {
 }
 
 /**
+ * Build a double-quoted ILIKE pattern for a user-supplied substring
+ * query. Safe to drop into either a single `.ilike(col, ...)` filter or
+ * a `.or('col.ilike.<pattern>,...')` logic tree.
+ *
+ * PostgREST's `.or(…)` grammar treats commas as condition separators and
+ * parens as grouping. An unquoted comma in the value (e.g. a chatty
+ * recall query like "...simmering liquid, so they'll...") splits the
+ * value into a second, malformed condition and the whole request fails
+ * with "failed to parse logic tree". Backslash-escaping those chars does
+ * NOT work - the parser does not honour the backslash, so the comma
+ * still terminates the value - the only correct carrier is to wrap the
+ * whole value in double quotes. Inside a quoted value a literal
+ * double-quote or backslash must itself be backslash-escaped.
+ *
+ * The surrounding `%` are intentional substring wildcards and live
+ * inside the quotes; ILIKE sees them after PostgREST strips the quotes.
+ * A `%` or `_` typed by the user stays a wildcard, matching the prior
+ * behaviour.
+ */
+function ilikePattern(query: string): string {
+  const escaped = query.replace(/(["\\])/g, '\\$1');
+  return `"%${escaped}%"`;
+}
+
+/**
  * One merged search hit. `kind` tags where the hit came from so the
  * UI can render an indicator badge; `similarity` is only set for
  * semantic hits (cosine similarity in [−1, 1], generally ~0.3–0.9
@@ -1596,8 +1621,7 @@ export class SupabaseService {
     const selectedTopics = opts.selectedTopics ?? [];
     const topicsClause = topicsFilterClause(selectedTopics);
 
-    const safe = query.replace(/([,()])/g, '\\$1');
-    const pattern = `%${safe}%`;
+    const pattern = ilikePattern(query);
     let exactQ = this.client
       .from('threads')
       .select('*')
@@ -1982,12 +2006,7 @@ export class SupabaseService {
       .order('updated_at', { ascending: false })
       .limit(limit);
     if (query && query.length > 0) {
-      // Escape the PostgREST "or" filter's reserved chars — commas and
-      // parentheses would otherwise break the `.or(…)` grammar. ILIKE's
-      // `%` and `_` are intentional wildcards, so we wrap the whole
-      // query in `%` to match anywhere in the field.
-      const safe = query.replace(/([,()])/g, '\\$1');
-      const pattern = `%${safe}%`;
+      const pattern = ilikePattern(query);
       q = q.or(`label.ilike.${pattern},data.ilike.${pattern}`);
     }
     const topicsClause = topicsFilterClause(selectedTopics);
@@ -2206,12 +2225,7 @@ export class SupabaseService {
       q = q.order('updated_at', { ascending: false });
     }
     if (query && query.length > 0) {
-      // Same escaping rationale as searchMemories: PostgREST's `.or(…)`
-      // grammar treats commas and parens specially, so an unfiltered
-      // user-typed query would break the filter. ILIKE's `%` / `_`
-      // remain wildcards by design.
-      const safe = query.replace(/([,()])/g, '\\$1');
-      q = q.ilike('title', `%${safe}%`);
+      q = q.ilike('title', ilikePattern(query));
     }
     const { data, error } = await q;
     if (error) throw new SupabaseError(error.message);
@@ -2346,8 +2360,7 @@ export class SupabaseService {
     const limit = opts.limit ?? 50;
     if (query.length === 0) return this.listRecipes('', limit);
 
-    const safe = query.replace(/([,()])/g, '\\$1');
-    const pattern = `%${safe}%`;
+    const pattern = ilikePattern(query);
 
     const ilikePromise = this.client
       .from('recipes')
@@ -3319,8 +3332,7 @@ export class SupabaseService {
     const limit = opts.limit ?? 20;
     if (query.length === 0) return this.listWikiArticles({ limit });
 
-    const safe = query.replace(/([,()])/g, '\\$1');
-    const pattern = `%${safe}%`;
+    const pattern = ilikePattern(query);
 
     const ilikePromise = this.client
       .from('wiki_articles')
@@ -4739,8 +4751,7 @@ export class SupabaseService {
     selectedTopics: readonly string[] = []
   ): Promise<Memory[]> {
     if (!query || query.length === 0) return [];
-    const safe = query.replace(/([,()])/g, '\\$1');
-    const pattern = `%${safe}%`;
+    const pattern = ilikePattern(query);
     let q = this.client
       .from('memories')
       .select('id, label, data, confidence, topics, created_at, updated_at')
