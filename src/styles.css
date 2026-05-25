@@ -3988,6 +3988,24 @@ button.top-bar-overflow-btn {
   opacity: 0.85;
 }
 
+/* Subconscious-priming throbbers: one row per pre-response pipeline
+   (samskara fire, intuition, context recall) the chat-loop is running
+   before the answer streams. Same subordinate treatment as the
+   rate-limit row - muted, centered, sitting under the primary
+   "Thinking" Scanner - so the rows read as a quiet "here's which
+   internal layer is busy" annotation rather than competing with the
+   main spinner. The inline Scanner is scaled down (size=0.7 on the
+   component) so the KITT bars sit at caption scale next to the text. */
+.msg.assistant > .subconscious-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.15rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
 /* ---------- Help modal ----------
    Renders `docs/user/` markdown in-app. Structurally a sibling of the
    Settings modal — same backdrop dismiss, same Escape handler, same

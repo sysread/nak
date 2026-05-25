@@ -180,6 +180,7 @@
     shouldRetainDisplaced,
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
+  import { orderedOps, subconsciousLabel } from '$lib/ui/subconscious-status';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -3267,6 +3268,25 @@
                 context_recall_payload: payload,
               });
             },
+            onSubconsciousStart: (op) => {
+              // A pre-response priming pipeline (samskara fire,
+              // intuition, or context recall) began for this turn. Add
+              // it to the slot's in-flight set so a keyed throbber row
+              // shows in the streaming bubble. Set semantics keep a
+              // duplicate start idempotent.
+              slot.subconsciousOps.add(op);
+            },
+            onSubconsciousEnd: (op) => {
+              // Pipeline settled (fresh payload, empty, or error - the
+              // row only signals liveness, so we don't branch on
+              // outcome). Drop it from the set. This can fire after the
+              // exchange already reset the slot: the samskara fire
+              // outruns the priming race timeout and can resolve once
+              // streaming is well underway, so the End lands late. A
+              // delete of a key that reset() already cleared is a
+              // harmless no-op.
+              slot.subconsciousOps.delete(op);
+            },
             onRateLimitWait: ({ attempt, until }) => {
               // Venice returned 429 and the chat-loop is about to
               // sleep before re-issuing the round. Surface the wait
@@ -6353,6 +6373,26 @@
               <div class="thinking">
                 <Scanner label="Thinking" />
               </div>
+              <!-- Subconscious-priming throbbers. One keyed row per
+                   pre-response pipeline (samskara fire, intuition,
+                   context recall) the chat-loop is currently running
+                   for this turn. Like the rate-limit row below, these
+                   sit under the generic "Thinking" Scanner and add
+                   specificity - the Scanner says "working", each row
+                   says WHAT subconscious layer is working. The set
+                   empties as each pipeline settles, so on a warm turn
+                   where only the samskara fire runs you see a single
+                   brief row; a cold-start turn shows all three. The
+                   per-row Scanner is aria-labelled, so the visible
+                   label text is aria-hidden to avoid a double
+                   announcement. orderedOps pins the row order
+                   regardless of which pipeline finishes first. -->
+              {#each orderedOps(activeSlot.subconsciousOps) as op (op)}
+                <div class="subconscious-status">
+                  <Scanner label={subconsciousLabel(op)} size={0.7} />
+                  <span aria-hidden="true">{subconsciousLabel(op)}...</span>
+                </div>
+              {/each}
               {#if activeSlot.rateLimitWaitUntil !== null}
                 <!-- Rate-limit wait indicator. Sits below the Scanner
                      (or the streaming Markdown when text is already

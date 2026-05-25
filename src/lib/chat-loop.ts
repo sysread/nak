@@ -768,6 +768,21 @@ async function* streamChatWithGuards(
   }
 }
 
+/**
+ * Which subconscious-priming pipeline a status signal refers to. These
+ * are the three pre-response background jobs the chat-loop runs before
+ * (and, for the title trigger, during) a turn:
+ *
+ *   'samskara'  - situational fire (top-k predictions for this turn).
+ *   'intuition' - perception + drives + synthesis.
+ *   'recall'    - memory + conversation + wiki pull, stitched into one
+ *                 first-person recollection note.
+ *
+ * Used as the key for the onSubconsciousStart/End handler pair so the
+ * UI can show a per-pipeline throbber while each runs.
+ */
+export type SubconsciousOp = 'samskara' | 'intuition' | 'recall';
+
 /** Event surface consumed by the UI. Each callback is best-effort. */
 export interface ChatLoopHandlers {
   /** Cumulative text for the current round; fires on every text delta. */
@@ -824,6 +839,22 @@ export interface ChatLoopHandlers {
    * as-is.
    */
   onContextRecallUpdate?(payload: ContextRecallPayload): void;
+  /**
+   * A subconscious-priming pipeline started (`...Start`) or settled
+   * (`...End`) for this turn. A liveness pair, like
+   * onRateLimitWait/onRateLimitResolved: every Start is followed by
+   * exactly one End regardless of outcome (fresh payload, empty result,
+   * or error - the throbber signals "this is running", not "this
+   * succeeded"). `op` keys which pipeline fired. Intuition and recall
+   * run in parallel and the samskara fire overlaps both, so more than
+   * one op can be active at once; the UI tracks a set, not a single
+   * flag. The samskara End can land after the priming race timeout has
+   * already let the turn proceed (the fire keeps running in the
+   * background), so a UI consuming these must tolerate an End that
+   * arrives once streaming is well underway.
+   */
+  onSubconsciousStart?(op: SubconsciousOp): void;
+  onSubconsciousEnd?(op: SubconsciousOp): void;
   /**
    * The current round hit a Venice 429 and the loop is going to wait
    * before re-issuing the request. Fires once per wait, before the
@@ -1311,10 +1342,25 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     compoundThink: string | null;
     fireThink: string | null;
   }
+  // Bracket a subconscious-priming pipeline's promise with the UI
+  // start/end signals. Start fires synchronously (the throbber should
+  // appear the instant the pipeline is kicked off, not a microtask
+  // later); End fires when the promise settles, success or failure -
+  // the row tracks liveness, not outcome. No-op when handlers is
+  // absent. Returns the same promise so call sites read as a thin
+  // wrapper around the underlying work.
+  const trackSubconscious = <T>(op: SubconsciousOp, work: Promise<T>): Promise<T> => {
+    handlers?.onSubconsciousStart?.(op);
+    return work.finally(() => handlers?.onSubconsciousEnd?.(op));
+  };
+
   const primingWork = (async (): Promise<PrimingBundle> => {
     const [compoundSummary, fireResult] = await Promise.all([
       getCompoundSummary(supabase),
-      fireSamskaras(supabase, venice, thread.id, currentUserRound, userText, signal),
+      trackSubconscious(
+        'samskara',
+        fireSamskaras(supabase, venice, thread.id, currentUserRound, userText, signal)
+      ),
     ]);
     const { compound, fire } = formatPrimingThinks({
       compoundSummary,
@@ -1436,30 +1482,36 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // latency win even when one side short-circuits.
     const [freshIntuition, freshContextRecall] = await Promise.all([
       intuitionPreTrigger && intuitionModelId
-        ? withIntuitionInflight(thread.id, () =>
-            runIntuitionPipeline({
-              venice,
-              model: intuitionModelId,
-              history,
-              signal,
-              round: currentUserRound,
-              mood: intuitionMood ?? null,
-              trigger: intuitionPreTrigger,
-            })
+        ? trackSubconscious(
+            'intuition',
+            withIntuitionInflight(thread.id, () =>
+              runIntuitionPipeline({
+                venice,
+                model: intuitionModelId,
+                history,
+                signal,
+                round: currentUserRound,
+                mood: intuitionMood ?? null,
+                trigger: intuitionPreTrigger,
+              })
+            )
           )
         : Promise.resolve<IntuitionPayload | null>(null),
       contextRecallPreTrigger
-        ? withContextRecallInflight(thread.id, () =>
-            runContextRecallPipeline({
-              venice,
-              supabase,
-              threadId: thread.id,
-              userId,
-              signal,
-              round: currentUserRound,
-              mood: intuitionMood ?? null,
-              trigger: contextRecallPreTrigger,
-            })
+        ? trackSubconscious(
+            'recall',
+            withContextRecallInflight(thread.id, () =>
+              runContextRecallPipeline({
+                venice,
+                supabase,
+                threadId: thread.id,
+                userId,
+                signal,
+                round: currentUserRound,
+                mood: intuitionMood ?? null,
+                trigger: contextRecallPreTrigger,
+              })
+            )
           )
         : Promise.resolve<ContextRecallPayload | null>(null),
     ]);
@@ -2048,30 +2100,36 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       if (intuitionTitleTrigger || contextRecallTitleTrigger) {
         const [freshIntuition, freshContextRecall] = await Promise.all([
           intuitionTitleTrigger && intuitionModelId
-            ? withIntuitionInflight(thread.id, () =>
-                runIntuitionPipeline({
-                  venice,
-                  model: intuitionModelId,
-                  history,
-                  signal,
-                  round: currentUserRound,
-                  mood: intuitionMood ?? null,
-                  trigger: intuitionTitleTrigger,
-                })
+            ? trackSubconscious(
+                'intuition',
+                withIntuitionInflight(thread.id, () =>
+                  runIntuitionPipeline({
+                    venice,
+                    model: intuitionModelId,
+                    history,
+                    signal,
+                    round: currentUserRound,
+                    mood: intuitionMood ?? null,
+                    trigger: intuitionTitleTrigger,
+                  })
+                )
               )
             : Promise.resolve<IntuitionPayload | null>(null),
           contextRecallTitleTrigger
-            ? withContextRecallInflight(thread.id, () =>
-                runContextRecallPipeline({
-                  venice,
-                  supabase,
-                  threadId: thread.id,
-                  userId,
-                  signal,
-                  round: currentUserRound,
-                  mood: intuitionMood ?? null,
-                  trigger: contextRecallTitleTrigger,
-                })
+            ? trackSubconscious(
+                'recall',
+                withContextRecallInflight(thread.id, () =>
+                  runContextRecallPipeline({
+                    venice,
+                    supabase,
+                    threadId: thread.id,
+                    userId,
+                    signal,
+                    round: currentUserRound,
+                    mood: intuitionMood ?? null,
+                    trigger: contextRecallTitleTrigger,
+                  })
+                )
               )
             : Promise.resolve<ContextRecallPayload | null>(null),
         ]);

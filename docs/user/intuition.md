@@ -67,6 +67,14 @@ will notice a slightly longer pause before the response starts
 streaming on that very first turn; subsequent turns reuse the cached
 read until something shifts.
 
+While the pipeline runs, the in-progress assistant bubble shows a
+small **Predicting outcomes...** status line with a spinner, so the
+pause has a visible cause rather than reading as a stall. It clears
+the moment the read lands and the reply starts. The sibling
+[recall](./background.md) and samskara layers show their own status
+lines (**Remembering past interactions...** and **Reacting to the
+situation...**) the same way when they fire.
+
 ## What it isn't
 
 Intuition is a private internal-monologue layer, not a separate voice

@@ -76,7 +76,9 @@
  *     for the post-listMessages reconciliation.
  */
 
+import { SvelteSet } from 'svelte/reactivity';
 import type { Message } from '../supabase';
+import type { SubconsciousOp } from '../chat-loop';
 
 interface StreamingError {
   text: string;
@@ -147,6 +149,19 @@ export class ExchangeSlot {
   slopNotices = $state<SlopNotice[]>([]);
   rateLimitWaitUntil = $state<number | null>(null);
   rateLimitAttempt = $state(0);
+  /**
+   * Subconscious-priming pipelines currently in flight for this turn
+   * (samskara fire, intuition, context recall). Populated by the
+   * chat-loop's onSubconsciousStart/End handlers; the streaming bubble
+   * renders one keyed throbber row per member. SvelteSet rather than a
+   * plain `$state(new Set())` because Svelte 5's $state doesn't proxy
+   * Set add/delete - without it the rows wouldn't re-render as
+   * pipelines come and go. The reference is stable (we mutate in
+   * place), so it's a plain readonly field, not $state. A late End that
+   * arrives after reset() cleared the set just deletes a missing key,
+   * which is a no-op - see the handler comments for why that happens.
+   */
+  readonly subconsciousOps = new SvelteSet<SubconsciousOp>();
   abortCtl = $state<AbortController | null>(null);
   toolTimings = $state<ToolTimings>({});
   /**
@@ -186,6 +201,7 @@ export class ExchangeSlot {
     this.slopNotices = [];
     this.rateLimitWaitUntil = null;
     this.rateLimitAttempt = 0;
+    this.subconsciousOps.clear();
     this.abortCtl = null;
     this.toolTimings = {};
     this.persistedRows = [];
