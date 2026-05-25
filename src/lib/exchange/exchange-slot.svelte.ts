@@ -76,9 +76,10 @@
  *     for the post-listMessages reconciliation.
  */
 
-import { SvelteSet } from 'svelte/reactivity';
+import { SvelteMap } from 'svelte/reactivity';
 import type { Message } from '../supabase';
 import type { SubconsciousOp } from '../chat-loop';
+import type { SubconsciousStatus } from '../ui/subconscious-status';
 
 interface StreamingError {
   text: string;
@@ -150,18 +151,33 @@ export class ExchangeSlot {
   rateLimitWaitUntil = $state<number | null>(null);
   rateLimitAttempt = $state(0);
   /**
-   * Subconscious-priming pipelines currently in flight for this turn
-   * (samskara fire, intuition, context recall). Populated by the
-   * chat-loop's onSubconsciousStart/End handlers; the streaming bubble
-   * renders one keyed throbber row per member. SvelteSet rather than a
-   * plain `$state(new Set())` because Svelte 5's $state doesn't proxy
-   * Set add/delete - without it the rows wouldn't re-render as
-   * pipelines come and go. The reference is stable (we mutate in
-   * place), so it's a plain readonly field, not $state. A late End that
-   * arrives after reset() cleared the set just deletes a missing key,
-   * which is a no-op - see the handler comments for why that happens.
+   * Subconscious-priming pipelines that have fired this turn (samskara
+   * fire, intuition, context recall), each mapped to running/done.
+   * Populated by the chat-loop's onSubconsciousStart/End handlers; the
+   * streaming bubble renders one checklist row per entry - a spinner
+   * while 'running', a checkmark once 'done'. Entries persist after
+   * completing (the row checks off rather than vanishing); the whole
+   * checklist is dismissed at once when the response starts streaming
+   * (see subconsciousDismissed). SvelteMap rather than a plain
+   * `$state(new Map())` because Svelte 5's $state doesn't proxy Map
+   * set/delete - without it the rows wouldn't re-render as statuses
+   * flip. Reference is stable (mutated in place), so a plain readonly
+   * field. The End handler only flips an entry that's still present, so
+   * a late End that lands after reset() cleared the map is a no-op
+   * rather than resurrecting a stale checkmark - see the handler
+   * comments for why the samskara End can arrive that late.
    */
-  readonly subconsciousOps = new SvelteSet<SubconsciousOp>();
+  readonly subconsciousStatus = new SvelteMap<SubconsciousOp, SubconsciousStatus>();
+  /**
+   * Sticky guard that retires the subconscious checklist once the
+   * actual reply starts arriving. Flipped true on the first content or
+   * reasoning delta of the turn; the template's checklist `{#if}` reads
+   * it so the rows ease-fade out as the answer begins. Sticky (not
+   * derived from streamingText) because streamingText resets to '' at
+   * each round boundary - deriving from it would make the checklist
+   * flicker back in between rounds. Reset to false per exchange.
+   */
+  subconsciousDismissed = $state(false);
   abortCtl = $state<AbortController | null>(null);
   toolTimings = $state<ToolTimings>({});
   /**
@@ -201,7 +217,8 @@ export class ExchangeSlot {
     this.slopNotices = [];
     this.rateLimitWaitUntil = null;
     this.rateLimitAttempt = 0;
-    this.subconsciousOps.clear();
+    this.subconsciousStatus.clear();
+    this.subconsciousDismissed = false;
     this.abortCtl = null;
     this.toolTimings = {};
     this.persistedRows = [];

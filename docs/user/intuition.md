@@ -68,12 +68,13 @@ streaming on that very first turn; subsequent turns reuse the cached
 read until something shifts.
 
 While the pipeline runs, the in-progress assistant bubble shows a
-small **Predicting outcomes...** status line with a spinner, so the
-pause has a visible cause rather than reading as a stall. It clears
-the moment the read lands and the reply starts. The sibling
-[recall](./background.md) and samskara layers show their own status
-lines (**Remembering past interactions...** and **Reacting to the
-situation...**) the same way when they fire.
+small checklist with a spinner next to **Predicting outcomes**, so the
+pause has a visible cause rather than reading as a stall. The spinner
+ticks over to a checkmark once the read lands, and the whole checklist
+ease-fades out as the reply starts streaming. The sibling
+[recall](./background.md) and samskara layers get their own rows in
+the same checklist (**Remembering past interactions** and **Reacting
+to the situation**) when they fire on the turn.
 
 ## What it isn't
 

@@ -40,6 +40,7 @@
    *     changes — see setTier().
    */
   import { onMount, tick } from 'svelte';
+  import { fade } from 'svelte/transition';
   import type { Session } from '@supabase/supabase-js';
   import { app, lock, applyServerSettings, notifyBiasActiveConvIds } from '$lib/state.svelte';
   import {
@@ -180,7 +181,10 @@
     shouldRetainDisplaced,
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
-  import { orderedOps, subconsciousLabel } from '$lib/ui/subconscious-status';
+  import {
+    orderedSubconsciousRows,
+    subconsciousLabel,
+  } from '$lib/ui/subconscious-status';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -754,6 +758,14 @@
     void rateLimitNowTick;
     return Math.max(0, Math.ceil((activeSlot.rateLimitWaitUntil - Date.now()) / 1000));
   });
+
+  // Subconscious-priming checklist rows for the active slot, in stable
+  // fire -> intuition -> recall order, each carrying its running/done
+  // status. Empty array when no slot or nothing has fired; the template
+  // renders the checklist only while the slot hasn't dismissed it.
+  const subconsciousRows = $derived(
+    activeSlot ? orderedSubconsciousRows(activeSlot.subconsciousStatus) : []
+  );
 
   // Drawer state: four separate buckets.
   //   drafts         — local-only threads the user has started but not
@@ -3122,6 +3134,10 @@
               // so only the first text delta schedules it.
               if (!slot.streamingContentStarted) {
                 slot.streamingContentStarted = true;
+                // The reply is arriving - retire the subconscious
+                // checklist so it ease-fades out (priming finished
+                // before the first token; the answer is the payoff).
+                slot.subconsciousDismissed = true;
                 if (slot.streamingReasoningOpen && slot.streamingReasoning.length > 0) {
                   reasoningCloseTimer = window.setTimeout(() => {
                     slot.streamingReasoningOpen = false;
@@ -3132,6 +3148,11 @@
             },
             onReasoningUpdate: (t) => {
               slot.streamingReasoning = t;
+              // Reasoning is the first thing the reply emits on a
+              // reasoning model - retire the subconscious checklist
+              // here too so it fades as the thinking starts streaming,
+              // not only on the first visible content delta.
+              slot.subconsciousDismissed = true;
               // Panel opens on the first reasoning delta so the user
               // watches the thinking stream in. Only before content
               // has started — once the answer is flowing, late
@@ -3270,22 +3291,24 @@
             },
             onSubconsciousStart: (op) => {
               // A pre-response priming pipeline (samskara fire,
-              // intuition, or context recall) began for this turn. Add
-              // it to the slot's in-flight set so a keyed throbber row
-              // shows in the streaming bubble. Set semantics keep a
-              // duplicate start idempotent.
-              slot.subconsciousOps.add(op);
+              // intuition, or context recall) began for this turn. Mark
+              // it 'running' so a spinner row shows in the checklist.
+              slot.subconsciousStatus.set(op, 'running');
             },
             onSubconsciousEnd: (op) => {
               // Pipeline settled (fresh payload, empty, or error - the
               // row only signals liveness, so we don't branch on
-              // outcome). Drop it from the set. This can fire after the
-              // exchange already reset the slot: the samskara fire
+              // outcome). Flip the row to 'done' so its spinner checks
+              // off in place. Guarded on has(): this can fire after the
+              // exchange already reset the slot - the samskara fire
               // outruns the priming race timeout and can resolve once
-              // streaming is well underway, so the End lands late. A
-              // delete of a key that reset() already cleared is a
-              // harmless no-op.
-              slot.subconsciousOps.delete(op);
+              // streaming is well underway, so its End lands late. Once
+              // the map's been cleared (or the checklist dismissed),
+              // re-setting here would resurrect a stale checkmark, so we
+              // only flip an entry that's still present.
+              if (slot.subconsciousStatus.has(op)) {
+                slot.subconsciousStatus.set(op, 'done');
+              }
             },
             onRateLimitWait: ({ attempt, until }) => {
               // Venice returned 429 and the chat-loop is about to
@@ -6373,26 +6396,47 @@
               <div class="thinking">
                 <Scanner label="Thinking" />
               </div>
-              <!-- Subconscious-priming throbbers. One keyed row per
+              <!-- Subconscious-priming checklist. One row per
                    pre-response pipeline (samskara fire, intuition,
-                   context recall) the chat-loop is currently running
-                   for this turn. Like the rate-limit row below, these
-                   sit under the generic "Thinking" Scanner and add
-                   specificity - the Scanner says "working", each row
-                   says WHAT subconscious layer is working. The set
-                   empties as each pipeline settles, so on a warm turn
-                   where only the samskara fire runs you see a single
-                   brief row; a cold-start turn shows all three. The
-                   per-row Scanner is aria-labelled, so the visible
-                   label text is aria-hidden to avoid a double
-                   announcement. orderedOps pins the row order
-                   regardless of which pipeline finishes first. -->
-              {#each orderedOps(activeSlot.subconsciousOps) as op (op)}
-                <div class="subconscious-status">
-                  <Scanner label={subconsciousLabel(op)} size={0.7} />
-                  <span aria-hidden="true">{subconsciousLabel(op)}...</span>
+                   context recall) that fired this turn: a spinner while
+                   running, a checkmark once done, so the user watches
+                   the batch check off before the reply lands. The whole
+                   group ease-fades out the moment the first reply chunk
+                   arrives (subconsciousDismissed) - priming is finished
+                   by then and the answer is the payoff. Rows persist
+                   through the running -> done flip rather than
+                   vanishing one by one; orderedSubconsciousRows pins the
+                   row order regardless of which pipeline finishes first.
+                   On a warm turn only the samskara fire runs (and may
+                   fade mid-spin before checking off); a cold-start turn
+                   shows all three. -->
+              {#if !activeSlot.subconsciousDismissed && subconsciousRows.length > 0}
+                <div
+                  class="subconscious-checklist"
+                  role="status"
+                  aria-live="polite"
+                  transition:fade={{ duration: 240 }}
+                >
+                  {#each subconsciousRows as row (row.op)}
+                    <div class="subconscious-status" class:done={row.status === 'done'}>
+                      {#if row.status === 'done'}
+                        <!-- Feather "check". Decorative - the row's label
+                             text carries the meaning for screen readers, so
+                             the glyph is aria-hidden to avoid a bare "check"
+                             announcement. -->
+                        <svg class="check" width="14" height="14" viewBox="0 0 24 24"
+                             fill="none" stroke="currentColor" stroke-width="3"
+                             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      {:else}
+                        <span class="spinner" aria-hidden="true"></span>
+                      {/if}
+                      <span>{subconsciousLabel(row.op)}</span>
+                    </div>
+                  {/each}
                 </div>
-              {/each}
+              {/if}
               {#if activeSlot.rateLimitWaitUntil !== null}
                 <!-- Rate-limit wait indicator. Sits below the Scanner
                      (or the streaming Markdown when text is already
