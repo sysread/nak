@@ -42,6 +42,7 @@
     recipeToPlainText,
   } from '$lib/cooklang';
   import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '$lib/recipe-limits';
+  import { recipeSourceLine } from '$lib/ui/recipe-detail';
   import type { Recipe, RecipeVersion } from '$lib/supabase';
   import {
     arrayBufferToBase64,
@@ -936,14 +937,17 @@
                   <strong>{formatVersionDate(v.created_at)}</strong> —
                   <em>{v.change_message}</em>
                 </p>
-              {:else if r!.source || r!.source_url}
+              {:else if recipeSourceLine(r!).kind !== 'none'}
+                {@const sourceLine = recipeSourceLine(r!)}
                 <p class="subtle">
-                  {#if r!.source}{r!.source}{/if}
-                  {#if r!.source && r!.source_url} — {/if}
-                  {#if r!.source_url}
-                    <a href={r!.source_url} target="_blank" rel="noopener noreferrer">
-                      {r!.source_url}
-                    </a>
+                  {#if sourceLine.kind === 'link'}
+                    <a
+                      href={sourceLine.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >{sourceLine.label}</a>
+                  {:else if sourceLine.kind === 'text'}
+                    {sourceLine.text}
                   {/if}
                 </p>
               {/if}
@@ -1549,6 +1553,11 @@
   .cookbook-detail-header p {
     margin: 0 0 0.75rem;
     font-size: 0.85rem;
+    /* Source line carries free-text / imported strings; an unbroken
+       token (e.g. a bare domain pasted as the name) would otherwise
+       span the whole app width and force a horizontal scroll on a
+       narrow viewport. */
+    overflow-wrap: anywhere;
   }
   .cookbook-actions {
     display: flex;

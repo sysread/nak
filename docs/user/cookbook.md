@@ -123,7 +123,10 @@ Two entry points:
 
 **By hand**: click **+ New recipe**. Fill in a title, optionally a
 source (URL or provenance note), and the Cooklang source. A live
-preview renders as you type so you can check the structure.
+preview renders as you type so you can check the structure. On the
+detail pane the source shows as a short labeled link - the source
+name if you gave one, otherwise just "Source" - so a long URL no
+longer stretches the line across the whole width.
 
 **Via the model**: ask Nak in chat. "Save this chicken piccata recipe
 to my cookbook" followed by the URL, or just paste the recipe text —
