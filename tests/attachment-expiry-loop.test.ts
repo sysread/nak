@@ -9,10 +9,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   runOneCycle,
-  napForResult,
   type CycleContext,
   type CycleResult,
-  type NapConfig,
 } from '../src/lib/agents/attachment_expiry/loop';
 import { LeaseCoordinator, type LeaseTimers } from '../src/lib/embeddings/lease';
 import type { SupabaseService } from '../src/lib/supabase';
@@ -125,30 +123,5 @@ describe('attachment-expiry runOneCycle', () => {
     const result = await runOneCycle(buildCtx({ signal: ac.signal, supabase: svc }));
     expect(result).toBe<CycleResult>('empty-queue');
     expect(spies.expireOldAttachments).not.toHaveBeenCalled();
-  });
-});
-
-describe('napForResult', () => {
-  const config: NapConfig = {
-    leasePollMs: 20_000,
-    idleIntervalMs: 60 * 60 * 1000,
-    errorBackoffMs: 60_000,
-  };
-
-  it('naps zero on acquired-lease and expired — to drain', () => {
-    expect(napForResult('acquired-lease', config)).toBe(0);
-    expect(napForResult('expired', config)).toBe(0);
-  });
-
-  it('naps lease-poll on polling', () => {
-    expect(napForResult('polling', config)).toBe(20_000);
-  });
-
-  it('naps the idle interval on empty-queue', () => {
-    expect(napForResult('empty-queue', config)).toBe(60 * 60 * 1000);
-  });
-
-  it('naps error back-off on error', () => {
-    expect(napForResult('error', config)).toBe(60_000);
   });
 });

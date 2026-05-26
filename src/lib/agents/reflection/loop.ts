@@ -1,17 +1,17 @@
 /**
- * Single-cycle driver for the reflection worker. Factored out of
- * `./worker.ts` so the state machine is unit-testable without a Web
- * Worker runtime — the Worker entry point is a thin wrapper that
- * calls `runOneCycle` repeatedly until its AbortSignal trips. Shape
- * mirrors `src/lib/embeddings/loop.ts` deliberately; both drivers
- * share the lease-acquire → claim → work → save/mark progression, so
- * anyone reading one file has the other's vocabulary for free.
+ * Single-cycle driver for the reflection work unit. The supervisor
+ * (`../supervisor/`) imports this `runOneCycle` and drives it; the
+ * supervisor owns the sleep policy for the whole supervised batch, so
+ * this module just reports what happened. Factoring the state machine
+ * out keeps it unit-testable without a Web Worker runtime, and mirrors
+ * `src/lib/embeddings/loop.ts` deliberately; both share the
+ * lease-acquire -> claim -> work -> save/mark progression, so anyone
+ * reading one file has the other's vocabulary for free.
  *
- * One cycle = one observable state transition. The outer loop in
- * `./worker.ts` maps each result to a sleep via `napForResult`
- * before asking for another cycle. Splitting "what happened" from
- * "how long to wait" keeps the timing policy in one place and lets
- * tests drive the state machine directly without waiting on timers.
+ * One cycle = one observable state transition. Splitting "what
+ * happened" (this module) from "how long to wait" (the supervisor's nap
+ * policy) lets tests drive the state machine directly without waiting
+ * on timers.
  */
 import type { Agent } from '../types';
 import type { SupabaseService } from '../../supabase';
@@ -72,8 +72,9 @@ export interface CycleContext {
 }
 
 /**
- * Drive exactly one cycle. The outer loop is just
- * `while (!signal.aborted) { await runOneCycle(...); await sleep(napForResult(...)); }`.
+ * Drive exactly one cycle. The supervisor's outer loop is just
+ * `while (!signal.aborted) { await runOneCycle(...); await sleep(...); }`,
+ * napping between cycles per its own policy.
  */
 export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
   if (ctx.signal.aborted) return 'empty-queue';
@@ -194,36 +195,5 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       err instanceof Error ? err.message : String(err)
     );
     return 'error';
-  }
-}
-
-/** Tunables the outer loop maps cycle results to sleep durations with. */
-export interface NapConfig {
-  /** Sleep after 'polling' — we don't hold the lease. */
-  leasePollMs: number;
-  /** Sleep after 'empty-queue' — we hold the lease but nothing to do. */
-  idleIntervalMs: number;
-  /** Sleep after 'error' — Supabase or agent transient failure. */
-  errorBackoffMs: number;
-}
-
-/**
- * Map cycle outcomes to sleep durations. Zero means "run the next
- * cycle immediately" — used for results that represent forward
- * progress (a thread reflected, a lease just acquired) where we
- * want to drain the queue fast.
- */
-export function napForResult(result: CycleResult, config: NapConfig): number {
-  switch (result) {
-    case 'acquired-lease':
-    case 'reflected':
-    case 'claim-lost':
-      return 0;
-    case 'polling':
-      return config.leasePollMs;
-    case 'empty-queue':
-      return config.idleIntervalMs;
-    case 'error':
-      return config.errorBackoffMs;
   }
 }

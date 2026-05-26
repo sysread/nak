@@ -13,10 +13,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   runOneCycle,
-  napForResult,
   type CycleContext,
   type CycleResult,
-  type NapConfig,
 } from '../src/lib/agents/reflection/loop';
 import { LeaseCoordinator, type LeaseTimers } from '../src/lib/embeddings/lease';
 import type { SupabaseService } from '../src/lib/supabase';
@@ -374,31 +372,5 @@ describe('runOneCycle — abort', () => {
     const ctx = buildCtx({ signal: ac.signal });
     const result = await runOneCycle(ctx);
     expect(result).toBe<CycleResult>('empty-queue');
-  });
-});
-
-describe('napForResult', () => {
-  const config: NapConfig = {
-    leasePollMs: 20_000,
-    idleIntervalMs: 30_000,
-    errorBackoffMs: 10_000,
-  };
-
-  it('drains fast on forward-progress results', () => {
-    expect(napForResult('acquired-lease', config)).toBe(0);
-    expect(napForResult('reflected', config)).toBe(0);
-    expect(napForResult('claim-lost', config)).toBe(0);
-  });
-
-  it('polls at the lease cadence when contended', () => {
-    expect(napForResult('polling', config)).toBe(20_000);
-  });
-
-  it('idles on empty queue at the 30s cadence', () => {
-    expect(napForResult('empty-queue', config)).toBe(30_000);
-  });
-
-  it('backs off on transient error', () => {
-    expect(napForResult('error', config)).toBe(10_000);
   });
 });
