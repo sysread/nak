@@ -18,6 +18,7 @@
  */
 import type { Session } from '@supabase/supabase-js';
 import { BaseWorkerManager, type BaseStartOpts } from '../agents/base-manager';
+import type { ServerConfig } from '../supabase';
 import { VENICE_EMBEDDING_MODEL } from '../models';
 
 /**
@@ -59,7 +60,25 @@ const WORKER_DEFAULTS = {
   rateLimitBackoffMs: 30_000,
 };
 
-class EmbeddingManager extends BaseWorkerManager {
+/**
+ * Embeddings is the first consumer migrated to the project-global shared
+ * Venice key (app_config, surfaced as app.serverConfig). The extra
+ * `serverConfig` opt carries it; see
+ * docs/dev/in-progress/venice-edge-functions/. The other workers still take
+ * their key from `config` only - they migrate in later milestones.
+ */
+interface EmbeddingsStartOpts extends BaseStartOpts {
+  /**
+   * Project-global shared config. When present, its Venice key takes
+   * precedence over the local config's. Null until the post-unlock fetch in
+   * state.svelte.ts resolves, or if that fetch failed - in which case we
+   * fall back to the local key, which is what keeps the parallel migration
+   * phase safe.
+   */
+  serverConfig: ServerConfig | null;
+}
+
+class EmbeddingManager extends BaseWorkerManager<EmbeddingsStartOpts> {
   protected readonly lockName = 'nak:embed-worker';
   protected readonly loggerSource = 'embed-worker';
 
@@ -70,13 +89,18 @@ class EmbeddingManager extends BaseWorkerManager {
     });
   }
 
-  protected buildStartPayload(opts: BaseStartOpts, session: Session): Record<string, unknown> {
+  protected buildStartPayload(
+    opts: EmbeddingsStartOpts,
+    session: Session
+  ): Record<string, unknown> {
     return {
       supabaseUrl: opts.config.supabaseUrl,
       supabasePublishableKey: opts.config.supabasePublishableKey,
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
-      veniceApiKey: opts.config.veniceApiKey,
+      // Prefer the shared key; fall back to the local one while serverConfig
+      // may be null (unseeded project, or fetch failed).
+      veniceApiKey: opts.serverConfig?.veniceApiKey ?? opts.config.veniceApiKey,
       embeddingModel: VENICE_EMBEDDING_MODEL,
       ...WORKER_DEFAULTS,
     };

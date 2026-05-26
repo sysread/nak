@@ -752,7 +752,7 @@ function startBackgroundWorkers(config: AppConfig): void {
   // on the 'New conversation' placeholder; see docs/dev/auto-title.md.
   // The samskara worker forms the chat model's progressively-built
   // predictive model of the user; see docs/dev/samskara.md.
-  embeddings.start({ supabase: app.supabase, config });
+  embeddings.start({ supabase: app.supabase, config, serverConfig: app.serverConfig });
   supervisor.start({
     supabase: app.supabase,
     config,
