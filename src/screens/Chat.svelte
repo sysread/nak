@@ -5005,8 +5005,22 @@
       if (parsed && ASK_USER_PENDING_FLAG in parsed) return null;
       return last;
     }
-    if (last.role === 'assistant' && last.tool_calls && last.tool_calls.length > 0) {
-      return last;
+    if (last.role === 'assistant') {
+      if (last.tool_calls && last.tool_calls.length > 0) return last;
+      // Reasoning-only stall: the model emitted chain-of-thought but no
+      // visible content and no tool calls. Seen when a model fences its
+      // tool call in a non-standard syntax (e.g. DSML markers) that the
+      // parser doesn't recognize - the whole turn lands in `reasoning`,
+      // `content` stays empty, and `tool_calls` is null, so the card
+      // renders as a bare reasoning panel with no answer. That tail
+      // genuinely lacks a follow-up, so make it retry-able. A normal
+      // completed turn has content (or tool calls) and is excluded;
+      // reasoning paired with either is the model working as intended,
+      // not a stall.
+      const hasContent = last.content.trim().length > 0;
+      const hasReasoning = (last.reasoning ?? '').trim().length > 0;
+      if (!hasContent && hasReasoning) return last;
+      return null;
     }
     if (last.role === 'user') return last;
     return null;
