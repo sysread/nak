@@ -159,25 +159,3 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
     return 'error';
   }
 }
-
-export interface NapConfig {
-  leasePollMs: number;
-  idleIntervalMs: number;
-  errorBackoffMs: number;
-}
-
-export function napForResult(result: CycleResult, config: NapConfig): number {
-  switch (result) {
-    case 'acquired-lease':
-    case 'tagged':
-    case 'claim-lost':
-    case 'empty-topics':
-      return 0;
-    case 'polling':
-      return config.leasePollMs;
-    case 'empty-queue':
-      return config.idleIntervalMs;
-    case 'error':
-      return config.errorBackoffMs;
-  }
-}
