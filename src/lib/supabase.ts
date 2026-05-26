@@ -979,6 +979,18 @@ export const RECENT_THREAD_CUTOFF_MS = 3 * 24 * 60 * 60 * 1000;
  * prefs that should follow the account across browsers — API keys and
  * the master-password KDF remain per-device by design.
  */
+/**
+ * The project-global shared config row (the `app_config` table). One row
+ * per Supabase project, readable by every authenticated member - distinct
+ * from {@link UserSettings}, which is the per-user profiles.settings blob.
+ * Seeded by `mise run supabase-init`; see
+ * docs/dev/in-progress/venice-edge-functions/.
+ */
+export interface ServerConfig {
+  /** Shared Venice API key, or null when app_config hasn't been seeded. */
+  veniceApiKey: string | null;
+}
+
 export interface UserSettings {
   defaultModel?: ModelTier;
   /**
@@ -1305,6 +1317,27 @@ export class SupabaseService {
       .maybeSingle();
     if (error) throw new SupabaseError(error.message);
     return coerceSettings((data as { settings?: unknown } | null)?.settings);
+  }
+
+  /**
+   * Read the project-global shared config row (app_config). Returns null
+   * when the row has not been seeded yet (mise run supabase-init). RLS lets
+   * any authenticated member read it; see
+   * docs/dev/in-progress/venice-edge-functions/. Distinct from getSettings,
+   * which reads the per-user profiles.settings blob.
+   */
+  async getAppConfig(): Promise<ServerConfig | null> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const { data, error } = await this.client
+      .from('app_config')
+      .select('venice_api_key')
+      .eq('id', true)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    if (!data) return null;
+    const key = (data as { venice_api_key?: string | null }).venice_api_key;
+    return { veniceApiKey: typeof key === 'string' && key.length > 0 ? key : null };
   }
 
   /**

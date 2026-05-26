@@ -21,7 +21,12 @@
  * easier to read than a constellation of stores with the same lifetime.
  */
 import type { AppConfig } from './config';
-import { SupabaseService, type SystemPrompt, type UserSettings } from './supabase';
+import {
+  SupabaseService,
+  type ServerConfig,
+  type SystemPrompt,
+  type UserSettings,
+} from './supabase';
 import { VeniceClient } from './venice';
 import { saveSession, clearSession } from './session';
 import { resetUsage } from './usage-store.svelte';
@@ -139,6 +144,16 @@ export type AppPhase = 'loading' | 'setup' | 'locked' | 'unlocked' | 'edit-confi
 interface AppState {
   phase: AppPhase;
   config: AppConfig | null;
+  /**
+   * Project-global shared config fetched from the `app_config` table after
+   * unlock (see {@link ServerConfig}). Distinct from `config`, the local
+   * encrypted blob: this is the shared Venice key the project owner seeds
+   * via `mise run supabase-init`, readable by every project member. Null
+   * until the post-unlock fetch in `loadSettingsThenStartWorkers` resolves,
+   * and null if that fetch fails. Consumers migrating off the local key
+   * read this; see docs/dev/in-progress/venice-edge-functions/.
+   */
+  serverConfig: ServerConfig | null;
   supabase: SupabaseService | null;
   venice: VeniceClient | null;
   /**
@@ -256,6 +271,7 @@ const cachedTheme = readCachedTheme();
 export const app = $state<AppState>({
   phase: 'loading',
   config: null,
+  serverConfig: null,
   supabase: null,
   venice: null,
   defaultModel: DEFAULT_TIER,
@@ -832,6 +848,19 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
       // behaviour pre-race-fix, so a Supabase outage doesn't gate the
       // entire bootstrap.
     }
+    // Fetch the project-global shared config before workers start, so a
+    // worker migrated to read app.serverConfig (see
+    // docs/dev/in-progress/venice-edge-functions/) finds it populated
+    // rather than racing the fetch. This resolves the sequencing gotcha:
+    // local config is available synchronously at unlock, but serverConfig
+    // is an async post-auth fetch.
+    try {
+      app.serverConfig = await app.supabase.getAppConfig();
+    } catch {
+      // Best-effort: leave serverConfig null. Consumers fall back to the
+      // local config.veniceApiKey until a later unlock's fetch succeeds, so
+      // a degraded Supabase doesn't gate worker boot.
+    }
   }
   startBackgroundWorkers(config);
 }
@@ -897,6 +926,9 @@ export function notifyBiasActiveConvIds(ids: readonly string[]): void {
 export function lock(): void {
   stopBackgroundWorkers();
   app.config = null;
+  // Drop the shared config so a subsequent unlock as a different account
+  // re-fetches it rather than inheriting the previous project's key.
+  app.serverConfig = null;
   app.supabase = null;
   app.venice = null;
   app.defaultModel = DEFAULT_TIER;
