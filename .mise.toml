@@ -29,8 +29,10 @@ deno = "2.8.0"
 # hosted realtime resolves opaque keys. When a future CLI fixes #4219, this is
 # the place to note it: bump, then flip dev-local.mjs's readStatus back to
 # prefer PUBLISHABLE_KEY and re-test that realtime connects locally.
-"aqua:cli/cli"      = "latest"
-"aqua:supabase/cli" = "2.101.0"
+# gum drives the interactive config widgets in `mise run supabase-init`.
+"aqua:cli/cli"           = "latest"
+"aqua:supabase/cli"      = "2.101.0"
+"aqua:charmbracelet/gum" = "latest"
 
 # Note: markdownlint-cli2 is a pnpm devDependency — the `deps` task
 # below provisions it via `pnpm install --frozen-lockfile`, and every
@@ -67,7 +69,7 @@ run = "node scripts/setup-pages.mjs"
 raw = true
 
 [tasks.supabase-init]
-description = "First-time Supabase setup: create/link project, apply schema, configure auth URLs, seed main user"
+description = "Supabase setup + config: create/link project, apply schema, edit app config (Venice key) via gum, configure auth URLs, seed main user. Re-runnable."
 run = "node scripts/setup-supabase.mjs"
 raw = true
 
@@ -80,12 +82,6 @@ raw = true
 description = "Create a Supabase user on the linked project, or reset an existing user's password. Interactive; --email/--password override."
 run = "node scripts/user-edit.mjs"
 # raw = true so password prompts have direct TTY access (same as setup-supabase).
-raw = true
-
-[tasks.config-set]
-description = "Set the project-global Venice API key in the app_config table on the linked project. Interactive; --key or VENICE_API_KEY override."
-run = "node scripts/config-set.mjs"
-# raw = true so the masked key prompt has direct TTY access (same as user-edit).
 raw = true
 
 [tasks.branch-cleanup]

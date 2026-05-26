@@ -42,9 +42,112 @@ import {
 import { buildAuthConfigPatch } from './lib/auth-config.mjs';
 import { getRepoSlug, pagesUrl } from './lib/repo.mjs';
 import { loadState, saveState } from './lib/state-file.mjs';
+import { gumAvailable, gumChoose, gumInput } from './lib/gum.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = join(__dirname, '..', 'supabase', 'schema.sql');
+
+// Application config stored in the project-global app_config table (see
+// supabase/schema.sql - one shared row, not keyed to a user). Data-driven so
+// adding a field is a single entry here: the config step renders a gum input
+// per field and upserts it via the Management API. Column names come from this
+// list (never from user input), so they are safe to interpolate into SQL;
+// values are escaped in writeConfigField.
+const CONFIG_FIELDS = [
+  {
+    column: 'venice_api_key',
+    label: 'Venice API key',
+    description: 'shared key the edge function and browser use for Venice calls',
+    secret: true,
+  },
+];
+
+async function readAppConfig(ref) {
+  const cols = CONFIG_FIELDS.map((f) => f.column).join(', ');
+  const rows = await runSql(ref, `select ${cols} from public.app_config where id = true;`);
+  return Array.isArray(rows) ? (rows[0] ?? {}) : {};
+}
+
+async function writeConfigField(ref, column, value) {
+  // Escape single quotes by doubling - the correct escape for Postgres
+  // standard-conforming strings (on by default; backslashes are literal). The
+  // Management API query endpoint takes raw SQL with no parameter binding.
+  const escaped = value.replace(/'/g, "''");
+  await runSql(
+    ref,
+    `insert into public.app_config (id, ${column}) values (true, '${escaped}')
+       on conflict (id) do update set ${column} = excluded.${column}, updated_at = now();`
+  );
+}
+
+async function promptConfigField(field) {
+  const value = await gumInput({
+    header: `Enter ${field.label}`,
+    password: field.secret === true,
+  });
+  // gumInput returns null for a blank entry, treated as "no change". Reject
+  // control characters - a pasted secret should never contain them, and they
+  // would corrupt the SQL literal in writeConfigField.
+  if (value !== null && [...value].some((c) => c.charCodeAt(0) < 0x20)) {
+    warn('That value contains control characters; leaving it unchanged.');
+    return null;
+  }
+  return value;
+}
+
+// Interactive editor for the app_config row. First-time (nothing set yet)
+// walks through each field; once values exist it shows a gum menu of the
+// fields with their set/unset state and a description, looping so several can
+// be edited in one pass.
+async function manageConfig(ref) {
+  if (!(await gumAvailable())) {
+    warn('gum is not installed, so the interactive config editor is unavailable.');
+    hint('Run `mise install` to get it, then re-run this task to set the Venice API key.');
+    return;
+  }
+
+  let current;
+  try {
+    current = await readAppConfig(ref);
+  } catch (err) {
+    warn(`Could not read app_config: ${err.message}`);
+    hint('If the schema apply above failed, fix that first - app_config lives in schema.sql.');
+    return;
+  }
+
+  if (!CONFIG_FIELDS.some((f) => current[f.column])) {
+    info('No application config set yet - walking through each value.');
+    for (const field of CONFIG_FIELDS) {
+      const value = await promptConfigField(field);
+      if (value !== null) {
+        await writeConfigField(ref, field.column, value);
+        ok(`${field.label} set.`);
+      } else {
+        warn(`${field.label} left unset.`);
+      }
+    }
+    return;
+  }
+
+  const DONE = 'Done - continue setup';
+  const labelFor = (f) =>
+    `${f.label} (${current[f.column] ? 'set' : 'unset'}) - ${f.description}`;
+  for (;;) {
+    const chosen = await gumChoose('Which config value would you like to change?', [
+      ...CONFIG_FIELDS.map(labelFor),
+      DONE,
+    ]);
+    if (chosen === null || chosen === DONE) break;
+    const field = CONFIG_FIELDS.find((f) => labelFor(f) === chosen);
+    if (!field) break;
+    const value = await promptConfigField(field);
+    if (value !== null) {
+      await writeConfigField(ref, field.column, value);
+      current[field.column] = value;
+      ok(`${field.label} updated.`);
+    }
+  }
+}
 
 // Parse --output <path> if present. Everything else is interactive.
 let outputPath = null;
@@ -139,7 +242,10 @@ try {
   console.error(`    ${style.dim(err.message)}`);
 }
 
-step(4, 'Configure auth');
+step(4, 'Set application config');
+await manageConfig(project.id);
+
+step(5, 'Configure auth');
 const slug = await getRepoSlug();
 const url = pagesUrl(slug);
 info(
@@ -194,7 +300,7 @@ try {
   );
 }
 
-step(5, 'Create the main user account');
+step(6, 'Create the main user account');
 info(
   'This seeds your login directly on the Supabase project using the secret ' +
     'key (SUPABASE_SECRET_KEY, or the legacy service-role key as a fallback). ' +

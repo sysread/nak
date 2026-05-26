@@ -116,7 +116,8 @@ create trigger on_auth_user_created
 -- Singleton table: `id boolean primary key default true` plus the
 -- `check (id)` constraint permits only the value true, so the table holds
 -- at most one row and every upsert targets it via `on conflict (id)`.
--- Seeded by `mise run config:set` (scripts/config-set.mjs).
+-- Seeded by the config editor in `mise run supabase-init`
+-- (scripts/setup-supabase.mjs).
 create table if not exists public.app_config (
   id boolean primary key default true,
   venice_api_key text,
@@ -130,9 +131,9 @@ alter table public.app_config enable row level security;
 -- table isolates rows with `auth.uid() = user_id`; app_config is shared,
 -- so any *authenticated* member may read it (anon, where auth.uid() is
 -- null, may not). There is intentionally NO insert/update/delete policy:
--- writes happen only through the service role - `mise run config:set` via
--- the Management API, and later the edge function - which bypasses RLS. A
--- missing write policy here is deliberate, not an oversight.
+-- writes happen only through the service role - `mise run supabase-init`
+-- via the Management API, and later the edge function - which bypasses RLS.
+-- A missing write policy here is deliberate, not an oversight.
 drop policy if exists "app_config is readable by authenticated users" on public.app_config;
 create policy "app_config is readable by authenticated users" on public.app_config
   for select using (auth.uid() is not null);

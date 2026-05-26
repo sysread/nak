@@ -140,13 +140,14 @@ Five Venice endpoints are in scope (the full surface of
 
 ## Shared-config track
 
-The shared `app_config` table and its `mise run config-set`
-seeder underpin every endpoint - the function cannot call
-Venice without the key, and the invited-user UX win is the
-shared key. This track is sequenced first inside milestone 1
-and lands once, then every later endpoint reuses it. It is
-documented in [embeddings.md](./embeddings.md) rather than
-duplicated here, because milestone 1 is what proves it.
+The shared `app_config` table and the gum-driven config editor
+in `mise run supabase-init` underpin every endpoint - the
+function cannot call Venice without the key, and the
+invited-user UX win is the shared key. This track is sequenced
+first inside milestone 1 and lands once, then every later
+endpoint reuses it. It is documented in
+[embeddings.md](./embeddings.md) rather than duplicated here,
+because milestone 1 is what proves it.
 
 Note the migration tactic that makes "did we get every
 consumer" a *static* check: keep the local config and a new
@@ -180,8 +181,8 @@ Existing dev docs this project touches:
   master-password envelope and config lifecycle the
   shared-config track changes.
 - [Settings](../../settings.md) - the key-entry screens
-  (`Setup`, `EditConfig`, `Settings`) that collapse once
-  `config-set` owns key entry.
+  (`Setup`, `EditConfig`, `Settings`) that collapse once the
+  `supabase-init` config editor owns key entry.
 - [Chat](../../chat.md) - the completion call sites behind the
   chat-completions sub-plan.
 - [Attachments](../../attachments.md) - the text-parser caller

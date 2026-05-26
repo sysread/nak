@@ -54,7 +54,7 @@ full current-state detail; this plan does not duplicate it.
 ## Target state
 
 - A single-row `app_config` table holds the shared Venice key,
-  seeded by `mise run config-set`.
+  seeded by the config editor in `mise run supabase-init`.
 - A `venice` edge function exposes `/embed`, calling Venice with
   the shared key read server-side via the service role.
 - A `pg_cron` job invokes the function on a schedule (via
@@ -80,12 +80,19 @@ key. It is reused by every later endpoint.
   owner/service_role may write. Any member reading the key in
   devtools is acceptable under the trust model (see the
   project README's "Not a zero-knowledge system").
-- **Seeding.** A `mise run config-set` target takes the key
-  (prompt or `VENICE_API_KEY` env) and upserts the row via the
-  existing `runSql` Management-API helper in
-  `scripts/lib/supabase.mjs`. No dashboard clicking. The script
-  cannot read the browser's encrypted localStorage, so the
-  owner supplies the key once - less machinery, not more.
+- **Seeding.** `mise run supabase-init` gains a gum-driven
+  config step (after schema apply): when `app_config` is empty
+  it walks the owner through each field, and once values exist
+  it shows a menu of fields - each with its set/unset state and
+  a description - and opens the right input for the one picked.
+  It upserts the row via the existing `runSql` Management-API
+  helper in `scripts/lib/supabase.mjs`. No dashboard clicking.
+  The wizard cannot read the browser's encrypted localStorage,
+  so the owner supplies the key once - less machinery, not more.
+  gum is pinned in `.mise.toml` (aqua backend, alongside the gh
+  and supabase CLIs); the field list lives in `CONFIG_FIELDS` in
+  `scripts/setup-supabase.mjs`, so adding a shared setting later
+  is one entry.
 
 ### Client wiring
 
@@ -120,8 +127,9 @@ seeder, fetch, a real consumer) with eight fallbacks intact.
 
 1. **`app_config` table + RLS** in `supabase/schema.sql`.
    Idempotent. Apply via `mise run sync`.
-2. **`mise run config-set`** target wrapping `runSql` to upsert
-   the row.
+2. **Config editor in `mise run supabase-init`** - a gum-driven
+   step that upserts the row via `runSql` (menu when values
+   exist, walkthrough when empty).
 3. **Fetch-on-login** into `app.serverConfig`; resolve the
    start-sequencing gotcha above.
 4. **Migrate the embeddings manager** (`manager.ts`) to read
@@ -213,7 +221,8 @@ Resolve during implementation; answers feed the learning loop.
 
 ## Definition of done
 
-- `app_config` + RLS applied; `mise run config-set` seeds it.
+- `app_config` + RLS applied; the `supabase-init` config editor
+  seeds it.
 - `app.serverConfig` fetched post-auth; start-sequencing
   resolved.
 - Embeddings manager reads `serverConfig`; embeddings still
