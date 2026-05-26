@@ -103,6 +103,40 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
+-- app_config -------------------------------------------------------------
+--
+-- Project-global configuration shared by every member of this Supabase
+-- project - NOT keyed to a user. One Venice API key serves the owner and
+-- anyone they invite (for example a family member on a separate account
+-- but the same project), so both the embeddings edge function and the
+-- browser read the single shared key from here instead of each user
+-- supplying their own. See
+-- docs/dev/in-progress/venice-edge-functions/ for the broader plan.
+--
+-- Singleton table: `id boolean primary key default true` plus the
+-- `check (id)` constraint permits only the value true, so the table holds
+-- at most one row and every upsert targets it via `on conflict (id)`.
+-- Seeded by `mise run config:set` (scripts/config-set.mjs).
+create table if not exists public.app_config (
+  id boolean primary key default true,
+  venice_api_key text,
+  updated_at timestamptz not null default now(),
+  constraint app_config_singleton check (id)
+);
+
+alter table public.app_config enable row level security;
+
+-- RLS diverges from the per-user sibling tables on purpose. Every other
+-- table isolates rows with `auth.uid() = user_id`; app_config is shared,
+-- so any *authenticated* member may read it (anon, where auth.uid() is
+-- null, may not). There is intentionally NO insert/update/delete policy:
+-- writes happen only through the service role - `mise run config:set` via
+-- the Management API, and later the edge function - which bypasses RLS. A
+-- missing write policy here is deliberate, not an oversight.
+drop policy if exists "app_config is readable by authenticated users" on public.app_config;
+create policy "app_config is readable by authenticated users" on public.app_config
+  for select using (auth.uid() is not null);
+
 -- threads ----------------------------------------------------------------
 
 create table if not exists public.threads (

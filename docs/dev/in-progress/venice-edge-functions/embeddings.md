@@ -54,7 +54,7 @@ full current-state detail; this plan does not duplicate it.
 ## Target state
 
 - A single-row `app_config` table holds the shared Venice key,
-  seeded by `mise run config:set`.
+  seeded by `mise run config-set`.
 - A `venice` edge function exposes `/embed`, calling Venice with
   the shared key read server-side via the service role.
 - A `pg_cron` job invokes the function on a schedule (via
@@ -80,7 +80,7 @@ key. It is reused by every later endpoint.
   owner/service_role may write. Any member reading the key in
   devtools is acceptable under the trust model (see the
   project README's "Not a zero-knowledge system").
-- **Seeding.** A `mise run config:set` target takes the key
+- **Seeding.** A `mise run config-set` target takes the key
   (prompt or `VENICE_API_KEY` env) and upserts the row via the
   existing `runSql` Management-API helper in
   `scripts/lib/supabase.mjs`. No dashboard clicking. The script
@@ -120,7 +120,7 @@ seeder, fetch, a real consumer) with eight fallbacks intact.
 
 1. **`app_config` table + RLS** in `supabase/schema.sql`.
    Idempotent. Apply via `mise run sync`.
-2. **`mise run config:set`** target wrapping `runSql` to upsert
+2. **`mise run config-set`** target wrapping `runSql` to upsert
    the row.
 3. **Fetch-on-login** into `app.serverConfig`; resolve the
    start-sequencing gotcha above.
@@ -213,7 +213,7 @@ Resolve during implementation; answers feed the learning loop.
 
 ## Definition of done
 
-- `app_config` + RLS applied; `mise run config:set` seeds it.
+- `app_config` + RLS applied; `mise run config-set` seeds it.
 - `app.serverConfig` fetched post-auth; start-sequencing
   resolved.
 - Embeddings manager reads `serverConfig`; embeddings still

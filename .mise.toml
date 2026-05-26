@@ -82,6 +82,12 @@ run = "node scripts/user-edit.mjs"
 # raw = true so password prompts have direct TTY access (same as setup-supabase).
 raw = true
 
+[tasks.config-set]
+description = "Set the project-global Venice API key in the app_config table on the linked project. Interactive; --key or VENICE_API_KEY override."
+run = "node scripts/config-set.mjs"
+# raw = true so the masked key prompt has direct TTY access (same as user-edit).
+raw = true
+
 [tasks.branch-cleanup]
 description = "Delete remote branches under a given prefix older than N days. Defaults to claude/* and 10 days. Lists candidates and asks for confirmation."
 run = "node scripts/branch-cleanup.mjs"

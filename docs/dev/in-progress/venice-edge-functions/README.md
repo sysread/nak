@@ -140,7 +140,7 @@ Five Venice endpoints are in scope (the full surface of
 
 ## Shared-config track
 
-The shared `app_config` table and its `mise run config:set`
+The shared `app_config` table and its `mise run config-set`
 seeder underpin every endpoint - the function cannot call
 Venice without the key, and the invited-user UX win is the
 shared key. This track is sequenced first inside milestone 1
@@ -181,7 +181,7 @@ Existing dev docs this project touches:
   shared-config track changes.
 - [Settings](../../settings.md) - the key-entry screens
   (`Setup`, `EditConfig`, `Settings`) that collapse once
-  `config:set` owns key entry.
+  `config-set` owns key entry.
 - [Chat](../../chat.md) - the completion call sites behind the
   chat-completions sub-plan.
 - [Attachments](../../attachments.md) - the text-parser caller
