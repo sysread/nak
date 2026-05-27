@@ -86,12 +86,27 @@ export async function runContextRecallPipeline(
 
   if (signal.aborted) return null;
 
-  const index = await gatherContextIndex({
-    venice,
-    supabase,
-    threadId,
-    signal,
-  });
+  // Total safety net. gatherContextIndex isolates each search layer
+  // internally, but the parts outside the layers (the listMessages read
+  // and deriveRecallQuery that build the query) can still throw. This
+  // pipeline is awaited on the live turn's critical path
+  // (chat-loop.ts fires it on the cold-start trigger of a brand-new
+  // thread, among others), so a throw here would crash the user's chat
+  // turn rather than degrade priming. Mirror the intuition pipeline's
+  // posture: any failure returns null, the caller leaves the prior
+  // cache in place, and the turn proceeds with no recall block.
+  let index;
+  try {
+    index = await gatherContextIndex({
+      venice,
+      supabase,
+      threadId,
+      signal,
+    });
+  } catch (err) {
+    log.warn('gather failed; skipping recall this round', err);
+    return null;
+  }
 
   if (signal.aborted) return null;
 

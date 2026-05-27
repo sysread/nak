@@ -354,6 +354,33 @@ describe('gatherContextIndex', () => {
     expect(out).toEqual({ memories: [], conversations: [], wiki: [] });
     expect(supabase.searchMemories).not.toHaveBeenCalled();
   });
+
+  it('degrades a throwing layer to empty instead of rejecting the gather', async () => {
+    // The conversation layer throws (e.g. PostgREST rejecting an
+    // oversized ILIKE query); the other two layers still contribute.
+    // This isolation is load-bearing: the gather runs on the live
+    // turn's critical path, so one layer's failure must not crash the
+    // chat turn.
+    const supabase = {
+      ...gatherSupabase({
+        memories: [mem('m1', 'The user grows basil.', 5)],
+        wiki: [wikiArt('w1', 'The herb garden')],
+      }),
+      searchThreads: vi.fn(async () => {
+        throw new Error('PostgREST 414 URI Too Long');
+      }),
+    } as unknown as SupabaseService;
+    const out = await gatherContextIndex({
+      venice: veniceNoEmbed,
+      supabase,
+      threadId: 't-1',
+      signal,
+      query: 'the garden',
+    });
+    expect(out.memories).toHaveLength(1);
+    expect(out.conversations).toEqual([]);
+    expect(out.wiki).toHaveLength(1);
+  });
 });
 
 // --- runContextRecallPipeline --------------------------------------
@@ -424,6 +451,32 @@ describe('runContextRecallPipeline', () => {
       threadId: 't-1',
       userId: 'u-1',
       signal: ctl.signal,
+      round: 1,
+      mood: null,
+      trigger: 'cold',
+    });
+    expect(out).toBeNull();
+  });
+
+  it('returns null instead of throwing when the gather blows up', async () => {
+    // A throw from the non-layer part of the gather (here listMessages,
+    // which builds the derived query) must not propagate: this pipeline
+    // is awaited on the live chat turn, so a throw would crash the turn
+    // with a generic error card rather than degrading priming. The
+    // cold-start trigger on a brand-new thread is exactly the path that
+    // motivated this guard.
+    const supabase = {
+      ...gatherSupabase({}),
+      listMessages: vi.fn(async () => {
+        throw new Error('read failed');
+      }),
+    } as unknown as SupabaseService;
+    const out = await runContextRecallPipeline({
+      venice: veniceNoEmbed,
+      supabase,
+      threadId: 't-1',
+      userId: 'u-1',
+      signal: new AbortController().signal,
       round: 1,
       mood: null,
       trigger: 'cold',
