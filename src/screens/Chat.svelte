@@ -4042,15 +4042,13 @@
     await app.supabase?.signOut();
   }
 
-  // Sidebar visibility — doubles as the slide-over drawer toggle below
-  // 1025px and the desktop "hide sidebar" toggle in the column layout.
-  // Initial value is viewport-aware so the wide column layout loads with
-  // the sidebar open and the slide-over layout loads with it closed,
-  // without a layout flash. 1024 is the drawer-layout breakpoint (see
-  // the `@media (max-width: 1024px)` block in styles.css); it is wider
-  // than the 720px composer/typography breakpoint used elsewhere.
+  // Mobile drawer. Hidden by default on narrow viewports via CSS, which
+  // Sidebar visibility — doubles as the mobile drawer toggle and the
+  // desktop "hide sidebar" toggle. Initial value is viewport-aware so
+  // desktop loads with the sidebar open and mobile loads with it closed,
+  // without a layout flash.
   let drawerOpen = $state(
-    typeof window !== 'undefined' && window.innerWidth > 1024
+    typeof window !== 'undefined' && window.innerWidth > 720
   );
   function closeDrawer(): void {
     drawerOpen = false;
@@ -4126,27 +4124,25 @@
     applyStoredColumnWidth('sidebar');
     applyStoredColumnWidth('logs');
   });
-  // In the slide-over layout (<=1024px) the drawer is a modal overlay, so
-  // picking a row from it (thread, recipe, memory, or wiki article) should
-  // dismiss it once the main panel has navigated. In the column layout the
-  // sidebar is a persistent column, so leave it alone. Idempotent there too
-  // - drawerOpen stays true when the viewport is wide. The 1024px test
-  // matches the drawer-layout breakpoint in styles.css.
+  // On mobile the drawer is a modal overlay, so picking a row from it
+  // (thread, recipe, memory, or wiki article) should dismiss it once the main
+  // panel has navigated. On desktop the sidebar is a persistent column,
+  // so leave it alone. Idempotent on desktop too - drawerOpen stays
+  // true when the viewport is wide.
   function closeDrawerOnMobile(): void {
     if (typeof window === 'undefined') return;
-    if (!window.matchMedia('(max-width: 1024px)').matches) return;
+    if (!window.matchMedia('(max-width: 720px)').matches) return;
     drawerOpen = false;
   }
   // Inverse of the above: the Cookbook panel calls this when the user
-  // closes a recipe and lands on the empty/list pane. In the slide-over
-  // layout the recipe list lives in the drawer, so without this the empty
-  // pane dead-ends with no obvious way back to the listing. The column
-  // layout keeps its existing drawerOpen value (the user may have collapsed
-  // it on purpose, and the list is still reachable via the toggle). The
-  // 1024px test matches the drawer-layout breakpoint in styles.css.
+  // closes a recipe and lands on the empty/list pane. On mobile the
+  // recipe list lives in the drawer, so without this the empty pane
+  // dead-ends with no obvious way back to the listing. Desktop keeps
+  // its existing drawerOpen value (the user may have collapsed it on
+  // purpose, and the list is still reachable via the toggle).
   function openDrawerOnMobile(): void {
     if (typeof window === 'undefined') return;
-    if (!window.matchMedia('(max-width: 1024px)').matches) return;
+    if (!window.matchMedia('(max-width: 720px)').matches) return;
     drawerOpen = true;
   }
 
