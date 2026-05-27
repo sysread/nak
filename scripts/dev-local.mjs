@@ -100,28 +100,33 @@ async function readStatus() {
   } catch {
     bail('`supabase status -o json` did not return JSON.', 'Check your supabase CLI version.');
   }
-  const missing = ['API_URL', 'DB_URL', 'ANON_KEY', 'SERVICE_ROLE_KEY'].filter((k) => !s[k]);
-  if (missing.length) {
-    bail(`supabase status is missing: ${missing.join(', ')}`, 'CLI output shape changed; update this script.');
+  if (!s.API_URL || !s.DB_URL) {
+    bail('supabase status is missing API_URL / DB_URL.', 'CLI output shape changed; update this script.');
   }
   // Refuse to operate on anything but a loopback target. This script applies
-  // the schema and seeds a user with the service-role key - operations that
-  // would be catastrophic against the real project. A dev machine commonly
-  // has prod credentials in its environment (direnv injecting an access
-  // token, etc.), so guard on the endpoint itself rather than trusting that
+  // the schema and seeds a user with the secret key - operations that would be
+  // catastrophic against the real project. A dev machine commonly has prod
+  // credentials in its environment (direnv injecting an access token, etc.),
+  // so guard on the endpoint itself rather than trusting that
   // `supabase status` could only ever return localhost.
   assertLoopback('DB_URL', s.DB_URL);
   assertLoopback('API_URL', s.API_URL);
-  // The local stack emits a legacy JWT anon key under ANON_KEY; it fills the
-  // client/publishable-key slot the app config calls supabasePublishableKey
-  // (hosted projects put an sb_publishable_ key there instead). Same for the
-  // service-role key vs the new sb_secret_ key.
-  return {
-    apiUrl: s.API_URL,
-    dbUrl: s.DB_URL,
-    publishableKey: s.ANON_KEY,
-    serviceRoleKey: s.SERVICE_ROLE_KEY,
-  };
+  // Use the modern keys the local stack mints (PUBLISHABLE_KEY / SECRET_KEY,
+  // the sb_publishable_ / sb_secret_ pair), matching what a hosted project now
+  // uses, so local dev exercises the same key shapes as prod. Fall back to the
+  // legacy JWT anon / service_role keys for an older CLI that predates the
+  // modern pair. The publishable key is the app's client key; the secret key
+  // seeds the user via the GoTrue admin API (verified the local GoTrue accepts
+  // sb_secret_ there).
+  const publishableKey = s.PUBLISHABLE_KEY || s.ANON_KEY;
+  const secretKey = s.SECRET_KEY || s.SERVICE_ROLE_KEY;
+  if (!publishableKey || !secretKey) {
+    bail(
+      'supabase status has no publishable/secret (or legacy anon/service_role) key.',
+      'CLI output shape changed; update this script.'
+    );
+  }
+  return { apiUrl: s.API_URL, dbUrl: s.DB_URL, publishableKey, secretKey };
 }
 
 // A connection target is safe only when its host is a loopback literal.
@@ -223,13 +228,13 @@ function watchSchema(dbUrl) {
 // materializes the profiles row the app expects. A repeat run gets a 422
 // "already registered" - that is success for our purposes, not an error.
 // ---------------------------------------------------------------------------
-async function seedUser(apiUrl, serviceRoleKey) {
+async function seedUser(apiUrl, secretKey) {
   step(4, 'Seed login');
   const res = await fetch(`${apiUrl}/auth/v1/admin/users`, {
     method: 'POST',
     headers: {
-      apikey: serviceRoleKey,
-      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: secretKey,
+      Authorization: `Bearer ${secretKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ email: DEV_EMAIL, password: DEV_PASSWORD, email_confirm: true }),
@@ -405,9 +410,9 @@ function runVite() {
 async function main() {
   banner('Nak - isolated local dev');
   await preflight();
-  const { apiUrl, dbUrl, publishableKey, serviceRoleKey } = await ensureStack();
+  const { apiUrl, dbUrl, publishableKey, secretKey } = await ensureStack();
   await applySchema(dbUrl);
-  await seedUser(apiUrl, serviceRoleKey);
+  await seedUser(apiUrl, secretKey);
   const veniceKey = await collectVeniceKey();
   await seedAppConfig(dbUrl, veniceKey);
   writeConfig(apiUrl, publishableKey, veniceKey);
