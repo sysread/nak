@@ -99,6 +99,23 @@ The gated `research` toolbox carries:
   `parseResearchResult` preserves those prefixes when
   `keepPrefixes: true` is passed.
 
+The gated `images` toolbox carries:
+
+- `generate_image` - runs one `VeniceClient.generateImage` (`POST
+  /image/generate`, default model `VENICE_IMAGE_MODEL`) from a
+  text prompt and optional negative prompt / style preset / aspect
+  ratio. Gated rather than always-on because a generation spends
+  Venice credits and writes a persistent attachment - the same
+  deliberate-write rationale the cookbook / memory write boxes use.
+  Unusually for a tool, its real output does NOT come back in the
+  tool-result content: the base64 image rides under
+  `GENERATED_IMAGE_RESULT_KEY`, which the chat-loop harvests
+  (`extractGeneratedImage`) and strips (`stripGeneratedImage`)
+  before persisting the `role='tool'` row, then writes as a
+  `message_attachments` row on the terminal assistant message. The
+  model only sees a compact descriptor (filename + dimensions). See
+  `./attachments.md` for the storage + display half.
+
 ## Files
 
 - `src/lib/tools/index.ts` - the toolbox definitions
@@ -152,6 +169,16 @@ The gated `research` toolbox carries:
   `citations` column so `CitationsPanel` + `^N^` markdown
   superscripts light up the same way they did under the old
   always-on search path.
+- `src/lib/tools/generate_image.ts` + `.schema.ts` - the
+  generate_image tool (gated `images` toolbox); maps an aspect
+  ratio to width/height for the pixel-dimensioned default model
+  and returns the descriptor + stashed payload.
+- `src/lib/tools/generated-image.ts` - dependency-light
+  harvest/strip helpers (`extractGeneratedImage`,
+  `stripGeneratedImage`, `generatedImageToNewAttachment`,
+  `GENERATED_IMAGE_RESULT_KEY`) shared by the tool and the
+  chat-loop. Kept separate so the chat-loop imports them without
+  pulling the lazy generate_image impl chunk.
 - `src/lib/tools/analyze_image.ts` - fires a one-shot vision sub-
   completion against the balanced tier with the image bytes from
   `ctx.attachments`. Requires `ToolContext.attachments` to be
@@ -307,6 +334,13 @@ The gated `research` toolbox carries:
   catalog each round; `onToolboxesEnabledChange` fires whenever
   the model flips the thread's enabled set so the UI can patch
   its local thread row without a refetch. See `./chat.md`.
+- **Attachments** - `generate_image` (gated `images` toolbox) is
+  the one tool whose output bypasses the tool-result content
+  entirely: the chat-loop harvests its stashed base64 and writes a
+  `message_attachments` row on the terminal assistant message, so
+  generated images share storage, 30-day retention, RLS, and
+  `analyze_image` reachability with user uploads. See
+  `./attachments.md`.
 - **Memory** - the five memory tools (`search`, `create`,
   `update`, `invalidate`, `delete`) ARE the memory CRUD
   interface. The user-facing `memoriesToolbox` packages

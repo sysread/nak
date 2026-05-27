@@ -172,9 +172,12 @@ A chat turn goes:
 - `ChatLoopHandlers` - the event surface the UI uses: text
   updates, tool start/done/error, persistence events,
   `onToolboxesEnabledChange` (for the composer toolbox flash when
-  `toggle_toolbox` fires), `onGuardRetry` (an output guard
-  discarded a junk attempt and is re-rolling - see below). Every
-  handler is optional; the loop runs cleanly with none of them.
+  `toggle_toolbox` fires), `onAssistantAttachments` (generate_image
+  output attached to the terminal assistant row at end of turn, so
+  the UI patches the in-memory row without a refetch),
+  `onGuardRetry` (an output guard discarded a junk attempt and is
+  re-rolling - see below). Every handler is optional; the loop runs
+  cleanly with none of them.
 - **Output guards** (`src/lib/stream-guards.ts` +
   `streamChatWithGuards` in `chat-loop.ts`) - generic "the
   completion came back wrong, re-roll it" machinery wrapping the

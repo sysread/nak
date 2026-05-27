@@ -1331,3 +1331,87 @@ describe('VeniceClient.fetchUsage', () => {
     });
   });
 });
+
+describe('generateImage', () => {
+  function jsonResponse(
+    body: unknown,
+    init: { status?: number; headers?: Record<string, string> } = {}
+  ): Response {
+    return new Response(JSON.stringify(body), {
+      status: init.status ?? 200,
+      headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+    });
+  }
+
+  it('posts to /image/generate and returns the first image as base64', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ id: 'g1', images: ['BASE64DATA'] })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await client.generateImage({
+      model: 'venice-sd35',
+      prompt: 'a cat',
+      width: 1024,
+      height: 1024,
+    });
+    expect(result).toEqual({ imageBase64: 'BASE64DATA', mimeType: 'image/webp' });
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(String(url)).toContain('/image/generate');
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).toMatchObject({
+      model: 'venice-sd35',
+      prompt: 'a cat',
+      width: 1024,
+      height: 1024,
+      variants: 1,
+      safe_mode: true,
+      return_binary: false,
+      format: 'webp',
+    });
+  });
+
+  it('throws on a content-policy violation even with HTTP 200', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(
+        { id: 'g1', images: [] },
+        { headers: { 'x-venice-is-content-violation': 'true' } }
+      )
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(
+      client.generateImage({ model: 'm', prompt: 'x' })
+    ).rejects.toBeInstanceOf(VeniceError);
+  });
+
+  it('throws when the response carries no image data', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ id: 'g1', images: [] })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(
+      client.generateImage({ model: 'm', prompt: 'x' })
+    ).rejects.toThrow(/no image data/);
+  });
+
+  it('surfaces an HTTP error through classifyError', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response('rate limited', { status: 429 })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(
+      client.generateImage({ model: 'm', prompt: 'x' })
+    ).rejects.toMatchObject({ kind: 'rate_limit' });
+  });
+});
