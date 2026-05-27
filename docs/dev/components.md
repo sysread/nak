@@ -290,7 +290,7 @@ interface Props {
 ```
 
 Autocomplete defaults to `'off'` so browsers don't try to autofill
-the Supabase anon key into a credit-card form somewhere. Master-
+the Supabase publishable key into a credit-card form somewhere. Master-
 password callers override with `'current-password'` /
 `'new-password'` so password managers and Chrome devtools see the
 hint and stop warning about a missing attribute.

@@ -136,7 +136,7 @@
 
   // --- Keys pane ---
   let supabaseUrl = $state(app.config?.supabaseUrl ?? '');
-  let supabaseAnonKey = $state(app.config?.supabaseAnonKey ?? '');
+  let supabasePublishableKey = $state(app.config?.supabasePublishableKey ?? '');
   let veniceApiKey = $state(app.config?.veniceApiKey ?? '');
   let keysPassword = $state('');
   let keysError = $state<string | null>(null);
@@ -890,7 +890,7 @@
     try {
       const config = {
         supabaseUrl: supabaseUrl.trim(),
-        supabaseAnonKey: supabaseAnonKey.trim(),
+        supabasePublishableKey: supabasePublishableKey.trim(),
         veniceApiKey: veniceApiKey.trim(),
       };
       await saveConfig(config, keysPassword);
@@ -1300,8 +1300,8 @@
             <input id="su" type="url" bind:value={supabaseUrl} required />
           </div>
           <div class="form-row">
-            <label for="sa">Supabase anon key</label>
-            <SecretInput id="sa" bind:value={supabaseAnonKey} required />
+            <label for="sa">Supabase publishable key</label>
+            <SecretInput id="sa" bind:value={supabasePublishableKey} required />
           </div>
           <div class="form-row">
             <label for="vk">Venice API key</label>

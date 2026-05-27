@@ -84,7 +84,7 @@ project.
 - **Supabase `auth.users`** — managed by Supabase. JWT stored in
   localStorage by the Supabase client under its own keys.
 
-The `AppConfig` shape is fixed: `supabaseUrl`, `supabaseAnonKey`,
+The `AppConfig` shape is fixed: `supabaseUrl`, `supabasePublishableKey`,
 `veniceApiKey`. `validateConfig` drops any other fields on read,
 so a future storage-shape change is a version bump on the
 localStorage key (`v2`) rather than a migration.

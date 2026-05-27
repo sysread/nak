@@ -10,15 +10,19 @@
  * while the app is unlocked, is owned by `./state.svelte.ts`.
  *
  * Also defines the plaintext export/import format (kind="nak-config",
- * version=1) used by the Setup → Import flow and the Settings → Export
- * panel. Export is plaintext by design — users should store the file
- * like any other secret (password manager, etc.).
+ * version=2) used by the Setup → Import flow and the Settings → Export
+ * panel. v2 renamed the client-key field supabaseAnonKey ->
+ * supabasePublishableKey to match Supabase's modern API-key nomenclature;
+ * both the import parser and the stored-blob validator still read the
+ * legacy field, so older exported files and saved configs keep working.
+ * Export is plaintext by design — users should store the file like any
+ * other secret (password manager, etc.).
  */
 import { encrypt, decrypt } from './crypto';
 
 export interface AppConfig {
   supabaseUrl: string;
-  supabaseAnonKey: string;
+  supabasePublishableKey: string;
   veniceApiKey: string;
 }
 
@@ -68,9 +72,14 @@ function validateConfig(candidate: unknown): AppConfig {
   }
   const c = candidate as Record<string, unknown>;
   const url = c.supabaseUrl;
-  const anon = c.supabaseAnonKey;
+  // Blobs saved before the anon->publishable rename stored the client key
+  // under `supabaseAnonKey`. Read the new field, fall back to the legacy
+  // one, so an older saved config still loads; the next saveConfig rewrites
+  // it under the new name. The value is the Supabase client key either way
+  // (a publishable key now, a legacy anon JWT on older/local projects).
+  const pub = c.supabasePublishableKey ?? c.supabaseAnonKey;
   const venice = c.veniceApiKey;
-  if (typeof url !== 'string' || typeof anon !== 'string' || typeof venice !== 'string') {
+  if (typeof url !== 'string' || typeof pub !== 'string' || typeof venice !== 'string') {
     throw new ConfigError('Stored config is missing required fields.');
   }
   if (!/^https?:\/\//.test(url)) {
@@ -78,7 +87,7 @@ function validateConfig(candidate: unknown): AppConfig {
   }
   // Any unknown fields (including the legacy `defaultModel` from before
   // settings moved to Supabase) are dropped silently on read.
-  return { supabaseUrl: url, supabaseAnonKey: anon, veniceApiKey: venice };
+  return { supabaseUrl: url, supabasePublishableKey: pub, veniceApiKey: venice };
 }
 
 /**
@@ -139,13 +148,15 @@ export async function changePassword(
 // ---------------------------------------------------------------------------
 
 const EXPORT_KIND = 'nak-config';
-const EXPORT_VERSION = 1;
+// v2 renamed supabaseAnonKey -> supabasePublishableKey. We write v2; the
+// parser still accepts v1 (legacy field) so old exported files import.
+const EXPORT_VERSION = 2;
 
 export interface ExportedConfig {
   kind: typeof EXPORT_KIND;
   version: typeof EXPORT_VERSION;
   supabaseUrl: string;
-  supabaseAnonKey: string;
+  supabasePublishableKey: string;
   veniceApiKey: string;
 }
 
@@ -154,7 +165,7 @@ export function toExportedConfig(config: AppConfig): ExportedConfig {
     kind: EXPORT_KIND,
     version: EXPORT_VERSION,
     supabaseUrl: config.supabaseUrl,
-    supabaseAnonKey: config.supabaseAnonKey,
+    supabasePublishableKey: config.supabasePublishableKey,
     veniceApiKey: config.veniceApiKey,
   };
 }
@@ -173,18 +184,21 @@ export function parseExportedConfig(raw: string): AppConfig {
   if (r.kind !== EXPORT_KIND) {
     throw new ConfigError('Not a Nak config file (wrong `kind`).');
   }
-  if (r.version !== EXPORT_VERSION) {
+  // Accept v1 (legacy `supabaseAnonKey`) and v2 (`supabasePublishableKey`).
+  if (r.version !== 1 && r.version !== 2) {
     throw new ConfigError(
-      `Unsupported config file version: ${String(r.version)}. Expected ${EXPORT_VERSION}.`
+      `Unsupported config file version: ${String(r.version)}. Expected 1 or 2.`
     );
   }
   const supabaseUrl = typeof r.supabaseUrl === 'string' ? r.supabaseUrl.trim() : '';
-  const supabaseAnonKey = typeof r.supabaseAnonKey === 'string' ? r.supabaseAnonKey.trim() : '';
+  // New field first, legacy `supabaseAnonKey` as the v1 fallback.
+  const rawPub = r.supabasePublishableKey ?? r.supabaseAnonKey;
+  const supabasePublishableKey = typeof rawPub === 'string' ? rawPub.trim() : '';
   const veniceApiKey = typeof r.veniceApiKey === 'string' ? r.veniceApiKey.trim() : '';
   if (!/^https?:\/\//.test(supabaseUrl)) {
     throw new ConfigError('Missing or invalid supabaseUrl.');
   }
-  if (!supabaseAnonKey) throw new ConfigError('Missing supabaseAnonKey.');
+  if (!supabasePublishableKey) throw new ConfigError('Missing Supabase publishable key.');
   if (!veniceApiKey) throw new ConfigError('Missing veniceApiKey.');
-  return { supabaseUrl, supabaseAnonKey, veniceApiKey };
+  return { supabaseUrl, supabasePublishableKey, veniceApiKey };
 }

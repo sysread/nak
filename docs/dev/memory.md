@@ -308,7 +308,7 @@ in `docs/user/memory.md`. The dev side has four moving parts:
   can't land a now-stale embedding.
 - **RLS policies** — all four (select / insert / update / delete)
   are `auth.uid() = user_id`. No cross-user read is possible
-  via the anon key.
+  via the publishable key.
 - **`threads.last_reflected_msg_id`**, plus
   `reflection_holder_id` and `reflection_claim_expires_at`
   — same shape as the

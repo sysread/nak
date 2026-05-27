@@ -3,7 +3,7 @@
    * "Edit keys before unlocking" screen. Reached from Unlock via the
    * Edit keys button. Lets a user fix a mistyped API key (or rotate
    * one) without first having to authenticate to Supabase — which they
-   * can't do if the stored URL / anon key is wrong.
+   * can't do if the stored URL / publishable key is wrong.
    *
    * Pre-fill note: by the time we render here, Unlock has already
    * decrypted the config into `app.config`, so we read the three
@@ -20,7 +20,7 @@
   // password again. Re-encrypting on save still needs the master password
   // (below) because that's the KDF input — we don't hold it in memory.
   let supabaseUrl = $state(app.config?.supabaseUrl ?? '');
-  let supabaseAnonKey = $state(app.config?.supabaseAnonKey ?? '');
+  let supabasePublishableKey = $state(app.config?.supabasePublishableKey ?? '');
   let veniceApiKey = $state(app.config?.veniceApiKey ?? '');
   let password = $state('');
   let error = $state<string | null>(null);
@@ -37,7 +37,7 @@
     try {
       const next: AppConfig = {
         supabaseUrl: supabaseUrl.trim(),
-        supabaseAnonKey: supabaseAnonKey.trim(),
+        supabasePublishableKey: supabasePublishableKey.trim(),
         veniceApiKey: veniceApiKey.trim(),
       };
       await saveConfig(next, password);
@@ -73,8 +73,8 @@
              placeholder="https://your-project.supabase.co" />
     </div>
     <div class="form-row">
-      <label for="sa">Supabase anon key</label>
-      <SecretInput id="sa" bind:value={supabaseAnonKey} required />
+      <label for="sa">Supabase publishable key</label>
+      <SecretInput id="sa" bind:value={supabasePublishableKey} required />
     </div>
     <div class="form-row">
       <label for="vk">Venice API key</label>

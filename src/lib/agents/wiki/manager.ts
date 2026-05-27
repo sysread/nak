@@ -72,7 +72,7 @@ class WikiManager extends BaseWorkerManager<WikiStartOpts> {
   ): Record<string, unknown> {
     return {
       supabaseUrl: opts.config.supabaseUrl,
-      supabaseAnonKey: opts.config.supabaseAnonKey,
+      supabasePublishableKey: opts.config.supabasePublishableKey,
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       userId: session.user.id,

@@ -112,7 +112,16 @@ async function readStatus() {
   // `supabase status` could only ever return localhost.
   assertLoopback('DB_URL', s.DB_URL);
   assertLoopback('API_URL', s.API_URL);
-  return { apiUrl: s.API_URL, dbUrl: s.DB_URL, anonKey: s.ANON_KEY, serviceRoleKey: s.SERVICE_ROLE_KEY };
+  // The local stack emits a legacy JWT anon key under ANON_KEY; it fills the
+  // client/publishable-key slot the app config calls supabasePublishableKey
+  // (hosted projects put an sb_publishable_ key there instead). Same for the
+  // service-role key vs the new sb_secret_ key.
+  return {
+    apiUrl: s.API_URL,
+    dbUrl: s.DB_URL,
+    publishableKey: s.ANON_KEY,
+    serviceRoleKey: s.SERVICE_ROLE_KEY,
+  };
 }
 
 // A connection target is safe only when its host is a loopback literal.
@@ -297,13 +306,13 @@ function pgLiteral(s) {
 // time - it never touches this file, which is plaintext by the same design
 // as the app's own export.
 // ---------------------------------------------------------------------------
-function writeConfig(apiUrl, anonKey, veniceKey) {
+function writeConfig(apiUrl, publishableKey, veniceKey) {
   step(5, 'Write importable config');
   const config = {
     kind: 'nak-config',
-    version: 1,
+    version: 2,
     supabaseUrl: apiUrl,
-    supabaseAnonKey: anonKey,
+    supabasePublishableKey: publishableKey,
     veniceApiKey: veniceKey,
   };
   writeFileSync(CONFIG_OUT, `${JSON.stringify(config, null, 2)}\n`);
@@ -336,7 +345,7 @@ async function serveFunctions() {
 
 // Printed once, before the Vite server takes over the terminal, so the
 // first-run import steps stay visible above the dev-server log. The import
-// is a one-time act per browser - the local anon key and the config file
+// is a one-time act per browser - the local client key and the config file
 // are stable across sessions - so on later runs this is just a reminder.
 function printGettingStarted() {
   console.log('');
@@ -396,12 +405,12 @@ function runVite() {
 async function main() {
   banner('Nak - isolated local dev');
   await preflight();
-  const { apiUrl, dbUrl, anonKey, serviceRoleKey } = await ensureStack();
+  const { apiUrl, dbUrl, publishableKey, serviceRoleKey } = await ensureStack();
   await applySchema(dbUrl);
   await seedUser(apiUrl, serviceRoleKey);
   const veniceKey = await collectVeniceKey();
   await seedAppConfig(dbUrl, veniceKey);
-  writeConfig(apiUrl, anonKey, veniceKey);
+  writeConfig(apiUrl, publishableKey, veniceKey);
   await serveFunctions();
   watchSchema(dbUrl);
   printGettingStarted();

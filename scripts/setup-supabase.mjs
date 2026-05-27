@@ -279,7 +279,7 @@ if (wantsUser) {
 
 const result = {
   supabaseUrl,
-  supabaseAnonKey: anon.api_key,
+  supabasePublishableKey: anon.api_key,
   projectRef: project.id,
   pagesUrl: url,
 };

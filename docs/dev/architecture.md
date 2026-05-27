@@ -63,7 +63,7 @@ Three pieces cooperate to keep the user's secrets where they belong:
 
 1. **Encrypted at rest** — `src/lib/config.ts` owns the
    `nak:config:v1` localStorage blob. Contents are the three API
-   keys (Supabase URL + anon key + Venice API key), AES-256-GCM
+   keys (Supabase URL + publishable key + Venice API key), AES-256-GCM
    encrypted under a PBKDF2-SHA256 key derived from the master
    password. Envelope format is versioned (`src/lib/crypto.ts`);
    primitives are Web Crypto, no external libraries.
@@ -102,9 +102,9 @@ The file is large (~1300 lines). Everything is well-commented; its
 size is not complexity, just the number of narrow method wrappers
 over the generated Supabase client.
 
-Security posture: the browser connects with the **anon key**. Every
+Security posture: the browser connects with the **publishable key**. Every
 table has RLS enabled, and every policy is `auth.uid() = user_id`
-(or a join via `threads`). The anon key is safe to ship; the
+(or a join via `threads`). The publishable key is safe to ship; the
 service-role key never reaches the browser. The same file comments
 this at the top — the comment is load-bearing.
 

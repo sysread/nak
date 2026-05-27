@@ -77,7 +77,7 @@ class BiasManager extends BaseWorkerManager {
   protected buildStartPayload(opts: BaseStartOpts, session: Session): Record<string, unknown> {
     return {
       supabaseUrl: opts.config.supabaseUrl,
-      supabaseAnonKey: opts.config.supabaseAnonKey,
+      supabasePublishableKey: opts.config.supabasePublishableKey,
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       veniceApiKey: opts.config.veniceApiKey,
