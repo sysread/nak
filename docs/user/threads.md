@@ -8,17 +8,6 @@ how to organize, rename, and clean up threads.
 
 ## The drawer layout
 
-On a desktop-sized window the drawer is a permanent column down the
-left edge rather than a slide-over. Hover the seam between the drawer
-and the conversation and the cursor turns into a resize arrow - drag
-it to make the column wider or narrower. Your chosen width is
-remembered on this device (it lives in the browser, so it doesn't
-follow you to another machine) and reapplied the next time you open
-Nak. The same drag handle works on the **log drawer** on the right
-(see [Chat](./chat.md)). On a phone-sized screen both panels slide
-over the conversation at a fixed width instead, so the resize handles
-don't appear there.
-
 ## Pinning a thread
 
 ## Renaming a thread
