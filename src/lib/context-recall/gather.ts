@@ -46,6 +46,9 @@ import {
 } from '../memories';
 import { searchWikiArticlesSemantic } from '../wiki';
 import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from '../models';
+import { createLogger } from '../logger.svelte';
+
+const log = createLogger('context-recall');
 
 /** Verbatim memory row as it lands in the index. A subset of the full
  *  Memory shape - the fields the consuming model needs to read the fact
@@ -174,13 +177,34 @@ export async function gatherContextIndex(
   }
   if (query.length === 0) return empty;
 
-  const [memories, conversations, wiki] = await Promise.all([
+  // Each layer degrades independently: a search that throws (Venice
+  // unreachable for the embed, a PostgREST error on an oversized query,
+  // an RPC failure) contributes an empty list rather than rejecting the
+  // whole gather. allSettled (not Promise.all) is load-bearing here -
+  // this gather runs on the live turn's critical path via
+  // runContextRecallPipeline, so one layer throwing must never surface
+  // as a chat-turn failure. The failure mode that motivated this: a
+  // very large opening message on a brand-new thread, where the
+  // cold-start trigger fires recall and one layer's search threw.
+  const [memoriesR, conversationsR, wikiR] = await Promise.allSettled([
     gatherMemories(query, { supabase, venice, signal }),
     gatherConversations(query, threadId, { venice, supabase, signal }),
     gatherWiki(query, threadId, { supabase, venice, signal }),
   ]);
 
-  return { memories, conversations, wiki };
+  if (memoriesR.status === 'rejected')
+    log.warn('memory layer failed', memoriesR.reason);
+  if (conversationsR.status === 'rejected')
+    log.warn('conversation layer failed', conversationsR.reason);
+  if (wikiR.status === 'rejected')
+    log.warn('wiki layer failed', wikiR.reason);
+
+  return {
+    memories: memoriesR.status === 'fulfilled' ? memoriesR.value : [],
+    conversations:
+      conversationsR.status === 'fulfilled' ? conversationsR.value : [],
+    wiki: wikiR.status === 'fulfilled' ? wikiR.value : [],
+  };
 }
 
 async function gatherMemories(
