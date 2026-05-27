@@ -1,6 +1,13 @@
 <!--
-  Per-message attachment list rendered under the body of a user
-  message. One row per attachment with:
+  Per-message attachment list rendered under the body of a user message
+  (uploads) or an assistant message (generate_image output). Two groups,
+  split by `partitionAttachments`:
+
+    - Live images render as large inline previews, about 85% of the
+      message-card width, wrapped in a download anchor. Same treatment
+      for user-uploaded and AI-generated images.
+    - Everything else (non-image files, plus expired images whose
+      binary was reclaimed) renders as a compact chip row:
 
     - Live attachment: a download anchor (`download=<filename>`) that
       resolves the base64 `data` back into a Blob URL on demand.
@@ -31,6 +38,7 @@
     formatBytes,
     isImageMimeType,
   } from '$lib/attachments';
+  import { partitionAttachments } from '$lib/ui/message-attachments';
   import { extractedTextDrawer } from '$lib/extractedTextDrawer.svelte';
 
   interface Props {
@@ -38,6 +46,10 @@
   }
 
   const { attachments }: Props = $props();
+
+  // Live images render large; files (and expired images) render as
+  // chips. Decision logic lives in the UI primitive, not the markup.
+  const partitioned = $derived(partitionAttachments(attachments));
 
   // Cache of Blob URLs we've created for this component's attachments,
   // keyed by attachment id. Populated lazily and torn down together.
@@ -74,29 +86,44 @@
   }
 </script>
 
-{#if attachments.length > 0}
+{#if partitioned.images.length > 0}
+  <div class="msg-attachment-images">
+    {#each partitioned.images as a (a.id)}
+      <!-- Wrapped in the download anchor so a click saves the original
+           file, same affordance the file chips offer. Lightbox/zoom is
+           a deliberate follow-up, not wired here. -->
+      <a
+        href={hrefFor(a)}
+        download={a.filename}
+        rel="noopener"
+        class="msg-attachment-image-link"
+        title={`Download ${a.filename}`}
+      >
+        <img class="msg-attachment-image" src={thumbSrc(a)} alt={a.filename} />
+      </a>
+    {/each}
+  </div>
+{/if}
+
+{#if partitioned.files.length > 0}
   <ul class="msg-attachments" role="list">
-    {#each attachments as a (a.id)}
+    {#each partitioned.files as a (a.id)}
       <li class="msg-attachment" class:expired={!!a.expired_at}>
-        {#if isImageMimeType(a.mime_type) && a.data_base64}
-          <img class="msg-attachment-thumb" src={thumbSrc(a)} alt={a.filename} />
-        {:else}
-          <svg
-            class="msg-attachment-icon"
-            viewBox="0 0 24 24"
-            width="16"
-            height="16"
-            aria-hidden="true"
-          >
-            <path
-              d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm0 0v6h6"
-              stroke="currentColor"
-              stroke-width="1.6"
-              fill="none"
-              stroke-linejoin="round"
-            />
-          </svg>
-        {/if}
+        <svg
+          class="msg-attachment-icon"
+          viewBox="0 0 24 24"
+          width="16"
+          height="16"
+          aria-hidden="true"
+        >
+          <path
+            d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm0 0v6h6"
+            stroke="currentColor"
+            stroke-width="1.6"
+            fill="none"
+            stroke-linejoin="round"
+          />
+        </svg>
         <span class="msg-attachment-name">
           {#if a.data_base64}
             <a
@@ -150,6 +177,32 @@
 {/if}
 
 <style>
+  .msg-attachment-images {
+    margin: 0.5rem 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  /* ~85% of the message-card content width, capped at 100% so the
+     preview never spills past the card padding on a narrow viewport.
+     The link is the width-constrained block; the img fills it and keeps
+     its natural aspect ratio via height:auto. */
+  .msg-attachment-image-link {
+    display: block;
+    width: 85%;
+    max-width: 100%;
+  }
+
+  .msg-attachment-image {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg-0);
+  }
+
   .msg-attachments {
     list-style: none;
     margin: 0.5rem 0 0;
@@ -178,15 +231,6 @@
     color: var(--muted);
     background: transparent;
     border-style: dashed;
-  }
-
-  .msg-attachment-thumb {
-    width: 32px;
-    height: 32px;
-    object-fit: cover;
-    border-radius: calc(var(--radius) / 2);
-    flex: 0 0 32px;
-    background: var(--bg-0);
   }
 
   .msg-attachment-icon {

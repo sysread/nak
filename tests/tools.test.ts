@@ -273,6 +273,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
+      'images',
     ]);
   });
 
@@ -281,6 +282,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
+      'images',
     ]);
     expect(GATED_TOOLBOX_NAMES).not.toContain('always_on');
   });
@@ -294,6 +296,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
+      'images',
     ]);
     for (const m of GATED_TOOLBOX_META) {
       expect(typeof m.description).toBe('string');
@@ -347,6 +350,16 @@ describe('tool registry', () => {
     expect(names).not.toContain('wiki_delete');
     expect(names).not.toContain('recipe_save');
     expect(names).not.toContain('memory_create');
+  });
+
+  it('buildToolList(["images"]) exposes generate_image only when enabled', () => {
+    // generate_image is gated, not always-on: it spends Venice credits
+    // and writes a persistent attachment, so it must not appear in the
+    // wire list until the images toolbox is on.
+    const offNames = buildToolList([]).map((t) => t.function.name);
+    expect(offNames).not.toContain('generate_image');
+    const onNames = buildToolList(['images']).map((t) => t.function.name);
+    expect(onNames).toContain('generate_image');
   });
 
   it('alwaysOnToolbox carries every read-only surface', () => {

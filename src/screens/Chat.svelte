@@ -1522,19 +1522,21 @@
       // reach this closure before removeChannel completes.
       if (activeThreadId !== threadId) return;
       appendMessage(msg);
-      // Hydrate attachments for user rows. The realtime payload only
-      // carries the `messages` row — Postgres replication doesn't
-      // join across tables — so a user message that was sent with
-      // files reaches the subscriber with `attachments` unset. Fire
-      // a follow-up fetch and re-append; `appendMessage`'s upgrade
+      // Hydrate attachments for rows that can carry them — user rows
+      // (uploads) and assistant rows (generate_image output). The
+      // realtime payload only carries the `messages` row — Postgres
+      // replication doesn't join across tables — so a message with
+      // attachments reaches the subscriber with `attachments` unset.
+      // Fire a follow-up fetch and re-append; `appendMessage`'s upgrade
       // path replaces the placeholder with the hydrated row.
       //
       // Covers two scenarios:
-      //   1. Local sender race — the sender's own `appendMessage(userMsg)`
-      //      with attachments already lands via the upgrade path; this
-      //      hydration is a defensive second attempt for the case where
-      //      the realtime echo arrives but the local path never fires
-      //      (e.g. an error between addMessage and addAttachments).
+      //   1. Local sender race — the sender's own appendMessage with
+      //      attachments already lands (the user-upload path, or the
+      //      chat-loop's onAssistantAttachments patch for generated
+      //      images); this hydration is a defensive second attempt for
+      //      the case where the realtime echo arrives but the local
+      //      path never fires.
       //   2. Cross-tab sync — tab B sees the INSERT from tab A and
       //      needs to fetch attachments itself; this is the only path
       //      that does it.
@@ -1542,7 +1544,7 @@
       // Fire-and-forget: a failure here just leaves the row without
       // attachments in this tab. The next full `listMessages` on
       // reload (or a re-subscribe) hydrates correctly.
-      if (msg.role === 'user' && app.supabase) {
+      if ((msg.role === 'user' || msg.role === 'assistant') && app.supabase) {
         void app.supabase
           .listAttachmentsByMessageIds([msg.id])
           .then((byId) => {
@@ -3199,6 +3201,19 @@
               if (ctx.threadId === activeThreadId) {
                 appendMessage(msg);
               }
+            },
+            onAssistantAttachments: (messageId, attachments) => {
+              // The chat-loop wrote generate_image output to this
+              // assistant row at end of turn. Patch the live message so
+              // the image renders without a refetch; appendMessage's
+              // upgrade path swaps the attachment-less row for this one.
+              // Background-thread slots need no patch - their buffered
+              // row is attachment-less, but listMessages re-hydrates
+              // assistant attachments on re-entry and mergeMessagesById
+              // prefers the fetched row.
+              if (ctx.threadId !== activeThreadId) return;
+              const existing = messages.find((m) => m.id === messageId);
+              if (existing) appendMessage({ ...existing, attachments });
             },
             onToolStart: (call) => {
               // performance.now() rather than Date.now() so the
@@ -6079,6 +6094,7 @@
                   model={block.assistant.model}
                   usage={block.assistant.usage}
                   createdAt={block.assistant.created_at}
+                  attachments={block.assistant.attachments}
                   disabled={pendingDeleteSet.has(block.assistant.id) || (activeSlot?.sending ?? false)}
                   onRegenerate={() => { void regenerateFrom(block.assistant.id); }}
                 >
@@ -6140,6 +6156,7 @@
                   model={block.message.model}
                   usage={block.message.usage}
                   createdAt={block.message.created_at}
+                  attachments={block.message.attachments}
                   disabled={pendingDeleteSet.has(block.message.id) || activeSlot?.sending}
                   onRegenerate={() => { void regenerateFrom(block.message.id); }}
                 />

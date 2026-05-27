@@ -50,12 +50,40 @@ Click the × on a chip to remove it before sending.
 
 ## After sending
 
-Each attached file shows up under your message as a download link:
+Images you attach (and images Nak generates, below) render as a large
+preview under the message - about 85% of the bubble width - so you can
+actually see them in the conversation rather than squinting at a
+thumbnail. Click an image preview to download the original.
+
+Other files show up under your message as a download chip:
 
 - **Click the filename** to download the original file. Nak
   preserves the original name.
 - **Click "Text"** (when present) to open a right-side drawer with
   the extracted text, so you can read what the model read.
+
+## Generating images
+
+Nak can also create images for you. Enable the **Images** toolbox in
+the [toolbox popover](./chat.md#toolboxes), then ask for a picture -
+"draw me a watercolor fox in a snowy forest." Nak writes a detailed
+prompt, sends it to Venice's image model, and attaches the result to
+its reply as a large preview, exactly like an image you uploaded
+yourself.
+
+- Nak often turns the Images toolbox on by itself when you clearly
+  ask for a picture, the same way it reaches for other capabilities
+  mid-conversation. If nothing happens, check the toolbox is enabled.
+- Generated images are **stored and expired on the same 30-day
+  schedule as your uploads** (see below) - they live in your Nak
+  database, freed automatically a month after the conversation goes
+  quiet.
+- Because a generated image is a normal attachment, you can ask Nak
+  to look at it again later ("what's in the background of that image?")
+  and it will inspect the picture it made, just like re-asking about
+  an uploaded image.
+- Generating an image spends Venice credits, which is why it sits
+  behind a toolbox rather than firing on every message.
 
 ## Expiration
 

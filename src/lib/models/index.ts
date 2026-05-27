@@ -541,6 +541,21 @@ export function agentModel(role: AgentRole): ModelSpec {
 export const VENICE_EMBEDDING_MODEL = 'text-embedding-bge-m3';
 
 /**
+ * Venice's default text-to-image model for the generate_image tool. A
+ * standalone constant rather than an AGENT_MODELS entry because an
+ * image model isn't a chat ModelSpec - it has no context window, no
+ * token-based capabilities, and `agentModel()` (which indexes MODELS)
+ * would type-error on it. Same shape as VENICE_EMBEDDING_MODEL above:
+ * one non-chat Venice model id, swappable here in one place.
+ *
+ * venice-sd35 is pixel-dimensioned (width/height up to 1280px), which
+ * is why the tool maps aspect ratios to width/height pairs rather than
+ * sending an `aspect_ratio` field - swapping to an aspect-ratio-native
+ * model means revisiting that mapping in generate_image.ts.
+ */
+export const VENICE_IMAGE_MODEL = 'venice-sd35';
+
+/**
  * Native output dimension of VENICE_EMBEDDING_MODEL - the length of each
  * `embedding` array returned by /embeddings. bge-m3 emits 1024.
  */

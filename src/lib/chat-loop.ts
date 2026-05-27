@@ -39,6 +39,8 @@ import type {
   Message,
   Thread,
   ThreadAttachmentSummary,
+  Attachment,
+  NewAttachment,
 } from './supabase';
 import type {
   VeniceClient,
@@ -71,6 +73,12 @@ import {
   sanitizeToolCallsForWire,
 } from './tools/wire';
 import {
+  extractGeneratedImage,
+  generatedImageToNewAttachment,
+  stripGeneratedImage,
+  type GeneratedImagePayload,
+} from './tools/generated-image';
+import {
   fireSamskaras,
   formatPrimingThinks,
   getCompoundSummary,
@@ -83,6 +91,7 @@ import {
   snapshotBiasActiveBiases,
 } from './bias';
 import { detectTimezone } from './timezone';
+import { createLogger } from './logger.svelte';
 import {
   buildIntuitionThinkMessage,
   countUserRounds,
@@ -112,6 +121,8 @@ import {
  * actually hits the cap, the model is misbehaving rather than working.
  */
 export const MAX_ROUNDS = 20;
+
+const log = createLogger('chat-loop');
 
 /**
  * Hard cap on the wait for samskara priming before the first
@@ -806,6 +817,16 @@ export interface ChatLoopHandlers {
   /** A tool-result row has been written (fires once per tool). */
   onToolResultPersisted?(message: Message): void;
   /**
+   * Generated-image attachments were written to the terminal assistant
+   * row at end of turn (from one or more generate_image calls). Fires
+   * once, with the message id they were attached to and the hydrated
+   * rows, so the UI can patch the in-memory assistant message without a
+   * refetch - the same way the user-upload path patches attachments
+   * onto the just-sent user message. Skipped when no image was
+   * generated this turn.
+   */
+  onAssistantAttachments?(messageId: string, attachments: Attachment[]): void;
+  /**
    * The thread's gated-toolbox set changed during the round (triggered
    * by a `toggle_toolbox` call from the model). UI surfaces this as
    * a flash on the composer toolbox button. The handler receives the
@@ -1286,6 +1307,14 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // main chat-loop no longer sets `enable_web_search` on its own
   // requests, so the only citation source is the tool path.
   const toolCitations: Citation[] = [];
+
+  // Images produced by generate_image calls over the whole turn. The
+  // heavy base64 payload is harvested here and stripped from the
+  // model-visible tool-result row (see ./tools/generated-image); at end
+  // of turn these are written as message_attachments rows on the
+  // terminal assistant message so they render on the reply and ride the
+  // same 30-day retention as user uploads.
+  const generatedImages: GeneratedImagePayload[] = [];
 
   // Turn-open priming. Computed ONCE before the round loop so every
   // round in this turn sees the same compound + fire + opening-recall
@@ -2008,8 +2037,13 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           'cancelled_by_sibling_ask_user'
         );
       } else {
+        // stripGeneratedImage drops the ~700KB base64 blob a
+        // generate_image result carries before it's encoded onto the
+        // role='tool' row - the model only needs the compact descriptor
+        // (filename + dimensions), and replaying the blob into context
+        // every round would be pure waste. No-op for every other tool.
         content = r.ok
-          ? encodeToolContent({ ok: true, value: r.value })
+          ? encodeToolContent({ ok: true, value: stripGeneratedImage(r.value) })
           : encodeToolContent({ ok: false, error: r.error });
       }
       const msg = await supabase.addMessage(thread.id, 'tool', content, {
@@ -2041,6 +2075,10 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         for (const cite of extracted) {
           toolCitations.push({ ...cite, index: toolCitations.length + 1 });
         }
+        // Harvest a generate_image payload, if this result carried one,
+        // for the end-of-turn attach to the terminal assistant row.
+        const img = extractGeneratedImage(r.value);
+        if (img) generatedImages.push(img);
       }
     }
 
@@ -2197,6 +2235,31 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // request more tool calls.
     if (round === MAX_ROUNDS - 1) {
       stoppedByLimit = true;
+    }
+  }
+
+  // Attach any generate_image output to the assistant row that closed
+  // the turn. Done once, after the loop, against the final
+  // lastAssistantId so it works whether the model wrapped up with a
+  // text reply (terminal row) or ended on the tool-invoking row with no
+  // follow-up text. The attachment rows ride the same message_attachments
+  // table, 30-day expiry worker, and RLS chain as user uploads - no
+  // separate storage. Best-effort: a failed insert is logged but does
+  // not tear down the turn (the reply text is already persisted); the
+  // image just won't render on revisit.
+  if (lastAssistantId !== null && generatedImages.length > 0) {
+    const rows: NewAttachment[] = generatedImages.map((img, i) =>
+      generatedImageToNewAttachment(img, i)
+    );
+    try {
+      const attached = await supabase.addAttachments(lastAssistantId, rows);
+      handlers?.onAssistantAttachments?.(lastAssistantId, attached);
+    } catch (err) {
+      log.error(
+        `failed to attach ${rows.length} generated image(s) to assistant ${lastAssistantId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
     }
   }
 

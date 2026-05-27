@@ -34,8 +34,9 @@
   import ContextRing from './ContextRing.svelte';
   import ReasoningPanel from './ReasoningPanel.svelte';
   import CitationsPanel from './CitationsPanel.svelte';
+  import MessageAttachments from './MessageAttachments.svelte';
   import type { Snippet } from 'svelte';
-  import type { Message } from '$lib/supabase';
+  import type { Message, Attachment } from '$lib/supabase';
   import { app } from '$lib/state.svelte';
   import { findContextWindowById } from '$lib/models';
   import {
@@ -62,6 +63,13 @@
     /** Tool-group card (ToolCalls component). Rendered between body and actions. */
     children?: Snippet;
     /**
+     * Attachments on this assistant message - generate_image output.
+     * Rendered as large image previews below the body, the same
+     * MessageAttachments component user-uploaded images use. Absent on
+     * the vast majority of assistant rows (no image was generated).
+     */
+    attachments?: Attachment[] | null;
+    /**
      * Set true when this message is in the regenerate-from-here
      * pending-delete range. Greys the bubble (via the parent's
      * `.regen-target` class) and disables every button in the
@@ -87,6 +95,7 @@
     usage = null,
     createdAt = null,
     children,
+    attachments = null,
     disabled = false,
     onRegenerate,
   }: Props = $props();
@@ -165,6 +174,10 @@
 <div class="assistant-body" onclick={onBodyClick}>
   <Markdown {content} />
 </div>
+
+{#if attachments && attachments.length > 0}
+  <MessageAttachments {attachments} />
+{/if}
 
 {#if children}
   {@render children()}

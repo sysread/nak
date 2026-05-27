@@ -36,6 +36,8 @@ that you can enable per conversation:
 - **Memories** — search, create, update, and delete long-term
   memories about you.
 - **Conversations** — search prior conversations for context.
+- **Images** — generate a picture from a text description and attach
+  it to the reply. See [Attachments](./attachments.md#generating-images).
 
 Click the toolbox icon to open the popover and check off the
 toolboxes you want active for this conversation. Each toolbox is

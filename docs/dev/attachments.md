@@ -17,7 +17,8 @@ consume them, and reclaimed after a 30-day dormancy window.
 - `src/lib/supabase.ts` — `Attachment` / `NewAttachment` types,
   `addAttachments`, `listAttachmentsByMessageIds`,
   `expireOldAttachments`. `listMessages` co-fetches attachments
-  for user rows.
+  for user AND assistant rows (assistant rows can carry
+  generate_image output).
 - `src/lib/venice.ts` — `VeniceMessage.content` widened to
   `string | ContentPart[]`; new `VeniceClient.extractText(blob,
   filename)` that calls `POST /augment/text-parser` as
@@ -28,9 +29,29 @@ consume them, and reclaimed after a 30-day dormancy window.
 - `src/lib/extractedTextDrawer.svelte.ts` — rune-based singleton
   store driving the right-side drawer.
 - `src/components/MessageAttachments.svelte` — per-message list
-  under user-message bodies. Live rows render download anchors;
-  expired rows render the filename plus a clock icon (no anchor)
-  and the "Text" button if extracted text remains.
+  under user- and assistant-message bodies. Splits attachments via
+  `partitionAttachments`: live images render as large previews
+  (~85% of card width, wrapped in a download anchor); files and
+  expired images render as compact chips - download anchor when
+  live, filename plus clock icon (no anchor) plus the "Text" button
+  when expired.
+- `src/lib/ui/message-attachments.ts` — `partitionAttachments`, the
+  image-vs-chip split. Pure UI primitive so the decision logic
+  stays out of the `.svelte` markup.
+- `src/components/AssistantBody.svelte` — takes an `attachments`
+  prop and renders `MessageAttachments` between the body and the
+  action bar; this is how generated images surface on the
+  assistant reply (the plain assistant block and the tool-group
+  block both pass it).
+- `src/lib/tools/generate_image.ts` + `.schema.ts` — the
+  generate_image tool (gated `images` toolbox). Calls
+  `VeniceClient.generateImage` and returns a compact descriptor
+  with the base64 payload stashed under a key the chat-loop
+  harvests.
+- `src/lib/tools/generated-image.ts` — pure harvest/strip helpers
+  shared by the tool and the chat-loop: `extractGeneratedImage`,
+  `stripGeneratedImage`, `generatedImageToNewAttachment`, and the
+  `GENERATED_IMAGE_RESULT_KEY` constant.
 - `src/components/ExtractedTextDrawer.svelte` — full-height
   right-side drawer with the filename as header and the
   extracted text as a `<pre>` body.
@@ -55,7 +76,19 @@ consume them, and reclaimed after a 30-day dormancy window.
   built by `toVeniceMessage(m, { visionSpec })` with
   `m.attachments` in play.
 - **Message replayed on reload** — `listMessages` co-fetches
-  attachments for user rows; `MessageAttachments` renders.
+  attachments for user and assistant rows; `MessageAttachments`
+  renders (under the user body, or inside `AssistantBody` for
+  generated images).
+- **Model generates an image** — the main model calls
+  `generate_image` (gated `images` toolbox). The tool runs one
+  `VeniceClient.generateImage` and returns a compact descriptor
+  (`filename`, `width`, `height`) with the base64 stashed under
+  `GENERATED_IMAGE_RESULT_KEY`. The chat-loop harvests the payload
+  (`extractGeneratedImage`), strips it from the model-visible
+  tool-result row (`stripGeneratedImage`), and at end of turn
+  writes the image as a `message_attachments` row on the terminal
+  assistant message via `addAttachments`, firing
+  `onAssistantAttachments` so the live UI patches the in-memory row.
 - **Expiration sweep** — `attachmentExpiryManager.start` spawns
   the Web Worker on unlock (parallel to the reflection and
   summary managers). The worker acquires the
@@ -121,6 +154,18 @@ via-parent-of-parent pattern —
   left the model unable to re-analyze an image once any
   follow-up message was sent; the thread-scoped lookup fixes
   that by trusting RLS to keep the scope honest.
+- **Generated images never put base64 on the tool-result row**: a
+  generate_image result the model reads carries only the compact
+  descriptor; the ~700KB base64 rides under
+  `GENERATED_IMAGE_RESULT_KEY` and is stripped before
+  `encodeToolContent`. The bytes reach the user via the
+  `message_attachments` attach on the terminal assistant row, never
+  via the `role='tool'` content - otherwise the blob would replay
+  into context every round and bloat every thread reload for no
+  benefit (the model can't read pixels from a tool string). Generated
+  images are otherwise indistinguishable from uploads: same table,
+  same `expire_old_attachments` 30-day sweep, same RLS chain, same
+  `findImageByFilenameInThread` reachability for `analyze_image`.
 - **`<thread_attachments>` system block**: built once per turn in
   `runChatLoop` from
   `SupabaseService.listAttachmentSummariesForThread` (a
@@ -139,9 +184,14 @@ via-parent-of-parent pattern —
   `Chat.svelte`; the `send()` path materialises attachments into
   the DB and builds the Venice wire shape. Docs in
   `./chat.md`.
-- **Venice adapter**: we added `VeniceClient.extractText` and
+- **Venice adapter**: we added `VeniceClient.extractText`,
+  `VeniceClient.generateImage` (`POST /image/generate`), and
   widened `VeniceMessage.content`. See `./architecture.md` for
   the adapter conventions.
+- **Tools**: `generate_image` is a gated tool in the `images`
+  toolbox; its output flows back through the attachment path
+  rather than the tool-result content. Catalog + toolbox model in
+  `./tools.md`.
 - **Models**: `ModelSpec.supportsVision` gates inline images.
   Keep the flag truthful as tiers are repointed; documented in
   `./chat.md`.
@@ -152,14 +202,20 @@ via-parent-of-parent pattern —
   `reflection/manager.ts`.
 - **Realtime**: `subscribeToMessages` fires for every `messages`
   INSERT with the row payload only — Postgres replication doesn't
-  join `message_attachments`, so a user-row echo arrives with
+  join `message_attachments`, so a row echo arrives with
   `attachments` unset. Chat.svelte's subscribe handler fires a
   follow-up `listAttachmentsByMessageIds([msg.id])` for every
-  user-role INSERT and re-runs `appendMessage` with the hydrated
-  row. Needed for (a) cross-tab sync (tab B sees tab A's insert
-  and must hydrate itself) and (b) defense against a local race
-  where the attachment-less echo arrives before the sender's own
-  `appendMessage(userMsg)` can upgrade the row.
+  user- AND assistant-role INSERT and re-runs `appendMessage` with
+  the hydrated row. Needed for (a) cross-tab sync (tab B sees tab
+  A's insert and must hydrate itself) and (b) defense against a
+  local race where the attachment-less echo arrives before the
+  sender's own `appendMessage` can upgrade the row. The assistant
+  case covers generated images; on the local sender the chat-loop's
+  `onAssistantAttachments` handler already patched the row, so the
+  realtime fetch is a redundant-but-harmless second attempt there.
+  `mergeMessagesById` prefers the DB-fetched row, so a background
+  slot whose buffered assistant row is attachment-less still shows
+  the image on thread re-entry.
 - **Logging**: the attachment-expiry worker's manager
   emits breadcrumbs through
   `createLogger('attachment-expiry-worker')`. Worker-side

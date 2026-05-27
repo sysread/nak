@@ -4784,17 +4784,19 @@ export class SupabaseService {
     // rows without attachments, which is the common case) and lets
     // the realtime subscribe path reuse the same hydration helper
     // later.
-    const userMessageIds = messages
-      .filter((m) => m.role === 'user')
+    // User rows carry uploads; assistant rows carry generate_image
+    // output (attached at end of turn by the chat-loop). Both hydrate
+    // through the same query; tool / system rows never carry
+    // attachments so they're left out to keep the IN-list small.
+    const attachableIds = messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
       .map((m) => m.id);
-    if (userMessageIds.length > 0) {
-      const attachmentsByMessageId = await this.listAttachmentsByMessageIds(userMessageIds);
+    if (attachableIds.length > 0) {
+      const attachmentsByMessageId = await this.listAttachmentsByMessageIds(attachableIds);
       for (const m of messages) {
-        m.attachments = attachmentsByMessageId.get(m.id) ?? [];
-      }
-    } else {
-      for (const m of messages) {
-        if (m.role === 'user') m.attachments = [];
+        if (m.role === 'user' || m.role === 'assistant') {
+          m.attachments = attachmentsByMessageId.get(m.id) ?? [];
+        }
       }
     }
     // Repair an interrupted-exchange tail in memory so every reader -

@@ -105,6 +105,7 @@ import { wikiSearchSchema } from './wiki_search.schema';
 import { wikiListSchema } from './wiki_list.schema';
 import { wikiGetSchema } from './wiki_get.schema';
 import { wikiLibrarianSchema } from './wiki_librarian.schema';
+import { generateImageSchema } from './generate_image.schema';
 
 // Agent-only toolbox re-exports moved to the bottom of the file
 // alongside other re-exports. Direct `export ... from` rather than
@@ -244,6 +245,11 @@ const wikiLibrarian = lazyTool(
   wikiLibrarianSchema,
   () => import('./wiki_librarian'),
   'wikiLibrarian'
+);
+const generateImage = lazyTool(
+  generateImageSchema,
+  () => import('./generate_image'),
+  'generateImage'
 );
 
 /**
@@ -428,6 +434,25 @@ export const wikiToolbox: Toolbox = {
 };
 
 /**
+ * Image-generation toolbox. Gated rather than always-on: generating an
+ * image spends Venice credits and writes a persistent attachment row,
+ * so it gets the same deliberate user-or-model gate the cookbook /
+ * memory writes use. The user enables it from the composer popover; the
+ * model can flip it on via `toggle_toolbox` once a "draw me X" makes
+ * generation the obvious next move. The generated image is attached to
+ * the assistant's reply and rides the same 30-day retention as user
+ * uploads.
+ */
+export const imagesToolbox: Toolbox = {
+  name: 'images',
+  description:
+    'Generate an image from a text prompt and attach it to the reply. ' +
+    'Stored under the same 30-day retention as user uploads; reachable ' +
+    'afterward by analyze_image via its filename.',
+  tools: [generateImage],
+};
+
+/**
  * The canonical ordered list of toolboxes exposed to the main chat.
  * Order is visible to the model (system-prompt catalog) and to the
  * user (popover list). Always-on goes first so the model reads the
@@ -441,6 +466,7 @@ export const TOOLBOXES: readonly Toolbox[] = [
   cookingToolbox,
   memoriesToolbox,
   wikiToolbox,
+  imagesToolbox,
 ];
 
 /**

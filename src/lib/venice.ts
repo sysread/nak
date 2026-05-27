@@ -347,6 +347,41 @@ export interface ChatCompletion {
   finishReason: string | null;
 }
 
+/**
+ * Request shape for `POST /image/generate`. `model` and `prompt` are
+ * required; everything else is optional and only sent when supplied,
+ * matching the wire-discipline used by buildChatBody. Dimensions are
+ * pixel-based (width/height) because the default model is
+ * pixel-dimensioned; the generate_image tool maps user-facing aspect
+ * ratios to width/height pairs before calling.
+ *
+ * Docs: https://docs.venice.ai/api-reference/endpoint/image/generate
+ */
+export interface ImageGenRequest {
+  model: string;
+  prompt: string;
+  negativePrompt?: string;
+  stylePreset?: string;
+  /** Pixel width, 1-1280 for venice-sd35. */
+  width?: number;
+  /** Pixel height, 1-1280 for venice-sd35. */
+  height?: number;
+  seed?: number;
+  steps?: number;
+  cfgScale?: number;
+  /** Blur adult content. Defaults to true (mirrors Venice's default). */
+  safeMode?: boolean;
+  format?: 'webp' | 'png' | 'jpeg';
+  signal?: AbortSignal;
+}
+
+export interface ImageGenResult {
+  /** Base64-encoded image bytes, no `data:` prefix. */
+  imageBase64: string;
+  /** MIME type derived from the requested format, e.g. `image/webp`. */
+  mimeType: string;
+}
+
 export interface EmbeddingRequest {
   model: string;
   input: string | string[];
@@ -1096,6 +1131,85 @@ export class VeniceClient {
       }
       attempt += 1;
     }
+  }
+
+  /**
+   * Generate an image from a text prompt via `POST /image/generate`.
+   * Returns the first image as base64 (no `data:` prefix) plus its MIME
+   * type. Used by the generate_image tool.
+   *
+   * Unlike completeChat there is no 429 retry loop here: a generation
+   * is a single expensive call with no streaming epilogue, and the
+   * generate_image tool surfaces any failure to the model as a tool
+   * error it can choose to retry. We force `return_binary: false` so
+   * the bytes arrive as base64 JSON ready to drop straight into a
+   * message_attachments row, and `variants: 1` because the attachment
+   * path carries one image per generation.
+   *
+   * Content-policy guard: Venice can return HTTP 200 with the
+   * `x-venice-is-content-violation` header set when a prompt trips its
+   * policy and no usable image came back. We check the header
+   * explicitly and throw rather than handing back an empty / placeholder
+   * image as if it were a success.
+   */
+  async generateImage(req: ImageGenRequest): Promise<ImageGenResult> {
+    const format = req.format ?? 'webp';
+    const body: Record<string, unknown> = {
+      model: req.model,
+      prompt: req.prompt,
+      format,
+      variants: 1,
+      safe_mode: req.safeMode ?? true,
+      return_binary: false,
+    };
+    if (typeof req.width === 'number') body.width = req.width;
+    if (typeof req.height === 'number') body.height = req.height;
+    if (req.negativePrompt) body.negative_prompt = req.negativePrompt;
+    if (req.stylePreset) body.style_preset = req.stylePreset;
+    if (typeof req.seed === 'number') body.seed = req.seed;
+    if (typeof req.steps === 'number') body.steps = req.steps;
+    if (typeof req.cfgScale === 'number') body.cfg_scale = req.cfgScale;
+
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}/image/generate`, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(body),
+        signal: req.signal,
+      });
+    } catch (err) {
+      throw new VeniceError(
+        `Network error contacting Venice: ${(err as Error).message}`,
+        'network'
+      );
+    }
+    if (!res.ok) {
+      throw await this.classifyError(res);
+    }
+    if (res.headers.get('x-venice-is-content-violation') === 'true') {
+      throw new VeniceError(
+        'Venice rejected the image prompt for a content-policy violation. ' +
+          'Rephrase the request or tell the user the prompt was not allowed.',
+        'http',
+        res.status
+      );
+    }
+    let payload: unknown;
+    try {
+      payload = await res.json();
+    } catch {
+      throw new VeniceError('Failed to parse Venice image response.', 'parse');
+    }
+    const images = (payload as { images?: unknown }).images;
+    const first = Array.isArray(images) ? images[0] : undefined;
+    if (typeof first !== 'string' || first.length === 0) {
+      throw new VeniceError(
+        'Venice image response contained no image data.',
+        'parse'
+      );
+    }
+    return { imageBase64: first, mimeType: `image/${format}` };
   }
 
   /**
