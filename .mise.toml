@@ -16,6 +16,18 @@ pnpm = "10.33.4"
 # `mise run dev-start` still reaches Vite on the new version. 2.101.0 is the
 # latest verified good (dev-start drove a full local stack on it - start,
 # status-key read, schema apply, teardown).
+#
+# REALTIME CAVEAT (do not "modernize" the local key without reading this):
+# this CLI ships realtime image v2.86.3, which authenticates the WebSocket
+# apikey by verifying it as a JWT. The modern sb_publishable_ key is opaque,
+# not a JWT, so local realtime rejects it (`MalformedJWT`) and the app's live
+# message/thread updates silently stop - REST and auth still work, which makes
+# it look fine on load. That is upstream bug supabase/cli#4219. Because of it
+# dev-local.mjs deliberately writes the LEGACY anon JWT (not the publishable
+# key) as the app's client key in nak-local-config.json. Prod is unaffected -
+# hosted realtime resolves opaque keys. When a future CLI fixes #4219, this is
+# the place to note it: bump, then flip dev-local.mjs's readStatus back to
+# prefer PUBLISHABLE_KEY and re-test that realtime connects locally.
 "aqua:cli/cli"      = "latest"
 "aqua:supabase/cli" = "2.101.0"
 

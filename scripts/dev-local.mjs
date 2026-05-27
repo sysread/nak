@@ -111,22 +111,43 @@ async function readStatus() {
   // `supabase status` could only ever return localhost.
   assertLoopback('DB_URL', s.DB_URL);
   assertLoopback('API_URL', s.API_URL);
-  // Use the modern keys the local stack mints (PUBLISHABLE_KEY / SECRET_KEY,
-  // the sb_publishable_ / sb_secret_ pair), matching what a hosted project now
-  // uses, so local dev exercises the same key shapes as prod. Fall back to the
-  // legacy JWT anon / service_role keys for an older CLI that predates the
-  // modern pair. The publishable key is the app's client key; the secret key
-  // seeds the user via the GoTrue admin API (verified the local GoTrue accepts
-  // sb_secret_ there).
-  const publishableKey = s.PUBLISHABLE_KEY || s.ANON_KEY;
+  // The app's client key is deliberately the LEGACY anon JWT (ANON_KEY), not
+  // the modern publishable key (PUBLISHABLE_KEY, the sb_publishable_ value).
+  // This is the one place local intentionally diverges from the prod key shape,
+  // and the divergence is forced by an upstream bug, not a preference.
+  //
+  // Why: the local CLI realtime container (image realtime:v2.86.3, shipped by
+  // the pinned CLI) authenticates the WebSocket by verifying the apikey as a
+  // JWT signed with the local JWT secret. The opaque sb_publishable_ key is not
+  // a JWT, so realtime rejects it with `MalformedJWT` and the browser logs
+  // `WebSocket connection to .../realtime/v1/websocket?apikey=sb_publishable_...
+  // failed`. REST (PostgREST) and GoTrue auth both accept the publishable key
+  // locally - only realtime breaks - so the failure mode is subtle: the app
+  // loads and reads data fine, but live message/thread updates never arrive.
+  // This is upstream bug https://github.com/supabase/cli/issues/4219; the local
+  // single-tenant stack has no resolver for opaque keys the way hosted Supabase
+  // does, and it is NOT fixable by bumping the CLI (2.101.0 is the newest and
+  // still ships v2.86.3 - see the pin comment in .mise.toml). The anon JWT
+  // carries the same `anon` role and is accepted by REST, auth, AND realtime,
+  // so it is the only key that makes the entire local stack work. When #4219 is
+  // fixed in a future CLI, flip the preference back to PUBLISHABLE_KEY and
+  // re-test that realtime connects.
+  //
+  // Fall back to PUBLISHABLE_KEY only if a future CLI drops ANON_KEY entirely -
+  // at which point realtime would break again and this choice needs revisiting,
+  // so the fallback is a loud last resort, not a path exercised today.
+  const appClientKey = s.ANON_KEY || s.PUBLISHABLE_KEY;
+  // The secret key seeds the dev user via the GoTrue admin API. The modern
+  // sb_secret_ key works there (verified the local GoTrue accepts it), so
+  // prefer it and fall back to the legacy service_role JWT for an older CLI.
   const secretKey = s.SECRET_KEY || s.SERVICE_ROLE_KEY;
-  if (!publishableKey || !secretKey) {
+  if (!appClientKey || !secretKey) {
     bail(
-      'supabase status has no publishable/secret (or legacy anon/service_role) key.',
+      'supabase status has no anon/publishable (or secret/service_role) key.',
       'CLI output shape changed; update this script.'
     );
   }
-  return { apiUrl: s.API_URL, dbUrl: s.DB_URL, publishableKey, secretKey };
+  return { apiUrl: s.API_URL, dbUrl: s.DB_URL, appClientKey, secretKey };
 }
 
 // A connection target is safe only when its host is a loopback literal.
@@ -311,13 +332,18 @@ function pgLiteral(s) {
 // time - it never touches this file, which is plaintext by the same design
 // as the app's own export.
 // ---------------------------------------------------------------------------
-function writeConfig(apiUrl, publishableKey, veniceKey) {
+function writeConfig(apiUrl, appClientKey, veniceKey) {
   step(5, 'Write importable config');
+  // The field is named `supabasePublishableKey` to match the app's config
+  // contract (src/lib/config.ts), but the app treats it as an opaque Supabase
+  // client key and never inspects the format. Locally that value is the anon
+  // JWT, not an sb_publishable_ key - see readStatus for why (local realtime
+  // can't authenticate the publishable key; supabase/cli#4219).
   const config = {
     kind: 'nak-config',
     version: 2,
     supabaseUrl: apiUrl,
-    supabasePublishableKey: publishableKey,
+    supabasePublishableKey: appClientKey,
     veniceApiKey: veniceKey,
   };
   writeFileSync(CONFIG_OUT, `${JSON.stringify(config, null, 2)}\n`);
@@ -410,12 +436,12 @@ function runVite() {
 async function main() {
   banner('Nak - isolated local dev');
   await preflight();
-  const { apiUrl, dbUrl, publishableKey, secretKey } = await ensureStack();
+  const { apiUrl, dbUrl, appClientKey, secretKey } = await ensureStack();
   await applySchema(dbUrl);
   await seedUser(apiUrl, secretKey);
   const veniceKey = await collectVeniceKey();
   await seedAppConfig(dbUrl, veniceKey);
-  writeConfig(apiUrl, publishableKey, veniceKey);
+  writeConfig(apiUrl, appClientKey, veniceKey);
   await serveFunctions();
   watchSchema(dbUrl);
   printGettingStarted();
