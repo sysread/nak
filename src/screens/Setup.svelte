@@ -23,7 +23,7 @@
   import SecretInput from '../components/SecretInput.svelte';
 
   let supabaseUrl = $state('');
-  let supabaseAnonKey = $state('');
+  let supabasePublishableKey = $state('');
   let veniceApiKey = $state('');
   let password = $state('');
   let confirmPassword = $state('');
@@ -48,7 +48,10 @@
       const json = atob(padded);
       const obj = JSON.parse(json);
       if (typeof obj.supabaseUrl === 'string') supabaseUrl = obj.supabaseUrl;
-      if (typeof obj.supabaseAnonKey === 'string') supabaseAnonKey = obj.supabaseAnonKey;
+      // Accept the legacy `supabaseAnonKey` from setup links generated before
+      // the publishable-key rename.
+      const pub = obj.supabasePublishableKey ?? obj.supabaseAnonKey;
+      if (typeof pub === 'string') supabasePublishableKey = pub;
       if (typeof obj.veniceApiKey === 'string') veniceApiKey = obj.veniceApiKey;
       prefilled = true;
     } catch {
@@ -70,7 +73,7 @@
       const text = await file.text();
       const cfg = parseExportedConfig(text);
       supabaseUrl = cfg.supabaseUrl;
-      supabaseAnonKey = cfg.supabaseAnonKey;
+      supabasePublishableKey = cfg.supabasePublishableKey;
       veniceApiKey = cfg.veniceApiKey;
       prefilled = true;
       importInfo = `Imported from ${file.name}. Pick a master password below to continue.`;
@@ -95,7 +98,7 @@
     }
     const config: AppConfig = {
       supabaseUrl: supabaseUrl.trim(),
-      supabaseAnonKey: supabaseAnonKey.trim(),
+      supabasePublishableKey: supabasePublishableKey.trim(),
       veniceApiKey: veniceApiKey.trim(),
     };
     busy = true;
@@ -146,8 +149,8 @@
              placeholder="https://your-project.supabase.co" required />
     </div>
     <div class="form-row">
-      <label for="supabase-anon">Supabase anon key</label>
-      <SecretInput id="supabase-anon" bind:value={supabaseAnonKey} required />
+      <label for="supabase-publishable">Supabase publishable key</label>
+      <SecretInput id="supabase-publishable" bind:value={supabasePublishableKey} required />
     </div>
     <div class="form-row">
       <label for="venice-key">Venice API key</label>

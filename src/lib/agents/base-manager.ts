@@ -64,7 +64,7 @@ export interface BaseStartOpts {
    * don't hand the main-thread client across the worker boundary.
    */
   supabase: SupabaseService;
-  /** Source of truth for Supabase URL + anon key + Venice API key. */
+  /** Source of truth for Supabase URL + publishable key + Venice API key. */
   config: AppConfig;
 }
 

@@ -12,7 +12,7 @@ test('after saving config, reload shows unlock screen', async ({ page }) => {
   await page.addInitScript(() => localStorage.clear());
   await page.goto('/');
   await page.getByLabel('Supabase URL').fill('https://demo.supabase.co');
-  await page.getByLabel('Supabase anon key').fill('anon-demo');
+  await page.getByLabel('Supabase publishable key').fill('sb_publishable_demo');
   await page.getByLabel('Venice API key').fill('venice-demo');
   await page.getByLabel('Master password', { exact: true }).fill('test-password');
   await page.getByLabel('Confirm master password').fill('test-password');

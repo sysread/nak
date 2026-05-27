@@ -14,8 +14,8 @@ GitHub Pages, and own every piece of infrastructure it touches.
 - **AI**: Venice.ai REST API, called directly from the browser. Chat responses
   stream via SSE and render token-by-token in the UI.
 - **Data/Auth**: Supabase, configured by you, using `supabase-js` with the
-  public anon key and Row Level Security.
-- **Config storage**: Your Supabase URL, Supabase anon key, and Venice API key
+  public publishable key and Row Level Security.
+- **Config storage**: Your Supabase URL, Supabase publishable key, and Venice API key
   are encrypted with a master password using AES-256-GCM via the Web Crypto
   API (PBKDF2-SHA256, 600k iterations) and stored only in `localStorage`. No
   plaintext secrets are ever written to disk.
@@ -92,7 +92,7 @@ by hand:
 
 1. **Fork** this repository.
 2. **Create a Supabase project** at <https://supabase.com> and note the
-   project URL + `anon` key from Project Settings → API.
+   project URL + publishable key from Project Settings → API.
 3. **Apply the schema** by pasting [`supabase/schema.sql`](supabase/schema.sql)
    into the Supabase SQL Editor.
 4. **Whitelist** your `https://<you>.github.io/<repo>/` URL in Supabase
@@ -157,15 +157,16 @@ additional encryption for the sessionStorage blob.
 
 Additionally:
 
-- Supabase RLS is the line of defense for data. The anon key does not grant
+- Supabase RLS is the line of defense for data. The publishable key does not grant
   access to other users' rows — RLS policies in `schema.sql` enforce this.
 - The app never contacts the Supabase Management API from the browser.
   Schema changes, auth-config updates, and main-user creation all happen
   from `mise run setup` on your local machine, not from the deployed PWA.
-- The Supabase **service-role key** (which bypasses RLS) is used by the
+- The Supabase **secret key** (`SUPABASE_SECRET_KEY`, or the legacy
+  **service-role key** as a fallback) bypasses RLS and is used by the
   wizard only long enough to seed the main user, then discarded. It is
   never written to `localStorage`, the `#setup=` hand-off link, the
-  encrypted config blob, or anywhere else in the app. Only the anon key
+  encrypted config blob, or anywhere else in the app. Only the publishable key
   ever reaches the browser.
 - If you picked "sign-ups disabled" during setup, anyone who finds the
   deployed URL cannot create an account — they'd need access to your
@@ -196,7 +197,7 @@ pre-configured tiers so you don't have to memorize model names:
 
 | Item | Lives where | Shared across devices? |
 | ---- | ----------- | ---------------------- |
-| Supabase URL / anon key / Venice API key | local `localStorage` (AES-GCM encrypted) | No — needed to reach Supabase, and staying local is the whole point of the encryption |
+| Supabase URL / publishable key / Venice API key | local `localStorage` (AES-GCM encrypted) | No — needed to reach Supabase, and staying local is the whole point of the encryption |
 | Master password | derived per-device | No — it's the KDF input; nothing is stored |
 | **Default model tier** | Supabase `profiles.settings` | **Yes** |
 | **Color mode + accent** | Supabase `profiles.settings` + local cache for flash-free boot | **Yes** |
@@ -305,7 +306,7 @@ pnpm preview
 ### Running against a local Supabase
 
 You can point the app at a local Supabase stack (`supabase start`) just by
-entering its URL and anon key during initial setup. Apply `schema.sql` via
+entering its URL and publishable key during initial setup. Apply `schema.sql` via
 `supabase db reset` or the local SQL editor.
 
 ## Project layout

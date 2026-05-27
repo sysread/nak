@@ -3,9 +3,9 @@
  * settings. Every call from the UI that touches the user's Supabase
  * project goes through SupabaseService.
  *
- * Security posture: we connect with the project's public **anon key**,
+ * Security posture: we connect with the project's public **publishable key**,
  * not a service-role key. Row-Level Security (see `supabase/schema.sql`)
- * is the actual boundary — the anon key only works for the signed-in
+ * is the actual boundary — the publishable key only works for the signed-in
  * user's own rows. The service-role key never reaches the browser; it's
  * used by `mise run setup` locally to seed the main user and then
  * discarded.
@@ -1220,12 +1220,12 @@ export class SupabaseService {
    * default path (no `opts`) preserves the original main-thread behavior.
    */
   constructor(
-    config: Pick<AppConfig, 'supabaseUrl' | 'supabaseAnonKey'>,
+    config: Pick<AppConfig, 'supabaseUrl' | 'supabasePublishableKey'>,
     opts: { client?: SupabaseClient } = {}
   ) {
     this.client =
       opts.client ??
-      createClient(config.supabaseUrl, config.supabaseAnonKey, {
+      createClient(config.supabaseUrl, config.supabasePublishableKey, {
         auth: {
           persistSession: true,
           autoRefreshToken: true,

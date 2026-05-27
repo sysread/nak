@@ -45,8 +45,8 @@
 --   recipes   Cooklang recipes CRUD-able by the user and the recipe_* tools
 --
 -- All tables have Row Level Security enabled so an authenticated user
--- can only access rows they own. The anon key the browser uses is
--- safe to expose provided RLS policies stay in place.
+-- can only access rows they own. The publishable key the browser uses
+-- is safe to expose provided RLS policies stay in place.
 
 create extension if not exists pgcrypto;
 -- pgvector backs every embedding column (vector(2048)) further down. It

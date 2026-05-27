@@ -185,7 +185,7 @@ extension.
 ## Gotchas
 
 - **Class instances don't structured-clone.** The manager
-  passes primitives (Supabase URL, anon key, access token,
+  passes primitives (Supabase URL, publishable key, access token,
   refresh token, Venice key) via `postMessage`; the Worker
   reconstructs `VeniceClient` + `SupabaseClient` on its side.
   Handing a live service across the boundary looks fine and

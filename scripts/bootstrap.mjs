@@ -124,7 +124,7 @@ if (!veniceApiKey) bail('Venice API key is required.');
 console.log(`\n${style.magenta('━━ Phase 4: Setup link ━━')}`);
 const payload = {
   supabaseUrl: supa.supabaseUrl,
-  supabaseAnonKey: supa.supabaseAnonKey,
+  supabasePublishableKey: supa.supabasePublishableKey,
   veniceApiKey,
 };
 const b64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');

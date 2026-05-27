@@ -1,5 +1,6 @@
 // Tiny terminal UI helpers. No external dependencies.
 import readline from 'node:readline/promises';
+import { Writable } from 'node:stream';
 import { stdin as input, stdout as output } from 'node:process';
 
 const isTTY = output.isTTY;
@@ -54,44 +55,46 @@ export function bail(msg, recovery = null) {
 }
 
 export async function ask(question, { default: def, secret = false } = {}) {
-  const rl = readline.createInterface({ input, output, terminal: true });
   const suffix = def ? ` [${def}]` : '';
   const prompt = `  ${style.cyan('?')} ${question}${suffix} `;
+  if (secret) return askSecret(prompt, def);
+  const rl = readline.createInterface({ input, output, terminal: true });
   try {
-    if (secret) {
-      // Echo '*' for each typed char. We write the prompt ourselves first
-      // so readline's own prompt output doesn't get masked, then override
-      // the Interface's _writeToOutput for everything that follows.
-      output.write(prompt);
-      const originalWriteToOutput = rl._writeToOutput.bind(rl);
-      rl._writeToOutput = (chunk) => {
-        if (typeof chunk !== 'string' || chunk.length === 0) {
-          originalWriteToOutput(chunk);
-          return;
-        }
-        // Newlines end the input — pass through untouched.
-        if (chunk === '\n' || chunk === '\r' || chunk === '\r\n') {
-          originalWriteToOutput(chunk);
-          return;
-        }
-        // Backspace sequences (readline uses '\b \b' to erase a char).
-        // Pass through so the visual cursor moves back and erases the *.
-        if (chunk.charCodeAt(0) === 0x08) {
-          originalWriteToOutput(chunk);
-          return;
-        }
-        // Everything else is treated as one-or-more printable chars;
-        // show the same number of asterisks.
-        originalWriteToOutput('*'.repeat(chunk.length));
-      };
-      const answer = (await rl.question('')).trim();
-      return answer || (def ?? '');
-    }
     const answer = (await rl.question(prompt)).trim();
     return answer || (def ?? '');
   } finally {
     rl.close();
   }
+}
+
+// Masked secret entry. readline echoes every keystroke to its output stream;
+// the previous approach monkeypatched the internal `_writeToOutput` to swap
+// those for asterisks, but that hook is undefined on readline/promises (Node
+// 20.x) and, even on the callback API, fights readline's full-line refresh
+// under terminal:true. Instead, point readline's output at a sink that
+// swallows the echo entirely: the secret is hidden (sudo-style - no echo, not
+// even asterisks). The prompt is written to the real stdout up front, where
+// readline never touches it; terminal:true keeps stdin in raw mode so the TTY
+// itself doesn't echo either.
+function askSecret(prompt, def) {
+  const sink = new Writable({
+    write(_chunk, _enc, cb) {
+      cb();
+    },
+  });
+  const rl = readline.createInterface({ input, output: sink, terminal: true });
+  output.write(prompt);
+  return rl.question('').then(
+    (answer) => {
+      output.write('\n');
+      rl.close();
+      return answer.trim() || (def ?? '');
+    },
+    (err) => {
+      rl.close();
+      throw err;
+    }
+  );
 }
 
 /**

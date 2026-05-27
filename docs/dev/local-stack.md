@@ -61,10 +61,10 @@ signal or the child's exit triggers it.
 The app already has a Setup -> Import from JSON flow
 (`parseExportedConfig` in
 [`src/lib/config.ts`](../../src/lib/config.ts)) that accepts
-`{kind:"nak-config", version:1, supabaseUrl, supabaseAnonKey,
+`{kind:"nak-config", version:2, supabaseUrl, supabasePublishableKey,
 veniceApiKey}`. `dev-start` writes exactly that shape, so the
 handoff needs no app code. It is a one-time act per browser -
-the local anon key and the config file are stable across
+the local publishable key and the config file are stable across
 sessions:
 
 1. In the app (Vite is already running): Setup -> Import from

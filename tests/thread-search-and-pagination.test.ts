@@ -71,7 +71,7 @@ function makeClient(opts: {
 
 function makeService(client: SupabaseClient): SupabaseService {
   return new SupabaseService(
-    { supabaseUrl: 'http://example.test', supabaseAnonKey: 'anon' },
+    { supabaseUrl: 'http://example.test', supabasePublishableKey: 'anon' },
     { client }
   );
 }

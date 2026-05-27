@@ -14,7 +14,7 @@ import type { AppConfig } from '../src/lib/config';
 
 const CONFIG: AppConfig = {
   supabaseUrl: 'https://example.supabase.co',
-  supabaseAnonKey: 'anon-xyz',
+  supabasePublishableKey: 'anon-xyz',
   veniceApiKey: 'venice-abc',
 };
 

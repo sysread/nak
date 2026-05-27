@@ -44,7 +44,7 @@ import {
 interface StartMessage {
   type: 'start';
   supabaseUrl: string;
-  supabaseAnonKey: string;
+  supabasePublishableKey: string;
   accessToken: string;
   refreshToken: string;
   veniceApiKey: string;
@@ -132,7 +132,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
   // Single source of truth: the main thread refreshes, its manager
   // posts us a `session` message with the new tokens, and we re-pin
   // via setSession. See docs/dev/auth-session.md.
-  const client: SupabaseClient = createClient(msg.supabaseUrl, msg.supabaseAnonKey, {
+  const client: SupabaseClient = createClient(msg.supabaseUrl, msg.supabasePublishableKey, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
@@ -156,7 +156,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
   currentClient = client;
 
   const supabase = new SupabaseService(
-    { supabaseUrl: msg.supabaseUrl, supabaseAnonKey: msg.supabaseAnonKey },
+    { supabaseUrl: msg.supabaseUrl, supabasePublishableKey: msg.supabasePublishableKey },
     { client }
   );
   const venice = new VeniceClient({

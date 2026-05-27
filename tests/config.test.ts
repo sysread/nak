@@ -10,7 +10,7 @@ import {
 
 const VALID = {
   supabaseUrl: 'https://example.supabase.co',
-  supabaseAnonKey: 'anon-xxx',
+  supabasePublishableKey: 'sb_publishable_xxx',
   veniceApiKey: 'venice-yyy',
 };
 
@@ -66,7 +66,7 @@ describe('config', () => {
   it('does NOT store plaintext secrets', async () => {
     await saveConfig(VALID, 'pw');
     const blob = localStorage.getItem('nak:config:v1') ?? '';
-    expect(blob).not.toContain(VALID.supabaseAnonKey);
+    expect(blob).not.toContain(VALID.supabasePublishableKey);
     expect(blob).not.toContain(VALID.veniceApiKey);
     expect(blob).not.toContain('supabase.co');
   });
@@ -76,6 +76,21 @@ describe('config', () => {
     const exported = toExportedConfig(VALID);
     const json = JSON.stringify(exported);
     expect(parseExportedConfig(json)).toEqual(VALID);
+  });
+
+  it('parseExportedConfig accepts a legacy v1 file (supabaseAnonKey)', async () => {
+    // Files exported before the anon->publishable rename are v1 and carry the
+    // key under `supabaseAnonKey`. They must still import, mapped onto the
+    // current `supabasePublishableKey` field.
+    const { parseExportedConfig } = await import('../src/lib/config');
+    const legacy = JSON.stringify({
+      kind: 'nak-config',
+      version: 1,
+      supabaseUrl: VALID.supabaseUrl,
+      supabaseAnonKey: VALID.supabasePublishableKey,
+      veniceApiKey: VALID.veniceApiKey,
+    });
+    expect(parseExportedConfig(legacy)).toEqual(VALID);
   });
 
   it('parseExportedConfig rejects a file missing the kind marker', async () => {

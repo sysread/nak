@@ -3,10 +3,10 @@
    * Password / secret input with a reveal toggle (eye icon).
    * Used for master password fields and for the three long API keys
    * (where seeing what you pasted is the difference between a working
-   * app and a "Supabase rejected the anon key" error).
+   * app and a "Supabase rejected the publishable key" error).
    *
    * Autocomplete defaults to "off" so browsers don't try to autofill the
-   * Supabase anon key into a credit-card form somewhere. Master-password
+   * Supabase publishable key into a credit-card form somewhere. Master-password
    * fields override with "current-password" / "new-password" so OS
    * password managers and Chrome devtools stop warning about the missing
    * attribute and can remember the freshly-chosen passphrase.

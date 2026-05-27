@@ -19,7 +19,7 @@ import {
 interface StartMessage {
   type: 'start';
   supabaseUrl: string;
-  supabaseAnonKey: string;
+  supabasePublishableKey: string;
   accessToken: string;
   refreshToken: string;
   userId: string;
@@ -87,7 +87,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> {
-  const client: SupabaseClient = createClient(msg.supabaseUrl, msg.supabaseAnonKey, {
+  const client: SupabaseClient = createClient(msg.supabaseUrl, msg.supabasePublishableKey, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
@@ -109,7 +109,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
   currentClient = client;
 
   const supabase = new SupabaseService(
-    { supabaseUrl: msg.supabaseUrl, supabaseAnonKey: msg.supabaseAnonKey },
+    { supabaseUrl: msg.supabaseUrl, supabasePublishableKey: msg.supabasePublishableKey },
     { client }
   );
   const venice = new VeniceClient({
