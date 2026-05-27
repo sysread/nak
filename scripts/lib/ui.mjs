@@ -1,5 +1,10 @@
 // Tiny terminal UI helpers. No external dependencies.
 import readline from 'node:readline/promises';
+// The callback readline API is used only for masked secret entry: it exposes
+// the internal `_writeToOutput` hook that asterisk-masking needs, which the
+// promises API does NOT (it is undefined on Node 20.x and crashed every
+// secret prompt). See askSecret below.
+import readlineCb from 'node:readline';
 import { stdin as input, stdout as output } from 'node:process';
 
 const isTTY = output.isTTY;
@@ -54,44 +59,45 @@ export function bail(msg, recovery = null) {
 }
 
 export async function ask(question, { default: def, secret = false } = {}) {
-  const rl = readline.createInterface({ input, output, terminal: true });
   const suffix = def ? ` [${def}]` : '';
   const prompt = `  ${style.cyan('?')} ${question}${suffix} `;
+  if (secret) return askSecret(prompt, def);
+  const rl = readline.createInterface({ input, output, terminal: true });
   try {
-    if (secret) {
-      // Echo '*' for each typed char. We write the prompt ourselves first
-      // so readline's own prompt output doesn't get masked, then override
-      // the Interface's _writeToOutput for everything that follows.
-      output.write(prompt);
-      const originalWriteToOutput = rl._writeToOutput.bind(rl);
-      rl._writeToOutput = (chunk) => {
-        if (typeof chunk !== 'string' || chunk.length === 0) {
-          originalWriteToOutput(chunk);
-          return;
-        }
-        // Newlines end the input — pass through untouched.
-        if (chunk === '\n' || chunk === '\r' || chunk === '\r\n') {
-          originalWriteToOutput(chunk);
-          return;
-        }
-        // Backspace sequences (readline uses '\b \b' to erase a char).
-        // Pass through so the visual cursor moves back and erases the *.
-        if (chunk.charCodeAt(0) === 0x08) {
-          originalWriteToOutput(chunk);
-          return;
-        }
-        // Everything else is treated as one-or-more printable chars;
-        // show the same number of asterisks.
-        originalWriteToOutput('*'.repeat(chunk.length));
-      };
-      const answer = (await rl.question('')).trim();
-      return answer || (def ?? '');
-    }
     const answer = (await rl.question(prompt)).trim();
     return answer || (def ?? '');
   } finally {
     rl.close();
   }
+}
+
+// Masked secret entry. Uses the callback readline API because it exposes the
+// `_writeToOutput` hook the promises API lacks. The prompt is written first so
+// it isn't masked; everything readline echoes afterward is replaced with '*'.
+function askSecret(prompt, def) {
+  return new Promise((resolve, reject) => {
+    const rl = readlineCb.createInterface({ input, output, terminal: true });
+    output.write(prompt);
+    const originalWriteToOutput = rl._writeToOutput.bind(rl);
+    rl._writeToOutput = (chunk) => {
+      if (typeof chunk !== 'string' || chunk.length === 0) return originalWriteToOutput(chunk);
+      // Newlines end the input — pass through untouched.
+      if (chunk === '\n' || chunk === '\r' || chunk === '\r\n') return originalWriteToOutput(chunk);
+      // Backspace sequences (readline uses '\b \b' to erase a char) — pass
+      // through so the visual cursor moves back and erases the asterisk.
+      if (chunk.charCodeAt(0) === 0x08) return originalWriteToOutput(chunk);
+      // Everything else is one-or-more printable chars; show that many asterisks.
+      return originalWriteToOutput('*'.repeat(chunk.length));
+    };
+    rl.question('', (answer) => {
+      rl.close();
+      resolve(answer.trim() || (def ?? ''));
+    });
+    rl.on('error', (err) => {
+      rl.close();
+      reject(err);
+    });
+  });
 }
 
 /**
