@@ -75,8 +75,8 @@ description = "Sync npm devDependencies from the lockfile (idempotent)"
 # ~500ms on an up-to-date tree, trivial compared to the gate runtime.
 run = "pnpm install --frozen-lockfile"
 
-[tasks.dev]
-description = "Run the Vite dev server"
+[tasks.dev-frontend]
+description = "Run the Vite dev server only (no backend). The app talks to whatever Supabase the browser config points at; use dev-start for an isolated local backend."
 depends = ["deps"]
 run = "pnpm dev"
 raw = true
@@ -142,3 +142,17 @@ run = [
   "pnpm lint",
   "pnpm build",
 ]
+
+[tasks.dev-start]
+description = "Isolated local dev: bring up a local Supabase stack (Docker), provision it, run Vite, and tear the stack down on exit. Never touches the linked cloud project."
+# deps so a fresh worktree has Vite/etc; raw = true so the foreground Vite
+# server, the slow `supabase start` image pull, and the optional Venice-key
+# prompt all have direct TTY access and Ctrl-C reaches the script.
+depends = ["deps"]
+run = "node scripts/dev-local.mjs"
+raw = true
+
+[tasks.dev-stop]
+description = "Stop the local Supabase stack. The crash-cleanup fallback for a dev-start that exited without tearing down. Data is preserved; add --no-backup to supabase stop for a clean wipe."
+run = "supabase stop"
+raw = true

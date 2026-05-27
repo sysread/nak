@@ -79,7 +79,9 @@ idempotent (safe to rerun). Run `mise tasks` to see the full list.
 | `mise run pages-enable`   | Enable Pages + flip workflow perms for the current fork       |
 | `mise run supabase-init`  | First-time Supabase flow: create/link project, apply schema, configure auth, seed user |
 | `mise run sync`           | Re-apply schema + allowlist to the linked project. Prompt-free after first setup. |
-| `mise run dev`            | Vite dev server (http://localhost:5173)                       |
+| `mise run dev-frontend`   | Vite dev server only (http://localhost:5173); app points at whatever the browser config holds |
+| `mise run dev-start`      | Isolated local dev: local Supabase stack + Vite; tears the stack down on exit |
+| `mise run dev-stop`       | Stop the local Supabase stack (crash-cleanup fallback)        |
 | `mise run build`          | Production PWA build                                          |
 | `mise run test`           | Vitest unit tests                                             |
 

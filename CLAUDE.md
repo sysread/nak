@@ -692,7 +692,8 @@ mise run check        # full local gate: deps + test + svelte-check + lint + bui
 mise run test         # vitest run (auto-installs deps)
 mise run markdownlint # markdownlint-cli2 only (auto-installs deps)
 mise run knip         # dead-code scan (auto-installs deps); not in the gate by design
-mise run dev          # Vite dev server (auto-installs deps)
+mise run dev-frontend # Vite dev server only, no backend (auto-installs deps)
+mise run dev-start    # isolated local dev: local Supabase stack + Vite, torn down on exit
 mise run build        # production PWA build (auto-installs deps)
 ```
 
@@ -759,8 +760,8 @@ as complete." That rule applies only when the environment can
 actually do it - **the cloud agent cannot**. Cloud sessions don't
 have a browser, don't have a Pages preview, and the dev server it
 can spin up has no surface the user can see. Pretending to verify by
-running `mise run dev` and reading the build output is theatre - the
-build was already covered by `mise run check`.
+running `mise run dev-frontend` and reading the build output is
+theatre - the build was already covered by `mise run check`.
 
 The cloud agent's correct posture:
 

@@ -110,6 +110,9 @@ changing a contract that other features depend on.
 
 - [Build & deploy](./build-deploy.md) — Vite, PWA,
   GitHub Pages, the sync-on-deploy schema workflow.
+- [Local dev stack](./local-stack.md) — a throwaway local
+  Supabase backend (`mise run dev-start`) isolated from the
+  linked cloud project, for schema work without touching prod.
 
 ### Future work
 

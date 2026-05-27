@@ -26,6 +26,10 @@ playwright/.cache/
 .env.local
 .env.*.local
 *.pem
+# Importable local-dev credentials written by `mise run local-up`.
+# Plaintext (same design as the app's own config export) and carries the
+# Venice key - never commit it.
+nak-local-config.json
 
 # IDE / Editors
 .vscode/

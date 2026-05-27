@@ -49,6 +49,12 @@
 -- safe to expose provided RLS policies stay in place.
 
 create extension if not exists pgcrypto;
+-- pgvector backs every embedding column (vector(2048)) further down. It
+-- must be created before its first use - hosted Supabase enables it by
+-- default so a cloud re-apply never noticed, but a clean apply against a
+-- fresh database (e.g. the local dev stack) fails with `type "vector"
+-- does not exist` unless the extension exists first.
+create extension if not exists vector;
 
 -- profiles ---------------------------------------------------------------
 
@@ -778,8 +784,6 @@ create trigger clear_thread_embedding_on_change
 -- embedding a row, the claim columns are stamped so device B (if it ever
 -- holds the lease) skips the row until the claim expires, preventing
 -- duplicate Venice billing across devices.
-
-create extension if not exists vector;
 
 create table if not exists public.memories (
   id uuid primary key default gen_random_uuid(),
