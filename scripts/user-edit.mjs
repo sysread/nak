@@ -109,17 +109,20 @@ if (adminKey) {
   ok('Using SUPABASE_SECRET_KEY from the environment.');
 } else {
   const keys = await getProjectApiKeys(projectRef);
-  const serviceRole = keys.find(
-    (k) => k.name === 'service_role' || k.tags?.includes('service_role')
-  );
-  if (!serviceRole) {
+  // Prefer the project's modern secret key (type 'secret'); fall back to the
+  // legacy service_role key so this keeps working both before the new keys
+  // exist and after the legacy ones are disabled.
+  const secretKey =
+    keys.find((k) => k.type === 'secret') ||
+    keys.find((k) => k.name === 'service_role' || k.tags?.includes('service_role'));
+  if (!secretKey) {
     bail(
       'No secret key available for this project.',
       'Set SUPABASE_SECRET_KEY, or check the project in the Supabase dashboard and retry.'
     );
   }
-  adminKey = serviceRole.api_key;
-  ok('Fetched the legacy service-role key.');
+  adminKey = secretKey.api_key;
+  ok(`Fetched the project's ${secretKey.type === 'secret' ? 'secret' : 'legacy service-role'} key.`);
 }
 
 step(2, 'Collect credentials');
