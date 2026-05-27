@@ -41,6 +41,12 @@
    */
   import { onMount, tick } from 'svelte';
   import { fade } from 'svelte/transition';
+  import {
+    clampColumnWidth,
+    readColumnWidth,
+    storeColumnWidth,
+    type ColumnKind,
+  } from '$lib/ui/column-resize';
   import type { Session } from '@supabase/supabase-js';
   import { app, lock, applyServerSettings, notifyBiasActiveConvIds } from '$lib/state.svelte';
   import {
@@ -4050,6 +4056,74 @@
   function toggleDrawer(): void {
     drawerOpen = !drawerOpen;
   }
+
+  // Desktop-only column resizing. On wide viewports the threads sidebar
+  // and the logs panel are real grid columns of .shell; a drag handle
+  // straddling each inner edge lets the user retune their widths, saved
+  // per-column to localStorage and reapplied as the --col-*-pref custom
+  // props. On mobile the handles are display:none (the panels are
+  // slide-overs), so none of this fires there.
+  let shellEl = $state<HTMLDivElement | null>(null);
+  let sidebarEl = $state<HTMLElement | null>(null);
+  let colResizing = $state(false);
+
+  function prefProp(kind: ColumnKind): string {
+    return kind === 'sidebar' ? '--col-sidebar-pref' : '--col-logs-pref';
+  }
+
+  // Apply a saved width by writing it back into the pref custom prop.
+  // Capped at 40vw via min() so a width saved on a wide monitor can't
+  // crowd out the chat column on a smaller screen; a live drag goes
+  // through clampColumnWidth, which enforces the same ceiling.
+  function applyStoredColumnWidth(kind: ColumnKind): void {
+    if (!shellEl) return;
+    const px = readColumnWidth(kind);
+    if (px == null) return;
+    shellEl.style.setProperty(prefProp(kind), `min(${px}px, 40vw)`);
+  }
+
+  function startColumnResize(kind: ColumnKind, e: PointerEvent): void {
+    if (!shellEl) return;
+    e.preventDefault();
+    const colEl =
+      kind === 'sidebar'
+        ? sidebarEl
+        : shellEl.querySelector<HTMLElement>('.logs-drawer');
+    if (!colEl) return;
+    const startX = e.clientX;
+    const startWidth = colEl.getBoundingClientRect().width;
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    colResizing = true;
+
+    function onMove(ev: PointerEvent): void {
+      const delta = ev.clientX - startX;
+      // The sidebar's handle is on its right edge (drag right = wider);
+      // the logs handle is on its left edge (drag left = wider), so the
+      // logs delta is inverted.
+      const raw = kind === 'sidebar' ? startWidth + delta : startWidth - delta;
+      const w = clampColumnWidth(kind, raw, window.innerWidth);
+      shellEl?.style.setProperty(prefProp(kind), `${w}px`);
+    }
+
+    function onUp(ev: PointerEvent): void {
+      handle.releasePointerCapture(ev.pointerId);
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      colResizing = false;
+      const delta = ev.clientX - startX;
+      const raw = kind === 'sidebar' ? startWidth + delta : startWidth - delta;
+      storeColumnWidth(kind, clampColumnWidth(kind, raw, window.innerWidth));
+    }
+
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+  }
+
+  onMount(() => {
+    applyStoredColumnWidth('sidebar');
+    applyStoredColumnWidth('logs');
+  });
   // On mobile the drawer is a modal overlay, so picking a row from it
   // (thread, recipe, memory, or wiki article) should dismiss it once the main
   // panel has navigated. On desktop the sidebar is a persistent column,
@@ -5348,10 +5422,12 @@
     cure is to never let the branch swap happen in the first place.
   -->
   <div
+    bind:this={shellEl}
     class="shell"
     class:drawer-open={drawerOpen}
     class:logs-open={logsDrawer.state.open}
     class:shell-behind-modal={route.modal !== null}
+    class:col-resizing={colResizing}
   >
     <div
       class="drawer-backdrop"
@@ -5362,7 +5438,7 @@
       aria-label="Close thread drawer"
       aria-hidden={!drawerOpen}
     ></div>
-    <aside class="sidebar">
+    <aside bind:this={sidebarEl} class="sidebar">
       <header class="sidebar-header">
         <!-- Tab switcher between conversation threads and the
              cookbook. Rendered as a vertical pair of thread-row-
@@ -5766,6 +5842,19 @@
         </div>
       </footer>
     </aside>
+
+    <!-- Desktop drag handle on the sidebar's inner (right) edge. Hidden
+         on mobile via CSS; gated on drawerOpen so there's no stray
+         handle floating over the chat when the sidebar is collapsed. -->
+    {#if drawerOpen}
+      <div
+        class="col-resize-handle sidebar"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize threads sidebar"
+        onpointerdown={(e) => startColumnResize('sidebar', e)}
+      ></div>
+    {/if}
 
     <main class="chat">
       <div class="top-bar">
@@ -7290,6 +7379,18 @@
          scroll-icon button in the top bar toggles that state. -->
     {#if LogsDrawerComp}
       <LogsDrawerComp />
+    {/if}
+    <!-- Desktop drag handle on the logs panel's inner (left) edge.
+         Mirror of the sidebar handle; gated on the logs panel being
+         open so it only exists while there's a column to resize. -->
+    {#if logsDrawer.state.open}
+      <div
+        class="col-resize-handle logs"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize logs panel"
+        onpointerdown={(e) => startColumnResize('logs', e)}
+      ></div>
     {/if}
   </div>
   <!-- Global right-side drawer for the extracted-text preview.

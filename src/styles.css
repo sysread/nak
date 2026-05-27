@@ -1084,13 +1084,31 @@ h1 {
    about the other. The 30vw cap on each side keeps the chat column at
    >= ~40vw even with both panels open on a narrow desktop window. */
 .shell {
-  --col-sidebar: min(260px, 30vw);
+  /* User-resizable preferred widths for the two side columns. The drag
+     handles (.col-resize-handle) write px values into these props and
+     persist them to localStorage; absent a saved preference they fall
+     back to the viewport-capped defaults below. The grid columns
+     (--col-sidebar / --col-logs) only resolve to the pref while the
+     panel is open, so a closed panel still collapses to 0 regardless of
+     the saved width. */
+  --col-sidebar-pref: min(260px, 30vw);
+  --col-logs-pref: min(520px, 30vw);
+  --col-sidebar: var(--col-sidebar-pref);
   --col-logs: 0px;
   display: grid;
   grid-template-columns: var(--col-sidebar) 1fr var(--col-logs);
   height: 100%;
   position: relative;
   transition: grid-template-columns 180ms ease-out;
+}
+
+/* While a resize drag is in flight, kill the column transition so the
+   panel edge tracks the pointer 1:1 instead of easing behind it, and
+   suppress text selection so dragging across the columns doesn't
+   highlight their contents. */
+.shell.col-resizing {
+  transition: none;
+  user-select: none;
 }
 
 /* When a modal is open the shell is display:none so the modal
@@ -1114,7 +1132,52 @@ h1 {
 }
 
 .shell.logs-open {
-  --col-logs: min(520px, 30vw);
+  --col-logs: var(--col-logs-pref);
+}
+
+/* Thin drag affordances straddling the inner edge of each side column.
+   Absolutely positioned against .shell (position: relative) and tracked
+   to the live column width so they ride the edge as it resizes. Only
+   rendered on desktop while the matching panel is open - on mobile the
+   panels are slide-overs (see the 720px media query) and the handles
+   are hidden there. */
+.col-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  z-index: 30;
+  cursor: col-resize;
+  /* Suppress the browser's default touch panning so a pointer drag on
+     the handle resizes the column instead of scrolling the page. */
+  touch-action: none;
+}
+
+.col-resize-handle.sidebar {
+  left: calc(var(--col-sidebar) - 4px);
+}
+
+.col-resize-handle.logs {
+  right: calc(var(--col-logs) - 4px);
+}
+
+/* Hairline that lights up on hover or while dragging, so the otherwise
+   invisible handle reveals itself as an interactive edge. */
+.col-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: transparent;
+  transition: background 120ms ease-out;
+}
+
+.col-resize-handle:hover::after,
+.shell.col-resizing .col-resize-handle::after {
+  background: var(--accent);
 }
 
 .shell:not(.drawer-open) .sidebar {
@@ -1247,6 +1310,12 @@ h1 {
   .shell.logs-open .logs-backdrop {
     background: rgba(0, 0, 0, 0.45);
     pointer-events: auto;
+  }
+
+  /* The side panels are fixed-width slide-overs here, not resizable grid
+     columns, so the drag handles have nothing to act on. */
+  .col-resize-handle {
+    display: none;
   }
 
   /* The chat column owns the full viewport on mobile. Tighten the chrome. */
