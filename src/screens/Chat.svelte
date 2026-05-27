@@ -181,6 +181,7 @@
     shouldRetainDisplaced,
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
+  import { isReasoningOnlyStall } from '$lib/ui/incomplete-turn';
   import {
     orderedSubconsciousRows,
     subconsciousLabel,
@@ -3447,6 +3448,16 @@
         }
         pendingDeleteIds = [];
         await deletePromise;
+      } else if (pendingDeleteIds.length > 0) {
+        // The re-roll produced no replaceable text (e.g. a reasoning-
+        // only completion, or a turn that suspended on ask_user). The
+        // delete above is skipped on purpose - we don't drop the old
+        // rows when nothing landed to replace them. But the regenerate
+        // greying (.regen-target + disabled action buttons, keyed off
+        // pendingDeleteSet) has to clear regardless, or the old rows
+        // sit frozen and uninteractable until a thread reload.
+        pendingDeleteIds = [];
+        fadeOutDelays = {};
       }
       if (loopResult.stoppedByLimit && !loopResult.finalText) {
         error = { text: 'Stopped: tool-call loop hit the 20-round limit.' };
@@ -3849,6 +3860,22 @@
     }
     if (userIdx === -1) return;
     const userMessage = messages[userIdx];
+
+    // A reasoning-only stall is a dead turn, not a continuation point:
+    // the empty assistant row at the tail carries nothing for the
+    // re-roll to build on, so mark it for replacement the way
+    // regenerateFrom marks its range. Without this the dead bubble
+    // lingers above the fresh answer once the retry lands (the
+    // pendingDeleteSet filter keeps it off the wire, and the post-loop
+    // delete in runExchange prunes it once finalText arrives). The
+    // other incomplete-tail shapes (orphaned tool rows, a bare user
+    // message) ARE genuine continuation points - their persisted rows
+    // are exactly what the model needs to pick up - so they keep the
+    // no-delete behavior.
+    const tail = messages[messages.length - 1];
+    if (isReasoningOnlyStall(tail)) {
+      pendingDeleteIds = [tail.id];
+    }
 
     const tier = resolveTier(active.model ?? null, defaultTier);
     const tierSpec = TIERS[tier];
@@ -5007,19 +5034,14 @@
     }
     if (last.role === 'assistant') {
       if (last.tool_calls && last.tool_calls.length > 0) return last;
-      // Reasoning-only stall: the model emitted chain-of-thought but no
-      // visible content and no tool calls. Seen when a model fences its
-      // tool call in a non-standard syntax (e.g. DSML markers) that the
-      // parser doesn't recognize - the whole turn lands in `reasoning`,
-      // `content` stays empty, and `tool_calls` is null, so the card
-      // renders as a bare reasoning panel with no answer. That tail
-      // genuinely lacks a follow-up, so make it retry-able. A normal
-      // completed turn has content (or tool calls) and is excluded;
-      // reasoning paired with either is the model working as intended,
-      // not a stall.
-      const hasContent = last.content.trim().length > 0;
-      const hasReasoning = (last.reasoning ?? '').trim().length > 0;
-      if (!hasContent && hasReasoning) return last;
+      // Reasoning-only stall (see isReasoningOnlyStall): the model
+      // emitted chain-of-thought but no visible content and no tool
+      // calls, so the card renders as a bare reasoning panel with no
+      // answer. That tail genuinely lacks a follow-up, so make it
+      // retry-able. A normal completed turn has content (or tool calls)
+      // and is excluded; reasoning paired with either is the model
+      // working as intended, not a stall.
+      if (isReasoningOnlyStall(last)) return last;
       return null;
     }
     if (last.role === 'user') return last;

@@ -498,6 +498,13 @@ transcript. Its refresh-arrow button resumes the turn the same way
 the in-session retry would: the existing tool results stay, and the
 model picks up from them to produce the reply.
 
+The same banner also appears after a turn where the model produced
+only its private reasoning and no actual answer (a quirk of some
+models that occasionally "think" without replying). In that case
+there's nothing to build on, so clicking retry discards the empty
+response and generates a fresh one in its place rather than stacking
+a second reply beneath it.
+
 ## Where to go next
 
 - [Threads](./threads.md) — managing the conversation list.
