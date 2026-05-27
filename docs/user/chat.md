@@ -261,11 +261,11 @@ at the matching level, so if you are more comfortable filtering there
 the drawer doesn't take anything away - it just adds an in-app view
 that travels with the PWA install.
 
-On a desktop-sized window the log drawer is a column down the right
-edge. Drag the seam between it and the conversation to resize it; the
-width is saved on this device and restored next time. On a phone-sized
-screen it slides over the conversation at a fixed width instead, with
-no resize handle.
+On a wide screen the log drawer is a column down the right edge. With a
+mouse, drag the seam between it and the conversation to resize it; the
+width is saved on this device and restored next time. On a narrower
+screen (phones, and tablets up to about a 1024px-wide window) it slides
+over the conversation at a fixed width instead, with no resize handle.
 
 ### Samskara diagnostics
 
