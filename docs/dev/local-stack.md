@@ -90,8 +90,25 @@ sessions:
    which fires the `on_auth_user_created` trigger and
    materializes the `profiles` row the app expects.
 5. **Config file.** Writes `nak-local-config.json`.
-6. **Run Vite, then tear down.** Spawns the dev server in the
+6. **Watch the schema.** A directory watch on `supabase/` re-runs
+   the schema apply whenever `schema.sql` changes (see below).
+7. **Run Vite, then tear down.** Spawns the dev server in the
    foreground and stops the stack when it exits.
+
+### Live schema re-apply
+
+While `dev-start` runs, editing `supabase/schema.sql` re-applies
+it to the local stack automatically (debounced) - the local
+counterpart of running `mise run sync` after a schema change, but
+without sync's cloud-only steps (project resolution and the
+Pages-URL auth-allowlist merge have no local meaning). The
+re-apply is additive-idempotent, so a failure is non-fatal: the
+dev session keeps running and the next save retries. The
+destructive-change caveat carries over from the cloud sync model -
+a re-apply adds new objects but does not drop a column you removed
+from the file; that needs a wipe (`supabase stop --no-backup`).
+Frontend code is already live via Vite HMR; this brings the schema
+layer to the same immediacy.
 
 ### Overrides
 
@@ -149,10 +166,17 @@ work (`docs/dev/in-progress/venice-edge-functions/`):
   silently skips - and the app's local-key fallback covers it
   either way.
 - **Edge functions.** When `supabase/functions/*/index.ts`
-  exist, `dev-start` prints the `supabase functions serve`
-  command. Functions are a Deno island served separately
-  (foreground hot-reload), and are not auto-started by
-  `dev-start` today.
+  exist, `dev-start` runs `supabase functions serve` as a second
+  supervised child, torn down with everything else on exit.
+  `serve` hot-reloads the Deno code on edit, so functions need no
+  watcher of their own - unlike the schema, they are served, not
+  applied. The serve child is a supporting service, not the
+  lifecycle driver: if it dies on its own the session keeps
+  running (the frontend is unaffected) and a warning prints;
+  restart `dev-start` to resume functions. Gated on a function
+  being present, so it is a no-op on a branch without any.
+  Per-function `verify_jwt` and import maps come from
+  `config.toml`; `dev-start` passes no overriding flags.
 
 ## Interactions
 

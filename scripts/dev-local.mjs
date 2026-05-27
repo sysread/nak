@@ -29,8 +29,8 @@
 // into a migrations tree would fork it from the file the deploy workflow
 // re-applies. Provisioning is idempotent, so reuse and restart are safe.
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { writeFileSync, watch } from 'node:fs';
+import { resolve, dirname, basename } from 'node:path';
 import { runInherit, runCapture, which } from './lib/shell.mjs';
 import { banner, step, info, ok, warn, hint, bail, ask, style } from './lib/ui.mjs';
 
@@ -149,10 +149,62 @@ async function applySchema(dbUrl) {
     bail('psql not on PATH.', 'Install libpq/postgres client tools (brew install libpq, then link psql).');
   }
   info(`psql -f ${style.dim('supabase/schema.sql')}`);
-  await runInherit('psql', [dbUrl, '-v', 'ON_ERROR_STOP=1', '-f', SCHEMA_PATH], {
+  await runSchemaSql(dbUrl);
+  ok('schema applied');
+}
+
+// The bare psql apply, shared by the startup step and the live watcher. This
+// is the local equivalent of what `mise run sync` does to the cloud project -
+// re-apply supabase/schema.sql - minus sync's cloud-only steps (project
+// resolution and the Pages-URL auth-allowlist merge), which have no local
+// meaning. ON_ERROR_STOP aborts on the first bad statement so a syntax error
+// surfaces loudly; client-min-messages=warning hides the idempotency NOTICEs.
+function runSchemaSql(dbUrl) {
+  return runInherit('psql', [dbUrl, '-v', 'ON_ERROR_STOP=1', '-f', SCHEMA_PATH], {
     env: { ...process.env, PGOPTIONS: '--client-min-messages=warning' },
   });
-  ok('schema applied');
+}
+
+// ---------------------------------------------------------------------------
+// Live schema re-apply. Watching the file makes a schema.sql edit land in the
+// running local stack without a restart - the local counterpart of running
+// `mise run sync` after a schema change. Re-apply is additive-idempotent
+// (the same contract as the cloud sync), so a failure here is non-fatal: the
+// dev session keeps running and the next save retries. The destructive-change
+// caveat carries over too - a re-apply adds new objects but does not drop a
+// column you removed from the file; that still needs `supabase stop
+// --no-backup`. The directory watch (rather than watching the file inode)
+// survives editors that save by atomic rename.
+// ---------------------------------------------------------------------------
+function watchSchema(dbUrl) {
+  let timer = null;
+  let applying = false;
+  const fire = () => {
+    clearTimeout(timer);
+    timer = setTimeout(reapply, 400);
+  };
+  const reapply = async () => {
+    if (applying) {
+      fire(); // a save landed mid-apply; retry once the current run finishes
+      return;
+    }
+    applying = true;
+    info('schema.sql changed - re-applying to the local stack...');
+    try {
+      await runSchemaSql(dbUrl);
+      ok('schema re-applied');
+    } catch (err) {
+      warn(`schema re-apply failed: ${err.message}`);
+      hint('Fix the SQL and save again; the dev session keeps running.');
+    } finally {
+      applying = false;
+    }
+  };
+  const base = basename(SCHEMA_PATH);
+  watch(dirname(SCHEMA_PATH), (_event, filename) => {
+    if (filename === base) fire();
+  });
+  info(`watching ${style.dim('supabase/schema.sql')} - edits re-apply to the local stack live`);
 }
 
 // ---------------------------------------------------------------------------
@@ -258,14 +310,28 @@ function writeConfig(apiUrl, anonKey, veniceKey) {
   ok(`wrote ${style.bold('nak-local-config.json')}`);
 }
 
-// Edge functions are a Deno island served separately (hot-reload, foreground)
-// rather than folded into this one-shot. Surface the command when functions
-// are present so the rebased edge branch picks it up automatically.
-async function functionsHint() {
+// Edge functions are a Deno island. When any exist (i.e. once the
+// venice-edge-functions work lands), run `supabase functions serve` as a
+// second supervised child so they are live alongside Vite - serve hot-reloads
+// the Deno code on edit, so functions need no watcher of their own (unlike the
+// schema, they are served, not applied). Gated on a function being present, so
+// this is a no-op on a branch without any. Per-function verify_jwt and import
+// maps come from config.toml; we pass no overriding flags.
+async function serveFunctions() {
   const ls = await runCapture('bash', ['-c', 'ls supabase/functions/*/index.ts 2>/dev/null']);
-  if (ls.code === 0 && ls.stdout.trim()) {
-    info(`Edge functions detected. Serve them with: ${style.bold('supabase functions serve')}`);
-  }
+  if (!(ls.code === 0 && ls.stdout.trim())) return;
+  info('serving edge functions (supabase functions serve, hot-reload)');
+  funcsChild = spawn('supabase', ['functions', 'serve'], { stdio: 'inherit' });
+  funcsChild.on('error', (err) => warn(`could not start functions serve: ${err.message}`));
+  // serve is a supporting service, not the lifecycle driver - Vite is. If it
+  // dies on its own, warn but keep the session up (the frontend is unaffected);
+  // restart dev-start to bring functions back. During teardown the exit is
+  // expected, so stay quiet.
+  funcsChild.on('close', (code) => {
+    if (!shuttingDown) {
+      warn(`functions serve exited (code ${code}); functions are no longer served - restart dev-start to resume them.`);
+    }
+  });
 }
 
 // Printed once, before the Vite server takes over the terminal, so the
@@ -281,29 +347,34 @@ function printGettingStarted() {
 }
 
 // ---------------------------------------------------------------------------
-// Foreground lifecycle. Vite runs as a child with inherited stdio; the script
-// blocks here until it exits. Teardown (`supabase stop`) must run on every
-// exit path - a clean Ctrl-C, a Vite crash, or a kill signal - so the stack
-// never outlives the command. Ctrl-C reaches both this process and the Vite
-// child (shared process group), so the signal handler and the child's `close`
-// event can both fire; `shuttingDown` makes teardown run exactly once.
+// Foreground lifecycle. The supervised children (Vite always; edge-function
+// serve when functions exist) run with inherited stdio. Teardown (`supabase
+// stop`) must run on every exit path - a clean Ctrl-C, a child crash, or a
+// kill signal - so the stack never outlives the command. Ctrl-C reaches this
+// process and the children (shared process group), so the signal handler and
+// a child's `close` event can both fire; `shuttingDown` makes teardown run
+// exactly once.
 // ---------------------------------------------------------------------------
 let viteChild = null;
+let funcsChild = null;
 let shuttingDown = false;
+
+// Stop a child and wait for it to actually die before returning. Children are
+// grandchildren via their launchers (e.g. node -> pnpm -> vite); if this
+// process exits while one is still alive it reparents to init and keeps
+// holding its port, breaking the "setup goes down on exit" contract. The
+// timeout keeps a child that ignores SIGTERM from hanging teardown forever.
+async function killChild(child) {
+  if (!child || child.exitCode !== null) return;
+  const closed = new Promise((res) => child.once('close', res));
+  child.kill('SIGTERM');
+  await Promise.race([closed, new Promise((res) => setTimeout(res, 5000))]);
+}
 
 async function shutdown(code) {
   if (shuttingDown) return;
   shuttingDown = true;
-  // Wait for Vite to actually die before we exit. Vite is a grandchild
-  // (node -> pnpm -> vite); if this process exits while it is still alive it
-  // reparents to init and keeps holding the dev-server port, which would
-  // break the "setup goes down on exit" contract. The timeout keeps a Vite
-  // that ignores SIGTERM from hanging teardown forever.
-  if (viteChild && viteChild.exitCode === null) {
-    const closed = new Promise((res) => viteChild.once('close', res));
-    viteChild.kill('SIGTERM');
-    await Promise.race([closed, new Promise((res) => setTimeout(res, 5000))]);
-  }
+  await Promise.all([killChild(viteChild), killChild(funcsChild)]);
   console.log(`\n  ${style.dim('Stopping the local stack...')}`);
   // Best-effort: even if `supabase stop` fails (already down, daemon gone),
   // we still exit. `mise run dev-stop` is the manual fallback.
@@ -331,7 +402,8 @@ async function main() {
   const veniceKey = await collectVeniceKey();
   await seedAppConfig(dbUrl, veniceKey);
   writeConfig(apiUrl, anonKey, veniceKey);
-  await functionsHint();
+  await serveFunctions();
+  watchSchema(dbUrl);
   printGettingStarted();
   runVite();
 }

@@ -5,8 +5,19 @@ pnpm = "10.33.4"
 # the curated aqua registry so binary names resolve correctly across
 # platforms. If aqua fails for you, comment these out and install manually
 # — the wizard (`mise run doctor`) will tell you what's missing.
+#
+# gh floats on `latest` - its CLI surface is stable and version-agnostic.
+# supabase is PINNED, because `mise run dev-start` drives a local stack
+# whose reproducibility is tied to the CLI version: it determines the
+# config.toml shape, the Docker image versions pulled, and the
+# `supabase status -o json` key names that scripts/dev-local.mjs reads
+# (ANON_KEY / SERVICE_ROLE_KEY). A floating `latest` could shift any of
+# those under a routine `mise install`. Bump deliberately after confirming
+# `mise run dev-start` still reaches Vite on the new version. 2.101.0 is the
+# latest verified good (dev-start drove a full local stack on it - start,
+# status-key read, schema apply, teardown).
 "aqua:cli/cli"      = "latest"
-"aqua:supabase/cli" = "latest"
+"aqua:supabase/cli" = "2.101.0"
 
 # Note: markdownlint-cli2 is a pnpm devDependency — the `deps` task
 # below provisions it via `pnpm install --frozen-lockfile`, and every
