@@ -182,3 +182,23 @@ raw = true
 description = "Stop the local Supabase stack. The crash-cleanup fallback for a dev-start that exited without tearing down. Data is preserved; add --no-backup to supabase stop for a clean wipe."
 run = "supabase stop"
 raw = true
+
+# Edge functions (supabase/functions) are a Deno island - own toolchain, run
+# via deno / the supabase CLI, not pnpm. See
+# docs/dev/in-progress/venice-edge-functions/.
+
+[tasks.functions-test]
+description = "Deno unit tests for the edge functions (offline - fake fetch, no network or Supabase). Pure logic in _shared; the handler glue is exercised via dev-start's functions serve."
+# --config points deno at the functions' import map; the tests/ dir holds only
+# the pure offline tests, so this stays network-free after deno caches std.
+run = "deno test --config supabase/functions/deno.json supabase/functions/tests/"
+
+[tasks.functions-serve]
+description = "Serve edge functions locally (supabase functions serve). dev-start already runs this alongside Vite; use standalone to serve against an already-running stack."
+run = "supabase functions serve"
+raw = true
+
+[tasks.functions-deploy]
+description = "Deploy the venice edge function to the linked Supabase project."
+run = "supabase functions deploy venice"
+raw = true

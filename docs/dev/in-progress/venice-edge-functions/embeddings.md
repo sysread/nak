@@ -136,11 +136,13 @@ seeder, fetch, a real consumer) with eight fallbacks intact.
    `serverConfig.veniceApiKey`. Leave the other consumers on
    local config. *Vet point:* embeddings still generate.
 5. **Scaffold the `venice` function** with an `/embed` route:
-   `supabase/functions/deno.json`, `config.toml`,
-   `_shared/venice.ts` (duplicated wire-shape), the function
-   entry with internal routing, and an offline `deno test` of
-   the request/response shaping. Add `mise run test:functions`,
-   `functions:serve`, `functions:deploy`.
+   `supabase/functions/deno.json`, `_shared/venice.ts`
+   (duplicated wire-shape), the function entry with internal
+   routing, and an offline `deno test` of the request/response
+   shaping. Add `mise run functions-test`, `functions-serve`,
+   `functions-deploy`. (Done. The Deno island is kept out of the
+   app gate by eslint ignore + the tsconfig `include` scope;
+   `dev-start` auto-serves the function once `index.ts` exists.)
 6. **Convert the backfill caller** so `runOneCycle` calls the
    function's `/embed` rather than Venice directly. Still
    browser-triggered at this stage - behavior unchanged, bugs
