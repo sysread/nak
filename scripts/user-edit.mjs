@@ -2,9 +2,10 @@
 // mise run user-edit — create a Supabase user, or reset an existing user's
 // password, on the project linked by `mise run supabase-init`. Reads the
 // project ref from .nak/state.json (or SUPABASE_PROJECT_REF) and the access
-// token from the supabase CLI login (or SUPABASE_ACCESS_TOKEN). The
-// service-role key is fetched over the Management API and never written to
-// disk.
+// token from the supabase CLI login (or SUPABASE_ACCESS_TOKEN). The admin key
+// for the GoTrue calls comes from SUPABASE_SECRET_KEY when set, else the
+// legacy service-role key fetched over the Management API; neither is written
+// to disk.
 //
 // Args (all optional; missing ones are prompted interactively):
 //   --email <addr>       skip the email prompt
@@ -98,18 +99,28 @@ if (!projectRef) {
 const supabaseUrl = `https://${projectRef}.supabase.co`;
 info(`Project: ${style.bold(projectRef)}`);
 
-step(1, 'Fetch service-role key');
-const keys = await getProjectApiKeys(projectRef);
-const serviceRole = keys.find(
-  (k) => k.name === 'service_role' || k.tags?.includes('service_role')
-);
-if (!serviceRole) {
-  bail(
-    'Could not locate the service_role key for this project.',
-    'Check the project in the Supabase dashboard and retry.'
+step(1, 'Resolve the admin key');
+// Prefer the modern secret key from the environment; fall back to fetching the
+// legacy service_role key via the Management API so existing setups keep
+// working. Either way this is a service-role-class secret (bypasses RLS) used
+// only for the GoTrue admin calls below - the app never sees it.
+let adminKey = process.env.SUPABASE_SECRET_KEY?.trim();
+if (adminKey) {
+  ok('Using SUPABASE_SECRET_KEY from the environment.');
+} else {
+  const keys = await getProjectApiKeys(projectRef);
+  const serviceRole = keys.find(
+    (k) => k.name === 'service_role' || k.tags?.includes('service_role')
   );
+  if (!serviceRole) {
+    bail(
+      'No secret key available for this project.',
+      'Set SUPABASE_SECRET_KEY, or check the project in the Supabase dashboard and retry.'
+    );
+  }
+  adminKey = serviceRole.api_key;
+  ok('Fetched the legacy service-role key.');
 }
-ok('Service-role key fetched.');
 
 step(2, 'Collect credentials');
 const email = argEmail ?? (await ask('Email'));
@@ -128,7 +139,7 @@ if (argPassword !== null) {
 
 step(3, 'Create or reset');
 try {
-  await adminCreateUser(supabaseUrl, serviceRole.api_key, { email, password });
+  await adminCreateUser(supabaseUrl, adminKey, { email, password });
   ok(`User ${style.bold(email)} created. You can sign in immediately.`);
 } catch (err) {
   if (err.status !== 422) {
@@ -144,7 +155,7 @@ try {
   }
   let users;
   try {
-    users = await adminListUsers(supabaseUrl, serviceRole.api_key);
+    users = await adminListUsers(supabaseUrl, adminKey);
   } catch (e) {
     bail(`Could not list users to find the existing record: ${e.message}`);
   }
@@ -160,7 +171,7 @@ try {
   try {
     await adminUpdateUserPassword(
       supabaseUrl,
-      serviceRole.api_key,
+      adminKey,
       existing.id,
       password
     );

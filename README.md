@@ -162,7 +162,8 @@ Additionally:
 - The app never contacts the Supabase Management API from the browser.
   Schema changes, auth-config updates, and main-user creation all happen
   from `mise run setup` on your local machine, not from the deployed PWA.
-- The Supabase **service-role key** (which bypasses RLS) is used by the
+- The Supabase **secret key** (`SUPABASE_SECRET_KEY`, or the legacy
+  **service-role key** as a fallback) bypasses RLS and is used by the
   wizard only long enough to seed the main user, then discarded. It is
   never written to `localStorage`, the `#setup=` hand-off link, the
   encrypted config blob, or anywhere else in the app. Only the publishable key

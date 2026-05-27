@@ -105,8 +105,8 @@ over the generated Supabase client.
 Security posture: the browser connects with the **publishable key**. Every
 table has RLS enabled, and every policy is `auth.uid() = user_id`
 (or a join via `threads`). The publishable key is safe to ship; the
-service-role key never reaches the browser. The same file comments
-this at the top — the comment is load-bearing.
+secret key (service-role-class) never reaches the browser. The same file
+comments this at the top — the comment is load-bearing.
 
 ### Conversation-recovery synthesis on read
 

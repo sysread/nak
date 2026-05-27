@@ -196,12 +196,13 @@ try {
 
 step(5, 'Create the main user account');
 info(
-  'This seeds your login directly on the Supabase project using the ' +
-    'service-role key. The email is auto-confirmed, so you can sign in ' +
-    'immediately with no email round-trip.'
+  'This seeds your login directly on the Supabase project using the secret ' +
+    'key (SUPABASE_SECRET_KEY, or the legacy service-role key as a fallback). ' +
+    'The email is auto-confirmed, so you can sign in immediately with no ' +
+    'email round-trip.'
 );
 info(
-  `${style.dim('Tip:')} the service-role key stays on your machine — it is never ` +
+  `${style.dim('Tip:')} the secret key stays on your machine — it is never ` +
     'written to the app or the setup link.'
 );
 
@@ -212,10 +213,16 @@ const serviceRole = keys.find(
 );
 if (!anon) bail('Could not locate the anon API key for this project.');
 
+// Key for the GoTrue admin calls (user creation/reset) below. Prefer the
+// modern secret key from the environment (SUPABASE_SECRET_KEY); fall back to
+// the legacy service_role key fetched above so older setups still work. This
+// is a service-role-class secret - it bypasses RLS and the app never sees it.
+const adminKey = process.env.SUPABASE_SECRET_KEY?.trim() || serviceRole?.api_key;
+
 const wantsUser = await confirm('Create a main user account now?', { default: true });
 if (wantsUser) {
-  if (!serviceRole) {
-    warn('Could not locate the service_role key — skipping user creation.');
+  if (!adminKey) {
+    warn('No secret key available (set SUPABASE_SECRET_KEY, or expose the legacy service_role key) — skipping user creation.');
     hint(
       'Create a user manually in Supabase → Authentication → Users, or rerun the wizard later.'
     );
@@ -227,7 +234,7 @@ if (wantsUser) {
     }).catch((err) => bail(err.message));
 
     try {
-      await adminCreateUser(supabaseUrl, serviceRole.api_key, { email, password });
+      await adminCreateUser(supabaseUrl, adminKey, { email, password });
       ok(`User ${style.bold(email)} created. You can sign in immediately.`);
     } catch (err) {
       if (err.status === 422) {
@@ -237,7 +244,7 @@ if (wantsUser) {
         });
         if (reset) {
           try {
-            const users = await adminListUsers(supabaseUrl, serviceRole.api_key);
+            const users = await adminListUsers(supabaseUrl, adminKey);
             const existingUser = users.find(
               (u) => u.email?.toLowerCase() === email.toLowerCase()
             );
@@ -246,7 +253,7 @@ if (wantsUser) {
             } else {
               await adminUpdateUserPassword(
                 supabaseUrl,
-                serviceRole.api_key,
+                adminKey,
                 existingUser.id,
                 password
               );
