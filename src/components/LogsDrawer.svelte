@@ -290,7 +290,7 @@
       <div class="logs-controls-row">
         <label class="logs-level">
           <span class="visually-hidden">Minimum level</span>
-          <select bind:value={levelFilter} aria-label="Minimum log level">
+          <select name="logs-level" bind:value={levelFilter} aria-label="Minimum log level">
             {#each LOG_LEVELS as level (level)}
               <option value={level}>{LOG_LEVEL_LABELS[level]}</option>
             {/each}
@@ -305,7 +305,7 @@
              match mode, then types the query. -->
         <label class="logs-mode">
           <span class="visually-hidden">Match mode</span>
-          <select bind:value={matchMode} aria-label="Search match mode">
+          <select name="logs-match-mode" bind:value={matchMode} aria-label="Search match mode">
             <option value="or">Any</option>
             <option value="and">All</option>
           </select>
@@ -322,6 +322,7 @@
         <label class="logs-source">
           <span class="visually-hidden">Source tag</span>
           <select
+            name="logs-source"
             bind:value={sourceFilter}
             aria-label="Filter by source tag"
             disabled={availableSources.length === 0}
