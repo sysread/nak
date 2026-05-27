@@ -1137,11 +1137,10 @@ h1 {
 
 /* Thin drag affordances straddling the inner edge of each side column.
    Absolutely positioned against .shell (position: relative) and tracked
-   to the live column width so they ride the edge as it resizes.
-   Resizing is a mouse affordance for the desktop column layout only:
-   hidden by default and revealed (in the media query below) only on
-   fine-pointer devices at the column layout's min width, so the
-   <=1024px slide-over layout and touch tablets never show a handle. */
+   to the live column width so they ride the edge as it resizes. Only
+   rendered on desktop while the matching panel is open - on mobile the
+   panels are slide-overs (see the 720px media query) and the handles
+   are hidden there. */
 .col-resize-handle {
   position: absolute;
   top: 0;
@@ -1149,19 +1148,9 @@ h1 {
   width: 8px;
   z-index: 30;
   cursor: col-resize;
-  display: none;
   /* Suppress the browser's default touch panning so a pointer drag on
      the handle resizes the column instead of scrolling the page. */
   touch-action: none;
-}
-
-/* Columns exist only from 1025px up (the slide-over layout owns
-   everything <=1024px), and resizing them is a mouse gesture - so gate
-   the handles on both a fine pointer and the column-layout min width. */
-@media (min-width: 1025px) and (pointer: fine) {
-  .col-resize-handle {
-    display: block;
-  }
 }
 
 .col-resize-handle.sidebar {
@@ -1229,22 +1218,22 @@ h1 {
   background: var(--accent-weak);
 }
 
-/* Drawer-layout breakpoint. Up to 1024px the threads sidebar and the
-   logs panel are fixed-position slide-overs that overlay the chat;
-   from 1025px up they are resizable grid columns of .shell. This is a
-   wider boundary than the typography / composer-chrome breakpoint
-   further down (720px) on purpose: a tablet wants slide-over drawers
-   but is still wide enough for desktop type and the full top-bar, so
-   the two concerns split at different widths. The JS drawer breakpoint
-   (drawerOpen default, openDrawerOnMobile / closeDrawerOnMobile in
-   Chat.svelte) tracks this 1024px value, not the 720px one. */
-@media (max-width: 1024px) {
+@media (max-width: 720px) {
+  /* Nudge the base size up on phones. At 13.5px Lekton reads fine on
+     a desktop monitor but sits below the comfortable-reading threshold
+     on a typical 5–7" screen held at arm's length. Everything else
+     scales off this via `rem`, so a single bump here resizes headings,
+     buttons, messages, and composer in lockstep. */
+  :root {
+    font-size: 15.5px;
+  }
+
   .shell,
   .shell:not(.drawer-open),
   .shell.logs-open,
   .shell:not(.drawer-open).logs-open {
-    /* Both side panels overlay the chat instead of taking grid columns,
-       so the column template never changes with state. */
+    /* On mobile both side panels overlay the chat instead of taking
+       grid columns, so the column template never changes with state. */
     grid-template-columns: 1fr;
   }
 
@@ -1322,25 +1311,14 @@ h1 {
     background: rgba(0, 0, 0, 0.45);
     pointer-events: auto;
   }
-}
 
-/* Typography + composer-chrome breakpoint. Narrower than the drawer
-   breakpoint above (1024px): the base font bump and the tightened
-   top-bar / composer / model-toggle spacing target genuinely phone-
-   width screens, where reading distance and horizontal room are the
-   real constraints. An 800-1024px window gets slide-over drawers from
-   the block above but keeps desktop type and spacing here. */
-@media (max-width: 720px) {
-  /* Nudge the base size up on phones. At 13.5px Lekton reads fine on
-     a desktop monitor but sits below the comfortable-reading threshold
-     on a typical 5-7" screen held at arm's length. Everything else
-     scales off this via `rem`, so a single bump here resizes headings,
-     buttons, messages, and composer in lockstep. */
-  :root {
-    font-size: 15.5px;
+  /* The side panels are fixed-width slide-overs here, not resizable grid
+     columns, so the drag handles have nothing to act on. */
+  .col-resize-handle {
+    display: none;
   }
 
-  /* The chat column owns the full viewport on a phone. Tighten the chrome. */
+  /* The chat column owns the full viewport on mobile. Tighten the chrome. */
   .top-bar {
     padding: 0.5rem 0.6rem;
   }
