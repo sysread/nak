@@ -374,6 +374,30 @@ async function serveFunctions() {
   });
 }
 
+// Local stand-in for the hosted pg_cron embedding-backfill job. The local stack
+// has no pg_cron/pg_net, so the schedule in schema.sql no-ops here, and with the
+// browser worker deleted nothing else drains the embedding queue in local dev.
+// So dev-start runs the shim as a third supervised child (same lifecycle as Vite
+// / functions-serve), POSTing /backfill on an interval. On by default; set
+// NAK_DEV_BACKFILL=0 to disable. The cost is bounded: an idle tick is free (a
+// local claim query, no Venice call), and a tick only spends Venice when there
+// are actually unembedded rows - the same work hosted cron would do. Honours
+// NAK_BACKFILL_INTERVAL via the inherited env. See scripts/dev-backfill-cron.mjs.
+function serveBackfillShim() {
+  const v = process.env.NAK_DEV_BACKFILL;
+  if (v !== undefined && ['0', 'false', 'off', 'no'].includes(v.toLowerCase())) return;
+  info('backfill cron shim on (set NAK_DEV_BACKFILL=0 to disable) - draining embeddings on an interval');
+  backfillChild = spawn('node', [resolve(REPO_ROOT, 'scripts/dev-backfill-cron.mjs')], {
+    stdio: 'inherit',
+  });
+  backfillChild.on('error', (err) => warn(`could not start backfill shim: ${err.message}`));
+  backfillChild.on('close', (code) => {
+    if (!shuttingDown) {
+      warn(`backfill shim exited (code ${code}); embeddings will not drain until restart.`);
+    }
+  });
+}
+
 // Printed once, before the Vite server takes over the terminal, so the
 // first-run import steps stay visible above the dev-server log. The import
 // is a one-time act per browser - the local client key and the config file
@@ -397,6 +421,7 @@ function printGettingStarted() {
 // ---------------------------------------------------------------------------
 let viteChild = null;
 let funcsChild = null;
+let backfillChild = null;
 let shuttingDown = false;
 
 // Stop a child and wait for it to actually die before returning. Children are
@@ -414,7 +439,7 @@ async function killChild(child) {
 async function shutdown(code) {
   if (shuttingDown) return;
   shuttingDown = true;
-  await Promise.all([killChild(viteChild), killChild(funcsChild)]);
+  await Promise.all([killChild(viteChild), killChild(funcsChild), killChild(backfillChild)]);
   console.log(`\n  ${style.dim('Stopping the local stack...')}`);
   // Best-effort: even if `supabase stop` fails (already down, daemon gone),
   // we still exit. `mise run dev-stop` is the manual fallback.
@@ -443,6 +468,7 @@ async function main() {
   await seedAppConfig(dbUrl, veniceKey);
   writeConfig(apiUrl, appClientKey, veniceKey);
   await serveFunctions();
+  serveBackfillShim();
   watchSchema(dbUrl);
   printGettingStarted();
   runVite();

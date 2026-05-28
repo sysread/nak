@@ -1,8 +1,8 @@
 /**
- * Single-cycle driver for the attachment-expiry worker. Factored out
- * of `./worker.ts` so the state machine is unit-testable without a
- * Web Worker runtime — the Worker entry point is a thin wrapper that
- * calls `runOneCycle` repeatedly until its AbortSignal trips.
+ * Single-cycle driver for the attachment-expiry work unit. The
+ * supervisor (`../supervisor/`) imports this `runOneCycle` and drives
+ * it; factoring the state machine out keeps it unit-testable without a
+ * Web Worker runtime.
  *
  * Simpler than reflection/summary: there's no per-row claim because
  * the `expire_old_attachments` RPC uses `for update skip locked`
@@ -82,31 +82,4 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       `older than ${ctx.expiryDays} days`
   );
   return 'expired';
-}
-
-/** Tunables the outer loop maps cycle results to sleep durations with. */
-export interface NapConfig {
-  /** Sleep after 'polling' — we don't hold the lease. */
-  leasePollMs: number;
-  /** Sleep after 'empty-queue' — we hold the lease but nothing to do. */
-  idleIntervalMs: number;
-  /** Sleep after 'error' — Supabase transient failure. */
-  errorBackoffMs: number;
-}
-
-export function napForResult(result: CycleResult, config: NapConfig): number {
-  switch (result) {
-    case 'acquired-lease':
-    case 'expired':
-      // Drain: run another cycle with zero delay so a freshly-taken
-      // lease can hit the RPC, and a non-zero expire result can keep
-      // clearing backlog as fast as the server will let us.
-      return 0;
-    case 'polling':
-      return config.leasePollMs;
-    case 'empty-queue':
-      return config.idleIntervalMs;
-    case 'error':
-      return config.errorBackoffMs;
-  }
 }

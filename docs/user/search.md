@@ -53,9 +53,9 @@ similarity ranking is the sort during a search.
 
 ## Why a search might miss something
 
-- The item was just added and the background embedding worker
-  hasn't reached it yet. Substring-on-the-obvious-field still
-  catches it; meaning matches will catch up within minutes.
+- The item was just added and the scheduled embedding pass hasn't
+  reached it yet. Substring-on-the-obvious-field still catches it;
+  meaning matches will catch up within a few minutes.
 - The phrase you typed is too short or too generic for the model
   to anchor on. Try adding a noun or a context word.
 - You typed a long query and the substring pass found nothing

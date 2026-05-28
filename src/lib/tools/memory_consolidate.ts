@@ -27,7 +27,7 @@
  * conversation history.
  */
 import type { ToolDef } from './types';
-import { MAX_MEMORY_DATA_CHARS } from '../embeddings/types';
+import { MAX_MEMORY_DATA_CHARS } from '../memories';
 import { memoryConsolidateSchema } from './memory_consolidate.schema';
 import { emitMemoryChange } from '../memory-events';
 

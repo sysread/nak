@@ -1,237 +1,237 @@
 # Embeddings
 
-The Web-Worker pipeline that vectorizes memories and thread
-summaries so semantic search works. This doc also covers the
-cross-tab Web Lock and the Supabase `worker_leases` /
-per-row-claim pattern, because the embeddings worker is the
-canonical example — reflection and summaries mirror the same
-shape.
+The pipeline that vectorizes memories, thread summaries, recipes,
+wiki articles, and samskara substrate so semantic search works.
+Backfill (turning `embedding is null` rows into vectors) runs
+server-side on a `pg_cron` schedule behind the `venice` edge
+function; the browser still embeds *search queries* synchronously at
+each call site. This doc covers both halves plus the per-row claim
+protocol the backfill drains through.
+
+> Backfill moved off the browser in the venice-edge-functions
+> milestone (step 7). See
+> [the milestone plan](./in-progress/venice-edge-functions/embeddings.md)
+> for the why and the migration story.
 
 ## Role in the app
 
-A memory that's just been written is `embedding is null`; so is
-a thread whose title or summary was just updated (trigger-
-invalidated). The embeddings worker polls for rows in that
-state, claims one, asks Venice's `/embeddings` endpoint for a
-vector, and writes it back under a claim guard.
+A memory that's just been written is `embedding is null`; so is a
+thread whose title or summary changed (trigger-invalidated), and the
+same for recipes, wiki articles, and substrate rows. A `pg_cron` job
+fires every 5 minutes, POSTs to the edge function's `/backfill`
+route, and the function claims pending rows across all five tables,
+asks Venice's `/embeddings` endpoint for vectors, and writes them
+back under a claim guard - all server-side, no open tab required.
 
-Downstream: `memory_search` and `conversation_search` run
-cosine-similarity against these vectors. Unembedded rows are
-covered by ILIKE fallbacks on the search side, so a just-
-written memory is never invisible — just semantically
-under-ranked until the worker catches up.
+Downstream: `memory_search`, `conversation_search`, and the drawer
+searches run cosine-similarity against these vectors. Unembedded
+rows are covered by ILIKE fallbacks on the search side, so a just-
+written memory is never invisible - just semantically under-ranked
+until the next sweep catches up (at most ~5 minutes).
+
+The other direction - embedding a *search query* to run cosine
+search - stays in the browser at each of the ~10 query-time call
+sites (`memory_search`, `conversation_search`, the drawers, context
+recall). Those are latency-sensitive and still call Venice directly
+with the local config key; moving them behind the function is a
+later milestone (phase 4).
 
 ## Files
 
-- `src/lib/embeddings/worker.ts` — Web Worker entry point.
-  Constructs Supabase + Venice clients on this side of the
-  structured-clone boundary (class instances don't clone) and
-  drives `runOneCycle` until abort.
-- `src/lib/embeddings/loop.ts` — `runOneCycle`,
-  `napForResult`. State machine factored out of the worker for
-  unit tests.
-- `src/lib/embeddings/lease.ts` — `LeaseCoordinator`: wraps
-  the three Supabase lease RPCs (`acquire_worker_lease`,
-  `heartbeat_worker_lease`, `release_worker_lease`) plus the
-  heartbeat interval. Owns the top rail of cross-device
-  coordination. Reflection and summary workers also import
-  this.
-- `src/lib/embeddings/manager.ts` — main-thread supervisor.
-  Cross-tab Web Lock (`nak:embed-worker`), starts/stops the
-  Worker, passes config via a `StartMessage`.
-- `src/lib/embeddings/types.ts` — `EmbeddingSource` interface
-  and shared constants.
-- `src/lib/embeddings/sources/memories.ts`,
-  `sources/threads.ts`, `sources/journal.ts`,
-  `sources/wiki.ts`, `sources/samskara-substrate.ts`,
-  `sources/recipes.ts` — per-table adapters. Each knows how
-  to claim one pending row, build the input string for
-  Venice, and save the result under a guard.
-- `supabase/schema.sql` — `worker_leases` table, lease RPCs,
-  `claim_next_pending_memory` /
-  `claim_next_pending_thread_embedding`,
-  `save_memory_embedding_if_claimed` /
-  `save_thread_embedding_if_claimed`, and the
-  `clear_*_embedding_on_change` triggers.
+- `supabase/functions/venice/index.ts` - the edge function.
+  `/embed` is the thin per-call proxy (one vector for a query);
+  `/backfill` is the cron target that runs the server-side drain.
+  Service-role-only on `/backfill`.
+- `supabase/functions/_shared/backfill.ts` - `runBackfill`, the
+  claim -> embed -> pad -> save orchestration. I/O-free (injected
+  deps) so it unit-tests offline. Also holds the ported
+  `padEmbeddingForStorage` and the model constant.
+- `supabase/functions/_shared/embed-input.ts` - per-source text
+  composition (which columns, soft boundary, char caps) plus the
+  `EMBED_SOURCES` registry mapping each source to its claim RPC,
+  save RPC, and input builder. Ported from the old browser adapters;
+  kept in TS so truncation stays byte-identical to historical rows.
+- `supabase/functions/_shared/venice.ts` - the Venice `/embeddings`
+  wire shape (request/response, error mapping), fetch-injectable.
+- `src/lib/embeddings/lease.ts` - `LeaseCoordinator`: wraps the
+  Supabase lease RPCs plus the heartbeat interval. No longer used by
+  embeddings backfill (that's server-side now), but every worker in
+  the agent fleet imports it - the directory name is a vestige. See
+  [Worker-fleet coordination](#worker-fleet-coordination).
+- `supabase/schema.sql` - the `claim_next_pending_*` /
+  `save_*_embedding_if_claimed` RPCs (now `security definer` global
+  sweeps; see below), the `clear_*_embedding_on_change` triggers,
+  the `nak_trigger_embed_backfill()` dispatcher, and the `pg_cron` /
+  `pg_net` setup block.
 
 ## Entry points
 
-- **`activate()` in `state.svelte.ts`** — calls
-  `embeddingManager.start({ supabase, config })`. The manager
-  acquires the cross-tab Web Lock, reads the auth session, and
-  posts a `StartMessage` to the Worker with the access/refresh
-  tokens so the worker can construct its own Supabase client.
-- **`lock()`** — calls `embeddingManager.stop()`. Settles the
-  Web Lock resolver (releases the lock), aborts the Worker,
-  calls `release_worker_lease` so another device can take over
-  instantly rather than waiting for the TTL.
-- **Cycle driver** — `runOneCycle(ctx)` returns a `CycleResult`
-  (`acquired-lease` / `polling` / `empty-queue` / `embedded` /
-  `save-rejected` / `no-embedding` / `rate-limited` /
-  `error`). `napForResult` maps each to a sleep before the
-  next cycle.
+- **`pg_cron` -> `nak_trigger_embed_backfill()`** - every 5 minutes,
+  the job calls the trigger function, which reads the `project_url`
+  and `service_role_key` Vault secrets and `pg_net.http_post`s to
+  `/functions/v1/venice/backfill`. No-ops if the secrets are
+  unseeded, so an un-provisioned project simply doesn't backfill.
+- **`handleBackfill` in the function** - authenticates the caller as
+  the service role (bearer must equal the injected
+  `SUPABASE_SERVICE_ROLE_KEY`), then drives `runBackfill` over the
+  five sources, bounded by a batch cap (50 rows) and a time budget
+  (25s) per invocation. The schedule resumes the drain next tick.
+- **`runBackfill(deps, opts)`** - round-robins one claim attempt per
+  source per pass; embeds and saves whatever it claims; stops when a
+  full pass claims nothing (queue drained), the cap or budget is
+  hit, or Venice rate-limits (back off, resume next tick).
 
 ## Data model
 
-### Two layers of singleton enforcement
-
-1. **`navigator.locks.request('nak:embed-worker')`** —
-   cross-tab, device-local. Web Locks queue natively; we don't
-   spin. The lock request returns a Promise that stays pending
-   while we hold it; `stop()` settles that Promise, which
-   releases the lock.
-2. **`worker_leases` row** — cross-device. Keyed on
-   `(user_id, worker_kind='embedding')`. `acquire_worker_lease`
-   is atomic via `on conflict do update where ...`: the update
-   only fires when the existing lease is ours (harmless
-   refresh) or expired. `heartbeat_worker_lease` returns false
-   if our lease lapsed and someone else took over — the
-   coordinator stops the worker immediately rather than racing.
-
-These layers are independent. Either one alone prevents the
-common case; the combination handles the edge case (local Web
-Lock released, Supabase lease still held — happens during a
-crash-and-restart within the TTL).
-
 ### Per-row claim
 
-Each source row carries `embedding_claim_holder` +
-`embedding_claim_expires`. The `claim_next_pending_*` RPCs use
-`for update skip locked` to atomically pick one row and stamp
-it. The save RPC only commits if the claim still belongs to
-the caller (`where claim_holder = $me and claim_expires >
-now()`). A trigger nulls the claim columns (and the embedding
-itself) on user edits, so an in-flight worker save can't land
-a stale vector.
+This is the mechanism the backfill drains through, unchanged in shape
+from the browser era - only the driver moved. Each source row carries
+`embedding_claim_holder` + `embedding_claim_expires`. The
+`claim_next_pending_*` RPCs use `for update skip locked` to atomically
+pick one row and stamp it with the invocation's holder id + a 120s
+claim TTL. The save RPC only commits if the claim still belongs to the
+caller (`where claim_holder = $me and claim_expires > now()`). A
+trigger nulls the claim columns (and the embedding itself) on user
+edits, so an in-flight save can't land a stale vector. The claim TTL
+outlives a single invocation, so two overlapping ticks can't both save
+the same row.
+
+### Service-definer global sweep
+
+The `claim_next_pending_*` / `save_*_if_claimed` RPCs are
+`security definer` and sweep **every member's** pending rows with no
+`auth.uid()` filter - cron has no user session, so a user-scoped
+`security invoker` RPC (their original shape) would match nothing.
+Because they now run as the owner and ignore user scoping, **the
+EXECUTE grant is the security boundary**: each is revoked from
+`public`/`anon`/`authenticated` and granted only to `service_role`.
+Leaving them open to `authenticated` would let any signed-in member
+claim and read another member's row text. The edge function (service
+role) is their only caller.
 
 ### Padding
 
 Venice's current embedding model emits 1024 dims; the column is
-`vector(2048)` for forward compat. `padEmbeddingForStorage`
-zero-extends. Cosine similarity is invariant under zero-
-extension.
+`vector(2048)` for forward compat. `padEmbeddingForStorage` zero-
+extends. Cosine similarity is invariant under zero-extension. The
+function pads (not the SQL) so the stored shape matches what the
+browser worker wrote historically.
 
 ### Timing
 
-- `leaseTtlSeconds = 45`, `leaseHeartbeatMs = 20_000` — two
-  beats per expiry window; a single missed beat stays inside
-  the margin. Reflection and summary managers use the same
-  numbers.
-- Rate-limit back-off is 30s, error back-off is short (~5s),
-  idle poll is ~20s. Timings live in `napForResult`.
+- Cron cadence: every 5 minutes (`*/5 * * * *`).
+- Per-invocation bounds: 50 rows or 25s, whichever first. The 25s
+  budget sits well under the edge runtime wall-clock limit - nearly
+  all of it is awaiting Venice (I/O, not CPU). Both are tunables in
+  `venice/index.ts`.
+- Row claim TTL: 120s. Rate-limit back-off: the invocation bails and
+  the next tick resumes.
+
+## Worker-fleet coordination
+
+The cross-tab Web Lock + Supabase `worker_leases` + heartbeat model
+documented here used to be the embeddings worker's, and embeddings
+was its canonical example. Backfill no longer uses any of it - but
+the agent worker fleet (reflection, summary, topics, samskara, bias,
+wiki, wiki-librarian, deep-sleep, rem, attachment-expiry, consolidated
+under the supervisor) still does, importing `LeaseCoordinator` from
+`embeddings/lease.ts`. For the live worker model see
+[`./architecture.md`](./architecture.md) and any
+`src/lib/agents/<feature>/worker.ts`. The short version:
+
+- **`navigator.locks.request(...)`** - cross-tab, device-local;
+  Web Locks queue natively.
+- **`worker_leases` row** - cross-device, keyed on
+  `(user_id, worker_kind)`. `acquire`/`heartbeat`/`release` RPCs; a
+  `false` heartbeat means the lease lapsed and someone else took
+  over, so the worker stops immediately.
 
 ## Contracts
 
-- `EmbeddingSource` — per-table adapter:
-  - `claim(holderId, ttlSeconds): Promise<PendingItem | null>`
-    — returns one claimed row's `{id, input}` or null if the
-    queue is empty.
-  - `save(id, holderId, embedding, embeddingModel):
-    Promise<boolean>` — true if the write landed (claim still
-    ours), false if we lost the row (not an error).
-- `PendingItem` — `{id, input}`; input is already prepared
-  (truncated, composed). The worker does not know anything
-  about the source's shape beyond these two fields.
-- `runOneCycle(ctx): Promise<CycleResult>` — one observable
-  state transition. Contract: never hold the lease after a
-  `false` heartbeat, never double-save a claim, never retry a
-  save that returned false.
-- `LeaseCoordinator.isHolding` — the invariant every cycle
-  checks before attempting work.
+- `EMBED_SOURCES[i]` - per-table descriptor: `name`, `claimRpc`,
+  `saveRpc`, and `buildInput(row)`. Adding an embeddable table is one
+  registry entry plus its claim/save RPC pair in schema.sql.
+- `runBackfill(deps, opts): Promise<BackfillSummary>` - `deps`
+  injects `claim(sourceIndex)`, `embed(input)`, and `save(...)`; the
+  summary tallies embedded / rejected / no-embedding / errors /
+  rate-limited / duration. Never double-saves a claim; treats a
+  `false` save as a normal skip.
+- `claim_next_pending_*(p_holder_id, p_ttl_seconds)` - returns the
+  next claimed row's raw columns or no rows. `save_*_if_claimed(...)`
+  - returns true if the write landed (claim still ours), false if we
+  lost the row. False is not an error.
 
 ## Interactions with other features
 
-- **Memory** — `memories` is one of the two registered sources.
-  The `clear_memory_embedding_on_change` trigger ensures every
-  edit reselects the row. See `./memory.md`.
-- **Summaries** — `threads` is the other source. The
-  `clear_thread_embedding_on_change` trigger fires when
-  `title` or `summary` changes, so a fresh summary
-  automatically reselects the row for re-embedding. See
-  `./summaries.md`.
-- **Memory recall** — `memory_search` vector path reads
-  `memories.embedding`. ILIKE fallback covers unembedded rows.
-  See `./memory.md`.
-- **Conversation recall** — `conversation_search` vector path
-  reads `threads.embedding`. ILIKE-on-title fallback covers
-  unembedded rows. See `./conversation-recall.md`.
-- **Reflection / summary / wiki workers** — share the
-  `lease.ts` coordinator and the worker-leases table.
-  Separate `worker_kind` values (`'reflection'`,
-  `'summary'`, `'embedding'`, `'wiki'`,
-  `'attachment_expiry'`, `'samskara'`) so a device can
-  hold every lease concurrently. See `./memory.md`,
-  `./summaries.md`, `./wiki.md`.
-- **Cookbook** — `recipes` joined the registered-source list
-  so the drawer's recipe search can rank by meaning. The
-  `clear_recipe_embedding_on_change` trigger fires when
-  `title | cooklang | source` change. The LLM-facing
-  `recipe_list` tool still runs ILIKE-on-title only - the
-  embedding pipeline is for the human drawer search. See
-  `./cookbook.md`.
-- **Auth-session** — worker startup is gated on an active
-  Supabase session; `manager.start()` pulls the session from
-  the Supabase client and passes tokens to the Worker. A
-  lack of session exits the worker cleanly; the next
-  `activate()` call will spin it up again. See
-  `./auth-session.md`.
-- **Logging** - the loop driver emits progress and error
-  breadcrumbs through `createLogger('embed-worker')`.
-  Worker-context entries postMessage to the main thread
-  as `{type: 'nak-log'}` and appear in the in-app log
-  drawer indistinguishably from main-thread entries with
-  the same source tag. See `./logging.md`.
+- **Memory** - `memories` is one of the five backfill sources. The
+  `clear_memory_embedding_on_change` trigger reselects edited rows.
+  `memory_search`'s vector path reads `memories.embedding`; ILIKE
+  fallback covers unembedded rows. See `./memory.md`.
+- **Summaries** - `threads` is a source; the
+  `clear_thread_embedding_on_change` trigger fires when `title` or
+  `summary` changes, so a fresh summary reselects the row. The
+  summary agent worker writes `threads.summary`; the server-side
+  backfill then embeds it. See `./summaries.md`.
+- **Conversation recall** - `conversation_search`'s vector path reads
+  `threads.embedding`; ILIKE-on-title covers unembedded rows. See
+  `./conversation-recall.md`.
+- **Cookbook** - `recipes` is a source so the drawer's recipe search
+  can rank by meaning; `clear_recipe_embedding_on_change` fires on
+  `title | cooklang | source`. See `./cookbook.md`.
+- **Wiki / Samskara** - `wiki_articles` and `samskara_substrate` are
+  sources; the substrate claim skips unassimilated rows
+  (`situation is null`). See `./wiki.md`, `./samskara.md`.
+- **Shared config** - the function reads the project-global Venice
+  key from `app_config` server-side (service role). The browser's
+  `app.serverConfig` copy is the same row, fetched post-auth, staged
+  for the query-time consumers to migrate onto later. See
+  [the milestone plan](./in-progress/venice-edge-functions/embeddings.md).
+- **Build & deploy** - the `pg_cron`/`pg_net` block and the converted
+  RPCs ship in `schema.sql`, applied by the deploy's `sync-supabase`
+  job. The Vault secrets that authenticate the cron call are seeded
+  once by `mise run supabase-init`. See `./build-deploy.md`.
+- **Edge functions** - `/backfill` is one route on the fat `venice`
+  function; `/embed` is its sibling. See
+  [the milestone plan](./in-progress/venice-edge-functions/README.md).
 
 ## Gotchas
 
-- **Class instances don't structured-clone.** The manager
-  passes primitives (Supabase URL, publishable key, access token,
-  refresh token, Venice key) via `postMessage`; the Worker
-  reconstructs `VeniceClient` + `SupabaseClient` on its side.
-  Handing a live service across the boundary looks fine and
-  silently fails with opaque errors.
-- **Two copies of the auth token.** The worker has its own
-  Supabase client with its own copy of the session tokens.
-  When the main-thread session refreshes, the worker's copy
-  goes stale. The current design accepts that for simplicity
-  — a lapsed worker token just fails the next RPC, the
-  lease is released on error, and the main-thread manager
-  will restart the worker on the next `activate()`. If you
-  find yourself wiring token-refresh across the boundary,
-  the simpler fix is "stop and restart the worker."
-- **`save-rejected` is not an error.** The row was edited,
-  the TTL lapsed, or the user deleted the memory. Drain to
-  the next row; do not retry, do not log as error.
-  Distinguishing this from a true save failure is why the
-  save RPC returns boolean rather than throwing.
-- **`no-embedding` shouldn't happen but does.** Venice
-  occasionally returns an empty array for a non-empty input.
-  Loop treats it as `save-rejected` (skip, move on) rather
-  than a hard error — there's no useful recovery and a retry
-  usually gets the same answer.
-- **Rate-limit back-off is long on purpose.** 30s, not 5s.
-  If Venice 429s us once, it's probably 429-ing every tab
-  the user has open; backing off for half a minute lets the
-  rate-limit window clear rather than hammering.
-- **Heartbeat errors are recoverable; `false` return is
-  decisive.** A thrown error just means "couldn't check, try
-  again"; the server-side TTL catches any truly-dead worker.
-  A `false` return means "your lease expired and someone
-  else took over" — the coordinator stops the worker
-  immediately, no more rows touched.
-- **`LeaseCoordinator` is the worker's view of the lease,
-  not the lease itself.** The Supabase row is authoritative.
-  If the coordinator thinks it holds the lease but the
-  server disagrees (clock skew past the TTL margin), the
-  next heartbeat returns false and the worker stops. Don't
-  add an "optimistic" path that skips the server check.
+- **The EXECUTE grant is load-bearing, not boilerplate.** The
+  claim/save RPCs are `security definer` with no user filter; the
+  `revoke from public` + `grant to service_role` is what stops a
+  signed-in member from reading another member's rows through them.
+  Don't "tidy" the grants away.
+- **Cron auth needs the LEGACY JWT key.** The function gateway
+  validates the bearer as a JWT; the modern opaque `sb_secret_` key
+  is not one and gets rejected (same gotcha as the local realtime
+  stack rejecting `sb_publishable_`). The Vault `service_role_key`
+  secret must be the legacy key.
+- **Text composition stays in TS.** Moving the per-source builders
+  into the SQL claim RPCs would diverge from historical vectors: JS
+  `String.slice` counts UTF-16 units, SQL `left()` counts characters,
+  so an emoji on a truncation boundary changes the string. Compose in
+  `_shared/embed-input.ts`.
+- **The schema must apply on a DB without pg_cron/pg_net.** The local
+  dev stack ships neither, so the extension + `cron.schedule` setup is
+  gated on `pg_available_extensions` inside a guarded `do` block, and
+  the trigger function uses dynamic SQL so it compiles regardless. It
+  all no-ops locally; cron is a hosted-only concern.
+- **`save`-false is not an error.** The row was edited, the TTL
+  lapsed, or the row was deleted. The summary counts it as `rejected`
+  and moves on; that's why the save RPC returns boolean.
+- **`pg_net` confirms dispatch, not completion.** A tick fires the
+  HTTP call and returns; it does not wait for the backfill to finish.
+  That's why each invocation self-bounds and the claim protocol
+  resumes the drain - never assume one tick drains the whole queue.
 
 ## Where to go next
 
-- `./memory.md` — first consumer: memory search + the
-  ILIKE fallback.
-- `./summaries.md` — the sibling worker that produces the
+- `./memory.md` - first consumer: memory search + the ILIKE fallback.
+- `./summaries.md` - the sibling worker that produces the
   `threads.summary` field this feature then embeds.
-- `./conversation-recall.md` — second consumer: thread
-  search + recall.
-- `./architecture.md` — the worker model in context.
+- `./conversation-recall.md` - second consumer: thread search.
+- [`./in-progress/venice-edge-functions/embeddings.md`](./in-progress/venice-edge-functions/embeddings.md)
+  - the milestone that moved backfill server-side.
+- `./architecture.md` - the worker model (still used by the agent
+  fleet) in context.

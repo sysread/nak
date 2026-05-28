@@ -4,6 +4,8 @@
     "src/sw.ts",
     "scripts/bootstrap.mjs",
     "scripts/branch-cleanup.mjs",
+    "scripts/dev-backfill-cron.mjs",
+    "scripts/dev-local.mjs",
     "scripts/doctor.mjs",
     "scripts/setup-pages.mjs",
     "scripts/setup-supabase.mjs",

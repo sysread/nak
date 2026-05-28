@@ -1,7 +1,7 @@
 /**
  * Schema-only export for memory_update. Impl lives in `./memory_update`.
  */
-import { MAX_MEMORY_DATA_CHARS } from '../embeddings/types';
+import { MAX_MEMORY_DATA_CHARS } from '../memories';
 import { MAX_MEMORY_CHANGELOG_MESSAGE_CHARS } from '../memories';
 
 export const memoryUpdateSchema = {

@@ -21,7 +21,12 @@
  * easier to read than a constellation of stores with the same lifetime.
  */
 import type { AppConfig } from './config';
-import { SupabaseService, type SystemPrompt, type UserSettings } from './supabase';
+import {
+  SupabaseService,
+  type ServerConfig,
+  type SystemPrompt,
+  type UserSettings,
+} from './supabase';
 import { VeniceClient } from './venice';
 import { saveSession, clearSession } from './session';
 import { resetUsage } from './usage-store.svelte';
@@ -98,9 +103,12 @@ function lazyManager<
 // every manager chunk pulls from rather than duplicating them.
 //
 // Order doesn't matter; each handle is independent.
-const embeddings = lazyManager(() =>
-  import('./embeddings/manager').then((m) => m.embeddingManager)
-);
+//
+// Embedding backfill is no longer a worker here: it runs server-side on a
+// pg_cron schedule against the venice edge function (see
+// docs/dev/in-progress/venice-edge-functions/embeddings.md). The browser still
+// embeds search *queries* synchronously at the call sites, but nothing in the
+// tab drives backfill anymore.
 // Seven formerly-standalone workers (auto_title, summary, reflection,
 // topics, memory_topics, recipe_topics, attachment_expiry) are
 // consolidated under one supervisor worker. The supervisor owns one
@@ -139,6 +147,16 @@ export type AppPhase = 'loading' | 'setup' | 'locked' | 'unlocked' | 'edit-confi
 interface AppState {
   phase: AppPhase;
   config: AppConfig | null;
+  /**
+   * Project-global shared config fetched from the `app_config` table after
+   * unlock (see {@link ServerConfig}). Distinct from `config`, the local
+   * encrypted blob: this is the shared Venice key the project owner seeds
+   * via `mise run supabase-init`, readable by every project member. Null
+   * until the post-unlock fetch in `loadSettingsThenStartWorkers` resolves,
+   * and null if that fetch fails. Consumers migrating off the local key
+   * read this; see docs/dev/in-progress/venice-edge-functions/.
+   */
+  serverConfig: ServerConfig | null;
   supabase: SupabaseService | null;
   venice: VeniceClient | null;
   /**
@@ -256,6 +274,7 @@ const cachedTheme = readCachedTheme();
 export const app = $state<AppState>({
   phase: 'loading',
   config: null,
+  serverConfig: null,
   supabase: null,
   venice: null,
   defaultModel: DEFAULT_TIER,
@@ -719,13 +738,13 @@ function startBackgroundWorkers(config: AppConfig): void {
   // unlock / sign-in will call `activate()` again.
   //
   // The workers run concurrently and partition the shared
-  // `worker_leases` table on `worker_kind` ('embedding' /
-  // 'reflection' / 'summary' / 'topics' / 'memory-topics' /
-  // 'recipe-topics' / 'attachment_expiry' / 'auto_title' /
-  // 'samskara' / 'wiki') so one device can hold every lease
-  // simultaneously without contention. The summary worker feeds the
-  // drawer's search feature - it writes `threads.summary`, which the
-  // embeddings worker then picks up to build the searchable vector.
+  // `worker_leases` table on `worker_kind` ('reflection' / 'summary' /
+  // 'topics' / 'memory-topics' / 'recipe-topics' / 'attachment_expiry' /
+  // 'auto_title' / 'samskara' / 'wiki') so one device can hold every
+  // lease simultaneously without contention. The summary worker feeds
+  // the drawer's search feature - it writes `threads.summary`, which the
+  // server-side cron backfill then picks up to build the searchable
+  // vector (see docs/dev/in-progress/venice-edge-functions/embeddings.md).
   // The topics worker writes `threads.topics` which the drawer reads
   // to populate the topic-filter dropdown; see docs/dev/topics.md.
   // The memory-topics and recipe-topics workers are siblings that
@@ -736,7 +755,6 @@ function startBackgroundWorkers(config: AppConfig): void {
   // on the 'New conversation' placeholder; see docs/dev/auto-title.md.
   // The samskara worker forms the chat model's progressively-built
   // predictive model of the user; see docs/dev/samskara.md.
-  embeddings.start({ supabase: app.supabase, config });
   supervisor.start({
     supabase: app.supabase,
     config,
@@ -832,6 +850,21 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
       // behaviour pre-race-fix, so a Supabase outage doesn't gate the
       // entire bootstrap.
     }
+    // Fetch the project-global shared config post-auth into app.serverConfig.
+    // This is the shared-key spine the venice edge function migration is built
+    // on (see docs/dev/in-progress/venice-edge-functions/). The edge function
+    // reads app_config server-side for backfill; the browser copy here has no
+    // consumer yet - it is staged for the remaining veniceApiKey consumers
+    // (the agent workers and query-time embeds) to migrate onto in later
+    // milestones. Kept warm so that migration is a one-line swap, not a
+    // re-introduction of the whole fetch/sequencing dance.
+    try {
+      app.serverConfig = await app.supabase.getAppConfig();
+    } catch {
+      // Best-effort: leave serverConfig null. Consumers fall back to the
+      // local config.veniceApiKey until a later unlock's fetch succeeds, so
+      // a degraded Supabase doesn't gate worker boot.
+    }
   }
   startBackgroundWorkers(config);
 }
@@ -851,7 +884,6 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
  * across an unlock-lock-unlock to a different API key.
  */
 function stopBackgroundWorkers(): void {
-  embeddings.stop();
   supervisor.stop();
   samskara.stop();
   bias.stop();
@@ -897,6 +929,9 @@ export function notifyBiasActiveConvIds(ids: readonly string[]): void {
 export function lock(): void {
   stopBackgroundWorkers();
   app.config = null;
+  // Drop the shared config so a subsequent unlock as a different account
+  // re-fetches it rather than inheriting the previous project's key.
+  app.serverConfig = null;
   app.supabase = null;
   app.venice = null;
   app.defaultModel = DEFAULT_TIER;

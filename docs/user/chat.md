@@ -207,9 +207,11 @@ the **log drawer** on the right side of the screen. The button is
 present on every section - Chats, Recipes, Memories, and Wiki -
 so you can pop the drawer open without first switching back to a
 chat. The drawer is a live feed of everything Nak writes to its
-internal logs - service-worker updates, reflection / summary /
-embedding worker progress, recall-agent breadcrumbs, and anything
-else a background subsystem wants to tell you about.
+internal logs - service-worker updates, reflection / summary
+worker progress, recall-agent breadcrumbs, and anything else a
+background subsystem wants to tell you about. (Embedding backfill
+runs on your Supabase project, not in the browser, so it logs there
+rather than in this drawer.)
 
 Useful when:
 

@@ -38,8 +38,7 @@
     addRelationEdge,
     removeRelationEdge,
   } from '$lib/memories-store.svelte';
-  import { searchMemoriesSemantic } from '$lib/memories';
-  import { MAX_MEMORY_DATA_CHARS } from '$lib/embeddings/types';
+  import { searchMemoriesSemantic, MAX_MEMORY_DATA_CHARS } from '$lib/memories';
   import type { Memory, MemoryRelation, SimilarMemory } from '$lib/supabase';
   import Markdown from '../components/Markdown.svelte';
   import MemoryChangelogPanel from '../components/MemoryChangelogPanel.svelte';

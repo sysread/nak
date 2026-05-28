@@ -1,15 +1,17 @@
 /**
- * Single-cycle driver for the auto-title worker. Factored out of
- * `./worker.ts` so the state machine is unit-testable without a Web
- * Worker runtime. Shape mirrors `../summary/loop.ts` deliberately -
- * both workers share the lease-acquire -> claim -> work -> save
- * progression, so reading one gives you the other's vocabulary.
+ * Single-cycle driver for the auto-title work unit. The supervisor
+ * (`../supervisor/`) imports this `runOneCycle` and drives it; the
+ * supervisor owns the sleep policy for the whole supervised batch, so
+ * this module just reports what happened. Factoring the state machine
+ * out keeps it unit-testable without a Web Worker runtime, and mirrors
+ * `../summary/loop.ts` deliberately - both share the lease-acquire ->
+ * claim -> work -> save progression, so reading one gives you the
+ * other's vocabulary.
  *
- * One cycle = one observable state transition. The outer loop in
- * `./worker.ts` maps each result to a sleep via `napForResult` before
- * asking for another cycle. Splitting "what happened" from "how long
- * to wait" keeps timing policy in one place and lets tests drive the
- * state machine directly without waiting on timers.
+ * One cycle = one observable state transition. Splitting "what
+ * happened" (this module) from "how long to wait" (the supervisor's nap
+ * policy) lets tests drive the state machine directly without waiting
+ * on timers.
  *
  * Why this pipeline lives in a worker rather than firing from
  * Chat.svelte's send() like it used to: the in-Chat trigger lost work
@@ -131,27 +133,5 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
       err instanceof Error ? err.message : String(err)
     );
     return 'error';
-  }
-}
-
-export interface NapConfig {
-  leasePollMs: number;
-  idleIntervalMs: number;
-  errorBackoffMs: number;
-}
-
-export function napForResult(result: CycleResult, config: NapConfig): number {
-  switch (result) {
-    case 'acquired-lease':
-    case 'titled':
-    case 'no-title':
-    case 'claim-lost':
-      return 0;
-    case 'polling':
-      return config.leasePollMs;
-    case 'empty-queue':
-      return config.idleIntervalMs;
-    case 'error':
-      return config.errorBackoffMs;
   }
 }

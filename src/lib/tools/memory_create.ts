@@ -12,7 +12,7 @@
  * blows up the next round's prompt budget.
  */
 import type { ToolDef } from './types';
-import { MAX_MEMORY_DATA_CHARS } from '../embeddings/types';
+import { MAX_MEMORY_DATA_CHARS } from '../memories';
 import { MAX_MEMORY_CHANGELOG_MESSAGE_CHARS } from '../memories';
 import { memoryCreateSchema } from './memory_create.schema';
 import { emitMemoryChange } from '../memory-events';

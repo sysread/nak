@@ -1,6 +1,7 @@
 [tools]
 node = "20.11.1"
 pnpm = "10.33.4"
+deno = "2.8.0"
 # gh and supabase are installed via mise's `aqua` backend, which pulls from
 # the curated aqua registry so binary names resolve correctly across
 # platforms. If aqua fails for you, comment these out and install manually
@@ -28,8 +29,10 @@ pnpm = "10.33.4"
 # hosted realtime resolves opaque keys. When a future CLI fixes #4219, this is
 # the place to note it: bump, then flip dev-local.mjs's readStatus back to
 # prefer PUBLISHABLE_KEY and re-test that realtime connects locally.
-"aqua:cli/cli"      = "latest"
-"aqua:supabase/cli" = "2.101.0"
+# gum drives the interactive config widgets in `mise run supabase-init`.
+"aqua:cli/cli"           = "latest"
+"aqua:supabase/cli"      = "2.101.0"
+"aqua:charmbracelet/gum" = "latest"
 
 # Note: markdownlint-cli2 is a pnpm devDependency — the `deps` task
 # below provisions it via `pnpm install --frozen-lockfile`, and every
@@ -66,7 +69,7 @@ run = "node scripts/setup-pages.mjs"
 raw = true
 
 [tasks.supabase-init]
-description = "First-time Supabase setup: create/link project, apply schema, configure auth URLs, seed main user"
+description = "Supabase setup + config: create/link project, apply schema, edit app config (Venice key) via gum, configure auth URLs, seed main user. Re-runnable."
 run = "node scripts/setup-supabase.mjs"
 raw = true
 
@@ -167,7 +170,7 @@ run = [
 ]
 
 [tasks.dev-start]
-description = "Isolated local dev: bring up a local Supabase stack (Docker), provision it, run Vite, and tear the stack down on exit. Never touches the linked cloud project."
+description = "Isolated local dev: bring up a local Supabase stack (Docker), provision it, serve edge functions, drive embedding backfill on an interval (NAK_DEV_BACKFILL=0 to disable), run Vite, and tear the stack down on exit. Never touches the linked cloud project."
 # deps so a fresh worktree has Vite/etc; raw = true so the foreground Vite
 # server, the slow `supabase start` image pull, and the optional Venice-key
 # prompt all have direct TTY access and Ctrl-C reaches the script.
@@ -178,4 +181,30 @@ raw = true
 [tasks.dev-stop]
 description = "Stop the local Supabase stack. The crash-cleanup fallback for a dev-start that exited without tearing down. Data is preserved; add --no-backup to supabase stop for a clean wipe."
 run = "supabase stop"
+raw = true
+
+[tasks.dev-backfill-cron]
+description = "DEV SHIM: poll the local /backfill route on an interval, standing in for the hosted pg_cron job (the local stack has no pg_cron). dev-start runs this by default; use the task standalone to drive backfill against an already-running stack or with a custom interval. Arg or NAK_BACKFILL_INTERVAL = seconds (default 60)."
+# raw = true so Ctrl-C reaches the script and its tick logs stream to the TTY.
+run = "node scripts/dev-backfill-cron.mjs"
+raw = true
+
+# Edge functions (supabase/functions) are a Deno island - own toolchain, run
+# via deno / the supabase CLI, not pnpm. See
+# docs/dev/in-progress/venice-edge-functions/.
+
+[tasks.functions-test]
+description = "Deno unit tests for the edge functions (offline - fake fetch, no network or Supabase). Pure logic in _shared; the handler glue is exercised via dev-start's functions serve."
+# --config points deno at the functions' import map; the tests/ dir holds only
+# the pure offline tests, so this stays network-free after deno caches std.
+run = "deno test --config supabase/functions/deno.json supabase/functions/tests/"
+
+[tasks.functions-serve]
+description = "Serve edge functions locally (supabase functions serve). dev-start already runs this alongside Vite; use standalone to serve against an already-running stack."
+run = "supabase functions serve"
+raw = true
+
+[tasks.functions-deploy]
+description = "Deploy the venice edge function to the linked Supabase project."
+run = "supabase functions deploy venice"
 raw = true

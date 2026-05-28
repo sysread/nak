@@ -135,23 +135,26 @@ one") and it will.
 
 ## Embeddings
 
-A background Web Worker computes vector embeddings for every memory
-and every thread summary. Embeddings are what make `memory_search`
-and `conversation_search` find things by meaning rather than by
-exact keyword match.
+Vector embeddings are computed for every memory, thread summary,
+recipe, wiki article, and a few other text fields. Embeddings are
+what make `memory_search`, `conversation_search`, and the drawer
+searches find things by meaning rather than by exact keyword match.
+
+Unlike the other items on this page, this one does **not** run in
+your browser. It runs on your Supabase project on a schedule (every
+few minutes), so it keeps working with no tab open - close the laptop
+and new memories still get embedded. Everything else here needs the
+app open in a tab; embeddings is the exception.
 
 What you see: nothing. A just-written memory is unembedded for a
-short window (typically under a minute) while the worker catches up;
-during that window, searches still match it by substring and
-promote to semantic results once the embedding lands.
+short window (up to a few minutes) until the next scheduled pass
+catches up; during that window, searches still match it by substring
+and promote to semantic results once the embedding lands.
 
-Cross-tab coordination: only one tab runs the worker at a time, via
-`navigator.locks`. If you have Nak open in several tabs, the others
-sit idle until the active one closes.
-
-Cost: Venice's embedding endpoint, one call per unembedded row.
-Rate-limit responses pause the worker for 30 seconds before
-retrying.
+Cost: Venice's embedding endpoint, one call per unembedded row. The
+schedule processes a bounded batch per run and resumes on the next
+run, so a large backlog drains over several passes rather than in one
+burst.
 
 No toggle.
 

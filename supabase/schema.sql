@@ -103,6 +103,41 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
+-- app_config -------------------------------------------------------------
+--
+-- Project-global configuration shared by every member of this Supabase
+-- project - NOT keyed to a user. One Venice API key serves the owner and
+-- anyone they invite (for example a family member on a separate account
+-- but the same project), so both the embeddings edge function and the
+-- browser read the single shared key from here instead of each user
+-- supplying their own. See
+-- docs/dev/in-progress/venice-edge-functions/ for the broader plan.
+--
+-- Singleton table: `id boolean primary key default true` plus the
+-- `check (id)` constraint permits only the value true, so the table holds
+-- at most one row and every upsert targets it via `on conflict (id)`.
+-- Seeded by the config editor in `mise run supabase-init`
+-- (scripts/setup-supabase.mjs).
+create table if not exists public.app_config (
+  id boolean primary key default true,
+  venice_api_key text,
+  updated_at timestamptz not null default now(),
+  constraint app_config_singleton check (id)
+);
+
+alter table public.app_config enable row level security;
+
+-- RLS diverges from the per-user sibling tables on purpose. Every other
+-- table isolates rows with `auth.uid() = user_id`; app_config is shared,
+-- so any *authenticated* member may read it (anon, where auth.uid() is
+-- null, may not). There is intentionally NO insert/update/delete policy:
+-- writes happen only through the service role - `mise run supabase-init`
+-- via the Management API, and later the edge function - which bypasses RLS.
+-- A missing write policy here is deliberate, not an oversight.
+drop policy if exists "app_config is readable by authenticated users" on public.app_config;
+create policy "app_config is readable by authenticated users" on public.app_config
+  for select using (auth.uid() is not null);
+
 -- threads ----------------------------------------------------------------
 
 create table if not exists public.threads (
@@ -2771,16 +2806,18 @@ create trigger clear_recipe_topics_on_change
 -- pipeline. Returns (id, title, source, cooklang) so the worker can
 -- build the embedding input without a second round-trip.
 drop function if exists public.claim_next_pending_recipe(text, int);
+-- Global service-definer sweep, same shape as claim_next_pending_memory:
+-- no auth.uid() filter, owner-privileged, EXECUTE locked to service_role below.
 create or replace function public.claim_next_pending_recipe(
   p_holder_id text,
   p_ttl_seconds int
 ) returns table (id uuid, title text, source text, cooklang text)
-language sql security invoker as $$
+language sql security definer
+set search_path = public as $$
   with candidate as (
     select r.id
       from public.recipes r
-     where r.user_id = auth.uid()
-       and r.embedding is null
+     where r.embedding is null
        and (r.embedding_claim_expires is null
             or r.embedding_claim_expires < now())
      order by r.updated_at desc
@@ -2802,7 +2839,8 @@ create or replace function public.save_recipe_embedding_if_claimed(
   p_embedding vector(2048),
   p_embedding_model text
 ) returns boolean
-language plpgsql security invoker as $$
+language plpgsql security definer
+set search_path = public as $$
 declare
   updated int;
 begin
@@ -2812,12 +2850,17 @@ begin
          embedding_claim_holder = null,
          embedding_claim_expires = null
    where id = p_id
-     and user_id = auth.uid()
      and embedding_claim_holder = p_holder_id
      and embedding_claim_expires > now();
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+-- Service-role only - see the note on the memory pair.
+revoke all on function public.claim_next_pending_recipe(text, int) from public;
+revoke all on function public.save_recipe_embedding_if_claimed(uuid, text, vector, text) from public;
+grant execute on function public.claim_next_pending_recipe(text, int) to service_role;
+grant execute on function public.save_recipe_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
 -- Cosine similarity search. Same shape as the wiki RPC; the sidebar
 -- merges these hits with an ILIKE pass on the client side so freshly
@@ -3011,16 +3054,20 @@ end $$;
 -- and returns the row contents so the worker can embed without a second
 -- round trip.
 drop function if exists public.claim_next_pending_memory(text, int);
+-- Claim the next memory needing an embedding, GLOBALLY across every member.
+-- `security definer` (runs as the owner, postgres) with no auth.uid() filter:
+-- the cron backfill has no user session, so it sweeps all users' pending rows.
+-- The EXECUTE grant below is the security boundary - see the revoke/grant.
 create or replace function public.claim_next_pending_memory(
   p_holder_id text,
   p_ttl_seconds int
 ) returns table (id uuid, label text, data text)
-language sql security invoker as $$
+language sql security definer
+set search_path = public as $$
   with candidate as (
     select m.id
       from public.memories m
-     where m.user_id = auth.uid()
-       and m.embedding is null
+     where m.embedding is null
        and (m.embedding_claim_expires is null
             or m.embedding_claim_expires < now())
      order by m.updated_at desc
@@ -3047,7 +3094,8 @@ create or replace function public.save_memory_embedding_if_claimed(
   p_embedding vector(2048),
   p_embedding_model text
 ) returns boolean
-language plpgsql security invoker as $$
+language plpgsql security definer
+set search_path = public as $$
 declare
   updated int;
 begin
@@ -3057,12 +3105,20 @@ begin
          embedding_claim_holder = null,
          embedding_claim_expires = null
    where id = p_id
-     and user_id = auth.uid()
      and embedding_claim_holder = p_holder_id
      and embedding_claim_expires > now();
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+-- Lock the embedding claim/save pair to the service role. These run as the
+-- definer (postgres) with no per-user filter, so leaving EXECUTE open to
+-- `authenticated` would let any signed-in member claim and read another
+-- member's memory text. Only the edge function (service role) drives backfill.
+revoke all on function public.claim_next_pending_memory(text, int) from public;
+revoke all on function public.save_memory_embedding_if_claimed(uuid, text, vector, text) from public;
+grant execute on function public.claim_next_pending_memory(text, int) to service_role;
+grant execute on function public.save_memory_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
 -- Similarity search RPC. `security invoker` means the function runs as
 -- the caller — RLS still applies — but the explicit `user_id = auth.uid()`
@@ -4099,16 +4155,19 @@ $$;
 -- a meaningful embedding); the worker will pick it up on a later
 -- poll once either the autoTitle or the summary agent has landed.
 drop function if exists public.claim_next_pending_thread_for_embedding(text, int);
+-- Global service-definer sweep, same shape as claim_next_pending_memory:
+-- no auth.uid() filter, owner-privileged, EXECUTE locked to service_role below.
+-- The title/summary eligibility predicate is preserved.
 create or replace function public.claim_next_pending_thread_for_embedding(
   p_holder_id text,
   p_ttl_seconds int
 ) returns table (id uuid, title text, summary text)
-language sql security invoker as $$
+language sql security definer
+set search_path = public as $$
   with candidate as (
     select t.id
       from public.threads t
-     where t.user_id = auth.uid()
-       and t.embedding is null
+     where t.embedding is null
        and (t.embedding_claim_expires is null
             or t.embedding_claim_expires < now())
        and (t.title is distinct from 'New conversation' or t.summary is not null)
@@ -4133,7 +4192,8 @@ create or replace function public.save_thread_embedding_if_claimed(
   p_embedding vector(2048),
   p_embedding_model text
 ) returns boolean
-language plpgsql security invoker as $$
+language plpgsql security definer
+set search_path = public as $$
 declare
   updated int;
 begin
@@ -4143,12 +4203,17 @@ begin
          embedding_claim_holder = null,
          embedding_claim_expires = null
    where id = p_id
-     and user_id = auth.uid()
      and embedding_claim_holder = p_holder_id
      and embedding_claim_expires > now();
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+-- Service-role only - see the note on the memory pair.
+revoke all on function public.claim_next_pending_thread_for_embedding(text, int) from public;
+revoke all on function public.save_thread_embedding_if_claimed(uuid, text, vector, text) from public;
+grant execute on function public.claim_next_pending_thread_for_embedding(text, int) to service_role;
+grant execute on function public.save_thread_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
 -- Cosine-similarity search over threads. Returns a small projection
 -- (id + the columns the drawer renders) plus the raw similarity score
@@ -5268,16 +5333,19 @@ end $$;
 -- `situation_embedding is null AND situation is not null` — empty
 -- text would waste a Venice call.
 drop function if exists public.samskara_claim_next_substrate_embed(text, int);
+-- Global service-definer sweep, same shape as claim_next_pending_memory:
+-- no auth.uid() filter, owner-privileged, EXECUTE locked to service_role below.
+-- The situation-not-null predicate (skip unassimilated rows) is preserved.
 create or replace function public.samskara_claim_next_substrate_embed(
   p_holder_id text,
   p_ttl_seconds int
 ) returns table (id uuid, situation text, outcome text)
-language sql security invoker as $$
+language sql security definer
+set search_path = public as $$
   with candidate as (
     select s.id
       from public.samskara_substrate s
-     where s.user_id = auth.uid()
-       and s.situation_embedding is null
+     where s.situation_embedding is null
        and s.situation is not null
        and (s.embedding_claim_expires is null
             or s.embedding_claim_expires < now())
@@ -5302,7 +5370,8 @@ create or replace function public.samskara_save_substrate_embedding_if_claimed(
   p_embedding vector(2048),
   p_embedding_model text
 ) returns boolean
-language plpgsql security invoker as $$
+language plpgsql security definer
+set search_path = public as $$
 declare
   updated int;
 begin
@@ -5312,12 +5381,17 @@ begin
          embedding_claim_holder = null,
          embedding_claim_expires = null
    where id = p_id
-     and user_id = auth.uid()
      and embedding_claim_holder = p_holder_id
      and embedding_claim_expires > now();
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+-- Service-role only - see the note on the memory pair.
+revoke all on function public.samskara_claim_next_substrate_embed(text, int) from public;
+revoke all on function public.samskara_save_substrate_embedding_if_claimed(uuid, text, vector, text) from public;
+grant execute on function public.samskara_claim_next_substrate_embed(text, int) to service_role;
+grant execute on function public.samskara_save_substrate_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
 -- Decay pass. Two updates, mirroring scratch's two paths: stale-fire
 -- decay (gentle, hiatus-tolerant) and disconfirm decay (sharper,
@@ -6333,16 +6407,18 @@ $$;
 -- as memories, same 2048-dim padded vectors,
 -- same security invoker posture letting RLS enforce user scoping.
 drop function if exists public.claim_next_pending_wiki_article(text, int);
+-- Global service-definer sweep, same shape as claim_next_pending_memory:
+-- no auth.uid() filter, owner-privileged, EXECUTE locked to service_role below.
 create or replace function public.claim_next_pending_wiki_article(
   p_holder_id text,
   p_ttl_seconds int
 ) returns table (id uuid, title text, content text)
-language sql security invoker as $$
+language sql security definer
+set search_path = public as $$
   with candidate as (
     select w.id
       from public.wiki_articles w
-     where w.user_id = auth.uid()
-       and w.embedding is null
+     where w.embedding is null
        and (w.embedding_claim_expires is null
             or w.embedding_claim_expires < now())
      order by w.updated_at desc
@@ -6364,7 +6440,8 @@ create or replace function public.save_wiki_article_embedding_if_claimed(
   p_embedding vector(2048),
   p_embedding_model text
 ) returns boolean
-language plpgsql security invoker as $$
+language plpgsql security definer
+set search_path = public as $$
 declare
   updated int;
 begin
@@ -6374,12 +6451,17 @@ begin
          embedding_claim_holder = null,
          embedding_claim_expires = null
    where id = p_id
-     and user_id = auth.uid()
      and embedding_claim_holder = p_holder_id
      and embedding_claim_expires > now();
   get diagnostics updated = row_count;
   return updated > 0;
 end $$;
+
+-- Service-role only - see the note on the memory pair.
+revoke all on function public.claim_next_pending_wiki_article(text, int) from public;
+revoke all on function public.save_wiki_article_embedding_if_claimed(uuid, text, vector, text) from public;
+grant execute on function public.claim_next_pending_wiki_article(text, int) to service_role;
+grant execute on function public.save_wiki_article_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
 -- Similarity search RPC. Plain cosine ranking, no confidence boost
 -- (articles are direct user/agent assertions, not probabilistic
@@ -7462,3 +7544,91 @@ begin
     alter publication supabase_realtime add table public.messages;
   end if;
 end $$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled embedding backfill (pg_cron -> pg_net -> venice/backfill)
+--
+-- Replaces the browser embeddings worker: a cron tick POSTs to the venice edge
+-- function's /backfill route, which drains pending embeddings server-side
+-- across every member. See docs/dev/in-progress/venice-edge-functions/embeddings.md.
+--
+-- Auth + endpoint custody live in two Vault secrets the owner seeds once via
+-- `mise run supabase-init`:
+--   project_url       - e.g. https://<ref>.supabase.co
+--   service_role_key  - the LEGACY JWT service-role key. The modern opaque
+--                       sb_secret_ key is NOT a JWT, and the function gateway
+--                       rejects a non-JWT bearer (the same reason the local
+--                       realtime stack rejects sb_publishable_). The /backfill
+--                       handler also requires the bearer to equal its injected
+--                       SUPABASE_SERVICE_ROLE_KEY, so an ordinary signed-in user
+--                       can't trigger a cross-member sweep.
+-- Until both secrets exist the trigger no-ops - backfill simply does not run on
+-- an unseeded project, it never errors.
+-- ---------------------------------------------------------------------------
+
+-- Dynamic SQL throughout so this function compiles on a database that lacks
+-- pg_net / supabase_vault (the local dev stack). It no-ops cleanly there; only
+-- hosted Supabase, where the extensions and seeded secrets exist, dispatches.
+create or replace function public.nak_trigger_embed_backfill()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/venice/backfill',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_embed_backfill: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_embed_backfill() from public;
+
+-- Enable pg_cron + pg_net and (re)schedule the every-5-minutes backfill. Guarded
+-- on extension availability so the local dev stack (which ships neither) still
+-- applies schema.sql cleanly - same lesson as the vector-extension ordering fix
+-- near the top of this file. Idempotent: re-applying schema.sql reschedules the
+-- single named job rather than stacking duplicates. The outer handler also
+-- swallows a "pg_cron requires shared_preload_libraries" failure, so a partial
+-- local image can't break the apply.
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-embed-backfill') then
+      perform cron.unschedule('nak-embed-backfill');
+    end if;
+    perform cron.schedule(
+      'nak-embed-backfill',
+      '*/5 * * * *',
+      $job$ select public.nak_trigger_embed_backfill(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'embedding backfill cron setup skipped: %', sqlerrm;
+end
+$cron$;
