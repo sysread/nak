@@ -158,17 +158,22 @@ every remaining reader as a compile error - no runtime hunt.
 
 ## Learning loop
 
-The skeleton sub-plans are deliberately thin. Implementing
-embeddings will surface concrete lessons - how the function is
-structured, how `deno test` and `supabase functions serve` fit
-the gate, how `pg_cron` + `pg_net` behave with real batch
-sizes and timeouts, how the shared-config fetch sequences
-against worker startup.
+Sub-plans stay deliberately thin until their endpoint becomes the
+active milestone. We do not waterfall the design ahead of time -
+guessing the shape of four endpoints up front mostly produces
+churn. Instead **each milestone ends by folding its concrete
+learnings back into the remaining sub-plans**, so the next endpoint
+starts from earned knowledge rather than this document's best
+guesses. That closing step is the standing pattern, not a one-off.
 
-**The final step of the embeddings milestone is to fold those
-lessons back into the four sibling sub-plans**, so the next
-endpoint starts from earned knowledge rather than this
-document's best guesses. That step is listed explicitly in
+The embeddings milestone set it. Implementing it surfaced how the
+function is structured, how `deno test` and `supabase functions
+serve` fit the gate, how `pg_cron` + `pg_net` + Vault behave, and -
+the big scope-reducer - that the cron / definer / Vault machinery is
+specific to *background* jobs and does not transfer to the
+user-triggered endpoints. Its final step folded those lessons into
+the three remaining sub-plans; see each one's "Lessons from the
+embeddings milestone" section and
 [embeddings.md](./embeddings.md#definition-of-done).
 
 ## Interactions
