@@ -1371,6 +1371,22 @@ describe('generateImage', () => {
       return_binary: false,
       format: 'webp',
     });
+    // Only sent when the caller opts in - omitted here.
+    expect(body.hide_watermark).toBeUndefined();
+  });
+
+  it('forwards hide_watermark when hideWatermark is set', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ id: 'g1', images: ['B64'] })
+    );
+    const client = new VeniceClient({
+      apiKey: 'k',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await client.generateImage({ model: 'm', prompt: 'x', hideWatermark: true });
+    const [, init] = fetchImpl.mock.calls[0];
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.hide_watermark).toBe(true);
   });
 
   it('throws on a content-policy violation even with HTTP 200', async () => {

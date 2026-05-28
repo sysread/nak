@@ -31,7 +31,8 @@ consume them, and reclaimed after a 30-day dormancy window.
 - `src/components/MessageAttachments.svelte` — per-message list
   under user- and assistant-message bodies. Splits attachments via
   `partitionAttachments`: live images render as large previews
-  (~85% of card width, wrapped in a download anchor); files and
+  (~85% of card width, wrapped in an anchor that opens the image in
+  a new tab via its `blob:` URL); files and
   expired images render as compact chips - download anchor when
   live, filename plus clock icon (no anchor) plus the "Text" button
   when expired.

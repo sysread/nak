@@ -89,15 +89,18 @@
 {#if partitioned.images.length > 0}
   <div class="msg-attachment-images">
     {#each partitioned.images as a (a.id)}
-      <!-- Wrapped in the download anchor so a click saves the original
-           file, same affordance the file chips offer. Lightbox/zoom is
-           a deliberate follow-up, not wired here. -->
+      <!-- Opens the full-resolution image in a new tab on click.
+           Targets the cached Blob URL (a `blob:` href - browsers allow
+           top-level navigation to those, unlike `data:`). The teardown
+           effect revokes the URL on unmount, but a tab that already
+           navigated to it keeps the loaded image. Lightbox/zoom is a
+           deliberate follow-up, not wired here. -->
       <a
         href={hrefFor(a)}
-        download={a.filename}
+        target="_blank"
         rel="noopener"
         class="msg-attachment-image-link"
-        title={`Download ${a.filename}`}
+        title={`Open ${a.filename} in a new tab`}
       >
         <img class="msg-attachment-image" src={thumbSrc(a)} alt={a.filename} />
       </a>

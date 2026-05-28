@@ -53,7 +53,8 @@ Click the × on a chip to remove it before sending.
 Images you attach (and images Nak generates, below) render as a large
 preview under the message - about 85% of the bubble width - so you can
 actually see them in the conversation rather than squinting at a
-thumbnail. Click an image preview to download the original.
+thumbnail. Click an image preview to open the full-resolution
+image in a new tab.
 
 Other files show up under your message as a download chip:
 
@@ -84,6 +85,9 @@ yourself.
   an uploaded image.
 - Generating an image spends Venice credits, which is why it sits
   behind a toolbox rather than firing on every message.
+- Nak asks Venice to omit its watermark on generated images. Some
+  Venice plans force the watermark regardless, so it may still
+  appear depending on your account.
 
 ## Expiration
 
