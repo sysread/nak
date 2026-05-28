@@ -8,7 +8,7 @@
  *
  * Why not integration-test the whole worker against a real Supabase?
  * The cycle results are deterministic functions of the injected RPCs;
- * mocking at the source/venice seam keeps the tests fast and keeps
+ * mocking at the source/embed seam keeps the tests fast and keeps
  * failures pointing at the loop logic rather than someone else's
  * flakiness.
  */
@@ -23,7 +23,6 @@ import {
 } from '../src/lib/embeddings/loop';
 import { LeaseCoordinator, type LeaseTimers } from '../src/lib/embeddings/lease';
 import { VeniceError } from '../src/lib/venice';
-import type { VeniceClient } from '../src/lib/venice';
 import type { SupabaseService } from '../src/lib/supabase';
 import type { EmbeddingSource, PendingItem } from '../src/lib/embeddings/types';
 import { EMBEDDING_STORAGE_DIMS, VENICE_EMBEDDING_DIMS } from '../src/lib/models';
@@ -93,29 +92,21 @@ function makeSource(
   return { source, spies };
 }
 
-/** Mock Venice that returns a deterministic 1024-dim embedding. */
-function makeVenice(): {
-  venice: VeniceClient;
-  embed: ReturnType<typeof vi.fn>;
-} {
-  const embed = vi.fn(async () => ({
-    data: [
-      {
-        index: 0,
-        embedding: Array.from({ length: VENICE_EMBEDDING_DIMS }, (_, i) => i * 0.0001),
-      },
-    ],
-  }));
-  return { venice: { embed } as unknown as VeniceClient, embed };
+/** Mock embedder returning a deterministic 1024-dim embedding. */
+function makeEmbedder(): { embed: ReturnType<typeof vi.fn> } {
+  const embed = vi.fn(async () =>
+    Array.from({ length: VENICE_EMBEDDING_DIMS }, (_, i) => i * 0.0001)
+  );
+  return { embed };
 }
 
 function buildCtx(overrides: Partial<CycleContext> = {}): CycleContext {
   const { coordinator } = buildCoordinator();
   const { source } = makeSource();
-  const { venice } = makeVenice();
+  const { embed } = makeEmbedder();
   return {
     source,
-    venice,
+    embed,
     coordinator,
     holderId: 'holder-test',
     embeddingModel: 'bge-m3',
@@ -192,10 +183,10 @@ describe('runOneCycle — holding lease, work path', () => {
     const { coordinator, leaseSpies } = buildCoordinator();
     leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
-    const { venice, embed } = makeVenice();
+    const { embed } = makeEmbedder();
     sourceSpies.claimNext.mockResolvedValue(null);
 
-    const ctx = buildCtx({ coordinator, source, venice });
+    const ctx = buildCtx({ coordinator, source, embed });
     await holdLease(ctx);
 
     const result = await runOneCycle(ctx);
@@ -208,20 +199,15 @@ describe('runOneCycle — holding lease, work path', () => {
     const { coordinator, leaseSpies } = buildCoordinator();
     leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
-    const { venice, embed } = makeVenice();
+    const { embed } = makeEmbedder();
     sourceSpies.claimNext.mockResolvedValueOnce({ id: 'm-1', input: 'hello world' });
 
-    const ctx = buildCtx({ coordinator, source, venice });
+    const ctx = buildCtx({ coordinator, source, embed });
     await holdLease(ctx);
     const result = await runOneCycle(ctx);
 
     expect(result).toBe<CycleResult>('embedded');
-    expect(embed).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: 'bge-m3',
-        input: 'hello world',
-      })
-    );
+    expect(embed).toHaveBeenCalledWith('hello world', expect.anything());
     // Saved embedding must be the storage dim, padded from the 1024
     // Venice gave us. That's the critical invariant — a mismatched dim
     // would error at the pgvector boundary.
@@ -239,11 +225,11 @@ describe('runOneCycle — holding lease, work path', () => {
     const { coordinator, leaseSpies } = buildCoordinator();
     leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
-    const { venice } = makeVenice();
+    const { embed } = makeEmbedder();
     sourceSpies.claimNext.mockResolvedValueOnce({ id: 'm-2', input: 'x' });
     sourceSpies.save.mockResolvedValueOnce(false);
 
-    const ctx = buildCtx({ coordinator, source, venice });
+    const ctx = buildCtx({ coordinator, source, embed });
     await holdLease(ctx);
     const result = await runOneCycle(ctx);
 
@@ -254,11 +240,10 @@ describe('runOneCycle — holding lease, work path', () => {
     const { coordinator, leaseSpies } = buildCoordinator();
     leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
-    const embed = vi.fn(async () => ({ data: [] }));
-    const venice = { embed } as unknown as VeniceClient;
+    const embed = vi.fn(async () => undefined);
     sourceSpies.claimNext.mockResolvedValueOnce({ id: 'm-3', input: 'x' });
 
-    const ctx = buildCtx({ coordinator, source, venice });
+    const ctx = buildCtx({ coordinator, source, embed });
     await holdLease(ctx);
     const result = await runOneCycle(ctx);
 
@@ -273,10 +258,9 @@ describe('runOneCycle — holding lease, work path', () => {
     const embed = vi.fn(async () => {
       throw new VeniceError('429', 'rate_limit');
     });
-    const venice = { embed } as unknown as VeniceClient;
     sourceSpies.claimNext.mockResolvedValueOnce({ id: 'm-4', input: 'x' });
 
-    const ctx = buildCtx({ coordinator, source, venice });
+    const ctx = buildCtx({ coordinator, source, embed });
     await holdLease(ctx);
     const result = await runOneCycle(ctx);
 
@@ -291,10 +275,9 @@ describe('runOneCycle — holding lease, work path', () => {
     const embed = vi.fn(async () => {
       throw new VeniceError('500', 'http');
     });
-    const venice = { embed } as unknown as VeniceClient;
     sourceSpies.claimNext.mockResolvedValueOnce({ id: 'm-5', input: 'x' });
 
-    const ctx = buildCtx({ coordinator, source, venice });
+    const ctx = buildCtx({ coordinator, source, embed });
     await holdLease(ctx);
     const result = await runOneCycle(ctx);
 
@@ -306,9 +289,9 @@ describe('runOneCycle — holding lease, work path', () => {
     leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
     sourceSpies.claimNext.mockRejectedValueOnce(new Error('network'));
-    const { venice, embed } = makeVenice();
+    const { embed } = makeEmbedder();
 
-    const ctx = buildCtx({ coordinator, source, venice });
+    const ctx = buildCtx({ coordinator, source, embed });
     await holdLease(ctx);
     const result = await runOneCycle(ctx);
 
@@ -322,30 +305,28 @@ describe('runOneCycle — holding lease, work path', () => {
     const { source, spies: sourceSpies } = makeSource();
     sourceSpies.claimNext.mockResolvedValueOnce({ id: 'm-6', input: 'x' });
     sourceSpies.save.mockRejectedValueOnce(new Error('network'));
-    const { venice } = makeVenice();
+    const { embed } = makeEmbedder();
 
-    const ctx = buildCtx({ coordinator, source, venice });
+    const ctx = buildCtx({ coordinator, source, embed });
     await holdLease(ctx);
     const result = await runOneCycle(ctx);
 
     expect(result).toBe<CycleResult>('error');
   });
 
-  it('threads the AbortSignal through to Venice so stop cancels in-flight embeds', async () => {
+  it('threads the AbortSignal through to the embedder so stop cancels in-flight embeds', async () => {
     const { coordinator, leaseSpies } = buildCoordinator();
     leaseSpies.acquireWorkerLease.mockResolvedValueOnce(true);
     const { source, spies: sourceSpies } = makeSource();
-    const { venice, embed } = makeVenice();
+    const { embed } = makeEmbedder();
     sourceSpies.claimNext.mockResolvedValueOnce({ id: 'm-7', input: 'x' });
 
     const ac = new AbortController();
-    const ctx = buildCtx({ coordinator, source, venice, signal: ac.signal });
+    const ctx = buildCtx({ coordinator, source, embed, signal: ac.signal });
     await holdLease(ctx);
     await runOneCycle(ctx);
 
-    expect(embed).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: ac.signal })
-    );
+    expect(embed).toHaveBeenCalledWith('x', ac.signal);
   });
 });
 

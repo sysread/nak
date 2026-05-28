@@ -38,6 +38,7 @@ import {
   napForResult,
   sleep,
   type CycleContext,
+  type Embedder,
   type NapConfig,
 } from './loop';
 
@@ -163,6 +164,37 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     apiKey: msg.veniceApiKey,
     baseUrl: msg.veniceBaseUrl,
   });
+
+  // Embed via the venice edge function (server-side Venice call using the
+  // project-global key), falling back to a direct browser->Venice call when
+  // the function path fails for any reason - not deployed yet, app_config
+  // unseeded, network. The fallback keeps embedding generation flowing while
+  // the function rolls out and surfaces function-path failures via a warn
+  // rather than silently stalling the queue; it retires once cron owns
+  // generation. See docs/dev/in-progress/venice-edge-functions/. invoke uses
+  // the client's live (rotated) session for auth, so this stays valid across
+  // token refreshes; the fallback honors the abort signal.
+  const embed: Embedder = async (input, signal) => {
+    try {
+      const { data, error } = await client.functions.invoke('venice/embed', {
+        body: { input, model: msg.embeddingModel },
+      });
+      if (error) throw error;
+      const vec = (data as { data?: { embedding?: number[] }[] } | null)?.data?.[0]?.embedding;
+      if (vec && vec.length > 0) return vec;
+      throw new Error('edge function returned no embedding');
+    } catch (err) {
+      post({
+        type: 'log',
+        level: 'warn',
+        message:
+          'embed via venice edge function failed; falling back to direct Venice: ' +
+          (err instanceof Error ? err.message : String(err)),
+      });
+      const resp = await venice.embed({ model: msg.embeddingModel, input, signal });
+      return resp.data[0]?.embedding;
+    }
+  };
   // 'embedding' is this worker's partition of the shared `worker_leases`
   // table. Agent workers use different values ('reflection', …) and
   // hold independently.
@@ -208,7 +240,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
         if (signal.aborted) break;
         const ctx: CycleContext = {
           source,
-          venice,
+          embed,
           coordinator,
           holderId: msg.holderId,
           embeddingModel: msg.embeddingModel,

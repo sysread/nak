@@ -146,7 +146,15 @@ seeder, fetch, a real consumer) with eight fallbacks intact.
 6. **Convert the backfill caller** so `runOneCycle` calls the
    function's `/embed` rather than Venice directly. Still
    browser-triggered at this stage - behavior unchanged, bugs
-   surfaced.
+   surfaced. (Done. The loop takes an injected `Embedder`
+   callback instead of a `VeniceClient`; the worker builds one
+   that calls the function via `client.functions.invoke` -
+   using the live session token, which the local gateway and
+   hosted prod both verify - and falls back to a direct Venice
+   call on any function-path failure, so generation keeps
+   flowing while the function rolls out and failures surface as
+   a worker warn rather than a stalled queue. The fallback
+   retires at step 7.)
 7. **Schedule it.** A `pg_cron` job (via `pg_net`) invokes the
    function; the function claims a bounded batch and drains via
    the existing RPCs. Then delete the browser embeddings

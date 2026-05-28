@@ -11,7 +11,6 @@
  * happened" from "how long to wait" keeps timing policy in one place
  * and makes both pieces testable independently.
  */
-import type { VeniceClient } from '../venice';
 import { VeniceError } from '../venice';
 import { padEmbeddingForStorage } from '../models';
 import type { EmbeddingSource } from './types';
@@ -42,9 +41,19 @@ export type CycleResult =
   /** Venice or Supabase errored. Short back-off. */
   | 'error';
 
+/**
+ * Produce an embedding for `input`, or undefined/empty when the provider
+ * returned no vector. Throws VeniceError on failure - the loop maps a
+ * `rate_limit` kind to a back-off. The worker injects this: it routes
+ * through the venice edge function and falls back to a direct Venice call
+ * (see docs/dev/in-progress/venice-edge-functions/), so the loop stays
+ * agnostic about where the vector comes from.
+ */
+export type Embedder = (input: string, signal: AbortSignal) => Promise<number[] | undefined>;
+
 export interface CycleContext {
   source: EmbeddingSource;
-  venice: VeniceClient;
+  embed: Embedder;
   coordinator: LeaseCoordinator;
   holderId: string;
   embeddingModel: string;
@@ -102,12 +111,7 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
 
   let rawEmbedding: number[] | undefined;
   try {
-    const resp = await ctx.venice.embed({
-      model: ctx.embeddingModel,
-      input: claimed.input,
-      signal: ctx.signal,
-    });
-    rawEmbedding = resp.data[0]?.embedding;
+    rawEmbedding = await ctx.embed(claimed.input, ctx.signal);
   } catch (err) {
     if (err instanceof VeniceError && err.kind === 'rate_limit') return 'rate-limited';
     return 'error';
