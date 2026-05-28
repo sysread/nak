@@ -1,8 +1,7 @@
 # Chat completions milestone
 
-*Skeleton.* To be fleshed out after the
-[embeddings milestone](./embeddings.md) and informed by its
-lessons. Part of the [Venice edge functions](./README.md)
+*Skeleton - embeddings lessons folded in (step 8); target state
+still to define.* Part of the [Venice edge functions](./README.md)
 project.
 
 Wraps `POST /chat/completions` - both `VeniceClient.streamChat`
@@ -47,4 +46,42 @@ To define.
 
 ## Lessons from the embeddings milestone
 
-To be filled in when embeddings completes.
+Folded in after embeddings shipped (step 7). The biggest one is a
+scope reducer:
+
+- **Most of the embeddings *schema* work does not transfer.** That
+  milestone's hardest part - converting ten claim/save RPCs to
+  `security definer` global sweeps, the EXECUTE-grant lockdown, the
+  `pg_cron` / `pg_net` / Vault stack - exists only because backfill is
+  a *background, user-less* job. Chat is user-triggered: the browser
+  calls with the user's session JWT, `verify_jwt` stays on, and there
+  is no cron, no service-role sweep, no Vault secret. The auth model to
+  copy is `/embed`'s (per-user JWT), not `/backfill`'s (service-role
+  bearer).
+- **One route per concern.** `/complete` is its own route beside
+  `/embed`; do not overload. The fat-function rule is about *one
+  deployed function*, not one handler.
+- **Shared key, read server-side.** Like every route, `/complete`
+  reads the project Venice key from `app_config` via the service role
+  (the `readVeniceKey` helper already exists). The browser keeps using
+  its local key until this consumer is migrated to `serverConfig`;
+  that migration is the static-completeness check - delete the local
+  `veniceApiKey` field once the last consumer moves, and svelte-check
+  enumerates the stragglers.
+- **Factor the pure parts; `deno test` them offline.** Backfill's win
+  was an I/O-free core (`runBackfill`) with injected deps. The analogue
+  here is the SSE frame parsing, `[DONE]` handling, and event shaping -
+  pull it out as pure transforms over a fake upstream stream so the
+  streaming logic is tested without a live Venice.
+- **The wire-shape duplication question gets sharper here.**
+  Embeddings duplicated a tiny embed body into `_shared/venice.ts` and
+  deferred real code-sharing. Chat would have to duplicate the much
+  larger stream / abort / `venice_parameters` machinery, so this is the
+  endpoint where "share `src/lib/venice.ts` between app and function"
+  stops being premature and becomes the consolidation decision worth
+  making. Flag it before copying hundreds of lines.
+
+These do not resolve the streaming-through-a-function and
+abort-propagation questions above - those are genuinely new and unique
+to this endpoint. They just take the schema/cron complexity off the
+table.

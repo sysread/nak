@@ -1,8 +1,7 @@
 # Text parser milestone
 
-*Skeleton.* To be fleshed out after the
-[embeddings milestone](./embeddings.md) and informed by its
-lessons. Part of the [Venice edge functions](./README.md)
+*Skeleton - embeddings lessons folded in (step 8); target state
+still to define.* Part of the [Venice edge functions](./README.md)
 project.
 
 Wraps `POST /augment/text-parser` (`VeniceClient.extractText`)
@@ -43,4 +42,30 @@ To define.
 
 ## Lessons from the embeddings milestone
 
-To be filled in when embeddings completes.
+Folded in after embeddings shipped (step 7):
+
+- **User-triggered, so the cron / definer / Vault stack does not
+  apply.** Like chat and usage, this fires from the browser with the
+  user's session JWT; `verify_jwt` stays on and `/text-parser` reads
+  the shared key from `app_config` via the service role. Copy
+  `/embed`'s auth model, not `/backfill`'s.
+- **One route per concern (`/text-parser`).**
+- **Multipart is the genuinely new wire concern.** Embeddings only
+  ever sent JSON, so `_shared/venice.ts` is `JSON.stringify(body)`.
+  This endpoint forwards file bytes: the function reads
+  `multipart/form-data` (a `FormData` with the `Blob` + filename) and
+  re-posts it to Venice. The fetch-injectable test pattern still holds
+  - build the outgoing `FormData` in a pure helper and assert its parts
+  with a fake `fetch` under `deno test` - but the body construction is
+  new code, not a copy of the embed shape.
+- **The payload-size question is real and unmeasured.** Embeddings
+  gave no data here (text is tiny). The edge-function request-size
+  limit versus the largest attachment we accept is the open question
+  below; it has to be measured, and may force a direct-to-Venice escape
+  hatch for large files (the browser uploads straight to Venice,
+  skipping the function) - a partial-migration shape embeddings never
+  needed.
+- **Trust model unchanged.** The attachments flow's download/upload
+  confirmations (see [attachments](../../attachments.md)) are a client
+  concern; the function just must not become an unauthenticated
+  file-forwarding proxy - the user-JWT gate is what prevents that.

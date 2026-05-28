@@ -318,9 +318,12 @@ Resolved during step 7 - kept here as the answers feed the learning loop.
   function, and Vault seeding ship for the normal merge -> CI deploy
   to apply. The `/backfill` route is locally testable via
   `supabase functions serve` + a direct service-role POST.)
-- [ ] **Sibling sub-plans updated** with lessons learned (step 8):
+- [x] **Sibling sub-plans updated** with lessons learned (step 8):
   [chat-completions](./chat-completions.md),
   [billing-usage](./billing-usage.md),
-  [text-parser](./text-parser.md). This step is what makes the
-  milestone a *learning* milestone rather than a one-off. The step-7
-  "Done" note above is the source material.
+  [text-parser](./text-parser.md). Each got a tailored "Lessons from
+  the embeddings milestone" section - the headline being that the
+  cron / definer / Vault stack was background-job-specific and does
+  *not* transfer to these three user-triggered endpoints (they use
+  `/embed`'s per-user-JWT model). Target-state design for each is the
+  separate flesh-out, taken per endpoint as it gets built.
