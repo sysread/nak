@@ -34,12 +34,16 @@
    * marking the "internal monologue" voice visually distinct from
    * the user prompt above it.
    *
-   * The notes themselves are rendered verbatim - no paraphrasing, no
-   * markdown pass. The first-person voice ("I remember...", "Last
-   * time we talked about this...") is already in the right register;
-   * italic styling reinforces the internal-monologue framing.
+   * The notes render through the shared Markdown component, the same
+   * pipeline a chat reply uses, so any light formatting the stitch
+   * emits (emphasis, lists, the occasional inline code) lands the way
+   * it does in the conversation. The first-person voice ("I
+   * remember...", "Last time we talked about this...") is already in
+   * the right register; italic styling reinforces the internal-
+   * monologue framing.
    */
   import { route } from '$lib/routing.svelte';
+  import Markdown from '../components/Markdown.svelte';
   import {
     coerceContextRecallPayload,
     type ContextRecallPayload,
@@ -159,7 +163,13 @@
             {/if}
 
             <h3 class="sub-heading">Internal context</h3>
-            <p class="recall-prose">
+            <!-- A div, not a p: the Markdown component emits block
+                 content (paragraphs, lists) which is invalid nested
+                 inside a <p>. The floated bulb is a sibling preceding
+                 the .md block, and .md is a plain block (not a BFC),
+                 so the note's first line still wraps around the drop
+                 cap exactly as verbatim text did. -->
+            <div class="recall-prose">
               <!-- Drop-capped light bulb at the start of the first
                    line - the chapter-opener metaphor from the brief.
                    SVG (not emoji) so we get crisp rendering at the
@@ -180,8 +190,8 @@
                 <path d="M10 22h4" />
                 <path d="M12 2a7 7 0 0 0-4 12.7c.7.7 1 1.7 1 2.7V18h6v-.6c0-1 .3-2 1-2.7A7 7 0 0 0 12 2z" />
               </svg>
-              {entry.note}
-            </p>
+              <Markdown content={entry.note} />
+            </div>
 
             <p class="entry-meta subtle">
               {formatRecallTrigger(entry.trigger)} · {formatRecallTimestamp(entry.computed_at_at)}
@@ -340,11 +350,10 @@
     font-style: italic;
     line-height: 1.7;
     color: var(--text);
-    /* white-space:pre-wrap so paragraph breaks in the stitched note
-       survive into the rendered card. The stitch is single-paragraph
-       in practice but we don't want to lose the seam between layers
-       if the agents emit one. */
-    white-space: pre-wrap;
+    /* No white-space:pre-wrap here - the Markdown component owns block
+       structure now, so paragraph breaks arrive as real <p> tags.
+       Leaving pre-wrap on would render the newlines between those tags
+       as visible whitespace and open extra vertical gaps. */
     /* Contain the floated bulb so it can't hang out the bottom of
        the colored box on a short note. flow-root establishes a
        block formatting context without overflow:hidden's clipping
