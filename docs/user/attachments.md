@@ -84,6 +84,9 @@ yourself.
   an uploaded image.
 - Generating an image spends Venice credits, which is why it sits
   behind a toolbox rather than firing on every message.
+- Nak asks Venice to omit its watermark on generated images. Some
+  Venice plans force the watermark regardless, so it may still
+  appear depending on your account.
 
 ## Expiration
 

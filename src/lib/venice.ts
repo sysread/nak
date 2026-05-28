@@ -371,6 +371,12 @@ export interface ImageGenRequest {
   cfgScale?: number;
   /** Blur adult content. Defaults to true (mirrors Venice's default). */
   safeMode?: boolean;
+  /**
+   * Suppress the Venice watermark on the returned image. Sent only when
+   * set; Venice defaults to a watermarked image, and may ignore the
+   * request on plans that force the watermark.
+   */
+  hideWatermark?: boolean;
   format?: 'webp' | 'png' | 'jpeg';
   signal?: AbortSignal;
 }
@@ -1169,6 +1175,7 @@ export class VeniceClient {
     if (typeof req.seed === 'number') body.seed = req.seed;
     if (typeof req.steps === 'number') body.steps = req.steps;
     if (typeof req.cfgScale === 'number') body.cfg_scale = req.cfgScale;
+    if (typeof req.hideWatermark === 'boolean') body.hide_watermark = req.hideWatermark;
 
     let res: Response;
     try {

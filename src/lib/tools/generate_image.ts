@@ -98,6 +98,11 @@ export const generateImage: ToolDef = {
         width,
         height,
         format: 'webp',
+        // Suppress the Venice watermark - the image is the user's
+        // content in their conversation, not Venice marketing. Venice
+        // may still force the watermark on plans that don't allow
+        // hiding it, in which case this is a silent no-op.
+        hideWatermark: true,
         signal: ctx.signal,
       });
     } catch (err) {
