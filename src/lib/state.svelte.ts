@@ -103,9 +103,12 @@ function lazyManager<
 // every manager chunk pulls from rather than duplicating them.
 //
 // Order doesn't matter; each handle is independent.
-const embeddings = lazyManager(() =>
-  import('./embeddings/manager').then((m) => m.embeddingManager)
-);
+//
+// Embedding backfill is no longer a worker here: it runs server-side on a
+// pg_cron schedule against the venice edge function (see
+// docs/dev/in-progress/venice-edge-functions/embeddings.md). The browser still
+// embeds search *queries* synchronously at the call sites, but nothing in the
+// tab drives backfill anymore.
 // Seven formerly-standalone workers (auto_title, summary, reflection,
 // topics, memory_topics, recipe_topics, attachment_expiry) are
 // consolidated under one supervisor worker. The supervisor owns one
@@ -735,13 +738,13 @@ function startBackgroundWorkers(config: AppConfig): void {
   // unlock / sign-in will call `activate()` again.
   //
   // The workers run concurrently and partition the shared
-  // `worker_leases` table on `worker_kind` ('embedding' /
-  // 'reflection' / 'summary' / 'topics' / 'memory-topics' /
-  // 'recipe-topics' / 'attachment_expiry' / 'auto_title' /
-  // 'samskara' / 'wiki') so one device can hold every lease
-  // simultaneously without contention. The summary worker feeds the
-  // drawer's search feature - it writes `threads.summary`, which the
-  // embeddings worker then picks up to build the searchable vector.
+  // `worker_leases` table on `worker_kind` ('reflection' / 'summary' /
+  // 'topics' / 'memory-topics' / 'recipe-topics' / 'attachment_expiry' /
+  // 'auto_title' / 'samskara' / 'wiki') so one device can hold every
+  // lease simultaneously without contention. The summary worker feeds
+  // the drawer's search feature - it writes `threads.summary`, which the
+  // server-side cron backfill then picks up to build the searchable
+  // vector (see docs/dev/in-progress/venice-edge-functions/embeddings.md).
   // The topics worker writes `threads.topics` which the drawer reads
   // to populate the topic-filter dropdown; see docs/dev/topics.md.
   // The memory-topics and recipe-topics workers are siblings that
@@ -752,7 +755,6 @@ function startBackgroundWorkers(config: AppConfig): void {
   // on the 'New conversation' placeholder; see docs/dev/auto-title.md.
   // The samskara worker forms the chat model's progressively-built
   // predictive model of the user; see docs/dev/samskara.md.
-  embeddings.start({ supabase: app.supabase, config, serverConfig: app.serverConfig });
   supervisor.start({
     supabase: app.supabase,
     config,
@@ -848,12 +850,14 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
       // behaviour pre-race-fix, so a Supabase outage doesn't gate the
       // entire bootstrap.
     }
-    // Fetch the project-global shared config before workers start, so a
-    // worker migrated to read app.serverConfig (see
-    // docs/dev/in-progress/venice-edge-functions/) finds it populated
-    // rather than racing the fetch. This resolves the sequencing gotcha:
-    // local config is available synchronously at unlock, but serverConfig
-    // is an async post-auth fetch.
+    // Fetch the project-global shared config post-auth into app.serverConfig.
+    // This is the shared-key spine the venice edge function migration is built
+    // on (see docs/dev/in-progress/venice-edge-functions/). The edge function
+    // reads app_config server-side for backfill; the browser copy here has no
+    // consumer yet - it is staged for the remaining veniceApiKey consumers
+    // (the agent workers and query-time embeds) to migrate onto in later
+    // milestones. Kept warm so that migration is a one-line swap, not a
+    // re-introduction of the whole fetch/sequencing dance.
     try {
       app.serverConfig = await app.supabase.getAppConfig();
     } catch {
@@ -880,7 +884,6 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
  * across an unlock-lock-unlock to a different API key.
  */
 function stopBackgroundWorkers(): void {
-  embeddings.stop();
   supervisor.stop();
   samskara.stop();
   bias.stop();

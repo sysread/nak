@@ -13,10 +13,14 @@
  * duplicate work (embedding reruns, reflection reruns) costs real
  * Venice money.
  *
- * Lives under `src/lib/embeddings/` for historical reasons — it was
- * the embeddings worker's coordinator first and got generalised when
- * the reflection agent arrived. Both `src/lib/embeddings/worker.ts`
- * and `src/lib/agents/reflection/worker.ts` import from here.
+ * Lives under `src/lib/embeddings/` for historical reasons - it was the
+ * embeddings worker's coordinator first and got generalised when the agent
+ * workers arrived. The embeddings worker itself is gone (backfill moved
+ * server-side - see docs/dev/in-progress/venice-edge-functions/), but this
+ * coordinator is now shared infrastructure: every worker under
+ * `src/lib/agents/` (supervisor, samskara, bias, wiki, wiki-librarian,
+ * deep-sleep, rem) constructs one, partitioned by `workerKind`. The
+ * directory name is a vestige; the code is fleet-wide.
  *
  * Heartbeat timing: default TTL is 45s and we beat every 20s. That's
  * two attempts per expiry window; a single missed beat is still inside

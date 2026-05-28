@@ -1224,12 +1224,12 @@ export class SupabaseService {
   readonly client: SupabaseClient;
 
   /**
-   * `opts.client` is the dependency-injection hatch used by the
-   * embeddings Web Worker (src/lib/embeddings/worker.ts). The worker
-   * builds its own `SupabaseClient` with `persistSession: false` + a
-   * manually-pinned session, because workers have no localStorage and
-   * shouldn't fight the main-thread client for the session store. The
-   * default path (no `opts`) preserves the original main-thread behavior.
+   * `opts.client` is the dependency-injection hatch used by the background
+   * worker fleet (the Web Workers under src/lib/agents/). Each worker builds
+   * its own `SupabaseClient` with `persistSession: false` + a manually-pinned
+   * session, because workers have no localStorage and shouldn't fight the
+   * main-thread client for the session store. The default path (no `opts`)
+   * preserves the original main-thread behavior.
    */
   constructor(
     config: Pick<AppConfig, 'supabaseUrl' | 'supabasePublishableKey'>,
@@ -2435,55 +2435,6 @@ export class SupabaseService {
   }
 
   /**
-   * Claim the next recipe whose embedding column is null (or whose
-   * prior claim has expired). Used by the embeddings worker via the
-   * `createRecipesSource` adapter. Returns null when the queue is
-   * empty. Mirrors `claimNextPendingWikiArticle`.
-   */
-  async claimNextPendingRecipe(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<{
-    id: string;
-    title: string;
-    source: string | null;
-    cooklang: string;
-  } | null> {
-    const { data, error } = await this.client.rpc('claim_next_pending_recipe', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as {
-      id: string;
-      title: string;
-      source: string | null;
-      cooklang: string;
-    }[];
-    if (rows.length === 0) return null;
-    return rows[0];
-  }
-
-  async saveRecipeEmbedding(
-    id: string,
-    holderId: string,
-    embedding: number[],
-    model: string
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc(
-      'save_recipe_embedding_if_claimed',
-      {
-        p_id: id,
-        p_holder_id: holderId,
-        p_embedding: embedding,
-        p_embedding_model: model,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /**
    * Create a recipe and snapshot the initial state into
    * `recipe_versions` atomically via the
    * `recipe_create_with_version` RPC. `changeMessage` is required —
@@ -3621,39 +3572,6 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
   }
 
-  async claimNextPendingWikiArticle(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<{ id: string; title: string; content: string } | null> {
-    const { data, error } = await this.client.rpc('claim_next_pending_wiki_article', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as { id: string; title: string; content: string }[];
-    if (rows.length === 0) return null;
-    return rows[0];
-  }
-
-  async saveWikiArticleEmbedding(
-    id: string,
-    holderId: string,
-    embedding: number[],
-    model: string
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc(
-      'save_wiki_article_embedding_if_claimed',
-      {
-        p_id: id,
-        p_holder_id: holderId,
-        p_embedding: embedding,
-        p_embedding_model: model,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
   /**
    * Atomic claim for one wiki-librarian run. Returns true if the
    * caller acquired the run (the prior timestamp is older than
@@ -4058,50 +3976,6 @@ export class SupabaseService {
       p_holder_id: holderId,
     });
     if (error) throw new SupabaseError(error.message);
-  }
-
-  /**
-   * Atomically claim the next memory awaiting an embedding and stamp
-   * our holder + claim-expiry onto it. Returns null when the queue is
-   * empty (or every pending row is already claimed by a still-unexpired
-   * holder — which shouldn't happen under the lease invariant, but the
-   * query handles it correctly regardless).
-   */
-  async claimNextPendingMemory(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<{ id: string; label: string; data: string } | null> {
-    const { data, error } = await this.client.rpc('claim_next_pending_memory', {
-      p_holder_id: holderId,
-      p_ttl_seconds: ttlSeconds,
-    });
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as { id: string; label: string; data: string }[];
-    return rows.length > 0 ? rows[0] : null;
-  }
-
-  /**
-   * Save an embedding IF our claim is still valid — the SQL function
-   * guards on `embedding_claim_holder = $me AND embedding_claim_expires
-   * > now()`. Returns false when the row was edited (trigger nulled our
-   * claim), the claim expired and was retaken, or the row was deleted.
-   * Callers treat a false as "skip, loop to next row"; it is not an
-   * error condition.
-   */
-  async saveMemoryEmbedding(
-    id: string,
-    holderId: string,
-    embedding: number[],
-    model: string
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('save_memory_embedding_if_claimed', {
-      p_id: id,
-      p_holder_id: holderId,
-      p_embedding: embedding,
-      p_embedding_model: model,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
   }
 
   /**
@@ -4532,47 +4406,6 @@ export class SupabaseService {
     const { data, error } = await this.client.rpc('list_user_recipe_topics');
     if (error) throw new SupabaseError(error.message);
     return parseTopicVocabulary(data);
-  }
-
-  /**
-   * Claim the next thread awaiting a title+summary embedding. Same
-   * shape as `claimNextPendingMemory` but against threads. Rows with
-   * the placeholder title AND no summary yet are deliberately skipped
-   * — they haven't settled yet and embedding empty-ish text would
-   * waste a Venice call.
-   */
-  async claimNextPendingThreadForEmbedding(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<{ id: string; title: string; summary: string | null } | null> {
-    const { data, error } = await this.client.rpc(
-      'claim_next_pending_thread_for_embedding',
-      { p_holder_id: holderId, p_ttl_seconds: ttlSeconds }
-    );
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as { id: string; title: string; summary: string | null }[];
-    return rows.length > 0 ? rows[0] : null;
-  }
-
-  /**
-   * Save a thread embedding IF our claim is still valid. False = the
-   * row was edited or re-claimed; caller skips and loops. Never throws
-   * on a race, only on a network / SQL error.
-   */
-  async saveThreadEmbedding(
-    id: string,
-    holderId: string,
-    embedding: number[],
-    model: string
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc('save_thread_embedding_if_claimed', {
-      p_id: id,
-      p_holder_id: holderId,
-      p_embedding: embedding,
-      p_embedding_model: model,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
   }
 
   /**
@@ -5504,44 +5337,6 @@ export class SupabaseService {
         p_situation: situation,
         p_outcome: outcome,
         p_valence: valence,
-      }
-    );
-    if (error) throw new SupabaseError(error.message);
-    return data === true;
-  }
-
-  /** Worker: claim the next substrate row needing an embedding. */
-  async samskaraClaimNextSubstrateEmbed(
-    holderId: string,
-    ttlSeconds: number
-  ): Promise<{ id: string; situation: string; outcome: string | null } | null> {
-    const { data, error } = await this.client.rpc(
-      'samskara_claim_next_substrate_embed',
-      { p_holder_id: holderId, p_ttl_seconds: ttlSeconds }
-    );
-    if (error) throw new SupabaseError(error.message);
-    const rows = (data ?? []) as {
-      id: string;
-      situation: string;
-      outcome: string | null;
-    }[];
-    return rows.length > 0 ? rows[0] : null;
-  }
-
-  /** Worker: save substrate embedding IF claim still ours. */
-  async samskaraSaveSubstrateEmbedding(
-    id: string,
-    holderId: string,
-    embedding: number[],
-    model: string
-  ): Promise<boolean> {
-    const { data, error } = await this.client.rpc(
-      'samskara_save_substrate_embedding_if_claimed',
-      {
-        p_id: id,
-        p_holder_id: holderId,
-        p_embedding: embedding,
-        p_embedding_model: model,
       }
     );
     if (error) throw new SupabaseError(error.message);

@@ -10,8 +10,8 @@
  *
  * Mental model: each agent is analogous to a named GenServer. One
  * long-lived process per agent type, serialised per-process via its
- * own mailbox. On the web that's a dedicated Web Worker (mirroring
- * `src/lib/embeddings/worker.ts`), but the `Agent` contract is
+ * own mailbox. On the web that's a dedicated Web Worker (see any
+ * `src/lib/agents/<feature>/worker.ts`), but the `Agent` contract is
  * worker-agnostic — an implementation is free to run on the main
  * thread if that's ever useful (tests, ad-hoc scripts).
  *

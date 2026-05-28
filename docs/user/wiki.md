@@ -85,7 +85,7 @@ the same semantic-search pipeline the assistant uses for `wiki_search`
 (see "How the assistant uses the wiki" below) - typing a phrase finds
 articles by meaning, not just by literal substring. Substring matches
 are merged in too, so an article you wrote ten seconds ago (before the
-embedding worker has caught up) still surfaces.
+scheduled embedding pass has caught up) still surfaces.
 
 Clearing the search returns the alphabetical listing. That listing
 loads in pages as you scroll - more articles load automatically as
@@ -119,9 +119,9 @@ commit summary: "Fix Maya's job title" rather than "edits". The
 message clears back to blank after each successful save so a follow-
 up edit writes its own message rather than inheriting the prior one.
 
-Saving an article nulls its embedding - the background embedding
-worker will re-compute on its next poll (within ~30 seconds). Search
-falls back to substring matches in the meantime.
+Saving an article nulls its embedding - the scheduled embedding pass
+will re-compute it within a few minutes. Search falls back to
+substring matches in the meantime.
 
 ## Table of contents
 

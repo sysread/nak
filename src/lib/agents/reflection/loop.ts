@@ -4,7 +4,7 @@
  * supervisor owns the sleep policy for the whole supervised batch, so
  * this module just reports what happened. Factoring the state machine
  * out keeps it unit-testable without a Web Worker runtime, and mirrors
- * `src/lib/embeddings/loop.ts` deliberately; both share the
+ * `src/lib/agents/samskara/loop.ts` deliberately; both share the
  * lease-acquire -> claim -> work -> save/mark progression, so anyone
  * reading one file has the other's vocabulary for free.
  *

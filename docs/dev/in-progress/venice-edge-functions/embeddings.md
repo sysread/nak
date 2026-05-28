@@ -160,7 +160,71 @@ seeder, fetch, a real consumer) with eight fallbacks intact.
    the existing RPCs. Then delete the browser embeddings
    worker, its `nak:embed-worker` lock, and its lease usage.
    Flag the now-unused lease/worker plumbing for deletion per
-   the dead-code rules.
+   the dead-code rules. (Done. Several things differed from this
+   plan's guesses - captured here because step 8 folds them into
+   the siblings:
+
+   - **"Drain via the existing RPCs" did not hold.** Every
+     `claim_next_*` / `save_*_if_claimed` RPC was `security
+     invoker` and scoped to `auth.uid()`. Cron fires from inside
+     Postgres via `pg_net` with no user session, so `auth.uid()`
+     is null and those RPCs matched zero rows. The fix: convert
+     all ten in place to `security definer` global sweeps (no
+     `auth.uid()` filter, runs as the owner) - safe because
+     deleting the browser worker left the cron function as their
+     only caller. **The EXECUTE grant is the security boundary:**
+     `revoke ... from public` + `grant ... to service_role` on
+     each, or any signed-in member could call the now-global
+     claim and read another member's rows. Every later endpoint
+     that moves a user-scoped RPC server-side hits this same wall
+     - plan for the definer conversion + grant lockdown up front.
+   - **New `/backfill` route, not an overload of `/embed`.**
+     `/embed` stays the thin per-call proxy (query-time +
+     browser). `/backfill` is the cron target: service-role-only
+     (bearer must equal the injected `SUPABASE_SERVICE_ROLE_KEY`),
+     runs the claim -> embed -> pad -> save loop server-side
+     across all five sources, bounded per invocation (50 rows or
+     25s, whichever first; the schedule resumes the drain).
+     Orchestration is I/O-free with injected deps so it
+     unit-tests under `deno test` with fakes.
+   - **Text composition stayed in TS**, ported to
+     `_shared/embed-input.ts`. Moving the per-source builders into
+     the SQL claim RPCs was tempting but unsafe: JS `String.slice`
+     counts UTF-16 units, SQL `left()` counts characters, so an
+     emoji on a truncation boundary would make a server-composed
+     string diverge from a historical browser one. The claim RPCs
+     return raw columns; the function composes.
+   - **Cron -> function auth is the fiddly bit.** `pg_net` needs a
+     bearer the gateway accepts; the modern opaque `sb_secret_`
+     key is not a JWT and the gateway rejects it (same gotcha as
+     the local realtime stack rejecting `sb_publishable_`). Use
+     the **legacy JWT** service-role key, stored in **Vault**
+     (`project_url` + `service_role_key`), seeded once by `mise
+     run supabase-init`. The trigger fn uses dynamic SQL so it
+     compiles on a DB without pg_net/vault (the local stack) and
+     no-ops until seeded.
+   - **pgmq was not needed.** The trigger-nulls-the-column requeue
+     plus `FOR UPDATE SKIP LOCKED` claims already are the queue; a
+     second one would have been over-engineering.
+   - **Schema stays local-apply-safe** by gating the extensions +
+     `cron.schedule` on `pg_available_extensions` inside a guarded
+     `do` block - the local stack ships neither pg_cron nor
+     pg_net, so this lets `schema.sql` still apply cleanly there
+     (same lesson as the vector-extension ordering fix).
+   - **Deleted:** `src/lib/embeddings/{worker,manager,loop,types}.ts`,
+     `sources/*`, the ten `SupabaseService` claim/save methods,
+     the four browser embeddings vitest files (truncation coverage
+     ported to `deno test`), and the `state.svelte.ts` start/stop
+     wiring. **Kept:** `embeddings/lease.ts` (the whole agent
+     worker fleet imports `LeaseCoordinator` from it - the
+     directory name is now a vestige; moving it to a neutral home
+     is a separate task).
+   - **`app.serverConfig` is now staged, not consumed.** The
+     browser fetch remains (the shared-key spine the milestone
+     delivered) but has no browser reader now that the embeddings
+     manager is gone - the edge function reads `app_config`
+     server-side instead. It waits warm for the remaining
+     `veniceApiKey` consumers to migrate onto it later.)
 8. **Fold lessons into the sibling sub-plans** - see
    [Definition of done](#definition-of-done).
 
@@ -212,39 +276,51 @@ query-time and belong to phase 4):
 
 ## Open questions
 
-Resolve during implementation; answers feed the learning loop.
+Resolved during step 7 - kept here as the answers feed the learning loop.
 
-- **Schedule shape.** Bare hourly `pg_cron` sweep, every-minute
-  for responsiveness, or the queue pattern from Supabase's
-  "Automatic embeddings" guide (trigger -> pgmq -> cron-drained
-  function)? Our trigger-nulls-the-column mechanism is already
-  a hand-rolled queue, so the pgmq pattern may be a small step
-  with retry semantics for free.
-- **Batch size vs timeouts.** `pg_net` is fire-and-forget with
-  a short timeout and confirms *dispatch*, not *completion*;
-  edge functions have their own wall-clock limit. The function
-  must process a bounded batch per invocation and rely on the
-  claim/save protocol to resume. What batch size?
-- **Service-role key custody** in the function environment.
-- **Offline fallback.** Keep a browser embed path for when the
-  schedule is paused, or fully commit to server-side?
+- **Schedule shape.** *Resolved: bare `pg_cron` sweep, every 5
+  minutes.* No pgmq - the trigger-nulls-the-column requeue plus
+  `FOR UPDATE SKIP LOCKED` is already the queue. 5 min balances the
+  old ~3min browser feel against idle edge-function wakeups.
+- **Batch size vs timeouts.** *Resolved: 50 rows or 25s per
+  invocation, whichever first.* The 25s budget sits well under the
+  edge runtime wall-clock limit - nearly all of it is spent awaiting
+  Venice (I/O, not CPU). The claim/save protocol resumes the drain on
+  the next tick. Both are tunables in `venice/index.ts`.
+- **Service-role key custody.** *Resolved: Vault.* The function reads
+  `app_config` server-side via the injected
+  `SUPABASE_SERVICE_ROLE_KEY`. The cron *caller* authenticates with a
+  separate Vault secret (`service_role_key`, the LEGACY JWT key - the
+  modern opaque key is not a JWT and the gateway rejects it). Seeded
+  by `mise run supabase-init`.
+- **Offline fallback.** *Resolved: fully server-side.* The browser
+  embeddings worker is deleted; there is no client-side backfill
+  catch-up. If cron breaks, backfill stops with no UI signal -
+  acceptable for an owner-controlled project.
 
 ## Definition of done
 
-- `app_config` + RLS applied; the `supabase-init` config editor
+- [x] `app_config` + RLS applied; the `supabase-init` config editor
   seeds it.
-- `app.serverConfig` fetched post-auth; start-sequencing
+- [x] `app.serverConfig` fetched post-auth; start-sequencing
   resolved.
-- Embeddings manager reads `serverConfig`; embeddings still
-  generate.
-- `venice` function with `/embed`, offline `deno test` green,
+- [x] Embeddings manager reads `serverConfig`; embeddings still
+  generate. (Superseded by step 7: the manager is now deleted and
+  backfill is server-side. The proof-of-concept consumer served its
+  purpose - it validated the whole spine before cron took over.)
+- [x] `venice` function with `/embed`, offline `deno test` green,
   the three `mise` function targets wired, and
   `mise run check` still green (Deno island excluded from the
   app tsconfig).
-- Backfill driven by `pg_cron`; browser embeddings worker,
-  lock, and lease deleted.
-- **Sibling sub-plans updated** with lessons learned:
+- [x] Backfill driven by `pg_cron`; browser embeddings worker,
+  lock, and lease usage deleted. (The cron path runs only on hosted
+  Supabase; it could not be exercised from the local CLI - the schema,
+  function, and Vault seeding ship for the normal merge -> CI deploy
+  to apply. The `/backfill` route is locally testable via
+  `supabase functions serve` + a direct service-role POST.)
+- [ ] **Sibling sub-plans updated** with lessons learned (step 8):
   [chat-completions](./chat-completions.md),
   [billing-usage](./billing-usage.md),
   [text-parser](./text-parser.md). This step is what makes the
-  milestone a *learning* milestone rather than a one-off.
+  milestone a *learning* milestone rather than a one-off. The step-7
+  "Done" note above is the source material.

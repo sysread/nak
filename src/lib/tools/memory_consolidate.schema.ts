@@ -5,7 +5,7 @@
  * is a librarian-only privilege; the per-thread agents work at the
  * row level and never need to collapse two memories into one.
  */
-import { MAX_MEMORY_DATA_CHARS } from '../embeddings/types';
+import { MAX_MEMORY_DATA_CHARS } from '../memories';
 
 export const memoryConsolidateSchema = {
   name: 'memory_consolidate',

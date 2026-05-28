@@ -1,15 +1,14 @@
 /**
  * Single-cycle driver for the samskara formation worker. The outer
  * loop in `./worker.ts` calls `runOneCycle` repeatedly until abort.
- * Shape mirrors `src/lib/embeddings/loop.ts` and
- * `src/lib/agents/reflection/loop.ts` deliberately — same lease
- * acquire -> claim -> work -> save progression.
+ * Shape mirrors `src/lib/agents/reflection/loop.ts` deliberately — same
+ * lease acquire -> claim -> work -> save progression.
  *
- * One cycle = one observable state transition. Unlike the embeddings
- * worker (one source per cycle, round-robin across many in the outer
- * worker), the samskara worker has multiple PHASES per cycle: the
- * outer worker calls runOneCycle once and the cycle internally
- * advances exactly one phase (assimilate / pair-relate /
+ * One cycle = one observable state transition. Unlike a single-claim
+ * worker (one row claimed and saved per cycle), the samskara worker has
+ * multiple PHASES per cycle: the outer worker calls runOneCycle once and
+ * the cycle internally advances exactly one phase (assimilate /
+ * pair-relate /
  * cluster-mint-tier1 / cluster-mint-tier2 / reaction-classify /
  * decay / compound-regen). Phase rotation is round-robin across
  * cycles via the caller's `phaseIndex` state.

@@ -20,7 +20,7 @@ import {
 } from '../src/lib/tools';
 import { memoryLibrarianToolbox } from '../src/lib/tools/memory_librarian_toolbox';
 import { memoryConsolidate } from '../src/lib/tools/memory_consolidate';
-import { MAX_MEMORY_DATA_CHARS } from '../src/lib/embeddings/types';
+import { MAX_MEMORY_DATA_CHARS } from '../src/lib/memories';
 import type { SupabaseService } from '../src/lib/supabase';
 import type { VeniceClient } from '../src/lib/venice';
 
