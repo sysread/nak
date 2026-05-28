@@ -170,7 +170,7 @@ run = [
 ]
 
 [tasks.dev-start]
-description = "Isolated local dev: bring up a local Supabase stack (Docker), provision it, run Vite, and tear the stack down on exit. Never touches the linked cloud project."
+description = "Isolated local dev: bring up a local Supabase stack (Docker), provision it, serve edge functions, drive embedding backfill on an interval (NAK_DEV_BACKFILL=0 to disable), run Vite, and tear the stack down on exit. Never touches the linked cloud project."
 # deps so a fresh worktree has Vite/etc; raw = true so the foreground Vite
 # server, the slow `supabase start` image pull, and the optional Venice-key
 # prompt all have direct TTY access and Ctrl-C reaches the script.
@@ -181,6 +181,12 @@ raw = true
 [tasks.dev-stop]
 description = "Stop the local Supabase stack. The crash-cleanup fallback for a dev-start that exited without tearing down. Data is preserved; add --no-backup to supabase stop for a clean wipe."
 run = "supabase stop"
+raw = true
+
+[tasks.dev-backfill-cron]
+description = "DEV SHIM: poll the local /backfill route on an interval, standing in for the hosted pg_cron job (the local stack has no pg_cron). dev-start runs this by default; use the task standalone to drive backfill against an already-running stack or with a custom interval. Arg or NAK_BACKFILL_INTERVAL = seconds (default 60)."
+# raw = true so Ctrl-C reaches the script and its tick logs stream to the TTY.
+run = "node scripts/dev-backfill-cron.mjs"
 raw = true
 
 # Edge functions (supabase/functions) are a Deno island - own toolchain, run
