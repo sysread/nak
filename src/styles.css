@@ -2953,12 +2953,23 @@ button.composer-wharf-trigger {
    shares one button height. `display` is deliberately left untouched: the
    mobile `> button { display: none }` (closed wharf) and the
    `.wharf-open > button` 2.4rem tiles both need to win on narrow screens,
-   and the wharf-open rule already does via higher specificity. */
+   and the wharf-open rule already does via higher specificity.
+
+   `justify-content: center` is load-bearing here, not decoration: every
+   button in the row is already `display: inline-flex` via its own class,
+   but `.model-picker-btn` (model, reasoning, verbosity) sets no
+   justify-content, so it defaults to flex-start. Pinning a fixed 2.2rem
+   width with zero padding leaves spare horizontal room, and without this
+   the lone icon hugs the left edge instead of centering - the toolbox and
+   `.icon-btn` escape it only because they set justify-content themselves.
+   `display` stays unset so the mobile closed-wharf `display: none` wins. */
 .composer-bar-left > button {
   width: 2.2rem;
   height: 2.2rem;
   padding: 0;
   flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Prompts icon button gets a subtle tint + count badge when any prompt
