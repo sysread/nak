@@ -173,11 +173,16 @@ seeder, fetch, a real consumer) with eight fallbacks intact.
      `auth.uid()` filter, runs as the owner) - safe because
      deleting the browser worker left the cron function as their
      only caller. **The EXECUTE grant is the security boundary:**
-     `revoke ... from public` + `grant ... to service_role` on
-     each, or any signed-in member could call the now-global
-     claim and read another member's rows. Every later endpoint
-     that moves a user-scoped RPC server-side hits this same wall
-     - plan for the definer conversion + grant lockdown up front.
+     `revoke ... from public, anon, authenticated` + `grant ... to
+     service_role` on each, or any signed-in member could call the
+     now-global claim and read another member's rows. The
+     `anon, authenticated` matters - Supabase grants EXECUTE on
+     public functions to those roles explicitly, so `revoke from
+     public` alone does NOT lock it (shipped that bug to prod first
+     and caught it with `has_function_privilege`). Every later
+     endpoint that moves a user-scoped RPC server-side hits this
+     same wall - plan for the definer conversion + full grant
+     lockdown up front.
    - **New `/backfill` route, not an overload of `/embed`.**
      `/embed` stays the thin per-call proxy (query-time +
      browser). `/backfill` is the cron target: service-role-only

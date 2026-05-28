@@ -198,10 +198,15 @@ under the supervisor) still does, importing `LeaseCoordinator` from
 ## Gotchas
 
 - **The EXECUTE grant is load-bearing, not boilerplate.** The
-  claim/save RPCs are `security definer` with no user filter; the
-  `revoke from public` + `grant to service_role` is what stops a
-  signed-in member from reading another member's rows through them.
-  Don't "tidy" the grants away.
+  claim/save RPCs are `security definer` with no user filter, so the
+  `revoke ... from public, anon, authenticated` + `grant to
+  service_role` is what stops a signed-in member from reading another
+  member's rows through them. The `anon, authenticated` is not
+  optional: Supabase grants EXECUTE on public functions to those roles
+  *explicitly*, so `revoke from public` alone leaves the function wide
+  open (`has_function_privilege('authenticated', oid, 'execute')`
+  stays true). Verify with exactly that query after any change; don't
+  "tidy" the grants away.
 - **Cron auth needs the LEGACY JWT key.** The function gateway
   validates the bearer as a JWT; the modern opaque `sb_secret_` key
   is not one and gets rejected (same gotcha as the local realtime

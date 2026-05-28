@@ -2857,8 +2857,8 @@ begin
 end $$;
 
 -- Service-role only - see the note on the memory pair.
-revoke all on function public.claim_next_pending_recipe(text, int) from public;
-revoke all on function public.save_recipe_embedding_if_claimed(uuid, text, vector, text) from public;
+revoke all on function public.claim_next_pending_recipe(text, int) from public, anon, authenticated;
+revoke all on function public.save_recipe_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
 grant execute on function public.claim_next_pending_recipe(text, int) to service_role;
 grant execute on function public.save_recipe_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
@@ -3115,8 +3115,8 @@ end $$;
 -- definer (postgres) with no per-user filter, so leaving EXECUTE open to
 -- `authenticated` would let any signed-in member claim and read another
 -- member's memory text. Only the edge function (service role) drives backfill.
-revoke all on function public.claim_next_pending_memory(text, int) from public;
-revoke all on function public.save_memory_embedding_if_claimed(uuid, text, vector, text) from public;
+revoke all on function public.claim_next_pending_memory(text, int) from public, anon, authenticated;
+revoke all on function public.save_memory_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
 grant execute on function public.claim_next_pending_memory(text, int) to service_role;
 grant execute on function public.save_memory_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
@@ -4210,8 +4210,8 @@ begin
 end $$;
 
 -- Service-role only - see the note on the memory pair.
-revoke all on function public.claim_next_pending_thread_for_embedding(text, int) from public;
-revoke all on function public.save_thread_embedding_if_claimed(uuid, text, vector, text) from public;
+revoke all on function public.claim_next_pending_thread_for_embedding(text, int) from public, anon, authenticated;
+revoke all on function public.save_thread_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
 grant execute on function public.claim_next_pending_thread_for_embedding(text, int) to service_role;
 grant execute on function public.save_thread_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
@@ -5388,8 +5388,8 @@ begin
 end $$;
 
 -- Service-role only - see the note on the memory pair.
-revoke all on function public.samskara_claim_next_substrate_embed(text, int) from public;
-revoke all on function public.samskara_save_substrate_embedding_if_claimed(uuid, text, vector, text) from public;
+revoke all on function public.samskara_claim_next_substrate_embed(text, int) from public, anon, authenticated;
+revoke all on function public.samskara_save_substrate_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
 grant execute on function public.samskara_claim_next_substrate_embed(text, int) to service_role;
 grant execute on function public.samskara_save_substrate_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
@@ -6458,8 +6458,8 @@ begin
 end $$;
 
 -- Service-role only - see the note on the memory pair.
-revoke all on function public.claim_next_pending_wiki_article(text, int) from public;
-revoke all on function public.save_wiki_article_embedding_if_claimed(uuid, text, vector, text) from public;
+revoke all on function public.claim_next_pending_wiki_article(text, int) from public, anon, authenticated;
+revoke all on function public.save_wiki_article_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
 grant execute on function public.claim_next_pending_wiki_article(text, int) to service_role;
 grant execute on function public.save_wiki_article_embedding_if_claimed(uuid, text, vector, text) to service_role;
 
@@ -7604,7 +7604,7 @@ begin
 end;
 $fn$;
 
-revoke all on function public.nak_trigger_embed_backfill() from public;
+revoke all on function public.nak_trigger_embed_backfill() from public, anon, authenticated;
 
 -- Enable pg_cron + pg_net and (re)schedule the every-5-minutes backfill. Guarded
 -- on extension availability so the local dev stack (which ships neither) still
