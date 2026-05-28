@@ -2943,6 +2943,24 @@ button.composer-wharf-trigger {
   align-items: center;
 }
 
+/* Uniform square sizing for every trigger in the desktop picker row so
+   toolbox, attachments, prompts, model, reasoning, and verbosity read as
+   one set. Without it each button fell back to its own intrinsic size -
+   the toolbox tile at 2.4rem, the icon buttons 2.2rem wide but only
+   content-tall, the model/reasoning/verbosity triggers sized by padding -
+   so the row stair-stepped at different heights. 2.2rem squares match the
+   send button on the right edge of the same bar, so the whole composer bar
+   shares one button height. `display` is deliberately left untouched: the
+   mobile `> button { display: none }` (closed wharf) and the
+   `.wharf-open > button` 2.4rem tiles both need to win on narrow screens,
+   and the wharf-open rule already does via higher specificity. */
+.composer-bar-left > button {
+  width: 2.2rem;
+  height: 2.2rem;
+  padding: 0;
+  flex-shrink: 0;
+}
+
 /* Prompts icon button gets a subtle tint + count badge when any prompt
    is active for the current conversation — a passive "heads up" that
    system prompts are in play. */
@@ -3107,13 +3125,17 @@ button.composer-wharf-trigger {
 .model-picker-btn > svg:not(.model-picker-model-icon) {
   display: none;
 }
-/* The CPU glyph is the affordance icon on the model button. Swapped in
-   for the tier-specific emoji because a lone 🧠/⚡ reads as "currently
-   on brain/spark", not "opens the model menu" — the CPU outline is
-   unambiguously a picker. The ~ sibling selector only matches the tier
-   emoji when a `.model-picker-model-icon` precedes it in the same
-   button, which is true only of the model picker in Chat.svelte; the
-   reasoning picker has no preceding CPU glyph, so its 💭 stays. */
+/* Marks the leading affordance glyph kept visible on a collapsed picker
+   trigger - the CPU outline on the model button, the thought-cloud on the
+   reasoning picker, the speech bubble on the verbosity picker. All three
+   are stroke SVGs inheriting currentColor, so they render at full --text
+   contrast and uniform weight rather than as faint monochrome emoji. The
+   `svg:not(.model-picker-model-icon)` rule above hides the trailing
+   chevron without catching these. The ~ sibling rule below suppresses the
+   model button's tier emoji (a lone 🧠/⚡ reads as "currently on
+   brain/spark", not "opens the model menu"); it only fires on the model
+   button, the one trigger that still carries a `.model-picker-icon` span
+   after this leading glyph. */
 .model-picker-model-icon {
   display: inline-block;
 }

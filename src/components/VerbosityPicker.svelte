@@ -43,11 +43,17 @@
   aria-expanded={open}
   title={`Verbosity: ${VERBOSITY_LABELS[value]}`}
 >
-  <!-- U+1F4AC SPEECH BALLOON + U+FE0F for emoji presentation — same
-       variation-selector discipline as the tier-toggle icons in
-       models.ts, so the glyph renders as a color emoji rather than a
-       thin text outline against the toggle background. -->
-  <span class="model-picker-icon" aria-hidden="true">💬</span>
+  <!-- Speech-bubble line icon rather than a 💬 emoji: the emoji renders
+       as a thin monochrome text glyph against the toggle background and
+       reads as a disabled/low-contrast control. A stroke SVG inheriting
+       currentColor matches the model and reasoning triggers at full
+       --text contrast. `.model-picker-model-icon` keeps it visible past
+       the rule that hides the trailing chevron. -->
+  <svg class="model-picker-model-icon" width="18" height="18" viewBox="0 0 24 24"
+       fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+       stroke-linejoin="round" aria-hidden="true">
+    <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+  </svg>
   <span class="model-picker-label">{VERBOSITY_LABELS[value]}</span>
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
