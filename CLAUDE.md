@@ -824,6 +824,13 @@ A schema-apply failure in CI fails the whole deploy on purpose — we'd
 rather catch a bad migration than ship an app whose code expects
 columns the DB doesn't have.
 
+**Do NOT tell the user to run `mise run sync` after a cloud merge to
+`main`.** The deploy's `sync-supabase` job applies the schema
+automatically on every merge, so a "remember to sync" reminder in an
+end-of-task summary is redundant noise. `mise run sync` is only worth
+mentioning as the way to try a schema change against the linked project
+*before* merging (step 3 above) — not as a post-merge step.
+
 The sync job also merges the fork's Pages URL into the auth allowlist,
 but that's orthogonal to schema — don't dwell on it in PR descriptions
 for schema changes.
