@@ -37,6 +37,16 @@ End state: a project-global Venice config the owner seeds once,
 a single `venice` edge function that wraps every Venice
 endpoint, and background generation moved to `pg_cron`.
 
+The strategic driver behind all of it: on mobile, backgrounding
+the page - minimize, app switch, screen lock - lets Chrome
+suspend a running tab to save battery, which kills any in-flight
+work, including a chat completion the user is waiting on. An
+installed PWA gets no exemption. The only durable fix is for the
+work to run and persist server-side, independent of whether the
+page is still alive. That is the attractor every milestone climbs
+toward; see
+[Strategic spine](#strategic-spine-climbing-to-streaming-chat).
+
 ## Not a zero-knowledge system
 
 Worth stating up front because it removes an objection that
@@ -174,6 +184,76 @@ Five Venice endpoints are in scope (the full surface of
   /augment/text-parser` via `extractText`. *Skeleton.*
   Multipart file upload from the attachments flow.
 
+## Strategic spine: climbing to streaming chat
+
+The endpoint list above is a *catalog of primitives* - the
+wire-level handlers the `venice` function exposes. It does not by
+itself say what order to migrate callers in. That order comes from
+a second, orthogonal decomposition: the **call tree** of
+who-invokes-whom at runtime, with the streaming chat turn at its
+root.
+
+The attractor is **the streaming chat completion running entirely
+in an edge function** - reading from Venice, persisting the
+assistant message to the database itself, while the client
+collects the live stream *somehow* (the channel mechanism is the
+one open fork; see [chat-completions.md](./chat-completions.md)).
+Reaching it solves the strategic driver: a completion that lives
+server-side survives the page being backgrounded.
+
+You cannot move the root before its leaves. A streaming turn emits
+tool calls; the tools (web search, doc research, image analysis)
+and the intuition pipeline are themselves Venice callers - they
+need *non-streaming* completions and, in some cases, embeddings.
+So the climb is leaf-first:
+
+1. **Non-streaming `/complete` primitive.** The holistic
+   `completeChat` path as its own route, beside `/embed`. The leaf
+   that intuition and the completion-using tools call. Per-user JWT
+   auth like `/embed` - synchronous and user-triggered, so no cron
+   and no service-role sweep.
+2. **Migrate the tool / intuition callers onto it.** Point web
+   search, doc research, image analysis, and the intuition pipeline
+   at the primitive instead of calling Venice directly. Behavior
+   unchanged; this phase irons out payload and auth.
+3. **Move the tools into edge functions.** Each tool becomes a
+   server-side handler *composed of* the primitives it needs
+   (non-streaming completion, embeddings) by importing the shared
+   handler in-process - not by an HTTP hop to a sibling function.
+   The fat-function decision applies recursively: composition is
+   module calls within one isolate, not a mesh of tiny functions
+   phoning each other.
+4. **Move streaming chat server-side.** The root. The processing
+   loop now only calls edge-function handlers and writes to the
+   database; the browser stops owning the Venice call and the
+   message write. This is where the durable-persistence machinery
+   returns (see the learning-loop note) and where the
+   client-stream-collection fork gets resolved.
+
+Two catalogued endpoints sit *off* this spine. **Billing usage**
+and **text parser** are real primitives, but nothing on the path
+to the streaming attractor composes them - the spine does not
+constrain when they move. They are not optional, though: they are
+load-bearing for the *other* strategic driver, the
+[shared-config track](#shared-config-track) - getting the Venice
+key out of the client. The browser holds the key today only
+because consumers like the usage display, attachment text
+extraction, query-time embedding, and the agents still call Venice
+directly; the key cannot leave the client until the *last* such
+consumer routes through the function. So usage and text-parser
+have to move for the single-source-of-truth goal to complete, even
+though they sit off the minimize-recovery spine. Sequence them for
+that goal, by convenience - just do not let "billing usage is the
+easy next mover" reorder the *spine*.
+
+The load-bearing invariant for step 4, true regardless of how the
+client collects the stream: **persistence of the assistant message
+moves out of the browser and into the function.** Today the
+browser accumulates the stream and writes the row on completion,
+so a backgrounded page loses the message. Moving that write
+server-side is the change that makes minimize survivable; the
+streaming channel is a detail layered on top.
+
 ## Shared-config track
 
 The shared `app_config` table and the gum-driven config editor
@@ -206,8 +286,15 @@ The embeddings milestone set it. Implementing it surfaced how the
 function is structured, how `deno test` and `supabase functions
 serve` fit the gate, how `pg_cron` + `pg_net` + Vault behave, and -
 the big scope-reducer - that the cron / definer / Vault machinery is
-specific to *background* jobs and does not transfer to the
-user-triggered endpoints. Its final step folded those lessons into
+specific to *background* jobs and does not transfer to *synchronous*
+user-triggered calls (the non-streaming completion primitive, billing
+usage, text parser). The asterisk: the streaming chat attractor stops
+being synchronous the moment it fires-and-forgets - the function
+persists the message after the client may have gone away - so that
+machinery (service-role write-back, a job row, `waitUntil`, possibly
+cron for resume) returns at step 4 of the spine. The reducer holds for
+everything below the root, not at it. Its final step folded those
+lessons into
 the three remaining sub-plans; see each one's "Lessons from the
 embeddings milestone" section and
 [embeddings.md](./embeddings.md#definition-of-done).

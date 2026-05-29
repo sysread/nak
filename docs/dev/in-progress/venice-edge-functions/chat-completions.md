@@ -11,6 +11,15 @@ Wraps `POST /chat/completions` - both `VeniceClient.streamChat`
 This is the hardest endpoint and should not be attempted before
 embeddings proves the function/test/deploy spine.
 
+These two methods are *not one milestone on one timeline.* In the
+call tree (the README's [Strategic
+spine](./README.md#strategic-spine-climbing-to-streaming-chat)) the
+**non-streaming** `completeChat` is a *leaf* - the primitive that
+tools and the intuition pipeline call - and moves early. The
+**streaming** `streamChat` is the *root*, the strategic attractor,
+and moves last. They share a route name and a wire endpoint; they
+do not share a difficulty class or a schedule.
+
 ## Why this is the hard one
 
 - **Streaming through a function.** `streamChat` consumes Venice
@@ -24,6 +33,15 @@ embeddings proves the function/test/deploy spine.
 - **Critical-path latency.** This is the live chat turn. Every
   added hop is felt directly, so phase 4 (move user-facing
   callers) needs a real latency argument, not just consistency.
+- **Surviving client disconnect.** The whole point of moving the
+  streaming root server-side is that a backgrounded mobile page
+  kills the in-flight turn today. A proxy that still lets the
+  browser hold the stream and write the message on completion is
+  exactly as fragile - the fix only lands if the *function*
+  persists the assistant message on its own authority and keeps
+  running after the client goes away (`EdgeRuntime.waitUntil`,
+  possibly a job row + cron for resume). This, not SSE plumbing,
+  is the real hard part.
 
 ## Current state
 
@@ -34,13 +52,44 @@ agents, auto-title, summaries, the recall agents), and the
 
 ## Target state
 
-To define.
+Two distinct shapes, matching the two positions in the call tree.
+
+**Non-streaming `/complete` (the leaf, moves early).** A thin
+proxy: take a `ChatRequest`, call Venice's holistic completion
+server-side with the shared key, return the `ChatCompletion` JSON
+whole. Per-user JWT auth like `/embed` - synchronous and
+user-triggered, no cron or service-role sweep. Tools (web search,
+doc research, image analysis) and the intuition pipeline migrate
+onto this; then those callers themselves move into edge functions
+composed of it.
+
+**Streaming `/complete` (the root, moves last).** The streaming
+turn runs server-side: the function reads Venice SSE, persists the
+assistant message to the database itself, and the client collects
+the live output. The load-bearing invariant is that message
+persistence lives in the function, not the browser - that is what
+makes a backgrounded page recoverable. *How* the client collects
+the stream is the one open fork:
+
+- **dual-sink** - the function tees: live SSE direct to the browser
+  *and* a durable write to the DB on completion. Minimize kills the
+  SSE; the DB write still lands; the browser reconciles the
+  finished message on return. Smallest delta from today's streaming
+  path.
+- **single-sink** - the function writes incremental chunks to a DB
+  row; the browser subscribes via realtime. One channel is both
+  live and durable, at the cost of a debounced write cadence and
+  realtime fan-out latency (laggier than direct SSE).
+
+The fork stays open until this milestone goes active - naming the
+destination lets future tactical choices climb toward it without
+committing the channel mechanism prematurely.
 
 ## Open questions
 
-- Does streaming through the function buy enough to justify the
-  hop, or does only the holistic `completeChat` path move while
-  streaming stays direct?
+- Channel mechanism for the streaming root: dual-sink (live SSE +
+  DB persist) or single-sink (DB row + realtime)? See Target state.
+  Decide when this milestone goes active, not before.
 - How do `venice_parameters` (web search, citations) survive the
   proxy?
 
@@ -49,15 +98,21 @@ To define.
 Folded in after embeddings shipped (step 7). The biggest one is a
 scope reducer:
 
-- **Most of the embeddings *schema* work does not transfer.** That
-  milestone's hardest part - converting ten claim/save RPCs to
-  `security definer` global sweeps, the EXECUTE-grant lockdown, the
-  `pg_cron` / `pg_net` / Vault stack - exists only because backfill is
-  a *background, user-less* job. Chat is user-triggered: the browser
-  calls with the user's session JWT, `verify_jwt` stays on, and there
-  is no cron, no service-role sweep, no Vault secret. The auth model to
-  copy is `/embed`'s (per-user JWT), not `/backfill`'s (service-role
-  bearer).
+- **The embeddings *schema* work transfers to the leaf, not the
+  root.** That milestone's hardest part - converting ten claim/save
+  RPCs to `security definer` global sweeps, the EXECUTE-grant
+  lockdown, the `pg_cron` / `pg_net` / Vault stack - exists because
+  backfill is a *background, user-less* job. The **non-streaming
+  primitive** is the opposite: synchronous, user-triggered, the
+  browser calls with its session JWT, `verify_jwt` stays on, no cron,
+  no service-role sweep, no Vault secret. Copy `/embed`'s per-user-JWT
+  auth there. **But the streaming root is not synchronous** - once it
+  fires-and-forgets and the client backgrounds, the function persists
+  on its own authority and must outlive the request, which
+  reintroduces the background-job machinery (service-role write-back,
+  `EdgeRuntime.waitUntil`, possibly a job row + cron for resume). So
+  this lesson cuts both ways: off the table for the leaf, back on it
+  for the root.
 - **One route per concern.** `/complete` is its own route beside
   `/embed`; do not overload. The fat-function rule is about *one
   deployed function*, not one handler.
