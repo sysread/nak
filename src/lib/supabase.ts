@@ -1251,6 +1251,75 @@ async function usageFunctionError(error: unknown): Promise<VeniceError> {
   return new VeniceError(`Network error contacting usage function: ${message}`, 'network');
 }
 
+/**
+ * A persistent reference document in the user's Library. Mirrors the
+ * `public.documents` table. The original file lives in the `documents`
+ * Storage bucket (pointed at by `storage_path`); `extracted_text` is the
+ * Venice text-parser output that gets chunked + embedded for search.
+ */
+export interface Document {
+  id: string;
+  title: string;
+  description: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  storage_path: string | null;
+  extracted_text: string | null;
+  extraction_status: 'pending' | 'done' | 'failed';
+  extraction_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function coerceDocument(raw: Record<string, unknown>): Document {
+  const status = raw.extraction_status;
+  return {
+    id: String(raw.id),
+    title: typeof raw.title === 'string' ? raw.title : '',
+    description: typeof raw.description === 'string' ? raw.description : '',
+    filename: typeof raw.filename === 'string' ? raw.filename : '',
+    mime_type: typeof raw.mime_type === 'string' ? raw.mime_type : '',
+    size_bytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : Number(raw.size_bytes ?? 0),
+    storage_path: typeof raw.storage_path === 'string' ? raw.storage_path : null,
+    extracted_text: typeof raw.extracted_text === 'string' ? raw.extracted_text : null,
+    extraction_status:
+      status === 'done' || status === 'failed' ? status : 'pending',
+    extraction_error: typeof raw.extraction_error === 'string' ? raw.extraction_error : null,
+    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
+    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
+  };
+}
+
+/**
+ * One search hit from `search_document_chunks_by_embedding`: a passage plus
+ * enough parent metadata to name its source document without a second fetch.
+ */
+export interface DocumentChunkHit {
+  chunk_id: string;
+  document_id: string;
+  title: string;
+  filename: string;
+  description: string;
+  chunk_index: number;
+  content: string;
+  similarity?: number;
+}
+
+function coerceDocumentChunkHit(raw: Record<string, unknown>): DocumentChunkHit {
+  return {
+    chunk_id: String(raw.chunk_id ?? raw.id),
+    document_id: String(raw.document_id),
+    title: typeof raw.title === 'string' ? raw.title : '',
+    filename: typeof raw.filename === 'string' ? raw.filename : '',
+    description: typeof raw.description === 'string' ? raw.description : '',
+    chunk_index:
+      typeof raw.chunk_index === 'number' ? raw.chunk_index : Number(raw.chunk_index ?? 0),
+    content: typeof raw.content === 'string' ? raw.content : '',
+    similarity: typeof raw.similarity === 'number' ? (raw.similarity as number) : undefined,
+  };
+}
+
 export class SupabaseService {
   readonly client: SupabaseClient;
 
@@ -3133,6 +3202,316 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
   }
 
+  // Documents (Library) --------------------------------------------------
+  //
+  // Upload flow is two-phase on purpose: createDocument writes the metadata
+  // row first (status 'pending', storage_path null), then the caller uploads
+  // the binary to the bucket and calls setDocumentStoragePath, then extracts
+  // text in the browser and calls setDocumentExtraction + insertDocumentChunks.
+  // Splitting it this way means a row always exists for the UI to show a
+  // "processing" placeholder, and a crash mid-upload leaves a recoverable
+  // pending row rather than an orphaned bucket object.
+
+  async createDocument(args: {
+    title: string;
+    description?: string;
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+  }): Promise<Document> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const { data, error } = await this.client
+      .from('documents')
+      .insert({
+        user_id: session.user.id,
+        title: args.title,
+        description: args.description ?? '',
+        filename: args.filename,
+        mime_type: args.mimeType,
+        size_bytes: args.sizeBytes,
+      })
+      .select(
+        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
+      )
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return coerceDocument(data as Record<string, unknown>);
+  }
+
+  async setDocumentStoragePath(id: string, storagePath: string): Promise<void> {
+    const { error } = await this.client
+      .from('documents')
+      .update({ storage_path: storagePath })
+      .eq('id', id);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Record the outcome of the browser-side text extraction. On success pass
+   * the extracted text and status 'done'; on failure pass status 'failed' and
+   * a trimmed error so the Library UI can explain why the doc isn't
+   * searchable. The original file stays downloadable either way.
+   */
+  async setDocumentExtraction(
+    id: string,
+    result:
+      | { status: 'done'; text: string }
+      | { status: 'failed'; error: string }
+  ): Promise<void> {
+    const patch: Record<string, unknown> =
+      result.status === 'done'
+        ? { extraction_status: 'done', extracted_text: result.text, extraction_error: null }
+        : { extraction_status: 'failed', extraction_error: result.error.slice(0, 500) };
+    const { error } = await this.client.from('documents').update(patch).eq('id', id);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  async listDocuments(opts: { limit?: number } = {}): Promise<Document[]> {
+    const { data, error } = await this.client
+      .from('documents')
+      .select(
+        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
+      )
+      .order('created_at', { ascending: false })
+      .limit(opts.limit ?? 500);
+    if (error) throw new SupabaseError(error.message);
+    return (data ?? []).map((row) => coerceDocument(row as Record<string, unknown>));
+  }
+
+  /**
+   * One offset page of the Library list, newest first. Powers the drawer's
+   * infinite scroll. `id` is the final tiebreak so docs sharing a created_at
+   * keep a stable cross-page order.
+   */
+  async listDocumentsPage(opts: {
+    offset: number;
+    pageSize: number;
+  }): Promise<OffsetPage<Document>> {
+    const { data, error } = await this.client
+      .from('documents')
+      .select(
+        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
+      )
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
+      .range(opts.offset, opts.offset + opts.pageSize);
+    if (error) throw new SupabaseError(error.message);
+    const all = (data ?? []).map((row) => coerceDocument(row as Record<string, unknown>));
+    const hasMore = all.length > opts.pageSize;
+    return { rows: hasMore ? all.slice(0, opts.pageSize) : all, hasMore };
+  }
+
+  async getDocumentById(id: string): Promise<Document | null> {
+    const { data, error } = await this.client
+      .from('documents')
+      .select(
+        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
+      )
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    if (!data) return null;
+    return coerceDocument(data as Record<string, unknown>);
+  }
+
+  /**
+   * Fetch several documents by id in one round-trip, returned in the order of
+   * the input ids (PostgREST `in` returns arbitrary order, so we re-sort).
+   * Used by the Library drawer to resolve passage-search hits (which carry
+   * document ids) back to full document rows in relevance order. Unknown ids
+   * are silently dropped.
+   */
+  async getDocumentsByIds(ids: readonly string[]): Promise<Document[]> {
+    if (ids.length === 0) return [];
+    const { data, error } = await this.client
+      .from('documents')
+      .select(
+        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
+      )
+      .in('id', ids);
+    if (error) throw new SupabaseError(error.message);
+    const byId = new Map<string, Document>();
+    for (const row of data ?? []) {
+      const doc = coerceDocument(row as Record<string, unknown>);
+      byId.set(doc.id, doc);
+    }
+    const out: Document[] = [];
+    for (const id of ids) {
+      const doc = byId.get(id);
+      if (doc) out.push(doc);
+    }
+    return out;
+  }
+
+  /**
+   * Patch a document's user-editable metadata (title, description). The
+   * extracted body and chunks are bound to the original file and are not
+   * editable here - replacing content means re-uploading the file.
+   */
+  async updateDocument(
+    id: string,
+    patch: { title?: string; description?: string }
+  ): Promise<Document> {
+    const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (patch.title !== undefined) update.title = patch.title;
+    if (patch.description !== undefined) update.description = patch.description;
+    const { data, error } = await this.client
+      .from('documents')
+      .update(update)
+      .eq('id', id)
+      .select(
+        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
+      )
+      .single();
+    if (error) throw new SupabaseError(error.message);
+    return coerceDocument(data as Record<string, unknown>);
+  }
+
+  /**
+   * Delete a document, its chunks (FK cascade), and its original file in the
+   * bucket. The bucket object is removed first; if that fails we still throw
+   * before deleting the row, so we never orphan a bucket object behind a
+   * deleted row. A leftover row whose object is already gone is the safer
+   * failure direction (the UI can retry the delete).
+   */
+  async deleteDocument(id: string): Promise<void> {
+    const doc = await this.getDocumentById(id);
+    if (doc?.storage_path) {
+      const { error: rmErr } = await this.client.storage
+        .from('documents')
+        .remove([doc.storage_path]);
+      if (rmErr) throw new SupabaseError(rmErr.message);
+    }
+    const { error } = await this.client.from('documents').delete().eq('id', id);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Bulk-insert a document's chunks with embedding null - the server-side
+   * backfill embeds them on its next sweep. user_id is denormalised onto each
+   * chunk so the search RPC and RLS scope without a join.
+   */
+  async insertDocumentChunks(documentId: string, chunks: readonly string[]): Promise<void> {
+    if (chunks.length === 0) return;
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const rows = chunks.map((content, chunk_index) => ({
+      document_id: documentId,
+      user_id: session.user.id,
+      chunk_index,
+      content,
+    }));
+    const { error } = await this.client.from('document_chunks').insert(rows);
+    if (error) throw new SupabaseError(error.message);
+  }
+
+  /**
+   * Semantic + substring search over the user's document chunks. Vector hits
+   * (RPC, cosine-ranked) first, then ILIKE hits the vector path missed so a
+   * just-uploaded doc participates before the backfill reaches its chunks.
+   * Deduped by chunk id and capped at `limit`. Mirrors searchWikiArticles.
+   */
+  async searchDocumentChunks(opts: {
+    query: string;
+    queryEmbedding: number[] | null;
+    limit?: number;
+  }): Promise<DocumentChunkHit[]> {
+    const query = opts.query.trim();
+    const limit = opts.limit ?? 12;
+    if (query.length === 0) return [];
+
+    const pattern = ilikePattern(query);
+    const ilikePromise = this.client
+      .from('document_chunks')
+      .select('id, document_id, chunk_index, content, documents(title, filename, description)')
+      .ilike('content', pattern)
+      .limit(limit);
+
+    const semanticPromise = opts.queryEmbedding
+      ? this.client.rpc('search_document_chunks_by_embedding', {
+          query_embedding: opts.queryEmbedding,
+          match_limit: limit,
+        })
+      : Promise.resolve({ data: [] as unknown[], error: null });
+
+    const [ilikeRes, semRes] = await Promise.all([ilikePromise, semanticPromise]);
+    if (ilikeRes.error) throw new SupabaseError(ilikeRes.error.message);
+
+    // PostgREST returns the embedded parent under a `documents` key; flatten
+    // it into the same shape the RPC returns so both paths coerce uniformly.
+    const ilikeRows = (ilikeRes.data ?? []).map((raw) => {
+      const row = raw as Record<string, unknown>;
+      const parent = (row.documents ?? {}) as Record<string, unknown>;
+      return coerceDocumentChunkHit({
+        chunk_id: row.id,
+        document_id: row.document_id,
+        chunk_index: row.chunk_index,
+        content: row.content,
+        title: parent.title,
+        filename: parent.filename,
+        description: parent.description,
+      });
+    });
+    const semanticRows =
+      semRes.error !== null
+        ? []
+        : ((semRes.data ?? []) as unknown[]).map((row) =>
+            coerceDocumentChunkHit(row as Record<string, unknown>)
+          );
+
+    const out: DocumentChunkHit[] = [];
+    const seen = new Set<string>();
+    for (const hit of semanticRows) {
+      if (seen.has(hit.chunk_id)) continue;
+      seen.add(hit.chunk_id);
+      out.push(hit);
+      if (out.length >= limit) return out;
+    }
+    for (const hit of ilikeRows) {
+      if (seen.has(hit.chunk_id)) continue;
+      seen.add(hit.chunk_id);
+      out.push(hit);
+      if (out.length >= limit) return out;
+    }
+    return out;
+  }
+
+  // Documents Storage helpers --------------------------------------------
+
+  /**
+   * Upload an original file to the private `documents` bucket. The object key
+   * convention `<user_id>/<document_id>/<filename>` is what the bucket RLS
+   * policy keys on (top-level folder must equal auth.uid()).
+   */
+  async uploadDocumentFile(args: {
+    documentId: string;
+    filename: string;
+    file: Blob;
+    contentType: string;
+  }): Promise<string> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const path = `${session.user.id}/${args.documentId}/${args.filename}`;
+    const { error } = await this.client.storage
+      .from('documents')
+      .upload(path, args.file, { contentType: args.contentType, upsert: true });
+    if (error) throw new SupabaseError(error.message);
+    return path;
+  }
+
+  /**
+   * Time-limited signed URL for downloading an original file. The bucket is
+   * private, so this is the only way the browser surfaces the binary.
+   */
+  async createDocumentDownloadUrl(storagePath: string, expiresInSeconds = 300): Promise<string> {
+    const { data, error } = await this.client.storage
+      .from('documents')
+      .createSignedUrl(storagePath, expiresInSeconds);
+    if (error) throw new SupabaseError(error.message);
+    return data.signedUrl;
+  }
+
   /**
    * Attribute one or more source conversations to a wiki article.
    * Upsert semantics on the composite (article_id, thread_id) primary
@@ -4861,6 +5240,44 @@ export class SupabaseService {
       .eq('messages.thread_id', threadId)
       .eq('filename', filename)
       .like('mime_type', 'image/%')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    if (!data) return null;
+    const row = data as Omit<Attachment, 'data_base64'> & { data: string | null };
+    return {
+      id: row.id,
+      message_id: row.message_id,
+      position: row.position,
+      filename: row.filename,
+      mime_type: row.mime_type,
+      size_bytes: row.size_bytes,
+      data_base64: row.data,
+      extracted_text: row.extracted_text,
+      expired_at: row.expired_at,
+      created_at: row.created_at,
+    };
+  }
+
+  /**
+   * Find the most recent attachment in a thread by filename, regardless of
+   * mime type or expiry state. Used by `doc_create` to promote a file the user
+   * pasted into the conversation into a persistent Library document: it needs
+   * the binary (`data_base64`, null once expired) and the already-parsed
+   * `extracted_text`. RLS scopes the thread join to the caller's own threads.
+   */
+  async findAttachmentByFilenameInThread(
+    threadId: string,
+    filename: string
+  ): Promise<Attachment | null> {
+    const { data, error } = await this.client
+      .from('message_attachments')
+      .select(
+        'id, message_id, position, filename, mime_type, size_bytes, data, extracted_text, expired_at, created_at, messages!inner(thread_id)'
+      )
+      .eq('messages.thread_id', threadId)
+      .eq('filename', filename)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();

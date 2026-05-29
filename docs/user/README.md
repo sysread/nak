@@ -44,6 +44,10 @@ You can reach these pages two ways:
   about projects, people, places, and topics, maintained by both you
   and a background agent. The assistant reaches them through the
   always-on `wiki_search` tool.
+- [Library](./library.md) — upload documents (contracts, insurance
+  policies, tax docs) to keep as permanent, searchable reference
+  material. The assistant can search inside them to answer your
+  questions, and they never expire the way chat attachments do.
 - [Intuition](./intuition.md) — the subconscious read Nak forms of
   each conversation: how the brain icon next to the mood emoji works,
   and what the inline cards mean.

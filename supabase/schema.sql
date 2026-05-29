@@ -7546,6 +7546,253 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
+-- User Documents (Library)
+--
+-- Persistent, user-uploaded reference documents (HOA agreements, insurance
+-- policies, contracts, tax docs - anything we can extract text from). UNLIKE
+-- message_attachments, these never expire: the Library is long-term reference
+-- material the user curates, not per-message context that ages out on a 30-day
+-- sweep.
+--
+-- Storage shape differs from message_attachments on purpose. Attachments keep
+-- the binary as base64 in a text column because they are bounded by the expiry
+-- sweep; a persistent multi-MB PDF base64'd into a Postgres row would bloat
+-- backups forever, so the original file lives in a private Storage bucket
+-- (`documents`, defined below) and the row holds only a `storage_path` pointer
+-- plus metadata and the extracted text.
+--   FOLLOW-UP: message_attachments should migrate onto the same bucket so we
+--   have one file-storage mechanism, not two. Tracked separately.
+--
+-- Search granularity: a 40-page contract is useless as a single embedding
+-- (truncation throws most of it away, and one vector can't localise "what is
+-- the late fee"). Instead the extracted text is split into chunks at upload
+-- time (see chunkText in src/lib/documents.ts) and each chunk gets its own row
+-- in document_chunks with its own embedding. Search embeds the query once and
+-- ranks every chunk by cosine similarity, returning the best-matching passages
+-- grouped by their source document. No truncation; the whole doc is reachable.
+
+create table if not exists public.documents (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- User-facing display name. Defaults to the original filename but the
+  -- user (or the doc_update tool) can rename it.
+  title text not null,
+  -- The "what this is for" field. Free-form note the user/LLM writes to
+  -- explain the document's purpose ("my 2024 Aetna policy", "the HOA CC&Rs").
+  -- Searchable context that helps the model decide whether a doc is relevant.
+  description text not null default '',
+  -- Original upload metadata, preserved verbatim.
+  filename text not null,
+  mime_type text not null,
+  size_bytes bigint not null,
+  -- Object key inside the `documents` Storage bucket. Convention:
+  -- `<user_id>/<document_id>/<filename>`. NULL only transiently between the
+  -- row insert and the binary upload completing.
+  storage_path text,
+  -- Venice text-parser output. Survives independent of the binary; this is
+  -- what gets chunked + embedded. NULL until extraction finishes.
+  extracted_text text,
+  -- pending: uploaded, extraction not yet done. done: text extracted and
+  -- chunked. failed: extraction errored (parser rejected the file, etc.) -
+  -- the original is still downloadable, it just isn't searchable.
+  extraction_status text not null default 'pending'
+    check (extraction_status in ('pending', 'done', 'failed')),
+  -- Trimmed parser/extraction error, surfaced in the Library UI when status
+  -- is 'failed' so the user knows why a doc isn't searchable.
+  extraction_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists documents_user_created_idx
+  on public.documents (user_id, created_at desc);
+
+alter table public.documents enable row level security;
+
+drop policy if exists "documents are self-selectable" on public.documents;
+create policy "documents are self-selectable" on public.documents
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "documents are self-insertable" on public.documents;
+create policy "documents are self-insertable" on public.documents
+  for insert with check (auth.uid() = user_id);
+
+drop policy if exists "documents are self-updatable" on public.documents;
+create policy "documents are self-updatable" on public.documents
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+drop policy if exists "documents are self-deletable" on public.documents;
+create policy "documents are self-deletable" on public.documents
+  for delete using (auth.uid() = user_id);
+
+-- One row per chunk of a document's extracted text. The searchable unit.
+-- user_id is denormalised from the parent so the search RPC and RLS can scope
+-- without a join to documents (and the embedding-claim sweep stays simple).
+create table if not exists public.document_chunks (
+  id uuid primary key default gen_random_uuid(),
+  document_id uuid not null references public.documents(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- 0-based position of this chunk in the document, for stable ordering and
+  -- so a search hit can say "passage 7 of N".
+  chunk_index int not null,
+  content text not null,
+  embedding vector(2048),
+  embedding_model text,
+  embedding_claim_holder text,
+  -- No _at suffix, matching the memories / wiki embedding-claim convention.
+  embedding_claim_expires timestamptz,
+  created_at timestamptz not null default now(),
+  unique (document_id, chunk_index)
+);
+
+-- Drives the embedding-backfill claim scan (pending = embedding is null) and
+-- keeps a document's chunks contiguous for the per-document fetch.
+create index if not exists document_chunks_pending_idx
+  on public.document_chunks (user_id)
+  where embedding is null;
+create index if not exists document_chunks_document_idx
+  on public.document_chunks (document_id, chunk_index);
+
+alter table public.document_chunks enable row level security;
+
+drop policy if exists "document_chunks are self-selectable" on public.document_chunks;
+create policy "document_chunks are self-selectable" on public.document_chunks
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "document_chunks are self-insertable" on public.document_chunks;
+create policy "document_chunks are self-insertable" on public.document_chunks
+  for insert with check (auth.uid() = user_id);
+
+-- Chunks are immutable once written (re-uploading a file replaces the doc and
+-- its chunks wholesale via cascade), so there is no self-update policy. The
+-- backfill writes embeddings through a service-definer RPC, not as the user.
+drop policy if exists "document_chunks are self-deletable" on public.document_chunks;
+create policy "document_chunks are self-deletable" on public.document_chunks
+  for delete using (auth.uid() = user_id);
+
+-- Embeddings pipeline RPCs for document chunks. Same claim/save shape and
+-- service-definer global-sweep posture as the memory / wiki pair: cron has no
+-- user session, so EXECUTE locked to service_role is the security boundary.
+drop function if exists public.claim_next_pending_document_chunk(text, int);
+create or replace function public.claim_next_pending_document_chunk(
+  p_holder_id text,
+  p_ttl_seconds int
+) returns table (id uuid, content text)
+language sql security definer
+set search_path = public as $$
+  with candidate as (
+    select c.id
+      from public.document_chunks c
+     where c.embedding is null
+       and (c.embedding_claim_expires is null
+            or c.embedding_claim_expires < now())
+     order by c.created_at asc
+     limit 1
+     for update skip locked
+  )
+  update public.document_chunks c
+     set embedding_claim_holder = p_holder_id,
+         embedding_claim_expires = now() + make_interval(secs => p_ttl_seconds)
+    from candidate cand
+   where c.id = cand.id
+  returning c.id, c.content;
+$$;
+
+drop function if exists public.save_document_chunk_embedding_if_claimed(uuid, text, vector, text);
+create or replace function public.save_document_chunk_embedding_if_claimed(
+  p_id uuid,
+  p_holder_id text,
+  p_embedding vector(2048),
+  p_embedding_model text
+) returns boolean
+language plpgsql security definer
+set search_path = public as $$
+declare
+  updated int;
+begin
+  update public.document_chunks
+     set embedding = p_embedding,
+         embedding_model = p_embedding_model,
+         embedding_claim_holder = null,
+         embedding_claim_expires = null
+   where id = p_id
+     and embedding_claim_holder = p_holder_id
+     and embedding_claim_expires > now();
+  get diagnostics updated = row_count;
+  return updated > 0;
+end $$;
+
+revoke all on function public.claim_next_pending_document_chunk(text, int) from public, anon, authenticated;
+revoke all on function public.save_document_chunk_embedding_if_claimed(uuid, text, vector, text) from public, anon, authenticated;
+grant execute on function public.claim_next_pending_document_chunk(text, int) to service_role;
+grant execute on function public.save_document_chunk_embedding_if_claimed(uuid, text, vector, text) to service_role;
+
+-- Similarity search over the caller's document chunks. Returns the best chunks
+-- with enough parent metadata (title, filename) that the tool can present a
+-- passage and name its source without a second round-trip. Scoped by RLS plus
+-- an explicit user_id guard. security invoker so auth.uid() is the caller.
+drop function if exists public.search_document_chunks_by_embedding(vector, int);
+create or replace function public.search_document_chunks_by_embedding(
+  query_embedding vector(2048),
+  match_limit int
+) returns table (
+  chunk_id uuid,
+  document_id uuid,
+  title text,
+  filename text,
+  description text,
+  chunk_index int,
+  content text,
+  similarity real
+)
+language sql stable security invoker as $$
+  select c.id, c.document_id, d.title, d.filename, d.description,
+         c.chunk_index, c.content,
+         (1 - (c.embedding <=> query_embedding))::real as similarity
+    from public.document_chunks c
+    join public.documents d on d.id = c.document_id
+   where c.user_id = auth.uid()
+     and c.embedding is not null
+   order by c.embedding <=> query_embedding asc
+   limit match_limit
+$$;
+
+-- Private bucket for the original uploaded files. `public = false` so objects
+-- are only reachable via signed URLs or authenticated download. Insert is
+-- idempotent so re-applying the schema is a no-op once the bucket exists.
+insert into storage.buckets (id, name, public)
+  values ('documents', 'documents', false)
+  on conflict (id) do nothing;
+
+-- Storage RLS: a user may only touch objects under their own `<user_id>/...`
+-- prefix in the documents bucket. storage.foldername(name) splits the object
+-- key on '/', so element [1] is the top-level folder - we require it to equal
+-- the caller's uid. Mirrors the per-row user_id scoping on the tables above.
+drop policy if exists "documents bucket is self-readable" on storage.objects;
+create policy "documents bucket is self-readable" on storage.objects
+  for select to authenticated
+  using (
+    bucket_id = 'documents'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "documents bucket is self-writable" on storage.objects;
+create policy "documents bucket is self-writable" on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id = 'documents'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "documents bucket is self-deletable" on storage.objects;
+create policy "documents bucket is self-deletable" on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'documents'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+-- ---------------------------------------------------------------------------
 -- Scheduled embedding backfill (pg_cron -> pg_net -> venice/backfill)
 --
 -- Replaces the browser embeddings worker: a cron tick POSTs to the venice edge

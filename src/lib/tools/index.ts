@@ -105,6 +105,12 @@ import { wikiSearchSchema } from './wiki_search.schema';
 import { wikiListSchema } from './wiki_list.schema';
 import { wikiGetSchema } from './wiki_get.schema';
 import { wikiLibrarianSchema } from './wiki_librarian.schema';
+import { docSearchSchema } from './doc_search.schema';
+import { docListSchema } from './doc_list.schema';
+import { docGetSchema } from './doc_get.schema';
+import { docCreateSchema } from './doc_create.schema';
+import { docUpdateSchema } from './doc_update.schema';
+import { docDeleteSchema } from './doc_delete.schema';
 import { generateImageSchema } from './generate_image.schema';
 
 // Agent-only toolbox re-exports moved to the bottom of the file
@@ -246,6 +252,12 @@ const wikiLibrarian = lazyTool(
   () => import('./wiki_librarian'),
   'wikiLibrarian'
 );
+const docSearch = lazyTool(docSearchSchema, () => import('./doc_search'), 'docSearch');
+const docList = lazyTool(docListSchema, () => import('./doc_list'), 'docList');
+const docGet = lazyTool(docGetSchema, () => import('./doc_get'), 'docGet');
+const docCreate = lazyTool(docCreateSchema, () => import('./doc_create'), 'docCreate');
+const docUpdate = lazyTool(docUpdateSchema, () => import('./doc_update'), 'docUpdate');
+const docDelete = lazyTool(docDeleteSchema, () => import('./doc_delete'), 'docDelete');
 const generateImage = lazyTool(
   generateImageSchema,
   () => import('./generate_image'),
@@ -340,6 +352,9 @@ export const alwaysOnToolbox: Toolbox = {
     wikiGet,
     recipeList,
     recipeGet,
+    docSearch,
+    docList,
+    docGet,
     researchDocs,
     webSearch,
     updateTitle,
@@ -453,6 +468,28 @@ export const imagesToolbox: Toolbox = {
 };
 
 /**
+ * Library write tools. Document reads (doc_search, doc_list, doc_get) live in
+ * the always-on set; this toolbox carries the writes that mutate the user's
+ * persistent document Library: promoting a pasted file into a permanent doc,
+ * editing a doc's title/description, and deleting a doc (with its chunks and
+ * stored original). Gated like the cookbook / memory writes - the user enables
+ * it from the composer popover, or the model flips it on via toggle_toolbox
+ * once saving or removing a document is the obvious next move. The model has no
+ * file of its own, so doc_create only promotes a file the user already
+ * attached to the conversation.
+ */
+export const libraryToolbox: Toolbox = {
+  name: 'library',
+  description:
+    "Manage the user's document Library: save a file they attached to the " +
+    'conversation as a permanent searchable document (doc_create), edit a ' +
+    "document's title or description (doc_update), or delete a document " +
+    '(doc_delete). Read paths (doc_search, doc_list, doc_get) are always-on; ' +
+    'this toolbox carries the writes.',
+  tools: [docCreate, docUpdate, docDelete],
+};
+
+/**
  * The canonical ordered list of toolboxes exposed to the main chat.
  * Order is visible to the model (system-prompt catalog) and to the
  * user (popover list). Always-on goes first so the model reads the
@@ -466,6 +503,7 @@ export const TOOLBOXES: readonly Toolbox[] = [
   cookingToolbox,
   memoriesToolbox,
   wikiToolbox,
+  libraryToolbox,
   imagesToolbox,
 ];
 

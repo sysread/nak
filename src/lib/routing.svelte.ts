@@ -54,7 +54,7 @@ export type Modal =
   | 'intuition'
   | 'bias-profile'
   | 'recall';
-export type DrawerTab = 'chats' | 'recipes' | 'memories' | 'wiki';
+export type DrawerTab = 'chats' | 'recipes' | 'memories' | 'wiki' | 'library';
 
 export interface Route {
   cid: string | null;
@@ -76,6 +76,13 @@ export interface Route {
    * panel" pattern.
    */
   wiki_article_id: string | null;
+  /**
+   * Document id for the focused Library document panel. Absent means the
+   * panel shows the upload / empty-state surface and the sidebar listing is
+   * the only content. Same shape as `wiki_article_id` - the Library tab
+   * mirrors the Wiki tab's "list in drawer, single item in panel" pattern.
+   */
+  document_id: string | null;
 }
 
 const ROUTED_KEYS = [
@@ -86,6 +93,7 @@ const ROUTED_KEYS = [
   'doc',
   'memory',
   'wiki_article_id',
+  'document_id',
 ] as const;
 const MODAL_VALUES: readonly Modal[] = [
   'settings',
@@ -100,6 +108,7 @@ const DRAWER_VALUES: readonly DrawerTab[] = [
   'recipes',
   'memories',
   'wiki',
+  'library',
 ];
 
 export const route = $state<Route>({
@@ -110,6 +119,7 @@ export const route = $state<Route>({
   doc: null,
   memory: null,
   wiki_article_id: null,
+  document_id: null,
 });
 
 function readEnum<T extends string>(
@@ -137,6 +147,7 @@ export function parseUrl(search: string = typeof location !== 'undefined' ? loca
     doc: readString(params, 'doc'),
     memory: readString(params, 'memory'),
     wiki_article_id: readString(params, 'wiki_article_id'),
+    document_id: readString(params, 'document_id'),
   };
 }
 
@@ -159,6 +170,7 @@ export function buildSearch(
   if (r.doc) params.set('doc', r.doc);
   if (r.memory) params.set('memory', r.memory);
   if (r.wiki_article_id) params.set('wiki_article_id', r.wiki_article_id);
+  if (r.document_id) params.set('document_id', r.document_id);
   const s = params.toString();
   return s ? `?${s}` : '';
 }
@@ -204,6 +216,10 @@ function applyPatch(patch: Partial<Route>): boolean {
     patch.wiki_article_id !== route.wiki_article_id
   ) {
     route.wiki_article_id = patch.wiki_article_id;
+    changed = true;
+  }
+  if (patch.document_id !== undefined && patch.document_id !== route.document_id) {
+    route.document_id = patch.document_id;
     changed = true;
   }
   return changed;
@@ -271,6 +287,7 @@ export const __test = {
     route.doc = null;
     route.memory = null;
     route.wiki_article_id = null;
+    route.document_id = null;
   },
   syncFromUrl,
 };

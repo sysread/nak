@@ -225,6 +225,14 @@ via-parent-of-parent pattern —
 
 ## Gotchas
 
+- **FOLLOW-UP: migrate off base64 onto the Library's Storage bucket.**
+  The Library feature (`./library.md`) introduced a private `documents`
+  Storage bucket for persistent originals. Attachments still keep their
+  binary as base64 in `message_attachments.data`. That's two
+  file-storage mechanisms; the intent is to consolidate attachments
+  (and generated images) onto the same bucket. Bounded by the 30-day
+  expiry sweep, so the base64 bloat is capped in the meantime - but
+  this is a known debt, tracked separately.
 - **Base64 stored as text, not bytea**: the original design used a
   `bytea` column on the assumption that PostgREST serialises bytea
   as base64 on SELECT. It doesn't — PostgREST returns bytea as a

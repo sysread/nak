@@ -15,12 +15,13 @@ describe('routing: parseUrl', () => {
       doc: null,
       memory: null,
       wiki_article_id: null,
+      document_id: null,
     });
   });
 
   it('reads every routed key', () => {
     const r = parseUrl(
-      '?cid=abc&drawer=recipes&modal=help&recipe=xyz&doc=user/foo.md&memory=mem1&wiki_article_id=art1'
+      '?cid=abc&drawer=recipes&modal=help&recipe=xyz&doc=user/foo.md&memory=mem1&wiki_article_id=art1&document_id=doc1'
     );
     expect(r).toEqual({
       cid: 'abc',
@@ -30,6 +31,7 @@ describe('routing: parseUrl', () => {
       doc: 'user/foo.md',
       memory: 'mem1',
       wiki_article_id: 'art1',
+      document_id: 'doc1',
     });
   });
 
@@ -80,7 +82,7 @@ describe('routing: buildSearch', () => {
 
   it('emits only the keys that are set', () => {
     const out = buildSearch(
-      { cid: 'abc', drawer: null, modal: 'settings', recipe: null, doc: null, memory: null, wiki_article_id: null },
+      { cid: 'abc', drawer: null, modal: 'settings', recipe: null, doc: null, memory: null, wiki_article_id: null, document_id: null },
       '',
     );
     expect(out).toBe('?cid=abc&modal=settings');
@@ -91,7 +93,7 @@ describe('routing: buildSearch', () => {
     // to ?share=pending, and our routing pushes must not strip that
     // flag before Chat.svelte's share-drain has a chance to read it.
     const out = buildSearch(
-      { cid: 'abc', drawer: null, modal: null, recipe: null, doc: null, memory: null, wiki_article_id: null },
+      { cid: 'abc', drawer: null, modal: null, recipe: null, doc: null, memory: null, wiki_article_id: null, document_id: null },
       '?share=pending&foo=bar',
     );
     expect(out).toContain('share=pending');
@@ -102,7 +104,7 @@ describe('routing: buildSearch', () => {
   it('overwrites stale routed keys on the current search', () => {
     // Old value for a routed key must be replaced, not duplicated.
     const out = buildSearch(
-      { cid: 'new', drawer: null, modal: null, recipe: null, doc: null, memory: null, wiki_article_id: null },
+      { cid: 'new', drawer: null, modal: null, recipe: null, doc: null, memory: null, wiki_article_id: null, document_id: null },
       '?cid=old&share=pending',
     );
     // URLSearchParams.set overwrites, URLSearchParams.append would not.
@@ -113,7 +115,7 @@ describe('routing: buildSearch', () => {
 
   it('clears routed keys when the field goes null', () => {
     const out = buildSearch(
-      { cid: null, drawer: null, modal: null, recipe: null, doc: null, memory: null, wiki_article_id: null },
+      { cid: null, drawer: null, modal: null, recipe: null, doc: null, memory: null, wiki_article_id: null, document_id: null },
       '?cid=was-here&share=pending',
     );
     expect(out).not.toContain('cid=');

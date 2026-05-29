@@ -156,6 +156,9 @@ describe('tool registry', () => {
         'conversation_get',
         'conversation_recall',
         'conversation_search',
+        'doc_get',
+        'doc_list',
+        'doc_search',
         'memory_recall',
         'memory_search',
         'recipe_get',
@@ -193,6 +196,9 @@ describe('tool registry', () => {
       'recipe_photos_reorder',
       'recipe_photo_label_set',
       'wiki_librarian',
+      'doc_create',
+      'doc_update',
+      'doc_delete',
     ]) {
       expect(disabled).not.toContain(gated);
     }
@@ -273,6 +279,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
+      'library',
       'images',
     ]);
   });
@@ -282,6 +289,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
+      'library',
       'images',
     ]);
     expect(GATED_TOOLBOX_NAMES).not.toContain('always_on');
@@ -296,6 +304,7 @@ describe('tool registry', () => {
       'cooking',
       'memories',
       'wiki',
+      'library',
       'images',
     ]);
     for (const m of GATED_TOOLBOX_META) {
