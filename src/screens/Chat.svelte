@@ -186,6 +186,7 @@
     orderedSubconsciousRows,
     subconsciousLabel,
   } from '$lib/ui/subconscious-status';
+  import { streamingCardHasContent } from '$lib/ui/streaming-bubble';
   import AssistantBody from '../components/AssistantBody.svelte';
   import Markdown from '../components/Markdown.svelte';
   import ReasoningPanel from '../components/ReasoningPanel.svelte';
@@ -766,6 +767,16 @@
   // renders the checklist only while the slot hasn't dismissed it.
   const subconsciousRows = $derived(
     activeSlot ? orderedSubconsciousRows(activeSlot.subconsciousStatus) : []
+  );
+
+  // Whether the streaming response card has anything to show this frame
+  // (reasoning panel, streaming markdown, the subconscious checklist, or
+  // the rate-limit wait row). The throbber lives below the card, not in
+  // it, so the card collapses to nothing during the inter-round gap and
+  // the pre-first-delta window - this gate keeps an empty bordered box
+  // from flashing there. See src/lib/ui/streaming-bubble.ts.
+  const streamingCardVisible = $derived(
+    !!activeSlot && streamingCardHasContent(activeSlot, subconsciousRows.length)
   );
 
   // Drawer state: four separate buckets.
@@ -3024,6 +3035,19 @@
       if (pending !== null) {
         slot.streamingText = pending;
         pending = null;
+        // Retire the subconscious checklist the instant the answer text
+        // actually paints (not on the first not-yet-flushed byte). The
+        // checklist lives in the response card and the card mounts only
+        // while it has content; dismissing here, where streamingText goes
+        // non-empty in the same tick, hands the card straight from
+        // checklist to streaming text with no content-less frame between
+        // them - dismissing on the first delta instead would blank the
+        // card for the ~500ms flush window and flicker its border out and
+        // back. Sticky and idempotent: stays dismissed across later
+        // flushes and round boundaries. The reasoning path dismisses
+        // separately in onReasoningUpdate, where its content is written
+        // synchronously.
+        slot.subconsciousDismissed = true;
       }
       // Piggyback the IDB draft flush on every display flush (~500ms).
       // Best-effort: a write failure is swallowed so a broken IDB never
@@ -3137,10 +3161,9 @@
               // so only the first text delta schedules it.
               if (!slot.streamingContentStarted) {
                 slot.streamingContentStarted = true;
-                // The reply is arriving - retire the subconscious
-                // checklist so it ease-fades out (priming finished
-                // before the first token; the answer is the payoff).
-                slot.subconsciousDismissed = true;
+                // Checklist dismissal happens in flushPending, when the
+                // first text actually paints - see the note there for why
+                // it can't fire on this not-yet-flushed first byte.
                 if (slot.streamingReasoningOpen && slot.streamingReasoning.length > 0) {
                   reasoningCloseTimer = window.setTimeout(() => {
                     slot.streamingReasoningOpen = false;
@@ -6405,30 +6428,37 @@
               <div class="msg-slop-notice-detail">{slopNoticeCopy(notice.guard).detail}</div>
             </div>
           {/each}
-          <!-- Streaming bubble visibility is gated on `activeSlot?.sending` alone -
-               the master flag for "chat loop is running". This
-               guarantees the KITT Scanner inside stays on screen for
-               the ENTIRE response cycle: from the moment the user hits
-               send, through every reasoning + content delta, across
-               every tool round (model assembles a tool call, tools
-               execute, next round opens, text streams in again), and
-               only winks out when the chat loop finally closes after
-               the terminal round's `data: [DONE]`. Earlier shapes
+          <!-- The streaming region is gated on `activeSlot?.sending` alone -
+               the master flag for "chat loop is running". This keeps the
+               throbber below on screen for the ENTIRE response cycle:
+               from the moment the user hits send, through every reasoning
+               + content delta, across every tool round (model assembles a
+               tool call, tools execute, next round opens, text streams in
+               again), and only winks out when the chat loop finally closes
+               after the terminal round's `data: [DONE]`. Earlier shapes
                OR'd in `activeSlot?.streamingText || activeSlot?.streamingReasoning` defensively;
                that read as "is there content" rather than "is the
-               turn alive" and made the bubble's lifetime ambiguous to
-               anyone reading it. Both buffers are cleared by
-               onAssistantPersisted at the close of every round (so
-               the bubble collapses back to a Scanner-only card while
-               tools execute or the next round is being opened) and
-               the runExchange success/error paths clear them both
-               before `activeSlot?.sending = false` runs in finally - so dropping
-               them from the condition can't shorten the visible
-               window, only document the intent. -->
+               turn alive" and made the region's lifetime ambiguous to
+               anyone reading it.
+
+               The response CARD (the bordered .msg.assistant bubble) is
+               a tighter gate: it only mounts when it has something to
+               show - reasoning, streaming text, the subconscious
+               checklist, or the rate-limit wait row (streamingCardVisible).
+               Both streaming buffers are cleared by onAssistantPersisted
+               at every round boundary, so during the inter-round gap (and
+               the initial pre-first-delta window) the card has no content;
+               rendering it anyway would flash an empty bordered box. In
+               those gaps only the throbber shows. The throbber sits OUTSIDE
+               the card, as a standalone row below it, so it stays the last
+               element in the transcript while a completion runs - which is
+               exactly what the follow-bottom scroll anchors to (see
+               scrollToBottom). -->
           {#if activeSlot && activeSlot.sending}
             <!-- activeSlot is non-null inside this block (the outer
                  condition guarantees it), so bindings can address its
                  fields directly without optional-chaining. -->
+            {#if streamingCardVisible}
             <div class="msg assistant">
               <!-- Live reasoning panel. Open when `streamingReasoningOpen`
                    is true; flipped on by the first reasoning delta and
@@ -6453,32 +6483,6 @@
                      this same <Markdown> path. -->
                 <Markdown content={activeSlot.streamingText} />
               {/if}
-              <!-- Continuous "still working" signal for the entire
-                   window between "user hit send" and the chat loop
-                   actually closing - including gaps that aren't
-                   emitting any deltas (model has finished reasoning
-                   and is assembling a tool call; tools are executing
-                   between rounds; round just ended, next round about
-                   to start; final round persisted but post-loop
-                   bookkeeping like refreshThreads is still running).
-                   Stays visible AFTER activeSlot?.streamingText starts arriving
-                   too: a single round can emit text deltas and then
-                   switch to tool_call deltas within the same
-                   assistant message, and once the text stops flowing
-                   the bubble otherwise reads as "done responding"
-                   even though the model is still building a tool
-                   call on the wire. Cleared only when `activeSlot?.sending` flips
-                   false in runExchange's outer finally - by which
-                   time every round, every tool execution, and every
-                   inter-round gap has played out. Sits below
-                   ReasoningPanel rather than being suppressed by it -
-                   once reasoning text has accumulated the panel
-                   itself stops moving. Wrapper centers the inline-
-                   flex Scanner inside the bubble so it doesn't read
-                   as a stranded artifact in the top-left corner. -->
-              <div class="thinking">
-                <Scanner label="Thinking" />
-              </div>
               <!-- Subconscious-priming checklist. One row per
                    pre-response pipeline (samskara fire, intuition,
                    context recall) that fired this turn: a spinner while
@@ -6492,7 +6496,10 @@
                    row order regardless of which pipeline finishes first.
                    On a warm turn only the samskara fire runs (and may
                    fade mid-spin before checking off); a cold-start turn
-                   shows all three. -->
+                   shows all three. Lives inside the card, above the
+                   throbber that sits below it - the user watches the
+                   batch check off in the card while the pulse continues
+                   underneath. -->
               {#if !activeSlot.subconsciousDismissed && subconsciousRows.length > 0}
                 <div
                   class="subconscious-checklist"
@@ -6521,11 +6528,11 @@
                 </div>
               {/if}
               {#if activeSlot.rateLimitWaitUntil !== null}
-                <!-- Rate-limit wait indicator. Sits below the Scanner
-                     (or the streaming Markdown when text is already
-                     arriving) so the existing "still working" cue
-                     stays in place; the additional row tells the user
-                     specifically WHY the spinner is paused. The
+                <!-- Rate-limit wait indicator. The last row in the card,
+                     below any streaming Markdown; the throbber pulsing
+                     below the card is the "still working" cue, and this
+                     row tells the user specifically WHY that pulse has
+                     gone quiet. The
                      remaining-seconds value is recomputed each render
                      against rateLimitNowTick (a 1Hz reactive bump
                      scheduled while the wait is active) so the
@@ -6559,6 +6566,37 @@
                    the citations up the instant the row lands, with the
                    panel collapsed by default and an action-bar toggle
                    to expand on demand. -->
+            </div>
+            {/if}
+            <!-- Continuous "still working" signal for the entire window
+                 between "user hit send" and the chat loop actually closing -
+                 including gaps that aren't emitting any deltas (model has
+                 finished reasoning and is assembling a tool call; tools are
+                 executing between rounds; round just ended, next round about
+                 to start; final round persisted but post-loop bookkeeping
+                 like refreshThreads is still running). Stays visible AFTER
+                 streaming text starts arriving too: a single round can emit
+                 text deltas and then switch to tool_call deltas within the
+                 same assistant message, and once the text stops flowing the
+                 turn otherwise reads as "done responding" even though the
+                 model is still building a tool call on the wire. Cleared
+                 only when `activeSlot?.sending` flips false in runExchange's
+                 outer finally - by which time every round, every tool
+                 execution, and every inter-round gap has played out.
+
+                 Rendered OUTSIDE the response card, as a standalone row
+                 below it, on purpose: the subconscious checklist and any
+                 streaming content live in the card above, and the pulse
+                 reads as a separate "the turn is alive" beat underneath.
+                 Being the last element in .messages while sending is what
+                 keeps the follow-bottom scroll (scrollToBottom -> scrollHeight)
+                 anchored to the throbber - the respondingElsewhere / empty /
+                 archived blocks below are all mutually exclusive with an
+                 active local completion, so nothing renders past this. The
+                 wrapper centers the inline-flex Scanner in the pane so it
+                 doesn't read as a stranded artifact in the top-left corner. -->
+            <div class="thinking streaming-throbber">
+              <Scanner label="Thinking" />
             </div>
           {/if}
           {#if respondingElsewhere}

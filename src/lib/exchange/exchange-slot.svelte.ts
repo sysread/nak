@@ -169,13 +169,18 @@ export class ExchangeSlot {
    */
   readonly subconsciousStatus = new SvelteMap<SubconsciousOp, SubconsciousStatus>();
   /**
-   * Sticky guard that retires the subconscious checklist once the
-   * actual reply starts arriving. Flipped true on the first content or
-   * reasoning delta of the turn; the template's checklist `{#if}` reads
-   * it so the rows ease-fade out as the answer begins. Sticky (not
-   * derived from streamingText) because streamingText resets to '' at
-   * each round boundary - deriving from it would make the checklist
-   * flicker back in between rounds. Reset to false per exchange.
+   * Sticky guard that retires the subconscious checklist once the actual
+   * reply becomes visible. Flipped true when the first answer text paints
+   * (in the chat-loop's flushPending) or on the first reasoning delta,
+   * whichever comes first; the template's checklist `{#if}` reads it so
+   * the rows ease-fade out as the answer begins. Tied to the moment
+   * content paints rather than the first wire byte because the checklist
+   * lives in the response card and the card mounts only while it has
+   * content - dismissing before any content is on screen would blank the
+   * card for the flush window. Sticky (not derived from streamingText)
+   * because streamingText resets to '' at each round boundary - deriving
+   * from it would make the checklist flicker back in between rounds.
+   * Reset to false per exchange.
    */
   subconsciousDismissed = $state(false);
   abortCtl = $state<AbortController | null>(null);
