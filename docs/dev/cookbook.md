@@ -309,9 +309,10 @@ columns inside its own RPC so the trigger fires automatically.
 
 RPCs: `claim_next_pending_recipe`, `save_recipe_embedding_if_claimed`,
 `search_recipes_by_embedding`. Same shape as the wiki RPCs and the
-same `for update skip locked` claim discipline. The worker adapter
-is `src/lib/embeddings/sources/recipes.ts`, registered in
-`src/lib/embeddings/worker.ts` alongside the other five sources.
+same `for update skip locked` claim discipline. The recipe input
+builder is the `recipes` entry in `EMBED_SOURCES`
+(`supabase/functions/_shared/embed-input.ts`), drained by the
+server-side backfill alongside the other four sources.
 
 Search wrapper: `SupabaseService.searchRecipes({query, queryEmbedding,
 limit})` merges semantic hits (RPC, cosine order) and ILIKE hits

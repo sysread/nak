@@ -301,7 +301,7 @@ pieces differ vs the other two surfaces:
   confined to them reads as "no change." That covers this pipeline's
   own topic columns (otherwise `save_recipe_topics_if_claimed` would
   re-queue the row it just tagged - the recursion guard) and the
-  embeddings worker's `embedding*` columns (an embed compute/claim is
+  embeddings backfill's `embedding*` columns (an embed compute/claim is
   not a recipe edit). Contrast `clear_recipe_embedding_on_change`,
   which fires only on title / cooklang / source because the embedded
   blob is built from just those three.

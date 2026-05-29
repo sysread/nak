@@ -10,7 +10,7 @@ to the user directly.
 When a thread's newest terminal assistant message is past
 `last_summarised_msg_id`, the summary worker claims it, asks the
 fast model for a 2-3 sentence summary, and writes the result back
-via a claim-guarded RPC. The background embeddings worker then
+via a claim-guarded RPC. The server-side embeddings backfill then
 picks up the row (the `clear_thread_embedding_on_change` trigger
 nulled its embedding on the write) and produces a vector over
 `title + summary`.
@@ -112,8 +112,8 @@ a thread is worth opening without fetching full message history.
 - **Embeddings** — the
   `clear_thread_embedding_on_change` trigger nulls
   `threads.embedding` whenever `threads.summary` changes, so
-  the embeddings worker's next poll reselects the row. The
-  two workers hand off through the row's state, not through
+  the embeddings backfill's next run reselects the row. The
+  summary worker and the backfill hand off through the row's state, not through
   an explicit signal. See `./embeddings.md`.
 - **Conversation recall** — reads `threads.summary` to judge
   relevance without fetching full message history. A

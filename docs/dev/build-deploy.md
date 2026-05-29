@@ -82,7 +82,9 @@ docs imported via `import.meta.glob`.
   branches are left alone. Override with `--days N` and
   `--prefix STR`; `--yes` skips the prompt.
 - **Push to `main`** — triggers Tests → Deploy. The deploy
-  runs sync-supabase → build → publish.
+  runs sync-supabase → build → publish; sync-supabase now also
+  deploys the `venice` edge function (a `supabase functions
+  deploy` step), so functions ship on every deploy.
 
 ## Data model
 
@@ -116,10 +118,11 @@ docs imported via `import.meta.glob`.
   `workflow_run` of Tests with `conclusion: success`. A
   failing test won't ship.
 - **Sync-supabase gates the build.** `needs: sync-supabase`
-  on the build job means a schema-apply failure halts the
-  deploy before the build runs. The sync step runs only when
-  `vars.SUPABASE_PROJECT_REF` is configured; forks without it
-  still build and publish.
+  on the build job means a schema-apply OR edge-function-deploy
+  failure halts the deploy before the build runs (the job both
+  applies `schema.sql` and deploys the `venice` function). Both
+  steps run only when `vars.SUPABASE_PROJECT_REF` is configured;
+  forks without it still build and publish.
 - **Fork-friendly sync gating.**
   `if: vars.SUPABASE_PROJECT_REF != ''` on the sync step.
   A fresh fork that hasn't wired the Supabase automation

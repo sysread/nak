@@ -21,7 +21,7 @@ Two shared signals drive this feature's value:
   summary into `threads.summary`. Without that, the recall
   agent would have to fetch full message histories to judge
   relevance.
-- **Thread embeddings.** The embeddings worker vectorizes
+- **Thread embeddings.** The embeddings backfill vectorizes
   `title + summary` into `threads.embedding`. The recall
   agent's search ranks threads against a query vector without
   scanning bodies.
@@ -65,7 +65,7 @@ Both signals are background; recall is the read-time consumer.
 - **`threads.summary`** — 2-3 sentences written by the summary
   worker. Null until summarized. See `./summaries.md`.
 - **`threads.embedding`** — `vector(2048)`, populated by the
-  embeddings worker after a summary lands. A trigger
+  embeddings backfill after a summary lands. A trigger
   (`clear_thread_embedding_on_change`) nulls this column (and
   `embedding_model` + both embed claim columns) whenever
   `title` or `summary` changes, so the worker re-embeds on its
@@ -164,7 +164,7 @@ Both signals are background; recall is the read-time consumer.
 - **Summary + embedding must both land before a thread is
   semantically recall-able.** Until the summary worker runs,
   `summary` is null and the embedding trigger never fires;
-  until the embeddings worker runs, the vector path skips the
+  until the embeddings backfill runs, the vector path skips the
   row. This means brand-new threads are recall-able only by
   title-ILIKE until the background catches up (usually under
   a minute in practice).

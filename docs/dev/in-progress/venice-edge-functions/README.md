@@ -93,6 +93,42 @@ reasoned through; the rationale is in the relevant sub-plan.
   Duplicate the minimal wire-shape into `_shared/` for now;
   revisit in the consolidation phase.
 
+## Supabase key types (current names, and which we use where)
+
+Supabase renamed its API keys, and this work touches both
+generations, so the mapping lives here once:
+
+- **Publishable key** (`sb_publishable_...`) - the modern *client*
+  key; replaces the legacy **anon** key. Safe to expose; the browser
+  app uses it (`config.supabasePublishableKey`).
+- **Secret key** (`sb_secret_...`) - the modern *server* key; replaces
+  the legacy **service_role** key. Full access, server-only.
+- **Legacy JWT keys** (`eyJ...`) - the old **anon** / **service_role**
+  keys, still issued for compatibility. Crucially, they are JWTs.
+
+The load-bearing rule: **anywhere a JWT bearer is required, use a
+legacy JWT key - the modern `sb_*` keys are opaque, not JWTs, and get
+rejected.** Two places this bites:
+
+- **Edge-function gateway** (`verify_jwt`, on by default): the cron ->
+  `/backfill` call must send the **legacy service_role JWT** as its
+  bearer; an `sb_secret_` key is rejected. So the cron's Vault secret
+  (`service_role_key`) is the legacy JWT. The function then authorizes
+  by the bearer's `role` claim (`role === 'service_role'`), not by
+  string-matching the injected `SUPABASE_SERVICE_ROLE_KEY` - those need
+  not be the same string.
+- **Local realtime** (CLI bug #4219): the local stack rejects the
+  `sb_publishable_` key, so `dev-start` writes the legacy **anon JWT**
+  as the local client key. Prod realtime accepts the publishable key.
+
+Where each runs here:
+
+- Browser client, prod: publishable key (`sb_publishable_`).
+- Browser client, local dev: legacy anon JWT (the realtime bug above).
+- Edge-function admin (reads `app_config`, runs the definer RPCs): the
+  injected `SUPABASE_SERVICE_ROLE_KEY`.
+- Cron -> `/backfill` bearer: legacy service_role JWT, stored in Vault.
+
 ## Migration shape (strangler fig)
 
 The same five phases apply to each endpoint, though endpoints

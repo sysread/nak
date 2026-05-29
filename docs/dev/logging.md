@@ -98,9 +98,10 @@ log.debug('payload', { foo, bar });
 Pick a short, stable source tag. Existing tags:
 
 - `update` - service-worker update lifecycle
-- `reflection-worker`, `summary-worker`, `embed-worker`,
+- `reflection-worker`, `summary-worker`,
   `attachment-expiry-worker`, `samskara-worker` - background
-  loop drivers
+  loop drivers (embedding backfill runs server-side now, so it
+  logs in Supabase, not this drawer)
 - `recall-agent`, `conversation-recall-agent` - tool executors
 - `samskara` - chat-loop-side samskara helpers
 - `chat` - main screen one-offs (e.g. attachment persist failures)

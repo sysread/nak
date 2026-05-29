@@ -186,7 +186,8 @@ seeder, fetch, a real consumer) with eight fallbacks intact.
    - **New `/backfill` route, not an overload of `/embed`.**
      `/embed` stays the thin per-call proxy (query-time +
      browser). `/backfill` is the cron target: service-role-only
-     (bearer must equal the injected `SUPABASE_SERVICE_ROLE_KEY`),
+     (the handler requires the bearer JWT's `role` claim to be
+     `service_role` - see the prod-verification lesson below),
      runs the claim -> embed -> pad -> save loop server-side
      across all five sources, bounded per invocation (50 rows or
      25s, whichever first; the schedule resumes the drain).
@@ -229,7 +230,24 @@ seeder, fetch, a real consumer) with eight fallbacks intact.
      delivered) but has no browser reader now that the embeddings
      manager is gone - the edge function reads `app_config`
      server-side instead. It waits warm for the remaining
-     `veniceApiKey` consumers to migrate onto it later.)
+     `veniceApiKey` consumers to migrate onto it later.
+   - **Prod verification caught three things the green deploy
+     hid** - the lesson being that a green deploy proves the bundle
+     shipped, not that the feature works; verify against the prod DB.
+     (a) The grant lockdown did not take: `revoke ... from public`
+     left `anon`/`authenticated` with EXECUTE, because Supabase grants
+     those roles EXECUTE on public functions explicitly. Fixed with
+     `revoke ... from public, anon, authenticated`; verify via
+     `has_function_privilege('authenticated', oid, 'execute')`.
+     (b) The first cron -> `/backfill` call 403'd: the service-role
+     check byte-compared the bearer to `SUPABASE_SERVICE_ROLE_KEY`,
+     but the JWT bearer the gateway requires need not equal that env
+     value (legacy JWT vs modern `sb_secret_`). Fixed by decoding the
+     bearer's `role` claim (`role === 'service_role'`), which is safe
+     because verify_jwt validated the signature. (c) CI never deployed
+     the function, so the cron POSTed to a 404 - fixed by adding a
+     `supabase functions deploy venice` step to the deploy workflow's
+     sync-supabase job, so functions now ship on every deploy.)
 8. **Fold lessons into the sibling sub-plans** - see
    [Definition of done](#definition-of-done).
 
@@ -296,8 +314,11 @@ Resolved during step 7 - kept here as the answers feed the learning loop.
   `app_config` server-side via the injected
   `SUPABASE_SERVICE_ROLE_KEY`. The cron *caller* authenticates with a
   separate Vault secret (`service_role_key`, the LEGACY JWT key - the
-  modern opaque key is not a JWT and the gateway rejects it). Seeded
-  by `mise run supabase-init`.
+  modern opaque key is not a JWT and the gateway rejects it). The
+  function then confirms the caller is the service role by the bearer
+  JWT's `role` claim, NOT by string-matching that key - key-equality
+  403'd in prod because the JWT bearer and the injected env value need
+  not be identical strings. Seeded by `mise run supabase-init`.
 - **Offline fallback.** *Resolved: fully server-side.* The browser
   embeddings worker is deleted; there is no client-side backfill
   catch-up. If cron breaks, backfill stops with no UI signal -

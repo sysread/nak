@@ -126,7 +126,7 @@ See `./chat.md` for the metadata-message details.
   See `./tools.md`.
 - **Embeddings** - the `clear_thread_embedding_on_change` trigger
   nulls `threads.embedding` whenever `threads.title` changes, so
-  the embeddings worker's next poll re-embeds the thread with its
+  the embeddings backfill's next run re-embeds the thread with its
   freshly-titled state. See `./embeddings.md`.
 - **Logging** - the loop driver emits progress and error breadcrumbs
   through `createLogger('auto-title-worker')`. Worker-side entries

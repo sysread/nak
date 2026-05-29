@@ -274,7 +274,7 @@ in `docs/user/memory.md`. The dev side has four moving parts:
     the vector; a future rotation reselects stale rows by
     `where embedding_model <> $current`
   - `embedding_claim_holder`, `embedding_claim_expires` — per-row
-    claim for the embeddings worker
+    claim for the embeddings backfill
   - `confidence real default 1.0` — starts at 1.0 on create;
     `memory_invalidate` halves it (reflection-only, ×0.5);
     `memory_update` calls the `bump_memory_confidence` RPC which

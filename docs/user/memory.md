@@ -204,12 +204,12 @@ From the panel you can:
   lists them by label, each prefixed with a match-score pill (higher
   is closer; the pill is the value the list is ordered by). Click a
   label to open that memory. Nothing
-  is fetched until you expand the section, and a memory the
-  background worker hasn't embedded yet (one written moments ago)
-  shows nothing until its vector is ready.
+  is fetched until you expand the section, and a memory not yet
+  embedded (one written moments ago) shows nothing until its vector
+  is ready.
 
 A freshly edited memory briefly falls back to substring search
-while the background embedding worker recomputes its vector — the
+while the scheduled embedding pass recomputes its vector - the
 list still shows it, but semantic-match hits on the old text stop
 landing until re-embedding catches up. This is the same behavior
 the assistant sees when it updates a memory through its tools.

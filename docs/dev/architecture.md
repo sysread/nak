@@ -248,12 +248,11 @@ search costs.
 
 ## Worker model
 
-Three Web Workers run while the app is unlocked:
+Background Web Workers run while the app is unlocked. Embedding
+backfill used to be one of them; it now runs server-side (`pg_cron`
+plus the `venice` edge function - see `./embeddings.md`), so the
+browser-side workers are the agent fleet. Two representative ones:
 
-- `src/lib/embeddings/worker.ts` — polls memories and threads with
-  null embeddings, claims one, calls Venice's `/embeddings`,
-  writes the vector back via a claim-guarded RPC. Covered in
-  `./embeddings.md`.
 - `src/lib/agents/summary/worker.ts` — finds threads with a
   terminal assistant message newer than `last_summarised_msg_id`,
   runs the summary agent (fast model), writes `threads.summary`.
@@ -264,7 +263,7 @@ Three Web Workers run while the app is unlocked:
   memory. Covered in `./memory.md`.
 
 Each worker has a **manager** on the main thread
-(`embeddings/manager.ts`, `agents/*/manager.ts`) that handles
+(`agents/*/manager.ts`) that handles
 boot, cross-tab `navigator.locks` coordination, and Supabase
 lease acquisition. The `activate()` path fires all three
 `manager.start()` calls fire-and-forget; `lock()` calls the

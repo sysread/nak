@@ -120,10 +120,10 @@ Tools:
 
 Embeddings:
 
-- `src/lib/embeddings/sources/wiki.ts` - the `EmbeddingSource`
-  adapter. The generic worker (`src/lib/embeddings/worker.ts`)
-  picks it up alongside memories, threads, samskara substrate, and
-  journal entries.
+- `supabase/functions/_shared/embed-input.ts` - the `wiki` entry in
+  `EMBED_SOURCES` builds the embed input. The server-side backfill
+  drains it alongside memories, threads, recipes, and samskara
+  substrate.
 
 Per-conversation autonomous agent:
 
@@ -562,9 +562,9 @@ The next claim will reprocess the conversation.
 
 ### Embedding pipeline
 
-`wiki_articles.embedding` is populated by the generic
-embeddings worker. Its source adapter
-(`src/lib/embeddings/sources/wiki.ts`) builds the input
+`wiki_articles.embedding` is populated by the server-side
+embeddings backfill. Its input builder
+(`supabase/functions/_shared/embed-input.ts`) builds the input
 string as `${title}\n\n${content}` (mirroring memories'
 label-and-data shape), truncates content to
 `MAX_WIKI_CONTENT_CHARS = 16000`, and calls

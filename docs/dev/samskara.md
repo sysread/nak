@@ -135,12 +135,13 @@ toast is just a glance cue that the bias model is forming.
   `formatValence` formatters. Unit-tested directly at
   `tests/cohort-panel.test.ts` with plain vitest - no mount, no
   harness.
-- `src/lib/embeddings/sources/samskara-substrate.ts` - registered
-  with the embeddings worker as a third source alongside
-  memories and threads. Polls `samskara_substrate where
-  situation_embedding is null and situation is not null`, embeds
-  via Venice, saves under a guard. Mirrors the memories source
-  exactly.
+- `supabase/functions/_shared/embed-input.ts` - the
+  `samskara-substrate` entry in `EMBED_SOURCES` registers substrate
+  as a third source the server-side embeddings backfill drains
+  alongside memories and threads. The cron-driven backfill claims
+  `samskara_substrate where situation_embedding is null and situation
+  is not null` (via `samskara_claim_next_substrate_embed`), embeds via
+  Venice, and saves under a guard. Mirrors the memories source entry.
 - `src/lib/agents/samskara/agent.ts` - `SamskaraAgent`, a single
   class whose methods correspond to the worker phases:
   `assimilate`, `relate`, `mint`, `classifyReaction`,
@@ -233,11 +234,11 @@ toast is just a glance cue that the bias model is forming.
   and the fast-model id, and subscribes to main-thread auth
   changes so the worker can re-pin rotated tokens.
   `samskaraManager.stop()` in `lock()` tears it down.
-- **Embeddings worker cycle** - the existing worker's
-  round-robin picks up the `samskara-substrate` source
-  automatically. No samskara-specific entry point on that side;
-  the source adapter implements the same `EmbeddingSource`
-  contract memories and threads do.
+- **Embeddings backfill** - the server-side backfill's round-robin
+  picks up the `samskara-substrate` source automatically. No
+  samskara-specific entry point on that side; the `EMBED_SOURCES`
+  registry entry shapes the same claim/build/save flow memories and
+  threads do.
 - **`SAMSKARA_MINT_EVENT` listener** - the `SamskaraToasts`
   component mounted inside `Chat.svelte` listens on `window`
   for `CustomEvent<SamskaraMintEventDetail>` and renders a
@@ -266,7 +267,7 @@ chat time; enriched in the background.
   is a continuous scalar in roughly [-1, 1] capturing emotional
   charge; zero is neutral.
 - `situation_embedding vector(2048)` - null until the
-  embeddings worker fills it from the enriched `situation`
+  embeddings backfill fills it from the enriched `situation`
   text. Padded from 1024-dim Venice native via
   `padEmbeddingForStorage` (see `src/lib/models.ts`).
 - Claim columns for each pending phase: `(embedding_claim_holder,
@@ -437,7 +438,7 @@ workers (45s / 20s).
 ### Worker side (async, fast-model agent calls)
 
 Each phase is a one-row-at-a-time cycle that mirrors the
-embeddings worker's claim -> process -> save shape. Phase
+embeddings backfill's claim -> process -> save shape. Phase
 rotation via `PHASES`: each cycle of the outer worker advances
 exactly one phase; an all-empty rotation triggers the idle
 sleep (60s).
@@ -678,9 +679,9 @@ summarizer reads samskaras to feed the agent.
   `<SamskaraToasts />` component that listens for mint events.
   See `./chat.md`.
 - **Embeddings** - `samskara-substrate` registers as a third
-  source in the existing embeddings worker alongside memories
+  source in the embeddings backfill alongside memories
   and threads. Pure embed work; no LLM calls on that path. The
-  worker's round-robin handles it automatically. See
+  backfill's round-robin handles it automatically. See
   `./embeddings.md`.
 - **Memory** - distinct system. Memories are facts the
   user/assistant chose to commit; samskaras are emergent

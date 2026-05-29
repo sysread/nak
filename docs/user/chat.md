@@ -235,7 +235,7 @@ Controls inside the drawer:
   dropdown here is a within-session override that resets on the
   next open.
 - **Source dropdown** - narrow the feed to a single subsystem tag
-  (e.g. `embed-worker`, `reflection-worker`, `samskara`). The list is
+  (e.g. `reflection-worker`, `summary-worker`, `samskara`). The list is
   built dynamically from the tags actually present in the current
   buffer, so it never offers options that would match nothing. Starts
   at **All sources**; the dropdown is greyed out until at least one

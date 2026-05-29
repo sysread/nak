@@ -72,9 +72,10 @@ later milestone (phase 4).
   `/functions/v1/venice/backfill`. No-ops if the secrets are
   unseeded, so an un-provisioned project simply doesn't backfill.
 - **`handleBackfill` in the function** - authenticates the caller as
-  the service role (bearer must equal the injected
-  `SUPABASE_SERVICE_ROLE_KEY`), then drives `runBackfill` over the
-  five sources, bounded by a batch cap (50 rows) and a time budget
+  the service role by decoding the bearer JWT's `role` claim and
+  requiring `role === 'service_role'` (the gateway's verify_jwt has
+  already validated the signature). It then drives `runBackfill` over
+  the five sources, bounded by a batch cap (50 rows) and a time budget
   (25s) per invocation. The schedule resumes the drain next tick.
 - **`runBackfill(deps, opts)`** - round-robins one claim attempt per
   source per pass; embeds and saves whatever it claims; stops when a
@@ -188,9 +189,11 @@ under the supervisor) still does, importing `LeaseCoordinator` from
   for the query-time consumers to migrate onto later. See
   [the milestone plan](./in-progress/venice-edge-functions/embeddings.md).
 - **Build & deploy** - the `pg_cron`/`pg_net` block and the converted
-  RPCs ship in `schema.sql`, applied by the deploy's `sync-supabase`
-  job. The Vault secrets that authenticate the cron call are seeded
-  once by `mise run supabase-init`. See `./build-deploy.md`.
+  RPCs ship in `schema.sql`, and the `venice` function is deployed,
+  both by the deploy's `sync-supabase` job (the function via a
+  `supabase functions deploy` step). The Vault secrets that
+  authenticate the cron call are seeded once by `mise run
+  supabase-init`. See `./build-deploy.md`.
 - **Edge functions** - `/backfill` is one route on the fat `venice`
   function; `/embed` is its sibling. See
   [the milestone plan](./in-progress/venice-edge-functions/README.md).
