@@ -58,7 +58,10 @@ const DOCUMENT_SEARCH_CHUNK_LIMIT = 60;
 
 let currentAbort: AbortController | null = null;
 
-export async function loadDocumentsFirstPage(supabase: SupabaseService): Promise<void> {
+// Internal: the empty-query browse load. Reached via runDocumentSearch, which
+// routes an empty query here. Not exported - the drawer and tab-pick paths all
+// go through runDocumentSearch.
+async function loadDocumentsFirstPage(supabase: SupabaseService): Promise<void> {
   if (currentAbort) currentAbort.abort();
   documentStore.loading = true;
   documentStore.error = null;
