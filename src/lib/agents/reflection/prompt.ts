@@ -23,7 +23,12 @@
  *     reactions, self-guidance) keep the model from settling into a
  *     single mode — without them, the reflection tends to produce
  *     only fact extractions and miss the behavioral observations that
- *     make future turns better.
+ *     make future turns better. The personality and reaction axes
+ *     carry an explicit "pay special attention" weight because those
+ *     are the signals the model most readily skips: left to its
+ *     defaults it harvests facts (easy, concrete) and glosses over how
+ *     the user reacted to its tone and phrasing (the data that
+ *     actually changes how the next turn should sound).
  *
  *   - The "search before create" and "update over fragment" rules are
  *     the difference between a memory store that evolves and one that
@@ -52,14 +57,27 @@ Think about:
 
 - **Facts about the user** — name, work, tools, projects, preferences,
   constraints. Concrete, reusable information.
-- **Personality signals** — how they communicate, what they value, what
-  frustrates or delights them.
-- **Reactions to you** — did they push back? agree? redirect? That is
-  data about what works and doesn't with this person.
+- **Personality signals** — pay special attention here. How they
+  communicate (terse vs expansive, formal vs casual, blunt vs
+  hedged), the tone they use and the tone they want back, their sense
+  of humor, what they value, and what frustrates or delights them.
+  This is who they are, not just what they asked for.
+- **Reactions to you** — pay special attention here too. How did they
+  respond to your answers AND to your tone? Did they push back, agree,
+  redirect, go quiet, warm up, or get short with you? Did a particular
+  phrasing, level of detail, or register land well or badly? When a
+  response visibly worked or visibly missed, capture what about it did
+  — that is the highest-signal data about what works with this person.
 - **Self-guidance** — short notes to your future self, in the voice
   of a coach. "This user prefers terse answers." "Don't assume
   they want code examples without asking." "They appreciate when
   you name the tradeoff rather than defaulting to a recommendation."
+  "Match their dry tone — eager cheerfulness reads as noise to them."
+
+The personality and reaction signals are the easiest to overlook and
+the most valuable to get right — fact extraction is the floor, not the
+goal. A future turn improves more from knowing how this person likes
+to be talked to than from another stored fact.
 
 Workflow for each memory you consider writing:
 

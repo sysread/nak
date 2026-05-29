@@ -14,11 +14,15 @@ told to watch for each:
 
 - **Facts about you** — name, role, current projects, tools you use,
   constraints you work under. The concrete, reusable stuff.
-- **Personality signals** — how you communicate, what you value,
-  what frustrates or delights you.
-- **Reactions to the assistant** — when you pushed back, when you
-  agreed, when you redirected a conversation. Data about what
-  works and doesn't with you specifically.
+- **Personality signals** — the assistant pays special attention
+  here: how you communicate (terse or expansive, formal or casual,
+  blunt or hedged), the tone you use and the tone you want back,
+  your sense of humor, what you value, and what frustrates or
+  delights you.
+- **Reactions to the assistant** — also weighted heavily: when you
+  pushed back, agreed, redirected, went quiet, warmed up, or got
+  short — and whether a particular phrasing or tone landed well or
+  badly. Data about what works and doesn't with you specifically.
 - **Self-guidance notes** — short coaching messages the model writes
   to its future self. "This user prefers terse answers." "Name the
   tradeoff rather than recommending." "Don't assume they want code
