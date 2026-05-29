@@ -4401,21 +4401,33 @@
     }
   });
 
-  // Streaming deltas — debounced with a max-wait cap. Tracks both the
-  // answer buffer (`activeSlot?.streamingText`) and the reasoning buffer
-  // (`activeSlot?.streamingReasoning`) so the view follows the bottom of the
-  // bubble while the thinking panel is growing, not just after the
-  // answer starts. Also tracks `activeSlot?.streamingReasoningOpen`: the panel
-  // opening or closing causes a vertical layout shift that should
-  // scroll the view exactly the same way a token append would.
-  // `activeSlot?.streamingText` toggling to '' at the end of a round also runs
-  // through here; the follow-up messages effect (assistant persisted)
-  // will cancel the pending timer and do the final snap-to-bottom,
-  // so we don't need a special "stream ended" signal.
+  // Streaming-card height changes - re-pin the bottom (rAF-coalesced via
+  // scheduleStreamScroll). Tracks every signal that grows or shrinks the
+  // streaming card, because each one moves the throbber row sitting below
+  // it and the view has to follow or the throbber slips under the fold:
+  //   - streamingText / streamingReasoning: the answer and thinking
+  //     buffers growing as tokens arrive.
+  //   - streamingReasoningOpen: the reasoning panel opening or closing is
+  //     a vertical layout shift, same as a token append.
+  //   - subconsciousRows: the priming checklist (Reacting / Predicting /
+  //     Recalling) gaining a row or flipping one running -> done. These
+  //     land BEFORE the first answer delta, so without tracking them the
+  //     card grows, shoves the throbber under the fold, and nothing
+  //     scrolls until the reply finally starts - the throbber stays hidden
+  //     through the whole priming window and a stray scroll there reads as
+  //     the user disengaging follow-bottom.
+  //   - subconsciousDismissed: the checklist fading out shrinks the card.
+  //   - rateLimitWaitUntil: the rate-limit wait row appearing or clearing.
+  // streamingText toggling to '' at a round boundary also runs through
+  // here; the discrete persisted-row effect cancels the queued frame and
+  // does the final snap, so there's no special "stream ended" signal.
   $effect(() => {
     void activeSlot?.streamingText;
     void activeSlot?.streamingReasoning;
     void activeSlot?.streamingReasoningOpen;
+    void subconsciousRows;
+    void activeSlot?.subconsciousDismissed;
+    void activeSlot?.rateLimitWaitUntil;
     const el = messagesEl;
     if (!el) return;
     hasOverflow = el.scrollHeight > el.clientHeight + 1;
