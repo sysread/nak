@@ -108,6 +108,8 @@ import { wikiLibrarianSchema } from './wiki_librarian.schema';
 import { docSearchSchema } from './doc_search.schema';
 import { docListSchema } from './doc_list.schema';
 import { docGetSchema } from './doc_get.schema';
+import { docGrepSchema } from './doc_grep.schema';
+import { docReadSchema } from './doc_read.schema';
 import { docCreateSchema } from './doc_create.schema';
 import { docUpdateSchema } from './doc_update.schema';
 import { docDeleteSchema } from './doc_delete.schema';
@@ -255,6 +257,8 @@ const wikiLibrarian = lazyTool(
 const docSearch = lazyTool(docSearchSchema, () => import('./doc_search'), 'docSearch');
 const docList = lazyTool(docListSchema, () => import('./doc_list'), 'docList');
 const docGet = lazyTool(docGetSchema, () => import('./doc_get'), 'docGet');
+const docGrep = lazyTool(docGrepSchema, () => import('./doc_grep'), 'docGrep');
+const docRead = lazyTool(docReadSchema, () => import('./doc_read'), 'docRead');
 const docCreate = lazyTool(docCreateSchema, () => import('./doc_create'), 'docCreate');
 const docUpdate = lazyTool(docUpdateSchema, () => import('./doc_update'), 'docUpdate');
 const docDelete = lazyTool(docDeleteSchema, () => import('./doc_delete'), 'docDelete');
@@ -355,6 +359,8 @@ export const alwaysOnToolbox: Toolbox = {
     docSearch,
     docList,
     docGet,
+    docGrep,
+    docRead,
     researchDocs,
     webSearch,
     updateTitle,

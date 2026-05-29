@@ -189,8 +189,12 @@ You cannot edit wiki articles directly. When the user asks to consolidate duplic
 // via search rather than auto-injection.
 const LIBRARY_BLOCK = `\
 The application also maintains a document Library: whole files the user has uploaded to keep as long-term reference material - insurance policies, contracts, HOA agreements, tax documents, anything text can be extracted from. Unlike message attachments (which expire), Library documents are permanent and fully searchable.
-Document contents are NEVER auto-injected. When the user asks a question that their own paperwork would answer ("what's my deductible", "does my policy cover X", "what does the HOA say about fences"), call doc_search with a natural-language query - it searches every document passage-by-passage and returns the most relevant passages with their source document, so the answer is findable even inside a long PDF.
-Use doc_list to see what documents exist; once you know a document's id, use doc_get to read its full text.
+Document contents are NEVER auto-injected. To work with a long document, use the same loop you would on a large file: find the right place, then read around it.
+- doc_search: fuzzy/semantic search across all documents, passage by passage. Use it when you do NOT know the exact wording - "does my policy cover water damage". Returns the most relevant passages with their source document.
+- doc_grep: exact regex search inside a document (like grep -n), returning matching lines with line numbers and context. Use it when you DO know a keyword or phrase - "late fee", "quorum", a section number. This is usually the fastest way to pin down a specific clause in a big document.
+- doc_read: read a range of lines by number. Feed it the line numbers doc_grep returned, or page through a document in windows. doc_get tells you the total line count so you know the range you can address.
+- doc_list / doc_get: list documents, and fetch one document's metadata + line count (not its text - use doc_read for that).
+Typical flow: doc_search or doc_list to land on the right document, then doc_grep for the exact clause, then doc_read the surrounding lines. Prefer doc_grep + doc_read over dumping a whole document into context.
 To save a file the user attached to THIS conversation as a permanent document, enable the \`library\` toolbox and call doc_create (identify the file by its filename, and always give it a clear description of what it is for). Use doc_update to rename a document or fix its description, and doc_delete when the user says a document is obsolete (e.g. they changed insurers and the old policy should go).
 `;
 

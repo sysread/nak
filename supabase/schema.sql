@@ -7757,6 +7757,154 @@ language sql stable security invoker as $$
    limit match_limit
 $$;
 
+-- Exact regex search over a document's extracted text, with line numbers and a
+-- few lines of context around each hit - the SQL equivalent of `rg -n -C` over
+-- the stored text. This is the deterministic counterpart to the semantic chunk
+-- search above: the chat model uses it to find the precise clause ("late fee",
+-- "quorum", a section heading) once it knows which document to look in, the
+-- same grep-then-read loop a human (or a coding agent) uses on a large file.
+--
+-- The text is split into numbered lines on the fly (regexp_split_to_table WITH
+-- ORDINALITY) so we never store a line index; ordinality restarts per document
+-- via the lateral, so line numbers are per-document and line up with
+-- read_document_lines below. The lines CTE is MATERIALIZED so a 5 MB document's
+-- split runs once rather than once per context lookup. Matching and context all
+-- happen server-side; only the matching snippets cross the wire, never the
+-- whole blob.
+--
+-- p_document_id null means "every document the caller owns" (each hit carries
+-- its own document_id + line). security invoker + the explicit user_id guard
+-- keep it scoped to the caller. An invalid regex raises; the calling tool
+-- rephrases that into actionable text.
+drop function if exists public.grep_documents(text, uuid, boolean, int, int);
+create or replace function public.grep_documents(
+  p_pattern text,
+  p_document_id uuid,
+  p_case_sensitive boolean,
+  p_context int,
+  p_max_matches int
+) returns table (
+  document_id uuid,
+  title text,
+  line_number int,
+  line_text text,
+  context_before text[],
+  context_after text[]
+)
+language sql stable security invoker as $$
+  with docs as (
+    select d.id as document_id, d.title, d.extracted_text
+      from public.documents d
+     where d.user_id = auth.uid()
+       and (p_document_id is null or d.id = p_document_id)
+       and d.extracted_text is not null
+  ),
+  lines as materialized (
+    select docs.document_id, docs.title,
+           t.ln::int as line_number, t.line_content
+      from docs
+      cross join lateral
+        regexp_split_to_table(docs.extracted_text, E'\n')
+        with ordinality as t(line_content, ln)
+  ),
+  matched as (
+    select document_id, title, line_number, line_content
+      from lines
+     where case when p_case_sensitive then line_content ~ p_pattern
+                else line_content ~* p_pattern end
+     order by document_id, line_number
+     limit p_max_matches
+  )
+  select m.document_id, m.title, m.line_number, m.line_content as line_text,
+         coalesce((select array_agg(l.line_content order by l.line_number)
+                     from lines l
+                    where l.document_id = m.document_id
+                      and l.line_number between m.line_number - p_context
+                                           and m.line_number - 1), array[]::text[])
+           as context_before,
+         coalesce((select array_agg(l.line_content order by l.line_number)
+                     from lines l
+                    where l.document_id = m.document_id
+                      and l.line_number between m.line_number + 1
+                                           and m.line_number + p_context), array[]::text[])
+           as context_after
+    from matched m
+   order by m.document_id, m.line_number
+$$;
+
+-- Read a contiguous line range of one document's extracted text, numbered, plus
+-- the document's total line count so the caller knows the address space. The
+-- read half of the grep-then-read loop: the model feeds the line numbers
+-- grep_documents returned straight in. Same per-line split as grep so the line
+-- numbers agree. The calling tool clamps the span so a single read can't ship
+-- the whole document. Empty result = out-of-range range or a doc the caller
+-- doesn't own (RLS).
+drop function if exists public.read_document_lines(uuid, int, int);
+create or replace function public.read_document_lines(
+  p_document_id uuid,
+  p_start int,
+  p_end int
+) returns table (
+  line_number int,
+  content text,
+  total_lines int
+)
+language sql stable security invoker as $$
+  with d as (
+    select d.extracted_text
+      from public.documents d
+     where d.id = p_document_id
+       and d.user_id = auth.uid()
+       and d.extracted_text is not null
+  ),
+  lines as materialized (
+    select t.ln::int as line_number, t.line_content as content
+      from d
+      cross join lateral
+        regexp_split_to_table(d.extracted_text, E'\n')
+        with ordinality as t(line_content, ln)
+  )
+  select l.line_number, l.content, (select count(*)::int from lines)
+    from lines l
+   where l.line_number between p_start and p_end
+   order by l.line_number
+$$;
+
+-- Lightweight "stat" for one document: metadata plus the total line count,
+-- WITHOUT shipping the extracted text. Line count is the newline-count + 1
+-- (length diff, not a row-exploding split) and agrees with the per-line split
+-- the grep/read RPCs use. Powers the doc_get tool, which used to ship a
+-- truncated head of the text - now doc_read owns text retrieval and doc_get is
+-- the cheap overview that tells the model how many lines it can address.
+drop function if exists public.document_stat(uuid);
+create or replace function public.document_stat(p_document_id uuid)
+returns table (
+  id uuid,
+  title text,
+  description text,
+  filename text,
+  mime_type text,
+  size_bytes bigint,
+  extraction_status text,
+  extraction_error text,
+  has_text boolean,
+  total_lines int,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language sql stable security invoker as $$
+  select d.id, d.title, d.description, d.filename, d.mime_type, d.size_bytes,
+         d.extraction_status, d.extraction_error,
+         (d.extracted_text is not null and length(d.extracted_text) > 0) as has_text,
+         case when d.extracted_text is null or length(d.extracted_text) = 0 then 0
+              else length(d.extracted_text)
+                   - length(replace(d.extracted_text, E'\n', '')) + 1 end as total_lines,
+         d.created_at, d.updated_at
+    from public.documents d
+   where d.id = p_document_id
+     and d.user_id = auth.uid()
+$$;
+
 -- Private bucket for the original uploaded files. `public = false` so objects
 -- are only reachable via signed URLs or authenticated download. Insert is
 -- idempotent so re-applying the schema is a no-op once the bucket exists.

@@ -1,37 +1,35 @@
 /**
- * Read a single Library document's metadata and extracted text by id. Returns
- * {found: false} for an unknown id (or one owned by another user - RLS filters
- * it) rather than throwing, matching wiki_get / recipe_get. Long bodies are
- * truncated to the inline cap with a flag so the model knows to fall back to
- * doc_search for the remainder.
+ * Document overview by id: metadata + total line count, without shipping the
+ * extracted text (a multi-MB document would blow the context window). This is
+ * the "stat" call - it tells the model what a document is and how many lines it
+ * can address; doc_read pulls the actual lines and doc_grep finds specific
+ * ones. Returns {found: false} for an unknown id (or one owned by another user
+ * - RLS filters it) rather than throwing, matching wiki_get / recipe_get.
  */
 import type { ToolDef } from './types';
-import { docGetSchema, DOC_GET_MAX_TEXT_CHARS } from './doc_get.schema';
+import { docGetSchema } from './doc_get.schema';
 
 export const docGet: ToolDef = {
   ...docGetSchema,
   async execute(args, ctx) {
     const id = typeof args.id === 'string' ? args.id.trim() : '';
     if (!id) throw new Error('id is required');
-    const doc = await ctx.supabase.getDocumentById(id);
-    if (!doc) return { found: false };
-
-    const full = doc.extracted_text ?? '';
-    const truncated = full.length > DOC_GET_MAX_TEXT_CHARS;
+    const stat = await ctx.supabase.getDocumentStat(id);
+    if (!stat) return { found: false };
     return {
       found: true,
       document: {
-        id: doc.id,
-        title: doc.title,
-        description: doc.description,
-        filename: doc.filename,
-        mime_type: doc.mime_type,
-        size_bytes: doc.size_bytes,
-        extraction_status: doc.extraction_status,
-        text: truncated ? full.slice(0, DOC_GET_MAX_TEXT_CHARS) : full,
-        text_truncated: truncated,
-        created_at: doc.created_at,
-        updated_at: doc.updated_at,
+        id: stat.id,
+        title: stat.title,
+        description: stat.description,
+        filename: stat.filename,
+        mime_type: stat.mime_type,
+        size_bytes: stat.size_bytes,
+        extraction_status: stat.extraction_status,
+        has_text: stat.has_text,
+        total_lines: stat.total_lines,
+        created_at: stat.created_at,
+        updated_at: stat.updated_at,
       },
     };
   },
