@@ -126,6 +126,11 @@ changing a contract that other features depend on.
   behind a Supabase edge function with a project-global key and
   scheduled background generation. Embeddings is the first
   milestone; the other endpoints are skeleton sub-plans.
+- [Attachments storage migration](./in-progress/attachments-storage-migration.md)
+  — move `message_attachments` file bytes off base64-in-Postgres
+  into a private Storage bucket (the `documents` pattern), with
+  signed-URL vision reads and a server-side expiry sweep. One
+  file-storage mechanism instead of two.
 
 ### Future work
 
