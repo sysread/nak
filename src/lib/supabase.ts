@@ -1320,6 +1320,70 @@ function coerceDocumentChunkHit(raw: Record<string, unknown>): DocumentChunkHit 
   };
 }
 
+/**
+ * One hit from `grep_documents`: a matching line with its location and a few
+ * lines of context on either side. The exact-search counterpart to
+ * `DocumentChunkHit` (which is semantic).
+ */
+export interface DocumentGrepHit {
+  document_id: string;
+  title: string;
+  line_number: number;
+  line_text: string;
+  context_before: string[];
+  context_after: string[];
+}
+
+function coerceDocumentGrepHit(raw: Record<string, unknown>): DocumentGrepHit {
+  const toLines = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : String(x ?? ''))) : [];
+  return {
+    document_id: String(raw.document_id),
+    title: typeof raw.title === 'string' ? raw.title : '',
+    line_number: typeof raw.line_number === 'number' ? raw.line_number : Number(raw.line_number ?? 0),
+    line_text: typeof raw.line_text === 'string' ? raw.line_text : '',
+    context_before: toLines(raw.context_before),
+    context_after: toLines(raw.context_after),
+  };
+}
+
+/**
+ * `document_stat` output: a document's metadata plus its total line count,
+ * fetched without shipping the extracted text. Powers the `doc_get` tool.
+ */
+export interface DocumentStat {
+  id: string;
+  title: string;
+  description: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  extraction_status: 'pending' | 'done' | 'failed';
+  extraction_error: string | null;
+  has_text: boolean;
+  total_lines: number;
+  created_at: string;
+  updated_at: string;
+}
+
+function coerceDocumentStat(raw: Record<string, unknown>): DocumentStat {
+  const status = raw.extraction_status;
+  return {
+    id: String(raw.id),
+    title: typeof raw.title === 'string' ? raw.title : '',
+    description: typeof raw.description === 'string' ? raw.description : '',
+    filename: typeof raw.filename === 'string' ? raw.filename : '',
+    mime_type: typeof raw.mime_type === 'string' ? raw.mime_type : '',
+    size_bytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : Number(raw.size_bytes ?? 0),
+    extraction_status: status === 'done' || status === 'failed' ? status : 'pending',
+    extraction_error: typeof raw.extraction_error === 'string' ? raw.extraction_error : null,
+    has_text: raw.has_text === true,
+    total_lines: typeof raw.total_lines === 'number' ? raw.total_lines : Number(raw.total_lines ?? 0),
+    created_at: String(raw.created_at ?? raw.updated_at ?? ''),
+    updated_at: String(raw.updated_at ?? raw.created_at ?? ''),
+  };
+}
+
 export class SupabaseService {
   readonly client: SupabaseClient;
 
@@ -3510,6 +3574,77 @@ export class SupabaseService {
       .createSignedUrl(storagePath, expiresInSeconds);
     if (error) throw new SupabaseError(error.message);
     return data.signedUrl;
+  }
+
+  // Documents exact-search / read helpers --------------------------------
+  //
+  // The deterministic grep-then-read pair, complementing the semantic
+  // searchDocumentChunks. Both run server-side over documents.extracted_text
+  // (see grep_documents / read_document_lines in schema.sql) so a multi-MB
+  // document's text never crosses the wire - only matching snippets or the
+  // requested line range come back.
+
+  /**
+   * Regex search over a document's text (or every document the user owns when
+   * `documentId` is omitted), with line numbers and context. The exact-match
+   * counterpart to `searchDocumentChunks`. An invalid regex surfaces as a
+   * SupabaseError the calling tool rephrases.
+   */
+  async grepDocument(opts: {
+    pattern: string;
+    documentId?: string | null;
+    caseSensitive?: boolean;
+    context?: number;
+    maxMatches?: number;
+  }): Promise<DocumentGrepHit[]> {
+    const { data, error } = await this.client.rpc('grep_documents', {
+      p_pattern: opts.pattern,
+      p_document_id: opts.documentId ?? null,
+      p_case_sensitive: opts.caseSensitive ?? false,
+      p_context: opts.context ?? 2,
+      p_max_matches: opts.maxMatches ?? 50,
+    });
+    if (error) throw new SupabaseError(error.message);
+    return ((data ?? []) as unknown[]).map((row) =>
+      coerceDocumentGrepHit(row as Record<string, unknown>)
+    );
+  }
+
+  /**
+   * Read a contiguous line range of a document, numbered, plus the document's
+   * total line count. Empty `lines` means the range was out of bounds or the
+   * document isn't the caller's (RLS); `totalLines` is 0 in that case.
+   */
+  async readDocumentLines(
+    documentId: string,
+    start: number,
+    end: number
+  ): Promise<{ lines: { line_number: number; content: string }[]; totalLines: number }> {
+    const { data, error } = await this.client.rpc('read_document_lines', {
+      p_document_id: documentId,
+      p_start: start,
+      p_end: end,
+    });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    const lines = rows.map((r) => ({
+      line_number: typeof r.line_number === 'number' ? r.line_number : Number(r.line_number ?? 0),
+      content: typeof r.content === 'string' ? r.content : '',
+    }));
+    const totalLines = rows.length > 0 ? Number(rows[0].total_lines ?? 0) : 0;
+    return { lines, totalLines };
+  }
+
+  /**
+   * Metadata + total line count for one document, without fetching its text.
+   * Returns null for an unknown id or one the caller doesn't own.
+   */
+  async getDocumentStat(id: string): Promise<DocumentStat | null> {
+    const { data, error } = await this.client.rpc('document_stat', { p_document_id: id });
+    if (error) throw new SupabaseError(error.message);
+    const rows = (data ?? []) as Record<string, unknown>[];
+    if (rows.length === 0) return null;
+    return coerceDocumentStat(rows[0]);
   }
 
   /**
