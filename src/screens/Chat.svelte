@@ -4304,82 +4304,69 @@
     }
   }
 
-  // Streaming deltas arrive fast enough that scrolling on every
-  // coalesced paint makes the content rocket off-screen before the
-  // eye can lock onto a word — the view feels like a slot machine.
-  // Debounce the streaming-driven scroll so bursts of tokens settle
-  // into periodic nudges instead of a continuous blur. The max-wait
-  // cap guarantees the view still keeps up with a sustained stream:
-  // no matter how fast the tokens come, a scroll fires at least once
-  // per SCROLL_MAX_WAIT_MS window. Discrete transitions (user sends,
-  // assistant-message commit, thread switch) bypass this path and
-  // scroll immediately — see the $effect below.
-  const SCROLL_DEBOUNCE_MS = 80;
-  const SCROLL_MAX_WAIT_MS = 300;
-  let scrollDebounceTimer = 0;
-  let scrollMaxWaitTimer = 0;
+  // Streaming deltas mutate the transcript fast - answer text in 500ms
+  // gulps (FLUSH_MS), reasoning on every SSE delta (unthrottled).
+  // Coalesce the follow-bottom scroll onto a single requestAnimationFrame:
+  // any number of synchronous mutations within one frame schedule one
+  // scroll, fired on the next frame once the browser has laid the new
+  // content out.
+  //
+  // rAF rather than a setTimeout debounce on purpose. It fires AFTER
+  // layout, so scrollHeight is final and scrollToBottom lands on the true
+  // bottom - the standalone throbber row below the card included - instead
+  // of a stale height captured mid-reflow. And it fires on the very next
+  // frame, so the view never trails the stream by a fixed delay (the old
+  // 80ms debounce was the source of the throbber drifting below the fold
+  // between gulps). One scroll per frame is its own ceiling, so a fast
+  // reasoning stream can't slot-machine the view and there's no separate
+  // max-wait timer to arm. Discrete transitions (user sends,
+  // assistant-message commit, thread switch) bypass this and scroll
+  // immediately - see the $effect below.
+  let streamScrollRaf = 0;
 
-  function cancelScrollTimers(): void {
-    if (scrollDebounceTimer !== 0) {
-      clearTimeout(scrollDebounceTimer);
-      scrollDebounceTimer = 0;
+  function cancelStreamScroll(): void {
+    if (streamScrollRaf !== 0) {
+      cancelAnimationFrame(streamScrollRaf);
+      streamScrollRaf = 0;
     }
-    if (scrollMaxWaitTimer !== 0) {
-      clearTimeout(scrollMaxWaitTimer);
-      scrollMaxWaitTimer = 0;
-    }
-  }
-
-  function firePendingStreamScroll(): void {
-    cancelScrollTimers();
-    // Re-check both gates at fire time. The user may have scrolled up
-    // while the timer was pending, and the completion may have ended
-    // between schedule and fire (max-wait of 300ms can outlive the
-    // final round of streaming) - either condition disables auto-scroll.
-    // refreshFollowBottom guards against the mobile case where the
-    // user dragged up without a 'scroll' event firing in time.
-    refreshFollowBottom();
-    if (activeSlot?.sending && followBottom) scrollToBottom(false);
   }
 
   function scheduleStreamScroll(): void {
     refreshFollowBottom();
     if (!activeSlot?.sending || !followBottom) {
       // Auto-scroll only runs while a completion is in progress and
-      // scroll-lock isn't engaged. Drop any pending scrolls so a stale
-      // timer doesn't yank the view after the user scrolls up or after
+      // scroll-lock isn't engaged. Drop any queued frame so a stale
+      // scroll doesn't yank the view after the user scrolls up or after
       // the completion ends.
-      cancelScrollTimers();
+      cancelStreamScroll();
       return;
     }
-    if (scrollDebounceTimer !== 0) clearTimeout(scrollDebounceTimer);
-    scrollDebounceTimer = window.setTimeout(
-      firePendingStreamScroll,
-      SCROLL_DEBOUNCE_MS
-    );
-    // Max-wait ceiling: armed on the first scheduled scroll of a
-    // streaming burst and only reset when a scroll actually fires.
-    // Without this, a rapid-enough stream would reset the debounce
-    // timer forever and the view would never catch up.
-    if (scrollMaxWaitTimer === 0) {
-      scrollMaxWaitTimer = window.setTimeout(
-        firePendingStreamScroll,
-        SCROLL_MAX_WAIT_MS
-      );
-    }
+    // A frame is already queued this tick - let it coalesce the burst.
+    if (streamScrollRaf !== 0) return;
+    streamScrollRaf = requestAnimationFrame(() => {
+      streamScrollRaf = 0;
+      // Re-check both gates at fire time. The user may have scrolled up
+      // between schedule and frame, and the completion may have ended in
+      // that gap (the persisted-row effect cancels this frame, but one
+      // already dispatched can still run) - either disables auto-scroll.
+      // refreshFollowBottom also guards the mobile case where the user
+      // dragged up without a 'scroll' event firing in time.
+      refreshFollowBottom();
+      if (activeSlot?.sending && followBottom) scrollToBottom(false);
+    });
   }
 
   // Two separate effects so streaming deltas and discrete message-list
   // mutations can drive different scroll policies. Splitting them is
-  // the simplest way to get "debounce tokens, snap on commits" without
-  // prev-value bookkeeping inside a single effect.
+  // the simplest way to get "coalesce tokens onto a frame, snap on
+  // commits" without prev-value bookkeeping inside a single effect.
 
   // Rendered-transcript mutations during an active completion - user
   // send, assistant-persist, regenerate-drop. These mark a clean
   // transition and should land the view on the bottom immediately.
-  // Firing here also supersedes any pending streaming debounce: the
+  // Firing here also supersedes any queued streaming frame: the
   // commit we just observed is the latest state, so a stale
-  // late-firing timer would just flicker.
+  // late-firing scroll would just flicker.
   //
   // Tracks `messageBlocks` (the derived render list) rather than raw
   // `messages` so non-message render blocks (e.g. the rename
@@ -4401,7 +4388,7 @@
     const el = messagesEl;
     if (!el) return;
     hasOverflow = el.scrollHeight > el.clientHeight + 1;
-    cancelScrollTimers();
+    cancelStreamScroll();
     // refreshFollowBottom: this effect fires synchronously off the
     // assistant-persist appendMessage, which on mobile can happen
     // while the user has a finger down dragging up to read - the
