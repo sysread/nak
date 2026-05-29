@@ -129,6 +129,7 @@
   type CookbookComponent = typeof import('./Cookbook.svelte').default;
   type MemoriesComponent = typeof import('./Memories.svelte').default;
   type WikiComponent = typeof import('./Wiki.svelte').default;
+  type LibraryComponent = typeof import('./Library.svelte').default;
   type SettingsComponent = typeof import('./Settings.svelte').default;
   type HelpComponent = typeof import('./Help.svelte').default;
   type SamskaraComponent = typeof import('./Samskara.svelte').default;
@@ -136,6 +137,7 @@
   type BiasProfileComponent = typeof import('./BiasProfile.svelte').default;
   type RecallComponent = typeof import('./Recall.svelte').default;
   import WikiList from '../components/WikiList.svelte';
+  import LibraryList from '../components/LibraryList.svelte';
   import IntuitionPill from '../components/IntuitionPill.svelte';
   import BiasPill from '../components/BiasPill.svelte';
   import RecallPill from '../components/RecallPill.svelte';
@@ -155,6 +157,11 @@
     runWikiSearch,
   } from '$lib/wiki-store.svelte';
   import { onWikiChange } from '$lib/wiki-events';
+  import {
+    documentStore,
+    runDocumentSearch,
+  } from '$lib/documents-store.svelte';
+  import { onDocumentChange } from '$lib/document-events';
   import { wikiLibrarianRunner } from '$lib/agents/wiki-librarian/runner.svelte';
   import { deepSleepRunner } from '$lib/agents/deep-sleep/runner.svelte';
   import { remRunner } from '$lib/agents/rem/runner.svelte';
@@ -265,6 +272,7 @@
   let CookbookComp: CookbookComponent | null = $state(null);
   let MemoriesComp: MemoriesComponent | null = $state(null);
   let WikiComp: WikiComponent | null = $state(null);
+  let LibraryComp: LibraryComponent | null = $state(null);
   let SettingsComp: SettingsComponent | null = $state(null);
   let HelpComp: HelpComponent | null = $state(null);
   let SamskaraComp: SamskaraComponent | null = $state(null);
@@ -303,6 +311,9 @@
   $effect(() => {
     if (drawerTab === 'wiki' && !WikiComp) {
       void import('./Wiki.svelte').then((m) => (WikiComp = m.default));
+    }
+    if (drawerTab === 'library' && !LibraryComp) {
+      void import('./Library.svelte').then((m) => (LibraryComp = m.default));
     }
   });
   $effect(() => {
@@ -428,7 +439,7 @@
    * replaceState so a tab flip doesn't fill history with UI-chrome
    * entries.
    */
-  const drawerTab = $derived<'chats' | 'recipes' | 'memories' | 'wiki'>(
+  const drawerTab = $derived<'chats' | 'recipes' | 'memories' | 'wiki' | 'library'>(
     route.drawer ?? 'chats'
   );
   // Recipe and memory search/listing state has moved to the
@@ -467,6 +478,16 @@
     }
   }
 
+  // Library drawer tab. Same lazy-load shape as wiki - LibraryList's $effect
+  // fires the first search via the shared `documentStore`, but kicking it on
+  // tab-pick lets a deep-linked panel land on a non-empty listing.
+  function onPickLibraryTab(): void {
+    navigate({ drawer: 'library' }, { replace: true });
+    if (app.supabase && !documentStore.loaded && !documentStore.loading) {
+      void runDocumentSearch(app.supabase, app.venice);
+    }
+  }
+
   // When the user (or a popstate pop) lands on `?drawer=recipes`
   // without having gone through onPickRecipesTab, still make sure the
   // recipe list is fetched so the drawer isn't blank.
@@ -498,6 +519,15 @@
     void runWikiSearch(app.supabase, app.venice);
   });
 
+  // Parallel for the library tab. Same `loaded`-gate rationale - a cold
+  // Library would re-fire the load forever otherwise.
+  $effect(() => {
+    if (route.drawer !== 'library') return;
+    if (!app.supabase) return;
+    if (documentStore.loaded || documentStore.loading) return;
+    void runDocumentSearch(app.supabase, app.venice);
+  });
+
   // Wiki cross-surface change channel. The chat-side wiki_* tool calls
   // and the autonomous wiki worker both fire WIKI_CHANGE_EVENT after a
   // write; refresh the drawer's listing so the new/updated row shows
@@ -506,6 +536,15 @@
     if (!app.supabase) return;
     if (!wikiStore.loaded) return;
     void runWikiSearch(app.supabase, app.venice);
+  }
+
+  // Library cross-surface change channel. The chat-side doc_* tool calls and
+  // the Library panel's own uploads/edits/deletes fire DOCUMENT_CHANGE_EVENT;
+  // refresh the drawer listing so the change shows without navigating away.
+  function onDocumentStoreChanged(): void {
+    if (!app.supabase) return;
+    if (!documentStore.loaded) return;
+    void runDocumentSearch(app.supabase, app.venice);
   }
 
   function onCookbookStoreChanged(): void {
@@ -1706,10 +1745,12 @@
     // fresh unlock that never opened those tabs stays lazy.
     const offCookbook = onCookbookChange(onCookbookStoreChanged);
     const offWiki = onWikiChange(onWikiStoreChanged);
+    const offDocuments = onDocumentChange(onDocumentStoreChanged);
     return () => {
       unsubscribe();
       offCookbook();
       offWiki();
+      offDocuments();
     };
   });
 
@@ -5469,6 +5510,16 @@
               onclick={() => onPickWikiTab()}
             >Wiki</button>
           </div>
+          <div class="row thread-row">
+            <button
+              type="button"
+              role="tab"
+              class="thread grow"
+              class:active={drawerTab === 'library'}
+              aria-selected={drawerTab === 'library'}
+              onclick={() => onPickLibraryTab()}
+            >Library</button>
+          </div>
         </div>
       </header>
       {#if drawerTab === 'chats'}
@@ -5705,11 +5756,16 @@
         {#if MemoryListComp}
           <MemoryListComp onSelect={closeDrawerOnMobile} />
         {/if}
-      {:else}
+      {:else if drawerTab === 'wiki'}
         <!-- Wiki tab. WikiList owns the search and alphabetical
              listing. Clicking an article surfaces it in the main
              panel. onSelect mirrors the other tabs on mobile. -->
         <WikiList onSelect={closeDrawerOnMobile} />
+      {:else}
+        <!-- Library tab. LibraryList owns the search and newest-first
+             listing. Clicking a document surfaces it in the main panel.
+             onSelect mirrors the other tabs on mobile. -->
+        <LibraryList onSelect={closeDrawerOnMobile} />
       {/if}
       <footer>
         <div class="subtle" style="margin-bottom:0.4rem;font-size:0.8rem">
@@ -5994,7 +6050,7 @@
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Memories</span>
           </div>
-        {:else}
+        {:else if drawerTab === 'wiki'}
           <!-- Wiki top-bar. No top-bar new-article button - the create
                affordance lives inline on the empty-state hint in
                Wiki.svelte, mirroring how Memories handles the same
@@ -6044,10 +6100,18 @@
           <div class="title-wrap">
             <span class="title-btn panel-section-label">Wiki</span>
           </div>
+        {:else}
+          <!-- Library top-bar. The upload affordance lives inline in
+               Library.svelte's panel (mirroring how Memories / Wiki put
+               their create affordance inline), so the chrome here is just
+               the static section label. -->
+          <div class="title-wrap">
+            <span class="title-btn panel-section-label">Library</span>
+          </div>
         {/if}
         <!-- Logs drawer toggle. Lives outside the per-tab branches so it
              appears as the trailing top-bar action on chats, recipes,
-             memories, and wiki alike - the in-app log viewer is a
+             memories, wiki, and library alike - the in-app log viewer is a
              cross-cutting tool, not chat-specific. Document-glyph icon
              reads as "open the reading panel" rather than "new document".
              Wired to the logsDrawer rune singleton; the LogsDrawer
@@ -7317,7 +7381,7 @@
             bind:triggerChangelog={memoriesChangelogTrigger}
           />
         {/if}
-      {:else}
+      {:else if drawerTab === 'wiki'}
         <!-- Wiki panel. Same inline-no-modal-chrome shape. The sidebar
              WikiList shares the same `wikiStore` so a search keystroke
              filters both surfaces. Edit / delete / "ask agent to
@@ -7333,6 +7397,14 @@
             bind:triggerChangelogView={wikiChangelogTrigger}
             bind:triggerSkippedView={wikiSkippedTrigger}
           />
+        {/if}
+      {:else}
+        <!-- Library panel. Inline, no modal chrome. The sidebar LibraryList
+             shares the same `documentStore` so a search keystroke filters
+             both surfaces. Upload / edit description / delete happen inline;
+             selecting a document (route.document_id) shows its detail. -->
+        {#if LibraryComp}
+          <LibraryComp />
         {/if}
       {/if}
     </main>

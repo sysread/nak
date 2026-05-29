@@ -134,7 +134,7 @@ export interface IngestDocumentDeps {
 export async function ingestDocument(
   args: { title: string; description?: string; file: File },
   deps: IngestDocumentDeps
-): Promise<void> {
+): Promise<string> {
   const { supabase, venice } = deps;
   const { file } = args;
   const mimeType = file.type || 'application/octet-stream';
@@ -165,6 +165,7 @@ export async function ingestDocument(
     const reason = err instanceof Error ? err.message : String(err);
     await supabase.setDocumentExtraction(doc.id, { status: 'failed', error: reason });
   }
+  return doc.id;
 }
 
 export interface SearchDocumentsDeps {

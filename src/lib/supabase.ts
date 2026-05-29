@@ -3316,6 +3316,35 @@ export class SupabaseService {
   }
 
   /**
+   * Fetch several documents by id in one round-trip, returned in the order of
+   * the input ids (PostgREST `in` returns arbitrary order, so we re-sort).
+   * Used by the Library drawer to resolve passage-search hits (which carry
+   * document ids) back to full document rows in relevance order. Unknown ids
+   * are silently dropped.
+   */
+  async getDocumentsByIds(ids: readonly string[]): Promise<Document[]> {
+    if (ids.length === 0) return [];
+    const { data, error } = await this.client
+      .from('documents')
+      .select(
+        'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
+      )
+      .in('id', ids);
+    if (error) throw new SupabaseError(error.message);
+    const byId = new Map<string, Document>();
+    for (const row of data ?? []) {
+      const doc = coerceDocument(row as Record<string, unknown>);
+      byId.set(doc.id, doc);
+    }
+    const out: Document[] = [];
+    for (const id of ids) {
+      const doc = byId.get(id);
+      if (doc) out.push(doc);
+    }
+    return out;
+  }
+
+  /**
    * Patch a document's user-editable metadata (title, description). The
    * extracted body and chunks are bound to the original file and are not
    * editable here - replacing content means re-uploading the file.
