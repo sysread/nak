@@ -305,7 +305,7 @@
   $effect(() => {
     if (!app.supabase) return;
     if (memoriesStore.loaded || memoriesStore.loading) return;
-    void runMemoriesSearch(app.supabase, app.venice);
+    void runMemoriesSearch(app.supabase);
   });
 
   /**
@@ -435,7 +435,6 @@
     try {
       const hits = await searchMemoriesSemantic(q, 10, {
         supabase: app.supabase,
-        venice: app.venice,
         signal: ctl.signal,
       });
       if (ctl.signal.aborted) return;
@@ -954,7 +953,7 @@
   onDestroy(
     onMemoryChange(() => {
       if (!app.supabase) return;
-      void runMemoriesSearch(app.supabase, app.venice);
+      void runMemoriesSearch(app.supabase);
     })
   );
 </script>

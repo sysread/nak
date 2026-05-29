@@ -1388,7 +1388,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       getCompoundSummary(supabase),
       trackSubconscious(
         'samskara',
-        fireSamskaras(supabase, venice, thread.id, currentUserRound, userText, signal)
+        fireSamskaras(supabase, thread.id, currentUserRound, userText, signal)
       ),
     ]);
     const { compound, fire } = formatPrimingThinks({
@@ -1531,7 +1531,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
             'recall',
             withContextRecallInflight(thread.id, () =>
               runContextRecallPipeline({
-                venice,
                 supabase,
                 threadId: thread.id,
                 userId,
@@ -2158,7 +2157,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
                 'recall',
                 withContextRecallInflight(thread.id, () =>
                   runContextRecallPipeline({
-                    venice,
                     supabase,
                     threadId: thread.id,
                     userId,

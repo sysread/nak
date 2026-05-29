@@ -58,7 +58,6 @@ export const contextTool: ToolDef = {
     const startedAt = Date.now();
 
     const index = await gatherContextIndex({
-      venice: ctx.venice,
       supabase: ctx.supabase,
       threadId: ctx.threadId,
       signal: ctx.signal,

@@ -77,6 +77,10 @@ interface MockSupabase {
   searchMemories: ReturnType<typeof vi.fn>;
   searchMemoriesByEmbedding: ReturnType<typeof vi.fn>;
   searchUnembeddedMemoriesByText: ReturnType<typeof vi.fn>;
+  // memory_search / fireSamskaras embed the query via SupabaseService.embed.
+  // Absent by default so searches degrade to the text path (searchMemories);
+  // tests that exercise the vector path supply it as an override.
+  embed?: ReturnType<typeof vi.fn>;
   // Context-recall gather reads the conversation + wiki layers through
   // these (see src/lib/context-recall/gather.ts). Defaults return
   // empty so threads with no matching history produce an empty index.
@@ -1410,8 +1414,12 @@ describe('runChatLoop', () => {
       [{ type: 'text', delta: 'You have a cat named Whiskers.' }],
     ]);
     const { svc, mocks, messagesOut } = mockSupabase({
-      // memory_search with a non-empty query now runs vector search;
-      // route the hit through the embedding-backed path.
+      // memory_search with a non-empty query embeds via the function then runs
+      // vector search; supply the embed and route the hit through the
+      // embedding-backed path.
+      embed: vi.fn(async () => ({
+        data: [{ index: 0, embedding: new Array(1024).fill(0) }],
+      })),
       searchMemoriesByEmbedding: vi.fn(async () => [
         { id: 'mem-1', label: 'cat', data: 'Whiskers', created_at: 't', updated_at: 't' },
       ]),

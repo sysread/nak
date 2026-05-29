@@ -18,12 +18,10 @@
  */
 
 import type { SupabaseService, WikiArticle } from './supabase';
-import type { VeniceClient } from './venice';
 import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from './models';
 
 export interface SearchWikiDeps {
   supabase: SupabaseService;
-  venice: VeniceClient | null;
   signal?: AbortSignal;
   /**
    * Sole-source exclusion. When set, drop any article whose ONLY row
@@ -79,7 +77,7 @@ export async function searchWikiArticlesSemantic(
   limit: number,
   deps: SearchWikiDeps,
 ): Promise<WikiArticle[]> {
-  const { supabase, venice, signal, excludeSoleSourceThreadId } = deps;
+  const { supabase, signal, excludeSoleSourceThreadId } = deps;
   const trimmed = query.trim();
   const filtering =
     typeof excludeSoleSourceThreadId === 'string' &&
@@ -100,17 +98,10 @@ export async function searchWikiArticlesSemantic(
       queryEmbedding: null,
       limit: fetchLimit,
     });
-  } else if (!venice) {
-    // No Venice client: ILIKE-only.
-    rows = await supabase.searchWikiArticles({
-      query: trimmed,
-      queryEmbedding: null,
-      limit: fetchLimit,
-    });
   } else {
     let rawEmbedding: number[] | undefined;
     try {
-      const response = await venice.embed({
+      const response = await supabase.embed({
         model: VENICE_EMBEDDING_MODEL,
         input: trimmed,
         signal,

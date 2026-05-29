@@ -54,7 +54,7 @@
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
       if (!app.supabase) return;
-      void runMemoriesSearch(app.supabase, app.venice);
+      void runMemoriesSearch(app.supabase);
     }, SEARCH_DEBOUNCE_MS);
     return () => {
       if (debounceTimer !== null) {
@@ -91,7 +91,7 @@
     const _sel = memoriesStore.selectedTopics;
     void _sel;
     if (!app.supabase) return;
-    void runMemoriesSearch(app.supabase, app.venice);
+    void runMemoriesSearch(app.supabase);
   });
 
   function setTopics(next: string[]): void {

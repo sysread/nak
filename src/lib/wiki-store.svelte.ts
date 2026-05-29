@@ -14,7 +14,6 @@ import {
   type SupabaseService,
   type WikiArticle,
 } from './supabase';
-import type { VeniceClient } from './venice';
 import { emitWikiChange } from './wiki-events';
 import { searchWikiArticlesSemantic } from './wiki';
 
@@ -135,7 +134,6 @@ export async function loadMoreWiki(
  */
 export async function runWikiSearch(
   supabase: SupabaseService,
-  venice: VeniceClient | null,
 ): Promise<void> {
   if (wikiStore.query.trim().length === 0) {
     return loadWikiFirstPage(supabase);
@@ -149,7 +147,7 @@ export async function runWikiSearch(
     const hits = await searchWikiArticlesSemantic(
       wikiStore.query.trim(),
       WIKI_LIST_LIMIT,
-      { supabase, venice, signal: ctl.signal },
+      { supabase, signal: ctl.signal },
     );
     if (ctl.signal.aborted) return;
     wikiStore.results = hits;

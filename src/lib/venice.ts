@@ -1090,29 +1090,6 @@ export class VeniceClient {
     return { imageBase64: first, mimeType: `image/${format}` };
   }
 
-  async embed(req: EmbeddingRequest): Promise<EmbeddingResponse> {
-    let res: Response;
-    try {
-      res = await this.fetchImpl(`${this.baseUrl}/embeddings`, {
-        method: 'POST',
-        headers: this.headers(),
-        body: JSON.stringify({ model: req.model, input: req.input }),
-        signal: req.signal,
-      });
-    } catch (err) {
-      throw new VeniceError(
-        `Network error contacting Venice: ${(err as Error).message}`,
-        'network'
-      );
-    }
-    if (!res.ok) throw await this.classifyError(res);
-    try {
-      return (await res.json()) as EmbeddingResponse;
-    } catch {
-      throw new VeniceError('Failed to parse Venice embedding response.', 'parse');
-    }
-  }
-
   /**
    * Extract readable text from a user-uploaded file via Venice's
    * `POST /augment/text-parser` endpoint. Used at attachment-upload

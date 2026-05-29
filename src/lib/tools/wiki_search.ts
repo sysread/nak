@@ -40,7 +40,6 @@ export const wikiSearch: ToolDef = {
 
     const rows = await searchWikiArticlesSemantic(query, limit, {
       supabase: ctx.supabase,
-      venice: ctx.venice,
       signal: ctx.signal,
       excludeSoleSourceThreadId: ctx.wikiExcludeOwnThreadSoleSources
         ? ctx.threadId

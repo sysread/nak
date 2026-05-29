@@ -13,8 +13,9 @@
  *     leaves the search call unfiltered.
  *
  * Both layers go through plain mocks of SupabaseService - the ILIKE
- * fallback path is taken by passing `venice: null` (no embed
- * round-trip needed for the filter logic this file pins).
+ * fallback path is taken because the mock has no `embed`, so the query
+ * embed throws and the search degrades (no embed round-trip is needed
+ * for the filter logic this file pins).
  */
 import { describe, it, expect, vi } from 'vitest';
 import { searchWikiArticlesSemantic } from '../src/lib/wiki';
@@ -53,7 +54,6 @@ describe('searchWikiArticlesSemantic sole-source filter', () => {
 
     const out = await searchWikiArticlesSemantic('q', 10, {
       supabase,
-      venice: null,
     });
 
     expect(out.map((a) => a.id)).toEqual(['a1', 'a2']);
@@ -76,7 +76,6 @@ describe('searchWikiArticlesSemantic sole-source filter', () => {
 
     const out = await searchWikiArticlesSemantic('q', 10, {
       supabase,
-      venice: null,
       excludeSoleSourceThreadId: 't-current',
     });
 
@@ -92,7 +91,6 @@ describe('searchWikiArticlesSemantic sole-source filter', () => {
 
     const out = await searchWikiArticlesSemantic('q', 10, {
       supabase,
-      venice: null,
       excludeSoleSourceThreadId: 't-current',
     });
 
@@ -110,7 +108,6 @@ describe('searchWikiArticlesSemantic sole-source filter', () => {
 
     const out = await searchWikiArticlesSemantic('q', 10, {
       supabase,
-      venice: null,
       excludeSoleSourceThreadId: 't-current',
     });
 
@@ -132,7 +129,6 @@ describe('searchWikiArticlesSemantic sole-source filter', () => {
 
     const out = await searchWikiArticlesSemantic('q', 2, {
       supabase,
-      venice: null,
       excludeSoleSourceThreadId: 't-current',
     });
 

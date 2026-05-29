@@ -61,7 +61,6 @@ export interface CycleContext {
  */
 export async function buildBatchForSeed(
   supabase: SupabaseService,
-  venice: VeniceClient,
   seed: {
     id: string;
     label: string;
@@ -76,7 +75,7 @@ export async function buildBatchForSeed(
   // cheap - the bge-m3 model's input is bounded by the memory's
   // 8000-char data cap, well under the model's window.
   const probe = `${seed.label}: ${seed.data}`.slice(0, 8000);
-  const response = await venice.embed({
+  const response = await supabase.embed({
     model: VENICE_EMBEDDING_MODEL,
     input: probe,
     signal,
@@ -166,7 +165,7 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
 
   let batch: DeepSleepMemoryRow[];
   try {
-    batch = await buildBatchForSeed(ctx.supabase, ctx.venice, seed, ctx.signal);
+    batch = await buildBatchForSeed(ctx.supabase, seed, ctx.signal);
   } catch (err) {
     log.info(
       `failed to build deep-sleep batch: ${err instanceof Error ? err.message : String(err)}`

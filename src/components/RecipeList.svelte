@@ -83,9 +83,9 @@
     searchError = null;
     try {
       let queryEmbedding: number[] | null = null;
-      if (app.venice) {
+      if (app.supabase) {
         try {
-          const resp = await app.venice.embed({
+          const resp = await app.supabase.embed({
             model: VENICE_EMBEDDING_MODEL,
             input: q,
             signal: ctl.signal,

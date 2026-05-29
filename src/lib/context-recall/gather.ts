@@ -37,7 +37,6 @@
  * targeted drill-down tier; this module is the cheap survey tier. That
  * divergence is deliberate - see docs/dev/context-recall.md.
  */
-import type { VeniceClient } from '../venice';
 import type { SupabaseService, Message } from '../supabase';
 import {
   searchMemoriesSemantic,
@@ -92,7 +91,6 @@ export const CONTEXT_WIKI_LIMIT = 3;
 const MAX_RECALL_QUERY_CHARS = 4000;
 
 export interface GatherContextInputs {
-  venice: VeniceClient;
   supabase: SupabaseService;
   /** Thread we're recalling for. Used to read messages when no explicit
    *  query is passed, and to exclude the current thread / its sole-
@@ -163,7 +161,7 @@ export function deriveRecallQuery(messages: Message[]): string {
 export async function gatherContextIndex(
   inputs: GatherContextInputs
 ): Promise<ContextIndex> {
-  const { venice, supabase, threadId, signal } = inputs;
+  const { supabase, threadId, signal } = inputs;
   const empty: ContextIndex = { memories: [], conversations: [], wiki: [] };
   if (signal.aborted) return empty;
 
@@ -187,9 +185,9 @@ export async function gatherContextIndex(
   // very large opening message on a brand-new thread, where the
   // cold-start trigger fires recall and one layer's search threw.
   const [memoriesR, conversationsR, wikiR] = await Promise.allSettled([
-    gatherMemories(query, { supabase, venice, signal }),
-    gatherConversations(query, threadId, { venice, supabase, signal }),
-    gatherWiki(query, threadId, { supabase, venice, signal }),
+    gatherMemories(query, { supabase, signal }),
+    gatherConversations(query, threadId, { supabase, signal }),
+    gatherWiki(query, threadId, { supabase, signal }),
   ]);
 
   if (memoriesR.status === 'rejected')
@@ -209,7 +207,7 @@ export async function gatherContextIndex(
 
 async function gatherMemories(
   query: string,
-  deps: { supabase: SupabaseService; venice: VeniceClient; signal: AbortSignal }
+  deps: { supabase: SupabaseService; signal: AbortSignal }
 ): Promise<ContextIndexMemory[]> {
   const rows = await searchMemoriesSemantic(query, CONTEXT_MEMORY_LIMIT, deps);
   return rows.map((m) => ({
@@ -223,7 +221,7 @@ async function gatherMemories(
 async function gatherWiki(
   query: string,
   threadId: string,
-  deps: { supabase: SupabaseService; venice: VeniceClient; signal: AbortSignal }
+  deps: { supabase: SupabaseService; signal: AbortSignal }
 ): Promise<ContextIndexRef[]> {
   // Exclude articles whose only source is THIS thread, so a thread does
   // not recall its own synthesised article back at itself - same
@@ -238,13 +236,13 @@ async function gatherWiki(
 async function gatherConversations(
   query: string,
   threadId: string,
-  deps: { venice: VeniceClient; supabase: SupabaseService; signal: AbortSignal }
+  deps: { supabase: SupabaseService; signal: AbortSignal }
 ): Promise<ContextIndexRef[]> {
-  const { venice, supabase, signal } = deps;
+  const { supabase, signal } = deps;
 
   let queryEmbedding: number[] | null = null;
   try {
-    const response = await venice.embed({
+    const response = await supabase.embed({
       model: VENICE_EMBEDDING_MODEL,
       input: query,
       signal,

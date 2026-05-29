@@ -25,7 +25,6 @@
  */
 
 import type { SupabaseService, Memory } from './supabase';
-import type { VeniceClient } from './venice';
 import { UNTAGGED_TOPIC_SENTINEL } from './supabase';
 import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from './models';
 
@@ -104,7 +103,6 @@ export function formatMemoryConfidenceTag(confidence: number): string {
 
 export interface SearchMemoriesDeps {
   supabase: SupabaseService;
-  venice: VeniceClient | null;
   signal?: AbortSignal;
   /**
    * Optional topic filter from the Memories drawer's TopicsFilter.
@@ -151,21 +149,20 @@ export async function searchMemoriesSemantic(
   limit: number,
   deps: SearchMemoriesDeps,
 ): Promise<Memory[]> {
-  const { supabase, venice, signal, selectedTopics = [] } = deps;
+  const { supabase, signal, selectedTopics = [] } = deps;
 
   // Empty query: list everything most-recent-first. Matches the
   // assistant-facing tool's "leave `query` empty to list every
   // memory" contract.
   if (query.length === 0) return supabase.searchMemories('', limit, selectedTopics);
 
-  // No Venice client configured (e.g. the user hasn't entered a key
-  // yet, or we're in an offline test). Straight to ILIKE; the user
-  // still gets substring matches.
-  if (!venice) return supabase.searchMemories(query, limit, selectedTopics);
-
+  // Embed the query through the venice edge function (SupabaseService.embed).
+  // A failure - no shared key configured, function/Venice unreachable - falls
+  // to the ILIKE path in the catch below, so the user still gets substring
+  // matches without a hard error.
   let rawEmbedding: number[] | undefined;
   try {
-    const response = await venice.embed({
+    const response = await supabase.embed({
       model: VENICE_EMBEDDING_MODEL,
       input: query,
       signal,

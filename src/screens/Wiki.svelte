@@ -134,11 +134,11 @@
   $effect(() => {
     if (!app.supabase) return;
     if (!wikiStore.loaded && !wikiStore.loading) {
-      void runWikiSearch(app.supabase, app.venice);
+      void runWikiSearch(app.supabase);
     }
     const off = onWikiChange(() => {
       if (!app.supabase) return;
-      void runWikiSearch(app.supabase, app.venice);
+      void runWikiSearch(app.supabase);
     });
     return () => off();
   });

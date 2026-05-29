@@ -492,7 +492,7 @@ async function runMintTier1Phase(ctx: CycleContext): Promise<CycleResult> {
   // Embed the prediction so future fire queries can match against it.
   let predEmbedding: number[];
   try {
-    const resp = await ctx.venice.embed({
+    const resp = await ctx.supabase.embed({
       model: VENICE_EMBEDDING_MODEL,
       input: minted.prediction,
       signal: ctx.signal,

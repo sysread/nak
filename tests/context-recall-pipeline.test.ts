@@ -33,7 +33,6 @@ import {
   type ContextIndex,
 } from '../src/lib/context-recall/gather';
 import { _clearContextRecallInflightForTests } from '../src/lib/context-recall/cache';
-import type { VeniceClient } from '../src/lib/venice';
 import type {
   SupabaseService,
   Message,
@@ -89,15 +88,10 @@ function wikiArt(id: string, title: string): WikiArticle {
   return { id, title, content: 'body' } as unknown as WikiArticle;
 }
 
-/** Venice whose embed always throws - drives every search helper down
- *  its no-embedding text-search fallback so the test only has to mock
- *  the text-path Supabase methods. gatherContextIndex assembles the
- *  same way regardless of which search path the layers take. */
-const veniceNoEmbed = {
-  embed: vi.fn(async () => {
-    throw new Error('offline');
-  }),
-} as unknown as VeniceClient;
+// The gather helpers embed via SupabaseService.embed; the mocks below omit it,
+// so the query embed throws and every layer degrades to its no-embedding
+// text-search path. gatherContextIndex assembles the same way regardless of
+// which path the layers take, which is what these tests pin.
 
 function gatherSupabase(opts: {
   messages?: Message[];
@@ -258,7 +252,6 @@ describe('gatherContextIndex', () => {
       wiki: [wikiArt('w1', 'The herb garden')],
     });
     const out = await gatherContextIndex({
-      venice: veniceNoEmbed,
       supabase,
       threadId: 't-1',
       signal,
@@ -276,7 +269,6 @@ describe('gatherContextIndex', () => {
       threads: [threadHit('t-1', 'this very thread'), threadHit('c2', 'another thread')],
     });
     const out = await gatherContextIndex({
-      venice: veniceNoEmbed,
       supabase,
       threadId: 't-1',
       signal,
@@ -294,7 +286,6 @@ describe('gatherContextIndex', () => {
     );
     const supabase = gatherSupabase({ threads, wiki });
     const out = await gatherContextIndex({
-      venice: veniceNoEmbed,
       supabase,
       threadId: 't-1',
       signal,
@@ -311,7 +302,6 @@ describe('gatherContextIndex', () => {
       memories: [mem('m1', 'The user grows basil.', 5)],
     });
     const out = await gatherContextIndex({
-      venice: veniceNoEmbed,
       supabase,
       threadId: 't-1',
       signal,
@@ -330,7 +320,6 @@ describe('gatherContextIndex', () => {
     // -> no searches run.
     const supabase = gatherSupabase({ messages: [assistantTurn('hi', 1)] });
     const out = await gatherContextIndex({
-      venice: veniceNoEmbed,
       supabase,
       threadId: 't-1',
       signal,
@@ -345,7 +334,6 @@ describe('gatherContextIndex', () => {
     ctl.abort();
     const supabase = gatherSupabase({ memories: [mem('m1', 'x')] });
     const out = await gatherContextIndex({
-      venice: veniceNoEmbed,
       supabase,
       threadId: 't-1',
       signal: ctl.signal,
@@ -371,7 +359,6 @@ describe('gatherContextIndex', () => {
       }),
     } as unknown as SupabaseService;
     const out = await gatherContextIndex({
-      venice: veniceNoEmbed,
       supabase,
       threadId: 't-1',
       signal,
@@ -398,7 +385,6 @@ describe('runContextRecallPipeline', () => {
       wiki: [wikiArt('w1', 'Haskell parser project')],
     });
     const out = await runContextRecallPipeline({
-      venice: veniceNoEmbed,
       supabase,
       threadId: 't-1',
       userId: 'u-1',
@@ -426,7 +412,6 @@ describe('runContextRecallPipeline', () => {
       messages: [userTurn('hi', 1)],
     });
     const out = await runContextRecallPipeline({
-      venice: veniceNoEmbed,
       supabase,
       threadId: 't-1',
       userId: 'u-1',
@@ -446,7 +431,6 @@ describe('runContextRecallPipeline', () => {
     const ctl = new AbortController();
     ctl.abort();
     const out = await runContextRecallPipeline({
-      venice: veniceNoEmbed,
       supabase,
       threadId: 't-1',
       userId: 'u-1',
@@ -472,7 +456,6 @@ describe('runContextRecallPipeline', () => {
       }),
     } as unknown as SupabaseService;
     const out = await runContextRecallPipeline({
-      venice: veniceNoEmbed,
       supabase,
       threadId: 't-1',
       userId: 'u-1',

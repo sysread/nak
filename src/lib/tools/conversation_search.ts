@@ -76,7 +76,7 @@ export const conversationSearch: ToolDef = {
 
     let queryEmbedding: number[] | null = null;
     try {
-      const response = await ctx.venice.embed({
+      const response = await ctx.supabase.embed({
         model: VENICE_EMBEDDING_MODEL,
         input: query,
         signal: ctx.signal,

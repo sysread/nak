@@ -19,7 +19,6 @@
  * embedding request per character.
  */
 import type { Memory, MemoryRelation, SupabaseService, TopicVocabulary } from './supabase';
-import type { VeniceClient } from './venice';
 import { searchMemoriesSemantic } from './memories';
 
 interface MemoriesStore {
@@ -212,7 +211,6 @@ export async function loadMoreMemories(
  */
 export async function runMemoriesSearch(
   supabase: SupabaseService,
-  venice: VeniceClient | null,
 ): Promise<void> {
   if (memoriesStore.query.trim().length === 0) {
     return loadMemoriesFirstPage(supabase);
@@ -225,7 +223,6 @@ export async function runMemoriesSearch(
   try {
     const hits = await searchMemoriesSemantic(memoriesStore.query.trim(), MEMORIES_LIST_LIMIT, {
       supabase,
-      venice,
       signal: ctl.signal,
       selectedTopics: memoriesStore.selectedTopics,
     });

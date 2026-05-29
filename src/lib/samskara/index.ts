@@ -33,7 +33,6 @@
  * mental contract with the feature.
  */
 import type { SupabaseService } from '../supabase';
-import type { VeniceClient } from '../venice';
 import {
   VENICE_EMBEDDING_MODEL,
   padEmbeddingForStorage,
@@ -110,7 +109,6 @@ export async function getCompoundSummary(
  */
 export async function fireSamskaras(
   supabase: SupabaseService,
-  venice: VeniceClient,
   threadId: string,
   userRound: number,
   userText: string,
@@ -125,7 +123,7 @@ export async function fireSamskaras(
   log.debug('fire: embedding user text', { chars: trimmed.length });
   let rawEmbedding: number[] | undefined;
   try {
-    const resp = await venice.embed({
+    const resp = await supabase.embed({
       model: VENICE_EMBEDDING_MODEL,
       input: trimmed,
       signal,

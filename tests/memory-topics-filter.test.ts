@@ -16,12 +16,16 @@
  *      only when the (untagged) sentinel is selected; rows with real
  *      topics match when at least one of their topics is in the
  *      selection (OR semantics, matching the dropdown's contract).
+ *
+ * The query embedding comes from SupabaseService.embed (the venice edge
+ * function) - so the mock supplies `embed`, and the "embed unavailable" path
+ * (function down / no shared key) is exercised by an embed that rejects, which
+ * the search falls back from to the ILIKE path.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { searchMemoriesSemantic } from '../src/lib/memories';
 import type { Memory, SupabaseService } from '../src/lib/supabase';
 import { UNTAGGED_TOPIC_SENTINEL } from '../src/lib/supabase';
-import type { VeniceClient } from '../src/lib/venice';
 
 function row(id: string, topics: string[]): Memory {
   return {
@@ -38,35 +42,24 @@ function row(id: string, topics: string[]): Memory {
 function mockSupabase(overrides: {
   vectorHits?: Memory[];
   ilikeHits?: Memory[];
+  embed?: () => Promise<{ data: { embedding: number[] }[] }>;
 }) {
   const searchMemories = vi.fn(async () => [] as Memory[]);
-  const searchMemoriesByEmbedding = vi.fn(
-    async () => overrides.vectorHits ?? []
-  );
-  const searchUnembeddedMemoriesByText = vi.fn(
-    async () => overrides.ilikeHits ?? []
+  const searchMemoriesByEmbedding = vi.fn(async () => overrides.vectorHits ?? []);
+  const searchUnembeddedMemoriesByText = vi.fn(async () => overrides.ilikeHits ?? []);
+  const embed = vi.fn(
+    overrides.embed ?? (async () => ({ data: [{ embedding: new Array(1024).fill(0.1) }] }))
   );
   const svc = {
     searchMemories,
     searchMemoriesByEmbedding,
     searchUnembeddedMemoriesByText,
+    embed,
   } as unknown as SupabaseService;
   return {
     svc,
-    spies: {
-      searchMemories,
-      searchMemoriesByEmbedding,
-      searchUnembeddedMemoriesByText,
-    },
+    spies: { searchMemories, searchMemoriesByEmbedding, searchUnembeddedMemoriesByText, embed },
   };
-}
-
-function mockVenice(): VeniceClient {
-  return {
-    embed: vi.fn(async () => ({
-      data: [{ embedding: new Array(1024).fill(0.1) }],
-    })),
-  } as unknown as VeniceClient;
 }
 
 describe('searchMemoriesSemantic topic filter', () => {
@@ -74,17 +67,21 @@ describe('searchMemoriesSemantic topic filter', () => {
     const { svc, spies } = mockSupabase({});
     await searchMemoriesSemantic('', 20, {
       supabase: svc,
-      venice: null,
       selectedTopics: ['food'],
     });
     expect(spies.searchMemories).toHaveBeenCalledWith('', 20, ['food']);
   });
 
-  it('forwards selectedTopics to searchMemories on the no-venice path', async () => {
-    const { svc, spies } = mockSupabase({});
+  it('forwards selectedTopics to searchMemories when the embed is unavailable', async () => {
+    // Embed failure (function down / no shared key) falls back to the ILIKE
+    // path, which must still carry the topic filter.
+    const { svc, spies } = mockSupabase({
+      embed: async () => {
+        throw new Error('embed unavailable');
+      },
+    });
     await searchMemoriesSemantic('hi', 20, {
       supabase: svc,
-      venice: null,
       selectedTopics: ['food', UNTAGGED_TOPIC_SENTINEL],
     });
     expect(spies.searchMemories).toHaveBeenCalledWith('hi', 20, [
@@ -97,7 +94,6 @@ describe('searchMemoriesSemantic topic filter', () => {
     const { svc, spies } = mockSupabase({ vectorHits: [], ilikeHits: [] });
     await searchMemoriesSemantic('q', 20, {
       supabase: svc,
-      venice: mockVenice(),
       selectedTopics: ['food'],
     });
     expect(spies.searchUnembeddedMemoriesByText).toHaveBeenCalledWith(
@@ -117,7 +113,6 @@ describe('searchMemoriesSemantic topic filter', () => {
     });
     const out = await searchMemoriesSemantic('q', 20, {
       supabase: svc,
-      venice: mockVenice(),
       selectedTopics: ['food'],
     });
     expect(out.map((m) => m.id)).toEqual(['m1', 'm3']);
@@ -133,7 +128,6 @@ describe('searchMemoriesSemantic topic filter', () => {
     });
     const out = await searchMemoriesSemantic('q', 20, {
       supabase: svc,
-      venice: mockVenice(),
       selectedTopics: [UNTAGGED_TOPIC_SENTINEL],
     });
     expect(out.map((m) => m.id)).toEqual(['m1', 'm3']);
@@ -149,7 +143,6 @@ describe('searchMemoriesSemantic topic filter', () => {
     });
     const out = await searchMemoriesSemantic('q', 20, {
       supabase: svc,
-      venice: mockVenice(),
       selectedTopics: [UNTAGGED_TOPIC_SENTINEL, 'food'],
     });
     expect(out.map((m) => m.id)).toEqual(['m1', 'm2']);
@@ -161,7 +154,6 @@ describe('searchMemoriesSemantic topic filter', () => {
     });
     const out = await searchMemoriesSemantic('q', 20, {
       supabase: svc,
-      venice: mockVenice(),
     });
     expect(out.map((m) => m.id)).toEqual(['m1', 'm2']);
   });

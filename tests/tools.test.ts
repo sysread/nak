@@ -46,6 +46,7 @@ function mockSupabase(): {
     searchMemories: ReturnType<typeof vi.fn>;
     searchMemoriesByEmbedding: ReturnType<typeof vi.fn>;
     searchUnembeddedMemoriesByText: ReturnType<typeof vi.fn>;
+    embed: ReturnType<typeof vi.fn>;
     createMemory: ReturnType<typeof vi.fn>;
     updateMemory: ReturnType<typeof vi.fn>;
     deleteMemory: ReturnType<typeof vi.fn>;
@@ -64,6 +65,12 @@ function mockSupabase(): {
       { id: 'm1', label: 'foo', data: 'bar', created_at: 't', updated_at: 't' },
     ]),
     searchUnembeddedMemoriesByText: vi.fn(async () => []),
+    // memory_search embeds its query via SupabaseService.embed (the venice
+    // edge function) before the similarity RPC. A 1024-float zero vector
+    // matches the real response shape; the tool pads it to the 2048 storage dim.
+    embed: vi.fn(async () => ({
+      data: [{ index: 0, embedding: new Array(1024).fill(0) }],
+    })),
     createMemory: vi.fn(async (label: string, data: string) => ({
       id: 'new-id',
       label,
@@ -556,9 +563,8 @@ describe('memory_search', () => {
 
   it('embeds the trimmed query and runs vector + ILIKE-fallback in parallel', async () => {
     const { svc, spies } = mockSupabase();
-    const venice = mockVenice();
-    await tool.execute({ query: '  foo  ' }, ctxFor(svc, venice));
-    expect(venice.embed).toHaveBeenCalledWith(
+    await tool.execute({ query: '  foo  ' }, ctxFor(svc));
+    expect(spies.embed).toHaveBeenCalledWith(
       expect.objectContaining({ input: 'foo' })
     );
     // Vector path runs against the embedded rows; the ILIKE probe
@@ -572,9 +578,8 @@ describe('memory_search', () => {
 
   it('pads the Venice query embedding to the storage dim before the similarity RPC', async () => {
     const { svc, spies } = mockSupabase();
-    const venice = mockVenice();
-    await tool.execute({ query: 'anything' }, ctxFor(svc, venice));
-    // Venice's mock returns 1024 floats; the tool must pad to 2048 or
+    await tool.execute({ query: 'anything' }, ctxFor(svc));
+    // The mock embed returns 1024 floats; the tool must pad to 2048 or
     // the RPC errors at pgvector's dimension check.
     const [embedding, limit] = spies.searchMemoriesByEmbedding.mock.calls[0];
     expect(embedding).toHaveLength(2048);
@@ -624,12 +629,10 @@ describe('memory_search', () => {
     expect(result.map((r) => r.id)).toEqual(['m1', 'm2', 'm3']);
   });
 
-  it('falls back to ILIKE when Venice returns no embedding', async () => {
+  it('falls back to ILIKE when the embed returns no vector', async () => {
     const { svc, spies } = mockSupabase();
-    const venice = {
-      embed: vi.fn(async () => ({ data: [] })),
-    } as unknown as VeniceClient;
-    await tool.execute({ query: 'foo' }, ctxFor(svc, venice));
+    spies.embed.mockResolvedValueOnce({ data: [] });
+    await tool.execute({ query: 'foo' }, ctxFor(svc));
     expect(spies.searchMemories).toHaveBeenCalledWith('foo', 20, []);
     expect(spies.searchMemoriesByEmbedding).not.toHaveBeenCalled();
   });

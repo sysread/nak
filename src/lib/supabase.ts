@@ -29,7 +29,7 @@ import { isLogLevel, createLogger, type LogLevel } from './logger.svelte';
 
 const log = createLogger('supabase');
 import type { OpenAIToolCall } from './tools/types';
-import type { Citation, TokenUsage } from './venice';
+import type { Citation, EmbeddingRequest, EmbeddingResponse, TokenUsage } from './venice';
 import { VeniceError } from './venice';
 import {
   collectUsagePages,
@@ -1229,13 +1229,14 @@ export function coerceSettings(raw: unknown): UserSettings {
 }
 
 /**
- * Translate a supabase-js functions.invoke error into a VeniceError. A
- * FunctionsHttpError carries the function's Response on `.context`; we read the
- * status and the function's normalized { error } body off it so the Usage pane
- * shows the real failure and a 429 still reads as rate_limit. Anything without a
- * Response context (a relay or transport failure) becomes a network error.
+ * Translate a supabase-js functions.invoke error (from any venice-function
+ * route) into a VeniceError. A FunctionsHttpError carries the function's
+ * Response on `.context`; we read the status and the function's normalized
+ * { error } body off it so the caller surfaces the real failure and a 429 still
+ * reads as rate_limit. Anything without a Response context (a relay or transport
+ * failure) becomes a network error.
  */
-async function usageFunctionError(error: unknown): Promise<VeniceError> {
+async function veniceFunctionError(error: unknown): Promise<VeniceError> {
   const ctx = (error as { context?: unknown }).context;
   if (ctx instanceof Response) {
     let payload: { error?: string } = {};
@@ -1244,11 +1245,11 @@ async function usageFunctionError(error: unknown): Promise<VeniceError> {
     } catch {
       // Non-JSON error body - fall back to the status line.
     }
-    const message = payload.error ?? `usage request failed (HTTP ${ctx.status})`;
+    const message = payload.error ?? `venice function request failed (HTTP ${ctx.status})`;
     return new VeniceError(message, ctx.status === 429 ? 'rate_limit' : 'http', ctx.status);
   }
   const message = error instanceof Error ? error.message : String(error);
-  return new VeniceError(`Network error contacting usage function: ${message}`, 'network');
+  return new VeniceError(`Network error contacting the venice function: ${message}`, 'network');
 }
 
 /**
@@ -1492,12 +1493,30 @@ export class SupabaseService {
     const { data, error } = await this.client.functions.invoke('venice/usage', {
       body: req,
     });
-    if (error) throw await usageFunctionError(error);
+    if (error) throw await veniceFunctionError(error);
     const body = (data ?? {}) as { data?: unknown; totalPages?: unknown };
     return {
       rows: Array.isArray(body.data) ? body.data : [],
       totalPages: typeof body.totalPages === 'number' ? body.totalPages : 1,
     };
+  }
+
+  /**
+   * Generate an embedding through the venice edge function's /embed route,
+   * replacing the browser's direct Venice call. The function reads the shared
+   * key server-side; this keeps the same { model, input } request and
+   * { data: [{ embedding }] } response shape the old VeniceClient.embed had, so
+   * callers only swap the handle. Note: req.signal is not propagated -
+   * functions.invoke has no abort hook - so a superseded search's embed is
+   * discarded by the caller's own staleness guard rather than aborted; an embed
+   * is a quick call, so the wasted request is cheap.
+   */
+  async embed(req: EmbeddingRequest): Promise<EmbeddingResponse> {
+    const { data, error } = await this.client.functions.invoke('venice/embed', {
+      body: { model: req.model, input: req.input },
+    });
+    if (error) throw await veniceFunctionError(error);
+    return (data ?? { data: [] }) as EmbeddingResponse;
   }
 
   /**

@@ -36,7 +36,7 @@
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
       if (!app.supabase) return;
-      void runWikiSearch(app.supabase, app.venice);
+      void runWikiSearch(app.supabase);
     }, SEARCH_DEBOUNCE_MS);
     return () => {
       if (debounceTimer !== null) {

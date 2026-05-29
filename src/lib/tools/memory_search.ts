@@ -53,7 +53,6 @@ export const memorySearch: ToolDef = {
     );
     const memories = await searchMemoriesSemantic(query, limit, {
       supabase: ctx.supabase,
-      venice: ctx.venice,
       signal: ctx.signal,
     });
     // Debug breadcrumb: every call logs the query (or "(list-all)" for

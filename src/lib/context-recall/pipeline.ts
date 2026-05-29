@@ -39,7 +39,6 @@
  *   - A signal abort returns null (no payload written). Caller leaves
  *     the prior cache in place. Same posture as the intuition pipeline.
  */
-import type { VeniceClient } from '../venice';
 import type { SupabaseService } from '../supabase';
 import type { IntuitionTrigger } from '../intuition/types';
 import { createLogger } from '../logger.svelte';
@@ -49,7 +48,6 @@ import { gatherContextIndex, renderContextThink } from './gather';
 const log = createLogger('context-recall');
 
 export interface RunContextRecallInputs {
-  venice: VeniceClient;
   supabase: SupabaseService;
   /** Thread we're recalling for. */
   threadId: string;
@@ -80,7 +78,7 @@ export async function runContextRecallPipeline(
   // userId rides on the inputs for caller symmetry with the intuition
   // pipeline, but the gather authenticates through the Supabase client's
   // RLS context rather than an explicit id, so it is not destructured.
-  const { venice, supabase, threadId, signal, round, mood, trigger } = inputs;
+  const { supabase, threadId, signal, round, mood, trigger } = inputs;
   const startedAt = Date.now();
   log.info('pipeline starting', { trigger, round });
 
@@ -98,7 +96,6 @@ export async function runContextRecallPipeline(
   let index;
   try {
     index = await gatherContextIndex({
-      venice,
       supabase,
       threadId,
       signal,

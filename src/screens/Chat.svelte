@@ -463,7 +463,7 @@
   function onPickMemoriesTab(): void {
     navigate({ drawer: 'memories' }, { replace: true });
     if (app.supabase && !memoriesStore.loaded && !memoriesStore.loading) {
-      void runMemoriesSearch(app.supabase, app.venice);
+      void runMemoriesSearch(app.supabase);
     }
   }
 
@@ -474,7 +474,7 @@
   function onPickWikiTab(): void {
     navigate({ drawer: 'wiki' }, { replace: true });
     if (app.supabase && !wikiStore.loaded && !wikiStore.loading) {
-      void runWikiSearch(app.supabase, app.venice);
+      void runWikiSearch(app.supabase);
     }
   }
 
@@ -506,7 +506,7 @@
     if (route.drawer !== 'memories') return;
     if (!app.supabase) return;
     if (memoriesStore.loaded || memoriesStore.loading) return;
-    void runMemoriesSearch(app.supabase, app.venice);
+    void runMemoriesSearch(app.supabase);
   });
 
   // Parallel for the wiki tab. Same `loaded`-gate rationale - an
@@ -516,7 +516,7 @@
     if (route.drawer !== 'wiki') return;
     if (!app.supabase) return;
     if (wikiStore.loaded || wikiStore.loading) return;
-    void runWikiSearch(app.supabase, app.venice);
+    void runWikiSearch(app.supabase);
   });
 
   // Parallel for the library tab. Same `loaded`-gate rationale - a cold
@@ -535,7 +535,7 @@
   function onWikiStoreChanged(): void {
     if (!app.supabase) return;
     if (!wikiStore.loaded) return;
-    void runWikiSearch(app.supabase, app.venice);
+    void runWikiSearch(app.supabase);
   }
 
   // Library cross-surface change channel. The chat-side doc_* tool calls and
@@ -5223,7 +5223,7 @@
     try {
       let queryEmbedding: number[] | null = null;
       try {
-        const resp = await app.venice.embed({
+        const resp = await app.supabase.embed({
           model: VENICE_EMBEDDING_MODEL,
           input: query,
           signal: ctl.signal,

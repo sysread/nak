@@ -132,7 +132,7 @@ export async function runManually(
       };
     }
 
-    const batch = await buildBatchForSeed(opts.supabase, opts.venice, seed, signal);
+    const batch = await buildBatchForSeed(opts.supabase, seed, signal);
     emit({ kind: 'preparing', batchSize: batch.length });
 
     if (batch.length < 2) {
