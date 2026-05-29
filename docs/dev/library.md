@@ -13,94 +13,79 @@ Two surfaces with deliberately different lifetimes:
   base64 in Postgres, reclaimed after 30 days dormancy.
 - **Library** (this doc) - whole uploaded documents kept forever. The
   original binary lives in a private Storage bucket; the extracted text
-  is chunked and embedded so the model can find an answer inside a long
-  PDF. Reached only through the `doc_*` tools - never auto-injected.
+  is stored alongside and searched directly. Reached only through the
+  `doc_*` tools - never auto-injected.
 
-Two complementary search paths, mirroring how an agent works a large
-file - fuzzy find, then exact grep, then read a range:
+There is **no embedding / semantic layer**. An earlier design chunked
+each document and embedded the chunks for cosine search; it was dropped
+because it both underperformed (semantic ranking surfaced the table of
+contents and definitions over the operative clauses) and cost a heavy
+per-chunk backfill (thousands of chunks for a multi-MB upload, hours of
+cron sweeps before a fresh doc was searchable). The corpus is a few
+dozen documents, not millions, so the model works a document the way an
+agent works a large source file:
 
-- **Semantic** (`doc_search`) - passage-level, on purpose. A long
-  contract is useless as a single embedding (truncation throws most of
-  it away, and one vector can't localise "what is the late fee"). The
-  extracted text is split into chunks at upload, each chunk gets its
-  own embedding, and search embeds the query once and cosine-ranks
-  every chunk, returning the best-matching passages grouped by their
-  source document. Use it when the wording is unknown.
-- **Exact** (`doc_grep` + `doc_read`) - the deterministic grep-then-
-  read loop. `doc_grep` is `grep -n` over the stored text (regex, line
-  numbers, context); `doc_read` reads a line range. This is the
-  reliable path for a known keyword/clause, and - unlike semantic
-  search - it works the instant a document is uploaded, with no
-  dependence on the embedding backfill having caught up (which for a
-  multi-MB document is hours of cron sweeps). All of it runs in
-  Postgres over `documents.extracted_text`; only matching snippets or
-  the requested line range cross the wire.
+- **`doc_list`** - pick which document (titles + descriptions).
+- **`doc_grep`** - `grep -n` over the stored text (regex, line numbers,
+  context) to find the exact clause. The primary search path.
+- **`doc_read`** - read a line range around the hit.
+- **`doc_get`** - a document's metadata + total line count (no text).
+
+All grep/read runs in Postgres over `documents.extracted_text`; only
+matching snippets or the requested line range cross the wire, and it
+works the instant a document is uploaded (no backfill to wait on).
 
 ## Files
 
 Schema:
 
 - `supabase/schema.sql` - the "User Documents (Library)" block defines
-  `documents`, `document_chunks`, RLS on both, the
-  `claim_next_pending_document_chunk` /
-  `save_document_chunk_embedding_if_claimed` embedding-pipeline RPCs,
-  the `search_document_chunks_by_embedding` semantic-search RPC, the
-  exact-search RPCs `grep_documents` (regex over the text returning line
-  numbers with context; its `lines` CTE is MATERIALIZED so a big doc's
-  split runs once) and `read_document_lines` (a numbered line range plus
-  the total count), the
-  text-free `document_stat` (metadata + line count for `doc_get`), the
-  private `documents` Storage bucket, and the three `storage.objects`
-  RLS policies that scope the bucket to each user's `<user_id>/...`
-  prefix. All three text RPCs split the text on the fly
+  `documents` + its RLS, the exact-search RPCs `grep_documents` (regex
+  over the text returning line numbers with context; its `lines` CTE is
+  MATERIALIZED so a big doc's split runs once) and `read_document_lines`
+  (a numbered line range plus the total count), the text-free
+  `document_stat` (metadata + line count for `doc_get`), the private
+  `documents` Storage bucket, and the three `storage.objects` RLS
+  policies that scope the bucket to each user's `<user_id>/...` prefix.
+  All three text RPCs split the text on the fly
   (`regexp_split_to_table ... with ordinality`), so line numbers are
-  per-document and agree across grep, read, and stat.
+  per-document and agree across grep, read, and stat. The block also
+  carries idempotent `drop` statements that remove the legacy
+  `document_chunks` table and its embedding RPCs from any project that
+  applied the earlier chunked schema.
 
 Data layer:
 
-- `src/lib/supabase.ts` - `Document` / `DocumentChunkHit` /
-  `DocumentGrepHit` / `DocumentStat` interfaces + coerce helpers, and
-  the `SupabaseService` methods: `createDocument`,
-  `setDocumentStoragePath`, `setDocumentExtraction`, `listDocuments`,
-  `listDocumentsPage`, `getDocumentById`, `getDocumentsByIds`,
-  `updateDocument`, `deleteDocument`, `insertDocumentChunks`,
-  `searchDocumentChunks`, the exact-search pair `grepDocument` /
-  `readDocumentLines` and the `getDocumentStat` overview, the Storage
-  helpers `uploadDocumentFile` / `createDocumentDownloadUrl`, and
-  `findAttachmentByFilenameInThread` (the any-mime attachment lookup
-  `doc_create` promotes from).
-- `src/lib/documents.ts` - the pure `chunkText` splitter (paragraph
-  packing + overlap), `ingestDocument` (the browser upload pipeline:
-  create row -> upload binary -> extract -> chunk -> insert chunks),
-  `searchDocumentsSemantic` (query embedding + chunk search with ILIKE
-  fallback), and the length / size ceilings. Mirrors `wiki.ts`.
+- `src/lib/supabase.ts` - `Document` / `DocumentGrepHit` /
+  `DocumentStat` interfaces + coerce helpers, and the `SupabaseService`
+  methods: `createDocument`, `setDocumentStoragePath`,
+  `setDocumentExtraction`, `listDocuments`, `listDocumentsPage`,
+  `getDocumentById`, `updateDocument`, `deleteDocument`,
+  `searchDocuments` (the drawer's substring browse search), the
+  grep/read pair `grepDocument` / `readDocumentLines`, the
+  `getDocumentStat` overview, the Storage helpers `uploadDocumentFile` /
+  `createDocumentDownloadUrl`, and `findAttachmentByFilenameInThread`
+  (the any-mime attachment lookup `doc_create` promotes from).
+- `src/lib/documents.ts` - `ingestDocument` (the browser upload
+  pipeline: create row -> upload binary -> extract text -> store) and
+  the length / size ceilings. No chunking; the extracted text is stored
+  whole.
 - `src/lib/documents-store.svelte.ts` - the shared `documentStore`
-  (results, snippets, loading, query, offset, hasMore, ...),
-  `runDocumentSearch`, `loadDocumentsFirstPage`, `loadMoreDocuments`,
-  and the `patchDocumentRow` / `removeDocumentRow` / `addDocumentRow`
-  mutators. Browse is newest-first; search dedupes chunk hits to unique
-  documents in relevance order via `getDocumentsByIds`, keeping the
-  best passage per document in `snippets`.
+  (results, loading, query, offset, hasMore, ...), `runDocumentSearch`,
+  `loadMoreDocuments`, and the `patchDocumentRow` / `removeDocumentRow`
+  / `addDocumentRow` mutators. Browse is newest-first; search is a
+  substring match returning whole documents (`searchDocuments`).
 - `src/lib/document-events.ts` - the `nak:document-change` window-event
   bus, parallel to `wiki-events.ts`.
 
-Embeddings:
-
-- `supabase/functions/_shared/embed-input.ts` - the `document-chunks`
-  entry in `EMBED_SOURCES` (the sixth source). Chunk content embeds
-  verbatim - no title prefix, since repeating the title across every
-  chunk of a long doc would dilute the passage's own signal.
-
 Tools:
 
-- `src/lib/tools/doc_search.{schema.,}ts`,
-  `doc_list.{schema.,}ts`, `doc_get.{schema.,}ts`,
+- `src/lib/tools/doc_list.{schema.,}ts`, `doc_get.{schema.,}ts`,
   `doc_grep.{schema.,}ts`, `doc_read.{schema.,}ts` - the always-on read
-  surfaces (registered in `alwaysOnToolbox`). `doc_search` is semantic;
-  `doc_grep` + `doc_read` are the exact grep-then-read pair; `doc_get`
-  is the text-free overview (metadata + total line count) that tells the
-  model how many lines it can address; `doc_read` owns all text
-  retrieval.
+  surfaces (registered in `alwaysOnToolbox`). `doc_list` picks the
+  document; `doc_grep` + `doc_read` are the grep-then-read pair;
+  `doc_get` is the text-free overview (metadata + total line count) that
+  tells the model how many lines it can address.
 - `src/lib/tools/doc_create.{schema.,}ts`,
   `doc_update.{schema.,}ts`, `doc_delete.{schema.,}ts` - the gated
   write tools, bundled in the `library` toolbox in
@@ -113,8 +98,7 @@ Prompt:
 UI:
 
 - `src/components/LibraryList.svelte` - drawer listing (search +
-  infinite-scroll), newest-first, with per-row status chip and (in
-  search mode) the matching-passage snippet.
+  infinite-scroll), newest-first, with a per-row status chip.
 - `src/lib/ui/library-list.ts` - pure UI primitives: `scannerLabel`,
   `emptyMessage`, `formatBytes`, `statusLabel`, `SEARCH_DEBOUNCE_MS`.
   Unit-tested at `tests/library-list.test.ts`.
@@ -134,27 +118,21 @@ Docs:
 
 - **User uploads a file** - `Library.svelte`'s upload form calls
   `ingestDocument({ title, description, file })`, which writes the
-  metadata row, uploads the original to the bucket, extracts text via
-  `VeniceClient.extractText`, chunks it, and inserts the chunk rows
-  (`embedding is null`). The cron backfill embeds them on its next
-  sweep (~5 min).
-- **Assistant searches (semantic)** - `doc_search` calls
-  `searchDocumentsSemantic`, returning the best passages with their
-  source document.
-- **Assistant works a large document (exact)** - the grep-then-read
-  loop: `doc_grep` (regex -> `grep_documents` RPC) finds the exact lines
-  and their numbers, then `doc_read` (-> `read_document_lines`) pulls
-  the surrounding range, capped at `DOC_READ_MAX_SPAN` lines per call so
-  it pages rather than dumping the whole doc. `doc_get`
-  (-> `document_stat`) gives the total line count up front. This path is
-  independent of the embedding backfill, so it works immediately after
-  upload.
+  metadata row, uploads the original to the bucket, and extracts text
+  via `VeniceClient.extractText`. The text is searchable immediately;
+  there is no embedding step.
+- **Assistant works a document** - the grep-then-read loop: `doc_list`
+  picks the document, `doc_grep` (regex -> `grep_documents` RPC) finds
+  the exact lines and their numbers, then `doc_read`
+  (-> `read_document_lines`) pulls the surrounding range, capped at
+  `DOC_READ_MAX_SPAN` lines per call so it pages rather than dumping the
+  whole doc. `doc_get` (-> `document_stat`) gives the total line count.
 - **Assistant saves a pasted file** - `doc_create` finds the named
   attachment in the current thread
   (`findAttachmentByFilenameInThread`), reuses its already-parsed
-  `extracted_text`, copies the binary into the bucket when still live,
-  and inserts the chunk rows. The model has no file of its own; it can
-  only promote a file the user attached.
+  `extracted_text`, and copies the binary into the bucket when still
+  live. The model has no file of its own; it can only promote a file the
+  user attached.
 
 ## Data model
 
@@ -173,22 +151,9 @@ Docs:
 - `created_at`, `updated_at`
 - Index `(user_id, created_at desc)` for the newest-first listing.
 
-`document_chunks`:
-
-- `id`, `document_id` (FK `documents` cascade), `user_id` (FK cascade,
-  denormalised so the search RPC and RLS scope without a join)
-- `chunk_index int` - 0-based position; `unique (document_id,
-  chunk_index)`
-- `content text` - the passage
-- `embedding vector(2048)` + the standard `embedding_model` /
-  `embedding_claim_holder` / `embedding_claim_expires` claim columns
-  (note: `_expires`, no `_at`, matching memories / wiki)
-- Partial index `(user_id) where embedding is null` drives the backfill
-  claim scan; `(document_id, chunk_index)` keeps a doc's chunks
-  contiguous.
-- No self-update RLS policy: chunks are immutable once written (a
-  re-upload replaces the doc and its chunks via cascade); the backfill
-  writes embeddings through the service-definer save RPC.
+There is no chunk table. `grep_documents` / `read_document_lines`
+operate directly on `extracted_text`, splitting it into numbered lines
+on the fly.
 
 Storage bucket `documents`: `public = false`. Three `storage.objects`
 policies (select / insert / delete) require
@@ -202,50 +167,45 @@ per-row `user_id` scoping.
   `setDocumentStoragePath` records the path, then extraction runs.
   Steps are committed before extraction, so a parser failure leaves a
   downloadable doc marked `failed` rather than losing the upload.
-- **Chunking.** `chunkText` packs whole paragraphs up to
-  `DOCUMENT_CHUNK_CHARS` (2000), hard-splitting a paragraph that
-  exceeds it, and prefixes each chunk after the first with
-  `DOCUMENT_CHUNK_OVERLAP_CHARS` (200) of its predecessor so a phrase
-  straddling a boundary stays retrievable in one chunk. The
-  server-side embed-input builder caps at 4000 as a defensive backstop.
-- **Search merge.** `searchDocumentChunks` runs the cosine RPC and an
-  ILIKE fallback in parallel, semantic first, deduped by chunk id - so
-  a just-uploaded doc participates before the backfill reaches its
-  chunks. Same contract as `searchWikiArticles`.
+- **grep / read agree on line numbers.** Both split `extracted_text` on
+  `E'\n'` with `regexp_split_to_table ... with ordinality`, so a line
+  number from `doc_grep` indexes the same line in `doc_read`.
+  `doc_read` clamps its span to `DOC_READ_MAX_SPAN`; `doc_grep` caps
+  matches and rephrases an invalid-regex error as `{error}` guidance.
 - **doc_create requires extractable text.** A promoted attachment with
   empty `extracted_text` is rejected with actionable text rather than
   creating an unsearchable document. An expired attachment (binary
   reclaimed) can still be promoted from its surviving text - the doc is
   searchable, just without a downloadable original (`storage_path`
   null).
-- **deleteDocument removes the bucket object first**, then the row
-  (chunks cascade). A leftover row whose object is already gone is the
-  safer failure direction than an orphaned bucket object.
+- **deleteDocument removes the bucket object first**, then the row. A
+  leftover row whose object is already gone is the safer failure
+  direction than an orphaned bucket object.
 
 ## Interactions
 
-- **Embeddings** (`docs/dev/embeddings.md`) - `document_chunks` is the
-  sixth backfill source; one registry entry plus the claim/save RPC
-  pair. The query-time embedding stays in the browser at the
-  `doc_search` / drawer call sites, like every other search surface.
 - **Attachments** (`docs/dev/attachments.md`) - `doc_create` promotes
   an attachment into a document, reusing its `extracted_text` and
   binary. FOLLOW-UP: attachments should migrate onto the same Storage
   bucket so there is one file-storage mechanism, not two.
-- **Tools** (`docs/dev/tools.md`) - `doc_search` / `doc_list` /
-  `doc_get` / `doc_grep` / `doc_read` ride always-on; the `library`
-  toolbox carries the writes.
-- **Chat-prompt** (search `LIBRARY_BLOCK`) - tells the model the
-  Library exists and teaches the search/grep/read loop.
+- **Tools** (`docs/dev/tools.md`) - `doc_list` / `doc_get` / `doc_grep`
+  / `doc_read` ride always-on; the `library` toolbox carries the writes.
+- **Chat-prompt** (search `LIBRARY_BLOCK`) - tells the model the Library
+  exists and teaches the list -> grep -> read loop.
+- **Embeddings** (`docs/dev/embeddings.md`) - the Library is
+  deliberately NOT a backfill source. It was one (a sixth
+  `document_chunks` source) in the chunked design; the embeddings doc
+  is back to five sources.
 
 ## Gotchas
 
-- **Passage-level search, not document-level.** The unit of semantic
-  retrieval is the chunk, not the document. `doc_search` returns
-  passages; for whole-document reading the model uses `doc_grep` to
-  find lines and `doc_read` to pull a range. Don't "simplify" search to
-  one-vector-per-document - that reintroduces the truncation problem the
-  chunking exists to solve.
+- **No semantic search - and that was a deliberate removal.** Search is
+  exact regex (`doc_grep`) plus metadata routing (`doc_list`). Before
+  re-adding embeddings, read why they were dropped (Role section): they
+  underperformed against the operative text and cost a heavy per-chunk
+  backfill at a corpus size that doesn't need it. If large libraries
+  ever make routing hard, a *single embedding per document* (routing
+  only, not per-chunk) is the cheap thing to add - not chunk search.
 - **`doc_get` does NOT return the text.** It's the text-free stat
   (metadata + line count). Pulling a multi-MB document's text into a
   tool result blows the context window; `doc_read` exists precisely so
@@ -261,28 +221,30 @@ per-row `user_id` scoping.
   catches Postgres's "invalid regular expression" and returns it as
   `{error: ...}` guidance so the model fixes the pattern and retries,
   rather than the tool throwing.
-- **`embedding_claim_expires` (no `_at`).** Matches the memories / wiki
-  embedding-claim convention. Easy to flip when cloning.
-- **The bucket SQL must be idempotent.** `insert into storage.buckets
-  ... on conflict do nothing` and `drop policy if exists` + recreate,
-  so re-applying `schema.sql` is a no-op once the bucket exists.
+- **The bucket and legacy-drop SQL must be idempotent.** `insert into
+  storage.buckets ... on conflict do nothing`, `drop policy if exists` +
+  recreate, and `drop table/function if exists` for the retired chunk
+  objects, so re-applying `schema.sql` is a no-op once the state is
+  reached.
 
 ## Verification
 
 End-to-end manual smoke test:
 
-1. `mise run sync` against a dev Supabase. Confirm `documents`,
-   `document_chunks`, the RPCs, the bucket, and the storage policies
-   land. Re-run for idempotency.
-2. Upload a multi-page PDF. The row appears in the Library tab marked
-   **Processing**; the original is downloadable immediately.
-3. ~5 min later, the chunks' embeddings fill (cron backfill).
-4. Ask the chat a question answered deep in the PDF -> the model calls
-   `doc_search` and answers from the right passage, citing the doc.
-5. Drawer search by a phrase from the doc -> the doc appears with the
-   matching snippet.
-6. Edit the description, download the original, then delete -> the row,
-   its chunks, and the bucket object are all gone.
-7. Attach a text file to a chat and ask Nak to "save this to my
+1. `mise run sync` against a dev Supabase. Confirm `documents`, the
+   `grep_documents` / `read_document_lines` / `document_stat` RPCs, the
+   bucket, and the storage policies land, and that any old
+   `document_chunks` table is dropped. Re-run for idempotency.
+2. Upload a multi-page PDF. The row appears in the Library tab; the
+   original is downloadable, and the text is searchable immediately (no
+   embedding wait).
+3. Ask the chat a question answered deep in the PDF -> the model uses
+   `doc_list` -> `doc_grep` -> `doc_read` and answers from the right
+   lines, citing the doc.
+4. Drawer search by a phrase from the doc -> the doc appears in the
+   listing.
+5. Edit the description, download the original, then delete -> the row
+   and the bucket object are gone.
+6. Attach a text file to a chat and ask Nak to "save this to my
    library" -> `doc_create` promotes it; it appears in the tab.
-8. `mise run check` green; no `(!)` build warnings.
+7. `mise run check` green; no `(!)` build warnings.

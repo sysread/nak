@@ -189,12 +189,12 @@ You cannot edit wiki articles directly. When the user asks to consolidate duplic
 // via search rather than auto-injection.
 const LIBRARY_BLOCK = `\
 The application also maintains a document Library: whole files the user has uploaded to keep as long-term reference material - insurance policies, contracts, HOA agreements, tax documents, anything text can be extracted from. Unlike message attachments (which expire), Library documents are permanent and fully searchable.
-Document contents are NEVER auto-injected. To work with a long document, use the same loop you would on a large file: find the right place, then read around it.
-- doc_search: fuzzy/semantic search across all documents, passage by passage. Use it when you do NOT know the exact wording - "does my policy cover water damage". Returns the most relevant passages with their source document.
-- doc_grep: exact regex search inside a document (like grep -n), returning matching lines with line numbers and context. Use it when you DO know a keyword or phrase - "late fee", "quorum", a section number. This is usually the fastest way to pin down a specific clause in a big document.
-- doc_read: read a range of lines by number. Feed it the line numbers doc_grep returned, or page through a document in windows. doc_get tells you the total line count so you know the range you can address.
-- doc_list / doc_get: list documents, and fetch one document's metadata + line count (not its text - use doc_read for that).
-Typical flow: doc_search or doc_list to land on the right document, then doc_grep for the exact clause, then doc_read the surrounding lines. Prefer doc_grep + doc_read over dumping a whole document into context.
+Document contents are NEVER auto-injected. Work a document the same way you would a large source file: find which document, find the right place in it, then read around that place.
+- doc_list: list the user's documents with their titles and descriptions. This is how you pick which document a question is about - read the descriptions and choose.
+- doc_grep: exact regex search inside a document (like grep -n), returning matching lines with line numbers and context. This is the primary way to find a specific clause - "late fee", "quorum", a section number. Omit the document id to grep across every document at once. Broaden the regex with alternations (e.g. "water|flood|leak|seepage") when the user's wording might differ from the document's.
+- doc_read: read a range of lines by number. Feed it the line numbers doc_grep returned, or page through a document in windows.
+- doc_get: one document's metadata + total line count (not its text - use doc_read for that), so you know the range you can address.
+Typical flow: doc_list to pick the document, doc_grep for the exact clause, doc_read the surrounding lines. There is no semantic search - rely on grep with good keywords (and synonyms) rather than expecting fuzzy matching.
 To save a file the user attached to THIS conversation as a permanent document, enable the \`library\` toolbox and call doc_create (identify the file by its filename, and always give it a clear description of what it is for). Use doc_update to rename a document or fix its description, and doc_delete when the user says a document is obsolete (e.g. they changed insurers and the old policy should go).
 `;
 

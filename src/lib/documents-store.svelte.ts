@@ -7,30 +7,25 @@
  *
  * Parallel to `wiki-store.svelte.ts`, with two differences:
  *   - Browse order is newest-first (created_at desc), not alphabetical.
- *   - Search is passage-level: searchDocumentsSemantic returns chunk hits,
- *     which we dedupe to unique documents in relevance order and resolve back
- *     to full rows via getDocumentsByIds. `snippets` carries the best-matching
- *     passage per document so the list can show why a doc matched.
+ *   - Search is a plain substring match over the user's documents
+ *     (`SupabaseService.searchDocuments`) returning whole documents - there is
+ *     no embedding/passage layer. The chat model's precise in-document search
+ *     is doc_grep; this drawer surface is browse-by-keyword.
  */
 import {
   DEFAULT_LIST_PAGE_SIZE,
   type Document,
   type SupabaseService,
 } from './supabase';
-import type { VeniceClient } from './venice';
-import { searchDocumentsSemantic } from './documents';
 
 interface DocumentStore {
   /**
    * The documents currently shown. Browse (empty query) is an offset window
    * paged newest-first by `listDocumentsPage`, grown by the sidebar's
    * infinite-scroll sentinel. Search (non-empty query) is a capped, unpaged
-   * relevance set; `hasMore` is forced false there.
+   * match set; `hasMore` is forced false there.
    */
   results: Document[];
-  /** Best-matching passage per document id, populated during a search so the
-   * list can show the snippet that matched. Empty in browse mode. */
-  snippets: Record<string, string>;
   loading: boolean;
   loaded: boolean;
   error: string | null;
@@ -42,7 +37,6 @@ interface DocumentStore {
 
 export const documentStore = $state<DocumentStore>({
   results: [],
-  snippets: {},
   loading: false,
   loaded: false,
   error: null,
@@ -52,9 +46,8 @@ export const documentStore = $state<DocumentStore>({
   loadingMore: false,
 });
 
-// Match the assistant's doc_search reach so a drawer search never hides a
-// document the assistant can find passages in.
-const DOCUMENT_SEARCH_CHUNK_LIMIT = 60;
+// Cap on the drawer's keyword-search result set.
+const DOCUMENT_SEARCH_LIMIT = 100;
 
 let currentAbort: AbortController | null = null;
 
@@ -65,7 +58,6 @@ async function loadDocumentsFirstPage(supabase: SupabaseService): Promise<void> 
   if (currentAbort) currentAbort.abort();
   documentStore.loading = true;
   documentStore.error = null;
-  documentStore.snippets = {};
   try {
     const page = await supabase.listDocumentsPage({
       offset: 0,
@@ -104,14 +96,11 @@ export async function loadMoreDocuments(supabase: SupabaseService): Promise<void
 
 /**
  * Drive `documentStore` from the bound query. Empty query -> the newest-first
- * browse list; non-empty -> the passage search, deduped to documents in
- * relevance order. Callers should debounce - this runs immediately. Cancels
- * any in-flight search so a stale result can't clobber the latest query.
+ * browse list; non-empty -> a substring match over the user's documents.
+ * Callers should debounce - this runs immediately. Cancels any in-flight load
+ * so a stale result can't clobber the latest query.
  */
-export async function runDocumentSearch(
-  supabase: SupabaseService,
-  venice: VeniceClient | null
-): Promise<void> {
+export async function runDocumentSearch(supabase: SupabaseService): Promise<void> {
   if (documentStore.query.trim().length === 0) {
     return loadDocumentsFirstPage(supabase);
   }
@@ -121,28 +110,14 @@ export async function runDocumentSearch(
   documentStore.loading = true;
   documentStore.error = null;
   try {
-    const hits = await searchDocumentsSemantic(
-      documentStore.query.trim(),
-      DOCUMENT_SEARCH_CHUNK_LIMIT,
-      { supabase, venice, signal: ctl.signal }
-    );
-    if (ctl.signal.aborted) return;
-
-    // Dedupe chunk hits to unique documents, preserving relevance order, and
-    // keep the first (best) passage per document as the snippet.
-    const orderedIds: string[] = [];
-    const snippets: Record<string, string> = {};
-    for (const hit of hits) {
-      if (!(hit.document_id in snippets)) {
-        orderedIds.push(hit.document_id);
-        snippets[hit.document_id] = hit.content;
-      }
-    }
-    const docs = await supabase.getDocumentsByIds(orderedIds);
+    const docs = await supabase.searchDocuments({
+      query: documentStore.query.trim(),
+      limit: DOCUMENT_SEARCH_LIMIT,
+    });
     if (ctl.signal.aborted) return;
     documentStore.results = docs;
-    documentStore.snippets = snippets;
     documentStore.offset = docs.length;
+    // Search results are capped, not paged - close the sentinel.
     documentStore.hasMore = false;
   } catch (err) {
     if (ctl.signal.aborted) return;

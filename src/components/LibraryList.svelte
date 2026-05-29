@@ -5,9 +5,8 @@
    * `documentStore.query` so a search keystroke filters the listing in place.
    *
    * Browse order is newest-first (the Library is curated reference material,
-   * read most-recent-first, not browsed alphabetically). Search is the same
-   * debounced passage-search pipeline the assistant uses for `doc_search` -
-   * see `searchDocumentsSemantic` in `$lib/documents` - deduped to documents.
+   * read most-recent-first, not browsed alphabetically). Search is a debounced
+   * substring match over the user's documents (`SupabaseService.searchDocuments`).
    * Clicking a row sets `route.document_id` so the main panel renders that
    * document.
    */
@@ -42,7 +41,7 @@
     debounceTimer = setTimeout(() => {
       debounceTimer = null;
       if (!app.supabase) return;
-      void runDocumentSearch(app.supabase, app.venice);
+      void runDocumentSearch(app.supabase);
     }, SEARCH_DEBOUNCE_MS);
     return () => {
       if (debounceTimer !== null) {
@@ -103,11 +102,6 @@
               >{statusLabel(d.extraction_status)}</span>
             {/if}
           </span>
-          {#if documentStore.snippets[d.id]}
-            <!-- Snippet shown only in search mode - the passage that matched,
-                 so the user can see why a document came up. -->
-            <span class="library-row-snippet">{documentStore.snippets[d.id]}</span>
-          {/if}
         </button>
       </div>
     {/each}
@@ -171,16 +165,6 @@
   .library-status.failed {
     color: var(--error, #c0392b);
     opacity: 0.9;
-  }
-  .library-row-snippet {
-    font-size: 0.76rem;
-    opacity: 0.6;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    max-width: 100%;
   }
   .library-list-sentinel {
     min-height: 1px;

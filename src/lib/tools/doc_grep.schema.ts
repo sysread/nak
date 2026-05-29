@@ -9,13 +9,14 @@ export const DOC_GREP_MAX_MATCHES = 200;
 export const docGrepSchema = {
   name: 'doc_grep',
   description:
-    'Exact regex search inside Library documents - the precise counterpart ' +
-    'to doc_search (which is fuzzy/semantic). Like `grep -n` over the ' +
-    "document's text: returns every matching line with its line number and a " +
-    'few lines of context, so you can pinpoint an exact clause ("late fee", ' +
-    '"quorum", a section heading) and then doc_read the surrounding section. ' +
-    'POSIX regex, case-insensitive by default. Omit document_id to search ' +
-    'across every document. Returns {document_id, title, line_number, ' +
+    'The primary way to search Library documents: exact regex, like ' +
+    "`grep -n` over the document's text. Returns every matching line with its " +
+    'line number and a few lines of context, so you can pinpoint an exact ' +
+    'clause ("late fee", "quorum", a section heading) and then doc_read the ' +
+    'surrounding section. POSIX regex, case-insensitive by default. Omit ' +
+    'document_id to search across every document. Broaden with alternations ' +
+    '(e.g. "water|flood|leak|seepage") when the user\'s wording may differ ' +
+    'from the document\'s. Returns {document_id, title, line_number, ' +
     'line_text, context_before[], context_after[]}[] plus match_count. ' +
     'Reach for this the way you would grep a large file before reading it.',
   shortDescription: 'regex-search inside documents for exact lines',
@@ -30,7 +31,7 @@ export const docGrepSchema = {
       document_id: {
         type: 'string',
         description:
-          'Restrict to one document (from doc_list / doc_search). Omit to ' +
+          'Restrict to one document (from doc_list or doc_get). Omit to ' +
           'search across all of the user\'s documents.',
       },
       case_sensitive: {

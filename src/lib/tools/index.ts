@@ -105,7 +105,6 @@ import { wikiSearchSchema } from './wiki_search.schema';
 import { wikiListSchema } from './wiki_list.schema';
 import { wikiGetSchema } from './wiki_get.schema';
 import { wikiLibrarianSchema } from './wiki_librarian.schema';
-import { docSearchSchema } from './doc_search.schema';
 import { docListSchema } from './doc_list.schema';
 import { docGetSchema } from './doc_get.schema';
 import { docGrepSchema } from './doc_grep.schema';
@@ -254,7 +253,6 @@ const wikiLibrarian = lazyTool(
   () => import('./wiki_librarian'),
   'wikiLibrarian'
 );
-const docSearch = lazyTool(docSearchSchema, () => import('./doc_search'), 'docSearch');
 const docList = lazyTool(docListSchema, () => import('./doc_list'), 'docList');
 const docGet = lazyTool(docGetSchema, () => import('./doc_get'), 'docGet');
 const docGrep = lazyTool(docGrepSchema, () => import('./doc_grep'), 'docGrep');
@@ -356,7 +354,6 @@ export const alwaysOnToolbox: Toolbox = {
     wikiGet,
     recipeList,
     recipeGet,
-    docSearch,
     docList,
     docGet,
     docGrep,
@@ -474,15 +471,15 @@ export const imagesToolbox: Toolbox = {
 };
 
 /**
- * Library write tools. Document reads (doc_search, doc_list, doc_get) live in
- * the always-on set; this toolbox carries the writes that mutate the user's
- * persistent document Library: promoting a pasted file into a permanent doc,
- * editing a doc's title/description, and deleting a doc (with its chunks and
- * stored original). Gated like the cookbook / memory writes - the user enables
- * it from the composer popover, or the model flips it on via toggle_toolbox
- * once saving or removing a document is the obvious next move. The model has no
- * file of its own, so doc_create only promotes a file the user already
- * attached to the conversation.
+ * Library write tools. Document reads (doc_list, doc_get, doc_grep, doc_read)
+ * live in the always-on set; this toolbox carries the writes that mutate the
+ * user's persistent document Library: promoting a pasted file into a permanent
+ * doc, editing a doc's title/description, and deleting a doc (with its stored
+ * original). Gated like the cookbook / memory writes - the user enables it from
+ * the composer popover, or the model flips it on via toggle_toolbox once saving
+ * or removing a document is the obvious next move. The model has no file of its
+ * own, so doc_create only promotes a file the user already attached to the
+ * conversation.
  */
 export const libraryToolbox: Toolbox = {
   name: 'library',
@@ -490,8 +487,8 @@ export const libraryToolbox: Toolbox = {
     "Manage the user's document Library: save a file they attached to the " +
     'conversation as a permanent searchable document (doc_create), edit a ' +
     "document's title or description (doc_update), or delete a document " +
-    '(doc_delete). Read paths (doc_search, doc_list, doc_get) are always-on; ' +
-    'this toolbox carries the writes.',
+    '(doc_delete). Read paths (doc_list, doc_get, doc_grep, doc_read) are ' +
+    'always-on; this toolbox carries the writes.',
   tools: [docCreate, docUpdate, docDelete],
 };
 

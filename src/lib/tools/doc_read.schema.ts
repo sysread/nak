@@ -25,7 +25,7 @@ export const docReadSchema = {
     properties: {
       document_id: {
         type: 'string',
-        description: 'UUID of the document (from doc_list / doc_search / doc_grep).',
+        description: 'UUID of the document (from doc_list, doc_grep, or doc_get).',
       },
       start_line: {
         type: 'integer',

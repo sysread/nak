@@ -33,11 +33,12 @@ different jobs:
    description helps both you and the assistant find it later.
 4. Save it to the Library.
 
-When you upload, Nak extracts the document's text and, a few minutes
-later, indexes it for search in the background. A document shows
-**Processing** until its text is extracted, and **Not searchable** if
-the file had no extractable text (a scanned image with no text layer,
-for example) - the original is still downloadable in that case.
+When you upload, Nak extracts the document's text, which usually takes
+a few seconds. A document shows **Processing** until extraction
+finishes, then it's immediately searchable. A document is marked **Not
+searchable** if the file had no extractable text (a scanned image with
+no text layer, for example) - the original is still downloadable in
+that case.
 
 Supported files are anything text can be extracted from: plain text,
 Word documents, PDFs, and similar. The original file is stored
@@ -48,12 +49,12 @@ privately and is only reachable by you.
 You don't have to do anything special. Just ask. When a question would
 be answered by your paperwork - "what's my deductible?", "does my
 policy cover water damage?", "what does the HOA say about fences?" -
-the assistant searches your Library passage-by-passage and answers from
-the exact relevant section, even inside a long PDF. It cites which
-document the answer came from.
+the assistant searches inside your documents for the relevant section
+and answers from it, even inside a long PDF. It cites which document
+the answer came from.
 
-Because search works on individual passages, a forty-page contract is
-just as findable as a one-page letter - the answer doesn't get lost.
+The assistant searches the full text, so a forty-page contract is just
+as findable as a one-page letter - the answer doesn't get lost.
 
 ## Managing documents
 
@@ -61,8 +62,8 @@ From a document's page in the Library panel you can:
 
 - **Edit the description** to clarify what it's for.
 - **Download the original** file.
-- **Delete** the document - this permanently removes its text, its
-  search index, and the stored original.
+- **Delete** the document - this permanently removes its text and the
+  stored original.
 
 The assistant can also help you manage the Library in conversation. It
 can:

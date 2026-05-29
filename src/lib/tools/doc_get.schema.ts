@@ -11,14 +11,14 @@ export const docGetSchema = {
     'has_text, total_lines, created_at, updated_at}} or {found: false}. To ' +
     'read the actual contents use doc_read (by line range) or doc_grep (to ' +
     'find specific lines first); total_lines tells you the range you can ' +
-    'address. Discover ids with doc_list or doc_search.',
+    'address. Discover ids with doc_list.',
   shortDescription: 'document overview + line count by id',
   parameters: {
     type: 'object',
     properties: {
       id: {
         type: 'string',
-        description: 'UUID of the document (from doc_list or doc_search).',
+        description: 'UUID of the document (from doc_list or doc_grep).',
       },
     },
     required: ['id'],

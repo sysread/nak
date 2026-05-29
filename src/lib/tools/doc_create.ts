@@ -14,7 +14,7 @@
  */
 import type { ToolDef } from './types';
 import { base64ToBlob } from '../attachments';
-import { chunkText, MAX_DOCUMENT_TITLE_CHARS, MAX_DOCUMENT_DESCRIPTION_CHARS } from '../documents';
+import { MAX_DOCUMENT_TITLE_CHARS, MAX_DOCUMENT_DESCRIPTION_CHARS } from '../documents';
 import { docCreateSchema } from './doc_create.schema';
 
 export const docCreate: ToolDef = {
@@ -71,7 +71,6 @@ export const docCreate: ToolDef = {
     }
 
     await ctx.supabase.setDocumentExtraction(doc.id, { status: 'done', text });
-    await ctx.supabase.insertDocumentChunks(doc.id, chunkText(text));
 
     return { created: true, document_id: doc.id, title: doc.title };
   },

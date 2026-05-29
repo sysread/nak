@@ -10,8 +10,9 @@ export const docListSchema = {
     "List the user's Library documents, newest first. Returns " +
     '{id, title, description, filename, mime_type, size_bytes, ' +
     'extraction_status, created_at}[]. Use this to survey what reference ' +
-    'material the user has on file; use doc_search to find a passage by ' +
-    'meaning, or doc_get to read one document’s full text by id.',
+    'material the user has on file and pick which document a question is ' +
+    'about (read the descriptions); then doc_grep to find the relevant lines ' +
+    'and doc_read to read them.',
   shortDescription: 'list the user’s uploaded documents',
   parameters: {
     type: 'object',

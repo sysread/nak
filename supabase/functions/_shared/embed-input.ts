@@ -38,10 +38,6 @@ const MAX_WIKI_CONTENT_CHARS = 16000;
 const MAX_SUBSTRATE_SITUATION_CHARS = 6000;
 const MAX_SUBSTRATE_OUTCOME_CHARS = 2000;
 
-// Document chunks are already sized at chunk time (see DOCUMENT_CHUNK_CHARS in
-// src/lib/documents.ts) to sit under bge-m3's window, so this is a defensive
-// backstop against a malformed oversized row rather than the primary cap.
-const MAX_DOCUMENT_CHUNK_CHARS = 4000;
 
 /**
  * Compose the string Venice embeds for a memory row. The label carries a lot
@@ -94,18 +90,6 @@ export function buildWikiEmbedInput(title: string, content: string): string {
   const body =
     content.length > MAX_WIKI_CONTENT_CHARS ? content.slice(0, MAX_WIKI_CONTENT_CHARS) : content;
   return `${title}\n\n${body}`;
-}
-
-/**
- * Compose the text Venice embeds for a document chunk. The chunk content is
- * already a coherent passage sized at upload time, so it embeds verbatim - no
- * title prefix (the title repeated across every chunk of a long doc would
- * dilute the passage's own signal). The cap is purely defensive.
- */
-export function buildDocumentChunkEmbedInput(content: string): string {
-  return content.length > MAX_DOCUMENT_CHUNK_CHARS
-    ? content.slice(0, MAX_DOCUMENT_CHUNK_CHARS)
-    : content;
 }
 
 /**
@@ -183,11 +167,5 @@ export const EMBED_SOURCES: EmbedSource[] = [
     claimRpc: 'samskara_claim_next_substrate_embed', // returns (id, situation, outcome)
     saveRpc: 'samskara_save_substrate_embedding_if_claimed',
     buildInput: (row) => buildSubstrateEmbedInput(str(row.situation), strOrNull(row.outcome)),
-  },
-  {
-    name: 'document-chunks',
-    claimRpc: 'claim_next_pending_document_chunk', // returns (id, content)
-    saveRpc: 'save_document_chunk_embedding_if_claimed',
-    buildInput: (row) => buildDocumentChunkEmbedInput(str(row.content)),
   },
 ];

@@ -1292,38 +1292,8 @@ function coerceDocument(raw: Record<string, unknown>): Document {
 }
 
 /**
- * One search hit from `search_document_chunks_by_embedding`: a passage plus
- * enough parent metadata to name its source document without a second fetch.
- */
-export interface DocumentChunkHit {
-  chunk_id: string;
-  document_id: string;
-  title: string;
-  filename: string;
-  description: string;
-  chunk_index: number;
-  content: string;
-  similarity?: number;
-}
-
-function coerceDocumentChunkHit(raw: Record<string, unknown>): DocumentChunkHit {
-  return {
-    chunk_id: String(raw.chunk_id ?? raw.id),
-    document_id: String(raw.document_id),
-    title: typeof raw.title === 'string' ? raw.title : '',
-    filename: typeof raw.filename === 'string' ? raw.filename : '',
-    description: typeof raw.description === 'string' ? raw.description : '',
-    chunk_index:
-      typeof raw.chunk_index === 'number' ? raw.chunk_index : Number(raw.chunk_index ?? 0),
-    content: typeof raw.content === 'string' ? raw.content : '',
-    similarity: typeof raw.similarity === 'number' ? (raw.similarity as number) : undefined,
-  };
-}
-
-/**
  * One hit from `grep_documents`: a matching line with its location and a few
- * lines of context on either side. The exact-search counterpart to
- * `DocumentChunkHit` (which is semantic).
+ * lines of context on either side.
  */
 export interface DocumentGrepHit {
   document_id: string;
@@ -3271,7 +3241,7 @@ export class SupabaseService {
   // Upload flow is two-phase on purpose: createDocument writes the metadata
   // row first (status 'pending', storage_path null), then the caller uploads
   // the binary to the bucket and calls setDocumentStoragePath, then extracts
-  // text in the browser and calls setDocumentExtraction + insertDocumentChunks.
+  // text in the browser and calls setDocumentExtraction.
   // Splitting it this way means a row always exists for the UI to show a
   // "processing" placeholder, and a crash mid-upload leaves a recoverable
   // pending row rather than an orphaned bucket object.
@@ -3380,38 +3350,34 @@ export class SupabaseService {
   }
 
   /**
-   * Fetch several documents by id in one round-trip, returned in the order of
-   * the input ids (PostgREST `in` returns arbitrary order, so we re-sort).
-   * Used by the Library drawer to resolve passage-search hits (which carry
-   * document ids) back to full document rows in relevance order. Unknown ids
-   * are silently dropped.
+   * Substring search over the user's documents for the Library drawer, newest
+   * first. Matches the query against title, description, filename, and the
+   * extracted body, so a document surfaces whether the user typed its name or a
+   * phrase from inside it. This is the drawer's browse-by-keyword surface; the
+   * chat model's precise in-document search is grep_documents (doc_grep).
    */
-  async getDocumentsByIds(ids: readonly string[]): Promise<Document[]> {
-    if (ids.length === 0) return [];
+  async searchDocuments(opts: { query: string; limit?: number }): Promise<Document[]> {
+    const query = opts.query.trim();
+    if (query.length === 0) return [];
+    const pattern = ilikePattern(query);
     const { data, error } = await this.client
       .from('documents')
       .select(
         'id, title, description, filename, mime_type, size_bytes, storage_path, extracted_text, extraction_status, extraction_error, created_at, updated_at'
       )
-      .in('id', ids);
+      .or(
+        `title.ilike.${pattern},description.ilike.${pattern},filename.ilike.${pattern},extracted_text.ilike.${pattern}`
+      )
+      .order('created_at', { ascending: false })
+      .limit(opts.limit ?? 100);
     if (error) throw new SupabaseError(error.message);
-    const byId = new Map<string, Document>();
-    for (const row of data ?? []) {
-      const doc = coerceDocument(row as Record<string, unknown>);
-      byId.set(doc.id, doc);
-    }
-    const out: Document[] = [];
-    for (const id of ids) {
-      const doc = byId.get(id);
-      if (doc) out.push(doc);
-    }
-    return out;
+    return (data ?? []).map((row) => coerceDocument(row as Record<string, unknown>));
   }
 
   /**
    * Patch a document's user-editable metadata (title, description). The
-   * extracted body and chunks are bound to the original file and are not
-   * editable here - replacing content means re-uploading the file.
+   * extracted body is bound to the original file and is not editable here -
+   * replacing content means re-uploading the file.
    */
   async updateDocument(
     id: string,
@@ -3451,96 +3417,6 @@ export class SupabaseService {
     if (error) throw new SupabaseError(error.message);
   }
 
-  /**
-   * Bulk-insert a document's chunks with embedding null - the server-side
-   * backfill embeds them on its next sweep. user_id is denormalised onto each
-   * chunk so the search RPC and RLS scope without a join.
-   */
-  async insertDocumentChunks(documentId: string, chunks: readonly string[]): Promise<void> {
-    if (chunks.length === 0) return;
-    const session = await this.getSession();
-    if (!session) throw new SupabaseError('Not authenticated.');
-    const rows = chunks.map((content, chunk_index) => ({
-      document_id: documentId,
-      user_id: session.user.id,
-      chunk_index,
-      content,
-    }));
-    const { error } = await this.client.from('document_chunks').insert(rows);
-    if (error) throw new SupabaseError(error.message);
-  }
-
-  /**
-   * Semantic + substring search over the user's document chunks. Vector hits
-   * (RPC, cosine-ranked) first, then ILIKE hits the vector path missed so a
-   * just-uploaded doc participates before the backfill reaches its chunks.
-   * Deduped by chunk id and capped at `limit`. Mirrors searchWikiArticles.
-   */
-  async searchDocumentChunks(opts: {
-    query: string;
-    queryEmbedding: number[] | null;
-    limit?: number;
-  }): Promise<DocumentChunkHit[]> {
-    const query = opts.query.trim();
-    const limit = opts.limit ?? 12;
-    if (query.length === 0) return [];
-
-    const pattern = ilikePattern(query);
-    const ilikePromise = this.client
-      .from('document_chunks')
-      .select('id, document_id, chunk_index, content, documents(title, filename, description)')
-      .ilike('content', pattern)
-      .limit(limit);
-
-    const semanticPromise = opts.queryEmbedding
-      ? this.client.rpc('search_document_chunks_by_embedding', {
-          query_embedding: opts.queryEmbedding,
-          match_limit: limit,
-        })
-      : Promise.resolve({ data: [] as unknown[], error: null });
-
-    const [ilikeRes, semRes] = await Promise.all([ilikePromise, semanticPromise]);
-    if (ilikeRes.error) throw new SupabaseError(ilikeRes.error.message);
-
-    // PostgREST returns the embedded parent under a `documents` key; flatten
-    // it into the same shape the RPC returns so both paths coerce uniformly.
-    const ilikeRows = (ilikeRes.data ?? []).map((raw) => {
-      const row = raw as Record<string, unknown>;
-      const parent = (row.documents ?? {}) as Record<string, unknown>;
-      return coerceDocumentChunkHit({
-        chunk_id: row.id,
-        document_id: row.document_id,
-        chunk_index: row.chunk_index,
-        content: row.content,
-        title: parent.title,
-        filename: parent.filename,
-        description: parent.description,
-      });
-    });
-    const semanticRows =
-      semRes.error !== null
-        ? []
-        : ((semRes.data ?? []) as unknown[]).map((row) =>
-            coerceDocumentChunkHit(row as Record<string, unknown>)
-          );
-
-    const out: DocumentChunkHit[] = [];
-    const seen = new Set<string>();
-    for (const hit of semanticRows) {
-      if (seen.has(hit.chunk_id)) continue;
-      seen.add(hit.chunk_id);
-      out.push(hit);
-      if (out.length >= limit) return out;
-    }
-    for (const hit of ilikeRows) {
-      if (seen.has(hit.chunk_id)) continue;
-      seen.add(hit.chunk_id);
-      out.push(hit);
-      if (out.length >= limit) return out;
-    }
-    return out;
-  }
-
   // Documents Storage helpers --------------------------------------------
 
   /**
@@ -3576,19 +3452,18 @@ export class SupabaseService {
     return data.signedUrl;
   }
 
-  // Documents exact-search / read helpers --------------------------------
+  // Documents grep / read helpers ----------------------------------------
   //
-  // The deterministic grep-then-read pair, complementing the semantic
-  // searchDocumentChunks. Both run server-side over documents.extracted_text
-  // (see grep_documents / read_document_lines in schema.sql) so a multi-MB
-  // document's text never crosses the wire - only matching snippets or the
-  // requested line range come back.
+  // The deterministic grep-then-read pair the chat model uses on a document.
+  // Both run server-side over documents.extracted_text (see grep_documents /
+  // read_document_lines in schema.sql) so a multi-MB document's text never
+  // crosses the wire - only matching snippets or the requested line range come
+  // back.
 
   /**
    * Regex search over a document's text (or every document the user owns when
-   * `documentId` is omitted), with line numbers and context. The exact-match
-   * counterpart to `searchDocumentChunks`. An invalid regex surfaces as a
-   * SupabaseError the calling tool rephrases.
+   * `documentId` is omitted), with line numbers and context. An invalid regex
+   * surfaces as a SupabaseError the calling tool rephrases.
    */
   async grepDocument(opts: {
     pattern: string;
