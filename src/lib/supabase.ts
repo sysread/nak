@@ -339,14 +339,18 @@ export interface MemoryRelation {
 
 /**
 /**
- * One file attached to a user message. Binary lives in `data_base64`
- * as a base64 string — stored directly in a `text` column on the DB
- * side (see the note on `message_attachments.data` in schema.sql
- * explaining why not bytea). Null `data_base64` + non-null
- * `expired_at` is the "reclaimed" state produced by the
- * attachment_expiry worker; `extracted_text` survives that
- * transition on purpose so the message list stays
- * meaningful.
+ * One file attached to a user message (or a model-generated image). The
+ * original bytes live in the private `attachments` Storage bucket,
+ * pointed at by `storage_path`; the row carries only metadata + the
+ * extracted text. Liveness is keyed on `storage_path`:
+ *   * live:    storage_path !== null  (object in the bucket)
+ *   * expired: storage_path === null  (object deleted by the expiry
+ *              sweep, or a legacy pre-bucket row). `extracted_text`
+ *              survives the transition so the message list stays
+ *              meaningful.
+ * Bytes are never loaded into the row on read; the UI fetches a signed
+ * URL on demand (see SupabaseService.createAttachmentSignedUrls) and the
+ * vision wire hands Venice a signed URL directly.
  */
 export interface Attachment {
   id: string;
@@ -359,22 +363,29 @@ export interface Attachment {
   /** Byte count of the original file — preserved across expiration. */
   size_bytes: number;
   /**
-   * Base64-encoded file bytes, or `null` after the attachment_expiry
-   * worker has reclaimed the row. Non-null iff the attachment is live.
+   * Object key in the `attachments` bucket
+   * (`<user_id>/<attachment_id>/<filename>`), or `null` once the expiry
+   * sweep has deleted the object (or for a legacy pre-bucket row).
+   * Non-null iff the attachment is live.
    */
-  data_base64: string | null;
+  storage_path: string | null;
   /**
    * Text extracted by Venice's /augment/text-parser at upload time for
    * non-image files. Stays populated after expiration — the value the
-   * model saw outlives the original blob.
+   * model saw outlives the original object.
    */
   extracted_text: string | null;
-  /** Timestamp at which `data` was nulled by the expiry worker; null when live. */
+  /** Timestamp at which the object was deleted by the expiry sweep; null when live. */
   expired_at: string | null;
   created_at: string;
 }
 
-/** Fields callers supply when inserting a new attachment row. */
+/**
+ * Fields callers supply when inserting a new attachment. `data_base64` is
+ * the SOURCE bytes to upload to the bucket - `addAttachments` uploads it
+ * and stores the resulting `storage_path`; it is never written to a
+ * column.
+ */
 export interface NewAttachment {
   position: number;
   filename: string;
@@ -382,6 +393,38 @@ export interface NewAttachment {
   size_bytes: number;
   data_base64: string;
   extracted_text: string | null;
+}
+
+/**
+ * Decode a base64 string to raw bytes for a Storage upload. Kept local
+ * (rather than importing from `attachments.ts`) because that module
+ * imports types from here - the dependency must not become a cycle.
+ */
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * Map a `message_attachments` row (which may carry a joined `messages`
+ * object from a thread-scoped lookup) to an Attachment, ignoring any
+ * extra join columns.
+ */
+function coerceAttachmentRow(raw: Record<string, unknown>): Attachment {
+  return {
+    id: String(raw.id),
+    message_id: String(raw.message_id),
+    position: typeof raw.position === 'number' ? raw.position : Number(raw.position ?? 0),
+    filename: typeof raw.filename === 'string' ? raw.filename : '',
+    mime_type: typeof raw.mime_type === 'string' ? raw.mime_type : '',
+    size_bytes: typeof raw.size_bytes === 'number' ? raw.size_bytes : Number(raw.size_bytes ?? 0),
+    storage_path: typeof raw.storage_path === 'string' ? raw.storage_path : null,
+    extracted_text: typeof raw.extracted_text === 'string' ? raw.extracted_text : null,
+    expired_at: typeof raw.expired_at === 'string' ? raw.expired_at : null,
+    created_at: String(raw.created_at ?? ''),
+  };
 }
 
 /**
@@ -5155,89 +5198,151 @@ export class SupabaseService {
   ): Promise<Map<string, Attachment[]>> {
     const result = new Map<string, Attachment[]>();
     if (messageIds.length === 0) return result;
-    // `data` is the large column. It's a plain text column holding a
-    // base64-encoded file body (see schema.sql's message_attachments
-    // block for why not bytea). We rename it to `data_base64` in the
-    // TS shape so consumers of the Attachment type can't mistake it
-    // for raw bytes.
+    // Bytes are NOT projected - they live in the `attachments` bucket
+    // (pointed at by storage_path) and are fetched on demand via a
+    // signed URL. Thread load carries metadata only, so a thread full of
+    // images no longer ships megabytes of base64 on every open.
     const { data, error } = await this.client
       .from('message_attachments')
       .select(
-        'id, message_id, position, filename, mime_type, size_bytes, data, extracted_text, expired_at, created_at'
+        'id, message_id, position, filename, mime_type, size_bytes, storage_path, extracted_text, expired_at, created_at'
       )
       .in('message_id', messageIds)
       .order('position', { ascending: true });
     if (error) throw new SupabaseError(error.message);
-    for (const row of (data ?? []) as Array<
-      Omit<Attachment, 'data_base64'> & { data: string | null }
-    >) {
+    for (const row of (data ?? []) as Attachment[]) {
       const existing = result.get(row.message_id) ?? [];
-      const attachment: Attachment = {
+      existing.push({
         id: row.id,
         message_id: row.message_id,
         position: row.position,
         filename: row.filename,
         mime_type: row.mime_type,
         size_bytes: row.size_bytes,
-        data_base64: row.data,
+        storage_path: typeof row.storage_path === 'string' ? row.storage_path : null,
         extracted_text: row.extracted_text,
         expired_at: row.expired_at,
         created_at: row.created_at,
-      };
-      existing.push(attachment);
+      });
       result.set(row.message_id, existing);
     }
     return result;
   }
 
   /**
-   * Bulk-insert attachments for a just-written user message. Writes
-   * rows in the given order; `position` is caller-supplied so the
-   * render order matches the order the user picked them in.
+   * Bulk-insert attachments for a just-written message. For each row we
+   * mint the attachment id client-side, upload its bytes to the
+   * `attachments` bucket at `<user_id>/<id>/<filename>`, then insert the
+   * row carrying `storage_path` (never the bytes). Client-minted ids let
+   * the upload and the insert reference the same path in one pass.
    *
-   * Returns the hydrated rows (including generated ids and
-   * timestamps) so the caller can append them to the in-memory
-   * message without a follow-up fetch.
+   * Returns the hydrated rows (with `storage_path` set, bytes left in the
+   * bucket) so the caller can append them to the in-memory message; the
+   * UI fetches a signed URL when it needs to render them.
    */
   async addAttachments(
     messageId: string,
     rows: NewAttachment[]
   ): Promise<Attachment[]> {
     if (rows.length === 0) return [];
-    const payload = rows.map((r) => ({
-      message_id: messageId,
-      position: r.position,
-      filename: r.filename,
-      mime_type: r.mime_type,
-      size_bytes: r.size_bytes,
-      // The DB column is plain `text` — the base64 string rides
-      // through PostgREST unchanged on both write and read. See the
-      // note on `message_attachments.data` in schema.sql for why
-      // this isn't a bytea column.
-      data: r.data_base64,
-      extracted_text: r.extracted_text,
-    }));
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const userId = session.user.id;
+
+    const prepared = await Promise.all(
+      rows.map(async (r) => {
+        const id = crypto.randomUUID();
+        const path = `${userId}/${id}/${r.filename}`;
+        const { error: upErr } = await this.client.storage
+          .from('attachments')
+          .upload(path, base64ToBytes(r.data_base64), {
+            contentType: r.mime_type,
+            upsert: true,
+          });
+        if (upErr) throw new SupabaseError(upErr.message);
+        return {
+          id,
+          message_id: messageId,
+          position: r.position,
+          filename: r.filename,
+          mime_type: r.mime_type,
+          size_bytes: r.size_bytes,
+          storage_path: path,
+          extracted_text: r.extracted_text,
+        };
+      })
+    );
+
     const { data, error } = await this.client
       .from('message_attachments')
-      .insert(payload)
+      .insert(prepared)
       .select(
-        'id, message_id, position, filename, mime_type, size_bytes, data, extracted_text, expired_at, created_at'
+        'id, message_id, position, filename, mime_type, size_bytes, storage_path, extracted_text, expired_at, created_at'
       );
     if (error) throw new SupabaseError(error.message);
-    return ((data ?? []) as Array<
-      Omit<Attachment, 'data_base64'> & { data: string | null }
-    >).map((row) => ({
+    return ((data ?? []) as Attachment[]).map((row) => ({
       id: row.id,
       message_id: row.message_id,
       position: row.position,
       filename: row.filename,
       mime_type: row.mime_type,
       size_bytes: row.size_bytes,
-      data_base64: row.data,
+      storage_path: typeof row.storage_path === 'string' ? row.storage_path : null,
       extracted_text: row.extracted_text,
       expired_at: row.expired_at,
       created_at: row.created_at,
     }));
+  }
+
+  /**
+   * A short-lived signed URL per attachment id, for rendering image
+   * previews / download links and for handing image bytes to Venice (its
+   * vision input fetches public URLs). Skips expired attachments
+   * (storage_path null). Batched into one Storage call. Best-effort: an
+   * attachment whose signed URL can't be minted is simply omitted from
+   * the map rather than failing the whole batch.
+   */
+  async createAttachmentSignedUrls(
+    attachments: readonly Pick<Attachment, 'id' | 'storage_path'>[],
+    expiresInSeconds = 3600
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const live = attachments.filter(
+      (a): a is { id: string; storage_path: string } => typeof a.storage_path === 'string'
+    );
+    if (live.length === 0) return out;
+    const { data, error } = await this.client.storage
+      .from('attachments')
+      .createSignedUrls(
+        live.map((a) => a.storage_path),
+        expiresInSeconds
+      );
+    if (error) throw new SupabaseError(error.message);
+    const urlByPath = new Map<string, string>();
+    for (const entry of data ?? []) {
+      if (entry.signedUrl && typeof entry.path === 'string') {
+        urlByPath.set(entry.path, entry.signedUrl);
+      }
+    }
+    for (const a of live) {
+      const url = urlByPath.get(a.storage_path);
+      if (url) out.set(a.id, url);
+    }
+    return out;
+  }
+
+  /**
+   * Download one attachment's bytes from the bucket as a Blob. Used by the
+   * paths that need the raw bytes rather than a URL: doc_create (re-upload
+   * into the documents bucket) and recipe_photos_attach (hash + dedup).
+   * Throws if the object is gone (expired).
+   */
+  async downloadAttachmentBlob(storagePath: string): Promise<Blob> {
+    const { data, error } = await this.client.storage
+      .from('attachments')
+      .download(storagePath);
+    if (error) throw new SupabaseError(error.message);
+    return data;
   }
 
   /**
@@ -5264,7 +5369,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('message_attachments')
       .select(
-        'id, message_id, position, filename, mime_type, size_bytes, data, extracted_text, expired_at, created_at, messages!inner(thread_id)'
+        'id, message_id, position, filename, mime_type, size_bytes, storage_path, extracted_text, expired_at, created_at, messages!inner(thread_id)'
       )
       .eq('messages.thread_id', threadId)
       .eq('filename', filename)
@@ -5274,27 +5379,16 @@ export class SupabaseService {
       .maybeSingle();
     if (error) throw new SupabaseError(error.message);
     if (!data) return null;
-    const row = data as Omit<Attachment, 'data_base64'> & { data: string | null };
-    return {
-      id: row.id,
-      message_id: row.message_id,
-      position: row.position,
-      filename: row.filename,
-      mime_type: row.mime_type,
-      size_bytes: row.size_bytes,
-      data_base64: row.data,
-      extracted_text: row.extracted_text,
-      expired_at: row.expired_at,
-      created_at: row.created_at,
-    };
+    return coerceAttachmentRow(data as Record<string, unknown>);
   }
 
   /**
    * Find the most recent attachment in a thread by filename, regardless of
    * mime type or expiry state. Used by `doc_create` to promote a file the user
-   * pasted into the conversation into a persistent Library document: it needs
-   * the binary (`data_base64`, null once expired) and the already-parsed
-   * `extracted_text`. RLS scopes the thread join to the caller's own threads.
+   * pasted into the conversation into a persistent Library document: it reads
+   * the bytes (from the bucket via `storage_path`, null once expired) and the
+   * already-parsed `extracted_text`. RLS scopes the thread join to the caller's
+   * own threads.
    */
   async findAttachmentByFilenameInThread(
     threadId: string,
@@ -5303,7 +5397,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('message_attachments')
       .select(
-        'id, message_id, position, filename, mime_type, size_bytes, data, extracted_text, expired_at, created_at, messages!inner(thread_id)'
+        'id, message_id, position, filename, mime_type, size_bytes, storage_path, extracted_text, expired_at, created_at, messages!inner(thread_id)'
       )
       .eq('messages.thread_id', threadId)
       .eq('filename', filename)
@@ -5312,33 +5406,19 @@ export class SupabaseService {
       .maybeSingle();
     if (error) throw new SupabaseError(error.message);
     if (!data) return null;
-    const row = data as Omit<Attachment, 'data_base64'> & { data: string | null };
-    return {
-      id: row.id,
-      message_id: row.message_id,
-      position: row.position,
-      filename: row.filename,
-      mime_type: row.mime_type,
-      size_bytes: row.size_bytes,
-      data_base64: row.data,
-      extracted_text: row.extracted_text,
-      expired_at: row.expired_at,
-      created_at: row.created_at,
-    };
+    return coerceAttachmentRow(data as Record<string, unknown>);
   }
 
   /**
    * Lightweight summary of every attachment in a thread, used to render
-   * the `<thread_attachments>` system block in chat-loop. Deliberately
-   * omits the `data` and `extracted_text` columns because both are
-   * potentially huge (base64-encoded file bodies, full document text)
-   * and the block only needs filenames + categorisation.
+   * the `<thread_attachments>` system block in chat-loop. Omits
+   * `extracted_text` (potentially huge) since the block only needs
+   * filenames + categorisation.
    *
-   * Live vs expired is read off `expired_at` rather than `data is null`
-   * - the schema guarantees those two states are equivalent (see the
-   * comment block on `message_attachments` in `schema.sql`), and
-   * checking `expired_at` lets us skip projecting the heavy `data`
-   * column entirely.
+   * Live vs expired is read off `expired_at`: the expiry sweep stamps it
+   * when it deletes an object, and the one-time legacy reclaim stamped it
+   * on pre-bucket rows, so a non-null `expired_at` is equivalent to
+   * `storage_path is null` here without projecting storage_path.
    */
   async listAttachmentSummariesForThread(
     threadId: string

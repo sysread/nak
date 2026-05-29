@@ -1139,7 +1139,17 @@ export const INTERRUPTED_MARKER = '--- user interrupted response';
  */
 export function toVeniceMessage(
   m: Message,
-  opts?: { visionSpec?: { supportsVision: boolean } }
+  opts?: {
+    visionSpec?: { supportsVision: boolean };
+    /**
+     * Attachment id -> signed URL for the live image attachments, pre-
+     * resolved by the caller (see SupabaseService.createAttachmentSignedUrls).
+     * Venice's vision input fetches these URLs server-side. Empty/omitted
+     * means no images inline (older callers, non-vision sends, history
+     * replay where a URL couldn't be minted).
+     */
+    imageUrls?: ReadonlyMap<string, string>;
+  }
 ): VeniceMessage {
   if (m.role === 'tool') {
     return {
@@ -1162,7 +1172,8 @@ export function toVeniceMessage(
     const content = buildUserVeniceContent(
       m.content,
       m.attachments,
-      opts?.visionSpec ?? { supportsVision: false }
+      opts?.visionSpec ?? { supportsVision: false },
+      opts?.imageUrls ?? new Map()
     );
     return { role: 'user', content };
   }

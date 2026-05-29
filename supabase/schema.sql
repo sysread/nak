@@ -434,34 +434,36 @@ alter table public.threads
 
 -- message_attachments ----------------------------------------------------
 --
--- One row per file a user attached to a message. The file bytes live
--- in `data` as base64-encoded `text` — not `bytea`. The original
--- design used bytea, but PostgREST serialises bytea as a hex-escaped
--- string (`\x4869...`) on both read and write, which our client code
--- assumed was base64 and fed straight into `atob()`. Storing base64
--- as text removes the encoding ambiguity entirely: what goes in is
--- what comes out, it's directly usable by `atob`, and the ~33%
--- storage overhead is negligible under the 10 MB per-file cap.
+-- One row per file a user attached to a message (or an image the model
+-- generated). The original bytes live in the private `attachments`
+-- Storage bucket (defined below), pointed at by `storage_path`; the row
+-- itself holds only metadata plus the extracted text. This mirrors the
+-- `documents` bucket - one file-storage mechanism for the whole app.
+--
+-- The legacy `data` column (base64 in `text`) predates the bucket and is
+-- retained only so the one-time reclaim below can null it and so a
+-- collapse follow-up can drop it; no code writes or reads it anymore.
 --
 -- `extracted_text` is populated at upload time for non-image files by
 -- calling Venice's POST /api/v1/augment/text-parser endpoint, so the
--- LLM has a prompt-ready representation of documents without the
--- client having to bundle a PDF parser. It lives alongside `data` on
--- purpose: even after the binary is expired and reclaimed, the
+-- LLM has a prompt-ready representation of documents. It is independent
+-- of the binary: even after the object is expired and deleted, the
 -- extracted text stays, so re-reading an old conversation still shows
 -- what the file said.
 --
--- Expiration policy: the attachment_expiry worker nulls `data` and
--- stamps `expired_at` 30 days after the parent thread's `updated_at`.
--- `filename`, `mime_type`, `size_bytes`, and `extracted_text` are kept
--- so the message list can still render "<file>: <expired icon> |
--- [extracted text]". `data is null and expired_at is not null` is the
--- expired state; `data is not null and expired_at is null` is live.
+-- Liveness is keyed on `storage_path`, NOT `data`:
+--   * live:    storage_path is not null  (object in the bucket)
+--   * expired: storage_path is null      (object deleted, or a legacy
+--              base64 row treated as expired). extracted_text survives.
+-- The server-side expiry sweep (see the attachments-expiry block near
+-- the embeddings cron) deletes the object 30 days after the parent
+-- thread's `updated_at`, then nulls `storage_path` and stamps
+-- `expired_at`.
 --
--- No `updated_at` — attachments are immutable once written (the
--- expiry worker is the only writer post-insert, and it only nulls
--- the blob). RLS is via-parent-of-parent: attachment → message →
--- thread → user, mirroring the messages policies one level deeper.
+-- No `updated_at` — attachments are immutable once written aside from
+-- the expiry transition. RLS is via-parent-of-parent: attachment ->
+-- message -> thread -> user, mirroring the messages policies one level
+-- deeper.
 
 create table if not exists public.message_attachments (
   id uuid primary key default gen_random_uuid(),
@@ -470,11 +472,34 @@ create table if not exists public.message_attachments (
   filename text not null,
   mime_type text not null,
   size_bytes int not null,
+  -- Object key in the `attachments` bucket:
+  -- `<user_id>/<attachment_id>/<filename>`. Null once expired (object
+  -- deleted) or for a legacy pre-bucket row.
+  storage_path text,
+  -- Legacy base64 body. Retained for the reclaim below + the eventual
+  -- column drop; not written or read by application code.
   data text,
   extracted_text text,
   expired_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+alter table public.message_attachments
+  add column if not exists storage_path text;
+
+-- One-time, idempotent reclaim of the legacy base64 bodies. Liveness now
+-- keys on storage_path, so every pre-bucket row (no storage_path) is
+-- "expired" by definition; nulling `data` reclaims the bloat immediately
+-- rather than waiting for the expiry sweep. Re-runs are no-ops: new rows
+-- never set `data`, and once nulled the predicate matches nothing. The
+-- preserved extracted_text means these rows still render as expired
+-- chips and doc_create can still promote them from text.
+--   COLLAPSE FOLLOW-UP: a later PR drops the `data` column and removes
+--   this statement together (a single apply can't both reference `data`
+--   here and drop it).
+update public.message_attachments
+   set data = null, expired_at = coalesce(expired_at, now())
+ where storage_path is null and data is not null;
 
 -- Migrate the `data` column from bytea to text for projects synced
 -- under the original design. Idempotent: the information_schema
@@ -509,13 +534,14 @@ end $$;
 create index if not exists message_attachments_message_idx
   on public.message_attachments (message_id, position);
 
--- Partial index used by the expiration worker. Only carries live
--- (non-expired) rows so the scan to find expirable attachments stays
--- tiny in steady state — the bulk of history is already expired and
--- excluded from the index.
+-- Partial index used by the expiry sweep. Only carries live (non-
+-- expired) rows - those with an object still in the bucket - so the
+-- scan to find expirable attachments stays tiny in steady state; the
+-- bulk of history is expired and excluded from the index.
+drop index if exists public.message_attachments_live_idx;
 create index if not exists message_attachments_live_idx
   on public.message_attachments (message_id)
-  where data is not null;
+  where storage_path is not null;
 
 alter table public.message_attachments enable row level security;
 
@@ -585,11 +611,44 @@ create policy "attachments are self-deletable via thread"
     )
   );
 
--- Expiration RPC. Reclaims the binary for attachments whose owning
--- thread hasn't been touched in `p_days`. Runs as the caller (RLS
--- intact). The `limit` keeps each call's work bounded — the worker
--- drains the backlog by calling repeatedly while the row count is
--- non-zero, then naps for an hour when it returns 0.
+-- Private bucket for attachment originals. Same shape as the `documents`
+-- bucket: public = false, reachable only via signed URLs or authenticated
+-- requests. Object key is `<user_id>/<attachment_id>/<filename>`; the
+-- storage.objects policies scope every operation to the caller's own
+-- top-level `<user_id>/` prefix. Idempotent insert.
+insert into storage.buckets (id, name, public)
+  values ('attachments', 'attachments', false)
+  on conflict (id) do nothing;
+
+drop policy if exists "attachments bucket is self-readable" on storage.objects;
+create policy "attachments bucket is self-readable" on storage.objects
+  for select to authenticated
+  using (
+    bucket_id = 'attachments'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "attachments bucket is self-writable" on storage.objects;
+create policy "attachments bucket is self-writable" on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id = 'attachments'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "attachments bucket is self-deletable" on storage.objects;
+create policy "attachments bucket is self-deletable" on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'attachments'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+-- Expiration RPC. Legacy path retained inert during the storage
+-- migration: it nulls `data` for any stray pre-bucket rows, but bucket
+-- objects (storage_path) are reclaimed by the server-side expiry sweep
+-- instead (see the attachments-expiry block; landed in a follow-up).
+-- Runs as the caller (RLS intact). The `limit` keeps each call bounded.
 --
 -- We don't delete the row — we null `data` and stamp `expired_at`.
 -- `filename`, `mime_type`, `size_bytes`, and `extracted_text` stay so

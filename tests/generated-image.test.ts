@@ -80,7 +80,7 @@ function att(over: Partial<Attachment>): Attachment {
     filename: 'f',
     mime_type: 'image/webp',
     size_bytes: 1,
-    data_base64: 'AAAA',
+    storage_path: 'u/a/f',
     extracted_text: null,
     expired_at: null,
     created_at: '2026-01-01T00:00:00Z',
@@ -103,7 +103,7 @@ describe('partitionAttachments', () => {
     const expiredImage = att({
       id: 'exp',
       mime_type: 'image/png',
-      data_base64: null,
+      storage_path: null,
       expired_at: '2026-02-01T00:00:00Z',
     });
     const { images, files } = partitionAttachments([expiredImage]);

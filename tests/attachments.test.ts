@@ -136,10 +136,11 @@ describe('arrayBufferToBase64 / base64ToBlob', () => {
 describe('buildUserVeniceContent', () => {
   const vision = { supportsVision: true };
   const noVision = { supportsVision: false };
+  const noUrls = new Map<string, string>();
 
   it('returns the plain text when there are no attachments', () => {
-    expect(buildUserVeniceContent('hello', [], vision)).toBe('hello');
-    expect(buildUserVeniceContent('hello', null, vision)).toBe('hello');
+    expect(buildUserVeniceContent('hello', [], vision, noUrls)).toBe('hello');
+    expect(buildUserVeniceContent('hello', null, vision, noUrls)).toBe('hello');
   });
 
   it('prepends fenced extracted-text blocks to the text', () => {
@@ -147,13 +148,15 @@ describe('buildUserVeniceContent', () => {
       'What does this say?',
       [
         {
+          id: 'p1',
           mime_type: 'application/pdf',
           filename: 'report.pdf',
           extracted_text: 'page one\npage two',
-          data_base64: 'AAAA',
+          storage_path: 'u/p1/report.pdf',
         },
       ],
-      noVision
+      noVision,
+      noUrls
     );
     expect(typeof result).toBe('string');
     expect(result as string).toContain('```[report.pdf]');
@@ -161,23 +164,46 @@ describe('buildUserVeniceContent', () => {
     expect(result as string).toContain('What does this say?');
   });
 
-  it('inlines image_url parts on a vision tier', () => {
+  it('inlines image_url parts on a vision tier using the resolved signed URL', () => {
     const parts = buildUserVeniceContent(
       'look at this',
       [
         {
+          id: 'img1',
           mime_type: 'image/png',
           filename: 'a.png',
           extracted_text: null,
-          data_base64: 'AAAA',
+          storage_path: 'u/img1/a.png',
         },
       ],
-      vision
+      vision,
+      new Map([['img1', 'https://signed.example/a.png']])
     );
     expect(Array.isArray(parts)).toBe(true);
-    const arr = parts as Array<{ type: string }>;
+    const arr = parts as Array<{ type: string; image_url?: { url: string } }>;
     expect(arr[0].type).toBe('text');
     expect(arr[1].type).toBe('image_url');
+    expect(arr[1].image_url?.url).toBe('https://signed.example/a.png');
+  });
+
+  it('skips an image whose signed URL could not be resolved', () => {
+    // Live (storage_path set) but absent from the imageUrls map - e.g. the
+    // batch signing dropped it. Defensive: no image_url part, no throw.
+    const parts = buildUserVeniceContent(
+      'look',
+      [
+        {
+          id: 'img1',
+          mime_type: 'image/png',
+          filename: 'a.png',
+          extracted_text: null,
+          storage_path: 'u/img1/a.png',
+        },
+      ],
+      vision,
+      noUrls
+    );
+    expect(parts).toBe('look');
   });
 
   it('skips image inlining on non-vision tiers but prepends an analyze_image note', () => {
@@ -188,15 +214,23 @@ describe('buildUserVeniceContent', () => {
     const result = buildUserVeniceContent(
       'check these',
       [
-        { mime_type: 'image/png', filename: 'a.png', extracted_text: null, data_base64: 'AAAA' },
         {
+          id: 'img1',
+          mime_type: 'image/png',
+          filename: 'a.png',
+          extracted_text: null,
+          storage_path: 'u/img1/a.png',
+        },
+        {
+          id: 'b1',
           mime_type: 'application/pdf',
           filename: 'b.pdf',
           extracted_text: 'some text',
-          data_base64: 'BBBB',
+          storage_path: 'u/b1/b.pdf',
         },
       ],
-      noVision
+      noVision,
+      new Map([['img1', 'https://signed.example/a.png']])
     );
     expect(typeof result).toBe('string');
     expect(result as string).toContain('```[b.pdf]');
@@ -205,18 +239,20 @@ describe('buildUserVeniceContent', () => {
     expect(result as string).not.toContain('image_url');
   });
 
-  it('skips images whose data has been expired', () => {
+  it('skips images whose object has been expired', () => {
     const parts = buildUserVeniceContent(
       'look',
       [
         {
+          id: 'gone1',
           mime_type: 'image/png',
           filename: 'gone.png',
           extracted_text: null,
-          data_base64: null,
+          storage_path: null,
         },
       ],
-      vision
+      vision,
+      noUrls
     );
     expect(parts).toBe('look');
   });

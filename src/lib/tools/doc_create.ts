@@ -13,7 +13,6 @@
  * original.
  */
 import type { ToolDef } from './types';
-import { base64ToBlob } from '../attachments';
 import { MAX_DOCUMENT_TITLE_CHARS, MAX_DOCUMENT_DESCRIPTION_CHARS } from '../documents';
 import { docCreateSchema } from './doc_create.schema';
 
@@ -57,10 +56,12 @@ export const docCreate: ToolDef = {
       sizeBytes: attachment.size_bytes,
     });
 
-    // Copy the binary into the bucket only when it is still live; an expired
-    // attachment leaves storage_path null but a fully searchable document.
-    if (attachment.data_base64) {
-      const blob = base64ToBlob(attachment.data_base64, attachment.mime_type);
+    // Copy the binary into the documents bucket only when the attachment is
+    // still live; an expired attachment (storage_path null) leaves the doc's
+    // storage_path null but a fully searchable document. Download the bytes
+    // from the attachments bucket, then re-upload into documents.
+    if (attachment.storage_path) {
+      const blob = await ctx.supabase.downloadAttachmentBlob(attachment.storage_path);
       const path = await ctx.supabase.uploadDocumentFile({
         documentId: doc.id,
         filename,

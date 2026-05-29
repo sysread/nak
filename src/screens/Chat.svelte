@@ -3030,11 +3030,38 @@
     // otherwise Venice would see "user, asst-bad, [regenerate
     // request]" and just continue from asst-bad instead of
     // re-rolling.
+    // Pre-resolve short-lived signed URLs for the live image attachments
+    // so the wire builder hands Venice a URL it fetches server-side - the
+    // bytes never touch the client, and history replay just re-signs
+    // rather than re-shipping base64. Vision tiers only; resolved once and
+    // captured by the closure so the in-loop 429 retry reuses it.
+    // Best-effort: a signing failure just means those images don't inline
+    // this turn (the non-vision note path still tells the model they exist).
+    let attachmentImageUrls = new Map<string, string>();
+    if (ctx.tierSpec.supportsVision && app.supabase) {
+      const liveImages = messages
+        .filter((m) => !pendingDeleteSet.has(m.id))
+        .flatMap((m) => m.attachments ?? [])
+        .filter((a) => a.mime_type.startsWith('image/') && a.storage_path !== null);
+      if (liveImages.length > 0) {
+        try {
+          attachmentImageUrls = await app.supabase.createAttachmentSignedUrls(liveImages);
+        } catch {
+          attachmentImageUrls = new Map();
+        }
+      }
+    }
+
     const buildHistoryOnWire = (): VeniceMessage[] => [
       ...ctx.systemMessages,
       ...messages
         .filter((m) => !pendingDeleteSet.has(m.id))
-        .map((m) => toVeniceMessage(m, { visionSpec: ctx.tierSpec })),
+        .map((m) =>
+          toVeniceMessage(m, {
+            visionSpec: ctx.tierSpec,
+            imageUrls: attachmentImageUrls,
+          })
+        ),
     ];
 
     // Anchor for the `<datetime>` tag's since_last_response attribute.

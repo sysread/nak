@@ -304,9 +304,10 @@ function canvasToBlob(
 }
 
 /**
- * Build the data: URI for an image attachment's base64. Used by the
- * send-path content-builder to populate `image_url.url` for vision
- * inlining, and by the message renderer for thumbnail previews.
+ * Build a data: URI from a mime type + base64. Still used by the recipe-
+ * image rendering path (recipe_images remains a base64 store, outside the
+ * attachments-storage migration). The message-attachment render path uses
+ * signed URLs instead.
  */
 export function dataUrlFor(mimeType: string, base64: string): string {
   return `data:${mimeType};base64,${base64}`;
@@ -335,25 +336,31 @@ export type WireContentPart =
  *     runs regardless of tier — extracted text is cheap to include
  *     and often the only way a non-image attachment reaches the
  *     model.
- *   - Every image attachment with live `data_base64` becomes an
- *     `image_url` content part IFF the target model supports vision.
- *     On non-vision tiers images are skipped silently (the pre-send
- *     guard should have already blocked; this is a defensive
- *     fallback for history replay when the tier changes mid-
- *     conversation).
+ *   - Every live image attachment becomes an `image_url` content part
+ *     IFF the target model supports vision AND the caller resolved a
+ *     URL for it in `imageUrls` (a short-lived signed URL into the
+ *     attachments bucket - Venice fetches it server-side). On
+ *     non-vision tiers, or for an image whose URL couldn't be resolved,
+ *     the image is skipped silently (the pre-send guard should have
+ *     already blocked; this is a defensive fallback for history replay
+ *     when the tier changes mid-conversation, or for an expired image).
  *   - The user's typed `text` is always present as the first part
  *     (or the sole content when there are no images to inline).
  *
- * Callers pass this the model spec for the SEND — history messages
- * and the just-added user message all render through the same
- * function so the wire format stays consistent across the history.
+ * Callers pass this the model spec for the SEND plus an `imageUrls` map
+ * (attachment id -> signed URL) they pre-resolved via
+ * `SupabaseService.createAttachmentSignedUrls`. History messages and the
+ * just-added user message all render through the same function so the
+ * wire format stays consistent across the history. The builder stays a
+ * pure transform - all I/O (minting the URLs) happens upstream.
  */
 export function buildUserVeniceContent(
   text: string,
   attachments: Array<
-    Pick<Attachment, 'mime_type' | 'extracted_text' | 'data_base64' | 'filename'>
+    Pick<Attachment, 'id' | 'mime_type' | 'extracted_text' | 'filename' | 'storage_path'>
   > | null | undefined,
-  spec: Pick<ModelSpec, 'supportsVision'>
+  spec: Pick<ModelSpec, 'supportsVision'>,
+  imageUrls: ReadonlyMap<string, string>
 ): string | WireContentPart[] {
   if (!attachments || attachments.length === 0) return text;
 
@@ -390,7 +397,10 @@ export function buildUserVeniceContent(
 
   const inlineImages = spec.supportsVision
     ? attachments.filter(
-        (a) => isImageMimeType(a.mime_type) && typeof a.data_base64 === 'string'
+        (a) =>
+          isImageMimeType(a.mime_type) &&
+          a.storage_path !== null &&
+          imageUrls.has(a.id)
       )
     : [];
 
@@ -400,7 +410,7 @@ export function buildUserVeniceContent(
   for (const img of inlineImages) {
     parts.push({
       type: 'image_url',
-      image_url: { url: dataUrlFor(img.mime_type, img.data_base64 as string) },
+      image_url: { url: imageUrls.get(img.id) as string },
     });
   }
   return parts;
