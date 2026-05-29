@@ -166,7 +166,9 @@ move through them on their own timelines:
 ## The endpoints
 
 Five Venice endpoints are in scope (the full surface of
-`src/lib/venice.ts`):
+`src/lib/venice.ts`). The full caller-level punch list - every
+browser call site, worker, and process to migrate, with status -
+lives in [migration-inventory.md](./migration-inventory.md):
 
 - [Embeddings](./embeddings.md) - `POST /embeddings` via
   `VeniceClient.embed`. **Milestone 1, fleshed out.** The
@@ -184,7 +186,13 @@ Five Venice endpoints are in scope (the full surface of
   error mapping) for the driver-B migrations that follow.
 - [Text parser](./text-parser.md) - `POST
   /augment/text-parser` via `extractText`. *Skeleton.*
-  Multipart file upload from the attachments flow.
+  Multipart file upload from the attachments flow, and now the
+  Library document-ingestion flow (a second caller).
+- Image generation - `POST /image/generate` via
+  `VeniceClient.generateImage`. *No sub-plan yet.* One browser
+  caller (the `generate_image` tool); least-used, but still a
+  driver-B item while it holds the local Venice key. Tracked in
+  [migration-inventory.md](./migration-inventory.md).
 
 ## Strategic spine: climbing to streaming chat
 
