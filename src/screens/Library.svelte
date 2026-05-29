@@ -26,6 +26,7 @@
   import {
     ingestDocument,
     MAX_DOCUMENT_FILE_BYTES,
+    MAX_DOCUMENT_TITLE_CHARS,
     MAX_DOCUMENT_DESCRIPTION_CHARS,
   } from '$lib/documents';
   import { formatBytes, statusLabel } from '$lib/ui/library-list';
@@ -35,10 +36,12 @@
   let loadingDoc = $state(false);
   let loadError = $state<string | null>(null);
 
-  // Inline description editor.
-  let editingDescription = $state(false);
+  // Inline details editor (title + description).
+  let editingDetails = $state(false);
+  let titleDraft = $state('');
   let descriptionDraft = $state('');
-  let savingDescription = $state(false);
+  let savingDetails = $state(false);
+  let detailsError = $state<string | null>(null);
 
   // Upload form state.
   let fileInput = $state<HTMLInputElement | null>(null);
@@ -60,7 +63,8 @@
     }
     loadingDoc = true;
     loadError = null;
-    editingDescription = false;
+    editingDetails = false;
+    detailsError = null;
     void app.supabase
       .getDocumentById(id)
       .then((row) => {
@@ -123,26 +127,34 @@
     if (fileInput) fileInput.value = '';
   }
 
-  function startEditDescription(): void {
+  function startEditDetails(): void {
     if (!doc) return;
+    titleDraft = doc.title;
     descriptionDraft = doc.description;
-    editingDescription = true;
+    detailsError = null;
+    editingDetails = true;
   }
 
-  async function saveDescription(): Promise<void> {
-    if (!app.supabase || !doc || savingDescription) return;
-    savingDescription = true;
+  async function saveDetails(): Promise<void> {
+    if (!app.supabase || !doc || savingDetails) return;
+    const title = titleDraft.trim().slice(0, MAX_DOCUMENT_TITLE_CHARS);
+    if (title.length === 0) {
+      detailsError = 'Title cannot be empty.';
+      return;
+    }
+    savingDetails = true;
+    detailsError = null;
     try {
-      const next = descriptionDraft.trim().slice(0, MAX_DOCUMENT_DESCRIPTION_CHARS);
-      const updated = await app.supabase.updateDocument(doc.id, { description: next });
+      const description = descriptionDraft.trim().slice(0, MAX_DOCUMENT_DESCRIPTION_CHARS);
+      const updated = await app.supabase.updateDocument(doc.id, { title, description });
       doc = updated;
-      patchDocumentRow(updated.id, { description: updated.description });
+      patchDocumentRow(updated.id, { title: updated.title, description: updated.description });
       emitDocumentChange();
-      editingDescription = false;
+      editingDetails = false;
     } catch (err) {
-      loadError = err instanceof Error ? err.message : String(err);
+      detailsError = err instanceof Error ? err.message : String(err);
     } finally {
-      savingDescription = false;
+      savingDetails = false;
     }
   }
 
@@ -189,7 +201,9 @@
       <p class="error">{loadError}</p>
     {:else if doc}
       <header class="library-doc-header">
-        <h2>{doc.title}</h2>
+        {#if !editingDetails}
+          <h2>{doc.title}</h2>
+        {/if}
         <div class="library-doc-meta subtle">
           <span>{doc.filename}</span>
           <span>{formatBytes(doc.size_bytes)}</span>
@@ -200,42 +214,53 @@
             </span>
           {/if}
         </div>
-        <div class="library-doc-actions">
-          {#if doc.storage_path}
-            <button class="secondary" onclick={() => downloadOriginal()}>Download original</button>
-          {/if}
-          <button class="danger" onclick={() => deleteDocument()} disabled={deleting}>
-            {deleting ? 'Deleting...' : 'Delete'}
-          </button>
-        </div>
+        {#if !editingDetails}
+          <div class="library-doc-actions">
+            {#if doc.storage_path}
+              <button class="secondary" onclick={() => downloadOriginal()}>Download original</button>
+            {/if}
+            <button class="secondary" onclick={() => startEditDetails()}>Edit</button>
+            <button class="danger" onclick={() => deleteDocument()} disabled={deleting}>
+              {deleting ? 'Deleting...' : 'Delete'}
+            </button>
+          </div>
+        {/if}
       </header>
 
-      <section class="library-doc-description">
-        <div class="library-section-head">
-          <h3>What this is for</h3>
-          {#if !editingDescription}
-            <button class="link-btn" onclick={() => startEditDescription()}>Edit</button>
-          {/if}
-        </div>
-        {#if editingDescription}
-          <textarea
-            bind:value={descriptionDraft}
-            rows="3"
-            maxlength={MAX_DOCUMENT_DESCRIPTION_CHARS}
-            placeholder="Describe what this document is, so it's easy to find later."
-          ></textarea>
+      {#if editingDetails}
+        <!-- Edit details: title (the rename) + description, saved together. -->
+        <section class="library-doc-edit">
+          <label class="library-field">
+            <span>Title</span>
+            <input type="text" bind:value={titleDraft} maxlength={MAX_DOCUMENT_TITLE_CHARS} />
+          </label>
+          <label class="library-field">
+            <span>What this is for</span>
+            <textarea
+              bind:value={descriptionDraft}
+              rows="3"
+              maxlength={MAX_DOCUMENT_DESCRIPTION_CHARS}
+              placeholder="Describe what this document is, so it's easy to find later."
+            ></textarea>
+          </label>
+          {#if detailsError}<p class="error">{detailsError}</p>{/if}
           <div class="row">
-            <button onclick={() => saveDescription()} disabled={savingDescription}>
-              {savingDescription ? 'Saving...' : 'Save'}
+            <button onclick={() => saveDetails()} disabled={savingDetails}>
+              {savingDetails ? 'Saving...' : 'Save'}
             </button>
-            <button class="secondary" onclick={() => (editingDescription = false)}>Cancel</button>
+            <button class="secondary" onclick={() => (editingDetails = false)}>Cancel</button>
           </div>
-        {:else if doc.description}
-          <p>{doc.description}</p>
-        {:else}
-          <p class="subtle">No description yet.</p>
-        {/if}
-      </section>
+        </section>
+      {:else}
+        <section class="library-doc-description">
+          <h3>What this is for</h3>
+          {#if doc.description}
+            <p>{doc.description}</p>
+          {:else}
+            <p class="subtle">No description yet.</p>
+          {/if}
+        </section>
+      {/if}
 
       {#if doc.extraction_status === 'failed'}
         <p class="error">
@@ -323,11 +348,12 @@
     gap: 0.5rem;
     margin-top: 0.75rem;
   }
-  .library-section-head {
+  .library-doc-edit {
+    margin-top: 1.5rem;
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 0.5rem;
+    flex-direction: column;
+    gap: 0.75rem;
+    align-items: flex-start;
   }
   .library-doc-description,
   .library-doc-text {
@@ -361,16 +387,7 @@
     opacity: 0.75;
   }
   .library-field input,
-  .library-field textarea,
-  .library-doc-description textarea {
+  .library-field textarea {
     width: 100%;
-  }
-  .link-btn {
-    background: none;
-    border: none;
-    color: var(--accent, #6ab0f3);
-    cursor: pointer;
-    padding: 0;
-    font-size: 0.85rem;
   }
 </style>

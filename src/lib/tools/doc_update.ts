@@ -1,8 +1,9 @@
 /**
- * Edit a Library document's user-facing metadata (title, description). The
- * extracted body and its chunks are bound to the uploaded file and are not
- * editable here - replacing content is a re-upload, a user action. Returns
- * {updated: false} for an unknown id or a no-op call rather than throwing.
+ * Edit a Library document's user-facing metadata: rename it (title) and/or
+ * change its description. The extracted body is bound to the uploaded file and
+ * is not editable here - replacing content is a re-upload, a user action.
+ * Returns {updated: false} for an unknown id or a no-op call rather than
+ * throwing.
  */
 import type { ToolDef } from './types';
 import { MAX_DOCUMENT_TITLE_CHARS, MAX_DOCUMENT_DESCRIPTION_CHARS } from '../documents';

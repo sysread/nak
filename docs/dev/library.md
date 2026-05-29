@@ -103,8 +103,8 @@ UI:
   `emptyMessage`, `formatBytes`, `statusLabel`, `SEARCH_DEBOUNCE_MS`.
   Unit-tested at `tests/library-list.test.ts`.
 - `src/screens/Library.svelte` - the main panel: upload form +
-  per-document detail view (editable description, download, extracted
-  text, delete).
+  per-document detail view with an Edit form (rename + description),
+  download, extracted text, and delete.
 - `src/lib/routing.svelte.ts` - `DrawerTab` gains `'library'`; `Route`
   gains `document_id`.
 - `src/screens/Chat.svelte` - the tab button, lazy-load wiring, the
