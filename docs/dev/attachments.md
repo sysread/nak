@@ -1,10 +1,23 @@
 # Attachments
 
+> **Storage migration in progress.** Attachment bytes now live in a
+> private `attachments` Storage bucket (the `documents` pattern), not as
+> base64 in `message_attachments.data`. Liveness keys on `storage_path`,
+> reads go through signed URLs, and the legacy base64 was reclaimed
+> one-time (pre-bucket rows are treated as expired). Still pending:
+> (1) the **expiry sweep is not yet server-side** - the old browser
+> worker / `expire_old_attachments` RPC are inert, so bucket objects do
+> not yet expire; (2) the `data` column drop. See
+> [`./in-progress/attachments-storage-migration.md`](./in-progress/attachments-storage-migration.md).
+> Sections below are mid-update; where they describe base64-in-`data`,
+> read it as "historical, now storage_path + bucket".
+
 ## Role
 
-Per-message file attachments — queued in the composer, persisted to
-Supabase, inlined into Venice chat requests where the model can
-consume them, and reclaimed after a 30-day dormancy window.
+Per-message file attachments — queued in the composer, the original
+bytes stored in the private `attachments` Storage bucket, surfaced to
+Venice chat requests as signed URLs the model can consume, and (once the
+server-side sweep lands) reclaimed after a 30-day dormancy window.
 
 ## Files
 
@@ -225,15 +238,14 @@ via-parent-of-parent pattern —
 
 ## Gotchas
 
-- **FOLLOW-UP: migrate off base64 onto the Library's Storage bucket.**
-  The Library feature (`./library.md`) introduced a private `documents`
-  Storage bucket for persistent originals. Attachments still keep their
-  binary as base64 in `message_attachments.data`. That's two
-  file-storage mechanisms; the intent is to consolidate attachments
-  (and generated images) onto the same bucket. Bounded by the 30-day
-  expiry sweep, so the base64 bloat is capped in the meantime - but
-  this is a known debt, tracked separately.
-- **Base64 stored as text, not bytea**: the original design used a
+- **Bytes live in the `attachments` bucket, keyed on `storage_path`.**
+  Liveness is `storage_path !== null`; a null path is the expired /
+  legacy state (`extracted_text` survives). Reads never load bytes into
+  the row - the UI mints signed URLs and Venice's vision input fetches a
+  signed URL server-side. The `data` column is retained only for the
+  one-time reclaim + the eventual drop. See the migration plan linked at
+  the top. The base64-as-text notes below are historical.
+- **Base64 stored as text, not bytea** (historical): the original design used a
   `bytea` column on the assumption that PostgREST serialises bytea
   as base64 on SELECT. It doesn't — PostgREST returns bytea as a
   hex-escaped string (`\x4869…`), which our client fed straight

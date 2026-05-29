@@ -168,14 +168,30 @@ row with `data` set but no `storage_path` just gets `data` nulled
 
 ## Migration sequencing (tetris)
 
-- **This PR** wires the desired state: bucket + RLS, client-UUID
-  uploads, signed-URL reads, server-side sweep, the one-time
-  reclaim UPDATE. The `data` column stays (write-never,
-  read-never after the reclaim).
+- **Stage 1 - data path (LANDED).** Bucket + RLS, client-UUID
+  uploads, signed-URL reads (render + vision + analyze_image +
+  doc_create + recipe_photos), the one-time reclaim UPDATE. The
+  `data` column stays (write-never, read-never after the reclaim).
+  The old browser expiry worker / `expire_old_attachments` RPC are
+  left INERT - so bucket objects do not yet expire.
+- **Stage 2 - server-side expiry (TODO).** The pg_cron + edge-
+  function sweep described under Expiry above; retire the browser
+  `attachment_expiry` worker + the inert RPC. Until this lands,
+  uploaded objects accumulate in the bucket.
 - **Collapse PR (follow-up)** drops the `data` column AND removes
   the reclaim UPDATE together. Splitting is required: a single
   apply can't both keep an UPDATE that references `data` and drop
   `data` (the next sync would fail on the dangling reference).
+
+## Stage 1 verification owed (no browser / live Venice from the cloud)
+
+- Venice actually fetches the signed URL on a vision turn (the
+  load-bearing assumption); fall back to the retained base64 data-
+  URI path if it rejects URLs.
+- Image preview + download links render from signed URLs
+  (`MessageAttachments.svelte`), including the async resolve flicker.
+- Upload round-trip (`addAttachments` -> bucket), and the
+  download-from-bucket paths in `doc_create` / `recipe_photos_attach`.
 
 ## Tests
 
