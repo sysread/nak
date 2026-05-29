@@ -67,6 +67,11 @@ changing a contract that other features depend on.
 - [Cookbook](./cookbook.md) — `recipes` store + Cooklang
   parser + the recipe_* tools + the Cookbook modal and
   drawer tab.
+- [Library](./library.md) — persistent uploaded documents:
+  the `documents` + `document_chunks` tables, the Storage
+  bucket for originals, browser-side extraction + chunking,
+  the chunk-level embedding search, the `doc_*` tools, and
+  the Library drawer tab + panel.
 - [Conversation recall](./conversation-recall.md) — recall
   over thread summaries.
 - [Context recall](./context-recall.md) — topic-boundary
