@@ -60,7 +60,8 @@ as findable as a one-page letter - the answer doesn't get lost.
 
 From a document's page in the Library panel you can:
 
-- **Edit the description** to clarify what it's for.
+- **Rename it or edit the description** to clarify what it is and what
+  it's for (the **Edit** button).
 - **Download the original** file.
 - **Delete** the document - this permanently removes its text and the
   stored original.
