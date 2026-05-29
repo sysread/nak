@@ -18,11 +18,9 @@
   import { route, navigate } from '$lib/routing.svelte';
   import type { Document } from '$lib/supabase';
   import {
-    documentStore,
     addDocumentRow,
     patchDocumentRow,
     removeDocumentRow,
-    loadDocumentsFirstPage,
   } from '$lib/documents-store.svelte';
   import { emitDocumentChange } from '$lib/document-events';
   import {
@@ -301,12 +299,6 @@
         <p class="subtle">Set up Venice in Settings to extract text from uploads.</p>
       {/if}
     </section>
-
-    {#if documentStore.loaded && documentStore.results.length === 0}
-      <button class="link-btn" onclick={() => app.supabase && loadDocumentsFirstPage(app.supabase)}>
-        Refresh
-      </button>
-    {/if}
   {/if}
 </div>
 
