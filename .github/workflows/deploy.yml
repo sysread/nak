@@ -28,12 +28,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Re-apply supabase/schema.sql and the Pages-URL auth allowlist to the
-  # linked Supabase project before building. Runs the same scripts/sync.mjs
-  # that `mise run sync` runs locally, just in its non-interactive CI mode
-  # (SUPABASE_PROJECT_REF env var skips the state-file + project-picker
-  # path). If this fails the build is skipped — we'd rather fail the deploy
-  # than ship an app that expects a column the DB doesn't have.
+  # Re-apply supabase/schema.sql + the Pages-URL auth allowlist and deploy the
+  # edge functions to the linked Supabase project before building. The schema
+  # sync runs the same scripts/sync.mjs that `mise run sync` runs locally, just
+  # in its non-interactive CI mode (SUPABASE_PROJECT_REF env var skips the
+  # state-file + project-picker path). If either step fails the build is
+  # skipped — we'd rather fail the deploy than ship an app whose backend
+  # (schema or functions) is out of sync with it.
   sync-supabase:
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -56,6 +57,19 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
         run: node scripts/sync.mjs
+
+      - name: Deploy edge functions
+        # CI syncs the schema but does not otherwise deploy edge functions, so
+        # a schema change that relies on one (the pg_cron backfill POSTs to the
+        # venice function's /backfill route) would have no function to hit.
+        # Deploy here, behind the same opt-in gate as the schema sync. The
+        # supabase CLI comes from mise; auth is the access token, the project is
+        # pinned via --project-ref (no `supabase link` in CI), and verify_jwt
+        # stays as configured in supabase/config.toml (on).
+        if: vars.SUPABASE_PROJECT_REF != ''
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: supabase functions deploy venice --project-ref ${{ vars.SUPABASE_PROJECT_REF }}
 
   build:
     needs: sync-supabase
