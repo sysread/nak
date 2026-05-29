@@ -3987,9 +3987,10 @@ button.top-bar-overflow-btn {
   .toolbox-btn.flash { animation: none; }
 }
 
-/* Thinking-state assistant bubble: a single Scanner sitting in an
-   otherwise-empty card. Center it so it doesn't visually anchor to the
-   top-left corner. */
+/* Scanner sitting alone in an assistant card. Now only the cross-device
+   observer bubble ("Responding on another device") uses this shape - the
+   local streaming throbber moved out of the card to .streaming-throbber
+   below. Center it so it doesn't visually anchor to the top-left corner. */
 .msg.assistant > .thinking {
   display: flex;
   align-items: center;
@@ -3999,14 +4000,30 @@ button.top-bar-overflow-btn {
   padding: 0.25rem 0;
 }
 
+/* Local streaming throbber: the continuous "still working" Scanner for an
+   in-flight completion. Rendered as a standalone row directly in .messages,
+   BELOW the assistant response card rather than inside it, so the card can
+   hold the response content (reasoning, streaming text, the subconscious
+   checklist) while this pulse beats underneath. Being a direct child of
+   .messages, it picks up the column's 1.25rem gap as separation from the
+   card above. Centering the inline-flex Scanner lands it on the same
+   horizontal center as the 80%-width cards. Staying the last element in
+   .messages while a completion runs is what the follow-bottom scroll
+   anchors to (scrollToBottom -> scrollHeight). */
+.messages > .streaming-throbber {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem 0;
+}
+
 /* Rate-limit wait indicator: rendered inside the streaming assistant
-   bubble (sibling of .thinking / streaming Markdown) when Venice
-   returns 429 and the chat-loop is sleeping before re-issuing. The
-   muted foreground keeps it subordinate to the Scanner above - the
-   spinner is the primary "still working" cue, this row just explains
-   why the spinner has gone quiet. The clock icon is inline so it
-   reads as part of a single status sentence rather than a stranded
-   pictogram. */
+   card (below the streaming Markdown) when Venice returns 429 and the
+   chat-loop is sleeping before re-issuing. The muted foreground keeps it
+   subordinate - the throbber pulsing below the card is the primary
+   "still working" cue, this row just explains why that pulse has gone
+   quiet. The clock icon is inline so it reads as part of a single status
+   sentence rather than a stranded pictogram. */
 .msg.assistant > .rate-limit-wait {
   display: flex;
   align-items: center;
@@ -4023,12 +4040,12 @@ button.top-bar-overflow-btn {
 
 /* Subconscious-priming checklist: one row per pre-response pipeline
    (samskara fire, intuition, context recall) that fired this turn,
-   shown under the primary "Thinking" Scanner before the answer streams.
-   Each row is a spinner (running) or checkmark (done) plus a label, and
-   the whole group ease-fades out via Svelte's `transition:fade` once the
-   reply starts. Same subordinate, muted, centered treatment as the
-   rate-limit row so it reads as a quiet "which internal layer is busy"
-   annotation rather than competing with the main spinner. */
+   shown inside the response card before the answer streams - above the
+   throbber, which sits below the card. Each row is a spinner (running)
+   or checkmark (done) plus a label, and the whole group ease-fades out
+   via Svelte's `transition:fade` once the reply starts. Subordinate,
+   muted, centered treatment so it reads as a quiet "which internal layer
+   is busy" annotation rather than competing with the throbber. */
 .msg.assistant > .subconscious-checklist {
   display: flex;
   flex-direction: column;
