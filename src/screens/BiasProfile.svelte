@@ -39,7 +39,13 @@
   import { navigate, route } from '$lib/routing.svelte';
   import { BIAS_CATALOG } from '$lib/bias/catalog';
   import { type BiasKey, isBiasKey } from '$lib/bias/catalog-keys';
-  import { displayThreadTitle, observationsLabel } from '$lib/ui/bias-profile';
+  import {
+    displayThreadTitle,
+    observationsLabel,
+    tierTitle,
+    IN_PROMPT_TITLE,
+    reactionVerdictTitle,
+  } from '$lib/ui/bias-profile';
   import {
     ALPHA_PRIOR,
     BETA_PRIOR,
@@ -556,7 +562,7 @@
                   <li class="bias-row">
                     <header class="bias-row-header">
                       <span class="bias-name">{biasLabel(row.bias)}</span>
-                      <span class="tier-badge {row.tier}">{row.tier}</span>
+                      <span class="tier-badge {row.tier}" title={tierTitle(row.tier)}>{row.tier}</span>
                     </header>
                     <p class="bias-def subtle">{biasGuidance(row.bias)}</p>
                   </li>
@@ -636,7 +642,7 @@
                   <div class="obs-card">
                     <header class="obs-header">
                       <span class="obs-bias">{biasLabel(r.bias)}</span>
-                      <span class="reaction-verdict {r.wasConfirmed === true ? 'affirmed' : r.wasConfirmed === false ? 'pushed' : 'neutral'}">
+                      <span class="reaction-verdict {r.wasConfirmed === true ? 'affirmed' : r.wasConfirmed === false ? 'pushed' : 'neutral'}" title={reactionVerdictTitle(r.wasConfirmed)}>
                         {reactionVerdict(r.wasConfirmed)}
                       </span>
                     </header>
@@ -738,9 +744,9 @@
               <li class="bias-row">
                 <header class="bias-row-header">
                   <span class="bias-name">{biasLabel(row.bias)}</span>
-                  <span class="tier-badge {row.tier}">{row.tier}</span>
+                  <span class="tier-badge {row.tier}" title={tierTitle(row.tier)}>{row.tier}</span>
                   {#if rendered.has(row.bias)}
-                    <span class="in-prompt">in prompt</span>
+                    <span class="in-prompt" title={IN_PROMPT_TITLE}>in prompt</span>
                   {/if}
                 </header>
                 <p class="bias-def subtle">{biasDefinition(row.bias)}</p>
@@ -866,7 +872,7 @@
                           <div class="obs-card">
                             <header class="obs-header">
                               <span class="obs-bias">{biasLabel(r.bias)}</span>
-                              <span class="reaction-verdict {r.wasConfirmed === true ? 'affirmed' : r.wasConfirmed === false ? 'pushed' : 'neutral'}">
+                              <span class="reaction-verdict {r.wasConfirmed === true ? 'affirmed' : r.wasConfirmed === false ? 'pushed' : 'neutral'}" title={reactionVerdictTitle(r.wasConfirmed)}>
                                 {reactionVerdict(r.wasConfirmed)}
                               </span>
                             </header>

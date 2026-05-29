@@ -76,7 +76,8 @@ The modal has three sections:
   current tier (elided, soft, or strong), the lower bound of
   the 90% credible interval, the posterior mean rate, and the
   effective sample size. Biases marked "in prompt" are the ones
-  actively shaping responses this session. Biases the worker has
+  actively shaping responses this session. Hover any tier or
+  "in prompt" badge for a one-line explanation of what it means. Biases the worker has
   never flagged in any analyzed conversation read as "no
   evidence" rather than a number - their CI lower would just be
   the prior's 10th-percentile (~5%), and surfacing that as a
@@ -148,6 +149,9 @@ active during that conversation:
   ("stop hedging", "just answer the question", "I don't need
   alternatives", etc.).
 - **Neutral** - no clear signal either way.
+
+Hover any reaction badge in the modal for a one-line reminder
+of what the verdict means and how it nudges the gate.
 
 Those reactions accumulate into a per-bias feedback score that
 shifts the surfacing thresholds slightly: consistently affirming
