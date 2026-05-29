@@ -180,6 +180,20 @@ The wiki is the right surface for "what is X (in the user's life)" lookups again
 You cannot edit wiki articles directly. When the user asks to consolidate duplicates, delete stale stubs, split a sprawling page, or otherwise reshape the wiki, enable the \`wiki\` toolbox and call wiki_librarian with concrete instructions - it delegates to a sub-agent that reads every article and carries out the maintenance pass. Scope the request first with wiki_list / wiki_get so the instructions reference specific titles or ids; vague instructions produce vague results.
 `;
 
+// Library (persistent document storage). Distinct from both the wiki (short
+// user-authored articles) and message attachments (per-message files that
+// expire after 30 days): the Library holds whole uploaded documents the user
+// keeps long-term - contracts, policies, tax docs - chunked and embedded so
+// answers can be found inside a long PDF. Positioned right after WIKI_BLOCK
+// because the two are sibling persistent-knowledge surfaces the model reaches
+// via search rather than auto-injection.
+const LIBRARY_BLOCK = `\
+The application also maintains a document Library: whole files the user has uploaded to keep as long-term reference material - insurance policies, contracts, HOA agreements, tax documents, anything text can be extracted from. Unlike message attachments (which expire), Library documents are permanent and fully searchable.
+Document contents are NEVER auto-injected. When the user asks a question that their own paperwork would answer ("what's my deductible", "does my policy cover X", "what does the HOA say about fences"), call doc_search with a natural-language query - it searches every document passage-by-passage and returns the most relevant passages with their source document, so the answer is findable even inside a long PDF.
+Use doc_list to see what documents exist; once you know a document's id, use doc_get to read its full text.
+To save a file the user attached to THIS conversation as a permanent document, enable the \`library\` toolbox and call doc_create (identify the file by its filename, and always give it a clear description of what it is for). Use doc_update to rename a document or fix its description, and doc_delete when the user says a document is obsolete (e.g. they changed insurers and the old policy should go).
+`;
+
 // Clarifying-question framing. Counter-pushes against the model's
 // tendency to guess at ambiguous user intent and then waste a long
 // answer on the wrong branch. The ask_user tool lives in the always-on
@@ -325,6 +339,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     VOICE_BLOCK,
     RECALL_BLOCK,
     WIKI_BLOCK,
+    LIBRARY_BLOCK,
     ASK_USER_BLOCK,
     TOOLBOX_FRAMING_BLOCK,
     ACTIVITY_BLOCK,
