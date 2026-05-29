@@ -75,21 +75,36 @@ async function readVeniceKey(admin: SupabaseClient): Promise<string | null> {
 
 /**
  * True when the request is authenticated as the service role. The cron job
- * (pg_net) sends the project's service-role key as the bearer; the gateway
- * (verify_jwt on) validates it as a JWT, and we additionally require it to
- * equal the injected SUPABASE_SERVICE_ROLE_KEY so an ordinary signed-in user
- * cannot trigger a cross-member backfill sweep.
+ * (pg_net) sends the project's service-role JWT as the bearer (the gateway
+ * needs a JWT, so the cron secret is the legacy JWT key, not the modern opaque
+ * `sb_secret_` one - same reason the local realtime stack rejects
+ * `sb_publishable_`).
  *
- * This must be the legacy JWT-format service-role key, not the modern opaque
- * `sb_secret_` key: the gateway rejects a non-JWT bearer (the same reason the
- * local realtime stack rejects the `sb_publishable_` key). The cron secret is
- * seeded with the legacy key for exactly this reason.
+ * We decode the bearer's `role` claim rather than string-comparing it to the
+ * injected SUPABASE_SERVICE_ROLE_KEY. That equality check shipped first and
+ * 403'd every cron call: the bearer must be a JWT for the gateway to accept it,
+ * but SUPABASE_SERVICE_ROLE_KEY is not guaranteed to be the same string (legacy
+ * JWT vs modern `sb_secret_`), so the bytes differ even though both grant the
+ * service role. Checking the claim is robust to which key format the project
+ * uses. SECURITY: this trusts the decoded payload, which is only safe because
+ * the gateway's `verify_jwt` (on by default, per supabase/config.toml; no
+ * per-route override) has already validated the signature. Do NOT disable
+ * verify_jwt for this function without replacing this with signature
+ * verification - otherwise a forged `role: service_role` token would pass.
  */
 function isServiceRole(req: Request): boolean {
   const auth = req.headers.get('Authorization') ?? '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-  return token.length > 0 && serviceKey.length > 0 && token === serviceKey;
+  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  const parts = token.split('.');
+  if (parts.length !== 3) return false; // not a JWT
+  try {
+    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const payload = JSON.parse(atob(b64)) as { role?: unknown };
+    return payload.role === 'service_role';
+  } catch {
+    return false;
+  }
 }
 
 interface EmbedRequestBody {
