@@ -160,7 +160,6 @@ describe('tool registry', () => {
         'doc_grep',
         'doc_list',
         'doc_read',
-        'doc_search',
         'memory_recall',
         'memory_search',
         'recipe_get',

@@ -15,7 +15,7 @@ export const docDeleteSchema = {
     properties: {
       id: {
         type: 'string',
-        description: 'UUID of the document to delete (from doc_list or doc_search).',
+        description: 'UUID of the document to delete (from doc_list or doc_grep).',
       },
     },
     required: ['id'],

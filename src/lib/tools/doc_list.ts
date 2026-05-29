@@ -1,7 +1,7 @@
 /**
  * Browse the user's Library documents (metadata only, newest first). The
- * counterpart to doc_search: a survey of what's on file when the model wants
- * to know which documents exist before drilling into one with doc_get.
+ * model's entry point: a survey of what's on file (titles + descriptions) so
+ * it can pick which document a question is about before grepping into it.
  */
 import type { ToolDef } from './types';
 import { docListSchema, DOC_LIST_DEFAULT_LIMIT, DOC_LIST_MAX_LIMIT } from './doc_list.schema';

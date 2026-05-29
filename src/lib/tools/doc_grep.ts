@@ -1,9 +1,9 @@
 /**
- * Exact regex search inside Library documents - the deterministic half of the
+ * Exact regex search inside Library documents - the find half of the
  * grep-then-read loop the chat model runs over a large document, mirroring how
  * a coding agent greps a big file for line numbers before reading a range.
- * Complements the semantic doc_search: this finds the precise clause once the
- * model knows the wording; doc_search finds the right document when it doesn't.
+ * This is the primary document-search path (there is no semantic search); the
+ * model picks the document via doc_list, greps for the clause, then doc_reads.
  *
  * An invalid regex comes back from Postgres as an error; we rephrase it into
  * actionable text rather than throwing so the model can fix its pattern and

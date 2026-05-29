@@ -484,7 +484,7 @@
   function onPickLibraryTab(): void {
     navigate({ drawer: 'library' }, { replace: true });
     if (app.supabase && !documentStore.loaded && !documentStore.loading) {
-      void runDocumentSearch(app.supabase, app.venice);
+      void runDocumentSearch(app.supabase);
     }
   }
 
@@ -525,7 +525,7 @@
     if (route.drawer !== 'library') return;
     if (!app.supabase) return;
     if (documentStore.loaded || documentStore.loading) return;
-    void runDocumentSearch(app.supabase, app.venice);
+    void runDocumentSearch(app.supabase);
   });
 
   // Wiki cross-surface change channel. The chat-side wiki_* tool calls
@@ -544,7 +544,7 @@
   function onDocumentStoreChanged(): void {
     if (!app.supabase) return;
     if (!documentStore.loaded) return;
-    void runDocumentSearch(app.supabase, app.venice);
+    void runDocumentSearch(app.supabase);
   }
 
   function onCookbookStoreChanged(): void {

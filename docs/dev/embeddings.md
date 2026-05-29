@@ -1,8 +1,7 @@
 # Embeddings
 
 The pipeline that vectorizes memories, thread summaries, recipes,
-wiki articles, samskara substrate, and Library document chunks so
-semantic search works.
+wiki articles, and samskara substrate so semantic search works.
 Backfill (turning `embedding is null` rows into vectors) runs
 server-side on a `pg_cron` schedule behind the `venice` edge
 function; the browser still embeds *search queries* synchronously at
@@ -18,10 +17,9 @@ protocol the backfill drains through.
 
 A memory that's just been written is `embedding is null`; so is a
 thread whose title or summary changed (trigger-invalidated), and the
-same for recipes, wiki articles, substrate rows, and freshly-inserted
-document chunks. A `pg_cron` job
+same for recipes, wiki articles, and substrate rows. A `pg_cron` job
 fires every 5 minutes, POSTs to the edge function's `/backfill`
-route, and the function claims pending rows across all six tables,
+route, and the function claims pending rows across all five tables,
 asks Venice's `/embeddings` endpoint for vectors, and writes them
 back under a claim guard - all server-side, no open tab required.
 
@@ -77,7 +75,7 @@ later milestone (phase 4).
   the service role by decoding the bearer JWT's `role` claim and
   requiring `role === 'service_role'` (the gateway's verify_jwt has
   already validated the signature). It then drives `runBackfill` over
-  the six sources, bounded by a batch cap (50 rows) and a time budget
+  the five sources, bounded by a batch cap (50 rows) and a time budget
   (25s) per invocation. The schedule resumes the drain next tick.
 - **`runBackfill(deps, opts)`** - round-robins one claim attempt per
   source per pass; embeds and saves whatever it claims; stops when a
@@ -167,7 +165,7 @@ under the supervisor) still does, importing `LeaseCoordinator` from
 
 ## Interactions with other features
 
-- **Memory** - `memories` is one of the six backfill sources. The
+- **Memory** - `memories` is one of the five backfill sources. The
   `clear_memory_embedding_on_change` trigger reselects edited rows.
   `memory_search`'s vector path reads `memories.embedding`; ILIKE
   fallback covers unembedded rows. See `./memory.md`.
@@ -185,9 +183,6 @@ under the supervisor) still does, importing `LeaseCoordinator` from
 - **Wiki / Samskara** - `wiki_articles` and `samskara_substrate` are
   sources; the substrate claim skips unassimilated rows
   (`situation is null`). See `./wiki.md`, `./samskara.md`.
-- **Library** - `document_chunks` is the sixth source; chunk rows are
-  inserted `embedding is null` at upload and drained by the same sweep.
-  Chunk content embeds verbatim (no title prefix). See `./library.md`.
 - **Shared config** - the function reads the project-global Venice
   key from `app_config` server-side (service role). The browser's
   `app.serverConfig` copy is the same row, fetched post-auth, staged
