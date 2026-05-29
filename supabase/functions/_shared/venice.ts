@@ -81,3 +81,107 @@ export async function veniceEmbed(opts: VeniceEmbedOptions): Promise<EmbeddingRe
     throw new VeniceError('Failed to parse Venice embedding response.', 'parse');
   }
 }
+
+export interface UsagePageParams {
+  /** 1-based page index. */
+  page: number;
+  /** Rows per page; the browser loop pins this at 500. */
+  limit: number;
+  /** Venice sort direction, e.g. 'desc'. */
+  sortOrder: string;
+  /** ISO 8601 lower bound (inclusive). Omitted -> unbounded. */
+  startDate?: string;
+  /** ISO 8601 upper bound (exclusive, per Venice docs). Omitted -> unbounded. */
+  endDate?: string;
+  /** Single-currency filter. Omitted -> every denomination. */
+  currency?: string;
+}
+
+/**
+ * Assemble the Venice /billing/usage query string for one page. Pure so the
+ * param shaping is unit-testable offline. Optional filters are dropped entirely
+ * when unset - an empty `startDate=` could read upstream as an epoch bound
+ * rather than "no bound", so omission, not an empty value, is what means
+ * unbounded.
+ */
+export function buildUsageQuery(params: UsagePageParams): string {
+  const qs = new URLSearchParams();
+  qs.set('limit', String(params.limit));
+  qs.set('page', String(params.page));
+  qs.set('sortOrder', params.sortOrder);
+  if (params.startDate) qs.set('startDate', params.startDate);
+  if (params.endDate) qs.set('endDate', params.endDate);
+  if (params.currency) qs.set('currency', params.currency);
+  return qs.toString();
+}
+
+/**
+ * One page of usage as relayed to the browser: the raw Venice rows plus the
+ * server-reported page count. Row coercion and the paging cap live in the
+ * browser loop (src/lib/usage.ts), so this handler stays a thin authenticated
+ * passthrough and does not need to know the UsageRow shape.
+ */
+export interface UsagePage {
+  data: unknown[];
+  totalPages: number;
+}
+
+export interface VeniceUsageOptions {
+  apiKey: string;
+  params: UsagePageParams;
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * GET one page of /billing/usage from Venice with the shared key. Mirrors
+ * veniceEmbed's error mapping: 429 -> rate_limit (the one status the caller
+ * backs off on), everything else -> http. Returns the raw rows and the
+ * reported page count; the caller clamps that count to its own safety cap.
+ */
+export async function veniceFetchUsagePage(opts: VeniceUsageOptions): Promise<UsagePage> {
+  const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const qs = buildUsageQuery(opts.params);
+
+  let res: Response;
+  try {
+    res = await fetchImpl(`${baseUrl}/billing/usage?${qs}`, {
+      method: 'GET',
+      // GET with no body: send only Authorization + Accept. A JSON
+      // Content-Type here forces a needless preflight and some intermediaries
+      // choke on a body-less request that declares one. Pin Accept so a
+      // default of */* can't negotiate the CSV variant Venice also serves here.
+      headers: {
+        Authorization: `Bearer ${opts.apiKey}`,
+        Accept: 'application/json',
+      },
+    });
+  } catch (err) {
+    throw new VeniceError(
+      `Network error contacting Venice: ${(err as Error).message}`,
+      'network'
+    );
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new VeniceError(
+      `Venice billing/usage ${res.status}: ${body.slice(0, 200)}`,
+      res.status === 429 ? 'rate_limit' : 'http',
+      res.status
+    );
+  }
+
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    throw new VeniceError('Failed to parse Venice usage response.', 'parse');
+  }
+  const obj = payload as { data?: unknown; pagination?: { totalPages?: number } };
+  const data = Array.isArray(obj.data) ? obj.data : [];
+  const totalPages =
+    typeof obj.pagination?.totalPages === 'number' ? obj.pagination.totalPages : 1;
+  return { data, totalPages };
+}

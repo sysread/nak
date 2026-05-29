@@ -3,9 +3,12 @@
 // not many small). It routes internally by trailing path segment:
 //   /embed     - browser-triggered, one vector for a search query or (legacy)
 //                a single backfill row. Authenticated as the calling user.
+//   /usage     - browser-triggered, one page of billing usage. The browser's
+//                paging loop calls it once per page so it can drive a per-page
+//                progress indicator. Authenticated as the calling user.
 //   /backfill  - cron-triggered (pg_cron -> pg_net), drains pending embeddings
 //                across every table server-side. Service-role only.
-// `/complete`, `/usage`, and `/text-parser` are the planned siblings - see
+// `/complete` and `/text-parser` are the planned siblings - see
 // docs/dev/in-progress/venice-edge-functions/.
 //
 // The handlers are intentionally thin: request/response shaping, the Venice
@@ -13,7 +16,7 @@
 // offline). This file owns only the glue - CORS, routing, auth, sourcing the
 // shared key, and error mapping.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { veniceEmbed, VeniceError } from '../_shared/venice.ts';
+import { veniceEmbed, veniceFetchUsagePage, VeniceError } from '../_shared/venice.ts';
 import { EMBED_SOURCES } from '../_shared/embed-input.ts';
 import {
   runBackfill,
@@ -143,6 +146,66 @@ async function handleEmbed(req: Request): Promise<Response> {
   }
 }
 
+interface UsageRequestBody {
+  page?: number;
+  limit?: number;
+  sortOrder?: string;
+  startDate?: string;
+  endDate?: string;
+  currency?: string;
+}
+
+/**
+ * Browser-triggered single-page proxy for GET /billing/usage. The browser's
+ * paging loop (src/lib/usage.ts) calls this once per page, so the per-page
+ * progress indicator in the Usage pane keeps working - a single fat response
+ * could not report page-by-page progress. Authenticated as the calling user:
+ * the gateway's verify_jwt has already validated the session JWT (same model as
+ * /embed, no service-role check). Usage is account-scoped, so any project member
+ * sees the one shared key's usage - consistent with the shared-key trust model.
+ *
+ * Forwards one page to Venice with the shared key and relays the rows verbatim;
+ * row coercion and the paging cap live in the browser loop, keeping this a thin
+ * passthrough with no UsageRow knowledge.
+ */
+async function handleUsage(req: Request): Promise<Response> {
+  let body: UsageRequestBody;
+  try {
+    body = (await req.json()) as UsageRequestBody;
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+  const apiKey = await readVeniceKey(admin);
+  if (!apiKey) {
+    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
+  }
+
+  try {
+    const result = await veniceFetchUsagePage({
+      apiKey,
+      params: {
+        page: typeof body.page === 'number' ? body.page : 1,
+        limit: typeof body.limit === 'number' ? body.limit : 500,
+        sortOrder: typeof body.sortOrder === 'string' ? body.sortOrder : 'desc',
+        startDate: body.startDate,
+        endDate: body.endDate,
+        currency: body.currency,
+      },
+    });
+    return json(result);
+  } catch (err) {
+    if (err instanceof VeniceError) {
+      // Mirror handleEmbed: surface Venice's 429 as a 429 so the browser loop
+      // can back off; everything else collapses to 502 (bad upstream).
+      return json({ error: err.message, kind: err.kind }, err.kind === 'rate_limit' ? 429 : 502);
+    }
+    return json({ error: (err as Error).message }, 500);
+  }
+}
+
 /**
  * Cron-driven server-side backfill. Claims pending rows across every embeddable
  * table, embeds them with the shared key, and writes the vectors back through
@@ -211,6 +274,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // lands here with a trailing `embed`.
   const route = new URL(req.url).pathname.split('/').filter(Boolean).pop();
   if (route === 'embed' && req.method === 'POST') return handleEmbed(req);
+  if (route === 'usage' && req.method === 'POST') return handleUsage(req);
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
 
   return json({ error: 'not found' }, 404);

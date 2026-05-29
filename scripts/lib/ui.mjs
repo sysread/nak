@@ -122,13 +122,18 @@ export async function confirm(question, { default: def = true } = {}) {
   return a.startsWith('y');
 }
 
-export async function choose(question, options) {
+export async function choose(question, options, { defaultIndex = 0 } = {}) {
+  const def =
+    Number.isInteger(defaultIndex) && defaultIndex >= 0 && defaultIndex < options.length
+      ? defaultIndex
+      : 0;
   console.log(`  ${style.cyan('?')} ${question}`);
   options.forEach((opt, i) => {
-    console.log(`      ${style.bold(String(i + 1))}. ${opt.label}`);
+    const marker = i === def ? style.dim(' (default)') : '';
+    console.log(`      ${style.bold(String(i + 1))}. ${opt.label}${marker}`);
   });
   while (true) {
-    const answer = await ask('  Pick a number', { default: '1' });
+    const answer = await ask('  Pick a number', { default: String(def + 1) });
     const idx = parseInt(answer, 10) - 1;
     if (Number.isInteger(idx) && idx >= 0 && idx < options.length) {
       return options[idx].value;

@@ -30,6 +30,14 @@ import { isLogLevel, createLogger, type LogLevel } from './logger.svelte';
 const log = createLogger('supabase');
 import type { OpenAIToolCall } from './tools/types';
 import type { Citation, TokenUsage } from './venice';
+import { VeniceError } from './venice';
+import {
+  collectUsagePages,
+  type UsageRequestOptions,
+  type UsageRow,
+  type UsagePageRequest,
+  type UsagePageResult,
+} from './usage';
 import { synthesizeRecoveryMessages } from './conversation-recovery';
 
 // Re-exported so consumers that already pull Message from this module
@@ -1220,6 +1228,29 @@ export function coerceSettings(raw: unknown): UserSettings {
   return out;
 }
 
+/**
+ * Translate a supabase-js functions.invoke error into a VeniceError. A
+ * FunctionsHttpError carries the function's Response on `.context`; we read the
+ * status and the function's normalized { error } body off it so the Usage pane
+ * shows the real failure and a 429 still reads as rate_limit. Anything without a
+ * Response context (a relay or transport failure) becomes a network error.
+ */
+async function usageFunctionError(error: unknown): Promise<VeniceError> {
+  const ctx = (error as { context?: unknown }).context;
+  if (ctx instanceof Response) {
+    let payload: { error?: string } = {};
+    try {
+      payload = await ctx.clone().json();
+    } catch {
+      // Non-JSON error body - fall back to the status line.
+    }
+    const message = payload.error ?? `usage request failed (HTTP ${ctx.status})`;
+    return new VeniceError(message, ctx.status === 429 ? 'rate_limit' : 'http', ctx.status);
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return new VeniceError(`Network error contacting usage function: ${message}`, 'network');
+}
+
 export class SupabaseService {
   readonly client: SupabaseClient;
 
@@ -1338,6 +1369,32 @@ export class SupabaseService {
     if (!data) return null;
     const key = (data as { venice_api_key?: string | null }).venice_api_key;
     return { veniceApiKey: typeof key === 'string' && key.length > 0 ? key : null };
+  }
+
+  /**
+   * Fetch Venice billing usage through the `venice` edge function. The browser
+   * no longer holds a Venice key for this path - the function reads the shared
+   * key server-side and proxies one page per call. The paging loop lives in
+   * src/lib/usage.ts (not server-side) precisely so it can drive the Usage
+   * pane's per-page progress indicator. The session JWT rides along on
+   * functions.invoke and the gateway's verify_jwt gates the call; failures
+   * surface as VeniceError so the pane renders the same error shape it always
+   * has.
+   */
+  async fetchUsage(opts: UsageRequestOptions = {}): Promise<UsageRow[]> {
+    return collectUsagePages((req) => this.fetchUsagePage(req), opts);
+  }
+
+  private async fetchUsagePage(req: UsagePageRequest): Promise<UsagePageResult> {
+    const { data, error } = await this.client.functions.invoke('venice/usage', {
+      body: req,
+    });
+    if (error) throw await usageFunctionError(error);
+    const body = (data ?? {}) as { data?: unknown; totalPages?: unknown };
+    return {
+      rows: Array.isArray(body.data) ? body.data : [],
+      totalPages: typeof body.totalPages === 'number' ? body.totalPages : 1,
+    };
   }
 
   /**

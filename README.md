@@ -56,7 +56,7 @@ The wizard will:
    API. The email is pre-confirmed, so you can sign in immediately with
    no email round-trip. (You can skip this if you prefer to manage users
    yourself.)
-8. Prompt for your **Venice API key** (get one at <https://venice.ai/settings/api>).
+8. Prompt for your **Venice API key** (get one at <https://venice.ai/settings/api>). Use an **Admin** key so the in-app **Usage** view works - billing needs admin scope; chat and embeddings work with a standard key.
 9. Print a one-shot setup link like
    `https://<you>.github.io/nak/#setup=<blob>`.
 
@@ -103,7 +103,7 @@ by hand:
 6. **Create your user** in Authentication → Users → *Add user* →
    *Create new user*. Enter your email and password and tick
    **Auto Confirm User** so you can sign in without an email round-trip.
-7. **Get a Venice API key** at <https://venice.ai/settings/api>.
+7. **Get a Venice API key** at <https://venice.ai/settings/api>. Use an **Admin** key if you want the in-app **Usage** view - billing needs admin scope; a standard key covers chat and embeddings.
 8. **Enable GitHub Pages** in Settings → Pages → Source = "GitHub Actions".
 9. **Allow workflow writes** in Settings → Actions → General → Workflow
    permissions → "Read and write permissions".

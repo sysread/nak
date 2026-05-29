@@ -177,9 +177,11 @@ Five Venice endpoints are in scope (the full surface of
   /chat/completions` via `streamChat` and `completeChat`.
   *Skeleton.* The hard one: streaming SSE through a function
   plus abort semantics.
-- [Billing usage](./billing-usage.md) - `GET /billing/usage`
-  via `fetchUsage`. *Skeleton.* The simple one: read-only,
-  paginated, account-scoped.
+- [Billing usage](./billing-usage.md) - `GET /billing/usage`.
+  **Milestone 2, implemented.** Read-only, paginated,
+  account-scoped - and the first browser->function call, so it
+  served as the client-invoke canary (session-JWT auth, CORS,
+  error mapping) for the driver-B migrations that follow.
 - [Text parser](./text-parser.md) - `POST
   /augment/text-parser` via `extractText`. *Skeleton.*
   Multipart file upload from the attachments flow.
@@ -264,6 +266,19 @@ first inside milestone 1 and lands once, then every later
 endpoint reuses it. It is documented in
 [embeddings.md](./embeddings.md) rather than duplicated here,
 because milestone 1 is what proves it.
+
+The shared key must be Admin-tier once billing usage is in scope.
+Venice's `/billing/usage` rejects a standard inference key with 401
+"Admin API key required", so the single `app_config.venice_api_key`
+that serves every route has to be admin-capable for the Usage view to
+work. That key is also member-readable (the browser GETs it via
+`getAppConfig` under an authenticated-read RLS policy), so in a
+multi-user project the owner's admin key is exposed to invited members
+(a privilege bump over the inference-only key the
+[not-a-zero-knowledge system](#not-a-zero-knowledge-system) note
+assumed). Fine for a solo project; revisit whether usage should be
+shared-key vs owner-only when multi-user matters. See
+[billing-usage.md](./billing-usage.md).
 
 Note the migration tactic that makes "did we get every
 consumer" a *static* check: keep the local config and a new

@@ -20,7 +20,8 @@
  * No localStorage. Billing data stays in memory only - a full page
  * reload always costs one fetch when the pane is eventually opened.
  */
-import { VeniceClient, VeniceError, USAGE_MAX_PAGES, type UsageRow } from './venice';
+import { VeniceError } from './venice';
+import { USAGE_MAX_PAGES, type UsageRequestOptions, type UsageRow } from './usage';
 import { createLogger } from './logger.svelte';
 
 const log = createLogger('usage');
@@ -85,6 +86,22 @@ export function isUsageStale(): boolean {
 }
 
 /**
+ * Whether the on-open effect should kick off an automatic refresh: cache is
+ * stale, nothing is in flight, and the last attempt did not error.
+ *
+ * The error guard is load-bearing. A failed fetch leaves `lastFetchedAt` null,
+ * so `isUsageStale()` stays true; without this guard, a persistently failing
+ * auto-load (no/expired shared key, Venice down, offline, rate-limited)
+ * re-qualifies the instant `loading` flips back to false and the effect
+ * re-fires - a tight retry storm hammering the usage endpoint. A failed
+ * auto-load therefore stops here and surfaces the error; the manual Refresh
+ * button is how the user retries (it clears `error` on entry).
+ */
+export function shouldAutoRefreshUsage(): boolean {
+  return !usage.loading && usage.error === null && isUsageStale();
+}
+
+/**
  * Compute the default rolling-7-day range as a pair of ISO 8601
  * timestamps. Venice treats `endDate` as exclusive, so the upper bound
  * is the NEXT midnight after today - matching the transform the pane
@@ -104,6 +121,15 @@ function defaultRangeIso(): { startDate: string; endDate: string } {
 }
 
 /**
+ * The slice of SupabaseService that refreshUsage depends on: the usage fetch.
+ * Narrow on purpose so the store does not couple to the whole service (and so
+ * the test can pass a bare stub).
+ */
+interface UsageFetcher {
+  fetchUsage(opts: UsageRequestOptions): Promise<UsageRow[]>;
+}
+
+/**
  * Fetch the default rolling-7-day window and populate the store.
  * Called from the Settings pane's on-open effect and from the
  * Refresh button when the date pickers match the defaults. Safe to
@@ -114,7 +140,7 @@ function defaultRangeIso(): { startDate: string; endDate: string } {
  * Errors are captured into `usage.error` and logged; prior
  * `usage.data` is preserved so a flaky fetch doesn't wipe the display.
  */
-export async function refreshUsage(venice: VeniceClient): Promise<void> {
+export async function refreshUsage(source: UsageFetcher): Promise<void> {
   usage.loading = true;
   usage.error = null;
   // Reset progress so the UI doesn't paint a stale "5/5 done" state
@@ -123,7 +149,7 @@ export async function refreshUsage(venice: VeniceClient): Promise<void> {
   usage.pagesTotal = 0;
   try {
     const { startDate, endDate } = defaultRangeIso();
-    const rows = await venice.fetchUsage({
+    const rows = await source.fetchUsage({
       startDate,
       endDate,
       onProgress: ({ page, totalPages }) => {

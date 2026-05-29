@@ -96,15 +96,15 @@
   } from '$lib/theme';
   import SecretInput from '../components/SecretInput.svelte';
   import { updateState, applyUpdate, checkForUpdates } from '$lib/update.svelte';
+  import { VeniceError } from '$lib/venice';
   import {
     USAGE_MAX_PAGES,
-    VeniceError,
     type UsageCurrency,
     type UsageRow,
-  } from '$lib/venice';
+  } from '$lib/usage';
   import {
     usage,
-    isUsageStale,
+    shouldAutoRefreshUsage,
     refreshUsage,
   } from '$lib/usage-store.svelte';
 
@@ -488,28 +488,28 @@
   );
 
   /**
-   * First-landing-on-the-pane auto-refresh. Fires only when the pane
-   * is showing the store view AND the cache is null or older than
-   * USAGE_STALE_MS - a fresher poll is reused as-is so the user sees
-   * numbers without a spinner. The guard on `usage.loading` means a
-   * poll already in flight (common during the boot window) isn't
-   * double-triggered.
+   * First-landing-on-the-pane auto-refresh for the store view. The
+   * "should we auto-load now" decision lives in shouldAutoRefreshUsage()
+   * - it fires only when the cache is stale, nothing is in flight, and
+   * the last attempt did not error. That error guard is what stops a
+   * persistently failing fetch from re-firing into a retry storm; a
+   * fresh-enough poll is reused as-is so the user sees numbers without a
+   * spinner.
    */
   $effect(() => {
     if (
       group === 'usage' &&
       usageSource === 'store' &&
-      !usage.loading &&
-      isUsageStale() &&
-      app.venice
+      shouldAutoRefreshUsage() &&
+      app.supabase
     ) {
-      void refreshUsage(app.venice);
+      void refreshUsage(app.supabase);
     }
   });
 
   async function onUsageRefresh(): Promise<void> {
-    if (!app.venice) {
-      customError = 'Not connected to Venice yet.';
+    if (!app.supabase) {
+      customError = 'Not connected yet.';
       return;
     }
     const isDefaultRange =
@@ -520,7 +520,7 @@
       // cache. The next pane open within USAGE_STALE_MS sees the
       // new numbers without having to re-fetch.
       usageSource = 'store';
-      await refreshUsage(app.venice);
+      await refreshUsage(app.supabase);
       return;
     }
     usageSource = 'custom';
@@ -547,7 +547,7 @@
       const endDay = new Date(`${requestedEnd}T00:00:00Z`);
       endDay.setUTCDate(endDay.getUTCDate() + 1);
       const endIso = endDay.toISOString();
-      const rows = await app.venice.fetchUsage({
+      const rows = await app.supabase.fetchUsage({
         startDate: startIso,
         endDate: endIso,
         onProgress: ({ page, totalPages }) => {

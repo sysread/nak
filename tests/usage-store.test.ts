@@ -3,15 +3,16 @@
  * exposes a reactive state object (data, lastFetchedAt, loading,
  * error, truncated, pagesLoaded, pagesTotal) and three entry points
  * (refreshUsage, isUsageStale, resetUsage). We exercise each through
- * a stubbed VeniceClient so the logic stays decoupled from the real
- * billing endpoint and from the page clock.
+ * a stubbed usage source (the shape of app.supabase.fetchUsage) so the
+ * logic stays decoupled from the real billing endpoint and the clock.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { VeniceClient, UsageRow } from '../src/lib/venice';
 import { VeniceError } from '../src/lib/venice';
+import type { UsageRequestOptions, UsageRow } from '../src/lib/usage';
 import {
   usage,
   isUsageStale,
+  shouldAutoRefreshUsage,
   refreshUsage,
   resetUsage,
   USAGE_STALE_MS,
@@ -31,8 +32,11 @@ function sampleRow(overrides: Partial<UsageRow> = {}): UsageRow {
   };
 }
 
-function mockVenice(impl: () => Promise<UsageRow[]>): VeniceClient {
-  return { fetchUsage: vi.fn(impl) } as unknown as VeniceClient;
+// A stub of the slice of SupabaseService that refreshUsage consumes - just the
+// usage fetch. refreshUsage always calls it with an options object, so the impl
+// receives the same opts (startDate/endDate/onProgress) the real path would.
+function mockSource(impl: (opts: UsageRequestOptions) => Promise<UsageRow[]>) {
+  return { fetchUsage: vi.fn(impl) };
 }
 
 beforeEach(() => {
@@ -50,8 +54,8 @@ afterEach(() => {
 describe('refreshUsage', () => {
   it('populates usage.data and sets lastFetchedAt on success', async () => {
     const before = Date.now();
-    const venice = mockVenice(async () => [sampleRow()]);
-    await refreshUsage(venice);
+    const source = mockSource(async () => [sampleRow()]);
+    await refreshUsage(source);
     expect(usage.data).toEqual([sampleRow()]);
     expect(usage.error).toBeNull();
     expect(usage.loading).toBe(false);
@@ -60,9 +64,8 @@ describe('refreshUsage', () => {
   });
 
   it('passes a rolling-7-day window to fetchUsage as ISO timestamps', async () => {
-    const fetchUsage = vi.fn<VeniceClient['fetchUsage']>(async () => []);
-    const venice = { fetchUsage } as unknown as VeniceClient;
-    await refreshUsage(venice);
+    const fetchUsage = vi.fn(async (_opts: UsageRequestOptions) => [] as UsageRow[]);
+    await refreshUsage({ fetchUsage });
     expect(fetchUsage).toHaveBeenCalledOnce();
     const arg = fetchUsage.mock.calls[0][0];
     if (!arg) throw new Error('fetchUsage was called without options');
@@ -82,14 +85,14 @@ describe('refreshUsage', () => {
   });
 
   it('preserves prior usage.data and surfaces error on failure', async () => {
-    const okVenice = mockVenice(async () => [sampleRow({ sku: 'keep-me' })]);
-    await refreshUsage(okVenice);
+    const okSource = mockSource(async () => [sampleRow({ sku: 'keep-me' })]);
+    await refreshUsage(okSource);
     expect(usage.data).toEqual([sampleRow({ sku: 'keep-me' })]);
 
-    const failVenice = mockVenice(async () => {
+    const failSource = mockSource(async () => {
       throw new VeniceError('boom', 'network');
     });
-    await refreshUsage(failVenice);
+    await refreshUsage(failSource);
     // Prior data is intentionally not wiped - a transient fetch failure
     // shouldn't blank the pane if a previous fetch has data to show.
     expect(usage.data).toEqual([sampleRow({ sku: 'keep-me' })]);
@@ -99,39 +102,37 @@ describe('refreshUsage', () => {
 
   it('marks truncated when rows hit the page cap', async () => {
     // The cap is USAGE_MAX_PAGES (20) x 500 = 10_000. Fabricating
-    // that many rows in-test is wasteful; instead stub fetchUsage
+    // that many rows in-test is wasteful; instead stub the source
     // to return exactly the cap count of minimal rows.
     const CAP = 20 * 500;
     const rows = Array.from({ length: CAP }, () => sampleRow());
-    const venice = mockVenice(async () => rows);
-    await refreshUsage(venice);
+    const source = mockSource(async () => rows);
+    await refreshUsage(source);
     expect(usage.truncated).toBe(true);
   });
 
   it('clears the truncated flag when a later fetch comes back under the cap', async () => {
     const CAP = 20 * 500;
     const bigRows = Array.from({ length: CAP }, () => sampleRow());
-    await refreshUsage(mockVenice(async () => bigRows));
+    await refreshUsage(mockSource(async () => bigRows));
     expect(usage.truncated).toBe(true);
-    await refreshUsage(mockVenice(async () => [sampleRow()]));
+    await refreshUsage(mockSource(async () => [sampleRow()]));
     expect(usage.truncated).toBe(false);
   });
 
   it('plumbs pagesLoaded / pagesTotal from the fetchUsage onProgress callback', async () => {
     // The store's progress fields are what the Settings pane reads to
     // render the determinate "Loading… N/M" indicator. Drive the
-    // mock's onProgress hook the same way VeniceClient.fetchUsage
-    // does in production and assert the final pair lands in the
-    // store. Reset-to-zero on entry is covered by the next test.
-    const venice = {
-      fetchUsage: vi.fn(async (opts: { onProgress?: (info: { page: number; totalPages: number }) => void }) => {
-        opts.onProgress?.({ page: 1, totalPages: 3 });
-        opts.onProgress?.({ page: 2, totalPages: 3 });
-        opts.onProgress?.({ page: 3, totalPages: 3 });
-        return [sampleRow()];
-      }),
-    } as unknown as VeniceClient;
-    await refreshUsage(venice);
+    // stub's onProgress hook the same way collectUsagePages does in
+    // production and assert the final pair lands in the store.
+    // Reset-to-zero on entry is covered by the next test.
+    const source = mockSource(async (opts) => {
+      opts.onProgress?.({ page: 1, totalPages: 3 });
+      opts.onProgress?.({ page: 2, totalPages: 3 });
+      opts.onProgress?.({ page: 3, totalPages: 3 });
+      return [sampleRow()];
+    });
+    await refreshUsage(source);
     expect(usage.pagesLoaded).toBe(3);
     expect(usage.pagesTotal).toBe(3);
   });
@@ -143,25 +144,21 @@ describe('refreshUsage', () => {
     // "already done." The store resets both fields on entry so a
     // mid-flight reader sees fresh zeros until the new fetch
     // reports its first page.
-    const populate = {
-      fetchUsage: vi.fn(async (opts: { onProgress?: (info: { page: number; totalPages: number }) => void }) => {
-        opts.onProgress?.({ page: 5, totalPages: 5 });
-        return [sampleRow()];
-      }),
-    } as unknown as VeniceClient;
+    const populate = mockSource(async (opts) => {
+      opts.onProgress?.({ page: 5, totalPages: 5 });
+      return [sampleRow()];
+    });
     await refreshUsage(populate);
     expect(usage.pagesLoaded).toBe(5);
 
     let observedDuringFetch = { pagesLoaded: -1, pagesTotal: -1 };
-    const observe = {
-      fetchUsage: vi.fn(async (_opts: unknown) => {
-        observedDuringFetch = {
-          pagesLoaded: usage.pagesLoaded,
-          pagesTotal: usage.pagesTotal,
-        };
-        return [sampleRow()];
-      }),
-    } as unknown as VeniceClient;
+    const observe = mockSource(async () => {
+      observedDuringFetch = {
+        pagesLoaded: usage.pagesLoaded,
+        pagesTotal: usage.pagesTotal,
+      };
+      return [sampleRow()];
+    });
     await refreshUsage(observe);
     expect(observedDuringFetch).toEqual({ pagesLoaded: 0, pagesTotal: 0 });
   });
@@ -175,14 +172,14 @@ describe('isUsageStale', () => {
   });
 
   it('returns false immediately after a successful fetch', async () => {
-    await refreshUsage(mockVenice(async () => [sampleRow()]));
+    await refreshUsage(mockSource(async () => [sampleRow()]));
     expect(isUsageStale()).toBe(false);
   });
 
   it('flips to true once the cache crosses USAGE_STALE_MS', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-04-24T12:00:00Z'));
-    await refreshUsage(mockVenice(async () => [sampleRow()]));
+    await refreshUsage(mockSource(async () => [sampleRow()]));
     expect(isUsageStale()).toBe(false);
     // One millisecond past the threshold is enough.
     vi.setSystemTime(new Date(Date.now() + USAGE_STALE_MS + 1));
@@ -190,9 +187,48 @@ describe('isUsageStale', () => {
   });
 });
 
+describe('shouldAutoRefreshUsage', () => {
+  it('is true on a cold store (stale, no error, not loading)', () => {
+    expect(shouldAutoRefreshUsage()).toBe(true);
+  });
+
+  it('is false after a successful fetch (cache is fresh)', async () => {
+    await refreshUsage(mockSource(async () => [sampleRow()]));
+    expect(shouldAutoRefreshUsage()).toBe(false);
+  });
+
+  it('is false after a failed fetch, so the on-open effect cannot retry-storm', async () => {
+    // Regression guard for the runaway loop the milestone-2 browser vet found:
+    // a failed auto-load leaves lastFetchedAt null (so isUsageStale() stays
+    // true). Without the error guard the Settings on-open effect would re-fire
+    // the instant `loading` flips back to false - a tight retry storm against
+    // the usage endpoint. The error guard makes the failed attempt terminal
+    // until the user manually refreshes.
+    await refreshUsage(
+      mockSource(async () => {
+        throw new VeniceError('boom', 'http', 502);
+      })
+    );
+    expect(usage.error).not.toBeNull();
+    expect(isUsageStale()).toBe(true); // still "stale" - the failed fetch set no timestamp
+    expect(shouldAutoRefreshUsage()).toBe(false);
+  });
+
+  it('is false while a fetch is in flight', async () => {
+    let duringFetch = true;
+    await refreshUsage(
+      mockSource(async () => {
+        duringFetch = shouldAutoRefreshUsage();
+        return [sampleRow()];
+      })
+    );
+    expect(duringFetch).toBe(false); // usage.loading was true mid-fetch
+  });
+});
+
 describe('resetUsage', () => {
   it('wipes the cache so rows from a prior API key do not leak across lock/unlock', async () => {
-    await refreshUsage(mockVenice(async () => [sampleRow({ sku: 'prior-key' })]));
+    await refreshUsage(mockSource(async () => [sampleRow({ sku: 'prior-key' })]));
     expect(usage.data).not.toBeNull();
     expect(usage.lastFetchedAt).not.toBeNull();
 

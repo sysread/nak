@@ -57,7 +57,10 @@ const CONFIG_FIELDS = [
   {
     column: 'venice_api_key',
     label: 'Venice API key',
-    description: 'shared key the edge function and browser use for Venice calls',
+    description:
+      'shared key the edge function and browser use for Venice calls (Admin-tier needed for the Usage view)',
+    hint:
+      'Use a Venice ADMIN API key: the in-app Usage (billing) view calls Venice billing, which 401s on a standard key. A standard key still works for chat and embeddings. Keys: https://venice.ai/settings/api',
     secret: true,
   },
 ];
@@ -81,6 +84,7 @@ async function writeConfigField(ref, column, value) {
 }
 
 async function promptConfigField(field) {
+  if (field.hint) hint(field.hint);
   const value = await gumInput({
     header: `Enter ${field.label}`,
     password: field.secret === true,
@@ -207,6 +211,11 @@ if (!token) {
 ok('Supabase access token present.');
 
 step(2, 'Pick or create a project');
+// A prior run records the linked project in .nak/state.json. On a re-run we
+// default the picker to that project (and frame the rest of the wizard as an
+// update) instead of steering toward a brand-new one.
+const priorState = await loadState();
+const priorRef = priorState?.supabase?.projectRef ?? null;
 const existing = await listProjects();
 const options = [
   { label: style.bold('Create a new project'), value: { kind: 'new' } },
@@ -215,7 +224,20 @@ const options = [
     value: { kind: 'existing', project: p },
   })),
 ];
-const chosen = await choose('Which project should this fork use?', options);
+// Default to the previously-linked project if it still exists; otherwise the
+// first option (create new). options[0] is "new", so existing projects are
+// offset by 1.
+const priorOptionIndex = priorRef ? existing.findIndex((p) => p.id === priorRef) : -1;
+if (priorOptionIndex >= 0) {
+  info(
+    `Previously linked project ${style.bold(existing[priorOptionIndex].name)} ` +
+      'is the default below.'
+  );
+}
+const chosen = await choose('Which project should this fork use?', options, {
+  defaultIndex: priorOptionIndex >= 0 ? priorOptionIndex + 1 : 0,
+});
+const isExistingProject = chosen.kind === 'existing';
 
 let project;
 if (chosen.kind === 'new') {
@@ -256,7 +278,6 @@ if (chosen.kind === 'new') {
 }
 
 // Persist the linked project so `mise run sync` doesn't have to re-ask.
-const priorState = await loadState();
 await saveState({ ...(priorState ?? {}), supabase: { projectRef: project.id } });
 
 step(3, 'Apply schema.sql');
@@ -276,36 +297,56 @@ await manageConfig(project.id);
 step(5, 'Configure auth');
 const slug = await getRepoSlug();
 const url = pagesUrl(slug);
+// For an existing project, read the current auth config up front so the
+// prompts below default to what is already set (an update, not a reset). New
+// projects start from the recommended personal-use defaults: sign-ups off,
+// confirmation off.
+let currentAuth = null;
+if (isExistingProject) {
+  currentAuth = await getAuthConfig(project.id).catch((err) => {
+    warn(`Could not read current auth config: ${err.message}`);
+    return null;
+  });
+}
+const currentAllowSignups = currentAuth ? !currentAuth.disable_signup : false;
+const currentRequireConfirmation = currentAuth ? !currentAuth.mailer_autoconfirm : false;
+
 info(
-  'Pick a sign-up policy for this project. You can change it later in ' +
-    'Supabase → Authentication → Providers → Email.'
+  (isExistingProject
+    ? "Update the sign-up policy - defaults reflect the project's current setting. "
+    : 'Pick a sign-up policy for this project. ') +
+    'You can change it later in Supabase → Authentication → Providers → Email.'
 );
-const allowSignups = await choose('Allow public sign-ups for this project?', [
-  {
-    label:
-      style.bold('No') +
-      ' — only admin-created accounts can sign in (recommended for personal use)',
-    value: false,
-  },
-  {
-    label:
-      style.bold('Yes') +
-      ' — anyone who knows the URL can create an account',
-    value: true,
-  },
-]);
+const allowSignups = await choose(
+  'Allow public sign-ups for this project?',
+  [
+    {
+      label:
+        style.bold('No') +
+        ' — only admin-created accounts can sign in (recommended for personal use)',
+      value: false,
+    },
+    {
+      label:
+        style.bold('Yes') +
+        ' — anyone who knows the URL can create an account',
+      value: true,
+    },
+  ],
+  { defaultIndex: currentAllowSignups ? 1 : 0 }
+);
 let requireConfirmation = false;
 if (allowSignups) {
   requireConfirmation = await confirm(
     'Require email confirmation on sign-up? (needs working SMTP)',
-    { default: false }
+    { default: currentRequireConfirmation }
   );
 }
 
 const supabaseUrl = `https://${project.id}.supabase.co`;
 
 try {
-  const current = await getAuthConfig(project.id);
+  const current = currentAuth ?? (await getAuthConfig(project.id));
   const patch = buildAuthConfigPatch({
     currentConfig: current,
     pagesUrl: url,
