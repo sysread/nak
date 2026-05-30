@@ -182,15 +182,14 @@ row with `data` set but no `storage_path` just gets `data` nulled
   line in `deploy.yml`. Cron/Storage round-trip is unverified from the
   cloud env - confirm after deploy that an object actually disappears
   ~30 days after its thread goes dormant.
-- **Stage 2b - retire the browser worker (TODO, cleanup).** The
-  `attachment_expiry` UNIT inside the supervisor
-  (`src/lib/agents/supervisor/{loop,manager,worker}.ts` +
-  `src/lib/agents/attachment_expiry/`), `SupabaseService.expireOldAttachments`,
-  the `expire_old_attachments` RPC, and `tests/attachment-expiry-loop.test.ts`.
-  Left in place for now because it is INERT post-Stage-1 (the RPC nulls
-  `data where data is not null`, which matches no rows after the reclaim,
-  so it no-ops). Pure deletion; deferred only to avoid rushed supervisor
-  surgery.
+- **Stage 2b - retire the browser worker (LANDED).** Removed the
+  `attachment_expiry` unit from the supervisor
+  (`src/lib/agents/supervisor/{loop,manager,worker}.ts`), deleted
+  `src/lib/agents/attachment_expiry/`, dropped
+  `SupabaseService.expireOldAttachments` + the `expire_old_attachments`
+  RPC (schema carries the idempotent `drop`), and removed
+  `tests/attachment-expiry-loop.test.ts`. The supervisor now walks six
+  units, not seven; expiry is entirely server-side.
 - **Collapse PR (follow-up)** drops the `data` column AND removes
   the reclaim UPDATE together. Splitting is required: a single
   apply can't both keep an UPDATE that references `data` and drop

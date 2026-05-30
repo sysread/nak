@@ -7,9 +7,8 @@
 > one-time (pre-bucket rows are treated as expired). Expiry now runs
 > **server-side** (the standalone `expire-attachments` edge function +
 > hourly cron deletes bucket objects 30 days after a thread goes
-> dormant). Still pending: (1) retiring the now-INERT browser
-> `attachment_expiry` worker + `expire_old_attachments` RPC (cleanup);
-> (2) the `data` column drop. See
+> dormant; the browser `attachment_expiry` worker + its RPC have been
+> removed). Still pending: the `data` column drop. See
 > [`./in-progress/attachments-storage-migration.md`](./in-progress/attachments-storage-migration.md).
 > Sections below are mid-update; where they describe base64-in-`data`,
 > read it as "historical, now storage_path + bucket".

@@ -2,7 +2,7 @@
  * Base class for every background-worker supervisor on the main
  * thread. Owns the parts that were duplicated across the previously-
  * standalone manager files (`embeddings`, `reflection`, `summary`,
- * `wiki`, `samskara`, `attachment_expiry`):
+ * `wiki`, `samskara`):
  *
  *   - cross-tab Web Lock acquisition + idempotent `start()` /
  *     `stop()` lifecycle

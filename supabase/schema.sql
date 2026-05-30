@@ -644,44 +644,14 @@ create policy "attachments bucket is self-deletable" on storage.objects
     and (storage.foldername(name))[1] = auth.uid()::text
   );
 
--- Expiration RPC. Legacy path retained inert during the storage
--- migration: it nulls `data` for any stray pre-bucket rows, but bucket
--- objects (storage_path) are reclaimed by the server-side expiry sweep
--- instead (see the attachments-expiry block; landed in a follow-up).
--- Runs as the caller (RLS intact). The `limit` keeps each call bounded.
---
--- We don't delete the row — we null `data` and stamp `expired_at`.
--- `filename`, `mime_type`, `size_bytes`, and `extracted_text` stay so
--- the message list can still render a "this file expired" entry with
--- the original name and the text the model saw. Conversations read a
--- year later still make sense.
+-- The legacy per-caller expiry RPC is retired: attachment bytes live in
+-- the `attachments` bucket now, and the server-side expiry sweep (the
+-- expire-attachments edge function + nak_trigger_attachment_expiry near
+-- the embeddings cron) deletes the objects and marks the rows. SQL can't
+-- delete a Storage object, so this RPC's null-the-base64 approach no
+-- longer applies. Dropped so a sync removes it from any project that ran
+-- the earlier schema; idempotent, a no-op once gone.
 drop function if exists public.expire_old_attachments(int);
-create or replace function public.expire_old_attachments(
-  p_days int
-) returns int
-language plpgsql security invoker as $$
-declare
-  affected int;
-begin
-  with stale as (
-    select a.id
-      from public.message_attachments a
-      join public.messages m on m.id = a.message_id
-      join public.threads t on t.id = m.thread_id
-     where t.user_id = auth.uid()
-       and a.data is not null
-       and t.updated_at < now() - make_interval(days => p_days)
-     limit 500
-     for update skip locked
-  )
-  update public.message_attachments a
-     set data = null,
-         expired_at = now()
-    from stale s
-   where a.id = s.id;
-  get diagnostics affected = row_count;
-  return affected;
-end $$;
 
 -- Reflection pipeline ----------------------------------------------------
 --

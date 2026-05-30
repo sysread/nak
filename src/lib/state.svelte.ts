@@ -109,8 +109,8 @@ function lazyManager<
 // docs/dev/in-progress/venice-edge-functions/embeddings.md). The browser still
 // embeds search *queries* synchronously at the call sites, but nothing in the
 // tab drives backfill anymore.
-// Seven formerly-standalone workers (auto_title, summary, reflection,
-// topics, memory_topics, recipe_topics, attachment_expiry) are
+// Six formerly-standalone workers (auto_title, summary, reflection,
+// topics, memory_topics, recipe_topics) are
 // consolidated under one supervisor worker. The supervisor owns one
 // lease, one heartbeat, one Supabase client, and one auth setup -
 // see src/lib/agents/supervisor/loop.ts for the rationale and which
@@ -739,7 +739,7 @@ function startBackgroundWorkers(config: AppConfig): void {
   //
   // The workers run concurrently and partition the shared
   // `worker_leases` table on `worker_kind` ('reflection' / 'summary' /
-  // 'topics' / 'memory-topics' / 'recipe-topics' / 'attachment_expiry' /
+  // 'topics' / 'memory-topics' / 'recipe-topics' /
   // 'auto_title' / 'samskara' / 'wiki') so one device can hold every
   // lease simultaneously without contention. The summary worker feeds
   // the drawer's search feature - it writes `threads.summary`, which the

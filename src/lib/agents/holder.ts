@@ -10,9 +10,9 @@
  *
  * Was previously colocated with `EmbeddingManager` because that's
  * where the first worker manager landed. Lifted out here so every
- * sibling manager (reflection, summary, wiki, samskara,
- * attachment_expiry) can import it from a neutral location instead
- * of reaching sideways into embeddings.
+ * sibling manager (reflection, summary, wiki, samskara) can import
+ * it from a neutral location instead of reaching sideways into
+ * embeddings.
  */
 
 /**
