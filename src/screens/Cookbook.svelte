@@ -1293,20 +1293,6 @@
             />
           </div>
           <div class="form-row">
-            <label for="cb-change-message">What changed?</label>
-            <input
-              id="cb-change-message"
-              type="text"
-              bind:value={draftChangeMessage}
-              maxlength={500}
-              placeholder="e.g. Doubled the recipe; fixed step 3"
-              required
-            />
-            <p class="subtle cookbook-change-message-hint">
-              A one-line note for this recipe's history. Required.
-            </p>
-          </div>
-          <div class="form-row">
             <!-- Stand-in label, same reasoning as the rating row above:
                  the file input is the only focusable target, but the
                  grid below it is the more meaningful "field" the user
@@ -1419,6 +1405,23 @@
                 {@html editPreviewHtml}
               </div>
             </div>
+          </div>
+          <!-- Change-message input sits last, right above Save, so the
+               required "What changed?" note is the final thing the user
+               fills in before committing the edit. -->
+          <div class="form-row">
+            <label for="cb-change-message">What changed?</label>
+            <input
+              id="cb-change-message"
+              type="text"
+              bind:value={draftChangeMessage}
+              maxlength={500}
+              placeholder="e.g. Doubled the recipe; fixed step 3"
+              required
+            />
+            <p class="subtle cookbook-change-message-hint">
+              A one-line note for this recipe's history. Required.
+            </p>
           </div>
           {#if editError}<p class="error">{editError}</p>{/if}
           <div class="cookbook-actions">
