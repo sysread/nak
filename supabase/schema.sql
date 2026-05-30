@@ -7970,3 +7970,138 @@ exception when others then
   raise notice 'embedding backfill cron setup skipped: %', sqlerrm;
 end
 $cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled attachment expiry (pg_cron -> pg_net -> expire-attachments)
+--
+-- Stage 2 of the attachments-storage migration
+-- (docs/dev/in-progress/attachments-storage-migration.md). Replaces the old
+-- browser attachment_expiry worker: a cron tick POSTs to the standalone
+-- `expire-attachments` edge function, which deletes the bucket objects for
+-- attachments whose owning thread has been dormant 30 days, then nulls
+-- storage_path + stamps expired_at. SQL can't delete a Storage object, so the
+-- deletion has to happen in the function (service-role storage client); these
+-- RPCs only select the batch and mark the rows.
+--
+-- Reuses the same Vault secrets as the embedding backfill (project_url +
+-- service_role_key, seeded by `mise run supabase-init`). The function is NOT
+-- the venice function - expiry never calls Venice, it only touches Storage -
+-- so it deploys separately (see .github/workflows/deploy.yml).
+--
+-- Both RPCs are security definer with no auth.uid() filter (cron has no user
+-- session; the sweep spans every member) and EXECUTE-locked to service_role -
+-- the same boundary as the embedding claim/save pair. The edge function
+-- (service role) is their only caller.
+
+-- Select a bounded batch of live attachments eligible for expiry: object still
+-- present (storage_path not null) and the owning thread dormant for p_days.
+-- Returns (id, storage_path) so the function knows which objects to delete and
+-- which rows to mark. No claim/TTL: deletion + marking are idempotent (removing
+-- an already-gone object is a no-op, re-marking an expired row is a no-op), so
+-- two overlapping ticks can't corrupt anything - the FOR UPDATE SKIP LOCKED
+-- just keeps them from contending on the same rows within a tick.
+drop function if exists public.list_expirable_attachments(int, int);
+create or replace function public.list_expirable_attachments(
+  p_days int,
+  p_limit int
+) returns table (id uuid, storage_path text)
+language sql security definer
+set search_path = public as $$
+  select a.id, a.storage_path
+    from public.message_attachments a
+    join public.messages m on m.id = a.message_id
+    join public.threads t on t.id = m.thread_id
+   where a.storage_path is not null
+     and t.updated_at < now() - make_interval(days => p_days)
+   order by t.updated_at asc
+   limit p_limit
+   for update of a skip locked
+$$;
+
+-- Mark the given attachments expired once their objects are deleted: null
+-- storage_path (the liveness signal) and stamp expired_at. extracted_text and
+-- the other metadata stay, so the row still renders as an expired chip.
+drop function if exists public.mark_attachments_expired(uuid[]);
+create or replace function public.mark_attachments_expired(
+  p_ids uuid[]
+) returns int
+language plpgsql security definer
+set search_path = public as $$
+declare
+  affected int;
+begin
+  update public.message_attachments
+     set storage_path = null,
+         expired_at = now()
+   where id = any(p_ids);
+  get diagnostics affected = row_count;
+  return affected;
+end $$;
+
+revoke all on function public.list_expirable_attachments(int, int) from public, anon, authenticated;
+revoke all on function public.mark_attachments_expired(uuid[]) from public, anon, authenticated;
+grant execute on function public.list_expirable_attachments(int, int) to service_role;
+grant execute on function public.mark_attachments_expired(uuid[]) to service_role;
+
+-- Cron dispatcher, same shape + Vault-secret custody as
+-- nak_trigger_embed_backfill above. Dynamic SQL so it compiles where pg_net /
+-- vault are absent (local stack); no-ops until the secrets are seeded.
+create or replace function public.nak_trigger_attachment_expiry()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;  -- vault not installed or unreadable; nothing to dispatch
+  end;
+  if v_url is null or v_key is null then
+    return;  -- secrets not seeded yet
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/expire-attachments',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_attachment_expiry: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+
+revoke all on function public.nak_trigger_attachment_expiry() from public, anon, authenticated;
+
+-- Schedule the sweep hourly (dormancy is measured in days, so hourly is ample
+-- and keeps each tick's batch small). Guarded on extension availability +
+-- idempotent reschedule, same as the backfill cron.
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-attachment-expiry') then
+      perform cron.unschedule('nak-attachment-expiry');
+    end if;
+    perform cron.schedule(
+      'nak-attachment-expiry',
+      '17 * * * *',
+      $job$ select public.nak_trigger_attachment_expiry(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'attachment expiry cron setup skipped: %', sqlerrm;
+end
+$cron$;

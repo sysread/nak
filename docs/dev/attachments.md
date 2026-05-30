@@ -4,10 +4,12 @@
 > private `attachments` Storage bucket (the `documents` pattern), not as
 > base64 in `message_attachments.data`. Liveness keys on `storage_path`,
 > reads go through signed URLs, and the legacy base64 was reclaimed
-> one-time (pre-bucket rows are treated as expired). Still pending:
-> (1) the **expiry sweep is not yet server-side** - the old browser
-> worker / `expire_old_attachments` RPC are inert, so bucket objects do
-> not yet expire; (2) the `data` column drop. See
+> one-time (pre-bucket rows are treated as expired). Expiry now runs
+> **server-side** (the standalone `expire-attachments` edge function +
+> hourly cron deletes bucket objects 30 days after a thread goes
+> dormant). Still pending: (1) retiring the now-INERT browser
+> `attachment_expiry` worker + `expire_old_attachments` RPC (cleanup);
+> (2) the `data` column drop. See
 > [`./in-progress/attachments-storage-migration.md`](./in-progress/attachments-storage-migration.md).
 > Sections below are mid-update; where they describe base64-in-`data`,
 > read it as "historical, now storage_path + bucket".
