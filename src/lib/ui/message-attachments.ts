@@ -14,13 +14,13 @@ import { isImageMimeType } from '../attachments';
 
 /**
  * True when an attachment should render as a large inline image
- * preview: it's an image MIME type AND its binary is still live
- * (non-null data_base64). An expired image has no bytes to show, so it
+ * preview: it's an image MIME type AND its object is still live
+ * (non-null storage_path). An expired image has no object to show, so it
  * falls back to the file-chip row (filename + expired badge) like any
  * other reclaimed attachment.
  */
 function isLiveImageAttachment(a: Attachment): boolean {
-  return isImageMimeType(a.mime_type) && !!a.data_base64;
+  return isImageMimeType(a.mime_type) && a.storage_path !== null;
 }
 
 export interface PartitionedAttachments {

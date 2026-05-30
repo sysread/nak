@@ -9,20 +9,20 @@
     - Everything else (non-image files, plus expired images whose
       binary was reclaimed) renders as a compact chip row:
 
-    - Live attachment: a download anchor (`download=<filename>`) that
-      resolves the base64 `data` back into a Blob URL on demand.
+    - Live attachment: a download anchor (`download=<filename>`)
+      pointing at a signed URL into the attachments bucket.
     - Expired attachment: the filename only, plus a greyed clock-icon
       and a tooltip explaining that the binary has been reclaimed.
     - Either state: an "Extracted text" button is present when the
       row has a non-empty extracted_text, opening the right-side
       drawer via `extractedTextDrawer.open({...})`.
 
-  Object URLs are created lazily (on first download click) rather than
-  eagerly at mount time — users scroll past messages far more often
-  than they click download, so upfront Blob construction would waste
-  memory on long transcripts. When created, the URL is kept around
-  until the component unmounts; `URL.revokeObjectURL` runs in the
-  teardown effect so we don't leak a URL per clicked attachment.
+  Bytes live in the `attachments` Storage bucket, not in memory. An
+  effect resolves short-lived signed URLs (batched) for the live
+  attachments whenever the list changes; previews and download links
+  read those URLs. There are no object URLs to revoke. A very long-open
+  transcript could outlive the URL TTL and need a re-render; acceptable
+  for now.
 
   An expired attachment deliberately renders the filename with no
   anchor tag, not even a disabled-styled one, because screen-reader
@@ -32,12 +32,8 @@
 -->
 <script lang="ts">
   import type { Attachment } from '$lib/supabase';
-  import {
-    base64ToBlob,
-    dataUrlFor,
-    formatBytes,
-    isImageMimeType,
-  } from '$lib/attachments';
+  import { app } from '$lib/state.svelte';
+  import { formatBytes } from '$lib/attachments';
   import { partitionAttachments } from '$lib/ui/message-attachments';
   import { extractedTextDrawer } from '$lib/extractedTextDrawer.svelte';
 
@@ -51,38 +47,37 @@
   // chips. Decision logic lives in the UI primitive, not the markup.
   const partitioned = $derived(partitionAttachments(attachments));
 
-  // Cache of Blob URLs we've created for this component's attachments,
-  // keyed by attachment id. Populated lazily and torn down together.
-  const blobUrls = new Map<string, string>();
+  // Signed URLs (attachment id -> URL) for the live attachments, resolved
+  // from the bucket whenever the attachment list changes. A generous TTL
+  // keeps previews valid across a normal viewing session. Best-effort: an
+  // attachment without a resolved URL renders as a non-link (image src
+  // simply doesn't load).
+  const SIGNED_URL_TTL_SECONDS = 60 * 60 * 6;
+  let signedUrls = $state(new Map<string, string>());
 
   $effect(() => {
+    const live = attachments.filter((a) => a.storage_path !== null);
+    if (live.length === 0 || !app.supabase) {
+      signedUrls = new Map();
+      return;
+    }
+    let cancelled = false;
+    void app.supabase
+      .createAttachmentSignedUrls(live, SIGNED_URL_TTL_SECONDS)
+      .then((m) => {
+        if (!cancelled) signedUrls = m;
+      })
+      .catch(() => {
+        if (!cancelled) signedUrls = new Map();
+      });
     return (): void => {
-      for (const url of blobUrls.values()) URL.revokeObjectURL(url);
-      blobUrls.clear();
+      cancelled = true;
     };
   });
-
-  function hrefFor(a: Attachment): string | null {
-    if (!a.data_base64) return null;
-    const cached = blobUrls.get(a.id);
-    if (cached) return cached;
-    const blob = base64ToBlob(a.data_base64, a.mime_type);
-    const url = URL.createObjectURL(blob);
-    blobUrls.set(a.id, url);
-    return url;
-  }
 
   function openExtractedText(a: Attachment): void {
     if (!a.extracted_text) return;
     extractedTextDrawer.open({ filename: a.filename, text: a.extracted_text });
-  }
-
-  // Inline thumbnail source for live image attachments. Cheap to
-  // compute — it's just a data: URI wrapping the base64 we already
-  // have — and avoids a Blob URL just for the preview.
-  function thumbSrc(a: Attachment): string | null {
-    if (!isImageMimeType(a.mime_type) || !a.data_base64) return null;
-    return dataUrlFor(a.mime_type, a.data_base64);
   }
 </script>
 
@@ -96,13 +91,13 @@
            navigated to it keeps the loaded image. Lightbox/zoom is a
            deliberate follow-up, not wired here. -->
       <a
-        href={hrefFor(a)}
+        href={signedUrls.get(a.id) ?? null}
         target="_blank"
         rel="noopener"
         class="msg-attachment-image-link"
         title={`Open ${a.filename} in a new tab`}
       >
-        <img class="msg-attachment-image" src={thumbSrc(a)} alt={a.filename} />
+        <img class="msg-attachment-image" src={signedUrls.get(a.id) ?? null} alt={a.filename} />
       </a>
     {/each}
   </div>
@@ -128,9 +123,9 @@
           />
         </svg>
         <span class="msg-attachment-name">
-          {#if a.data_base64}
+          {#if a.storage_path}
             <a
-              href={hrefFor(a)}
+              href={signedUrls.get(a.id) ?? null}
               download={a.filename}
               rel="noopener"
               class="msg-attachment-link"

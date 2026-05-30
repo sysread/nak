@@ -24,7 +24,7 @@
  *   - any other RPC failure -> propagate
  */
 import type { ToolDef } from './types';
-import { sha256HexFromBase64 } from '../attachments';
+import { sha256HexFromBase64, arrayBufferToBase64 } from '../attachments';
 // See recipe_save.ts - plain-.ts import, not the rune-using store.
 import { notifyCookbookChanged } from '../cookbook-events';
 import { recipePhotosAttachSchema } from './recipe_photos_attach.schema';
@@ -90,16 +90,21 @@ export const recipePhotosAttach: ToolDef = {
         missing.push(filename);
         continue;
       }
-      if (!a.data_base64) {
+      if (!a.storage_path) {
         expired.push(filename);
         continue;
       }
-      const sha = await sha256HexFromBase64(a.data_base64);
+      // Pull the bytes from the attachments bucket and base64-encode them
+      // for the sha256 dedup + the recipe-image upsert (recipe_images is
+      // its own base64 store, out of scope for the storage migration).
+      const blob = await ctx.supabase.downloadAttachmentBlob(a.storage_path);
+      const base64 = arrayBufferToBase64(await blob.arrayBuffer());
+      const sha = await sha256HexFromBase64(base64);
       resolved.push({
         sha256: sha,
         mime: a.mime_type,
         size: a.size_bytes,
-        data: a.data_base64,
+        data: base64,
       });
     }
     if (missing.length > 0 || expired.length > 0) {

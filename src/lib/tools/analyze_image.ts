@@ -137,9 +137,9 @@ export const analyzeImage: ToolDef = {
       throw new Error(`No image attachment named "${filename}" in this thread.${hint}`);
     }
 
-    if (!attachment.data_base64) {
-      // data_base64 is null when the 30-day expiry worker has reclaimed
-      // the row. The model already sees expired filenames in the
+    if (!attachment.storage_path) {
+      // storage_path is null when the expiry sweep has deleted the
+      // object. The model already sees expired filenames in the
       // <thread_attachments> block under the "Expired" heading, so it
       // shouldn't normally call us here - but if it does, surface the
       // expiry rather than silently producing nothing.
@@ -150,20 +150,26 @@ export const analyzeImage: ToolDef = {
 
     log.info(`analyzing "${filename}" with query: ${query.slice(0, 80)}`);
 
+    // Hand Venice a short-lived signed URL into the attachments bucket;
+    // its vision input fetches the image server-side, so we never pull
+    // the bytes into the browser. (Venice accepts either a public URL or
+    // an inline data URI; the signed URL is public for its TTL.)
+    const signedUrls = await ctx.supabase.createAttachmentSignedUrls([attachment]);
+    const imageUrl = signedUrls.get(attachment.id);
+    if (!imageUrl) {
+      throw new Error(
+        `Image "${filename}" could not be loaded for analysis. Try again.`
+      );
+    }
+
     // Venice OpenAI-compatible vision shape: text query part followed
-    // by an image_url part. The data: URI carries the base64 inline so
-    // Venice does not need to fetch a remote URL.
+    // by an image_url part pointing at the signed URL.
     const messages: VeniceMessage[] = [
       {
         role: 'user',
         content: [
           { type: 'text', text: query },
-          {
-            type: 'image_url',
-            image_url: {
-              url: `data:${attachment.mime_type};base64,${attachment.data_base64}`,
-            },
-          },
+          { type: 'image_url', image_url: { url: imageUrl } },
         ],
       },
     ];
