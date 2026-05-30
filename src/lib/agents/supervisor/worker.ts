@@ -46,8 +46,6 @@ interface StartMessage {
   holderId: string;
   /** Per-thread claim TTL for the claim-based units (seconds). */
   threadClaimTtlSeconds: number;
-  /** Attachment retention window, days. */
-  attachmentExpiryDays: number;
   /** Supervisor lease TTL (seconds). */
   leaseTtlSeconds: number;
   /** Supervisor lease heartbeat (ms). Must be < leaseTtlSeconds*1000. */
@@ -166,9 +164,8 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
   });
 
   // Five agents instantiated once for the worker's lifetime. The
-  // sixth and seventh units (auto_title, attachment_expiry) don't
-  // need agents - title-gen uses the bare Venice client; attachment
-  // expiry is a pure SQL RPC.
+  // sixth unit (auto_title) needs no agent - title-gen uses the bare
+  // Venice client.
   //
   // Each agent's model id comes from the start payload (resolved
   // from AGENT_MODELS on the main thread) so a model swap in the
@@ -208,7 +205,6 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
         agents: { reflection, summary, topics, memoryTopics, recipeTopics },
         tunables: {
           threadClaimTtlSeconds: msg.threadClaimTtlSeconds,
-          attachmentExpiryDays: msg.attachmentExpiryDays,
         },
       };
       const result = await runOneCycle(ctx);

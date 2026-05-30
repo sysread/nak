@@ -5446,20 +5446,6 @@ export class SupabaseService {
   }
 
   /**
-   * Run one pass of the attachment expiry sweep via the
-   * `expire_old_attachments` RPC. Returns the number of rows the
-   * server nulled on this call. The worker drains the backlog by
-   * calling repeatedly while the count is > 0.
-   */
-  async expireOldAttachments(days: number): Promise<number> {
-    const { data, error } = await this.client.rpc('expire_old_attachments', {
-      p_days: days,
-    });
-    if (error) throw new SupabaseError(error.message);
-    return typeof data === 'number' ? data : 0;
-  }
-
-  /**
    * Insert one message row and touch the thread's updated_at in a
    * follow-up call. The two writes aren't in a transaction — if the
    * second call fails, we've still saved the message and the thread

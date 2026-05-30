@@ -18,9 +18,9 @@
  * another picks up everything together rather than feature-by-
  * feature. One supervisor amortises all that overhead.
  *
- * Scope: this supervisor takes the seven simple claim-based workers
+ * Scope: this supervisor takes the six simple claim-based workers
  * (auto_title, summary, reflection, topics, memory_topics,
- * recipe_topics, attachment_expiry). Embeddings, bias, samskara,
+ * recipe_topics). Embeddings, bias, samskara,
  * wiki, and wiki-librarian stay standalone - the first three
  * because they have their own multi-phase complexity, the last
  * two because they accept main-thread `setProfile` / `setTimezone`
@@ -42,7 +42,6 @@ import { runOneCycle as runSummary } from '../summary/loop';
 import { runOneCycle as runTopics } from '../topics/loop';
 import { runOneCycle as runMemoryTopics } from '../memory_topics/loop';
 import { runOneCycle as runRecipeTopics } from '../recipe_topics/loop';
-import { runOneCycle as runAttachmentExpiry } from '../attachment_expiry/loop';
 
 import type { ReflectionAgent } from '../reflection/agent';
 import type { SummaryAgent } from '../summary/agent';
@@ -73,8 +72,6 @@ export type SupervisorCycleResult =
 export interface SupervisorTunables {
   /** Per-thread claim TTL for the claim-based units (seconds). */
   threadClaimTtlSeconds: number;
-  /** Retention window for attachment_expiry, days. */
-  attachmentExpiryDays: number;
 }
 
 export interface SupervisorContext {
@@ -134,12 +131,11 @@ export interface WorkUnit {
  * Ordered list of work units the supervisor walks per rotation.
  * Order is roughly "cheapest probe first" so an unfortunate
  * supervisor signal-abort drains as few unit cycles as possible:
- * attachment_expiry is a single SQL call, the title/topic units
- * each cost one claim RPC, and reflection/summary do the most
- * work-per-cycle (Venice round-trips) so they sit at the bottom.
+ * the title/topic units each cost one claim RPC, and
+ * reflection/summary do the most work-per-cycle (Venice round-trips)
+ * so they sit at the bottom.
  */
 export const UNITS: readonly WorkUnit[] = [
-  { name: 'attachment_expiry', run: runAttachmentExpiryUnit },
   { name: 'auto_title', run: runAutoTitleUnit },
   { name: 'topics', run: runTopicsUnit },
   { name: 'memory_topics', run: runMemoryTopicsUnit },
@@ -155,23 +151,6 @@ export const UNITS: readonly WorkUnit[] = [
 // per-unit result into a SupervisorCycleResult. The fake coordinator
 // + no-op onLeaseLost ensure the unit's lease-management code path
 // is a no-op.
-
-async function runAttachmentExpiryUnit(
-  ctx: SupervisorContext
-): Promise<SupervisorCycleResult> {
-  const result = await runAttachmentExpiry({
-    supabase: ctx.supabase,
-    coordinator: heldCoordinator,
-    expiryDays: ctx.tunables.attachmentExpiryDays,
-    signal: ctx.signal,
-    onLeaseLost: noLeaseLost,
-  });
-  // 'expired' = drained one batch of rows, more may remain. The
-  // supervisor's 'progress' return drains the rotation faster.
-  if (result === 'expired') return 'progress';
-  if (result === 'error') return 'error';
-  return 'empty-phase';
-}
 
 async function runAutoTitleUnit(
   ctx: SupervisorContext

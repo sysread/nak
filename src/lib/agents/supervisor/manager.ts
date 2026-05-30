@@ -5,10 +5,10 @@
  * only the supervisor-specific payload + timing constants.
  *
  * Cross-tab singleton via `navigator.locks.request('nak:supervisor-
- * worker')`. The worker consolidates seven formerly-standalone
+ * worker')`. The worker consolidates six formerly-standalone
  * features (auto_title, summary, reflection, topics, memory_topics,
- * recipe_topics, attachment_expiry) under one lease / heartbeat /
- * auth-bridge to cut the per-feature coordination overhead. See
+ * recipe_topics) under one lease / heartbeat / auth-bridge to cut
+ * the per-feature coordination overhead. See
  * `./loop.ts` for the rotation contract and which other workers
  * stayed standalone (embeddings, bias, samskara, wiki, wiki-
  * librarian).
@@ -22,8 +22,6 @@
  *   - threadClaimTtlSeconds 120: covers the slowest of the
  *     consolidated units (summary's smart-model call). Title /
  *     topic units fit well inside this cap.
- *   - attachmentExpiryDays 30: matches the prior standalone
- *     worker's default.
  *   - leasePollMs 20_000: while we don't hold the supervisor
  *     lease, check every 20s. Cheap SELECT.
  *   - idleIntervalMs 300_000: when we hold the lease and every
@@ -40,7 +38,6 @@ const WORKER_DEFAULTS = {
   leaseTtlSeconds: 300,
   leaseHeartbeatMs: 90_000,
   threadClaimTtlSeconds: 120,
-  attachmentExpiryDays: 30,
   leasePollMs: 20_000,
   idleIntervalMs: 300_000,
   errorBackoffMs: 30_000,
