@@ -8,6 +8,22 @@ Unlike attachments, recipe images are **persistent** (no expiry),
 so existing bytes must actually be moved - hence a one-time
 migrate button.
 
+## Status (live - update as PRs land)
+
+- [x] **PR1a** - bucket + dual-read + migrate button. *Built,
+  gate-green (check/lint/knip/1764 tests/build); not merged.* Schema
+  (bucket + RLS, `storage_path` col, `data` nullable, `recipe_image_upsert`
+  writes storage_path, `recipe_image_set_storage_path` definer RPC),
+  `upsertRecipeImage` uploads to `<uid>/<sha256>`, `listRecipePhotos`
+  resolves a `url` (signed/data-URI dual-read), `RecipePhoto.data_base64`
+  -> `url`, Cookbook `DraftPhoto.dataBase64` -> `src`, the
+  `recipe-image-migrate.ts` module + temporary About-pane button.
+- [ ] **PR1b** - GC sweep replacing the orphan trigger.
+- [ ] user clicks the Settings migrate button (after 1a+1b deploy).
+- [ ] **PR2** - collapse (drop `data`, drop dual-read, delete button).
+
+Branch: `claude/affectionate-ritchie-1jcnn`. Nothing merged yet.
+
 ## Resolved decisions
 
 1. **Dedicated `recipe-images` bucket** (content-addressed,

@@ -1744,15 +1744,25 @@ create table if not exists public.recipe_images (
   sha256 text not null,
   mime_type text not null,
   size_bytes int not null,
-  -- Base64 of the image bytes. PostgREST round-trips this as a plain
-  -- string with no encoding ambiguity, and the client feeds it straight
-  -- into `data:` URIs without intermediate decoding. (This is the same
-  -- base64-in-text choice message_attachments used before it moved to a
-  -- Storage bucket; recipe_images is queued for the same migration.)
-  data text not null,
+  -- Object key in the private `recipe-images` bucket, content-addressed
+  -- as `<user_id>/<sha256>`. The byte store. Null only for legacy rows
+  -- not yet moved by the migrate button (those still carry `data`).
+  storage_path text,
+  -- Legacy base64 of the image bytes (nullable now that bytes live in
+  -- the bucket). Read only as the dual-read fallback for un-migrated
+  -- rows; dropped in the collapse step. New rows never set it. See
+  -- docs/dev/in-progress/recipe-images-storage-migration.md.
+  data text,
   created_at timestamptz not null default now(),
   unique (user_id, sha256)
 );
+
+-- Bucket migration columns for projects synced before it: add
+-- storage_path and relax the legacy NOT NULL on data. Idempotent.
+alter table public.recipe_images
+  add column if not exists storage_path text;
+alter table public.recipe_images
+  alter column data drop not null;
 
 alter table public.recipe_images enable row level security;
 
@@ -1769,6 +1779,37 @@ create policy "recipe_images are self-insertable" on public.recipe_images
 drop policy if exists "recipe_images are self-deletable" on public.recipe_images;
 create policy "recipe_images are self-deletable" on public.recipe_images
   for delete using (auth.uid() = user_id);
+
+-- Private bucket for recipe-image bytes, content-addressed as
+-- `<user_id>/<sha256>`. Same shape as the documents/attachments buckets:
+-- public = false, self-prefix RLS on storage.objects. Idempotent.
+insert into storage.buckets (id, name, public)
+  values ('recipe-images', 'recipe-images', false)
+  on conflict (id) do nothing;
+
+drop policy if exists "recipe-images bucket is self-readable" on storage.objects;
+create policy "recipe-images bucket is self-readable" on storage.objects
+  for select to authenticated
+  using (
+    bucket_id = 'recipe-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "recipe-images bucket is self-writable" on storage.objects;
+create policy "recipe-images bucket is self-writable" on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id = 'recipe-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "recipe-images bucket is self-deletable" on storage.objects;
+create policy "recipe-images bucket is self-deletable" on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'recipe-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
 
 create table if not exists public.recipe_version_images (
   recipe_version_id uuid not null
@@ -1868,11 +1909,12 @@ create trigger gc_orphan_recipe_image
 -- dedup semantics, so it lives in the database rather than in
 -- application code.
 drop function if exists public.recipe_image_upsert(text, text, int, text);
+drop function if exists public.recipe_image_upsert(text, text, int, text, text);
 create or replace function public.recipe_image_upsert(
   p_sha256 text,
   p_mime_type text,
   p_size_bytes int,
-  p_data text
+  p_storage_path text
 ) returns uuid
 language plpgsql security invoker as $$
 declare
@@ -1883,20 +1925,20 @@ begin
   if p_sha256 is null or length(p_sha256) <> 64 then
     raise exception 'sha256 must be a 64-char hex digest';
   end if;
-  if p_data is null or length(p_data) = 0 then
-    raise exception 'data is required';
+  if p_storage_path is null or length(p_storage_path) = 0 then
+    raise exception 'storage_path is required';
   end if;
   -- Two-step upsert that respects the table's no-update RLS posture.
-  -- DO UPDATE would trip the RLS update policy that intentionally
-  -- doesn't exist (recipe_images rows are immutable - byte changes
-  -- mean a different sha256, which means a different row), so we use
-  -- DO NOTHING and follow up with a SELECT for the existing id when
-  -- the insert was suppressed by the conflict. The SELECT goes
-  -- through the SELECT policy (auth.uid() = user_id) which is
-  -- satisfied by construction.
+  -- DO NOTHING + a follow-up SELECT for the existing id when the insert
+  -- was suppressed by the (user_id, sha256) conflict. The caller has
+  -- already uploaded the bytes to the content-addressed key, so on a
+  -- conflict the existing row already points at the same object (or, for
+  -- a legacy row, still carries `data` and is covered by dual-read until
+  -- the migrate button sets its storage_path). New rows never write the
+  -- legacy `data` column.
   insert into public.recipe_images
-    (user_id, sha256, mime_type, size_bytes, data)
-    values (v_uid, p_sha256, p_mime_type, p_size_bytes, p_data)
+    (user_id, sha256, mime_type, size_bytes, storage_path)
+    values (v_uid, p_sha256, p_mime_type, p_size_bytes, p_storage_path)
     on conflict (user_id, sha256) do nothing
     returning id into v_id;
   if v_id is null then
@@ -1906,6 +1948,27 @@ begin
   end if;
   return v_id;
 end $$;
+
+-- Set storage_path on a caller-owned recipe_images row. Used by the
+-- one-time migrate button to mark a legacy (base64) row as moved to the
+-- bucket. security definer because recipe_images has no update RLS policy
+-- (rows are otherwise immutable); the explicit user_id = auth.uid() guard
+-- keeps it scoped to the caller's own rows. Idempotent - re-running with
+-- the same path is a harmless no-op.
+drop function if exists public.recipe_image_set_storage_path(uuid, text);
+create or replace function public.recipe_image_set_storage_path(
+  p_id uuid,
+  p_storage_path text
+) returns void
+language plpgsql security definer
+set search_path = public as $$
+begin
+  update public.recipe_images
+     set storage_path = p_storage_path
+   where id = p_id and user_id = auth.uid();
+end $$;
+
+revoke all on function public.recipe_image_set_storage_path(uuid, text) from public, anon;
 
 -- Recipe versioning RPCs -------------------------------------------------
 --

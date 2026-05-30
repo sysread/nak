@@ -155,7 +155,10 @@
     imageId: string;
     mimeType: string;
     sizeBytes: number;
-    dataBase64: string;
+    // Display-only source: a `data:` URI for a just-picked upload (bytes
+    // in memory) or the resolved `url` for a photo loaded from the DB.
+    // Save re-links by imageId, so the draft never carries bytes.
+    src: string;
     label: string;
   }
   let draftPhotos = $state<DraftPhoto[]>([]);
@@ -349,7 +352,10 @@
       imageId: p.id,
       mimeType: p.mime_type,
       sizeBytes: p.size_bytes,
-      dataBase64: p.data_base64,
+      // Display source only - the resolved URL (signed bucket URL or
+      // legacy data: URI) from listRecipePhotos. Save re-links by
+      // imageId, so the draft never needs the bytes.
+      src: p.url,
       // Seed the input with the saved label (or empty when there
       // isn't one). Empty string is the "no caption" sentinel in
       // the form; the wire mapper trims it back to null on save.
@@ -552,7 +558,10 @@
               imageId,
               mimeType: downscaled.type,
               sizeBytes: downscaled.size,
-              dataBase64: base64,
+              // We have the bytes in memory - render straight from a
+              // data: URI, no signed-URL round-trip for a just-picked
+              // photo.
+              src: dataUrlFor(downscaled.type, base64),
               // New uploads start without a label; the user fills
               // the input below the thumb if they want a caption.
               label: '',
@@ -1166,7 +1175,7 @@
                         : `Open photo ${i + 1} of ${activePhotos.length}`}
                     >
                       <img
-                        src={dataUrlFor(p.mime_type, p.data_base64)}
+                        src={p.url}
                         alt={p.label ?? ''}
                         title={p.label ?? ''}
                         loading="lazy"
@@ -1305,7 +1314,7 @@
               {#each draftPhotos as p, i (p.imageId + ':' + i)}
                 <div class="recipe-photo-edit-cell">
                   <img
-                    src={dataUrlFor(p.mimeType, p.dataBase64)}
+                    src={p.src}
                     alt={p.label}
                     loading="lazy"
                   />
@@ -1471,7 +1480,7 @@
     {#if p}
       <img
         class="recipe-lightbox-img"
-        src={dataUrlFor(p.mime_type, p.data_base64)}
+        src={p.url}
         alt={p.label ?? ''}
         title={p.label ?? ''}
       />
