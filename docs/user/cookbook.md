@@ -291,8 +291,8 @@ mouse-hover tooltips pick them up. Captions are optional and don't
 have to be unique - two photos on the same recipe can share the
 same caption, or none at all.
 
-- **In the edit form**, the **Photos** field sits between the change
-  message and the Cooklang source. Click **+ Add photo** to pick one or
+- **In the edit form**, the **Photos** field sits between the rating
+  and the Cooklang source. Click **+ Add photo** to pick one or
   more files; the per-cell controls move a photo left or right or
   remove it, and the **Caption** input under each photo lets you
   add or change the label. Images are downscaled to 2048 pixels on
