@@ -8,7 +8,9 @@
 > **server-side** (the standalone `expire-attachments` edge function +
 > hourly cron deletes bucket objects 30 days after a thread goes
 > dormant; the browser `attachment_expiry` worker + its RPC have been
-> removed). Still pending: the `data` column drop. See
+> removed; the legacy `data` column is dropped). The migration is
+> complete bar a post-deploy check that the expiry sweep deletes an
+> object. See
 > [`./in-progress/attachments-storage-migration.md`](./in-progress/attachments-storage-migration.md).
 > Sections below are mid-update; where they describe base64-in-`data`,
 > read it as "historical, now storage_path + bucket".

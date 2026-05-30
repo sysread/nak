@@ -190,10 +190,13 @@ row with `data` set but no `storage_path` just gets `data` nulled
   RPC (schema carries the idempotent `drop`), and removed
   `tests/attachment-expiry-loop.test.ts`. The supervisor now walks six
   units, not seven; expiry is entirely server-side.
-- **Collapse PR (follow-up)** drops the `data` column AND removes
-  the reclaim UPDATE together. Splitting is required: a single
-  apply can't both keep an UPDATE that references `data` and drop
-  `data` (the next sync would fail on the dangling reference).
+- **Collapse (LANDED).** Dropped the `data` column, the one-time
+  reclaim UPDATE, and the legacy bytea->text do-block together
+  (`alter table ... drop column if exists data`). Safe because the
+  reclaim already nulled it everywhere, no code reads/writes it, and
+  the live index keys on `storage_path`. The migration is complete
+  bar the post-deploy expiry round-trip check below; `recipe_images`
+  is a separate base64 store queued for the same treatment.
 
 ## Stage 1 verification owed (no browser / live Venice from the cloud)
 
