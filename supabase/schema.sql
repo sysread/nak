@@ -439,10 +439,8 @@ alter table public.threads
 -- Storage bucket (defined below), pointed at by `storage_path`; the row
 -- itself holds only metadata plus the extracted text. This mirrors the
 -- `documents` bucket - one file-storage mechanism for the whole app.
---
--- The legacy `data` column (base64 in `text`) predates the bucket and is
--- retained only so the one-time reclaim below can null it and so a
--- collapse follow-up can drop it; no code writes or reads it anymore.
+-- (The legacy base64 `data` column has been dropped; the drop below
+-- clears it from any project that ran an earlier schema.)
 --
 -- `extracted_text` is populated at upload time for non-image files by
 -- calling Venice's POST /api/v1/augment/text-parser endpoint, so the
@@ -476,9 +474,6 @@ create table if not exists public.message_attachments (
   -- `<user_id>/<attachment_id>/<filename>`. Null once expired (object
   -- deleted) or for a legacy pre-bucket row.
   storage_path text,
-  -- Legacy base64 body. Retained for the reclaim below + the eventual
-  -- column drop; not written or read by application code.
-  data text,
   extracted_text text,
   expired_at timestamptz,
   created_at timestamptz not null default now()
@@ -487,49 +482,13 @@ create table if not exists public.message_attachments (
 alter table public.message_attachments
   add column if not exists storage_path text;
 
--- One-time, idempotent reclaim of the legacy base64 bodies. Liveness now
--- keys on storage_path, so every pre-bucket row (no storage_path) is
--- "expired" by definition; nulling `data` reclaims the bloat immediately
--- rather than waiting for the expiry sweep. Re-runs are no-ops: new rows
--- never set `data`, and once nulled the predicate matches nothing. The
--- preserved extracted_text means these rows still render as expired
--- chips and doc_create can still promote them from text.
---   COLLAPSE FOLLOW-UP: a later PR drops the `data` column and removes
---   this statement together (a single apply can't both reference `data`
---   here and drop it).
-update public.message_attachments
-   set data = null, expired_at = coalesce(expired_at, now())
- where storage_path is null and data is not null;
-
--- Migrate the `data` column from bytea to text for projects synced
--- under the original design. Idempotent: the information_schema
--- check short-circuits on freshly-synced databases (where the column
--- is already text) and on subsequent syncs after the migration runs
--- (same reason). We drop + re-add rather than `alter column ... type
--- text using encode(data, 'base64')` because pre-migration rows hold
--- bytes under an ambiguous PostgREST encoding — re-encoding garbage
--- doesn't restore the original files. Post-migration, any rows that
--- existed before render as "expired" (data is null, extracted_text
--- preserved where populated) which matches the expired-attachment
--- rendering the message list already handles gracefully.
-do $$
-begin
-  if exists (
-    select 1
-      from information_schema.columns
-     where table_schema = 'public'
-       and table_name = 'message_attachments'
-       and column_name = 'data'
-       and data_type = 'bytea'
-  ) then
-    -- Drop the dependent partial index first; `alter column ... type`
-    -- would preserve it implicitly but we're dropping the column.
-    -- `create index if not exists` further down recreates it.
-    drop index if exists public.message_attachments_live_idx;
-    alter table public.message_attachments drop column data;
-    alter table public.message_attachments add column data text;
-  end if;
-end $$;
+-- Drop the retired legacy base64 column. Stage 1's reclaim already nulled it
+-- everywhere, no code reads or writes it, and the bytes live in the
+-- `attachments` bucket now. Idempotent: a no-op once the column is gone (and on
+-- a fresh database that never had it). The live index keys on storage_path, so
+-- nothing depends on this column.
+alter table public.message_attachments
+  drop column if exists data;
 
 create index if not exists message_attachments_message_idx
   on public.message_attachments (message_id, position);
@@ -1785,10 +1744,11 @@ create table if not exists public.recipe_images (
   sha256 text not null,
   mime_type text not null,
   size_bytes int not null,
-  -- Base64 of the image bytes. Same encoding choice as
-  -- `message_attachments.data` - PostgREST round-trips this as a
-  -- plain string with no encoding ambiguity, the client feeds it
-  -- straight into `data:` URIs without intermediate decoding.
+  -- Base64 of the image bytes. PostgREST round-trips this as a plain
+  -- string with no encoding ambiguity, and the client feeds it straight
+  -- into `data:` URIs without intermediate decoding. (This is the same
+  -- base64-in-text choice message_attachments used before it moved to a
+  -- Storage bucket; recipe_images is queued for the same migration.)
   data text not null,
   created_at timestamptz not null default now(),
   unique (user_id, sha256)
