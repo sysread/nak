@@ -933,9 +933,10 @@ function topicsFilterClause(selected: readonly string[]): string | null {
 }
 
 /**
- * Build a double-quoted ILIKE pattern for a user-supplied substring
- * query. Safe to drop into either a single `.ilike(col, ...)` filter or
- * a `.or('col.ilike.<pattern>,...')` logic tree.
+ * Build a double-quoted ILIKE pattern for a user-supplied substring query
+ * that rides INSIDE a `.or('col.ilike.<pattern>,...')` (or `.and(…)`) logic
+ * tree. Do NOT use it for a standalone `.ilike(col, value)` filter - see
+ * `ilikeFilterPattern` for why the quoting is wrong there.
  *
  * PostgREST's `.or(…)` grammar treats commas as condition separators and
  * parens as grouping. An unquoted comma in the value (e.g. a chatty
@@ -948,13 +949,31 @@ function topicsFilterClause(selected: readonly string[]): string | null {
  * double-quote or backslash must itself be backslash-escaped.
  *
  * The surrounding `%` are intentional substring wildcards and live
- * inside the quotes; ILIKE sees them after PostgREST strips the quotes.
- * A `%` or `_` typed by the user stays a wildcard, matching the prior
- * behaviour.
+ * inside the quotes; ILIKE sees them after PostgREST strips the quotes
+ * (quote-stripping only happens inside a logic tree). A `%` or `_` typed
+ * by the user stays a wildcard, matching the prior behaviour.
  */
-function ilikePattern(query: string): string {
+function ilikeLogicTreePattern(query: string): string {
   const escaped = query.replace(/(["\\])/g, '\\$1');
   return `"%${escaped}%"`;
+}
+
+/**
+ * Build an ILIKE substring pattern for a STANDALONE `.ilike(col, value)`
+ * filter. Plain `%query%`, no quoting, no escaping.
+ *
+ * supabase-js sends the value as its own URL-encoded query parameter, read
+ * verbatim to the end of that parameter, so the comma/paren reserved-char
+ * problem that forces quoting in a `.or(…)` logic tree simply does not
+ * exist here. Crucially, PostgREST strips surrounding double quotes ONLY
+ * inside a logic tree, not in a standalone horizontal filter - so reusing
+ * the quoted `ilikeLogicTreePattern` here makes ILIKE hunt for literal
+ * double-quote characters in the title, and a query like "Joy" stops
+ * matching a recipe titled "Joy's Favorite Bread" (returns an empty list).
+ * The `%`/`_` the user types stay wildcards by design.
+ */
+function ilikeFilterPattern(query: string): string {
+  return `%${query}%`;
 }
 
 /**
@@ -1876,7 +1895,7 @@ export class SupabaseService {
     const selectedTopics = opts.selectedTopics ?? [];
     const topicsClause = topicsFilterClause(selectedTopics);
 
-    const pattern = ilikePattern(query);
+    const pattern = ilikeFilterPattern(query);
     let exactQ = this.client
       .from('threads')
       .select('*')
@@ -2261,7 +2280,7 @@ export class SupabaseService {
       .order('updated_at', { ascending: false })
       .limit(limit);
     if (query && query.length > 0) {
-      const pattern = ilikePattern(query);
+      const pattern = ilikeLogicTreePattern(query);
       q = q.or(`label.ilike.${pattern},data.ilike.${pattern}`);
     }
     const topicsClause = topicsFilterClause(selectedTopics);
@@ -2480,7 +2499,7 @@ export class SupabaseService {
       q = q.order('updated_at', { ascending: false });
     }
     if (query && query.length > 0) {
-      q = q.ilike('title', ilikePattern(query));
+      q = q.ilike('title', ilikeFilterPattern(query));
     }
     const { data, error } = await q;
     if (error) throw new SupabaseError(error.message);
@@ -2615,7 +2634,7 @@ export class SupabaseService {
     const limit = opts.limit ?? 50;
     if (query.length === 0) return this.listRecipes('', limit);
 
-    const pattern = ilikePattern(query);
+    const pattern = ilikeFilterPattern(query);
 
     const ilikePromise = this.client
       .from('recipes')
@@ -3421,7 +3440,7 @@ export class SupabaseService {
   async searchDocuments(opts: { query: string; limit?: number }): Promise<Document[]> {
     const query = opts.query.trim();
     if (query.length === 0) return [];
-    const pattern = ilikePattern(query);
+    const pattern = ilikeLogicTreePattern(query);
     const { data, error } = await this.client
       .from('documents')
       .select(
@@ -3824,7 +3843,7 @@ export class SupabaseService {
     const limit = opts.limit ?? 20;
     if (query.length === 0) return this.listWikiArticles({ limit });
 
-    const pattern = ilikePattern(query);
+    const pattern = ilikeLogicTreePattern(query);
 
     const ilikePromise = this.client
       .from('wiki_articles')
@@ -5125,7 +5144,7 @@ export class SupabaseService {
     selectedTopics: readonly string[] = []
   ): Promise<Memory[]> {
     if (!query || query.length === 0) return [];
-    const pattern = ilikePattern(query);
+    const pattern = ilikeLogicTreePattern(query);
     let q = this.client
       .from('memories')
       .select('id, label, data, confidence, topics, created_at, updated_at')

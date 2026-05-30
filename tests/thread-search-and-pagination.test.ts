@@ -208,7 +208,14 @@ describe('ILIKE pattern escaping', () => {
     ]);
   });
 
-  it('double-quotes single-column .ilike() values too, and escapes embedded quotes/backslashes', async () => {
+  // Regression: a standalone `.ilike(col, value)` filter must NOT be
+  // double-quoted. supabase-js sends the value as its own URL-encoded
+  // parameter and PostgREST strips surrounding double quotes only inside a
+  // logic tree - so a quoted value here makes ILIKE hunt for literal
+  // double-quote characters, and a query like "Joy" stops matching a row
+  // titled "Joy's Favorite Bread" (the title search returned an empty
+  // list). The value rides bare, commas/quotes and all, between the `%`.
+  it('does not quote standalone .ilike() values (commas/quotes pass through verbatim)', async () => {
     const captured = { lastFromCall: {} as Record<string, unknown[]> };
     const svc = makeService(makeClient({ captured }));
     await svc.searchThreads({
@@ -217,8 +224,19 @@ describe('ILIKE pattern escaping', () => {
     });
     expect(captured.lastFromCall.ilike).toEqual([
       'title',
-      '"%say \\"hi\\" \\\\o/, then go%"',
+      '%say "hi" \\o/, then go%',
     ]);
+  });
+
+  // Regression for the recipe_list tool: a query of "Joy" returned an empty
+  // list even though a recipe titled "Joy's Favorite Bread" existed, because
+  // the standalone title filter was being double-quoted to `"%Joy%"` and
+  // matching literal quote characters. The wire value must be bare `%Joy%`.
+  it('recipe title search rides the standalone .ilike() filter unquoted', async () => {
+    const captured = { lastFromCall: {} as Record<string, unknown[]> };
+    const svc = makeService(makeClient({ captured }));
+    await svc.listRecipes('Joy', 20);
+    expect(captured.lastFromCall.ilike).toEqual(['title', '%Joy%']);
   });
 });
 
