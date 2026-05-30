@@ -204,14 +204,18 @@ unaffected.
     normalise to NULL on the wire so "no caption" reads
     consistently across the read path. Labels are not unique - two
     photos on a recipe can share a caption, or have none.
-  - `gc_orphan_recipe_image` trigger (AFTER DELETE, security
-    definer): when the last link to a `recipe_images` row is
-    removed, the trigger deletes the image row in the same
-    transaction. Recipe delete cascades through versions to link
-    rows, which fires the trigger per-row and reclaims the now-
-    orphan image bytes. Insert-side orphans (an image upserted but
-    no save followed) are not reclaimed automatically; they're rare
-    and cheap.
+  - Orphan reclamation is an idempotent server-side sweep (the
+    `recipe-image-gc` edge function + cron), not a trigger. It
+    deletes any `recipe_images` row with no link AND its bucket
+    object - catching both delete-side orphans (last link removed,
+    e.g. via a recipe-delete cascade) and insert-side orphans (a row
+    upserted but never linked). The `list_orphan_recipe_images` /
+    `delete_orphan_recipe_images` RPCs back it; the delete re-checks
+    "still no link" to skip a row re-linked mid-sweep. Replaced the
+    old `gc_orphan_recipe_image` AFTER DELETE trigger, which could
+    only delete the row (never the Storage object) and never caught
+    insert-side orphans. See
+    [`./in-progress/recipe-images-storage-migration.md`](./in-progress/recipe-images-storage-migration.md).
 - Parsed shape (`src/lib/cooklang.ts::Recipe`): `{ metadata, steps,
   ingredients, cookware, timers }`. The DB stores raw source; the
   parsed shape is re-derived at read time.

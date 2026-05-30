@@ -72,6 +72,7 @@ jobs:
         run: |
           supabase functions deploy venice --project-ref ${{ vars.SUPABASE_PROJECT_REF }}
           supabase functions deploy expire-attachments --project-ref ${{ vars.SUPABASE_PROJECT_REF }}
+          supabase functions deploy recipe-image-gc --project-ref ${{ vars.SUPABASE_PROJECT_REF }}
 
   build:
     needs: sync-supabase

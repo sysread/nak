@@ -18,7 +18,14 @@ migrate button.
   resolves a `url` (signed/data-URI dual-read), `RecipePhoto.data_base64`
   -> `url`, Cookbook `DraftPhoto.dataBase64` -> `src`, the
   `recipe-image-migrate.ts` module + temporary About-pane button.
-- [ ] **PR1b** - GC sweep replacing the orphan trigger.
+- [x] **PR1b** - GC sweep replacing the orphan trigger. *Built,
+  gate-green (deno 39 tests, handler type-checks, frontend gate
+  unaffected); not merged.* Dropped `gc_orphan_recipe_image`;
+  added `list_orphan_recipe_images` / `delete_orphan_recipe_images`
+  RPCs + `nak_trigger_recipe_image_gc` + a 6-hourly cron; the
+  standalone `recipe-image-gc` edge function + I/O-free
+  `_shared/recipe-image-gc.ts` (reclaims row + object, both orphan
+  kinds, re-link-safe); `deploy.yml` line.
 - [ ] user clicks the Settings migrate button (after 1a+1b deploy).
 - [ ] **PR2** - collapse (drop `data`, drop dual-read, delete button).
 

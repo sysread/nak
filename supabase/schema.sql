@@ -1867,39 +1867,122 @@ create policy "recipe_version_images are self-insertable"
   for insert with check (auth.uid() = user_id);
 
 -- No update / delete policies for application code: links are
--- immutable once written. Cascades from `recipe_versions` (and from
--- `recipe_images` when an image row goes away) are the only paths
--- that remove rows. The orphan-GC trigger below runs as
--- `security definer` so it can reach across to delete the image row
--- when the last link to it is removed by a cascade.
+-- immutable once written. Cascades from `recipe_versions` and the
+-- orphan-GC sweep below (which drops a recipe_images row once its last
+-- link is gone) are the only paths that remove rows.
 
--- Orphan reclamation. After the last link to an image is deleted
--- (typically as part of a recipe-delete cascade through versions),
--- delete the image row itself. `security definer` because the
--- triggering DELETE may be a cascade that the original caller's
--- role can't follow into recipe_images directly; the function still
--- only ever deletes images the same user owns, since the joined
--- recipe_images row carries the same user_id.
-create or replace function public.gc_orphan_recipe_image()
-  returns trigger
-  language plpgsql
-  security definer
-  set search_path = public
-as $$
-begin
-  if not exists (
-    select 1 from public.recipe_version_images
-     where image_id = old.image_id
-  ) then
-    delete from public.recipe_images where id = old.image_id;
-  end if;
-  return null;
-end $$;
-
+-- Orphan reclamation: an idempotent server-side sweep (the
+-- recipe-image-gc edge function + cron), NOT an AFTER DELETE trigger. The
+-- old trigger could only delete the orphaned recipe_images ROW, never its
+-- bucket object (SQL can't reach Storage), and never caught insert-side
+-- orphans (a row upserted but never linked because the save failed). The
+-- sweep reclaims BOTH orphan kinds and deletes the bucket object. Drop
+-- the old trigger + function so a sync removes them.
+--   See docs/dev/in-progress/recipe-images-storage-migration.md.
 drop trigger if exists gc_orphan_recipe_image on public.recipe_version_images;
-create trigger gc_orphan_recipe_image
-  after delete on public.recipe_version_images
-  for each row execute function public.gc_orphan_recipe_image();
+drop function if exists public.gc_orphan_recipe_image();
+
+-- List a bounded batch of orphaned recipe_images (no link references
+-- them), with their bucket key. Insert-side and delete-side orphans look
+-- identical here (no link), so one query catches both. security definer +
+-- service-role-only: cron has no user session and the sweep spans every
+-- member. FOR UPDATE SKIP LOCKED so overlapping ticks don't contend.
+drop function if exists public.list_orphan_recipe_images(int);
+create or replace function public.list_orphan_recipe_images(p_limit int)
+returns table (id uuid, storage_path text)
+language sql security definer
+set search_path = public as $$
+  select ri.id, ri.storage_path
+    from public.recipe_images ri
+   where not exists (
+     select 1 from public.recipe_version_images rvi where rvi.image_id = ri.id
+   )
+   order by ri.created_at asc
+   limit p_limit
+   for update of ri skip locked
+$$;
+
+-- Delete the given recipe_images rows that are STILL orphaned, returning
+-- the bucket keys actually removed so the caller deletes those objects.
+-- The re-check (no link) closes the race where a row listed as orphan
+-- gets re-linked before we delete it - that row is skipped and its object
+-- kept. Content addressing makes it self-healing anyway: a re-attach
+-- re-uploads the same <uid>/<sha256> key. Idempotent: already-deleted ids
+-- return nothing.
+drop function if exists public.delete_orphan_recipe_images(uuid[]);
+create or replace function public.delete_orphan_recipe_images(p_ids uuid[])
+returns table (id uuid, storage_path text)
+language sql security definer
+set search_path = public as $$
+  delete from public.recipe_images ri
+   where ri.id = any(p_ids)
+     and not exists (
+       select 1 from public.recipe_version_images rvi where rvi.image_id = ri.id
+     )
+  returning ri.id, ri.storage_path
+$$;
+
+revoke all on function public.list_orphan_recipe_images(int) from public, anon, authenticated;
+revoke all on function public.delete_orphan_recipe_images(uuid[]) from public, anon, authenticated;
+grant execute on function public.list_orphan_recipe_images(int) to service_role;
+grant execute on function public.delete_orphan_recipe_images(uuid[]) to service_role;
+
+-- Cron dispatcher for the recipe-image GC sweep. Same Vault-secret
+-- custody + local-stack guards as the embed-backfill / attachment-expiry
+-- crons; no-ops until the secrets are seeded.
+create or replace function public.nak_trigger_recipe_image_gc()
+returns void
+language plpgsql security definer set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;
+  end;
+  if v_url is null or v_key is null then
+    return;
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/recipe-image-gc',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_recipe_image_gc: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+revoke all on function public.nak_trigger_recipe_image_gc() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-recipe-image-gc') then
+      perform cron.unschedule('nak-recipe-image-gc');
+    end if;
+    perform cron.schedule(
+      'nak-recipe-image-gc',
+      '37 */6 * * *',
+      $job$ select public.nak_trigger_recipe_image_gc(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'recipe-image gc cron setup skipped: %', sqlerrm;
+end
+$cron$;
 
 -- Image upsert RPC. Returns the existing row's id if `(user_id,
 -- sha256)` already maps to one, otherwise inserts and returns the
