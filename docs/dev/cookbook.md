@@ -174,8 +174,16 @@ unaffected.
     `recipes` is the only way a version row leaves the table.
 - `public.recipe_images` table (see `supabase/schema.sql`):
   - `id uuid`, `user_id uuid`, `sha256 text` (64-char hex),
-    `mime_type text`, `size_bytes int`, `data text` (base64),
-    `created_at`. Unique on `(user_id, sha256)` for per-user dedup.
+    `mime_type text`, `size_bytes int`, `storage_path text`,
+    `data text` (legacy base64, nullable), `created_at`. Unique on
+    `(user_id, sha256)` for per-user dedup.
+  - Bytes live in the private `recipe-images` Storage bucket at the
+    content-addressed key `<user_id>/<sha256>` (`storage_path`); `data`
+    is the legacy base64 retained only as a dual-read fallback until the
+    one-time migrate button has run, then dropped. `listRecipePhotos`
+    resolves a display `url` (signed bucket URL or data-URI fallback).
+    Migration in progress - see
+    [`./in-progress/recipe-images-storage-migration.md`](./in-progress/recipe-images-storage-migration.md).
   - RLS: self-* select / insert / delete; no update (rows are
     immutable - byte changes mean a different sha256, which means a
     different row).
@@ -196,14 +204,18 @@ unaffected.
     normalise to NULL on the wire so "no caption" reads
     consistently across the read path. Labels are not unique - two
     photos on a recipe can share a caption, or have none.
-  - `gc_orphan_recipe_image` trigger (AFTER DELETE, security
-    definer): when the last link to a `recipe_images` row is
-    removed, the trigger deletes the image row in the same
-    transaction. Recipe delete cascades through versions to link
-    rows, which fires the trigger per-row and reclaims the now-
-    orphan image bytes. Insert-side orphans (an image upserted but
-    no save followed) are not reclaimed automatically; they're rare
-    and cheap.
+  - Orphan reclamation is an idempotent server-side sweep (the
+    `recipe-image-gc` edge function + cron), not a trigger. It
+    deletes any `recipe_images` row with no link AND its bucket
+    object - catching both delete-side orphans (last link removed,
+    e.g. via a recipe-delete cascade) and insert-side orphans (a row
+    upserted but never linked). The `list_orphan_recipe_images` /
+    `delete_orphan_recipe_images` RPCs back it; the delete re-checks
+    "still no link" to skip a row re-linked mid-sweep. Replaced the
+    old `gc_orphan_recipe_image` AFTER DELETE trigger, which could
+    only delete the row (never the Storage object) and never caught
+    insert-side orphans. See
+    [`./in-progress/recipe-images-storage-migration.md`](./in-progress/recipe-images-storage-migration.md).
 - Parsed shape (`src/lib/cooklang.ts::Recipe`): `{ metadata, steps,
   ingredients, cookware, timers }`. The DB stores raw source; the
   parsed shape is re-derived at read time.

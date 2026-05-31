@@ -400,6 +400,11 @@ export interface NewAttachment {
  * (rather than importing from `attachments.ts`) because that module
  * imports types from here - the dependency must not become a cycle.
  */
+// TTL for recipe-image display signed URLs. Generous (6h) so a recipe
+// detail / lightbox kept open through a session keeps rendering; a
+// longer-open pane re-resolves on reload.
+const RECIPE_IMAGE_SIGNED_URL_TTL_SECONDS = 60 * 60 * 6;
+
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -528,10 +533,12 @@ export interface RecipeVersion {
 }
 
 /**
- * One photo on a recipe, with full bytes. Loaded by the detail pane and
- * the edit form for thumbnail rendering and lightbox open. The bytes
- * are base64 (`data:` URI ready); `mime_type` and `size_bytes` come
- * from the source `recipe_images` row.
+ * One photo on a recipe, ready to render. Loaded by the detail pane and
+ * the edit form for thumbnail rendering and lightbox open. `url` is a
+ * display-ready source resolved by `listRecipePhotos`: a short-lived
+ * signed URL into the `recipe-images` bucket, or - for a legacy row not
+ * yet moved by the migrate button - a `data:` URI built from the base64
+ * fallback. The component renders `url` directly and stays synchronous.
  *
  * `position` is the link table's `position` field on the recipe's
  * latest version - lower numbers render first in the strip. `label`
@@ -545,7 +552,7 @@ export interface RecipePhoto {
   position: number;
   mime_type: string;
   size_bytes: number;
-  data_base64: string;
+  url: string;
   label: string | null;
 }
 
@@ -2923,17 +2930,77 @@ export class SupabaseService {
     sizeBytes: number,
     dataBase64: string
   ): Promise<string> {
+    // Upload the bytes to the content-addressed key first (idempotent:
+    // same sha -> same object, upsert:true), then record the row. The
+    // object existing before the row means a reader never sees a row
+    // pointing at a missing object.
+    const storagePath = await this.uploadRecipeImageObject(sha256, dataBase64, mimeType);
     const { data, error } = await this.client.rpc('recipe_image_upsert', {
       p_sha256: sha256,
       p_mime_type: mimeType,
       p_size_bytes: sizeBytes,
-      p_data: dataBase64,
+      p_storage_path: storagePath,
     });
     if (error) throw new SupabaseError(error.message);
     if (typeof data !== 'string') {
       throw new SupabaseError('image upsert returned no id');
     }
     return data;
+  }
+
+  /**
+   * Upload image bytes to the `recipe-images` bucket at the content-
+   * addressed key `<user_id>/<sha256>`. Idempotent (upsert:true), so a
+   * re-upload of the same image is a harmless overwrite. Returns the
+   * object key. Shared by upsertRecipeImage and the one-time migrate.
+   */
+  async uploadRecipeImageObject(
+    sha256: string,
+    dataBase64: string,
+    mimeType: string
+  ): Promise<string> {
+    const session = await this.getSession();
+    if (!session) throw new SupabaseError('Not authenticated.');
+    const path = `${session.user.id}/${sha256}`;
+    const { error } = await this.client.storage
+      .from('recipe-images')
+      .upload(path, base64ToBytes(dataBase64), { contentType: mimeType, upsert: true });
+    if (error) throw new SupabaseError(error.message);
+    return path;
+  }
+
+  /**
+   * Legacy recipe_images rows not yet moved to the bucket (storage_path
+   * null, base64 still in `data`). Drives the one-time migrate button.
+   * RLS scopes the SELECT to the caller's own rows.
+   */
+  async listRecipeImagesNeedingMigration(): Promise<
+    Array<{ id: string; sha256: string; mime_type: string; data: string }>
+  > {
+    const { data, error } = await this.client
+      .from('recipe_images')
+      .select('id, sha256, mime_type, data')
+      .is('storage_path', null)
+      .not('data', 'is', null);
+    if (error) throw new SupabaseError(error.message);
+    return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+      id: String(r.id),
+      sha256: String(r.sha256),
+      mime_type: typeof r.mime_type === 'string' ? r.mime_type : 'image/jpeg',
+      data: typeof r.data === 'string' ? r.data : '',
+    }));
+  }
+
+  /**
+   * Mark a legacy recipe_images row as moved (set its storage_path) via
+   * the service-definer RPC - the table has no update RLS policy.
+   */
+  async setRecipeImageStoragePath(id: string, storagePath: string): Promise<void> {
+    const { error } = await this.client.rpc('recipe_image_set_storage_path', {
+      p_id: id,
+      p_storage_path: storagePath,
+    });
+    if (error) throw new SupabaseError(error.message);
   }
 
   /**
@@ -2951,7 +3018,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('recipe_versions')
       .select(
-        'id, recipe_version_images(position, label, recipe_images(id, mime_type, size_bytes, data))'
+        'id, recipe_version_images(position, label, recipe_images(id, mime_type, size_bytes, storage_path, data))'
       )
       .eq('recipe_id', recipeId)
       .order('created_at', { ascending: false })
@@ -2970,7 +3037,8 @@ export class SupabaseService {
       id: string;
       mime_type: string;
       size_bytes: number;
-      data: string;
+      storage_path: string | null;
+      data: string | null;
     };
     type LinkRow = {
       position: number;
@@ -2980,19 +3048,46 @@ export class SupabaseService {
     const links = (data as unknown as { recipe_version_images?: LinkRow[] | null })
       .recipe_version_images;
     if (!Array.isArray(links)) return [];
-    const photos: RecipePhoto[] = [];
+
+    // Collect the rows first, then batch-resolve signed URLs for the
+    // bucket-backed ones in a single Storage call. Legacy rows (no
+    // storage_path) fall back to a data: URI from their base64.
+    const rows: Array<{ img: ImageEmbed; position: number; label: string | null }> = [];
     for (const l of links) {
-      const img = Array.isArray(l.recipe_images)
-        ? l.recipe_images[0]
-        : l.recipe_images;
+      const img = Array.isArray(l.recipe_images) ? l.recipe_images[0] : l.recipe_images;
       if (!img) continue;
+      rows.push({ img, position: l.position, label: l.label ?? null });
+    }
+
+    const paths = rows
+      .map((r) => r.img.storage_path)
+      .filter((p): p is string => typeof p === 'string');
+    const signed = new Map<string, string>();
+    if (paths.length > 0) {
+      const { data: signedData, error: signErr } = await this.client.storage
+        .from('recipe-images')
+        .createSignedUrls(paths, RECIPE_IMAGE_SIGNED_URL_TTL_SECONDS);
+      if (signErr) throw new SupabaseError(signErr.message);
+      for (const entry of signedData ?? []) {
+        if (entry.signedUrl && typeof entry.path === 'string') {
+          signed.set(entry.path, entry.signedUrl);
+        }
+      }
+    }
+
+    const photos: RecipePhoto[] = [];
+    for (const { img, position, label } of rows) {
+      const url =
+        (img.storage_path && signed.get(img.storage_path)) ||
+        (img.data ? `data:${img.mime_type};base64,${img.data}` : '');
+      if (!url) continue; // neither bucket object nor legacy bytes - skip
       photos.push({
         id: img.id,
-        position: l.position,
+        position,
         mime_type: img.mime_type,
         size_bytes: img.size_bytes,
-        data_base64: img.data,
-        label: l.label ?? null,
+        url,
+        label,
       });
     }
     photos.sort((a, b) => a.position - b.position);

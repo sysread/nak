@@ -131,6 +131,11 @@ changing a contract that other features depend on.
   into a private Storage bucket (the `documents` pattern), with
   signed-URL vision reads and a server-side expiry sweep. One
   file-storage mechanism instead of two.
+- [Recipe-images storage migration](./in-progress/recipe-images-storage-migration.md)
+  — same move for `recipe_images` (content-addressed
+  `<user_id>/<sha256>` bucket keys), a one-time migrate button, and
+  an idempotent GC sweep that replaces the orphan trigger and
+  reclaims bucket objects.
 
 ### Future work
 

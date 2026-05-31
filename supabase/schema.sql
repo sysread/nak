@@ -1744,15 +1744,25 @@ create table if not exists public.recipe_images (
   sha256 text not null,
   mime_type text not null,
   size_bytes int not null,
-  -- Base64 of the image bytes. PostgREST round-trips this as a plain
-  -- string with no encoding ambiguity, and the client feeds it straight
-  -- into `data:` URIs without intermediate decoding. (This is the same
-  -- base64-in-text choice message_attachments used before it moved to a
-  -- Storage bucket; recipe_images is queued for the same migration.)
-  data text not null,
+  -- Object key in the private `recipe-images` bucket, content-addressed
+  -- as `<user_id>/<sha256>`. The byte store. Null only for legacy rows
+  -- not yet moved by the migrate button (those still carry `data`).
+  storage_path text,
+  -- Legacy base64 of the image bytes (nullable now that bytes live in
+  -- the bucket). Read only as the dual-read fallback for un-migrated
+  -- rows; dropped in the collapse step. New rows never set it. See
+  -- docs/dev/in-progress/recipe-images-storage-migration.md.
+  data text,
   created_at timestamptz not null default now(),
   unique (user_id, sha256)
 );
+
+-- Bucket migration columns for projects synced before it: add
+-- storage_path and relax the legacy NOT NULL on data. Idempotent.
+alter table public.recipe_images
+  add column if not exists storage_path text;
+alter table public.recipe_images
+  alter column data drop not null;
 
 alter table public.recipe_images enable row level security;
 
@@ -1769,6 +1779,37 @@ create policy "recipe_images are self-insertable" on public.recipe_images
 drop policy if exists "recipe_images are self-deletable" on public.recipe_images;
 create policy "recipe_images are self-deletable" on public.recipe_images
   for delete using (auth.uid() = user_id);
+
+-- Private bucket for recipe-image bytes, content-addressed as
+-- `<user_id>/<sha256>`. Same shape as the documents/attachments buckets:
+-- public = false, self-prefix RLS on storage.objects. Idempotent.
+insert into storage.buckets (id, name, public)
+  values ('recipe-images', 'recipe-images', false)
+  on conflict (id) do nothing;
+
+drop policy if exists "recipe-images bucket is self-readable" on storage.objects;
+create policy "recipe-images bucket is self-readable" on storage.objects
+  for select to authenticated
+  using (
+    bucket_id = 'recipe-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "recipe-images bucket is self-writable" on storage.objects;
+create policy "recipe-images bucket is self-writable" on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id = 'recipe-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "recipe-images bucket is self-deletable" on storage.objects;
+create policy "recipe-images bucket is self-deletable" on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'recipe-images'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
 
 create table if not exists public.recipe_version_images (
   recipe_version_id uuid not null
@@ -1826,39 +1867,122 @@ create policy "recipe_version_images are self-insertable"
   for insert with check (auth.uid() = user_id);
 
 -- No update / delete policies for application code: links are
--- immutable once written. Cascades from `recipe_versions` (and from
--- `recipe_images` when an image row goes away) are the only paths
--- that remove rows. The orphan-GC trigger below runs as
--- `security definer` so it can reach across to delete the image row
--- when the last link to it is removed by a cascade.
+-- immutable once written. Cascades from `recipe_versions` and the
+-- orphan-GC sweep below (which drops a recipe_images row once its last
+-- link is gone) are the only paths that remove rows.
 
--- Orphan reclamation. After the last link to an image is deleted
--- (typically as part of a recipe-delete cascade through versions),
--- delete the image row itself. `security definer` because the
--- triggering DELETE may be a cascade that the original caller's
--- role can't follow into recipe_images directly; the function still
--- only ever deletes images the same user owns, since the joined
--- recipe_images row carries the same user_id.
-create or replace function public.gc_orphan_recipe_image()
-  returns trigger
-  language plpgsql
-  security definer
-  set search_path = public
-as $$
-begin
-  if not exists (
-    select 1 from public.recipe_version_images
-     where image_id = old.image_id
-  ) then
-    delete from public.recipe_images where id = old.image_id;
-  end if;
-  return null;
-end $$;
-
+-- Orphan reclamation: an idempotent server-side sweep (the
+-- recipe-image-gc edge function + cron), NOT an AFTER DELETE trigger. The
+-- old trigger could only delete the orphaned recipe_images ROW, never its
+-- bucket object (SQL can't reach Storage), and never caught insert-side
+-- orphans (a row upserted but never linked because the save failed). The
+-- sweep reclaims BOTH orphan kinds and deletes the bucket object. Drop
+-- the old trigger + function so a sync removes them.
+--   See docs/dev/in-progress/recipe-images-storage-migration.md.
 drop trigger if exists gc_orphan_recipe_image on public.recipe_version_images;
-create trigger gc_orphan_recipe_image
-  after delete on public.recipe_version_images
-  for each row execute function public.gc_orphan_recipe_image();
+drop function if exists public.gc_orphan_recipe_image();
+
+-- List a bounded batch of orphaned recipe_images (no link references
+-- them), with their bucket key. Insert-side and delete-side orphans look
+-- identical here (no link), so one query catches both. security definer +
+-- service-role-only: cron has no user session and the sweep spans every
+-- member. FOR UPDATE SKIP LOCKED so overlapping ticks don't contend.
+drop function if exists public.list_orphan_recipe_images(int);
+create or replace function public.list_orphan_recipe_images(p_limit int)
+returns table (id uuid, storage_path text)
+language sql security definer
+set search_path = public as $$
+  select ri.id, ri.storage_path
+    from public.recipe_images ri
+   where not exists (
+     select 1 from public.recipe_version_images rvi where rvi.image_id = ri.id
+   )
+   order by ri.created_at asc
+   limit p_limit
+   for update of ri skip locked
+$$;
+
+-- Delete the given recipe_images rows that are STILL orphaned, returning
+-- the bucket keys actually removed so the caller deletes those objects.
+-- The re-check (no link) closes the race where a row listed as orphan
+-- gets re-linked before we delete it - that row is skipped and its object
+-- kept. Content addressing makes it self-healing anyway: a re-attach
+-- re-uploads the same <uid>/<sha256> key. Idempotent: already-deleted ids
+-- return nothing.
+drop function if exists public.delete_orphan_recipe_images(uuid[]);
+create or replace function public.delete_orphan_recipe_images(p_ids uuid[])
+returns table (id uuid, storage_path text)
+language sql security definer
+set search_path = public as $$
+  delete from public.recipe_images ri
+   where ri.id = any(p_ids)
+     and not exists (
+       select 1 from public.recipe_version_images rvi where rvi.image_id = ri.id
+     )
+  returning ri.id, ri.storage_path
+$$;
+
+revoke all on function public.list_orphan_recipe_images(int) from public, anon, authenticated;
+revoke all on function public.delete_orphan_recipe_images(uuid[]) from public, anon, authenticated;
+grant execute on function public.list_orphan_recipe_images(int) to service_role;
+grant execute on function public.delete_orphan_recipe_images(uuid[]) to service_role;
+
+-- Cron dispatcher for the recipe-image GC sweep. Same Vault-secret
+-- custody + local-stack guards as the embed-backfill / attachment-expiry
+-- crons; no-ops until the secrets are seeded.
+create or replace function public.nak_trigger_recipe_image_gc()
+returns void
+language plpgsql security definer set search_path = public
+as $fn$
+declare
+  v_url text;
+  v_key text;
+begin
+  begin
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'project_url' $q$ into v_url;
+    execute $q$ select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' $q$ into v_key;
+  exception when others then
+    return;
+  end;
+  if v_url is null or v_key is null then
+    return;
+  end if;
+  begin
+    execute format(
+      $q$ select net.http_post(
+            url := %L,
+            headers := jsonb_build_object('Content-Type', 'application/json', 'Authorization', %L),
+            body := '{}'::jsonb
+          ) $q$,
+      v_url || '/functions/v1/recipe-image-gc',
+      'Bearer ' || v_key
+    );
+  exception when others then
+    raise notice 'nak_trigger_recipe_image_gc: dispatch failed: %', sqlerrm;
+  end;
+end;
+$fn$;
+revoke all on function public.nak_trigger_recipe_image_gc() from public, anon, authenticated;
+
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron')
+     and exists (select 1 from pg_available_extensions where name = 'pg_net') then
+    create extension if not exists pg_cron;
+    create extension if not exists pg_net;
+    if exists (select 1 from cron.job where jobname = 'nak-recipe-image-gc') then
+      perform cron.unschedule('nak-recipe-image-gc');
+    end if;
+    perform cron.schedule(
+      'nak-recipe-image-gc',
+      '37 */6 * * *',
+      $job$ select public.nak_trigger_recipe_image_gc(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'recipe-image gc cron setup skipped: %', sqlerrm;
+end
+$cron$;
 
 -- Image upsert RPC. Returns the existing row's id if `(user_id,
 -- sha256)` already maps to one, otherwise inserts and returns the
@@ -1868,11 +1992,12 @@ create trigger gc_orphan_recipe_image
 -- dedup semantics, so it lives in the database rather than in
 -- application code.
 drop function if exists public.recipe_image_upsert(text, text, int, text);
+drop function if exists public.recipe_image_upsert(text, text, int, text, text);
 create or replace function public.recipe_image_upsert(
   p_sha256 text,
   p_mime_type text,
   p_size_bytes int,
-  p_data text
+  p_storage_path text
 ) returns uuid
 language plpgsql security invoker as $$
 declare
@@ -1883,20 +2008,20 @@ begin
   if p_sha256 is null or length(p_sha256) <> 64 then
     raise exception 'sha256 must be a 64-char hex digest';
   end if;
-  if p_data is null or length(p_data) = 0 then
-    raise exception 'data is required';
+  if p_storage_path is null or length(p_storage_path) = 0 then
+    raise exception 'storage_path is required';
   end if;
   -- Two-step upsert that respects the table's no-update RLS posture.
-  -- DO UPDATE would trip the RLS update policy that intentionally
-  -- doesn't exist (recipe_images rows are immutable - byte changes
-  -- mean a different sha256, which means a different row), so we use
-  -- DO NOTHING and follow up with a SELECT for the existing id when
-  -- the insert was suppressed by the conflict. The SELECT goes
-  -- through the SELECT policy (auth.uid() = user_id) which is
-  -- satisfied by construction.
+  -- DO NOTHING + a follow-up SELECT for the existing id when the insert
+  -- was suppressed by the (user_id, sha256) conflict. The caller has
+  -- already uploaded the bytes to the content-addressed key, so on a
+  -- conflict the existing row already points at the same object (or, for
+  -- a legacy row, still carries `data` and is covered by dual-read until
+  -- the migrate button sets its storage_path). New rows never write the
+  -- legacy `data` column.
   insert into public.recipe_images
-    (user_id, sha256, mime_type, size_bytes, data)
-    values (v_uid, p_sha256, p_mime_type, p_size_bytes, p_data)
+    (user_id, sha256, mime_type, size_bytes, storage_path)
+    values (v_uid, p_sha256, p_mime_type, p_size_bytes, p_storage_path)
     on conflict (user_id, sha256) do nothing
     returning id into v_id;
   if v_id is null then
@@ -1906,6 +2031,27 @@ begin
   end if;
   return v_id;
 end $$;
+
+-- Set storage_path on a caller-owned recipe_images row. Used by the
+-- one-time migrate button to mark a legacy (base64) row as moved to the
+-- bucket. security definer because recipe_images has no update RLS policy
+-- (rows are otherwise immutable); the explicit user_id = auth.uid() guard
+-- keeps it scoped to the caller's own rows. Idempotent - re-running with
+-- the same path is a harmless no-op.
+drop function if exists public.recipe_image_set_storage_path(uuid, text);
+create or replace function public.recipe_image_set_storage_path(
+  p_id uuid,
+  p_storage_path text
+) returns void
+language plpgsql security definer
+set search_path = public as $$
+begin
+  update public.recipe_images
+     set storage_path = p_storage_path
+   where id = p_id and user_id = auth.uid();
+end $$;
+
+revoke all on function public.recipe_image_set_storage_path(uuid, text) from public, anon;
 
 -- Recipe versioning RPCs -------------------------------------------------
 --
