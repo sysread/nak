@@ -41,6 +41,11 @@ changing a contract that other features depend on.
   adding or refactoring anything under either directory.
 - [Components](./components.md) — the reusable Svelte
   components screens compose.
+- [File storage](./file-storage.md) — how user file bytes are
+  stored: private Storage buckets, signed-URL reads,
+  `storage_path` pointers, and the server-side expiry / GC
+  sweeps. Read before touching attachments, the Library, or
+  cookbook photos.
 
 ### Core features
 
@@ -126,16 +131,10 @@ changing a contract that other features depend on.
   behind a Supabase edge function with a project-global key and
   scheduled background generation. Embeddings is the first
   milestone; the other endpoints are skeleton sub-plans.
-- [Attachments storage migration](./in-progress/attachments-storage-migration.md)
-  — move `message_attachments` file bytes off base64-in-Postgres
-  into a private Storage bucket (the `documents` pattern), with
-  signed-URL vision reads and a server-side expiry sweep. One
-  file-storage mechanism instead of two.
-- [Recipe-images storage migration](./in-progress/recipe-images-storage-migration.md)
-  — same move for `recipe_images` (content-addressed
-  `<user_id>/<sha256>` bucket keys), a one-time migrate button, and
-  an idempotent GC sweep that replaces the orphan trigger and
-  reclaims bucket objects.
+
+(The attachments and recipe-images base64→bucket migrations have
+shipped; their mechanics live in [File storage](./file-storage.md)
+and the per-feature docs.)
 
 ### Future work
 

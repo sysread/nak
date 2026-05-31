@@ -140,11 +140,12 @@ recipe, wiki article, and a few other text fields. Embeddings are
 what make `memory_search`, `conversation_search`, and the drawer
 searches find things by meaning rather than by exact keyword match.
 
-Unlike the other items on this page, this one does **not** run in
+Unlike most of the items on this page, this one does **not** run in
 your browser. It runs on your Supabase project on a schedule (every
 few minutes), so it keeps working with no tab open - close the laptop
-and new memories still get embedded. Everything else here needs the
-app open in a tab; embeddings is the exception.
+and new memories still get embedded. The model-driven workers above
+(titles, summaries, tagging, reflection) need the app open in a tab;
+embeddings and the storage cleanup below run server-side without one.
 
 What you see: nothing. A just-written memory is unembedded for a
 short window (up to a few minutes) until the next scheduled pass
@@ -155,6 +156,27 @@ Cost: Venice's embedding endpoint, one call per unembedded row. The
 schedule processes a bounded batch per run and resumes on the next
 run, so a large backlog drains over several passes rather than in one
 burst.
+
+No toggle.
+
+## Storage cleanup
+
+Files you attach to a chat (and images Nak generates) don't live
+forever. Thirty days after a conversation's last message, a scheduled
+job on your Supabase project deletes the stored file bytes and frees
+the space. The filename, size, and any extracted text stay behind so
+the conversation still reads sensibly - see
+[Attachments](./attachments.md#expiration) for exactly what survives.
+
+Like embeddings, this runs server-side on a schedule, so it reclaims
+space even with no tab open. Replying to a thread resets the 30-day
+clock for every file in it.
+
+What you see: nothing while it runs. An expired attachment picks up a
+small clock icon in the conversation; its **Text** button keeps
+working.
+
+Cost: none - it only deletes, no model calls.
 
 No toggle.
 

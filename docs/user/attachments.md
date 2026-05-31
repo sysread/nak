@@ -76,8 +76,8 @@ yourself.
   ask for a picture, the same way it reaches for other capabilities
   mid-conversation. If nothing happens, check the toolbox is enabled.
 - Generated images are **stored and expired on the same 30-day
-  schedule as your uploads** (see below) - they live in your Nak
-  database, freed automatically a month after the conversation goes
+  schedule as your uploads** (see below) - they're kept in your Nak
+  storage, freed automatically a month after the conversation goes
   quiet.
 - Because a generated image is a normal attachment, you can ask Nak
   to look at it again later ("what's in the background of that image?")
@@ -94,7 +94,7 @@ yourself.
 Attachments are reclaimed 30 days after a conversation's last
 update. After that:
 
-- The file's binary is removed from Nak's database (your storage is
+- The file itself is deleted from Nak's storage (your space is
   freed).
 - The filename, size, and extracted text **stay** so the
   conversation is still legible — you'll see the filename with a
@@ -121,4 +121,4 @@ downscale keeps row sizes predictable.
 - [Models & reasoning](./models.md) — tier tradeoffs and
   capabilities.
 - [What runs in the background](./background.md) — including the
-  attachment-expiry worker that reclaims storage.
+  scheduled storage cleanup that reclaims expired attachments.
