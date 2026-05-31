@@ -9,6 +9,9 @@
  * re-running after a partial failure simply finishes the remainder.
  */
 import type { SupabaseService } from './supabase';
+import { createLogger } from './logger.svelte';
+
+const log = createLogger('recipe-image-migrate');
 
 export interface RecipeImageMigrationResult {
   /** Rows that needed moving at the start. */
@@ -23,6 +26,13 @@ export async function migrateRecipeImagesToBucket(
   supabase: SupabaseService
 ): Promise<RecipeImageMigrationResult> {
   const rows = await supabase.listRecipeImagesNeedingMigration();
+  // Progress goes to the log drawer so the one-time run is observable -
+  // a count up front, a line per image, and a final tally.
+  if (rows.length === 0) {
+    log.info('No recipe images need migrating - all already in the bucket.');
+    return { total: 0, migrated: 0, errors: [] };
+  }
+  log.info(`Migrating ${rows.length} recipe image(s) to the bucket...`);
   const errors: Array<{ id: string; message: string }> = [];
   let migrated = 0;
   for (const row of rows) {
@@ -30,9 +40,16 @@ export async function migrateRecipeImagesToBucket(
       const path = await supabase.uploadRecipeImageObject(row.sha256, row.data, row.mime_type);
       await supabase.setRecipeImageStoragePath(row.id, path);
       migrated += 1;
+      log.info(`Moved ${migrated}/${rows.length} (${row.sha256.slice(0, 12)}...)`);
     } catch (err) {
-      errors.push({ id: row.id, message: err instanceof Error ? err.message : String(err) });
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push({ id: row.id, message });
+      log.warn(`Failed to migrate recipe image ${row.id}: ${message}`);
     }
   }
+  log.info(
+    `Recipe-image migration done: moved ${migrated} of ${rows.length}` +
+      (errors.length > 0 ? `, ${errors.length} failed (re-run to retry).` : '.')
+  );
   return { total: rows.length, migrated, errors };
 }
