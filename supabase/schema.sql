@@ -1745,24 +1745,21 @@ create table if not exists public.recipe_images (
   mime_type text not null,
   size_bytes int not null,
   -- Object key in the private `recipe-images` bucket, content-addressed
-  -- as `<user_id>/<sha256>`. The byte store. Null only for legacy rows
-  -- not yet moved by the migrate button (those still carry `data`).
+  -- as `<user_id>/<sha256>`. The byte store.
   storage_path text,
-  -- Legacy base64 of the image bytes (nullable now that bytes live in
-  -- the bucket). Read only as the dual-read fallback for un-migrated
-  -- rows; dropped in the collapse step. New rows never set it. See
-  -- docs/dev/in-progress/recipe-images-storage-migration.md.
-  data text,
   created_at timestamptz not null default now(),
   unique (user_id, sha256)
 );
 
--- Bucket migration columns for projects synced before it: add
--- storage_path and relax the legacy NOT NULL on data. Idempotent.
+-- Add storage_path for projects synced before the bucket migration, and
+-- drop the retired legacy base64 `data` column (the migrate button moved
+-- every row's bytes into the bucket; nothing reads or writes `data`
+-- anymore). Idempotent: no-ops once the column is gone / the column
+-- exists. See docs/dev/in-progress/recipe-images-storage-migration.md.
 alter table public.recipe_images
   add column if not exists storage_path text;
 alter table public.recipe_images
-  alter column data drop not null;
+  drop column if exists data;
 
 alter table public.recipe_images enable row level security;
 
@@ -2032,26 +2029,10 @@ begin
   return v_id;
 end $$;
 
--- Set storage_path on a caller-owned recipe_images row. Used by the
--- one-time migrate button to mark a legacy (base64) row as moved to the
--- bucket. security definer because recipe_images has no update RLS policy
--- (rows are otherwise immutable); the explicit user_id = auth.uid() guard
--- keeps it scoped to the caller's own rows. Idempotent - re-running with
--- the same path is a harmless no-op.
+-- The one-time recipe-image migrate button (and its
+-- recipe_image_set_storage_path RPC) has been removed now that every row
+-- is in the bucket. Drop the RPC so a sync clears it.
 drop function if exists public.recipe_image_set_storage_path(uuid, text);
-create or replace function public.recipe_image_set_storage_path(
-  p_id uuid,
-  p_storage_path text
-) returns void
-language plpgsql security definer
-set search_path = public as $$
-begin
-  update public.recipe_images
-     set storage_path = p_storage_path
-   where id = p_id and user_id = auth.uid();
-end $$;
-
-revoke all on function public.recipe_image_set_storage_path(uuid, text) from public, anon;
 
 -- Recipe versioning RPCs -------------------------------------------------
 --

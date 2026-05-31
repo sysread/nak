@@ -26,10 +26,15 @@ migrate button.
   standalone `recipe-image-gc` edge function + I/O-free
   `_shared/recipe-image-gc.ts` (reclaims row + object, both orphan
   kinds, re-link-safe); `deploy.yml` line.
-- [ ] user clicks the Settings migrate button (after 1a+1b deploy).
-- [ ] **PR2** - collapse (drop `data`, drop dual-read, delete button).
+- [x] user clicked the Settings migrate button + verified rendering
+  (signed URLs into `recipe-images/<uid>/<sha256>`, 6h TTL).
+- [x] **PR2** - collapse: dropped the `data` column (idempotent
+  `drop column if exists`), `listRecipePhotos` is signed-URL-only,
+  and the migrate button + `recipe-image-migrate.ts` +
+  `recipe_image_set_storage_path` RPC are removed.
 
-Branch: `claude/affectionate-ritchie-1jcnn`. Nothing merged yet.
+**Migration complete.** This doc can be retired (move any lasting
+notes into `../cookbook.md`).
 
 ## Resolved decisions
 

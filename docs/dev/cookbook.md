@@ -175,14 +175,11 @@ unaffected.
 - `public.recipe_images` table (see `supabase/schema.sql`):
   - `id uuid`, `user_id uuid`, `sha256 text` (64-char hex),
     `mime_type text`, `size_bytes int`, `storage_path text`,
-    `data text` (legacy base64, nullable), `created_at`. Unique on
-    `(user_id, sha256)` for per-user dedup.
+    `created_at`. Unique on `(user_id, sha256)` for per-user dedup.
   - Bytes live in the private `recipe-images` Storage bucket at the
-    content-addressed key `<user_id>/<sha256>` (`storage_path`); `data`
-    is the legacy base64 retained only as a dual-read fallback until the
-    one-time migrate button has run, then dropped. `listRecipePhotos`
-    resolves a display `url` (signed bucket URL or data-URI fallback).
-    Migration in progress - see
+    content-addressed key `<user_id>/<sha256>` (`storage_path`).
+    `listRecipePhotos` resolves a display `url` (a signed bucket URL).
+    The migration off the old base64 `data` column is complete - see
     [`./in-progress/recipe-images-storage-migration.md`](./in-progress/recipe-images-storage-migration.md).
   - RLS: self-* select / insert / delete; no update (rows are
     immutable - byte changes mean a different sha256, which means a
