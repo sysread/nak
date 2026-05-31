@@ -1008,7 +1008,18 @@ label {
 
 @media (max-width: 48rem) {
   .settings-shell {
+    /* Stack the nav above the pane instead of placing them side by side.
+       The desktop grid uses a single `1fr` row with two columns; just
+       dropping to one column here leaves that lone `1fr` row in place, so
+       the two children auto-place into rows - nav into the explicit `1fr`
+       track, pane into an implicit `auto` track. The pane's content is
+       taller than the fixed-height shell, so the auto pane row consumes
+       the whole height and starves the `1fr` nav row down to ~0px - the
+       tab strip collapses to an illegible sliver at the top. Pin an
+       explicit two-row template so the nav keeps its natural height and
+       the pane takes the remainder (and scrolls via its own overflow). */
     grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
   }
   .settings-nav {
     flex-direction: row;
