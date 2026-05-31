@@ -10,7 +10,7 @@ material the user curates and the LLM searches.
 Two surfaces with deliberately different lifetimes:
 
 - **Attachments** (`docs/dev/attachments.md`) - per-message files,
-  base64 in Postgres, reclaimed after 30 days dormancy.
+  reclaimed after 30 days dormancy.
 - **Library** (this doc) - whole uploaded documents kept forever. The
   original binary lives in a private Storage bucket; the extracted text
   is stored alongside and searched directly. Reached only through the
@@ -186,8 +186,10 @@ per-row `user_id` scoping.
 
 - **Attachments** (`docs/dev/attachments.md`) - `doc_create` promotes
   an attachment into a document, reusing its `extracted_text` and
-  binary. FOLLOW-UP: attachments should migrate onto the same Storage
-  bucket so there is one file-storage mechanism, not two.
+  binary. Both ride the shared bucket model in
+  [`./file-storage.md`](./file-storage.md): a live attachment's bytes
+  are downloaded from the `attachments` bucket and re-uploaded into
+  `documents` (an expired attachment still promotes, just text-only).
 - **Tools** (`docs/dev/tools.md`) - `doc_list` / `doc_get` / `doc_grep`
   / `doc_read` ride always-on; the `library` toolbox carries the writes.
 - **Chat-prompt** (search `LIBRARY_BLOCK`) - tells the model the Library

@@ -180,7 +180,7 @@ unaffected.
     content-addressed key `<user_id>/<sha256>` (`storage_path`).
     `listRecipePhotos` resolves a display `url` (a signed bucket URL).
     The migration off the old base64 `data` column is complete - see
-    [`./in-progress/recipe-images-storage-migration.md`](./in-progress/recipe-images-storage-migration.md).
+    [`./file-storage.md`](./file-storage.md).
   - RLS: self-* select / insert / delete; no update (rows are
     immutable - byte changes mean a different sha256, which means a
     different row).
@@ -212,7 +212,7 @@ unaffected.
     old `gc_orphan_recipe_image` AFTER DELETE trigger, which could
     only delete the row (never the Storage object) and never caught
     insert-side orphans. See
-    [`./in-progress/recipe-images-storage-migration.md`](./in-progress/recipe-images-storage-migration.md).
+    [`./file-storage.md`](./file-storage.md).
 - Parsed shape (`src/lib/cooklang.ts::Recipe`): `{ metadata, steps,
   ingredients, cookware, timers }`. The DB stores raw source; the
   parsed shape is re-derived at read time.

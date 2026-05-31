@@ -295,6 +295,7 @@ Web-Lock-while-holding-the-Supabase-lease race).
 | Persistent per-origin | `localStorage['nak:config:v1']` | Encrypted config blob |
 | Persistent per-origin | `localStorage['nak:theme:v1']` | Cached theme (non-secret; used by the pre-paint boot script in `index.html`) |
 | Per-account, remote | Supabase tables | Everything else (threads, messages, memories, profile settings, worker leases) |
+| Per-account, remote | Supabase Storage buckets | User file bytes - chat attachments, Library documents, recipe photos. Tables hold only a `storage_path` pointer; see [File storage](./file-storage.md). |
 
 A new per-user setting lands in `profiles.settings` (JSONB) without
 a schema change. A new per-thread flag lands via `alter table
