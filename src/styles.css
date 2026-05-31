@@ -1025,6 +1025,17 @@ label {
   .settings-nav-list {
     flex-direction: row;
   }
+  /* Keep each tab at its natural width so the nav scrolls horizontally
+     instead of squeezing all eight tabs into the viewport. Without
+     flex-shrink: 0 the default flex-shrink: 1 compresses every tab into
+     a sliver and wraps the label across several lines - the tabs read as
+     a barely-visible smear at the top of the modal and `overflow-x: auto`
+     never engages because the children shrank to fit rather than
+     overflowing. white-space: nowrap keeps the label on one line. */
+  .settings-tab {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
 }
 
 h1 {
