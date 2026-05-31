@@ -70,10 +70,6 @@
   } from '$lib/state.svelte';
   import { detectTimezone, normalizeTimezone } from '$lib/timezone';
   import { resetAllWikiData } from '$lib/wiki-store.svelte';
-  // TEMPORARY (recipe-images storage migration): delete this import, the
-  // state + handler below, and the About-pane block together once the
-  // migration has run. See docs/dev/in-progress/recipe-images-storage-migration.md.
-  import { migrateRecipeImagesToBucket } from '$lib/recipe-image-migrate';
   import { isSupported as notificationsSupported, requestPermission } from '$lib/notifications.svelte';
   import { LOG_LEVELS, LOG_LEVEL_LABELS, type LogLevel } from '$lib/logger.svelte';
   import {
@@ -879,28 +875,6 @@
       }
     } finally {
       aboutBusy = 'idle';
-    }
-  }
-
-  // TEMPORARY (recipe-images storage migration). Rip out with the import
-  // above and the About-pane block below once the migration has run.
-  let recipeMigrateBusy = $state(false);
-  let recipeMigrateInfo = $state<string | null>(null);
-  async function onMigrateRecipeImages(): Promise<void> {
-    if (!app.supabase || recipeMigrateBusy) return;
-    recipeMigrateBusy = true;
-    recipeMigrateInfo = null;
-    try {
-      const r = await migrateRecipeImagesToBucket(app.supabase);
-      recipeMigrateInfo =
-        r.total === 0
-          ? 'Nothing to migrate - all recipe images are already in the bucket.'
-          : `Moved ${r.migrated} of ${r.total} recipe images to the bucket` +
-            (r.errors.length > 0 ? ` (${r.errors.length} failed - re-run to retry).` : '.');
-    } catch (err) {
-      recipeMigrateInfo = `Migration failed: ${err instanceof Error ? err.message : String(err)}`;
-    } finally {
-      recipeMigrateBusy = false;
     }
   }
 
@@ -2159,25 +2133,6 @@
           flips to "Reload to update" and the top-right banner
           appears.
         </p>
-
-        <!-- TEMPORARY: one-time recipe-image -> Storage bucket migration.
-             Remove this block, the import, and the state/handler above
-             once it has run. See
-             docs/dev/in-progress/recipe-images-storage-migration.md. -->
-        <h3 class="pane-section">Recipe image storage</h3>
-        <p class="subtle" style="font-size:0.85rem">
-          Move recipe photos from the database into the storage bucket.
-          One-time; safe to re-run (it only moves photos not already
-          moved).
-        </p>
-        <button
-          type="button"
-          onclick={onMigrateRecipeImages}
-          disabled={recipeMigrateBusy}
-        >{recipeMigrateBusy ? 'Migrating…' : 'Migrate recipe images'}</button>
-        {#if recipeMigrateInfo}
-          <p class="subtle" style="margin-top:0.5rem">{recipeMigrateInfo}</p>
-        {/if}
       {/if}
     </section>
   </div>

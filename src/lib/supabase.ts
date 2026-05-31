@@ -2969,39 +2969,6 @@ export class SupabaseService {
     return path;
   }
 
-  /**
-   * Legacy recipe_images rows not yet moved to the bucket (storage_path
-   * null, base64 still in `data`). Drives the one-time migrate button.
-   * RLS scopes the SELECT to the caller's own rows.
-   */
-  async listRecipeImagesNeedingMigration(): Promise<
-    Array<{ id: string; sha256: string; mime_type: string; data: string }>
-  > {
-    const { data, error } = await this.client
-      .from('recipe_images')
-      .select('id, sha256, mime_type, data')
-      .is('storage_path', null)
-      .not('data', 'is', null);
-    if (error) throw new SupabaseError(error.message);
-    return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
-      id: String(r.id),
-      sha256: String(r.sha256),
-      mime_type: typeof r.mime_type === 'string' ? r.mime_type : 'image/jpeg',
-      data: typeof r.data === 'string' ? r.data : '',
-    }));
-  }
-
-  /**
-   * Mark a legacy recipe_images row as moved (set its storage_path) via
-   * the service-definer RPC - the table has no update RLS policy.
-   */
-  async setRecipeImageStoragePath(id: string, storagePath: string): Promise<void> {
-    const { error } = await this.client.rpc('recipe_image_set_storage_path', {
-      p_id: id,
-      p_storage_path: storagePath,
-    });
-    if (error) throw new SupabaseError(error.message);
-  }
 
   /**
    * Fetch the photos currently linked to a recipe, with bytes, in
@@ -3018,7 +2985,7 @@ export class SupabaseService {
     const { data, error } = await this.client
       .from('recipe_versions')
       .select(
-        'id, recipe_version_images(position, label, recipe_images(id, mime_type, size_bytes, storage_path, data))'
+        'id, recipe_version_images(position, label, recipe_images(id, mime_type, size_bytes, storage_path))'
       )
       .eq('recipe_id', recipeId)
       .order('created_at', { ascending: false })
@@ -3038,7 +3005,6 @@ export class SupabaseService {
       mime_type: string;
       size_bytes: number;
       storage_path: string | null;
-      data: string | null;
     };
     type LinkRow = {
       position: number;
@@ -3050,8 +3016,7 @@ export class SupabaseService {
     if (!Array.isArray(links)) return [];
 
     // Collect the rows first, then batch-resolve signed URLs for the
-    // bucket-backed ones in a single Storage call. Legacy rows (no
-    // storage_path) fall back to a data: URI from their base64.
+    // bucket objects in a single Storage call.
     const rows: Array<{ img: ImageEmbed; position: number; label: string | null }> = [];
     for (const l of links) {
       const img = Array.isArray(l.recipe_images) ? l.recipe_images[0] : l.recipe_images;
@@ -3077,10 +3042,8 @@ export class SupabaseService {
 
     const photos: RecipePhoto[] = [];
     for (const { img, position, label } of rows) {
-      const url =
-        (img.storage_path && signed.get(img.storage_path)) ||
-        (img.data ? `data:${img.mime_type};base64,${img.data}` : '');
-      if (!url) continue; // neither bucket object nor legacy bytes - skip
+      const url = (img.storage_path && signed.get(img.storage_path)) || '';
+      if (!url) continue; // no bucket object (or signing failed) - skip
       photos.push({
         id: img.id,
         position,
