@@ -122,16 +122,24 @@
     | 'usage'
     | 'security'
     | 'about';
+  // Tabs are ordered by nearness of subject to the user: the app itself
+  // (About), then the user's own presentation and personal data
+  // (Appearance, Memory, Wiki), then the assistant (AI), then the
+  // account/infrastructure tail furthest from day-to-day use (Usage,
+  // Security, API keys).
   const GROUPS: { id: Group; label: string }[] = [
-    { id: 'ai', label: 'AI' },
+    { id: 'about', label: 'About' },
+    { id: 'appearance', label: 'Appearance' },
     { id: 'memory', label: 'Memory' },
     { id: 'wiki', label: 'Wiki' },
-    { id: 'appearance', label: 'Appearance' },
+    { id: 'ai', label: 'AI' },
     { id: 'usage', label: 'Usage' },
     { id: 'security', label: 'Security' },
     { id: 'keys', label: 'API keys' },
-    { id: 'about', label: 'About' },
   ];
+  // Default landing tab is AI, not the first tab (About) - About is a
+  // read-only version card that makes a poor thing to open onto every
+  // time, whereas AI holds the settings users actually come here to change.
   let group = $state<Group>('ai');
 
   // --- Keys pane ---
