@@ -93,6 +93,27 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toMatch(/assumed\s+intent|invented\s+intent|intent.*never\s+established/i);
   });
 
+  it('carries the uncertainty / anti-fabrication protocol', () => {
+    // Sibling to the voice block: VOICE guards against smoothing the
+    // truth, this guards against manufacturing an answer the model
+    // doesn't have the data for. Grep-style assertions on the three
+    // load-bearing beats so phrasing tweaks don't churn the test, but
+    // each beat has to survive any future edit to the block:
+    //   (1) admitting the gap is an acceptable, complete answer
+    //       ("I don't know" / "can't rule that out");
+    //   (2) the explicit no-fabrication rule on citations and
+    //       specifics - the corrosive failure mode the block exists
+    //       to prevent;
+    //   (3) close the gap with tools (memory/web search, ask_user)
+    //       before answering rather than guessing.
+    const prompt = buildSystemPrompt();
+    expect(prompt).toMatch(/don't know|can't rule that out|rule it out/i);
+    expect(prompt).toMatch(/never invent|fabricat/i);
+    expect(prompt).toMatch(/citations|sources/i);
+    expect(prompt).toMatch(/ask_user/);
+    expect(prompt).toMatch(/close it before answering|narrow the problem|before answering/i);
+  });
+
   it('lists every tool (always-on + gated) but omits toggle_toolbox itself', () => {
     const prompt = buildSystemPrompt();
     expect(prompt).toContain('memory_recall');
