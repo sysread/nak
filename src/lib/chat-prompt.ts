@@ -114,6 +114,28 @@ Ask whether the user is actually correct on the merits, whether you are caving t
 Honest disagreement is more useful to the user than agreement they did not earn.
 `;
 
+// Uncertainty and anti-fabrication protocol. VOICE_BLOCK above guards
+// against smoothing the truth to spare the user; this block guards the
+// adjacent failure where the model manufactures an answer it does not
+// have the data for - invented citations, backfilled sources, confident
+// specifics with nothing behind them. That failure is more corrosive
+// than a hedge, because a fabricated detail that reads as authoritative
+// is indistinguishable to the user from a real one, so it gets trusted
+// and acted on. The fix has three beats: (1) admit the gap plainly
+// instead of papering over it, (2) never invent specifics to make a
+// reply sound authoritative, (3) when the gap is closeable, close it
+// with the tools - persistent memory, web search, ask_user - before
+// answering rather than guessing. The recall layer and ask_user are
+// introduced in full further down (RECALL_BLOCK, ASK_USER_BLOCK); this
+// block forward-references them deliberately, the same way VOICE sets a
+// disposition the later tool blocks then operationalise.
+const UNCERTAINTY_BLOCK = `\
+When you don't have enough to answer well, say so plainly instead of manufacturing an answer. "I can't rule that out with what you've given me" or a flat "I don't know" is a complete, useful response; a confident answer built on data you don't have is worse than no answer.
+Never invent citations, sources, quotes, figures, dates, file paths, identifiers, or API shapes to make a reply read as authoritative. A fabricated specific that sounds right is the exact failure this is guarding against - the user cannot tell it apart from a real one, so they trust it and act on it.
+When a gap is closeable, close it before answering rather than guessing: search your persistent memory and the live web for the facts you're missing, and use ask_user to pin down intent or constraints the conversation never established. Narrow the problem until a confident answer is actually reachable, then give it.
+Truth and transparency come before narrative coherence or sounding sure. When part of an answer rests on something you're not certain of, flag that part as uncertain rather than smoothing it into the parts you do know.
+`;
+
 // Long-term memory introduction plus recall framing. Opens with the
 // memory-loop intro that used to ride in IDENTITY_BLOCK so the model knows
 // it has persistent state about this user before any of the recall framing
@@ -300,10 +322,13 @@ function buildCatalog(enabled: ReadonlySet<string>): string {
  * **Framing the model.** Identity (who Nak is and what the long-term
  * memory loop looks like to the model), then a Voice block that
  * pushes against the post-training drift toward diplomatic smoothing
- * and unearned validation. User-configured system prompts from
- * Settings ride AFTER this in the wire order, so a "you are a
- * pirate" custom prompt wins on voice while the baseline still
- * carries identity and tool framing.
+ * and unearned validation, then an Uncertainty block that guards the
+ * adjacent failure - manufacturing an answer (invented citations,
+ * backfilled sources, confident specifics) when the data isn't there -
+ * and routes the model to admit the gap or close it with tools before
+ * answering. User-configured system prompts from Settings ride AFTER
+ * this in the wire order, so a "you are a pirate" custom prompt wins
+ * on voice while the baseline still carries identity and tool framing.
  *
  * **Ambient context channels.** Tells the model how the chat-loop's
  * automatic priming layer feeds it context outside the model's
@@ -341,6 +366,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
   const sections = [
     IDENTITY_BLOCK,
     VOICE_BLOCK,
+    UNCERTAINTY_BLOCK,
     RECALL_BLOCK,
     WIKI_BLOCK,
     LIBRARY_BLOCK,

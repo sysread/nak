@@ -371,7 +371,10 @@ A chat turn goes:
   rebuilds the request from four layers:
 
   1. **Baseline system prompt** (`buildSystemPrompt`) -
-     identity, voice, recall framing, journal/wiki framing,
+     identity, voice, the uncertainty / anti-fabrication
+     protocol (admit the gap or close it with tools before
+     answering; never invent citations or specifics to sound
+     authoritative), recall framing, journal/wiki framing,
      toolbox framing, activity-narration rule, dynamic
      catalog. Stable across rounds except for the catalog's
      `(on)`/`(off)` marks tracking the current toolbox state.
