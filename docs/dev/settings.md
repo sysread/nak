@@ -1,7 +1,7 @@
 # Settings
 
-The settings modal plus everything it persists: the seven panes
-(Keys, AI, Appearance, Usage, Export, Security, About), the
+The settings modal plus everything it persists: the panes (About,
+Appearance, Memory, Wiki, AI, Usage, Security, API keys), the
 `profiles.settings` JSONB blob they read from and write to, and the
 theme system that lives alongside.
 
@@ -9,26 +9,50 @@ theme system that lives alongside.
 
 Settings is the user-visible control surface for every
 preference the app holds. Each pane targets a different persistence
-destination:
+destination. Panes are ordered in the nav by nearness of subject to
+the user - the app itself first, then the user's own presentation
+and personal data, then the assistant, then the
+account/infrastructure tail furthest from day-to-day use. The
+default landing tab is AI, not the first tab; About is a read-only
+version card that makes a poor thing to open onto every time,
+whereas AI holds the settings users actually come here to change.
 
-- **Keys** — the three API keys. Re-encrypts the config blob on
-  save.
+- **About** — build fingerprint (commit SHA + build time) and the
+  "Check for updates" / "Reload to update" action. Read-only; the
+  values come from `$lib/update.svelte` which Vite populates at
+  build time via `define`. See `./build-deploy.md` for the
+  version-detection pipeline.
+- **Appearance** — color mode + accent, plus the default log
+  level for the Logs drawer. Theme controls live-apply on click
+  (no Save button); they mirror to `profiles.settings` (and
+  localStorage for the boot script).
+- **Memory** - the memory-librarian toggle. Enables the autonomous
+  agent that consolidates, fills relations, and soft-deletes
+  contradictions in the memory store. Persists to
+  `profiles.settings.memoryLibrarianEnabled`. There is no Memories
+  browser here - memories live behind the **Memories** drawer tab
+  next to Chats / Recipes / Journal, which is its own prominent
+  affordance and doesn't need a redundant pointer in Settings.
+- **Wiki** - two independent toggles plus a destructive reset.
+  **Automatic wiki** gates the autonomous article-writing agent;
+  **Librarian** gates the periodic reorganization pass
+  (deduplication, fact-checking, boundary tightening). Both persist
+  to `profiles.settings` (`wikiAutomaticEnabled` /
+  `wikiLibrarianEnabled`). **Reset** is a confirmed-irreversible
+  wipe of every wiki article plus the per-thread wiki pipeline
+  state.
 - **AI** — default model tier, default reasoning effort, default
   verbosity, the "Emphasis markdown" opt-in (a bionic-style scan
   aid - when on, chat-loop folds a short formatting blurb into
   the per-turn system-prompt appendix so the model bolds terms
-  and italicises phrases), the **About you** profile fields
-  (`userName` / `userLocation`, free-form strings injected into
-  the per-turn appendix's "User profile" block - opt-in, both
-  blank skips the block), system-prompt library, and web-search
-  toggle. All preferences persist to `profiles.settings`. There
-  is no Memories pane here - memories live behind the **Memories**
-  drawer tab next to Chats / Recipes / Journal, which is its own
-  prominent affordance and doesn't need a redundant pointer in
-  Settings.
-- **Appearance** — color mode + accent. Live-applies on click
-  (no Save button); mirrors to `profiles.settings` (and
-  localStorage for the boot script).
+  and italicises phrases), reply notifications (an opt-in
+  completion notification persisted on
+  `profiles.settings.notifyOnComplete`; enabling prompts for the
+  browser's Notification permission), the **About you** profile
+  fields (`userName` / `userLocation`, free-form strings injected
+  into the per-turn appendix's "User profile" block - opt-in, both
+  blank skips the block), and the system-prompt library. All
+  preferences persist to `profiles.settings`.
 - **Usage** — a date-ranged snapshot of per-model token spend
   against the Venice API key. Read-only: it calls Venice's beta
   `/billing/usage` endpoint and aggregates the rows client-side.
@@ -50,23 +74,25 @@ destination:
   in the determinate phase. The totals strip itself pairs each
   currency's total spend pill with an avg-per-day pill that
   divides the total by the inclusive day count of the picked range.
-- **Export** — downloads the three keys as a plaintext JSON
-  file. No persistence change.
-- **Security** — rotates the master password. Re-encrypts the
-  config blob; doesn't touch Supabase.
-- **About** — build fingerprint (commit SHA + build time) and the
-  "Check for updates" / "Reload to update" action. Read-only; the
-  values come from `$lib/update.svelte` which Vite populates at
-  build time via `define`. See `./build-deploy.md` for the
-  version-detection pipeline.
+- **Security** - rotates two passwords. **Master password**
+  re-encrypts the local config blob and doesn't touch Supabase;
+  **account password** re-verifies the current password then calls
+  Supabase to rotate the login. Both require the current password.
+- **API keys** — the three API keys (Supabase URL, Supabase
+  publishable key, Venice key). Re-encrypts the config blob on
+  save, which is why the pane requires the current master password.
+  An **Export** subsection downloads the three keys as a plaintext
+  JSON file for re-import on another browser - read-only, no
+  persistence change.
 
 Theme is tightly coupled to Settings (the Appearance pane drives
 every update) so it's covered here rather than in its own file.
 
 ## Files
 
-- `src/screens/Settings.svelte` — the modal; seven panes + nav +
-  backdrop dismiss + Escape handling.
+- `src/screens/Settings.svelte` — the modal; the pane nav +
+  backdrop dismiss + Escape handling. `GROUPS` defines the tab
+  order; the leading comment documents the ordering principle.
 - `src/lib/update.svelte.ts` — reactive build fingerprint +
   service-worker update registration. Backs the About pane and the
   top-right `UpdateBanner`. Reads the Vite-`define`'d globals
