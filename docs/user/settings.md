@@ -1,28 +1,77 @@
 # Settings overview
 
 Everything configurable lives behind the gear icon in the drawer
-footer. The Settings modal has seven panes, each with its own Save
-behavior.
+footer. The panes are ordered by how close their subject is to you:
+the app itself first, then how Nak looks and what it remembers, then
+the assistant, then your account and credentials at the end. Each
+pane saves on its own.
 
 ## Opening settings
 
-## The seven panes
+## The panes
 
-### API keys
+### About
 
-Update your Supabase and Venice credentials, and download a JSON
-copy of those credentials for re-import on another browser. See
-[Security model](./security.md) for how keys are stored locally,
-and [Export & import](./export-import.md) for the export/import
-workflow itself.
+Shows which build of Nak your browser is running — a short commit
+fingerprint plus the date and time the build was produced — and
+whether a newer deploy is available.
 
-### AI
+- **Version** is the seven-character commit hash of the build you're
+  running. The same string that identifies the commit on GitHub.
+- **Built** is the timestamp the build step ran (not when you
+  installed it). Useful for answering "is this build from today?".
+- **Status** shows "Up to date" most of the time and flips to
+  "Update available" when a new deploy has landed.
+- **Check for updates** asks the service worker to look for a fresh
+  deploy without reloading. If one's found, the button flips to
+  **Reload to update** and a matching banner appears in the
+  top-right of the window.
 
-Covered in detail on [Models & reasoning](./models.md).
+You don't usually need to open this pane to get the prompt — the
+top-right banner appears on its own when a new version is ready.
+This pane is just the way to check on demand, or to confirm which
+build you're actually running if a feature seems missing.
+
+Clicking **Reload to update** swaps in the new build and reloads
+the page. Any unsent message in the composer is lost, but your
+conversation history (stored in Supabase) is not affected.
 
 ### Appearance
 
-Covered in detail on [Appearance](./appearance.md).
+Covered in detail on [Appearance](./appearance.md). Also holds the
+**Default log level** for the Logs drawer.
+
+### Memory
+
+A single toggle for the **memory librarian** - the autonomous agent
+that tidies your memory store in the background, merging duplicates,
+filling in relationships, and retiring entries that contradict newer
+ones. Turning it off leaves your existing memories untouched; it
+just stops the background reorganization. See [Memory](./memory.md).
+
+### Wiki
+
+Two independent toggles plus a reset:
+
+- **Automatic articles** - lets the autonomous agent write and
+  update wiki articles on its own. Off by default; manual edits and
+  the per-article "ask agent to update" button still work when it's
+  off.
+- **Librarian** - the periodic pass that deduplicates articles,
+  fact-checks them, and tightens their boundaries. Independent of
+  the automatic-articles toggle.
+- **Reset** - permanently deletes every wiki article and the
+  per-conversation wiki state. Irreversible; you're asked to
+  confirm first.
+
+Covered in detail on [Wiki](./wiki.md).
+
+### AI
+
+Covered in detail on [Models & reasoning](./models.md). Also holds
+the **Emphasis markdown** scan-aid toggle, **reply notifications**
+(an optional desktop/mobile ping when a reply lands while you're
+looking elsewhere), and the system-prompt library.
 
 ### Usage
 
@@ -84,36 +133,21 @@ Both require the current password and enforce an 8-character
 minimum on the new one. Covered in more detail on
 [Security model](./security.md).
 
-### About
+### API keys
 
-Shows which build of Nak your browser is running — a short commit
-fingerprint plus the date and time the build was produced — and
-whether a newer deploy is available.
-
-- **Version** is the seven-character commit hash of the build you're
-  running. The same string that identifies the commit on GitHub.
-- **Built** is the timestamp the build step ran (not when you
-  installed it). Useful for answering "is this build from today?".
-- **Status** shows "Up to date" most of the time and flips to
-  "Update available" when a new deploy has landed.
-- **Check for updates** asks the service worker to look for a fresh
-  deploy without reloading. If one's found, the button flips to
-  **Reload to update** and a matching banner appears in the
-  top-right of the window.
-
-You don't usually need to open this pane to get the prompt — the
-top-right banner appears on its own when a new version is ready.
-This pane is just the way to check on demand, or to confirm which
-build you're actually running if a feature seems missing.
-
-Clicking **Reload to update** swaps in the new build and reloads
-the page. Any unsent message in the composer is lost, but your
-conversation history (stored in Supabase) is not affected.
+Update your Supabase and Venice credentials, and download a JSON
+copy of those credentials for re-import on another browser. Saving
+re-encrypts your local config, so the pane asks for your current
+master password. See [Security model](./security.md) for how keys
+are stored locally, and [Export & import](./export-import.md) for
+the export/import workflow itself.
 
 ## Where to go next
 
 - [Models & reasoning](./models.md)
 - [Appearance](./appearance.md)
+- [Memory](./memory.md)
+- [Wiki](./wiki.md)
 - [Security model](./security.md)
 - [Export & import](./export-import.md)
 
