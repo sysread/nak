@@ -12,10 +12,9 @@ preference the app holds. Each pane targets a different persistence
 destination. Panes are ordered in the nav by nearness of subject to
 the user - the app itself first, then the user's own presentation
 and personal data, then the assistant, then the
-account/infrastructure tail furthest from day-to-day use. The
-default landing tab is AI, not the first tab; About is a read-only
-version card that makes a poor thing to open onto every time,
-whereas AI holds the settings users actually come here to change.
+account/infrastructure tail furthest from day-to-day use. The modal
+opens on the first tab in `GROUPS`, so the nav order and the default
+landing tab move together.
 
 - **About** — build fingerprint (commit SHA + build time) and the
   "Check for updates" / "Reload to update" action. Read-only; the
