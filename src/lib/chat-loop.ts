@@ -350,6 +350,14 @@ interface MetadataSystemMessageOptions {
   displayTimezone?: string | null;
   lastAssistantTimestamp?: string | null;
   attachmentSummaries: ThreadAttachmentSummary[];
+  /**
+   * True when the user message that opened this turn carries one or
+   * more attachments. Drives the anti-fabrication reinforcement
+   * section - distinct from `attachmentSummaries`, which is the
+   * thread-wide inventory and stays populated for the rest of the
+   * conversation even on turns that bring no new file.
+   */
+  currentTurnHasAttachments: boolean;
   emphasisMarkdown?: boolean;
   threadTitle: string;
   titleManuallySet: boolean;
@@ -371,8 +379,11 @@ interface MetadataSystemMessageOptions {
  *   1. User profile (name / location), when either is set.
  *   2. Datetime paragraph (always present).
  *   3. Thread attachments inventory, when there are any.
- *   4. Emphasis-markdown formatting nudge, when the toggle is on.
- *   5. Title nudge, from round 2 onward: the loud placeholder nag
+ *   4. Attachment-inspection reinforcement, when the current turn
+ *      brought a file. Anti-fabrication: pins any claim about a
+ *      file's contents to material actually read this turn.
+ *   5. Emphasis-markdown formatting nudge, when the toggle is on.
+ *   6. Title nudge, from round 2 onward: the loud placeholder nag
  *      when the title is still the schema default, the soft
  *      topic-drift hint when the title is model-set and not pinned
  *      by the user. Round 1 is silent here - the auto-title worker
@@ -406,6 +417,34 @@ function buildMetadataSystemMessage(
 
   const attachments = buildThreadAttachmentsBlock(opts.attachmentSummaries);
   if (attachments !== null) sections.push(attachments);
+
+  // Anti-fabrication reinforcement, fired only on turns where the user
+  // actually attached a file. Without it the model tends to answer "as
+  // if" it inspected the upload - describing an image from its filename,
+  // summarising a document it never read - because the inlined content
+  // and the analyze_image tool are both easy to skip past. The block
+  // pins every claim about a file to material the model demonstrably
+  // has this turn (inlined text, inlined image, or an analyze_image
+  // result) and tells it to call the tool or admit it can't see the
+  // file rather than invent an analysis. Gated on the current turn (not
+  // the thread-wide inventory) so a conversation with one old upload
+  // doesn't pay this on every later text-only turn.
+  if (opts.currentTurnHasAttachments) {
+    sections.push(
+      [
+        'The current message includes one or more file attachments. Any',
+        'statement you make about their contents must come from material',
+        'you have actually inspected this turn: the extracted text inlined',
+        'above, the image inlined above, or the result of an analyze_image',
+        'call. Do not describe, summarise, or quote a file based on its',
+        'filename, its type, or what such a file usually contains. If you',
+        'cannot actually see a file - for example an image on a model',
+        'without vision that you have not yet passed to analyze_image -',
+        'call the tool or tell the user you cannot see it. Never present an',
+        'analysis you did not perform.',
+      ].join('\n'),
+    );
+  }
 
   if (opts.emphasisMarkdown) {
     sections.push(
@@ -1059,6 +1098,15 @@ export interface ChatLoopOptions {
    * green without knowing the field exists.
    */
   contextRecallEnabled?: boolean;
+  /**
+   * True when the user message that opened this turn carries one or
+   * more attachments. Drives the metadata message's anti-fabrication
+   * reinforcement (see `buildMetadataSystemMessage`), which pins the
+   * model's claims about a file to content it actually inspected this
+   * turn. Omitted / false on turns with no upload (and for older
+   * callers / tests) so a text-only turn pays zero tokens for it.
+   */
+  currentTurnHasAttachments?: boolean;
 }
 
 /** Non-error completion shape returned to the caller. */
@@ -1284,6 +1332,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     intuitionModelId,
     intuitionMood,
     contextRecallEnabled,
+    currentTurnHasAttachments,
   } = opts;
   // Copy so we can extend locally each round without mutating the caller.
   const history: VeniceMessage[] = [...opts.history];
@@ -1682,6 +1731,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       displayTimezone,
       lastAssistantTimestamp,
       attachmentSummaries,
+      currentTurnHasAttachments: currentTurnHasAttachments ?? false,
       emphasisMarkdown,
       threadTitle: thread.title,
       titleManuallySet: thread.title_manually_set,
