@@ -137,10 +137,9 @@
     { id: 'security', label: 'Security' },
     { id: 'keys', label: 'API keys' },
   ];
-  // Default landing tab is AI, not the first tab (About) - About is a
-  // read-only version card that makes a poor thing to open onto every
-  // time, whereas AI holds the settings users actually come here to change.
-  let group = $state<Group>('ai');
+  // Default landing tab is always the first in GROUPS, so reordering the
+  // nav moves the default with it - no separate constant to keep in sync.
+  let group = $state<Group>(GROUPS[0].id);
 
   // --- Keys pane ---
   let supabaseUrl = $state(app.config?.supabaseUrl ?? '');
