@@ -8,9 +8,12 @@ This file is the concrete punch list: call sites, workers, and processes, with
 status.
 
 **Iteratively audited - not exhaustive or final.** Each milestone re-audits and
-updates this. Last full audit: **2026-05-29**, after the Library feature landed,
-against `src/lib/venice.ts` callers (`grep`) and the `src/lib/agents/` worker
-fleet. Line numbers drift; re-grep before relying on one.
+updates this. Last full audit: **2026-06-01**, after the embed query-time
+milestone landed and after the attachments/recipe-images Storage migrations
+collapsed two driver-A workers server-side. Audit walks `src/lib/venice.ts`
+callers (`grep`), the `src/lib/agents/` worker fleet, and the
+`supabase/functions/` directory. Line numbers drift; re-grep before relying on
+one.
 
 Status key:
 
@@ -24,10 +27,10 @@ Status key:
 
 | Endpoint | `VeniceClient` method | Status |
 | --- | --- | --- |
-| `POST /embeddings` | `embed` | PARTIAL - backfill DONE (cron, server-side); query-time embeds TODO |
+| `POST /embeddings` | `embed` (deleted from `VeniceClient`) | DONE - backfill (milestone 1, cron) + query-time (milestone 3, `/embed` route from the browser via `SupabaseService.embed`) |
 | `POST /chat/completions` | `completeChat`, `streamChat` | TODO - the hard one; streaming is the attractor |
 | `GET /billing/usage` | (was `fetchUsage`, now `SupabaseService.fetchUsage`) | DONE - milestone 2, `/usage` route |
-| `POST /augment/text-parser` | `extractText` | TODO |
+| `POST /augment/text-parser` | `extractText` | TODO - **bug-driven**: browser extraction is CORS-broken for non-image files (observed 2026-05-30); design in [text-parser.md](./text-parser.md) |
 | `POST /image/generate` | `generateImage` | TODO - no sub-plan yet |
 
 The README's endpoint list historically said "five" but enumerated four -
@@ -38,24 +41,20 @@ driver-B item even though it is the least-used endpoint.
 ## Venice call sites (browser) - callers to route through the function
 
 Driver B needs every one of these to call the function instead of Venice
-directly (so the key leaves the client). `file:line` from the 2026-05-29 audit.
+directly (so the key leaves the client). `file:line` from the 2026-06-01 audit.
 
 ### `embed` (`/embeddings`)
 
-Corpus side is DONE server-side via the cron backfill (memories, threads,
-recipes, wiki, samskara-substrate, document-chunks - the six `EMBED_SOURCES`).
-These are the remaining query-time / live embeds, all still browser-direct:
-
-- `src/components/RecipeList.svelte:88` - recipe search needle (N/A-recovery)
-- `src/lib/wiki.ts:113` - wiki search needle (N/A-recovery)
-- `src/lib/memories.ts:168` - memory search needle (N/A-recovery)
-- `src/lib/documents.ts:195` - doc search needle (N/A-recovery) [Library]
-- `src/lib/tools/conversation_search.ts:79` - conversation_search tool (mid-turn)
-- `src/lib/context-recall/gather.ts:247` - opening-turn recall priming (live critical path)
-- `src/lib/samskara/index.ts:128` - samskara embed (audit: live vs background)
-- `src/screens/Chat.svelte:5226` - chat-side embed (audit which path)
-- `src/lib/agents/deep-sleep/loop.ts:79` - deep-sleep worker embed (background)
-- `src/lib/agents/samskara/loop.ts:495` - samskara worker embed (background)
+DONE - milestone 3 (`claude/embed-via-edge-function`, merged to main as
+`ac2f6ec`). All ten browser embed callers (recipes/wiki/memories/library
+search needles, the `conversation_search` tool, `context-recall/gather`,
+`samskara`, `Chat.svelte` live path, and the `deep-sleep` + `samskara`
+worker embeds) now go through `SupabaseService.embed` → `/embed` route.
+`VeniceClient.embed` was deleted; the shared `veniceFunctionError` helper
+was generalized from the `/usage` path to cover both routes. Cron
+backfill (memories, threads, recipes, wiki, samskara-substrate,
+document-chunks - the six `EMBED_SOURCES`) is still milestone 1's
+server-side path.
 
 ### `completeChat` / `streamChat` (`/chat/completions`)
 
@@ -92,9 +91,18 @@ Wrapping the Venice endpoint each one calls is necessary but not sufficient; the
 orchestration has to move too.
 
 - **embeddings backfill** - DONE (milestone 1).
-- **TODO** (call `completeChat`, some also `embed`): `summary`, `reflection`,
-  `topics`, `memory_topics`, `recipe_topics`, `bias`, `samskara`, `wiki`,
-  `wiki-librarian`, `deep-sleep`, `rem`, `attachment_expiry`, `auto_title`.
+- **attachment_expiry** - DONE (no longer a browser worker; relocated to the
+  `expire-attachments` edge function + cron as part of the attachments
+  Storage-bucket migration). Does not call Venice - it sweeps expired bucket
+  entries and rows - but the driver-A relocation pattern is the same shape as
+  milestone 1.
+- **recipe-image-gc** - DONE (server-side from inception, never a browser
+  worker - introduced alongside the recipe-image Storage-bucket migration).
+  Worth tracking here as another exemplar of the cron-worker pattern even
+  though it skipped the browser-to-server hop.
+- **TODO** (call `completeChat`, some also called `embed` pre-milestone 3):
+  `summary`, `reflection`, `topics`, `memory_topics`, `recipe_topics`, `bias`,
+  `samskara`, `wiki`, `wiki-librarian`, `deep-sleep`, `rem`, `auto_title`.
 - **Recall family** (`conversation_recall`, `wiki_recall`, `recall`): mostly
   live-turn priming, not background drains - audit per-worker before assuming a
   cron shape fits.
