@@ -140,6 +140,17 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
   `listAttachmentSummariesForThread` (metadata-only projection). Lists
   live images, live documents, and expired filenames; empty sections add
   zero tokens.
+- **Attachment-inspection reinforcement**: when the user message that
+  opened the turn carries a file (`currentTurnHasAttachments`, threaded
+  from `Chat.svelte` and keyed on the opening user-message id), the
+  per-turn metadata system message gains an anti-fabrication paragraph
+  (see `buildMetadataSystemMessage`). It pins any claim about a file's
+  contents to material actually inspected this turn - the inlined
+  extracted text, the inlined image, or an `analyze_image` result - and
+  tells the model to call the tool or admit it can't see the file rather
+  than answer from the filename. Gated on the current turn (not the
+  thread-wide inventory) so a later text-only turn in a thread with an
+  old upload pays nothing for it.
 
 ## Interactions
 

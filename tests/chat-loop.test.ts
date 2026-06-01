@@ -674,6 +674,78 @@ describe('runChatLoop', () => {
     }
   });
 
+  it('renders the attachment-inspection reinforcement when currentTurnHasAttachments=true', async () => {
+    // When the user attaches a file on this turn, the metadata system
+    // message gains an anti-fabrication paragraph telling the model to
+    // ground its claims in content it actually inspected (inlined text,
+    // inlined image, or an analyze_image result) rather than answering
+    // from the filename. Assert on a distinctive phrase so a wording
+    // tweak surfaces here for deliberate review - the block changes
+    // model behaviour on every upload turn.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'what is in this file?' }],
+      signal: new AbortController().signal,
+      currentTurnHasAttachments: true,
+    });
+    const meta = seenRequests[0].messages[1];
+    expect(meta.role).toBe('system');
+    expect(meta.content as string).toContain('you have actually inspected this turn');
+  });
+
+  it('omits the attachment-inspection reinforcement when no file was attached this turn', async () => {
+    // Gated on the current turn, not the thread-wide inventory: a
+    // text-only turn (currentTurnHasAttachments false / omitted) must
+    // not pay for the reinforcement paragraph.
+    const seenRequests: ChatRequest[] = [];
+    const venice = {
+      async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+        seenRequests.push(req);
+        yield { type: 'text', delta: 'ok' };
+      },
+    } as unknown as VeniceClient;
+    const { svc } = mockSupabase();
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      currentTurnHasAttachments: false,
+    });
+    await runChatLoop({
+      venice,
+      supabase: svc,
+      thread: mkThread(),
+      userId: 'u-1',
+      modelId: 'm',
+      history: [{ role: 'user', content: 'hi' }],
+      signal: new AbortController().signal,
+      // currentTurnHasAttachments intentionally omitted.
+    });
+    expect(seenRequests).toHaveLength(2);
+    for (const req of seenRequests) {
+      for (const m of req.messages) {
+        if (m.role !== 'system') continue;
+        expect(m.content as string).not.toContain('you have actually inspected this turn');
+      }
+    }
+  });
+
   it('renders the user profile in the metadata system message when userName / userLocation is set', async () => {
     // Profile fields ride along with every reply this account sends,
     // as the lead paragraph of the per-turn metadata system message.

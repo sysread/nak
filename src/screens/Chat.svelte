@@ -3037,6 +3037,16 @@
     // captured by the closure so the in-loop 429 retry reuses it.
     // Best-effort: a signing failure just means those images don't inline
     // this turn (the non-vision note path still tells the model they exist).
+    // Did the user message that opened this turn bring a file? Drives the
+    // chat-loop's anti-fabrication reinforcement so the model is told to
+    // ground its claims in the inlined content / analyze_image rather than
+    // answer from the filename. Keyed on the opening user message id (not
+    // "any attachment in the thread") so a later text-only turn doesn't
+    // trigger it. Recomputed cheaply each attempt; constant across retries.
+    const currentTurnHasAttachments = messages.some(
+      (m) => m.id === ctx.userMessageId && (m.attachments?.length ?? 0) > 0
+    );
+
     let attachmentImageUrls = new Map<string, string>();
     if (ctx.tierSpec.supportsVision && app.supabase) {
       const liveImages = messages
@@ -3206,6 +3216,7 @@
           lastAssistantTimestamp: findLastAssistantTimestamp(),
           intuitionModelId: agentModel('intuition').id,
           intuitionMood: intuitionMoodArg,
+          currentTurnHasAttachments,
           // Topic-boundary recall rides the same trigger machinery as
           // intuition (cold-start, mid-turn title shift, mood shift,
           // stale fuse). Enabled by default in production - the
