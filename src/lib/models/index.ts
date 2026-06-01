@@ -208,10 +208,16 @@ export const MODELS = {
     supportsVision: false,
     supportsResponseFormat: true,
   },
-  'e2ee-qwen3-5-122b-a10b': {
-    id: 'e2ee-qwen3-5-122b-a10b',
+  'e2ee-qwen3-vl-30b-a3b-p': {
+    id: 'e2ee-qwen3-vl-30b-a3b-p',
     contextWindow: 128_000,
-    supportsReasoning: true,
+    // Not a reasoning model: it has no chain-of-thought pass, so the
+    // analyze_image call must not send `reasoning_effort` (Venice 4xxs
+    // on the field for non-reasoning ids). The call site omits it
+    // anyway - it never sets reasoningEffort - so the wire payload
+    // stays clean. See venice.ts completeChat (reasoning_effort is
+    // only forwarded when the caller opts in).
+    supportsReasoning: false,
     // Vision-capable; this is the id the analyze_image tool uses for
     // its sub-completions. The `e2ee-` prefix is Venice's marker for
     // end-to-end-encrypted serving.
@@ -477,12 +483,12 @@ export type AgentRole =
  *     distinct slot so the three recall surfaces can be retuned
  *     independently if one regresses.
  *
- *   visionAnalysis - e2ee-qwen3-5-122b-a10b. Vision sub-completion
+ *   visionAnalysis - e2ee-qwen3-vl-30b-a3b-p. Vision sub-completion
  *     for the analyze_image tool. Decoupled from any user-facing
  *     tier so a tier retarget doesn't silently break image
- *     analysis. Switched here from mistral-small-2603 after that
- *     model consistently missed detail on dense or text-heavy
- *     images.
+ *     analysis. A cheap non-reasoning vision model; the call site
+ *     never sends reasoning_effort, so the missing CoT pass costs
+ *     nothing on the wire.
  *
  *   autoTitle - e2ee-gpt-oss-20b-p. Background title-generation
  *     completion that fires from Chat.svelte in parallel with the
@@ -515,7 +521,7 @@ export const AGENT_MODELS = {
   recall:             'deepseek-v4-flash',
   conversationRecall: 'deepseek-v4-flash',
   wikiRecall:         'deepseek-v4-flash',
-  visionAnalysis:     'e2ee-qwen3-5-122b-a10b',
+  visionAnalysis:     'e2ee-qwen3-vl-30b-a3b-p',
   autoTitle:          'e2ee-gpt-oss-20b-p',
 } as const satisfies Record<AgentRole, ModelId>;
 
