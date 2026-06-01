@@ -8,7 +8,11 @@
 //                progress indicator. Authenticated as the calling user.
 //   /backfill  - cron-triggered (pg_cron -> pg_net), drains pending embeddings
 //                across every table server-side. Service-role only.
-// `/complete` and `/text-parser` are the planned siblings - see
+//   /text-parser - browser-triggered, forwards a multipart file upload to
+//                  Venice's /augment/text-parser. Bug-driven: browser direct
+//                  calls were CORS-rejected on non-image files; the function
+//                  fixes both the chat-attachment and Library-upload paths.
+// `/complete` is the planned sibling - see
 // docs/dev/in-progress/venice-edge-functions/.
 //
 // The handlers are intentionally thin: request/response shaping, the Venice
@@ -16,7 +20,12 @@
 // offline). This file owns only the glue - CORS, routing, auth, sourcing the
 // shared key, and error mapping.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { veniceEmbed, veniceFetchUsagePage, VeniceError } from '../_shared/venice.ts';
+import {
+  veniceEmbed,
+  veniceExtractText,
+  veniceFetchUsagePage,
+  VeniceError,
+} from '../_shared/venice.ts';
 import { EMBED_SOURCES } from '../_shared/embed-input.ts';
 import {
   runBackfill,
@@ -207,6 +216,57 @@ async function handleUsage(req: Request): Promise<Response> {
 }
 
 /**
+ * Browser-triggered text extraction proxy for POST /augment/text-parser. The
+ * browser cannot reach this Venice endpoint directly - Venice CORS-enables
+ * chat/image/embeddings but not text-parser, which surfaced as a confusing
+ * "Failed to fetch" on any non-image attachment. Forwarding through the
+ * function makes the call server-side where browser CORS does not apply and
+ * the shared key already lives. Authenticated as the calling user (gateway's
+ * verify_jwt has already validated the session JWT - same model as /embed,
+ * no service-role check).
+ *
+ * Multipart in, JSON out: the request body is a multipart/form-data with a
+ * `file` part (Blob + filename); the response is `{ text }`. Forwarding
+ * preserves the file's filename so Venice's content-type sniffing still
+ * works. Failures relay through the VeniceError -> { error, kind } shape the
+ * other routes use; 429 surfaces as 429, everything else collapses to 502.
+ */
+async function handleTextParser(req: Request): Promise<Response> {
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    return json({ error: 'invalid multipart body' }, 400);
+  }
+  const filePart = form.get('file');
+  // A File satisfies Blob (it extends Blob in the browser/Deno standard), so
+  // the Blob check covers both - File-ness is checked separately only to
+  // recover the original filename.
+  if (!(filePart instanceof Blob)) {
+    return json({ error: 'body must include a `file` part' }, 400);
+  }
+  const filename =
+    filePart instanceof File && filePart.name ? filePart.name : 'attachment';
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+  const apiKey = await readVeniceKey(admin);
+  if (!apiKey) {
+    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
+  }
+
+  try {
+    const text = await veniceExtractText({ apiKey, file: filePart, filename });
+    return json({ text });
+  } catch (err) {
+    if (err instanceof VeniceError) {
+      return json({ error: err.message, kind: err.kind }, err.kind === 'rate_limit' ? 429 : 502);
+    }
+    return json({ error: (err as Error).message }, 500);
+  }
+}
+
+/**
  * Cron-driven server-side backfill. Claims pending rows across every embeddable
  * table, embeds them with the shared key, and writes the vectors back through
  * the service-definer claim/save RPCs. Bounded per invocation (see the tunables
@@ -276,6 +336,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'embed' && req.method === 'POST') return handleEmbed(req);
   if (route === 'usage' && req.method === 'POST') return handleUsage(req);
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
+  if (route === 'text-parser' && req.method === 'POST') return handleTextParser(req);
 
   return json({ error: 'not found' }, 404);
 });

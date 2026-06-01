@@ -94,7 +94,7 @@
   }
 
   async function submitUpload(): Promise<void> {
-    if (!app.supabase || !app.venice || !pendingFile || uploading) return;
+    if (!app.supabase || !pendingFile || uploading) return;
     uploading = true;
     uploadError = null;
     try {
@@ -104,7 +104,7 @@
           description: uploadDescription.trim(),
           file: pendingFile,
         },
-        { supabase: app.supabase, venice: app.venice }
+        { supabase: app.supabase }
       );
       // Pull the freshly-ingested row (now carrying its final extraction
       // status) into the shared store and open it.

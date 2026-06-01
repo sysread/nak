@@ -1589,6 +1589,37 @@ export class SupabaseService {
   }
 
   /**
+   * Extract readable text from a user-uploaded file through the venice edge
+   * function's /text-parser route. Routes around the CORS rejection that hits
+   * any browser-direct call to Venice's /augment/text-parser (Venice CORS-
+   * enables chat/image/embeddings, not text-parser - the user saw "Failed to
+   * fetch" on every non-image attachment). The function holds the shared key
+   * server-side; this method packages the file as multipart/form-data and
+   * surfaces failures through the same VeniceError contract the call sites
+   * already render. Returns the parsed text on success.
+   *
+   * functions.invoke handles FormData natively (it leaves Content-Type unset
+   * so the runtime writes the multipart boundary), so the wire shape matches
+   * what Venice's endpoint expects.
+   */
+  async extractText(file: Blob, filename: string): Promise<string> {
+    const form = new FormData();
+    form.append('file', file, filename);
+    const { data, error } = await this.client.functions.invoke('venice/text-parser', {
+      body: form,
+    });
+    if (error) throw await veniceFunctionError(error);
+    const text = (data as { text?: unknown } | null)?.text;
+    if (typeof text !== 'string') {
+      throw new VeniceError(
+        'Venice text-parser response did not contain a text field.',
+        'parse'
+      );
+    }
+    return text;
+  }
+
+  /**
    * Merge a partial settings patch into the profiles.settings jsonb. Does a
    * read-then-write — fine for a single-user app but not safe under
    * concurrent writes from multiple tabs. If multi-tab concurrency ever

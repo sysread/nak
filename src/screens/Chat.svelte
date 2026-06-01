@@ -1255,13 +1255,16 @@
       const base64 = arrayBufferToBase64(buffer);
 
       let extractedText: string | null = null;
-      if (!isImageMimeType(finalFile.type) && app.venice) {
-        // Fire the text-parser call. We treat failure here as a
-        // non-blocking error on the chip — the user gets a red chip
-        // with an explanation, and the pre-send guard blocks until
-        // they remove or retry.
+      if (!isImageMimeType(finalFile.type) && app.supabase) {
+        // Fire the text-parser call through the venice edge function.
+        // Browser-direct calls to Venice's /augment/text-parser were
+        // CORS-rejected (every non-image upload surfaced as "Failed to
+        // fetch" at the chip) - routing through the function fixes it.
+        // Failure stays non-blocking: the user gets a red chip with an
+        // explanation, and the pre-send guard blocks until they remove
+        // or retry.
         try {
-          extractedText = await app.venice.extractText(finalFile, finalFile.name);
+          extractedText = await app.supabase.extractText(finalFile, finalFile.name);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           patchAttachment(id, {

@@ -14,7 +14,6 @@
  */
 
 import type { SupabaseService } from './supabase';
-import type { VeniceClient } from './venice';
 
 /** Ceiling on the document title. Defensive cap on the display/sort field. */
 export const MAX_DOCUMENT_TITLE_CHARS = 300;
@@ -28,7 +27,6 @@ export const MAX_DOCUMENT_FILE_BYTES = 25 * 1024 * 1024;
 
 export interface IngestDocumentDeps {
   supabase: SupabaseService;
-  venice: VeniceClient;
 }
 
 /**
@@ -36,7 +34,8 @@ export interface IngestDocumentDeps {
  *
  *   1. write the metadata row (status 'pending'),
  *   2. upload the original to the private bucket and record its path,
- *   3. extract text via Venice's parser and store it.
+ *   3. extract text via Venice's parser (through the venice edge function)
+ *      and store it.
  *
  * Steps 1-2 are committed before extraction runs, so a parser failure leaves a
  * downloadable doc marked 'failed' rather than losing the upload. The stored
@@ -47,7 +46,7 @@ export async function ingestDocument(
   args: { title: string; description?: string; file: File },
   deps: IngestDocumentDeps
 ): Promise<string> {
-  const { supabase, venice } = deps;
+  const { supabase } = deps;
   const { file } = args;
   const mimeType = file.type || 'application/octet-stream';
 
@@ -68,7 +67,7 @@ export async function ingestDocument(
   await supabase.setDocumentStoragePath(doc.id, path);
 
   try {
-    const text = await venice.extractText(file, file.name);
+    const text = await supabase.extractText(file, file.name);
     await supabase.setDocumentExtraction(doc.id, { status: 'done', text });
   } catch (err) {
     // Best-effort: the original is uploaded and downloadable; we just mark the
