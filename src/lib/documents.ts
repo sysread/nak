@@ -21,9 +21,12 @@ export const MAX_DOCUMENT_TITLE_CHARS = 300;
 /** Ceiling on the "what this is for" description. */
 export const MAX_DOCUMENT_DESCRIPTION_CHARS = 2000;
 
-/** Max upload size (25 MB). Large enough for scanned PDFs, bounded so a
- * single upload can't exhaust the base64 round-trip the text-parser uses. */
-export const MAX_DOCUMENT_FILE_BYTES = 25 * 1024 * 1024;
+/** Max upload size (24 MiB). Sits below Venice's text-parser cap (advertised
+ * as "25 MB", enforced somewhere between 24 and 25 MiB) so an over-cap upload
+ * trips this guard with a clean message at the form rather than surfacing as
+ * an opaque 502 once the extraction call reaches Venice. Comfortable headroom
+ * for scanned PDFs and longer DOCX. */
+export const MAX_DOCUMENT_FILE_BYTES = 24 * 1024 * 1024;
 
 export interface IngestDocumentDeps {
   supabase: SupabaseService;
