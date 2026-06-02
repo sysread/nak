@@ -2130,6 +2130,25 @@ h1 {
   border: 1px solid var(--border);
 }
 
+/* Boost the conversational body text a notch on desktop. The root size
+   is 13.5px on wide screens (mobile bumps it to 15.5px - see the
+   @media (max-width: 720px) :root rule), and at that size Lekton prose
+   reads a touch small in the roomy desktop cards. Bump only the user/
+   assistant bubbles so the running text grows without touching the rest
+   of the rem-scaled UI (headings inside .md are rem-anchored to root, so
+   they hold their size; only the inherited body prose moves). Gated on
+   min-width:721px - the inverse of the 720px mobile breakpoint - so
+   phones keep inheriting their already-larger 15.5px root size unchanged.
+   Scoped to .user/.assistant rather than bare .msg so it skips the
+   chrome-stripped .msg.ask-user-host and other non-conversational
+   .msg variants. */
+@media (min-width: 721px) {
+  .msg.user,
+  .msg.assistant {
+    font-size: 1.05rem;
+  }
+}
+
 /* Cross-surface "this thing is about to be replaced" marker. Set on
    chat .msg bubbles by Chat.svelte when the user clicks
    regenerate-from-here, and on the wiki <article> element while
