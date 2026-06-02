@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { Recipe } from '../src/lib/supabase';
-import { recipeSourceLine } from '../src/lib/ui/recipe-detail';
+import { recipeSourceLine, wrapIndex, swipeNavStep } from '../src/lib/ui/recipe-detail';
 
 function makeRecipe(overrides: Partial<Recipe> = {}): Recipe {
   return {
@@ -63,5 +63,53 @@ describe('recipeSourceLine', () => {
         makeRecipe({ source: '  Bon Appetit  ', source_url: '  https://x.test/r  ' })
       )
     ).toEqual({ kind: 'link', label: 'Bon Appetit', url: 'https://x.test/r' });
+  });
+});
+
+describe('wrapIndex', () => {
+  it('steps forward within range', () => {
+    expect(wrapIndex(0, 1, 3)).toBe(1);
+    expect(wrapIndex(1, 1, 3)).toBe(2);
+  });
+
+  it('wraps forward past the last index to the first', () => {
+    expect(wrapIndex(2, 1, 3)).toBe(0);
+  });
+
+  it('wraps backward past the first index to the last', () => {
+    expect(wrapIndex(0, -1, 3)).toBe(2);
+  });
+
+  it('is a no-op on an empty list', () => {
+    expect(wrapIndex(0, 1, 0)).toBe(0);
+    expect(wrapIndex(5, -1, 0)).toBe(5);
+  });
+
+  it('stays put on a single-element ring', () => {
+    expect(wrapIndex(0, 1, 1)).toBe(0);
+    expect(wrapIndex(0, -1, 1)).toBe(0);
+  });
+});
+
+describe('swipeNavStep', () => {
+  it('returns 0 for a drag shorter than the threshold', () => {
+    expect(swipeNavStep(100, 100, 130, 100)).toBe(0);
+  });
+
+  it('advances to the next photo on a leftward swipe', () => {
+    expect(swipeNavStep(200, 100, 100, 110)).toBe(1);
+  });
+
+  it('goes to the previous photo on a rightward swipe', () => {
+    expect(swipeNavStep(100, 100, 220, 90)).toBe(-1);
+  });
+
+  it('ignores a mostly-vertical drag even when it clears the threshold', () => {
+    expect(swipeNavStep(100, 100, 160, 300)).toBe(0);
+  });
+
+  it('respects a custom threshold', () => {
+    expect(swipeNavStep(100, 100, 170, 100, 100)).toBe(0);
+    expect(swipeNavStep(100, 100, 230, 100, 100)).toBe(-1);
   });
 });

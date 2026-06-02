@@ -280,8 +280,12 @@ you have two or more selected.
 
 Each recipe can carry up to 12 photos that show as thumbnails at the
 top of the detail pane, just above the servings line. Click any
-thumbnail to open it full-size; arrow keys page between photos in the
-viewer; Escape (or a click outside the image) dismisses it.
+thumbnail to open it full-size. In the viewer you can page between
+photos with the on-screen arrows pinned to the left and right edges,
+the Left/Right arrow keys, or - on a touchscreen - by swiping
+left/right (pinch-to-zoom still works). Paging loops, so going past
+the last photo wraps back to the first. Escape (or a click outside
+the image) dismisses it.
 
 Photos can also carry an optional **caption** (or label) - a short
 note that renders in italics below the thumbnail in the strip and as
