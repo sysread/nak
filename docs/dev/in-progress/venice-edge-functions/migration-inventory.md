@@ -132,10 +132,23 @@ fields on StartMessage and the CycleContext literal; manager drops
 `veniceApiKey`. Test fixture for the cycle loop drops its inert
 `fakeVenice` stub.
 
+**Wiki** MIGRATED in `claude/wiki-agent-complete`. The wiki agent
+mixes two completion paths: most rounds drive `runHeadlessToolLoop`
+(already migrated in step 2), but `updateOne` makes one direct
+non-streaming completion call for the per-article manual-update
+flow. Both paths now go through `SupabaseService.complete`. Agent
+constructor dropped `venice`; the headless-tool-loop toolCtx dropped
+its `venice: this.venice` slot. Worker and manager follow the
+standard shape (drop `VeniceClient` import + venice api-key fields).
+Main-thread WikiAgent constructors in `Wiki.svelte`
+(`submitManualUpdate`) and `WikiSkippedPanel.svelte` (`retryRow`)
+stopped guarding on `app.venice` and stopped passing it. Wiki test
+fixture dropped the now-obsolete `makeInertVenice` helper.
+
 **Deferred callers** (still hold `VeniceClient.completeChat`):
 
 - background-agent Web Workers: `agents/summary/`, `agents/topics/`,
-  `agents/memory_topics/`, `agents/recipe_topics/`, `agents/wiki/`,
+  `agents/memory_topics/`, `agents/recipe_topics/`,
   `agents/wiki-librarian/`
 
 Why deferred: each worker bootstraps its own `VeniceClient` from a

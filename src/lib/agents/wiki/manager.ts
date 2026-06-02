@@ -76,7 +76,6 @@ class WikiManager extends BaseWorkerManager<WikiStartOpts> {
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       userId: session.user.id,
-      veniceApiKey: opts.config.veniceApiKey,
       wikiModel: agentModel('wiki').id,
       timezone: opts.timezone,
       userName: opts.userName,

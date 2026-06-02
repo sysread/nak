@@ -208,7 +208,7 @@ green gate:
    wiki-librarian sweep ships.
 
 4. **Migrate the worker-resident agent families one at a
-   time.** For each of `wiki`, `wiki-librarian`, and the
+   time.** For each of `wiki-librarian` and the
    supervisor-hosted set (`summary`, `topics`,
    `memory_topics`, `recipe_topics`):
    drop `venice: VeniceClient` from the agent constructor
@@ -230,7 +230,16 @@ green gate:
    `runHeadlessToolLoop`. `samskara` followed
    (`claude/samskara-agent-complete`) -- same shape, four
    `callOnce` sites across its phase methods plus the
-   compound-summary regen path. When `wiki-librarian`'s
+   compound-summary regen path. `wiki`
+   (`claude/wiki-agent-complete`) mixes both patterns: its
+   main per-thread flow runs through the migrated
+   `runHeadlessToolLoop`, while the per-article manual
+   `updateOne` makes one direct `supabase.complete` call.
+   The content-classifier primary -> uncensored-fallback
+   retry logic ports verbatim because the rejection comes
+   back as a `VeniceError` either way -- the function side
+   wraps Venice's 400 response into the same error shape
+   the client expected. When `wiki-librarian`'s
    family ships, also drop `venice` from `ToolContext`
    entirely and remove the non-null assertion from the
    `wiki_librarian` tool dispatcher.

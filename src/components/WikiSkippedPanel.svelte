@@ -83,7 +83,7 @@
   }
 
   async function retryRow(row: SkippedRow): Promise<void> {
-    if (!app.supabase || !app.venice) return;
+    if (!app.supabase) return;
     if (retrying[row.threadId]) return;
     // Best-effort: wipe the previous error / result inline before
     // the new run so the user doesn't read a stale message while the
@@ -106,7 +106,7 @@
       // the worker's, so the manual button hits the uncensored
       // fallback on a content-classifier rejection without
       // duplicating that policy here.
-      const agent = new WikiAgent(app.venice, app.supabase);
+      const agent = new WikiAgent(app.supabase);
       const result = await agent.retrySkippedThread({
         threadId: row.threadId,
         userId: session.user.id,

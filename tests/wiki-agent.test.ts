@@ -13,7 +13,6 @@ import type { SupabaseService, Message } from '../src/lib/supabase';
 import type {
   ChatCompletion,
   ChatRequest,
-  VeniceClient,
   VeniceMessage,
 } from '../src/lib/venice';
 
@@ -57,19 +56,6 @@ function makeSupabase(
     manualAdvanceWikiPointer: vi.fn(async () => undefined),
     complete: complete ? vi.fn(complete) : vi.fn(),
   } as unknown as SupabaseService;
-}
-
-/**
- * Inert VeniceClient for the WikiAgent constructor's leftover `venice`
- * slot. The agent's network seam is `supabase.complete` post-milestone-
- * 6; the venice handle survives only because the worker-fleet sweep
- * that drops it from the constructor signature hasn't shipped.
- */
-function makeInertVenice(): VeniceClient {
-  return {
-    completeChat: vi.fn(),
-    embed: vi.fn(async () => ({ data: [] })),
-  } as unknown as VeniceClient;
 }
 
 /**
@@ -154,7 +140,7 @@ describe('WikiAgent - content-classifier fallback', () => {
       'Fallback ran, no edits warranted.'
     );
     const svc = makeSupabase(messages, complete);
-    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(svc, 'deepseek-v4-flash');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -181,7 +167,7 @@ describe('WikiAgent - content-classifier fallback', () => {
       calls.push({ model: req.model });
       throw new Error('Venice HTTP 500: gateway error');
     });
-    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(svc, 'deepseek-v4-flash');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -210,7 +196,7 @@ describe('WikiAgent - content-classifier fallback', () => {
       }
       throw new Error('arcee timeout');
     });
-    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(svc, 'deepseek-v4-flash');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -242,7 +228,7 @@ describe('WikiAgent - content-classifier fallback', () => {
         'Venice HTTP 400: {"error":"Input text data may contain inappropriate content."}'
       );
     });
-    const agent = new WikiAgent(makeInertVenice(), svc, 'arcee-trinity-large-thinking');
+    const agent = new WikiAgent(svc, 'arcee-trinity-large-thinking');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -272,7 +258,7 @@ describe('WikiAgent.retrySkippedThread', () => {
     (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
       'a1'
     );
-    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(svc, 'deepseek-v4-flash');
 
     const result = await agent.retrySkippedThread({
       threadId: 't-1',
@@ -309,7 +295,7 @@ describe('WikiAgent.retrySkippedThread', () => {
     (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
       'a1'
     );
-    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(svc, 'deepseek-v4-flash');
 
     const result = await agent.retrySkippedThread({
       threadId: 't-2',
@@ -329,7 +315,7 @@ describe('WikiAgent.retrySkippedThread', () => {
     (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
       null
     );
-    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(svc, 'deepseek-v4-flash');
 
     const result = await agent.retrySkippedThread({
       threadId: 't-empty',
@@ -352,7 +338,7 @@ describe('WikiAgent.retrySkippedThread', () => {
     (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
       'a1'
     );
-    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(svc, 'deepseek-v4-flash');
 
     const result = await agent.retrySkippedThread({
       threadId: 't-1',
@@ -387,7 +373,7 @@ describe('WikiAgent.retrySkippedThread', () => {
     (svc.manualAdvanceWikiPointer as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('RPC blew up')
     );
-    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(svc, 'deepseek-v4-flash');
 
     const result = await agent.retrySkippedThread({
       threadId: 't-1',

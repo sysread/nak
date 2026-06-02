@@ -622,7 +622,7 @@
   });
 
   async function submitManualUpdate(article: WikiArticle): Promise<void> {
-    if (!app.supabase || !app.venice) return;
+    if (!app.supabase) return;
     const instructions = manualInstructions.trim();
     if (instructions.length === 0) {
       manualError = 'Add some instructions for the agent first.';
@@ -636,7 +636,7 @@
     manualNoop = null;
     manualError = null;
     try {
-      const agent = new WikiAgent(app.venice, app.supabase);
+      const agent = new WikiAgent(app.supabase);
       const result: WikiUpdateOneResult = await agent.updateOne({
         articleId: article.id,
         currentTitle: article.title,

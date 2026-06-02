@@ -27,7 +27,7 @@
  */
 import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
-import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
+import type { VeniceMessage, ResponseFormat } from '../../venice';
 import { wikiToolbox } from '../../tools/wiki_toolbox';
 import { runHeadlessToolLoop } from '../../tools/run';
 import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
@@ -181,7 +181,6 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
   private userProfile: WikiUserProfile | null = null;
 
   constructor(
-    private venice: VeniceClient,
     private supabase: SupabaseService,
     /**
      * Optional model override. Defaults to the registry's `wiki`
@@ -334,7 +333,6 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
         toolbox: this.toolbox,
         toolCtx: {
           supabase: this.supabase,
-          venice: this.venice,
           userId: args.req.userId,
           threadId: args.req.input.threadId,
         },
@@ -564,7 +562,7 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
         `(${args.currentContent.length} chars in, ${instructions.length} chars instructions)`
     );
 
-    const completion = await this.venice.completeChat({
+    const completion = await this.supabase.complete({
       model: this.model,
       messages: convo,
       signal,

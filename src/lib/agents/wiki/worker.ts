@@ -10,7 +10,6 @@
  *     calendar.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { VeniceClient } from '../../venice';
 import { SupabaseService } from '../../supabase';
 import { LeaseCoordinator } from '../../embeddings/lease';
 import { WikiAgent } from './agent';
@@ -28,8 +27,6 @@ interface StartMessage {
   accessToken: string;
   refreshToken: string;
   userId: string;
-  veniceApiKey: string;
-  veniceBaseUrl?: string;
   wikiModel: string;
   /** IANA timezone or null (the SQL falls back to UTC). */
   timezone: string | null;
@@ -171,17 +168,12 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     { supabaseUrl: msg.supabaseUrl, supabasePublishableKey: msg.supabasePublishableKey },
     { client }
   );
-  const venice = new VeniceClient({
-    apiKey: msg.veniceApiKey,
-    baseUrl: msg.veniceBaseUrl,
-  });
   const coordinator = new LeaseCoordinator(supabase, 'wiki', msg.holderId, {
     ttlSeconds: msg.leaseTtlSeconds,
     heartbeatMs: msg.leaseHeartbeatMs,
   });
 
   const agent = new WikiAgent(
-    venice,
     supabase,
     msg.wikiModel,
     buildProfile(msg.userName, msg.userLocation)
