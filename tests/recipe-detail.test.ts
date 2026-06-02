@@ -6,7 +6,13 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { Recipe } from '../src/lib/supabase';
-import { recipeSourceLine, wrapIndex, swipeNavStep } from '../src/lib/ui/recipe-detail';
+import {
+  recipeSourceLine,
+  wrapIndex,
+  swipeNavStep,
+  lightboxTrackStyle,
+  LIGHTBOX_SLIDE_MS,
+} from '../src/lib/ui/recipe-detail';
 
 function makeRecipe(overrides: Partial<Recipe> = {}): Recipe {
   return {
@@ -111,5 +117,40 @@ describe('swipeNavStep', () => {
   it('respects a custom threshold', () => {
     expect(swipeNavStep(100, 100, 170, 100, 100)).toBe(0);
     expect(swipeNavStep(100, 100, 230, 100, 100)).toBe(-1);
+  });
+});
+
+describe('lightboxTrackStyle', () => {
+  it('rests centered on the middle slide with no transition when idle', () => {
+    const s = lightboxTrackStyle('idle', 0);
+    expect(s).toContain('translateX(-100%)');
+    expect(s).toContain('transition: none');
+  });
+
+  it('follows the finger by the drag offset and disables transition while dragging', () => {
+    const s = lightboxTrackStyle('drag', -42);
+    expect(s).toContain('calc(-100% + -42px)');
+    expect(s).toContain('transition: none');
+  });
+
+  it('slides one viewport left toward the next slide on a forward commit', () => {
+    const s = lightboxTrackStyle('to-next', 0);
+    expect(s).toContain('translateX(-200%)');
+    expect(s).toContain(`${LIGHTBOX_SLIDE_MS}ms`);
+  });
+
+  it('slides toward the previous slide on a backward commit', () => {
+    const s = lightboxTrackStyle('to-prev', 0);
+    expect(s).toContain('translateX(0%)');
+    expect(s).toContain(`${LIGHTBOX_SLIDE_MS}ms`);
+  });
+
+  it('eases back to center on a cancelled drag', () => {
+    const s = lightboxTrackStyle('cancel', 80);
+    // The cancel target ignores the residual drag offset and animates
+    // straight back to the centered resting transform.
+    expect(s).toContain('translateX(-100%)');
+    expect(s).not.toContain('80px');
+    expect(s).toContain(`${LIGHTBOX_SLIDE_MS}ms`);
   });
 });
