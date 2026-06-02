@@ -70,13 +70,21 @@
      */
     attachments?: Attachment[] | null;
     /**
-     * Set true when this message is in the regenerate-from-here
-     * pending-delete range. Greys the bubble (via the parent's
-     * `.regen-target` class) and disables every button in the
-     * action bar so the user can read what's about to be replaced
-     * but can't trigger a parallel action against it. Structural
-     * toggles (reasoning panel header, tool-call expand rows,
-     * body-side `^N^` clicks) stay live so inspection still works.
+     * Set true when the user can't trigger a mutating/parallel
+     * action against this row: either it's in the regenerate-from-here
+     * pending-delete range (greyed via the parent's `.regen-target`
+     * class so the user can read what's about to be replaced), or a
+     * send is in flight on this thread. Disables the Copy and
+     * Regenerate buttons in the action bar.
+     *
+     * Inspection affordances stay live regardless: the reasoning
+     * panel header, tool-call expand rows, body-side `^N^` clicks,
+     * AND the citations toggle. The toggle and the `^N^` superscripts
+     * are two entry points to the same read-only citations panel -
+     * gating one but not the other would let a click on `^2^` open
+     * sources while the button next to it sits dead, which reads as
+     * broken. Sources are safe to read while a row is being replaced
+     * or while the next turn streams.
      */
     disabled?: boolean;
     /**
@@ -206,7 +214,6 @@
         class="copy-btn citations-toggle"
         class:active={citationsOpen}
         class:unavailable={citationsUnavailable}
-        {disabled}
         onclick={() => {
           citationsOpen = !citationsOpen;
         }}
