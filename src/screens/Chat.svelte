@@ -3098,24 +3098,29 @@
       return null;
     };
 
-    // Throttle slot.streamingText updates to ~2Hz while the response
-    // arrives. Every assignment drives <Markdown> to re-run marked
-    // + DOMPurify + highlight.js over the full growing buffer, so
-    // flushing on each SSE delta would peg the main thread and make
-    // long responses land in visible gulps. Trailing-edge throttle:
-    // the first delta schedules a 500ms timer, any deltas arriving
-    // inside that window get coalesced into the latest `pending`
-    // value, and one flush commits the buffer when the timer fires.
-    // Side effect: ~500ms of "thinking dots" before the first
-    // rendered paint, which reads as intentional pacing.
+    // Throttle both streaming buffers - the answer text and the
+    // reasoning trace - to ~2Hz while the response arrives. Every
+    // assignment to slot.streamingText drives <Markdown> to re-run
+    // marked + DOMPurify + highlight.js over the full growing buffer,
+    // and every assignment to slot.streamingReasoning reflows the open
+    // reasoning panel; reasoning models emit the thinking trace at
+    // hundreds of deltas/sec, so flushing either channel on each SSE
+    // delta would peg the main thread and make long responses land in
+    // visible gulps. Trailing-edge throttle on a single shared timer:
+    // the first delta on either channel schedules a 500ms timer, deltas
+    // arriving inside that window coalesce into the latest `pendingText`
+    // / `pendingReasoning`, and one flush commits both buffers when the
+    // timer fires. Side effect: ~500ms of "thinking dots" before the
+    // first rendered paint, which reads as intentional pacing.
     const FLUSH_MS = 500;
-    let pending: string | null = null;
+    let pendingText: string | null = null;
+    let pendingReasoning: string | null = null;
     let flushTimer = 0;
     const flushPending = (): void => {
       flushTimer = 0;
-      if (pending !== null) {
-        slot.streamingText = pending;
-        pending = null;
+      if (pendingText !== null) {
+        slot.streamingText = pendingText;
+        pendingText = null;
         // Retire the subconscious checklist the instant the answer text
         // actually paints (not on the first not-yet-flushed byte). The
         // checklist lives in the response card and the card mounts only
@@ -3125,15 +3130,32 @@
         // them - dismissing on the first delta instead would blank the
         // card for the ~500ms flush window and flicker its border out and
         // back. Sticky and idempotent: stays dismissed across later
-        // flushes and round boundaries. The reasoning path dismisses
-        // separately in onReasoningUpdate, where its content is written
-        // synchronously.
+        // flushes and round boundaries. The reasoning branch below
+        // dismisses on the same principle when the thinking paints.
+        slot.subconsciousDismissed = true;
+      }
+      if (pendingReasoning !== null) {
+        slot.streamingReasoning = pendingReasoning;
+        pendingReasoning = null;
+        // Same checklist-dismissal logic as the text branch: dismiss when
+        // the thinking actually paints, not on the first not-yet-flushed
+        // reasoning byte, so the card never blanks for the flush window
+        // between checklist and the first visible reasoning. On a
+        // reasoning model this is the channel that fires first.
         slot.subconsciousDismissed = true;
       }
       // Piggyback the IDB draft flush on every display flush (~500ms).
       // Best-effort: a write failure is swallowed so a broken IDB never
       // stalls the visible render path.
       void updateDraftText(ctx.threadId, slot.streamingText, slot.streamingReasoning).catch(() => {});
+    };
+    // Arm the shared flush timer if it isn't already running. Both
+    // streaming channels call this; the leading delta on whichever
+    // channel arrives first owns the timer for the window.
+    const armFlush = (): void => {
+      if (flushTimer === 0) {
+        flushTimer = window.setTimeout(flushPending, FLUSH_MS);
+      }
     };
     const cancelPending = (): void => {
       if (flushTimer !== 0) {
@@ -3229,10 +3251,8 @@
           contextRecallEnabled: true,
           handlers: {
             onTextUpdate: (t) => {
-              pending = t;
-              if (flushTimer === 0) {
-                flushTimer = window.setTimeout(flushPending, FLUSH_MS);
-              }
+              pendingText = t;
+              armFlush();
               // First content byte of this round — schedule the
               // reasoning panel to animate shut shortly after so the
               // user sees "thinking… answer starts" rather than a
@@ -3246,7 +3266,15 @@
                 // Checklist dismissal happens in flushPending, when the
                 // first text actually paints - see the note there for why
                 // it can't fire on this not-yet-flushed first byte.
-                if (slot.streamingReasoningOpen && slot.streamingReasoning.length > 0) {
+                // pendingReasoning is OR'd in because reasoning now rides
+                // the same throttle: a fast first text delta can land
+                // before the leading reasoning buffer has flushed, so
+                // slot.streamingReasoning may still be empty even though
+                // reasoning content arrived and the panel is open.
+                if (
+                  slot.streamingReasoningOpen &&
+                  (slot.streamingReasoning.length > 0 || pendingReasoning !== null)
+                ) {
                   reasoningCloseTimer = window.setTimeout(() => {
                     slot.streamingReasoningOpen = false;
                     reasoningCloseTimer = 0;
@@ -3255,16 +3283,23 @@
               }
             },
             onReasoningUpdate: (t) => {
-              slot.streamingReasoning = t;
-              // Reasoning is the first thing the reply emits on a
-              // reasoning model - retire the subconscious checklist
-              // here too so it fades as the thinking starts streaming,
-              // not only on the first visible content delta.
-              slot.subconsciousDismissed = true;
+              // Coalesce reasoning deltas through the same trailing-edge
+              // throttle as the answer text. The buffer commits in
+              // flushPending, and the subconscious-checklist dismissal
+              // moved there with it (see the reasoning branch in
+              // flushPending) so the card doesn't blank between the
+              // checklist and the first painted reasoning.
+              pendingReasoning = t;
+              armFlush();
               // Panel opens on the first reasoning delta so the user
-              // watches the thinking stream in. Only before content
-              // has started — once the answer is flowing, late
-              // reasoning shouldn't pop the panel back open.
+              // watches the thinking stream in. Set eagerly here rather
+              // than on the throttled flush so streamingReasoningOpen is
+              // already true when the first reasoning buffer paints; the
+              // panel stays visually absent until that paint because
+              // ReasoningPanel guards its markup on reasoning.length > 0,
+              // so there's no empty-panel frame. Only before content has
+              // started — once the answer is flowing, late reasoning
+              // shouldn't pop the panel back open.
               if (!slot.streamingReasoningOpen && !slot.streamingContentStarted) {
                 slot.streamingReasoningOpen = true;
               }
@@ -3272,9 +3307,10 @@
             onAssistantPersisted: (msg) => {
               // Cancel any pending frame — the persisted row takes
               // over rendering and we don't want a stale flush to
-              // replay the text into slot.streamingText after this.
+              // replay the text or reasoning into the slot after this.
               cancelPending();
-              pending = null;
+              pendingText = null;
+              pendingReasoning = null;
               // Always buffer into the slot so a thread-switch + return
               // can replay this row via mergeMessagesById; only mutate
               // the screen's `messages` if the user is currently
@@ -3461,7 +3497,8 @@
               // the junk. The card is animated away by
               // dismissSlopNotices once the replacement persists.
               cancelPending();
-              pending = null;
+              pendingText = null;
+              pendingReasoning = null;
               slot.slopNotices.push({
                 id:
                   globalThis.crypto?.randomUUID?.() ??
@@ -3488,12 +3525,17 @@
         // again with a flat backoff.
         loopResult = await oneAttempt();
       } finally {
-        // Commit anything pending synchronously so post-loop code
-        // sees the final state.
+        // Commit anything pending synchronously so post-loop code sees
+        // the final state - both the answer text and the reasoning
+        // trace, since both now ride the shared throttle.
         cancelPending();
-        if (pending !== null) {
-          slot.streamingText = pending;
-          pending = null;
+        if (pendingText !== null) {
+          slot.streamingText = pendingText;
+          pendingText = null;
+        }
+        if (pendingReasoning !== null) {
+          slot.streamingReasoning = pendingReasoning;
+          pendingReasoning = null;
         }
       }
       // Regenerate-from-here commit. Runs only when a real reply
