@@ -122,8 +122,8 @@ reply reads as plain prose.
 
 Some models occasionally emit an internal control token (and a burst
 of unrelated text) at the very start of a reply instead of answering -
-a known quirk of the DeepSeek family that fronts the Balanced and Fast
-tiers. Nak detects this, throws the bad attempt away, and regenerates -
+a known quirk of the DeepSeek family that fronts the Fast tier. Nak
+detects this, throws the bad attempt away, and regenerates -
 automatically, without you doing anything.
 
 - When it happens you'll briefly see a small **"oops, all slop!"**

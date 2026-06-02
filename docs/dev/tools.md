@@ -59,10 +59,10 @@ The always-on toolbox carries:
   thread when `toolboxes_enabled=[]` by default; gating it would
   mean a toolbox flip before the model could name the
   conversation.
-- `analyze_image` - fires a one-shot vision sub-completion (balanced
-  tier) for an image attachment identified by filename and a caller-
-  supplied query. Always-on so the model can reach for it on any
-  tier when the user sends an image. The main model phrases the
+- `analyze_image` - fires a one-shot vision sub-completion (the
+  `visionAnalysis` agent model) for an image attachment identified by
+  filename and a caller-supplied query. Always-on so the model can
+  reach for it on any tier when the user sends an image. The main model phrases the
   query from the user's intent (e.g. "what does this say?" becomes
   an OCR-focused query); the tool returns the vision model's plain-
   text answer. Image bytes live in `ctx.attachments`, hydrated by
@@ -180,8 +180,8 @@ The gated `images` toolbox carries:
   chat-loop. Kept separate so the chat-loop imports them without
   pulling the lazy generate_image impl chunk.
 - `src/lib/tools/analyze_image.ts` - fires a one-shot vision sub-
-  completion against the balanced tier with the image bytes from
-  `ctx.attachments`. Requires `ToolContext.attachments` to be
+  completion against the `visionAnalysis` agent model with the image
+  bytes from `ctx.attachments`. Requires `ToolContext.attachments` to be
   populated (the chat loop does this from the current user
   message's attachment rows). Returns `{answer: string}`.
 - `src/lib/tools/ask_user.ts` - the clarifying-question tool. Pure

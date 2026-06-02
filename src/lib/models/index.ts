@@ -198,6 +198,18 @@ export const MODELS = {
     // See ModelSpec.leaksSpecialTokens.
     leaksSpecialTokens: true,
   },
+  'minimax-m3': {
+    id: 'minimax-m3',
+    contextWindow: 500_000,
+    supportsReasoning: true,
+    // Native vision: image_url parts inline directly, no analyze_image
+    // round-trip.
+    supportsVision: true,
+    // Function-calling + structured-output capable. The earlier minimax
+    // generation (minimax-m25) 4xx'd on response_format, which is the
+    // bug ModelSpec.supportsResponseFormat documents; m3 accepts it.
+    supportsResponseFormat: true,
+  },
   'mistral-small-3-2-24b-instruct': {
     id: 'mistral-small-3-2-24b-instruct',
     contextWindow: 256_000,
@@ -258,11 +270,11 @@ export interface TierSpec extends ModelSpec {
   /**
    * Tier-level reasoning_effort default. When set, wins over the user's
    * account-level default (but not the per-thread override). Used to
-   * differentiate tiers fronting the same Venice id - Balanced and Fast
-   * currently both front deepseek-v4-flash and the labels really mean
-   * "same model, different thinking budgets," with this field realising
-   * that contract. (Smart fronts qwen-3-6-plus and carries its own
-   * default independently.) Absent means "no tier opinion - fall
+   * differentiate tiers - Balanced fronts minimax-m3 with this set to
+   * 'low' (light thinking), while Fast fronts deepseek-v4-flash with
+   * `disableThinking` instead, so the labels mean "different model,
+   * different thinking budget." (Smart fronts qwen-3-6-plus and carries
+   * its own default independently.) Absent means "no tier opinion - fall
    * through to the user default." Only consulted when the underlying
    * model's supportsReasoning is also true and `disableThinking` is
    * not set.
@@ -294,7 +306,7 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     defaultReasoningEffort: 'medium',
   },
   balanced: {
-    ...MODELS['deepseek-v4-flash'],
+    ...MODELS['minimax-m3'],
     tier: 'balanced',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
@@ -303,7 +315,7 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     // in both themes; yin-yang is a solid bi-tonal disc that reads at
     // any size.
     icon: '\u262F\uFE0F',
-    description: 'DeepSeek V4 Flash with light thinking. Good default for most turns.',
+    description: 'MiniMax M3 with light thinking. 500k context, native vision. Good default for most turns.',
     defaultReasoningEffort: 'low',
   },
   fast: {
@@ -312,10 +324,10 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     label: 'Fast',
     icon: '\u26A1\uFE0F',
     description: 'DeepSeek V4 Flash with thinking off. Quickest replies.',
-    // disableThinking is what makes the Fast tier feel fast even
-    // though it fronts the same reasoning-capable model as Smart and
-    // Balanced - without it the model would burn its default thinking
-    // budget on CoT before writing any user-visible text.
+    // disableThinking is what makes the Fast tier feel fast even though
+    // it fronts a reasoning-capable model - without it the model would
+    // burn its default thinking budget on CoT before writing any
+    // user-visible text.
     disableThinking: true,
   },
 };
