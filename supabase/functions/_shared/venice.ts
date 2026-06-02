@@ -126,6 +126,126 @@ export interface UsagePage {
   totalPages: number;
 }
 
+export interface VeniceGenerateImageOptions {
+  apiKey: string;
+  model: string;
+  prompt: string;
+  negativePrompt?: string;
+  stylePreset?: string;
+  width?: number;
+  height?: number;
+  seed?: number;
+  steps?: number;
+  cfgScale?: number;
+  safeMode?: boolean;
+  hideWatermark?: boolean;
+  format?: 'webp' | 'png' | 'jpeg';
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+}
+
+export interface VeniceImageGenResult {
+  /** Base64-encoded image bytes, no `data:` prefix. */
+  imageBase64: string;
+  /** MIME type derived from the requested format, e.g. `image/webp`. */
+  mimeType: string;
+}
+
+/**
+ * POST /image/generate against Venice. Camel-cased options map to Venice's
+ * snake_case wire shape; only fields the caller supplied are forwarded (matches
+ * the wire discipline veniceEmbed uses). Pins `variants: 1` and
+ * `return_binary: false` so the response is a single base64 image ready to
+ * drop into a message_attachments row - the generate_image tool downstream
+ * never wants raw bytes or multi-image output.
+ *
+ * Content-policy guard: Venice can return HTTP 200 with the
+ * `x-venice-is-content-violation` header set when a prompt trips its policy
+ * and no usable image came back. We surface that as a VeniceError so the tool
+ * sees the violation explicitly rather than silently returning an empty image.
+ *
+ * Returns the first image as base64 plus a derived MIME type. Throws a
+ * VeniceError on any failure; 429 -> rate_limit so the caller can branch on
+ * the back-off case, everything else -> http or network.
+ */
+export async function veniceGenerateImage(
+  opts: VeniceGenerateImageOptions
+): Promise<VeniceImageGenResult> {
+  const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const format = opts.format ?? 'webp';
+
+  const body: Record<string, unknown> = {
+    model: opts.model,
+    prompt: opts.prompt,
+    format,
+    variants: 1,
+    safe_mode: opts.safeMode ?? true,
+    return_binary: false,
+  };
+  if (typeof opts.width === 'number') body.width = opts.width;
+  if (typeof opts.height === 'number') body.height = opts.height;
+  if (opts.negativePrompt) body.negative_prompt = opts.negativePrompt;
+  if (opts.stylePreset) body.style_preset = opts.stylePreset;
+  if (typeof opts.seed === 'number') body.seed = opts.seed;
+  if (typeof opts.steps === 'number') body.steps = opts.steps;
+  if (typeof opts.cfgScale === 'number') body.cfg_scale = opts.cfgScale;
+  if (typeof opts.hideWatermark === 'boolean') body.hide_watermark = opts.hideWatermark;
+
+  let res: Response;
+  try {
+    res = await fetchImpl(`${baseUrl}/image/generate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${opts.apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new VeniceError(
+      `Network error contacting Venice: ${(err as Error).message}`,
+      'network'
+    );
+  }
+
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '');
+    throw new VeniceError(
+      `Venice image/generate ${res.status}: ${errBody.slice(0, 200)}`,
+      res.status === 429 ? 'rate_limit' : 'http',
+      res.status
+    );
+  }
+  // Content-policy: a 200 may still carry no image when the header flags a
+  // policy violation. Check before parsing so the helper does not hand back
+  // an empty result as if it succeeded.
+  if (res.headers.get('x-venice-is-content-violation') === 'true') {
+    throw new VeniceError(
+      'Venice rejected the image prompt for a content-policy violation. ' +
+        'Rephrase the request or tell the user the prompt was not allowed.',
+      'http',
+      res.status
+    );
+  }
+
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    throw new VeniceError('Failed to parse Venice image response.', 'parse');
+  }
+  const images = (payload as { images?: unknown }).images;
+  const first = Array.isArray(images) ? images[0] : undefined;
+  if (typeof first !== 'string' || first.length === 0) {
+    throw new VeniceError(
+      'Venice image response contained no image data.',
+      'parse'
+    );
+  }
+  return { imageBase64: first, mimeType: `image/${format}` };
+}
+
 export interface VeniceExtractTextOptions {
   apiKey: string;
   file: Blob;

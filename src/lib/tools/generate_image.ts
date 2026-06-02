@@ -90,7 +90,7 @@ export const generateImage: ToolDef = {
 
     let result;
     try {
-      result = await ctx.venice.generateImage({
+      result = await ctx.supabase.generateImage({
         model: VENICE_IMAGE_MODEL,
         prompt,
         negativePrompt: negativePrompt || undefined,

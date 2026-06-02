@@ -12,6 +12,11 @@
 //                  Venice's /augment/text-parser. Bug-driven: browser direct
 //                  calls were CORS-rejected on non-image files; the function
 //                  fixes both the chat-attachment and Library-upload paths.
+//   /image-generate - browser-triggered, forwards a prompt + options to
+//                     Venice's /image/generate. The generate_image tool calls
+//                     it; the function pins variants=1/return_binary=false
+//                     so the response is a single base64 image ready for the
+//                     attachments path.
 // `/complete` is the planned sibling - see
 // docs/dev/in-progress/venice-edge-functions/.
 //
@@ -24,6 +29,7 @@ import {
   veniceEmbed,
   veniceExtractText,
   veniceFetchUsagePage,
+  veniceGenerateImage,
   VeniceError,
 } from '../_shared/venice.ts';
 import { EMBED_SOURCES } from '../_shared/embed-input.ts';
@@ -215,6 +221,74 @@ async function handleUsage(req: Request): Promise<Response> {
   }
 }
 
+interface ImageGenerateRequestBody {
+  model?: string;
+  prompt?: string;
+  negativePrompt?: string;
+  stylePreset?: string;
+  width?: number;
+  height?: number;
+  seed?: number;
+  steps?: number;
+  cfgScale?: number;
+  safeMode?: boolean;
+  hideWatermark?: boolean;
+  format?: 'webp' | 'png' | 'jpeg';
+}
+
+/**
+ * Browser-triggered image-generation proxy for POST /image/generate. Mirrors
+ * /embed's auth: the gateway's verify_jwt has already validated the session
+ * JWT; we read the shared key from app_config via the service role. The body
+ * keeps the camel-cased shape the browser's generate_image tool already uses;
+ * veniceGenerateImage handles the snake_case translation Venice expects, the
+ * variants=1 / return_binary=false defaults, and the content-policy header
+ * check. Response is `{ imageBase64, mimeType }` ready to drop into a
+ * message_attachments row.
+ */
+async function handleImageGenerate(req: Request): Promise<Response> {
+  let body: ImageGenerateRequestBody;
+  try {
+    body = (await req.json()) as ImageGenerateRequestBody;
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  if (typeof body.model !== 'string' || typeof body.prompt !== 'string') {
+    return json({ error: 'body must include `model` and `prompt`' }, 400);
+  }
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+  const apiKey = await readVeniceKey(admin);
+  if (!apiKey) {
+    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
+  }
+
+  try {
+    const result = await veniceGenerateImage({
+      apiKey,
+      model: body.model,
+      prompt: body.prompt,
+      negativePrompt: body.negativePrompt,
+      stylePreset: body.stylePreset,
+      width: body.width,
+      height: body.height,
+      seed: body.seed,
+      steps: body.steps,
+      cfgScale: body.cfgScale,
+      safeMode: body.safeMode,
+      hideWatermark: body.hideWatermark,
+      format: body.format,
+    });
+    return json(result);
+  } catch (err) {
+    if (err instanceof VeniceError) {
+      return json({ error: err.message, kind: err.kind }, err.kind === 'rate_limit' ? 429 : 502);
+    }
+    return json({ error: (err as Error).message }, 500);
+  }
+}
+
 /**
  * Browser-triggered text extraction proxy for POST /augment/text-parser. The
  * browser cannot reach this Venice endpoint directly - Venice CORS-enables
@@ -337,6 +411,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'usage' && req.method === 'POST') return handleUsage(req);
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
   if (route === 'text-parser' && req.method === 'POST') return handleTextParser(req);
+  if (route === 'image-generate' && req.method === 'POST') return handleImageGenerate(req);
 
   return json({ error: 'not found' }, 404);
 });

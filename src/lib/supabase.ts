@@ -29,7 +29,14 @@ import { isLogLevel, createLogger, type LogLevel } from './logger.svelte';
 
 const log = createLogger('supabase');
 import type { OpenAIToolCall } from './tools/types';
-import type { Citation, EmbeddingRequest, EmbeddingResponse, TokenUsage } from './venice';
+import type {
+  Citation,
+  EmbeddingRequest,
+  EmbeddingResponse,
+  ImageGenRequest,
+  ImageGenResult,
+  TokenUsage,
+} from './venice';
 import { VeniceError } from './venice';
 import {
   collectUsagePages,
@@ -1617,6 +1624,48 @@ export class SupabaseService {
       );
     }
     return text;
+  }
+
+  /**
+   * Generate an image through the venice edge function's /image-generate
+   * route. The function holds the shared key server-side and pins the
+   * variants=1 / return_binary=false defaults so the response is a single
+   * base64 image ready for the message_attachments row the chat-loop creates.
+   *
+   * The camel-cased ImageGenRequest shape is preserved on the wire; the Deno
+   * helper does the snake_case translation Venice expects. req.signal is not
+   * propagated (functions.invoke has no abort hook), so an aborted generation
+   * still spends Venice credits - the chat-loop's tool-side handling treats
+   * the discarded result the same as a model-side retry.
+   */
+  async generateImage(req: ImageGenRequest): Promise<ImageGenResult> {
+    const { data, error } = await this.client.functions.invoke('venice/image-generate', {
+      body: {
+        model: req.model,
+        prompt: req.prompt,
+        negativePrompt: req.negativePrompt,
+        stylePreset: req.stylePreset,
+        width: req.width,
+        height: req.height,
+        seed: req.seed,
+        steps: req.steps,
+        cfgScale: req.cfgScale,
+        safeMode: req.safeMode,
+        hideWatermark: req.hideWatermark,
+        format: req.format,
+      },
+    });
+    if (error) throw await veniceFunctionError(error);
+    const result = data as { imageBase64?: unknown; mimeType?: unknown } | null;
+    const imageBase64 = result?.imageBase64;
+    const mimeType = result?.mimeType;
+    if (typeof imageBase64 !== 'string' || typeof mimeType !== 'string') {
+      throw new VeniceError(
+        'Venice image response did not contain image data.',
+        'parse'
+      );
+    }
+    return { imageBase64, mimeType };
   }
 
   /**

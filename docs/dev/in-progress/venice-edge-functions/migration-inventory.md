@@ -8,9 +8,9 @@ This file is the concrete punch list: call sites, workers, and processes, with
 status.
 
 **Iteratively audited - not exhaustive or final.** Each milestone re-audits and
-updates this. Last full audit: **2026-06-01**, after the embed query-time
-milestone landed and after the attachments/recipe-images Storage migrations
-collapsed two driver-A workers server-side. Audit walks `src/lib/venice.ts`
+updates this. Last full audit: **2026-06-02**, after the text-parser and
+image-generate milestones landed. Driver B's remaining surface is now
+chat-completions alone (the attractor). Audit walks `src/lib/venice.ts`
 callers (`grep`), the `src/lib/agents/` worker fleet, and the
 `supabase/functions/` directory. Line numbers drift; re-grep before relying on
 one.
@@ -30,13 +30,8 @@ Status key:
 | `POST /embeddings` | `embed` (deleted from `VeniceClient`) | DONE - backfill (milestone 1, cron) + query-time (milestone 3, `/embed` route from the browser via `SupabaseService.embed`) |
 | `POST /chat/completions` | `completeChat`, `streamChat` | TODO - the hard one; streaming is the attractor |
 | `GET /billing/usage` | (was `fetchUsage`, now `SupabaseService.fetchUsage`) | DONE - milestone 2, `/usage` route |
-| `POST /augment/text-parser` | `extractText` | TODO - **bug-driven**: browser extraction is CORS-broken for non-image files (observed 2026-05-30); design in [text-parser.md](./text-parser.md) |
-| `POST /image/generate` | `generateImage` | TODO - no sub-plan yet |
-
-The README's endpoint list historically said "five" but enumerated four -
-**image generation was the missing fifth**. It has a live browser caller (the
-`generate_image` tool) and uses the browser's local Venice key, so it is a real
-driver-B item even though it is the least-used endpoint.
+| `POST /augment/text-parser` | `extractText` (deleted from `VeniceClient`) | DONE - milestone 4, `/text-parser` route. Fixed the CORS-broken browser path (every non-image upload had been "Failed to fetch"). Empirical: Venice caps at ~25 MB; the Supabase edge-function gateway is transparent at that scale (no escape hatch needed). `MAX_DOCUMENT_FILE_BYTES` clamped to 24 MiB to fail at the form guard instead of mid-upload. |
+| `POST /image/generate` | `generateImage` (deleted from `VeniceClient`) | DONE - milestone 5, `/image-generate` route. Single browser caller (the `generate_image` tool) routes through `SupabaseService.generateImage`; the content-policy header check + variants=1/return_binary=false defaults moved into the Deno helper. |
 
 ## Venice call sites (browser) - callers to route through the function
 
@@ -75,12 +70,20 @@ Streaming (`streamChat`) - the attractor, the live chat turn:
 
 ### `extractText` (`/augment/text-parser`)
 
-- `src/lib/documents.ts:159` - Library ingestion (`ingestDocument`)
-- `src/screens/Chat.svelte:1264` - attachments flow
+DONE - milestone 4 (`claude/text-parser-edge-function`, merged to main as
+`1b5fb7f`). The Library ingest (`src/lib/documents.ts`) and the chat-
+attachments composer (`src/screens/Chat.svelte`) both call
+`SupabaseService.extractText` (multipart `FormData` through
+`functions.invoke`); `VeniceClient.extractText` is gone.
 
 ### `generateImage` (`/image/generate`)
 
-- `src/lib/tools/generate_image.ts:93` - the `generate_image` tool
+DONE - milestone 5 (`claude/image-generate-edge-function`). The
+`generate_image` tool (`src/lib/tools/generate_image.ts`) calls
+`SupabaseService.generateImage`; the camel-to-snake_case translation, the
+variants=1/return_binary=false defaults, and the `x-venice-is-content-
+violation` guard live in the Deno helper. `VeniceClient.generateImage`
+is gone.
 
 ## Background workers (driver A: relocate the loop + cron)
 
@@ -114,10 +117,12 @@ background vs live-turn, and whether a cron cadence fits. That is the
 ## Multi-step processes
 
 - **Document ingestion** (`ingestDocument`, `src/lib/documents.ts`): create row
-  -> upload binary to Storage -> `extractText` -> chunk -> insert chunks. A
-  browser orchestration that calls the text-parser endpoint; a candidate to move
-  server-side so a long-PDF upload survives the page being backgrounded. The
-  chunk *embeddings* already ride the cron backfill (`document-chunks` source).
+  -> upload binary to Storage -> `extractText` -> store the text. A browser
+  orchestration that now calls the function for the extraction step (milestone
+  4), but the orchestration itself is still browser-driven. A candidate to
+  move server-side so a long-PDF upload survives the page being backgrounded:
+  trigger an `ingest-documents` edge function from a `documents.extraction_status
+  = 'pending'` cron sweep, mirroring the embeddings backfill shape.
 
 ## The attractor
 
