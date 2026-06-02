@@ -18,7 +18,7 @@
  * regardless of what the main model is busy doing, and the wire load
  * on the main turn drops by exactly one nag block.
  *
- * Shape: one Venice `completeChat` call against `agentModel('autoTitle')`,
+ * Shape: one `SupabaseService.complete` call against `agentModel('autoTitle')`,
  * with a tiny dedicated system prompt and the user's typed text as
  * the prompt. No tools, no history, no priming, no recall context.
  * `disableThinking: true` because the underlying model is reasoning-

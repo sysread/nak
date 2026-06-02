@@ -170,7 +170,7 @@ export const webSearch: ToolDef = {
       // Without this log line, "web_search failed" arrives at the
       // drawer with no context.
       const detail = err instanceof Error ? err.message : String(err);
-      log.error(`Venice completeChat failed: ${detail}`);
+      log.error(`Venice complete failed: ${detail}`);
       throw err;
     }
 

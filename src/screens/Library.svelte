@@ -320,9 +320,6 @@
         </div>
       {/if}
       {#if uploadError}<p class="error">{uploadError}</p>{/if}
-      {#if !app.venice}
-        <p class="subtle">Set up Venice in Settings to extract text from uploads.</p>
-      {/if}
     </section>
   {/if}
 </div>

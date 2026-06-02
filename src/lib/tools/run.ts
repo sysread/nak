@@ -306,8 +306,7 @@ export async function runHeadlessToolLoop(
     // incrementally into, and the multi-round tool loop already
     // serialises rounds anyway - streaming would only add latency.
     // Routes through the venice/complete edge function via the
-    // shared SupabaseService on the tool context - the same gateway
-    // the chat-completion leaf migrated to in milestone 6.
+    // shared SupabaseService on the tool context.
     const completion = await toolCtx.supabase.complete({
       model,
       messages,

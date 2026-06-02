@@ -16,31 +16,17 @@
  * the VeniceClient instance) and never touches storage except as part
  * of the encrypted config blob.
  *
- * Two entry points for chat completions:
- *
- *   - {@link VeniceClient.streamChat} - SSE-streaming. Yields a
- *     discriminated union of StreamEvent values; text deltas appear
- *     as they arrive, tool_call events appear *once* per call after
- *     the accumulator has assembled a complete `arguments` JSON
- *     string from the fragments OpenAI streams across many deltas.
- *     Used ONLY by the main user-facing chat (`chat-loop.ts`) where
- *     incremental rendering is what makes the app feel alive.
- *
- *   - {@link VeniceClient.completeChat} - one-shot non-streaming
- *     POST. Returns a fully-assembled {@link ChatCompletion} record
- *     once the response lands. Used by every background path -
- *     auto-titling, summary, samskara, intuition, the recall and
- *     reflection agents, the web_search / research_docs /
- *     analyze_image tools, and the headless tool loop. Background
- *     callers don't have a UI surface to render token-by-token, and
- *     long-lived SSE connections are noticeably slower end-to-end
- *     than the equivalent non-streaming POST (the provider has to
- *     flush after every chunk, which serializes cross-region latency
- *     into the per-token path). They also fail in transient ways
- *     specific to streaming - the silent "stream completed with no
- *     text" error mode the web_search tool kept hitting was a Venice
- *     SSE quirk that simply doesn't exist for the non-streaming
- *     completion endpoint.
+ * The one remaining chat-completion entry point is
+ * {@link VeniceClient.streamChat} - SSE-streaming. Yields a
+ * discriminated union of StreamEvent values; text deltas appear as
+ * they arrive, tool_call events appear *once* per call after the
+ * accumulator has assembled a complete `arguments` JSON string from
+ * the fragments OpenAI streams across many deltas. Used ONLY by the
+ * main user-facing chat (`chat-loop.ts`) where incremental rendering
+ * is what makes the app feel alive. Background and non-streaming
+ * callers go through `SupabaseService.complete` (the venice/complete
+ * edge function) - see `docs/dev/in-progress/venice-edge-functions/`
+ * for the migration history.
  *
  * Body building is shared via {@link buildChatBody}; the two methods
  * differ only in the `stream` / `stream_options` flags they layer on
@@ -312,9 +298,10 @@ export type StreamEvent =
   | { type: 'citations'; citations: Citation[] };
 
 /**
- * Result returned by {@link VeniceClient.completeChat}. The
- * non-streaming POST gives us everything in one shot, so the shape
- * is a flat record rather than a stream of events. Mirrors
+ * Result returned by `SupabaseService.complete` (the non-streaming
+ * chat-completion path through the venice/complete edge function).
+ * The POST gives us everything in one shot, so the shape is a flat
+ * record rather than a stream of events. Mirrors
  * {@link StreamEvent} field-for-field so callers that don't need
  * incremental rendering can use either path with no behavioural
  * difference.
@@ -460,64 +447,6 @@ function parseRetryAfterMs(headers: Headers): number | null {
   }
   if (candidates.length === 0) return null;
   return Math.round(Math.min(...candidates));
-}
-
-/**
- * Maximum attempts (initial + retries) before {@link VeniceClient.completeChat}
- * surfaces a 429 to the caller. Picked so a brief quota dip recovers
- * transparently while a stuck quota still surfaces within ~10s of total
- * wait. The streaming path in chat-loop.ts uses 3 attempts; completeChat
- * sits behind tool sub-calls and background agents with no UI feedback,
- * so a propagated 429 lands as a silent `{error: "..."}` in a tool-
- * result row or a swallowed agent failure - being a bit more patient
- * here trades a few seconds of latency for not burning a turn.
- */
-export const COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS = 5;
-
-/**
- * Fallback wait schedule for completeChat 429s, used only when Venice
- * sends no Retry-After or x-ratelimit-reset-* header. Log10-spaced from
- * 1s to 5s across the four retry intervals: 10^(i * log10(5) / 3) for
- * i in 0..3. Smooths the request burst across a quota reset window
- * without piling up several seconds of wait on the first retry.
- */
-export const COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS = [1_000, 1_710, 2_924, 5_000];
-
-/**
- * Hard cap on a single 429 wait inside completeChat. Mirrors
- * RATE_LIMIT_WAIT_CAP_MS in chat-loop.ts: a Retry-After longer than a
- * minute almost certainly means a daily/monthly cap that won't clear
- * during the current call, so surface it as a hard error rather than
- * blocking a tool sub-call (or, worse, a background agent the user
- * can't see) for that long.
- */
-export const COMPLETE_CHAT_RATE_LIMIT_WAIT_CAP_MS = 60_000;
-
-/**
- * Sleep that resolves either when `ms` elapses or `signal` aborts.
- * Returns true if the signal interrupted the sleep, false on a clean
- * timeout. When no signal is passed, behaves as a plain delay and
- * always returns false. Local to this module - the chat-loop has its
- * own copy because the retry shapes diverge slightly (chat-loop emits
- * UI lifecycle events on either side of the sleep; this one just
- * waits).
- */
-export function sleepCancellable(
-  ms: number,
-  signal: AbortSignal | undefined
-): Promise<boolean> {
-  if (signal?.aborted) return Promise.resolve(true);
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      if (signal) signal.removeEventListener('abort', onAbort);
-      resolve(false);
-    }, ms);
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-    if (signal) signal.addEventListener('abort', onAbort, { once: true });
-  });
 }
 
 const DEFAULT_BASE_URL = 'https://api.venice.ai/api/v1';
@@ -731,7 +660,8 @@ export class VeniceClient {
    * arguments string has been fully assembled).
    *
    * Used only by the main user-facing chat loop. Background callers
-   * should use {@link completeChat}; see the file header for the
+   * go through `SupabaseService.complete` (the non-streaming
+   * venice/complete edge function); see the file header for the
    * rationale.
    */
   async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -903,131 +833,6 @@ export class VeniceClient {
     // The `finished` flag is a debugging aid more than a contract —
     // callers only care that the generator returned.
     void finished;
-  }
-
-  /**
-   * Non-streaming chat completion. POSTs the same body shape
-   * streamChat builds (minus the `stream` / `stream_options` flags
-   * and the streaming-only `include_search_results_in_stream` venice
-   * parameter), parses the single JSON response, and returns a flat
-   * {@link ChatCompletion} record.
-   *
-   * MIGRATION STATE (chat-completions milestone 6, partial).
-   * `SupabaseService.complete` (src/lib/supabase.ts) is the post-
-   * milestone path - browser-direct -> /complete edge route -> Venice
-   * server-side, with the same retry semantics. The leaf callers that
-   * already migrated: tools (analyze_image, research_docs, web_search),
-   * the intuition pipeline, generateThreadTitle / the auto-title
-   * worker. The callers that STILL reach for `VeniceClient.completeChat`
-   * are the background-agent Web Workers (bias, samskara, summary,
-   * topics, memory_topics, recipe_topics, wiki, wiki-librarian,
-   * deep-sleep, rem, the recall family) and `runHeadlessToolLoop`,
-   * which background agents drive. Each worker bootstraps its own
-   * VeniceClient via a `veniceApiKey` postMessage; the next milestone
-   * threads SupabaseService into the worker context instead and the
-   * delete becomes safe. See docs/dev/in-progress/venice-edge-functions/
-   * migration-inventory.md for the deferred list.
-   *
-   * Until then, callers in the *migrated* set should NOT switch to
-   * this method - their migration is exactly what makes
-   * SupabaseService.complete the load-bearing path. Add new callers
-   * there.
-   *
-   * Message-shape gotcha: keep the conversation in the conventional
-   * `system` + `(user|assistant)+ user` shape. The fast tier
-   * (GLM-4.7 via Venice) on a request that ends with role
-   * `'assistant'` echoed the SYSTEM prompt body verbatim as its
-   * `content` instead of producing the next turn - bit the
-   * intuition synthesis pipeline live before pipeline.ts was
-   * reshaped. See the comment on {@link ChatRequest.messages} and
-   * src/lib/intuition/pipeline.ts stage 3 for the rationale; fold
-   * "prior internal voices" content into the user turn rather than
-   * passing it as an assistant message.
-   *
-   * Rate-limit retry: a 429 response is retried up to
-   * {@link COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS} times before
-   * propagating. The wait between retries comes from Venice's
-   * Retry-After / x-ratelimit-reset-* headers when present, falling
-   * back to a log10-spaced 1s -> 5s schedule otherwise. The wait is
-   * cancellable via `req.signal` - aborting during the sleep throws
-   * a spec-shaped AbortError matching what a mid-fetch abort would
-   * raise. Every other VeniceError kind propagates on the first
-   * occurrence; only 'rate_limit' is retryable here. Streaming chat
-   * has its own retry loop in chat-loop.ts ({@link streamChatWithRateLimitRetry});
-   * the two paths intentionally do not share code because streaming
-   * emits UI lifecycle events around its sleep and completeChat sits
-   * behind tool sub-calls / background agents with no UI surface.
-   */
-  async completeChat(req: ChatRequest): Promise<ChatCompletion> {
-    const body = buildChatBody(req, false);
-    const bodyJson = JSON.stringify(body);
-    let attempt = 0;
-    // Retry loop: every iteration runs one POST attempt. On 429 we
-    // sleep and continue; on any other failure (including final 429
-    // after retries are exhausted) we throw.
-    while (true) {
-      let res: Response;
-      try {
-        res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: this.headers(),
-          body: bodyJson,
-          signal: req.signal,
-        });
-      } catch (err) {
-        throw new VeniceError(
-          `Network error contacting Venice: ${(err as Error).message}`,
-          'network'
-        );
-      }
-      if (res.ok) {
-        let payload: unknown;
-        try {
-          payload = await res.json();
-        } catch {
-          throw new VeniceError(
-            'Failed to parse Venice completion response.',
-            'parse'
-          );
-        }
-        return parseChatCompletion(payload);
-      }
-      const veniceErr = await this.classifyError(res);
-      const retriesExhausted =
-        attempt >= COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS - 1;
-      if (
-        veniceErr.kind !== 'rate_limit' ||
-        retriesExhausted ||
-        req.signal?.aborted === true
-      ) {
-        throw veniceErr;
-      }
-      const hint = veniceErr.retryAfterMs;
-      // Header hint wins when present; otherwise pick the next entry
-      // from the log10-spaced schedule. The schedule has one entry per
-      // retry interval, so `attempt` (0-based, pre-increment) indexes
-      // directly into it.
-      const fallbackIdx = Math.min(
-        attempt,
-        COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS.length - 1
-      );
-      const baseMs =
-        hint ?? COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS[fallbackIdx];
-      const waitMs = Math.min(baseMs, COMPLETE_CHAT_RATE_LIMIT_WAIT_CAP_MS);
-      log.info(
-        `completeChat rate-limited (attempt ${attempt + 1}/${COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS}); waiting ${waitMs}ms before retry`
-      );
-      const interrupted = await sleepCancellable(waitMs, req.signal);
-      if (interrupted) {
-        // Aborted during the sleep. Throw a spec-shaped AbortError so
-        // callers' existing AbortError branches fire - same path a
-        // mid-fetch abort would have taken.
-        const abortErr = new Error('Aborted');
-        abortErr.name = 'AbortError';
-        throw abortErr;
-      }
-      attempt += 1;
-    }
   }
 
 }

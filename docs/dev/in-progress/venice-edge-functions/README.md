@@ -192,17 +192,14 @@ lives in [migration-inventory.md](./migration-inventory.md):
   in [migration-inventory.md](./migration-inventory.md).
 - [Chat completions](./chat-completions.md) - `POST
   /chat/completions` via `streamChat` and `completeChat`.
-  **Milestone 6 (front half of the non-streaming leaf), PARTIAL.**
-  Tools (analyze_image, research_docs, web_search), the intuition
-  pipeline, and the auto-title pipeline now talk to
-  `SupabaseService.complete`. The background-agent Web Worker
-  fleet still calls `VeniceClient.completeChat` because each
-  worker bootstraps its own VeniceClient via a `veniceApiKey`
-  postMessage - the worker-fleet milestone is broken out
-  explicitly in
-  [chat-completions.md](./chat-completions.md#worker-fleet-migration-plan).
-  The streaming root (`streamChat`) is still TODO and remains
-  the strategic attractor.
+  **Non-streaming half DONE** (milestone 6 and the worker-fleet
+  sweeps that followed: headless tool-loop, recall family,
+  memory-librarian pair, bias, samskara, wiki, wiki-librarian
+  with supervisor, and the orphan-deletion cleanup). Every browser
+  caller routes through `SupabaseService.complete`;
+  `VeniceClient.completeChat` is gone. The streaming root
+  (`streamChat`) is still TODO and remains the strategic
+  attractor.
 
 ## Strategic spine: climbing to streaming chat
 
@@ -232,25 +229,29 @@ So the climb is leaf-first:
    that intuition and the completion-using tools call. Per-user JWT
    auth like `/embed` - synchronous and user-triggered, so no cron
    and no service-role sweep. **DONE (milestone 6).**
-2. **Migrate the completion callers onto it.** Point every
-   `VeniceClient.completeChat` caller at the primitive. The naive
-   read of this step was "all callers move in one milestone"; in
-   practice the surface split cleanly into two halves with
-   different blast radii:
-   - **2a. Main-thread callers (DONE, milestone 6).** Tools (web
+2. **Migrate the completion callers onto it. (DONE.)** Every
+   `VeniceClient.completeChat` caller now goes through
+   `SupabaseService.complete`. The migration split cleanly into
+   two halves:
+   - **2a. Main-thread callers (milestone 6).** Tools (web
      search, doc research, image analysis), the intuition
-     pipeline, the auto-title pipeline. Behaviour unchanged; this
-     phase ironed out payload, auth, and the 429 retry-hint
-     plumbing.
-   - **2b. Worker-resident callers (NEXT, broken out as its own
-     milestone).** Background-agent Web Workers (bias, samskara,
-     summary, topics, memory_topics, recipe_topics, wiki,
-     wiki-librarian, deep-sleep, rem, the recall family) plus
-     `runHeadlessToolLoop`. Each worker bootstraps its own
-     `VeniceClient` via a `veniceApiKey` postMessage; migrating
-     means reshaping the worker-start protocol for every
-     family. Plan in
-     [chat-completions.md - Worker-fleet migration plan](./chat-completions.md#worker-fleet-migration-plan).
+     pipeline, the auto-title pipeline.
+   - **2b. Worker-resident callers (worker-fleet sweep, eight
+     follow-on commits).** `runHeadlessToolLoop` (the recall
+     family + headless agents), then per-family worker
+     migrations: recall (memory/conversation/wiki), the
+     memory-librarian pair (deep-sleep + rem), bias, samskara,
+     wiki, then wiki-librarian + the supervisor-hosted set
+     (reflection, summary, topics, memory_topics,
+     recipe_topics) together as the milestone-marker sweep that
+     also retired `ToolContext.venice`. The orphaned
+     `VeniceClient.completeChat` method + the
+     `COMPLETE_CHAT_RATE_LIMIT_*` exports + the leftover
+     `sleepCancellable` helper were deleted in a follow-on
+     cleanup commit; the rate-limit plumbing moved private into
+     `src/lib/supabase.ts` next to its only consumer. Plan +
+     history in
+     [chat-completions.md](./chat-completions.md).
 3. **Move the tools into edge functions.** Each tool becomes a
    server-side handler *composed of* the primitives it needs
    (non-streaming completion, embeddings) by importing the shared

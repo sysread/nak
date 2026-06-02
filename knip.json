@@ -10,8 +10,7 @@
     "scripts/setup-pages.mjs",
     "scripts/setup-supabase.mjs",
     "scripts/user-edit.mjs",
-    "tests/**/*.test.ts",
-    "tests/**/*.integration.test.ts"
+    "tests/**/*.test.ts"
   ],
   "project": [
     "src/**/*.{ts,svelte}",

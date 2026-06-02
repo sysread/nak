@@ -43,11 +43,7 @@ import type {
 } from './venice';
 import {
   buildChatBody,
-  COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS,
-  COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS,
-  COMPLETE_CHAT_RATE_LIMIT_WAIT_CAP_MS,
   parseChatCompletion,
-  sleepCancellable,
   VeniceError,
 } from './venice';
 import {
@@ -1455,6 +1451,66 @@ function coerceDocumentStat(raw: Record<string, unknown>): DocumentStat {
   };
 }
 
+/**
+ * Maximum attempts (initial + retries) before `SupabaseService.complete`
+ * surfaces a 429 to the caller. Picked so a brief quota dip recovers
+ * transparently while a stuck quota still surfaces within ~10s of total
+ * wait. The streaming path in chat-loop.ts uses its own attempt count;
+ * the non-streaming chat seam sits behind tool sub-calls and background
+ * agents with no UI feedback, so a propagated 429 lands as a silent
+ * `{error: "..."}` in a tool-result row or a swallowed agent failure -
+ * being a bit more patient here trades a few seconds of latency for not
+ * burning a turn.
+ */
+const COMPLETE_RATE_LIMIT_MAX_ATTEMPTS = 5;
+
+/**
+ * Fallback wait schedule for `complete` 429s, used only when the
+ * function-side relayed no Retry-After or x-ratelimit-reset-* hint.
+ * Log10-spaced from 1s to 5s across the four retry intervals:
+ * 10^(i * log10(5) / 3) for i in 0..3. Smooths the request burst across
+ * a quota reset window without piling up several seconds of wait on the
+ * first retry.
+ */
+const COMPLETE_RATE_LIMIT_FALLBACK_WAIT_MS = [1_000, 1_710, 2_924, 5_000];
+
+/**
+ * Hard cap on a single 429 wait inside `complete`. Mirrors
+ * RATE_LIMIT_WAIT_CAP_MS in chat-loop.ts: a Retry-After longer than a
+ * minute almost certainly means a daily/monthly cap that won't clear
+ * during the current call, so surface it as a hard error rather than
+ * blocking a tool sub-call (or, worse, a background agent the user
+ * can't see) for that long.
+ */
+const COMPLETE_RATE_LIMIT_WAIT_CAP_MS = 60_000;
+
+/**
+ * Sleep that resolves either when `ms` elapses or `signal` aborts.
+ * Returns true if the signal interrupted the sleep, false on a clean
+ * timeout. When no signal is passed, behaves as a plain delay and
+ * always returns false. Private to this module - the chat-loop has its
+ * own copy because the retry shapes diverge slightly (chat-loop emits
+ * UI lifecycle events on either side of the sleep; this one just
+ * waits).
+ */
+function sleepCancellable(
+  ms: number,
+  signal: AbortSignal | undefined
+): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      resolve(false);
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export class SupabaseService {
   readonly client: SupabaseClient;
 
@@ -1651,27 +1707,15 @@ export class SupabaseService {
   }
 
   /**
-   * Generate an image through the venice edge function's /image-generate
-   * route. The function holds the shared key server-side and pins the
-   * variants=1 / return_binary=false defaults so the response is a single
-   * base64 image ready for the message_attachments row the chat-loop creates.
-   *
-   * The camel-cased ImageGenRequest shape is preserved on the wire; the Deno
-   * helper does the snake_case translation Venice expects. req.signal is not
-   * propagated (functions.invoke has no abort hook), so an aborted generation
-   * still spends Venice credits - the chat-loop's tool-side handling treats
-   * the discarded result the same as a model-side retry.
-   */
-  /**
    * Non-streaming chat completion through the venice edge function's
    * /complete route. The browser builds Venice's wire-shape body via
    * buildChatBody and forwards it; the function holds the shared key
    * server-side and relays Venice's response (or error) verbatim. The
-   * 429 retry loop stays browser-side: completeChat sits behind tool
-   * sub-calls and background agents with no UI feedback, so a
-   * propagated 429 lands silently in a tool-result row or a swallowed
-   * agent failure - being a bit patient here trades a few seconds of
-   * latency for not burning a turn.
+   * 429 retry loop stays browser-side: the non-streaming chat seam
+   * sits behind tool sub-calls and background agents with no UI
+   * feedback, so a propagated 429 lands silently in a tool-result row
+   * or a swallowed agent failure - being a bit patient here trades a
+   * few seconds of latency for not burning a turn.
    *
    * Retry-After: Venice's hint travels through the function's 429
    * response body (retryAfterMs) since the underlying header does not
@@ -1697,7 +1741,7 @@ export class SupabaseService {
         payload = data;
       } catch (err) {
         if (!(err instanceof VeniceError)) throw err;
-        const retriesExhausted = attempt >= COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS - 1;
+        const retriesExhausted = attempt >= COMPLETE_RATE_LIMIT_MAX_ATTEMPTS - 1;
         if (
           err.kind !== 'rate_limit' ||
           retriesExhausted ||
@@ -1708,12 +1752,12 @@ export class SupabaseService {
         const hint = err.retryAfterMs;
         const fallbackIdx = Math.min(
           attempt,
-          COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS.length - 1
+          COMPLETE_RATE_LIMIT_FALLBACK_WAIT_MS.length - 1
         );
-        const baseMs = hint ?? COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS[fallbackIdx];
-        const waitMs = Math.min(baseMs, COMPLETE_CHAT_RATE_LIMIT_WAIT_CAP_MS);
+        const baseMs = hint ?? COMPLETE_RATE_LIMIT_FALLBACK_WAIT_MS[fallbackIdx];
+        const waitMs = Math.min(baseMs, COMPLETE_RATE_LIMIT_WAIT_CAP_MS);
         log.info(
-          `complete rate-limited (attempt ${attempt + 1}/${COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS}); waiting ${waitMs}ms before retry`
+          `complete rate-limited (attempt ${attempt + 1}/${COMPLETE_RATE_LIMIT_MAX_ATTEMPTS}); waiting ${waitMs}ms before retry`
         );
         const interrupted = await sleepCancellable(waitMs, req.signal);
         if (interrupted) {
@@ -1731,6 +1775,18 @@ export class SupabaseService {
     }
   }
 
+  /**
+   * Generate an image through the venice edge function's /image-generate
+   * route. The function holds the shared key server-side and pins the
+   * variants=1 / return_binary=false defaults so the response is a single
+   * base64 image ready for the message_attachments row the chat-loop creates.
+   *
+   * The camel-cased ImageGenRequest shape is preserved on the wire; the Deno
+   * helper does the snake_case translation Venice expects. req.signal is not
+   * propagated (functions.invoke has no abort hook), so an aborted generation
+   * still spends Venice credits - the chat-loop's tool-side handling treats
+   * the discarded result the same as a model-side retry.
+   */
   async generateImage(req: ImageGenRequest): Promise<ImageGenResult> {
     const { data, error } = await this.client.functions.invoke('venice/image-generate', {
       body: {

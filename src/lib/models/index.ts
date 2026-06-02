@@ -242,7 +242,7 @@ export const MODELS = {
     // analyze_image call must not send `reasoning_effort` (Venice 4xxs
     // on the field for non-reasoning ids). The call site omits it
     // anyway - it never sets reasoningEffort - so the wire payload
-    // stays clean. See venice.ts completeChat (reasoning_effort is
+    // stays clean. See buildChatBody in venice.ts (reasoning_effort is
     // only forwarded when the caller opts in).
     supportsReasoning: false,
     // Vision-capable; this is the id the analyze_image tool uses for

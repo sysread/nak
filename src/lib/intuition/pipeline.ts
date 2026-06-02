@@ -17,9 +17,10 @@
  * roundtrips on the fast model.
  *
  * The pipeline is non-streaming. Each stage hits Venice's one-shot
- * completion endpoint via `venice.completeChat` and reads the single
- * text result, mirroring the same pattern the samskara agent uses
- * (see src/lib/agents/samskara/agent.ts).
+ * completion endpoint via `SupabaseService.complete` (the
+ * venice/complete edge function) and reads the single text result,
+ * mirroring the same pattern the samskara agent uses (see
+ * src/lib/agents/samskara/agent.ts).
  *
  * Failure model:
  *   - Perception failure aborts the pipeline. Returns null so the

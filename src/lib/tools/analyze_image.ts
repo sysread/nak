@@ -51,7 +51,7 @@ const MAX_VISION_ATTEMPTS = 3;
  * Detect a vision sub-completion that ended before the model finished.
  *
  * analyze_image calls the non-streaming completion endpoint
- * (VeniceClient.completeChat), so the response is a single atomic JSON
+ * (`SupabaseService.complete`), so the response is a single atomic JSON
  * body and its `finish_reason` is authoritative - there is no SSE
  * stream that could close mid-clause behind the provider's back. That
  * makes finish_reason the only truncation signal we need:
