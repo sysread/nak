@@ -2951,6 +2951,18 @@ button.composer-wharf-trigger {
   outline: none;
 }
 
+/* Bump the draft text a notch on desktop. The base 0.95rem is tuned for
+   narrow viewports where vertical space is scarce; on a wide screen there's
+   room to make long-form drafts more comfortable to read while typing.
+   Gated on `min-width` (the inverse of the 720px mobile breakpoint used
+   throughout this file) so phones keep the compact size and only large
+   screens get the larger glyphs. */
+@media (min-width: 721px) {
+  .composer-textarea {
+    font-size: 1.05rem;
+  }
+}
+
 .composer-bar {
   display: flex;
   align-items: center;
