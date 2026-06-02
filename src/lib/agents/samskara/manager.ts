@@ -96,7 +96,6 @@ class SamskaraManager extends BaseWorkerManager {
       supabasePublishableKey: opts.config.supabasePublishableKey,
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
-      veniceApiKey: opts.config.veniceApiKey,
       fastModel: agentModel('samskara').id,
       ...WORKER_DEFAULTS,
     };

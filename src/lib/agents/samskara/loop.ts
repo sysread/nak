@@ -20,7 +20,6 @@
  * `phase: 'assimilate'`.
  */
 import type { SupabaseService, SamskaraSubstrateRow } from '../../supabase';
-import type { VeniceClient } from '../../venice';
 import { VeniceError } from '../../venice';
 import { VENICE_EMBEDDING_MODEL, padEmbeddingForStorage } from '../../models';
 import type { LeaseCoordinator } from '../../embeddings/lease';
@@ -119,7 +118,6 @@ export type CycleResult =
 export interface CycleContext {
   agent: SamskaraAgent;
   supabase: SupabaseService;
-  venice: VeniceClient;
   coordinator: LeaseCoordinator;
   holderId: string;
   /** Per-row claim TTL, seconds. Generous - LLM call timing varies. */

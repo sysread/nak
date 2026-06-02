@@ -120,14 +120,23 @@ function-side 429s). Agent constructor switched to `supabase`;
 loop CycleContext lost its venice field (it was pass-through only);
 worker dropped `VeniceClient` + `veniceApiKey`/`veniceBaseUrl` from
 StartMessage + `venice` from CycleContext literal; manager dropped
-`veniceApiKey` from `buildStartPayload`. The same callOnce/observe
-shape applies to samskara, which follows in a separate sweep.
+`veniceApiKey` from `buildStartPayload`.
+
+**Samskara** MIGRATED in `claude/samskara-agent-complete`. Same
+shape as bias -- `callOnce` (4 phase methods plus the compound-
+summary regen path all funnel through it) switched to
+`SupabaseService.complete`; `SamskaraAgent` constructor takes
+supabase; loop CycleContext drops the pass-through venice field;
+worker drops the `VeniceClient` import + construction + the venice
+fields on StartMessage and the CycleContext literal; manager drops
+`veniceApiKey`. Test fixture for the cycle loop drops its inert
+`fakeVenice` stub.
 
 **Deferred callers** (still hold `VeniceClient.completeChat`):
 
-- background-agent Web Workers: `agents/samskara/`,
-  `agents/summary/`, `agents/topics/`, `agents/memory_topics/`,
-  `agents/recipe_topics/`, `agents/wiki/`, `agents/wiki-librarian/`
+- background-agent Web Workers: `agents/summary/`, `agents/topics/`,
+  `agents/memory_topics/`, `agents/recipe_topics/`, `agents/wiki/`,
+  `agents/wiki-librarian/`
 
 Why deferred: each worker bootstraps its own `VeniceClient` from a
 `veniceApiKey` postMessage from the main thread; the protocol shape

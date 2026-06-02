@@ -208,9 +208,9 @@ green gate:
    wiki-librarian sweep ships.
 
 4. **Migrate the worker-resident agent families one at a
-   time.** For each of `samskara`, `wiki`,
-   `wiki-librarian`, and the supervisor-hosted set
-   (`summary`, `topics`, `memory_topics`, `recipe_topics`):
+   time.** For each of `wiki`, `wiki-librarian`, and the
+   supervisor-hosted set (`summary`, `topics`,
+   `memory_topics`, `recipe_topics`):
    drop `venice: VeniceClient` from the agent constructor
    and the cycle context; replace
    `this.venice.completeChat(...)` with
@@ -227,8 +227,10 @@ green gate:
    (`claude/bias-agent-complete`) as the first no-tool-loop
    agent migration -- it calls `SupabaseService.complete`
    directly via a `callOnce` helper rather than going through
-   `runHeadlessToolLoop`. `samskara` follows the same shape.
-   When `wiki-librarian`'s
+   `runHeadlessToolLoop`. `samskara` followed
+   (`claude/samskara-agent-complete`) -- same shape, four
+   `callOnce` sites across its phase methods plus the
+   compound-summary regen path. When `wiki-librarian`'s
    family ships, also drop `venice` from `ToolContext`
    entirely and remove the non-null assertion from the
    `wiki_librarian` tool dispatcher.

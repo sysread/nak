@@ -12,7 +12,6 @@
  * the long idle nap.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { VeniceClient } from '../../venice';
 import { SupabaseService } from '../../supabase';
 import { LeaseCoordinator } from '../../embeddings/lease';
 import { SamskaraAgent } from './agent';
@@ -48,8 +47,6 @@ interface StartMessage {
   supabasePublishableKey: string;
   accessToken: string;
   refreshToken: string;
-  veniceApiKey: string;
-  veniceBaseUrl?: string;
   fastModel: string;
   holderId: string;
   /** Lease TTL, seconds. */
@@ -158,10 +155,6 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     { supabaseUrl: msg.supabaseUrl, supabasePublishableKey: msg.supabasePublishableKey },
     { client }
   );
-  const venice = new VeniceClient({
-    apiKey: msg.veniceApiKey,
-    baseUrl: msg.veniceBaseUrl,
-  });
   // Separate worker_kind so this lease holds independently of the
   // embedding/reflection/summary leases. Each worker is one row in
   // the worker_leases table.
@@ -170,7 +163,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     heartbeatMs: msg.leaseHeartbeatMs,
   });
 
-  const agent = new SamskaraAgent(venice, msg.fastModel);
+  const agent = new SamskaraAgent(supabase, msg.fastModel);
 
   // Per-phase throttle state. Lives for the worker process
   // lifetime so successive rotations of the outer loop see the
@@ -220,7 +213,6 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
         const ctx: CycleContext = {
           agent,
           supabase,
-          venice,
           coordinator,
           holderId: msg.holderId,
           claimTtlSeconds: msg.claimTtlSeconds,

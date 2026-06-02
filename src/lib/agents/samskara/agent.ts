@@ -6,15 +6,16 @@
  *
  * The agent does NOT acquire leases, claim rows, or persist results.
  * That's the worker's job (see `./loop.ts`). This class is pure
- * model-call logic so it can be unit-tested with a mock VeniceClient.
+ * model-call logic so it can be unit-tested with a mock supabase
+ * service.
  *
  * Why not split into per-phase agent classes: each phase shares the
- * exact same plumbing (build one prompt, call completeChat, parse
+ * exact same plumbing (build one prompt, call supabase.complete, parse
  * JSON, error-handle). Splitting would multiply the boilerplate
  * without adding insight. The `phase` arg on each method is
  * intentionally implicit in the method name.
  */
-import type { VeniceClient } from '../../venice';
+import type { SupabaseService } from '../../supabase';
 import { VeniceError } from '../../venice';
 import {
   ASSIMILATOR_PROMPT,
@@ -91,21 +92,23 @@ function tryParseJson<T>(raw: string): T | null {
 }
 
 /**
- * Drive a single non-streaming Venice completion. Same pattern the
+ * Drive a single non-streaming chat completion. Same pattern the
  * summary agent uses; the response body is read directly off
- * `completeChat`'s ChatCompletion - no streaming-deltas path
- * because background JSON-shaped agents have no UI surface to
- * incrementally render into.
+ * `SupabaseService.complete`'s ChatCompletion - no streaming-deltas
+ * path because background JSON-shaped agents have no UI surface to
+ * incrementally render into. Routes through the venice/complete edge
+ * function so the call rides on the shared admin key, not the
+ * browser's per-user key.
  */
 async function callOnce(
-  venice: VeniceClient,
+  supabase: SupabaseService,
   model: string,
   systemPrompt: string,
   userPayload: string,
   signal: AbortSignal,
   maxTokens: number
 ): Promise<string> {
-  const result = await venice.completeChat({
+  const result = await supabase.complete({
     model,
     messages: [
       { role: 'system', content: systemPrompt },
@@ -119,7 +122,7 @@ async function callOnce(
 
 export class SamskaraAgent {
   constructor(
-    private venice: VeniceClient,
+    private supabase: SupabaseService,
     /** Fast model id to drive every phase. Defaults to VENICE_FAST or whichever the worker passes. */
     private model: string
   ) {}
@@ -140,7 +143,7 @@ export class SamskaraAgent {
     });
     let raw: string;
     try {
-      raw = await callOnce(this.venice, this.model, ASSIMILATOR_PROMPT, payload, signal, 2048);
+      raw = await callOnce(this.supabase, this.model, ASSIMILATOR_PROMPT, payload, signal, 2048);
     } catch (err) {
       // Rate-limit re-throws so the cycle driver can map to its
       // long back-off (60s) rather than the short error back-off
@@ -182,7 +185,7 @@ export class SamskaraAgent {
     const payload = JSON.stringify({ a, b });
     let raw: string;
     try {
-      raw = await callOnce(this.venice, this.model, RELATOR_PROMPT, payload, signal, 2048);
+      raw = await callOnce(this.supabase, this.model, RELATOR_PROMPT, payload, signal, 2048);
     } catch (err) {
       // Rate-limit re-throws so the cycle driver can map to its
       // long back-off (60s) rather than the short error back-off
@@ -223,7 +226,7 @@ export class SamskaraAgent {
     const payload = JSON.stringify(cluster);
     let raw: string;
     try {
-      raw = await callOnce(this.venice, this.model, MINTER_PROMPT, payload, signal, 2048);
+      raw = await callOnce(this.supabase, this.model, MINTER_PROMPT, payload, signal, 2048);
     } catch (err) {
       // Rate-limit re-throws so the cycle driver can map to its
       // long back-off (60s) rather than the short error back-off
@@ -272,7 +275,7 @@ export class SamskaraAgent {
     });
     let raw: string;
     try {
-      raw = await callOnce(this.venice, this.model, REACTION_PROMPT, payload, signal, 2048);
+      raw = await callOnce(this.supabase, this.model, REACTION_PROMPT, payload, signal, 2048);
     } catch (err) {
       // Rate-limit re-throws so the cycle driver can map to its
       // long back-off (60s) rather than the short error back-off
@@ -314,7 +317,7 @@ export class SamskaraAgent {
     let raw: string;
     try {
       raw = await callOnce(
-        this.venice,
+        this.supabase,
         this.model,
         COMPOUND_SUMMARY_PROMPT,
         payload,

@@ -16,7 +16,6 @@ import {
 } from '../src/lib/agents/samskara/loop';
 import { LeaseCoordinator, type LeaseTimers } from '../src/lib/embeddings/lease';
 import type { SupabaseService } from '../src/lib/supabase';
-import type { VeniceClient } from '../src/lib/venice';
 import type { SamskaraAgent } from '../src/lib/agents/samskara/agent';
 
 function buildCoordinator(): {
@@ -79,18 +78,11 @@ function fakeSupabase(overrides: Partial<SupabaseService> = {}): SupabaseService
   } as unknown as SupabaseService;
 }
 
-function fakeVenice(): VeniceClient {
-  return {
-    embed: vi.fn(async () => ({ data: [{ index: 0, embedding: [0.1, 0.2] }] })),
-  } as unknown as VeniceClient;
-}
-
 function buildCtx(overrides: Partial<CycleContext> = {}): CycleContext {
   const { coordinator } = buildCoordinator();
   return {
     agent: fakeAgent(),
     supabase: fakeSupabase(),
-    venice: fakeVenice(),
     coordinator,
     holderId: 'holder-test',
     claimTtlSeconds: 600,
