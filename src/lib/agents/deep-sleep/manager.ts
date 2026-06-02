@@ -43,7 +43,6 @@ class DeepSleepManager extends BaseWorkerManager<BaseStartOpts> {
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       userId: session.user.id,
-      veniceApiKey: opts.config.veniceApiKey,
       deepSleepModel: agentModel('deepSleep').id,
       ...WORKER_DEFAULTS,
     };

@@ -24,7 +24,6 @@
  * re-opening with one click) is fine.
  */
 import type { SupabaseService } from '../supabase';
-import type { VeniceClient } from '../venice';
 import {
   pushStep,
   deepSleepResultLine,
@@ -57,7 +56,6 @@ const state = $state<LibrarianRunState>({
 
 interface StartDeps {
   supabase: SupabaseService;
-  venice: VeniceClient;
 }
 
 export const librarianRun = {
@@ -137,7 +135,6 @@ export const librarianRun = {
       if (pass === 'deep-sleep') {
         const result = await runDeepSleepManually({
           supabase: deps.supabase,
-          venice: deps.venice,
           userId,
           onProgress: (event) => {
             if (event.kind === 'preparing') {
@@ -163,7 +160,6 @@ export const librarianRun = {
       } else {
         const result = await runRemManually({
           supabase: deps.supabase,
-          venice: deps.venice,
           userId,
           onProgress: (event) => {
             if (event.kind === 'preparing') {

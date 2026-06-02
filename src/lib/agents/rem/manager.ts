@@ -38,7 +38,6 @@ class RemManager extends BaseWorkerManager<BaseStartOpts> {
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       userId: session.user.id,
-      veniceApiKey: opts.config.veniceApiKey,
       remModel: agentModel('rem').id,
       ...WORKER_DEFAULTS,
     };

@@ -208,11 +208,11 @@ green gate:
    wiki-librarian sweep ships.
 
 4. **Migrate the worker-resident agent families one at a
-   time.** For each of `bias`, `samskara`, `summary`,
-   `topics`, `memory_topics`, `recipe_topics`, `wiki`,
-   `wiki-librarian`, `deep-sleep`, `rem`: drop
-   `venice: VeniceClient` from the agent constructor and
-   the cycle context; replace
+   time.** For each of `bias`, `samskara`, `wiki`,
+   `wiki-librarian`, and the supervisor-hosted set
+   (`summary`, `topics`, `memory_topics`, `recipe_topics`):
+   drop `venice: VeniceClient` from the agent constructor
+   and the cycle context; replace
    `this.venice.completeChat(...)` with
    `this.supabase.complete(...)`; update the agent's
    worker.ts to stop creating the `VeniceClient` and stop
@@ -220,10 +220,13 @@ green gate:
    the main-thread caller of the worker to stop sending
    `veniceApiKey`. One agent + its worker + its caller per
    commit so the gate stays green and the diff stays
-   reviewable. When `wiki-librarian`'s family ships, also
-   drop `venice` from `ToolContext` entirely and remove the
-   non-null assertion from the `wiki_librarian` tool
-   dispatcher.
+   reviewable. `deep-sleep` + `rem` shipped first as the
+   `memory-librarian` pair (`claude/deep-sleep-rem-complete`)
+   because they share a runner-svelte.ts pattern that made
+   batching the pair natural. When `wiki-librarian`'s
+   family ships, also drop `venice` from `ToolContext`
+   entirely and remove the non-null assertion from the
+   `wiki_librarian` tool dispatcher.
 
 5. **Delete `VeniceClient.completeChat`.** Once step 4 is
    complete the method has no remaining callers; delete it

@@ -5,7 +5,6 @@
  * librarians can't run concurrently per user across devices.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { VeniceClient } from '../../venice';
 import { SupabaseService } from '../../supabase';
 import { LeaseCoordinator } from '../../embeddings/lease';
 import { DeepSleepAgent } from './agent';
@@ -23,8 +22,6 @@ interface StartMessage {
   accessToken: string;
   refreshToken: string;
   userId: string;
-  veniceApiKey: string;
-  veniceBaseUrl?: string;
   deepSleepModel: string;
   holderId: string;
   minIntervalSeconds: number;
@@ -112,10 +109,6 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     { supabaseUrl: msg.supabaseUrl, supabasePublishableKey: msg.supabasePublishableKey },
     { client }
   );
-  const venice = new VeniceClient({
-    apiKey: msg.veniceApiKey,
-    baseUrl: msg.veniceBaseUrl,
-  });
   const coordinator = new LeaseCoordinator(
     supabase,
     'memory-librarian',
@@ -126,7 +119,7 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     }
   );
 
-  const agent = new DeepSleepAgent(venice, supabase, msg.deepSleepModel);
+  const agent = new DeepSleepAgent(supabase, msg.deepSleepModel);
 
   const napConfig: NapConfig = {
     leasePollMs: msg.leasePollMs,
@@ -139,7 +132,6 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
       const ctx: CycleContext = {
         agent,
         supabase,
-        venice,
         coordinator,
         holderId: msg.holderId,
         userId: msg.userId,

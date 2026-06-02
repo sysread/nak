@@ -909,10 +909,9 @@
   function confirmLibrarianRun(): void {
     const pass = librarianConfirm;
     librarianConfirm = null;
-    if (!app.supabase || !app.venice || pass === null) return;
+    if (!app.supabase || pass === null) return;
     void librarianRun.start(pass, {
       supabase: app.supabase,
-      venice: app.venice,
     });
   }
 

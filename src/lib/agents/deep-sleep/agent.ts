@@ -12,7 +12,7 @@
  */
 import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService } from '../../supabase';
-import type { VeniceClient, VeniceMessage } from '../../venice';
+import type { VeniceMessage } from '../../venice';
 import { memoryLibrarianToolbox } from '../../tools/memory_librarian_toolbox';
 import { runHeadlessToolLoop, type HeadlessToolLoopEvent } from '../../tools/run';
 import { agentModel } from '../../models';
@@ -62,7 +62,6 @@ export class DeepSleepAgent implements Agent<DeepSleepInput, DeepSleepOutput> {
   private onProgress: ((event: HeadlessToolLoopEvent) => void) | null = null;
 
   constructor(
-    private venice: VeniceClient,
     private supabase: SupabaseService,
     /**
      * Optional model override. Defaults to the registry's
@@ -114,7 +113,6 @@ export class DeepSleepAgent implements Agent<DeepSleepInput, DeepSleepOutput> {
         toolbox: this.toolbox,
         toolCtx: {
           supabase: this.supabase,
-          venice: this.venice,
           userId: req.userId,
           // Librarians are not thread-scoped. Pass empty string to
           // satisfy the ToolContext shape; the memory and

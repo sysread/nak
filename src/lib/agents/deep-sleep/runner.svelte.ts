@@ -30,7 +30,6 @@
  * Promise to await.
  */
 import type { SupabaseService } from '../../supabase';
-import type { VeniceClient } from '../../venice';
 import { createLogger } from '../../logger.svelte';
 import { emitMemoryChange } from '../../memory-events';
 import { buildBatchForSeed } from './loop';
@@ -80,7 +79,6 @@ export type DeepSleepProgress =
 
 export interface RunManuallyOpts {
   supabase: SupabaseService;
-  venice: VeniceClient;
   userId: string;
   signal?: AbortSignal;
   onProgress?: (event: DeepSleepProgress) => void;
@@ -157,7 +155,7 @@ export async function runManually(
     }
 
     const { DeepSleepAgent } = await import('./agent');
-    const agent = new DeepSleepAgent(opts.venice, opts.supabase);
+    const agent = new DeepSleepAgent(opts.supabase);
     agent.setProgressListener((event) => {
       if (event.kind === 'thinking') {
         emit({ kind: 'thinking', round: event.round });

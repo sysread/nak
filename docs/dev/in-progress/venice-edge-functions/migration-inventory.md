@@ -97,12 +97,24 @@ still populates the field in production for `wiki_librarian`'s sake
 until the wiki-librarian family migrates. After wiki-librarian's
 sweep ships, `ToolContext.venice` deletes outright.
 
+**Deep-sleep + rem (the memory-librarian pair)** MIGRATED in
+`claude/deep-sleep-rem-complete`. Both agent classes (`DeepSleepAgent`,
+`RemAgent`) dropped `venice` from their constructors and toolCtx
+literals; `deep-sleep/loop.ts` CycleContext lost its venice field;
+both workers stopped constructing `VeniceClient` and accepting
+`veniceApiKey`/`veniceBaseUrl` in the StartMessage; both managers
+stopped sending `veniceApiKey` in `buildStartPayload`; the
+main-thread `runManually` wrappers in `deep-sleep/runner.svelte.ts`
+and `rem/runner.svelte.ts` dropped their `venice` opts; and the
+shared `memory-librarian-run.svelte.ts` dispatcher dropped venice
+from its StartDeps. Only main-thread caller (`Memories.svelte`'s
+`confirmLibrarianRun`) stopped guarding on `app.venice`.
+
 **Deferred callers** (still hold `VeniceClient.completeChat`):
 
 - background-agent Web Workers: `agents/bias/`, `agents/samskara/`,
   `agents/summary/`, `agents/topics/`, `agents/memory_topics/`,
-  `agents/recipe_topics/`, `agents/wiki/`, `agents/wiki-librarian/`,
-  `agents/deep-sleep/`, `agents/rem/`
+  `agents/recipe_topics/`, `agents/wiki/`, `agents/wiki-librarian/`
 
 Why deferred: each worker bootstraps its own `VeniceClient` from a
 `veniceApiKey` postMessage from the main thread; the protocol shape

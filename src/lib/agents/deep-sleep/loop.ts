@@ -18,7 +18,6 @@
  */
 import type { Agent } from '../types';
 import type { SupabaseService } from '../../supabase';
-import type { VeniceClient } from '../../venice';
 import type { LeaseCoordinator } from '../../embeddings/lease';
 import {
   DEEP_SLEEP_MAX_NEIGHBORS,
@@ -44,7 +43,6 @@ export type CycleResult =
 export interface CycleContext {
   agent: Agent<DeepSleepInput, DeepSleepOutput>;
   supabase: SupabaseService;
-  venice: VeniceClient;
   coordinator: LeaseCoordinator;
   holderId: string;
   userId: string;

@@ -10,7 +10,6 @@
  * is supabase, which is reentrant).
  */
 import type { SupabaseService } from '../../supabase';
-import type { VeniceClient } from '../../venice';
 import { createLogger } from '../../logger.svelte';
 import { emitMemoryChange } from '../../memory-events';
 import {
@@ -51,7 +50,6 @@ export type RemProgress =
 
 export interface RunManuallyOpts {
   supabase: SupabaseService;
-  venice: VeniceClient;
   userId: string;
   signal?: AbortSignal;
   onProgress?: (event: RemProgress) => void;
@@ -106,7 +104,7 @@ export async function runManually(
     }
 
     const { RemAgent } = await import('./agent');
-    const agent = new RemAgent(opts.venice, opts.supabase);
+    const agent = new RemAgent(opts.supabase);
     agent.setProgressListener((event) => {
       if (event.kind === 'thinking') {
         emit({ kind: 'thinking', round: event.round });
