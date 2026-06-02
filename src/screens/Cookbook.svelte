@@ -268,9 +268,28 @@
       copyFeedback = null;
       lightboxIndex = null;
       clearVersionState();
-      void loadVersions(id);
-      if (app.supabase) void loadRecipePhotos(app.supabase, id);
     }
+  });
+
+  // Load versions + photos for whatever recipe the detail pane is
+  // showing. Deliberately separate from the URL-sync effect above:
+  // that effect early-returns when route.recipe already equals
+  // activeId, which is exactly the cold-refresh case - activeId is
+  // seeded from route.recipe at declaration (see the `let activeId`
+  // above), so a hard reload of a detail URL short-circuits the sync
+  // effect and the loads would never fire from there. Driving them
+  // off activeId + app.supabase here lands the fetch both on
+  // navigation and on a cold refresh, the latter once the Supabase
+  // client finishes connecting (app.supabase is null for the first
+  // beat of a refresh). Reads only activeId / pane / app.supabase, so
+  // it runs once per recipe and once when the client lands - the
+  // loaders mutate versions / cookbook.photos, which this effect does
+  // not read, so there is no feedback loop.
+  $effect(() => {
+    const id = activeId;
+    if (pane !== 'detail' || !id || !app.supabase) return;
+    void loadVersions(id);
+    void loadRecipePhotos(app.supabase, id);
   });
 
   // Photos linked to the recipe currently shown in the detail pane.
