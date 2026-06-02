@@ -42,7 +42,7 @@
     recipeToPlainText,
   } from '$lib/cooklang';
   import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '$lib/recipe-limits';
-  import { recipeSourceLine } from '$lib/ui/recipe-detail';
+  import { recipeSourceLine, wrapIndex, swipeNavStep } from '$lib/ui/recipe-detail';
   import type { Recipe, RecipeVersion } from '$lib/supabase';
   import {
     arrayBufferToBase64,
@@ -605,15 +605,49 @@
     lightboxIndex = null;
   }
 
-  function onLightboxKey(e: KeyboardEvent): void {
+  // Page the lightbox by `delta`, treating the photo set as a loop
+  // (prev from the first wraps to the last, next from the last wraps
+  // to the first). Shared by the on-screen arrows, the swipe gesture,
+  // and the Left/Right arrow keys.
+  function stepLightbox(delta: number): void {
     if (lightboxIndex === null) return;
     const photos = activePhotos;
     if (!Array.isArray(photos) || photos.length === 0) return;
-    if (e.key === 'ArrowLeft') {
-      lightboxIndex = (lightboxIndex - 1 + photos.length) % photos.length;
-    } else if (e.key === 'ArrowRight') {
-      lightboxIndex = (lightboxIndex + 1) % photos.length;
+    lightboxIndex = wrapIndex(lightboxIndex, delta, photos.length);
+  }
+
+  // Swipe-to-page state. We track only single-finger drags; the moment
+  // a second touch lands the gesture is a pinch-zoom, so we stop
+  // tracking and never page the photo. Nothing here calls
+  // preventDefault, so the browser's native pinch/zoom and scroll are
+  // left intact on mobile.
+  let swipeStartX = 0;
+  let swipeStartY = 0;
+  let swipeTracking = false;
+
+  function onLightboxTouchStart(e: TouchEvent): void {
+    if (e.touches.length !== 1) {
+      swipeTracking = false;
+      return;
     }
+    swipeTracking = true;
+    swipeStartX = e.touches[0]!.clientX;
+    swipeStartY = e.touches[0]!.clientY;
+  }
+
+  function onLightboxTouchMove(e: TouchEvent): void {
+    // A second finger joining mid-drag means a pinch is starting; bail
+    // so we don't flip the photo when the user meant to zoom.
+    if (e.touches.length > 1) swipeTracking = false;
+  }
+
+  function onLightboxTouchEnd(e: TouchEvent): void {
+    if (!swipeTracking) return;
+    swipeTracking = false;
+    const t = e.changedTouches[0];
+    if (!t) return;
+    const step = swipeNavStep(swipeStartX, swipeStartY, t.clientX, t.clientY);
+    if (step !== 0) stepLightbox(step);
   }
 
   // Persist a rating change made on the detail pane. Click-to-rate is
@@ -799,7 +833,7 @@
       return;
     }
     if (lightboxIndex !== null && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-      onLightboxKey(e);
+      stepLightbox(e.key === 'ArrowLeft' ? -1 : 1);
     }
   }
 
@@ -1465,6 +1499,9 @@
       // off the non-interactive <img>.
       if (e.target === e.currentTarget) closeLightbox();
     }}
+    ontouchstart={onLightboxTouchStart}
+    ontouchmove={onLightboxTouchMove}
+    ontouchend={onLightboxTouchEnd}
     role="dialog"
     aria-modal="true"
     aria-label="Photo viewer"
@@ -1477,6 +1514,26 @@
       title="Close"
       aria-label="Close photo viewer"
     >×</button>
+    {#if activePhotos.length > 1}
+      <!-- Edge-pinned, vertically-centered paging arrows. Mounted only
+           for multi-photo recipes; a single photo has nothing to page
+           to. Looping is handled by stepLightbox, so both arrows are
+           always live - there is no disabled end state. -->
+      <button
+        type="button"
+        class="recipe-lightbox-nav prev"
+        onclick={() => stepLightbox(-1)}
+        title="Previous photo"
+        aria-label="Previous photo"
+      >‹</button>
+      <button
+        type="button"
+        class="recipe-lightbox-nav next"
+        onclick={() => stepLightbox(1)}
+        title="Next photo"
+        aria-label="Next photo"
+      >›</button>
+    {/if}
     {#if p}
       <img
         class="recipe-lightbox-img"
@@ -2167,9 +2224,55 @@
     font-size: 1.5rem;
     line-height: 1;
     cursor: pointer;
+    /* Flex-center the glyph. A bare button lays the U+00D7 out on the
+       text baseline with the button's default padding, which parked
+       the x high and left of the circle's center. Centering both axes
+       and zeroing the padding pins it to the middle regardless of the
+       glyph's own metrics. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
   }
   .recipe-lightbox-close:hover,
   .recipe-lightbox-close:focus-visible {
+    background: rgba(0, 0, 0, 0.7);
+    border-color: white;
+  }
+  /* Paging arrows pinned to the left/right edges of the viewport and
+     centered vertically. translateY(-50%) re-centers against the
+     button's own height after top:50% anchors its top edge. The wide
+     hit target (the button is taller than the glyph) keeps them
+     thumb-reachable on mobile. */
+  .recipe-lightbox-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 2.75rem;
+    height: 3.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    background: rgba(0, 0, 0, 0.4);
+    color: white;
+    font-size: 2rem;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+  }
+  .recipe-lightbox-nav.prev {
+    left: 0;
+    border-left: none;
+    border-radius: 0 6px 6px 0;
+  }
+  .recipe-lightbox-nav.next {
+    right: 0;
+    border-right: none;
+    border-radius: 6px 0 0 6px;
+  }
+  .recipe-lightbox-nav:hover,
+  .recipe-lightbox-nav:focus-visible {
     background: rgba(0, 0, 0, 0.7);
     border-color: white;
   }

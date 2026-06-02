@@ -45,3 +45,50 @@ export function recipeSourceLine(recipe: Recipe): RecipeSourceLine {
   if (name) return { kind: 'text', text: name };
   return { kind: 'none' };
 }
+
+/**
+ * Step an index by `delta` (typically -1 or +1) over a list of
+ * `length`, wrapping past either end so the list reads as a ring.
+ * Returns `current` unchanged when `length` is 0 so a caller with an
+ * empty list is a no-op.
+ *
+ * The photo lightbox uses this for both its prev/next arrows and the
+ * Left/Right arrow keys: stepping back from the first photo lands on
+ * the last, and forward from the last lands on the first. The double
+ * modulo keeps the result in range for any `delta`, including the
+ * negative remainder JS `%` would otherwise produce.
+ */
+export function wrapIndex(current: number, delta: number, length: number): number {
+  if (length <= 0) return current;
+  return (((current + delta) % length) + length) % length;
+}
+
+/**
+ * Classify a one-finger drag across the photo lightbox into a paging
+ * step: -1 for the previous photo, +1 for the next, 0 when the drag
+ * was too short or too vertical to count.
+ *
+ * The horizontal travel must clear `threshold` px AND exceed the
+ * vertical travel, so a mostly-vertical drag (scrolling a long
+ * caption, or a sloppy tap that drifts down) does not flip the photo.
+ * A swipe to the LEFT (endX < startX) advances to the NEXT photo,
+ * matching the platform convention where the content tracks the
+ * finger.
+ *
+ * Multi-touch is the caller's concern, not ours - a pinch-zoom is
+ * filtered out before we ever see start/end coordinates, so this stays
+ * a pure single-vector classifier.
+ */
+export function swipeNavStep(
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  threshold = 50
+): -1 | 0 | 1 {
+  const dx = endX - startX;
+  const dy = endY - startY;
+  if (Math.abs(dx) < threshold) return 0;
+  if (Math.abs(dx) <= Math.abs(dy)) return 0;
+  return dx < 0 ? 1 : -1;
+}
