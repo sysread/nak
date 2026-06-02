@@ -78,16 +78,18 @@ describe('TIERS (user-facing wrappers)', () => {
     }
   });
   it('differentiates the tiers by reasoning configuration', () => {
+    // Smart is the only tier that runs with thinking on; it carries a
+    // tier-level reasoning_effort default.
     expect(TIERS.smart.defaultReasoningEffort).toBe('medium');
-    expect(TIERS.balanced.defaultReasoningEffort).toBe('low');
-    // Fast disables thinking entirely - reasoning_effort: 'low' would
-    // shrink the CoT but not zero it. Fast also carries no tier-level
-    // defaultReasoningEffort because the kill switch wins on the wire.
+    expect(TIERS.smart.disableThinking).toBeUndefined();
+    // Balanced and Fast both disable thinking entirely - reasoning_effort:
+    // 'low' would shrink the CoT but not zero it. With the kill switch on,
+    // neither carries a tier-level defaultReasoningEffort (it would be dead
+    // - disableThinking wins on the wire and the picker is hidden).
+    expect(TIERS.balanced.disableThinking).toBe(true);
+    expect(TIERS.balanced.defaultReasoningEffort).toBeUndefined();
     expect(TIERS.fast.disableThinking).toBe(true);
     expect(TIERS.fast.defaultReasoningEffort).toBeUndefined();
-    // Smart and Balanced share the model with thinking on.
-    expect(TIERS.smart.disableThinking).toBeUndefined();
-    expect(TIERS.balanced.disableThinking).toBeUndefined();
   });
   it('has matching tier/label and sensible context windows', () => {
     for (const t of TIER_ORDER) {
