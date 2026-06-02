@@ -14,19 +14,13 @@
    */
   import { loadConfig, clearStoredConfig } from '$lib/config';
   import { activate, enterEditConfig, app } from '$lib/state.svelte';
-
-  import { tick } from 'svelte';
+  import SecretInput from '../components/SecretInput.svelte';
 
   type Intent = 'unlock' | 'edit';
 
   let password = $state('');
   let error = $state<string | null>(null);
   let busy = $state(false);
-  let passwordEl: HTMLInputElement | undefined = $state();
-
-  $effect(() => {
-    void tick().then(() => passwordEl?.focus());
-  });
 
   async function submit(intent: Intent): Promise<void> {
     error = null;
@@ -86,8 +80,8 @@
         decrypted with the user's own password, so there's nothing to lose
         by letting a local vault remember it.
       -->
-      <input id="password" type="password" bind:value={password} required
-             bind:this={passwordEl} autocomplete="current-password" />
+      <SecretInput id="password" bind:value={password} required autofocus
+                   autocomplete="current-password" />
     </div>
     {#if error}<p class="error">{error}</p>{/if}
     <div class="row">

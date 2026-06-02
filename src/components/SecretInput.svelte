@@ -10,7 +10,14 @@
    * fields override with "current-password" / "new-password" so OS
    * password managers and Chrome devtools stop warning about the missing
    * attribute and can remember the freshly-chosen passphrase.
+   *
+   * autofocus is owned here rather than via a leaked element ref: a
+   * caller that wants the field focused on mount (the Unlock screen)
+   * sets the prop, and we do the tick()-then-focus dance internally so
+   * the DOM node never has to escape the component.
    */
+  import { tick } from 'svelte';
+
   interface Props {
     id: string;
     value: string;
@@ -18,6 +25,7 @@
     minlength?: number;
     placeholder?: string;
     autocomplete?: AutoFill;
+    autofocus?: boolean;
   }
   let {
     id,
@@ -26,9 +34,17 @@
     minlength,
     placeholder,
     autocomplete = 'off',
+    autofocus = false,
   }: Props = $props();
 
   let revealed = $state(false);
+  let inputEl: HTMLInputElement | undefined = $state();
+
+  // Defer to after the input is in the DOM. Without tick() the bind:this
+  // ref can still be undefined on the first effect run.
+  $effect(() => {
+    if (autofocus) void tick().then(() => inputEl?.focus());
+  });
 </script>
 
 <div class="secret-wrap">
@@ -36,6 +52,7 @@
     {id}
     type={revealed ? 'text' : 'password'}
     bind:value
+    bind:this={inputEl}
     {required}
     minlength={minlength}
     {placeholder}
