@@ -3099,7 +3099,7 @@
     };
 
     // Throttle both streaming buffers - the answer text and the
-    // reasoning trace - to ~2Hz while the response arrives. Every
+    // reasoning trace - to ~3Hz while the response arrives. Every
     // assignment to slot.streamingText drives <Markdown> to re-run
     // marked + DOMPurify + highlight.js over the full growing buffer,
     // and every assignment to slot.streamingReasoning reflows the open
@@ -3107,12 +3107,12 @@
     // hundreds of deltas/sec, so flushing either channel on each SSE
     // delta would peg the main thread and make long responses land in
     // visible gulps. Trailing-edge throttle on a single shared timer:
-    // the first delta on either channel schedules a 500ms timer, deltas
+    // the first delta on either channel schedules a 350ms timer, deltas
     // arriving inside that window coalesce into the latest `pendingText`
     // / `pendingReasoning`, and one flush commits both buffers when the
-    // timer fires. Side effect: ~500ms of "thinking dots" before the
+    // timer fires. Side effect: ~350ms of "thinking dots" before the
     // first rendered paint, which reads as intentional pacing.
-    const FLUSH_MS = 500;
+    const FLUSH_MS = 350;
     let pendingText: string | null = null;
     let pendingReasoning: string | null = null;
     let flushTimer = 0;
@@ -3128,7 +3128,7 @@
         // non-empty in the same tick, hands the card straight from
         // checklist to streaming text with no content-less frame between
         // them - dismissing on the first delta instead would blank the
-        // card for the ~500ms flush window and flicker its border out and
+        // card for the ~350ms flush window and flicker its border out and
         // back. Sticky and idempotent: stays dismissed across later
         // flushes and round boundaries. The reasoning branch below
         // dismisses on the same principle when the thinking paints.
@@ -3144,7 +3144,7 @@
         // reasoning model this is the channel that fires first.
         slot.subconsciousDismissed = true;
       }
-      // Piggyback the IDB draft flush on every display flush (~500ms).
+      // Piggyback the IDB draft flush on every display flush (~350ms).
       // Best-effort: a write failure is swallowed so a broken IDB never
       // stalls the visible render path.
       void updateDraftText(ctx.threadId, slot.streamingText, slot.streamingReasoning).catch(() => {});
@@ -4428,8 +4428,8 @@
     }
   }
 
-  // Streaming deltas mutate the transcript fast - answer text in 500ms
-  // gulps (FLUSH_MS), reasoning on every SSE delta (unthrottled).
+  // Streaming deltas mutate the transcript fast - both the answer text
+  // and the reasoning trace land in ~350ms gulps (FLUSH_MS).
   // Coalesce the follow-bottom scroll onto a single requestAnimationFrame:
   // any number of synchronous mutations within one frame schedule one
   // scroll, fired on the next frame once the browser has laid the new
@@ -6620,7 +6620,7 @@
               />
               {#if activeSlot.streamingText}
                 <!-- Live markdown render of the in-progress buffer. The
-                     onTextUpdate handler throttles writes to ~4Hz (see
+                     onTextUpdate handler throttles writes to ~3Hz (see
                      FLUSH_MS in send()), so marked + DOMPurify +
                      highlight.js only re-parse the growing string a few
                      times per second. Unclosed fences / bold / math
