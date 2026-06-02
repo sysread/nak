@@ -269,12 +269,10 @@ export interface TierSpec extends ModelSpec {
   readonly description: string;
   /**
    * Tier-level reasoning_effort default. When set, wins over the user's
-   * account-level default (but not the per-thread override). Used to
-   * differentiate tiers - Balanced fronts minimax-m3 with this set to
-   * 'low' (light thinking), while Fast fronts deepseek-v4-flash with
-   * `disableThinking` instead, so the labels mean "different model,
-   * different thinking budget." (Smart fronts qwen-3-6-plus and carries
-   * its own default independently.) Absent means "no tier opinion - fall
+   * account-level default (but not the per-thread override). Smart
+   * fronts qwen-3-6-plus with this set to 'medium'; Balanced and Fast
+   * both run with `disableThinking` instead (no CoT on the wire), so
+   * neither carries this field. Absent means "no tier opinion - fall
    * through to the user default." Only consulted when the underlying
    * model's supportsReasoning is also true and `disableThinking` is
    * not set.
@@ -286,9 +284,9 @@ export interface TierSpec extends ModelSpec {
    * skips `reasoning_effort` entirely - reasoning_effort: 'low' shrinks
    * the CoT but doesn't disable it, so an explicit disableThinking is
    * the only way to get "zero thinking" out of a reasoning-capable
-   * model. Used by the Fast tier so a tier swap from a non-reasoning
-   * model to a reasoning model doesn't silently leak default-budget
-   * CoT into the response latency. The per-thread reasoning picker is
+   * model. Used by the Fast and Balanced tiers so a tier swap to a
+   * reasoning-capable model doesn't silently leak default-budget CoT
+   * into the response latency. The per-thread reasoning picker is
    * also hidden when this is true (see Chat.svelte's
    * `currentSupportsReasoning` derived), since a picker that does
    * nothing on the wire would just confuse the user.
@@ -315,8 +313,15 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     // in both themes; yin-yang is a solid bi-tonal disc that reads at
     // any size.
     icon: '\u262F\uFE0F',
-    description: 'MiniMax M3 with light thinking. 500k context, native vision. Good default for most turns.',
-    defaultReasoningEffort: 'low',
+    description: 'MiniMax M3 with thinking off. 500k context, native vision. Good default for most turns.',
+    // Thinking disabled while we evaluate minimax-m3's latency. 'low'
+    // is the floor for reasoning_effort but still emits a CoT pass;
+    // disableThinking is the only way to get zero thinking out of a
+    // reasoning-capable model. Balanced and Fast now differ only by
+    // underlying model (minimax-m3 vs deepseek-v4-flash), not thinking
+    // budget - if M3 is no faster than DeepSeek with CoT off, the tier
+    // swap isn't buying anything and should revert.
+    disableThinking: true,
   },
   fast: {
     ...MODELS['deepseek-v4-flash'],
