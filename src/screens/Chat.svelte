@@ -7065,60 +7065,6 @@
             </div>
 
             <div class="composer-bar-left" id="composer-wharf" class:wharf-open={composerWharfOpen}>
-              <!-- Toolbox popover: each gated toolbox is an independent
-                   on/off. Badge shows how many are on for this thread.
-                   Pulses on LLM-initiated flips via .flash (see CSS).
-                   Sits first in the row because toolbox choice is the
-                   most load-bearing decision on this toolbar - cost and
-                   capability pivot on it. Renders unconditionally - even
-                   with no active thread, or on a draft, the user can
-                   pre-enable toolboxes for the conversation they're
-                   about to start. `toggleToolboxManually` auto-creates
-                   a draft on first toggle so the choice has somewhere
-                   to land; the draft carries `toolboxes_enabled` through
-                   `materializeIfDraft` to the persisted row on first
-                   send. Same pattern as the model / reasoning /
-                   verbosity pickers below. Gating on
-                   `currentThread && !currentThread.isDraft` previously
-                   hid the button on any fresh session or new
-                   conversation, leaving no entry point to the toolbox
-                   surface on desktop. -->
-              <button
-                type="button"
-                class="secondary toolbox-btn"
-                class:on={currentToolboxesEnabled.length > 0}
-                class:flash={toolboxFlash}
-                onclick={() => {
-                  modelMenuOpen = false;
-                  reasoningMenuOpen = false;
-                  verbosityMenuOpen = false;
-                  promptsMenuOpen = false;
-                  composerWharfOpen = false;
-                  toolboxMenuOpen = !toolboxMenuOpen;
-                }}
-                title={currentToolboxesEnabled.length > 0
-                  ? `Toolboxes: ${currentToolboxesEnabled.join(', ')}`
-                  : 'No toolboxes enabled - click to enable one'}
-                aria-label="Toolboxes"
-                aria-haspopup="true"
-                aria-expanded={toolboxMenuOpen}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" stroke-width="2"
-                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
-                  <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                  <line x1="3" y1="12" x2="21" y2="12" />
-                  <line x1="10" y1="12" x2="10" y2="14" />
-                  <line x1="14" y1="12" x2="14" y2="14" />
-                </svg>
-                {#if currentToolboxesEnabled.length > 0}
-                  <span class="badge" aria-hidden="true"
-                    >{currentToolboxesEnabled.length}</span
-                  >
-                {/if}
-              </button>
-
               <!-- File picker: opens a native file chooser; selected
                    files become pendingAttachments chips above the
                    textarea. Paste (on the textarea) and drag-drop
@@ -7181,6 +7127,64 @@
                 </svg>
                 {#if activePromptCount > 0}
                   <span class="badge" aria-hidden="true">{activePromptCount}</span>
+                {/if}
+              </button>
+
+              <!-- Toolbox popover: each gated toolbox is an independent
+                   on/off. Badge shows how many are on for this thread.
+                   Pulses on LLM-initiated flips via .flash (see CSS).
+                   Leads the picker cluster (ahead of model / reasoning /
+                   verbosity) because toolbox choice is the most load-
+                   bearing decision on this toolbar - cost and capability
+                   pivot on it. The attach and prompts buttons sit ahead
+                   of it: attach is a one-shot action and prompts is a
+                   selector over user-configured options, neither a per-
+                   conversation picker. Renders unconditionally - even
+                   with no active thread, or on a draft, the user can
+                   pre-enable toolboxes for the conversation they're
+                   about to start. `toggleToolboxManually` auto-creates
+                   a draft on first toggle so the choice has somewhere
+                   to land; the draft carries `toolboxes_enabled` through
+                   `materializeIfDraft` to the persisted row on first
+                   send. Same pattern as the model / reasoning /
+                   verbosity pickers below. Gating on
+                   `currentThread && !currentThread.isDraft` previously
+                   hid the button on any fresh session or new
+                   conversation, leaving no entry point to the toolbox
+                   surface on desktop. -->
+              <button
+                type="button"
+                class="secondary toolbox-btn"
+                class:on={currentToolboxesEnabled.length > 0}
+                class:flash={toolboxFlash}
+                onclick={() => {
+                  modelMenuOpen = false;
+                  reasoningMenuOpen = false;
+                  verbosityMenuOpen = false;
+                  promptsMenuOpen = false;
+                  composerWharfOpen = false;
+                  toolboxMenuOpen = !toolboxMenuOpen;
+                }}
+                title={currentToolboxesEnabled.length > 0
+                  ? `Toolboxes: ${currentToolboxesEnabled.join(', ')}`
+                  : 'No toolboxes enabled - click to enable one'}
+                aria-label="Toolboxes"
+                aria-haspopup="true"
+                aria-expanded={toolboxMenuOpen}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 7h18v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+                  <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  <line x1="3" y1="12" x2="21" y2="12" />
+                  <line x1="10" y1="12" x2="10" y2="14" />
+                  <line x1="14" y1="12" x2="14" y2="14" />
+                </svg>
+                {#if currentToolboxesEnabled.length > 0}
+                  <span class="badge" aria-hidden="true"
+                    >{currentToolboxesEnabled.length}</span
+                  >
                 {/if}
               </button>
 

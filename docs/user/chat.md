@@ -11,7 +11,7 @@ aren't immediately obvious.
 On narrow screens the composer toolbar collapses behind a single
 button — a 3x3 grid of dots sitting to the left of the textarea.
 Tap it and a thin vertical column slides up, one icon per row:
-toolbox, attachments, prompts, model, reasoning, verbosity. Tap
+attachments, prompts, toolbox, model, reasoning, verbosity. Tap
 one to act on it (the column closes; the corresponding popover
 takes over if the button has one). The send button stays in its
 usual bottom-right spot.
@@ -28,7 +28,8 @@ onto the composer. Full details in [Attachments](./attachments.md).
 
 ### Toolboxes
 
-The leftmost icon in the composer toolbar is the **toolbox popover**.
+The **toolbox popover** sits in the composer toolbar, just after the
+attach and prompts buttons.
 Nak's capabilities beyond plain chat are grouped into named toolboxes
 that you can enable per conversation:
 
