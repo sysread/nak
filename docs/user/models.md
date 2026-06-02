@@ -59,7 +59,7 @@ Notes on how it behaves:
 - The picker shows on every tier that uses a reasoning-capable model
   (all three of Smart, Balanced, and Fast do today). Each tier just
   starts at a different position - **Smart** defaults to *Medium*,
-  **Balanced** and **Fast** default to *Off* - and you can move any
+  **Balanced** to *Low*, and **Fast** to *Off* - and you can move any
   conversation up or down from there.
 - Your pick is **per conversation** and sticky: it's saved on the
   thread, so it survives refreshes and follows you across devices.
@@ -150,8 +150,8 @@ reply reads as plain prose.
 
 Some models occasionally emit an internal control token (and a burst
 of unrelated text) at the very start of a reply instead of answering -
-a known quirk of the DeepSeek family that fronts the Fast tier. Nak
-detects this, throws the bad attempt away, and regenerates -
+a known quirk of the DeepSeek family that fronts the Balanced and Fast
+tiers. Nak detects this, throws the bad attempt away, and regenerates -
 automatically, without you doing anything.
 
 - When it happens you'll briefly see a small **"oops, all slop!"**
