@@ -25,7 +25,6 @@ import { describe, it, expect, vi } from 'vitest';
 import type { Agent, AgentRunRequest, AgentRunResult } from '../src/lib/agents/types';
 import { memoryToolbox, executeToolboxCall, type ToolContext } from '../src/lib/tools';
 import type { SupabaseService } from '../src/lib/supabase';
-import type { VeniceClient } from '../src/lib/venice';
 
 /**
  * A minimal concrete agent used only by these tests. It's deliberately
@@ -49,10 +48,7 @@ class EchoAgent implements Agent<EchoRequest, EchoResponse> {
   readonly model = 'venice-test-model';
   readonly toolbox = memoryToolbox;
 
-  constructor(
-    private supabase: SupabaseService,
-    private venice: VeniceClient
-  ) {}
+  constructor(private supabase: SupabaseService) {}
 
   async run(
     req: AgentRunRequest<EchoRequest>
@@ -70,7 +66,6 @@ class EchoAgent implements Agent<EchoRequest, EchoResponse> {
     }
     const ctx: ToolContext = {
       supabase: this.supabase,
-      venice: this.venice,
       userId: req.userId,
       threadId: req.threadId ?? 't-agent',
       signal: req.signal ?? new AbortController().signal,
@@ -121,18 +116,9 @@ function mockSupabase(): {
   return { svc: spies as unknown as SupabaseService, spies };
 }
 
-function mockVenice(): VeniceClient {
-  // Echo agent never calls Venice, but an empty object wouldn't satisfy
-  // the ToolContext field type. An empty embed stub is harmless and
-  // keeps the cast honest.
-  return {
-    embed: vi.fn(async () => ({ data: [] })),
-  } as unknown as VeniceClient;
-}
-
 describe('Agent interface — EchoAgent as contract witness', () => {
   it('exposes the three readonly identity fields', () => {
-    const agent = new EchoAgent(mockSupabase().svc, mockVenice());
+    const agent = new EchoAgent(mockSupabase().svc);
     expect(agent.name).toBe('echo');
     expect(agent.model).toBe('venice-test-model');
     expect(agent.toolbox).toBe(memoryToolbox);
@@ -140,7 +126,7 @@ describe('Agent interface — EchoAgent as contract witness', () => {
 
   it('run() returns a typed result on the happy path with toolCalls counted', async () => {
     const { svc, spies } = mockSupabase();
-    const agent = new EchoAgent(svc, mockVenice());
+    const agent = new EchoAgent(svc);
     const result = await agent.run({
       input: { label: 'note', data: 'body' },
       userId: 'u-1',
@@ -186,7 +172,6 @@ describe('Agent interface — EchoAgent as contract witness', () => {
       async run(req: AgentRunRequest<void>): Promise<AgentRunResult<void>> {
         await executeToolboxCall(this.toolbox, 'record', {}, {
           supabase: svc,
-          venice: mockVenice(),
           userId: req.userId,
           threadId: req.threadId ?? 't-x',
           signal: req.signal ?? new AbortController().signal,
@@ -201,7 +186,7 @@ describe('Agent interface — EchoAgent as contract witness', () => {
   });
 
   it('short-circuits to stoppedReason=aborted when the signal is already aborted', async () => {
-    const agent = new EchoAgent(mockSupabase().svc, mockVenice());
+    const agent = new EchoAgent(mockSupabase().svc);
     const ac = new AbortController();
     ac.abort();
     const result = await agent.run({
@@ -226,7 +211,7 @@ describe('Agent interface — EchoAgent as contract witness', () => {
         throw new Error('simulated RLS denial');
       }),
     } as unknown as SupabaseService;
-    const agent = new EchoAgent(svc, mockVenice());
+    const agent = new EchoAgent(svc);
     const result = await agent.run({
       input: { label: 'x', data: 'y' },
       userId: 'u-1',
@@ -240,7 +225,7 @@ describe('Agent interface — EchoAgent as contract witness', () => {
     // Not every agent is thread-scoped — e.g. a future "summarise the
     // whole memory graph" agent. The interface keeps threadId optional
     // and implementations that need it assert or narrow themselves.
-    const agent = new EchoAgent(mockSupabase().svc, mockVenice());
+    const agent = new EchoAgent(mockSupabase().svc);
     const result = await agent.run({
       input: { label: 'x', data: 'y' },
       userId: 'u-1',

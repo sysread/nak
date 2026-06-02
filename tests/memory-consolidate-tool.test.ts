@@ -22,12 +22,10 @@ import { memoryLibrarianToolbox } from '../src/lib/tools/memory_librarian_toolbo
 import { memoryConsolidate } from '../src/lib/tools/memory_consolidate';
 import { MAX_MEMORY_DATA_CHARS } from '../src/lib/memories';
 import type { SupabaseService } from '../src/lib/supabase';
-import type { VeniceClient } from '../src/lib/venice';
 
 function ctxFor(svc: Partial<SupabaseService>): ToolContext {
   return {
     supabase: svc as SupabaseService,
-    venice: {} as VeniceClient,
     userId: 'u-1',
     threadId: '',
     signal: new AbortController().signal,

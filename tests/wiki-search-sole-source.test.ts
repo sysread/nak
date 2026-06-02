@@ -22,7 +22,6 @@ import { searchWikiArticlesSemantic } from '../src/lib/wiki';
 import { wikiSearch } from '../src/lib/tools/wiki_search';
 import type { SupabaseService, WikiArticle } from '../src/lib/supabase';
 import type { ToolContext } from '../src/lib/tools';
-import type { VeniceClient } from '../src/lib/venice';
 
 function makeArticle(id: string, title: string): WikiArticle {
   return {
@@ -151,7 +150,6 @@ describe('wikiSearch tool ctx wiring', () => {
     });
     return {
       supabase,
-      venice: { embed: vi.fn() } as unknown as VeniceClient,
       userId: 'u-1',
       threadId: 'ctx-thread',
       signal: new AbortController().signal,

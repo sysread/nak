@@ -35,7 +35,7 @@ Status key:
 | Endpoint | `VeniceClient` method | Status |
 | --- | --- | --- |
 | `POST /embeddings` | `embed` (deleted from `VeniceClient`) | DONE - backfill (milestone 1, cron) + query-time (milestone 3, `/embed` route from the browser via `SupabaseService.embed`) |
-| `POST /chat/completions` | `completeChat` (PARTIAL - tools + intuition + auto-title moved; background workers deferred), `streamChat` (TODO - the attractor) | PARTIAL - milestone 6 (`claude/complete-edge-function`), `/complete` route. See "completeChat (`/chat/completions` non-streaming)" below for the deferred caller list. |
+| `POST /chat/completions` | `completeChat` (DONE - every browser caller routes through `SupabaseService.complete`; the method itself is orphaned and pending deletion), `streamChat` (TODO - the attractor) | DONE for the non-streaming half - milestone 6 (`claude/complete-edge-function`) + the worker-fleet sweeps that followed (`claude/headless-tool-loop-complete`, `claude/recall-family-complete`, `claude/deep-sleep-rem-complete`, `claude/bias-agent-complete`, `claude/samskara-agent-complete`, `claude/wiki-agent-complete`, `claude/wiki-librarian-agent-complete`). |
 | `GET /billing/usage` | (was `fetchUsage`, now `SupabaseService.fetchUsage`) | DONE - milestone 2, `/usage` route |
 | `POST /augment/text-parser` | `extractText` (deleted from `VeniceClient`) | DONE - milestone 4, `/text-parser` route. Fixed the CORS-broken browser path (every non-image upload had been "Failed to fetch"). Empirical: Venice caps at ~25 MB; the Supabase edge-function gateway is transparent at that scale (no escape hatch needed). `MAX_DOCUMENT_FILE_BYTES` clamped to 24 MiB to fail at the form guard instead of mid-upload. |
 | `POST /image/generate` | `generateImage` (deleted from `VeniceClient`) | DONE - milestone 5, `/image-generate` route. Single browser caller (the `generate_image` tool) routes through `SupabaseService.generateImage`; the content-policy header check + variants=1/return_binary=false defaults moved into the Deno helper. |
@@ -145,11 +145,36 @@ Main-thread WikiAgent constructors in `Wiki.svelte`
 stopped guarding on `app.venice` and stopped passing it. Wiki test
 fixture dropped the now-obsolete `makeInertVenice` helper.
 
-**Deferred callers** (still hold `VeniceClient.completeChat`):
+**Wiki-librarian + supervisor-hosted fleet** MIGRATED in
+`claude/wiki-librarian-agent-complete`. The wiki-librarian half is
+the standard agent shape (drop venice from constructor + toolCtx,
+worker, manager, runner.svelte.ts `RunManuallyOpts`). The
+supervisor sweep that ships in the same commit migrates the five
+agents the supervisor worker hosts: reflection (constructor-only,
+already drove `runHeadlessToolLoop`), summary, topics,
+memory_topics, recipe_topics (each had one direct
+`venice.completeChat` call swapped to `supabase.complete` plus the
+constructor swap). The supervisor worker drops `VeniceClient`
+import + the venice block; its `SupervisorContext` drops the
+pass-through venice field; the manager drops `veniceApiKey`. The
+two unused-`_supabase` shimmed constructors on `MemoryTopicsAgent`
+and `RecipeTopicsAgent` shed the underscore prefix because the
+field is now actively used. `ToolContext.venice` deleted outright;
+the non-null assertion `ctx.venice!` in `tools/wiki_librarian.ts`
+removed; the `venice` field on the production `ToolContext`
+literal in `chat-loop.ts` dropped; the venice guards in
+`Wiki.svelte`'s `submitLibrarianRun` dropped. Ten test files
+cleaned of stale `venice: ...` ToolContext fields; six unused
+`VeniceClient` type imports stripped; the `mockVenice` helpers
+in `agents.test.ts` and `tools.test.ts` deleted; `summary-agent.
+test.ts` rewritten to script `supabase.complete` instead of
+`venice.completeChat`; `reflection-agent.test.ts` and `wiki-agent.
+test.ts` `makeInertVenice` helpers + their nine and nine
+constructor-arg call sites collapsed.
 
-- background-agent Web Workers: `agents/summary/`, `agents/topics/`,
-  `agents/memory_topics/`, `agents/recipe_topics/`,
-  `agents/wiki-librarian/`
+**No deferred callers remain.** `VeniceClient.completeChat` has
+zero production references and is orphaned pending deletion in
+the follow-up cleanup commit.
 
 Why deferred: each worker bootstraps its own `VeniceClient` from a
 `veniceApiKey` postMessage from the main thread; the protocol shape

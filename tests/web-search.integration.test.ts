@@ -38,10 +38,13 @@ const RUN = apiKey.length > 0;
 // developer wires a key in for debugging.
 const itLive = RUN ? it : it.skip;
 
-function makeCtx(venice: VeniceClient): ToolContext {
-  // The tool only reads `venice` and `signal`; the rest can be stubs.
+function makeCtx(): ToolContext {
+  // After the milestone-6 migration the tool reads
+  // ctx.supabase.complete, not ctx.venice; the supabase stub here is
+  // a placeholder - the webSearch.execute case in this file no longer
+  // exercises a live path. The raw `venice.completeChat` cases above
+  // still capture the historical empty-answer shape directly.
   return {
-    venice,
     supabase: {} as unknown as SupabaseService,
     userId: 'test-user',
     threadId: 'test-thread',
@@ -103,8 +106,7 @@ describe('web_search integration (live Venice)', () => {
   itLive(
     'reproduces the empty-answer error path through web_search.execute',
     async () => {
-      const venice = new VeniceClient({ apiKey });
-      const ctx = makeCtx(venice);
+      const ctx = makeCtx();
       let err: Error | null = null;
       let value: unknown = null;
       try {

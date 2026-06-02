@@ -33,7 +33,6 @@ import {
 } from '../src/lib/tools';
 import { sanitizeTitle } from '../src/lib/tools/update_title';
 import type { SupabaseService } from '../src/lib/supabase';
-import type { VeniceClient } from '../src/lib/venice';
 
 /**
  * Build a SupabaseService mock with just the methods the tool handlers
@@ -107,23 +106,9 @@ function mockSupabase(): {
   return { svc, spies };
 }
 
-/**
- * Stand-in VeniceClient for the tool tests. Only `memory_search` calls into
- * Venice (to embed the query), so we only stub `.embed()`. The embedding
- * shape matches the real response so the tool's index-0 unwrap works.
- */
-function mockVenice(): VeniceClient {
-  return {
-    embed: vi.fn(async () => ({
-      data: [{ index: 0, embedding: new Array(1024).fill(0) }],
-    })),
-  } as unknown as VeniceClient;
-}
-
-function ctxFor(svc: SupabaseService, venice: VeniceClient = mockVenice()): ToolContext {
+function ctxFor(svc: SupabaseService): ToolContext {
   return {
     supabase: svc,
-    venice,
     userId: 'u-1',
     threadId: 't-1',
     signal: new AbortController().signal,

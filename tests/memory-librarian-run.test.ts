@@ -53,7 +53,6 @@ import { librarianRun } from '../src/lib/agents/memory-librarian-run.svelte';
 function fakeDeps(session: { user: { id: string } } | null = { user: { id: 'u1' } }) {
   return {
     supabase: { getSession: vi.fn(async () => session) },
-    venice: {},
   } as unknown as Parameters<typeof librarianRun.start>[1];
 }
 

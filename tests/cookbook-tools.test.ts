@@ -20,7 +20,6 @@ import { recipeDelete } from '../src/lib/tools/recipe_delete';
 import { SupabaseService } from '../src/lib/supabase';
 import type { Recipe, RecipeVersion } from '../src/lib/supabase';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { VeniceClient } from '../src/lib/venice';
 import { MAX_RECIPE_COOKLANG_CHARS } from '../src/lib/recipe-limits';
 
 function sampleRecipe(overrides: Partial<Recipe> = {}): Recipe {
@@ -43,7 +42,6 @@ function sampleRecipe(overrides: Partial<Recipe> = {}): Recipe {
 function ctxFor(svc: Partial<SupabaseService>): ToolContext {
   return {
     supabase: svc as SupabaseService,
-    venice: {} as VeniceClient,
     userId: 'u-1',
     threadId: 't-1',
     signal: new AbortController().signal,

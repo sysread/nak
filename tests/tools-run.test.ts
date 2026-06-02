@@ -24,7 +24,6 @@ import type {
   ChatCompletion,
   ChatRequest,
   OpenAIToolCall,
-  VeniceClient,
   VeniceMessage,
 } from '../src/lib/venice';
 import type { SupabaseService } from '../src/lib/supabase';
@@ -43,10 +42,9 @@ interface RoundScript {
 
 /**
  * Script a `SupabaseService.complete` mock with one canned
- * ChatCompletion per round. The leftover `toolCtx.venice` field is
- * irrelevant to the loop (the network seam is supabase.complete now)
- * but the ToolContext interface still carries a `venice` slot until
- * the worker-fleet sweep deletes it; tests pass an inert handle.
+ * ChatCompletion per round. The loop's only network seam is
+ * supabase.complete; the toolCtx has no venice slot post worker-
+ * fleet sweep.
  */
 function makeSupabase(
   rounds: RoundScript[]
@@ -99,7 +97,6 @@ function makeToolbox(handler: ToolDef['execute'] = async () => ({ ok: true })): 
 function baseCtx(supabase: SupabaseService): Omit<ToolContext, 'signal'> {
   return {
     supabase,
-    venice: {} as unknown as VeniceClient,
     userId: 'u',
     threadId: 't',
   };

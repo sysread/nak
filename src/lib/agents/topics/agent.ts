@@ -16,7 +16,7 @@
  */
 import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
-import type { VeniceClient, VeniceMessage } from '../../venice';
+import type { VeniceMessage } from '../../venice';
 import type { Toolbox } from '../../tools/types';
 import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
 import {
@@ -194,7 +194,6 @@ export class TopicsAgent implements Agent<TopicsInput, TopicsOutput> {
   readonly toolbox: Toolbox = emptyToolbox;
 
   constructor(
-    private venice: VeniceClient,
     private supabase: SupabaseService,
     /**
      * Optional model override - defaults to the registry's `topics`
@@ -249,7 +248,7 @@ export class TopicsAgent implements Agent<TopicsInput, TopicsOutput> {
       // "c","d"]}` with 40-char tags. response_format pins the model
       // to JSON shape so the parser doesn't have to handle freeform
       // prose around the object.
-      const result = await this.venice.completeChat({
+      const result = await this.supabase.complete({
         model: this.model,
         messages: convo,
         maxTokens: 512,
@@ -278,7 +277,7 @@ export class TopicsAgent implements Agent<TopicsInput, TopicsOutput> {
 
 /**
  * Test hook: expose the internal validator so unit tests can drive
- * the parser without spinning up a VeniceClient stub. Kept behind a
+ * the parser without spinning up a SupabaseService stub. Kept behind a
  * `__test` namespace so production callers can't accidentally lean
  * on it - consistent with the convention in routing.svelte.ts /
  * crypto.ts / session.ts.

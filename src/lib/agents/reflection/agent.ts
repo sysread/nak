@@ -23,7 +23,7 @@
  */
 import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
-import type { VeniceClient, VeniceMessage } from '../../venice';
+import type { VeniceMessage } from '../../venice';
 // Import from the leaf file rather than the `../../tools` barrel.
 // This file runs inside the reflection Web Worker, and the barrel
 // statically imports `research_docs`, which reaches into
@@ -104,7 +104,6 @@ export class ReflectionAgent implements Agent<ReflectionInput, ReflectionOutput>
   readonly toolbox = memoryToolbox;
 
   constructor(
-    private venice: VeniceClient,
     private supabase: SupabaseService,
     /**
      * Optional model override. Defaults to the registry's
@@ -167,7 +166,6 @@ export class ReflectionAgent implements Agent<ReflectionInput, ReflectionOutput>
         toolbox: this.toolbox,
         toolCtx: {
           supabase: this.supabase,
-          venice: this.venice,
           userId: req.userId,
           threadId: req.input.threadId,
         },

@@ -17,7 +17,6 @@ import type {
 function ctxFor(svc: SupabaseService): ToolContext {
   return {
     supabase: svc,
-    venice: {} as never,
     userId: 'u-1',
     threadId: 't-current',
     signal: new AbortController().signal,

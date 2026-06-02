@@ -20,7 +20,6 @@ import type {
   ChatCompletion,
   ChatRequest,
   OpenAIToolCall,
-  VeniceClient,
   VeniceMessage,
 } from '../src/lib/venice';
 
@@ -111,25 +110,10 @@ function makeSupabase(
   };
 }
 
-/**
- * Inert VeniceClient for the ReflectionAgent constructor's leftover
- * `venice` slot. The agent's network seam moved to supabase.complete
- * in milestone 6; the venice handle survives only because the
- * worker-fleet sweep that drops it from the constructor signature
- * hasn't shipped yet. Tests pass this so the leftover slot doesn't
- * silently absorb a real client.
- */
-function makeInertVenice(): VeniceClient {
-  return {
-    completeChat: vi.fn(),
-    embed: vi.fn(async () => ({ data: [] })),
-  } as unknown as VeniceClient;
-}
-
 describe('ReflectionAgent — identity + contract', () => {
   it('advertises the reflection toolbox, reflection name, and a model id', () => {
     const { svc } = makeSupabase([]);
-    const agent = new ReflectionAgent(makeInertVenice(), svc);
+    const agent = new ReflectionAgent(svc);
     expect(agent.name).toBe('reflection');
     expect(agent.toolbox).toBe(memoryToolbox);
     expect(agent.model.length).toBeGreaterThan(0);
@@ -137,7 +121,7 @@ describe('ReflectionAgent — identity + contract', () => {
 
   it('accepts a model override for tests and future A/B runs', () => {
     const { svc } = makeSupabase([]);
-    const agent = new ReflectionAgent(makeInertVenice(), svc, 'custom-test-model');
+    const agent = new ReflectionAgent(svc, 'custom-test-model');
     expect(agent.model).toBe('custom-test-model');
   });
 });
@@ -153,7 +137,7 @@ describe('ReflectionAgent — run() happy path', () => {
       makeMessage({ id: 'u2', role: 'user', content: 'and also dogs', created_at: '2024-01-01T00:00:02Z' }),
     ];
     const { svc, streamCalls } = makeSupabase(messages, [{ text: 'done' }]);
-    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ReflectionAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -202,7 +186,7 @@ describe('ReflectionAgent — run() happy path', () => {
         { text: 'ok' },
       ]
     );
-    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ReflectionAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -228,7 +212,7 @@ describe('ReflectionAgent — edge cases', () => {
       makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
     ];
     const { svc } = makeSupabase(messages, [{ text: 'x' }]);
-    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ReflectionAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'nonexistent-id' },
@@ -241,7 +225,7 @@ describe('ReflectionAgent — edge cases', () => {
 
   it('returns done with zero work when the thread has no messages', async () => {
     const { svc, spies } = makeSupabase([]);
-    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ReflectionAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'whatever' },
@@ -257,7 +241,7 @@ describe('ReflectionAgent — edge cases', () => {
     const { svc, spies } = makeSupabase([
       makeMessage({ id: 'a1', role: 'assistant', content: 'x' }),
     ]);
-    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ReflectionAgent(svc, 'test-model');
     const ac = new AbortController();
     ac.abort();
 
@@ -278,7 +262,7 @@ describe('ReflectionAgent — edge cases', () => {
         throw new Error('network flaked');
       }),
     } as unknown as SupabaseService;
-    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ReflectionAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -320,7 +304,7 @@ describe('ReflectionAgent — edge cases', () => {
       makeMessage({ id: 'a2', role: 'assistant', content: 'here you go' }),
     ];
     const { svc, streamCalls } = makeSupabase(messages, [{ text: 'ok' }]);
-    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ReflectionAgent(svc, 'test-model');
 
     await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a2' },

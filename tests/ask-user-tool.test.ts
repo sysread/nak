@@ -34,12 +34,10 @@ import {
 } from '../src/lib/tools/ask_user';
 import { askUserSchema } from '../src/lib/tools/ask_user.schema';
 import type { SupabaseService } from '../src/lib/supabase';
-import type { VeniceClient } from '../src/lib/venice';
 
 function emptyCtx(): ToolContext {
   return {
     supabase: {} as SupabaseService,
-    venice: {} as VeniceClient,
     userId: 'u-1',
     threadId: 't-1',
     signal: new AbortController().signal,

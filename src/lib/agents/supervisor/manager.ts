@@ -71,7 +71,6 @@ class SupervisorManager extends BaseWorkerManager<SupervisorStartOpts> {
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       userId: session.user.id,
-      veniceApiKey: opts.config.veniceApiKey,
       reflectionModel: agentModel('reflection').id,
       summaryModel: agentModel('summary').id,
       topicsModel: agentModel('topics').id,

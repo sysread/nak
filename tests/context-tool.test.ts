@@ -28,21 +28,9 @@ import type {
   ThreadSearchHit,
   Thread,
 } from '../src/lib/supabase';
-import type { VeniceClient } from '../src/lib/venice';
-
-// Venice whose embed throws, so every search helper takes its
-// text-search fallback - the tool assembles the index identically
-// regardless of search path.
-const veniceNoEmbed = {
-  embed: vi.fn(async () => {
-    throw new Error('offline');
-  }),
-} as unknown as VeniceClient;
-
 function ctxFor(svc: SupabaseService): ToolContext {
   return {
     supabase: svc,
-    venice: veniceNoEmbed,
     userId: 'u-1',
     threadId: 't-1',
     signal: new AbortController().signal,

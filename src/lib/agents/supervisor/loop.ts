@@ -32,7 +32,6 @@
  * report 'empty-phase', sleep idleIntervalMs.
  */
 import type { SupabaseService } from '../../supabase';
-import type { VeniceClient } from '../../venice';
 import type { LeaseCoordinator } from '../../embeddings/lease';
 import { createLogger } from '../../logger.svelte';
 
@@ -76,7 +75,6 @@ export interface SupervisorTunables {
 
 export interface SupervisorContext {
   supabase: SupabaseService;
-  venice: VeniceClient;
   coordinator: LeaseCoordinator;
   holderId: string;
   userId: string;

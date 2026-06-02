@@ -14,7 +14,6 @@ import { wikiCreate } from '../src/lib/tools/wiki_create';
 import { wikiUpdate } from '../src/lib/tools/wiki_update';
 import type { ToolContext } from '../src/lib/tools/types';
 import type { SupabaseService, WikiArticle } from '../src/lib/supabase';
-import type { VeniceClient } from '../src/lib/venice';
 
 function fakeArticle(id: string, content = 'body'): WikiArticle {
   return {
@@ -60,7 +59,6 @@ function mockSupabase(opts: { knownThreadIds?: string[] } = {}): {
 function ctxFor(svc: SupabaseService, threadId: string): ToolContext {
   return {
     supabase: svc,
-    venice: {} as VeniceClient,
     userId: 'user-1',
     threadId,
     signal: new AbortController().signal,

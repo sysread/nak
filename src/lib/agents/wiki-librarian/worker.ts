@@ -14,7 +14,6 @@
  *     calendar day are we in".
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { VeniceClient } from '../../venice';
 import { SupabaseService } from '../../supabase';
 import { LeaseCoordinator } from '../../embeddings/lease';
 import { WikiLibrarianAgent } from './agent';
@@ -32,8 +31,6 @@ interface StartMessage {
   accessToken: string;
   refreshToken: string;
   userId: string;
-  veniceApiKey: string;
-  veniceBaseUrl?: string;
   wikiLibrarianModel: string;
   holderId: string;
   /** Min seconds between successive librarian runs (across devices). */
@@ -163,10 +160,6 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     { supabaseUrl: msg.supabaseUrl, supabasePublishableKey: msg.supabasePublishableKey },
     { client }
   );
-  const venice = new VeniceClient({
-    apiKey: msg.veniceApiKey,
-    baseUrl: msg.veniceBaseUrl,
-  });
   const coordinator = new LeaseCoordinator(
     supabase,
     'wiki-librarian',
@@ -178,7 +171,6 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
   );
 
   const agent = new WikiLibrarianAgent(
-    venice,
     supabase,
     msg.wikiLibrarianModel,
     buildProfile(msg.userName, msg.userLocation)

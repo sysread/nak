@@ -14,7 +14,6 @@
  * wiki-librarian remain standalone).
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { VeniceClient } from '../../venice';
 import { SupabaseService } from '../../supabase';
 import { LeaseCoordinator } from '../../embeddings/lease';
 import { ReflectionAgent } from '../reflection/agent';
@@ -36,8 +35,6 @@ interface StartMessage {
   accessToken: string;
   refreshToken: string;
   userId: string;
-  veniceApiKey: string;
-  veniceBaseUrl?: string;
   reflectionModel: string;
   summaryModel: string;
   topicsModel: string;
@@ -154,28 +151,24 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     { supabaseUrl: msg.supabaseUrl, supabasePublishableKey: msg.supabasePublishableKey },
     { client }
   );
-  const venice = new VeniceClient({
-    apiKey: msg.veniceApiKey,
-    baseUrl: msg.veniceBaseUrl,
-  });
   const coordinator = new LeaseCoordinator(supabase, 'supervisor', msg.holderId, {
     ttlSeconds: msg.leaseTtlSeconds,
     heartbeatMs: msg.leaseHeartbeatMs,
   });
 
   // Five agents instantiated once for the worker's lifetime. The
-  // sixth unit (auto_title) needs no agent - title-gen uses the bare
-  // Venice client.
+  // sixth unit (auto_title) needs no agent - title-gen drives
+  // SupabaseService.complete directly.
   //
   // Each agent's model id comes from the start payload (resolved
   // from AGENT_MODELS on the main thread) so a model swap in the
   // registry takes effect on the next worker start without
   // requiring a code change here.
-  const reflection = new ReflectionAgent(venice, supabase, msg.reflectionModel);
-  const summary = new SummaryAgent(venice, supabase, msg.summaryModel);
-  const topics = new TopicsAgent(venice, supabase, msg.topicsModel);
-  const memoryTopics = new MemoryTopicsAgent(venice, supabase, msg.memoryTopicsModel);
-  const recipeTopics = new RecipeTopicsAgent(venice, supabase, msg.recipeTopicsModel);
+  const reflection = new ReflectionAgent(supabase, msg.reflectionModel);
+  const summary = new SummaryAgent(supabase, msg.summaryModel);
+  const topics = new TopicsAgent(supabase, msg.topicsModel);
+  const memoryTopics = new MemoryTopicsAgent(supabase, msg.memoryTopicsModel);
+  const recipeTopics = new RecipeTopicsAgent(supabase, msg.recipeTopicsModel);
 
   const napConfig: NapConfig = {
     leasePollMs: msg.leasePollMs,
@@ -195,7 +188,6 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     while (!signal.aborted) {
       const ctx: SupervisorContext = {
         supabase,
-        venice,
         coordinator,
         holderId: msg.holderId,
         userId: msg.userId,

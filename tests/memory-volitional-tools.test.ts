@@ -29,7 +29,6 @@ import { memoryDoubt } from '../src/lib/tools/memory_doubt';
 import { memoryRelate } from '../src/lib/tools/memory_relate';
 import { memoryUnrelate } from '../src/lib/tools/memory_unrelate';
 import type { Memory, SupabaseService } from '../src/lib/supabase';
-import type { VeniceClient } from '../src/lib/venice';
 
 function sampleMemory(overrides: Partial<Memory> = {}): Memory {
   return {
@@ -47,7 +46,6 @@ function sampleMemory(overrides: Partial<Memory> = {}): Memory {
 function ctxFor(svc: Partial<SupabaseService>): ToolContext {
   return {
     supabase: svc as SupabaseService,
-    venice: {} as VeniceClient,
     userId: 'u-1',
     threadId: 't-1',
     signal: new AbortController().signal,

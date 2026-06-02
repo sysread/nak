@@ -208,9 +208,9 @@ green gate:
    wiki-librarian sweep ships.
 
 4. **Migrate the worker-resident agent families one at a
-   time.** For each of `wiki-librarian` and the
-   supervisor-hosted set (`summary`, `topics`,
-   `memory_topics`, `recipe_topics`):
+   time. (DONE.)** Every family in the worker fleet now
+   drives `SupabaseService.complete` for chat completions.
+   The shape per migration is unchanged:
    drop `venice: VeniceClient` from the agent constructor
    and the cycle context; replace
    `this.venice.completeChat(...)` with
@@ -239,10 +239,19 @@ green gate:
    retry logic ports verbatim because the rejection comes
    back as a `VeniceError` either way -- the function side
    wraps Venice's 400 response into the same error shape
-   the client expected. When `wiki-librarian`'s
-   family ships, also drop `venice` from `ToolContext`
-   entirely and remove the non-null assertion from the
-   `wiki_librarian` tool dispatcher.
+   the client expected. `wiki-librarian` + the supervisor-
+   hosted set (reflection, summary, topics, memory_topics,
+   recipe_topics) shipped together in
+   `claude/wiki-librarian-agent-complete` as the milestone-
+   marker sweep: with wiki-librarian's tool dispatcher
+   stopping its use of `ctx.venice` and the supervisor's
+   five hosted agents dropping `venice` from their
+   constructors, `ToolContext.venice` had no consumers
+   left and was deleted outright. The non-null assertion
+   in `tools/wiki_librarian.ts`, the `venice` slot on
+   chat-loop's ToolContext literal, and the `app.venice`
+   guards in `Wiki.svelte`'s `submitLibrarianRun` all came
+   off in the same commit.
 
 5. **Delete `VeniceClient.completeChat`.** Once step 4 is
    complete the method has no remaining callers; delete it

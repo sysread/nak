@@ -12,7 +12,7 @@
  */
 import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService } from '../../supabase';
-import type { VeniceClient, VeniceMessage } from '../../venice';
+import type { VeniceMessage } from '../../venice';
 import type { Toolbox } from '../../tools/types';
 import { agentModel } from '../../models';
 import { buildMemoryTopicsPrompt } from './prompt';
@@ -135,13 +135,7 @@ export class MemoryTopicsAgent
   readonly toolbox: Toolbox = emptyToolbox;
 
   constructor(
-    private venice: VeniceClient,
-    // SupabaseService isn't used today - the claim RPC returns label +
-    // data inline so the agent never reads back from supabase. The
-    // dependency stays in the constructor so a future need (e.g.
-    // re-fetching label/data on retry) doesn't require an interface
-    // change. Same posture as ../topics/agent.ts.
-    _supabase: SupabaseService,
+    private supabase: SupabaseService,
     /**
      * Optional model override - defaults to the registry's
      * `memoryTopics` slot. Useful for tests; a future A/B can pin a
@@ -149,7 +143,6 @@ export class MemoryTopicsAgent
      */
     modelId?: string
   ) {
-    void _supabase;
     this.model = modelId ?? agentModel('memoryTopics').id;
   }
 
@@ -180,7 +173,7 @@ export class MemoryTopicsAgent
       // shaped `{"topics":["a","b","c","d"]}` with 40-char tags.
       // response_format pins the model to JSON so the parser doesn't
       // have to handle freeform prose around the object.
-      const result = await this.venice.completeChat({
+      const result = await this.supabase.complete({
         model: this.model,
         messages: [userMessage],
         maxTokens: 256,
@@ -206,7 +199,7 @@ export class MemoryTopicsAgent
 
 /**
  * Test hook: expose the internal validator so unit tests can drive the
- * parser without spinning up a VeniceClient stub. Same `__test`
+ * parser without spinning up a SupabaseService stub. Same `__test`
  * convention as ../topics/agent.ts and the other agents.
  */
 export const __test = { parseTopics, normaliseTag };

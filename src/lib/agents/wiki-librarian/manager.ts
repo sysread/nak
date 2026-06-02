@@ -73,7 +73,6 @@ class WikiLibrarianManager extends BaseWorkerManager<WikiLibrarianStartOpts> {
       accessToken: session.access_token,
       refreshToken: session.refresh_token,
       userId: session.user.id,
-      veniceApiKey: opts.config.veniceApiKey,
       wikiLibrarianModel: agentModel('wikiLibrarian').id,
       userName: opts.userName,
       userLocation: opts.userLocation,

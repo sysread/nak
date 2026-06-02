@@ -20,19 +20,14 @@ import type { SupabaseService } from '../src/lib/supabase';
 import type {
   ChatCompletion,
   ChatRequest,
-  VeniceClient,
   Citation,
 } from '../src/lib/venice';
 
 // web_search talks to the venice edge function via SupabaseService.complete
-// (milestone 6). The leftover `venice: VeniceClient` field on ToolContext
-// is still there because background-agent workers haven't migrated yet -
-// ctxFor stubs an inert VeniceClient and threads the real fixture through
-// supabase.complete.
+// (milestone 6); the supabase fixture is the only network seam.
 function ctxFor(supabase: SupabaseService): ToolContext {
   return {
     supabase,
-    venice: { completeChat: vi.fn(), embed: vi.fn() } as unknown as VeniceClient,
     userId: 'u-1',
     threadId: 't-1',
     signal: new AbortController().signal,
@@ -253,7 +248,6 @@ describe('web_search — execute() shape', () => {
     // controller we constructed, not the default ctxFor wires up.
     const ctx: ToolContext = {
       supabase,
-      venice: { completeChat: vi.fn(), embed: vi.fn() } as unknown as VeniceClient,
       userId: 'u-1',
       threadId: 't-1',
       signal: ctl.signal,

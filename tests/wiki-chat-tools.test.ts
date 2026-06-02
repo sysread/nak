@@ -13,7 +13,6 @@ import { wikiGet } from '../src/lib/tools/wiki_get';
 import { WIKI_LIST_EXCERPT_CHARS } from '../src/lib/tools/wiki_list.schema';
 import type { ToolContext } from '../src/lib/tools/types';
 import type { SupabaseService, WikiArticle, UserSettings } from '../src/lib/supabase';
-import type { VeniceClient } from '../src/lib/venice';
 
 // Mock the librarian runner module so wiki_librarian's execute() can be
 // driven end-to-end without spinning the real agent. `vi.mock` is
@@ -63,7 +62,6 @@ function mockSupabase(opts: {
 function ctxFor(svc: SupabaseService): ToolContext {
   return {
     supabase: svc,
-    venice: {} as VeniceClient,
     userId: 'user-1',
     threadId: 'thread-1',
     signal: new AbortController().signal,

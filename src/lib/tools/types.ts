@@ -20,23 +20,9 @@
  * that cascades from the outer send() cancellation.
  */
 import type { SupabaseService } from '../supabase';
-import type { VeniceClient } from '../venice';
 
 export interface ToolContext {
   supabase: SupabaseService;
-  /**
-   * Leftover VeniceClient slot from the pre-edge-function era.
-   * Optional because most tools no longer reach for it: memory_search,
-   * conversation_search, and wiki_search embed queries through
-   * `SupabaseService.embed` (milestone 3), and the
-   * runHeadlessToolLoop-driven sub-agent flows run chat completions
-   * through `SupabaseService.complete` (milestone 6 + the
-   * headless-tool-loop sweep). The chat loop still populates it so
-   * `wiki_librarian` - the one remaining consumer - can pass it
-   * through to `runManually` until the wiki-librarian family migrates.
-   * After that sweep ships, the field deletes outright.
-   */
-  venice?: VeniceClient;
   userId: string;
   threadId: string;
   signal: AbortSignal;

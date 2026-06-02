@@ -22,7 +22,7 @@
  */
 import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService } from '../../supabase';
-import type { VeniceClient, VeniceMessage } from '../../venice';
+import type { VeniceMessage } from '../../venice';
 import { wikiLibrarianToolbox } from '../../tools/wiki_librarian_toolbox';
 import { runHeadlessToolLoop, type HeadlessToolLoopEvent } from '../../tools/run';
 import { agentModel } from '../../models';
@@ -83,7 +83,6 @@ export class WikiLibrarianAgent
   private onProgress: ((event: HeadlessToolLoopEvent) => void) | null = null;
 
   constructor(
-    private venice: VeniceClient,
     private supabase: SupabaseService,
     /**
      * Optional model override. Defaults to the registry's
@@ -164,7 +163,6 @@ export class WikiLibrarianAgent
         toolbox: this.toolbox,
         toolCtx: {
           supabase: this.supabase,
-          venice: this.venice,
           userId: req.userId,
           // The librarian is not thread-scoped. We pass the empty
           // string here to satisfy the ToolContext shape; the wiki

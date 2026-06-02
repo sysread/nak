@@ -19,7 +19,6 @@ import type {
   ThreadSummaryRow,
 } from '../src/lib/supabase';
 import type { ToolContext } from '../src/lib/tools';
-import type { VeniceClient } from '../src/lib/venice';
 
 function makeThread(id: string, title: string): Thread {
   return {
@@ -59,14 +58,6 @@ function makeSupabaseMock(opts: { hits: ThreadSearchHit[] }): SupabaseService {
   } as unknown as SupabaseService;
 }
 
-function makeVeniceMock(): VeniceClient {
-  return {
-    embed: vi.fn().mockResolvedValue({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-    }),
-  } as unknown as VeniceClient;
-}
-
 function makeCtx(opts: {
   flag: boolean | undefined;
   threadId: string;
@@ -74,7 +65,6 @@ function makeCtx(opts: {
 }): ToolContext {
   return {
     supabase: makeSupabaseMock({ hits: opts.hits }),
-    venice: makeVeniceMock(),
     userId: 'u-1',
     threadId: opts.threadId,
     signal: new AbortController().signal,

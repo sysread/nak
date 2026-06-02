@@ -1961,7 +1961,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       const ctl = childController(signal);
       const ctx: ToolContext = {
         supabase,
-        venice,
         userId,
         threadId: thread.id,
         signal: ctl.signal,

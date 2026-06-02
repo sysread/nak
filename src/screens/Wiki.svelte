@@ -930,7 +930,7 @@
   }
 
   async function submitLibrarianRun(): Promise<void> {
-    if (!app.supabase || !app.venice) return;
+    if (!app.supabase) return;
     if (librarianBusy) return;
     librarianBusy = true;
     librarianError = null;
@@ -944,7 +944,6 @@
       }
       const result = await runLibrarianManually({
         supabase: app.supabase,
-        venice: app.venice,
         userId: session.user.id,
         userName: app.userName,
         userLocation: app.userLocation,

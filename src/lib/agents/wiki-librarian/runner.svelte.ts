@@ -30,7 +30,6 @@
  * protecting against.
  */
 import type { SupabaseService } from '../../supabase';
-import type { VeniceClient } from '../../venice';
 import { createLogger } from '../../logger.svelte';
 import { emitWikiChange } from '../../wiki-events';
 import type { WikiLibrarianUserProfile } from './prompt';
@@ -111,7 +110,6 @@ export type LibrarianProgress =
 
 export interface RunManuallyOpts {
   supabase: SupabaseService;
-  venice: VeniceClient;
   userId: string;
   userName: string;
   userLocation: string;
@@ -195,7 +193,6 @@ export async function runManually(
 
     const { WikiLibrarianAgent } = await import('./agent');
     const agent = new WikiLibrarianAgent(
-      opts.venice,
       opts.supabase,
       undefined,
       buildProfile(opts.userName, opts.userLocation)

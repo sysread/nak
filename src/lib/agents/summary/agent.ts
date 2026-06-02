@@ -19,7 +19,7 @@
  */
 import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
-import type { VeniceClient, VeniceMessage } from '../../venice';
+import type { VeniceMessage } from '../../venice';
 import type { Toolbox } from '../../tools/types';
 import { sanitizeToolCallIdForWire, sanitizeToolCallsForWire } from '../../tools/wire';
 import {
@@ -145,7 +145,6 @@ export class SummaryAgent implements Agent<SummaryInput, SummaryOutput> {
   readonly toolbox: Toolbox = emptyToolbox;
 
   constructor(
-    private venice: VeniceClient,
     private supabase: SupabaseService,
     /**
      * Optional model override - defaults to the registry's
@@ -196,7 +195,7 @@ export class SummaryAgent implements Agent<SummaryInput, SummaryOutput> {
       // project-wide floor on agent sub-call caps; the prompt's 2-3
       // sentence target lands well under that. The prompt controls
       // length, not the cap.
-      const result = await this.venice.completeChat({
+      const result = await this.supabase.complete({
         model: this.model,
         messages: convo,
         maxTokens: 2048,
