@@ -38,7 +38,6 @@
     pickVisibleRecipes,
   } from '$lib/ui/recipe-list';
   import { onMount } from 'svelte';
-  import RecipeRating from './RecipeRating.svelte';
   import Scanner from './Scanner.svelte';
   import BucketHeader from './BucketHeader.svelte';
   import TopicsFilter from './TopicsFilter.svelte';
@@ -270,50 +269,54 @@
           }}
           title={r.title}
         >
-          <span class="recipe-list-title">
-            {#if r.upcoming}
-              <!-- Cart glyph: the user marked this for the current
-                   grocery-shopping cycle. Shown in BOTH the Upcoming
-                   section above AND the row's natural spot in the
-                   main list, so the user can tell at a glance which
-                   "regular" rows are also in the bookmark set. -->
-              <span
-                class="recipe-list-upcoming-mark"
-                aria-label="Upcoming"
-                title="Upcoming"
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                     stroke-linejoin="round" aria-hidden="true">
-                  <circle cx="9" cy="21" r="1" />
-                  <circle cx="20" cy="21" r="1" />
-                  <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
-                </svg>
-              </span>
-            {/if}
-            {#if r.favorite}
-              <!-- Thumbs-up glyph: parallel to the cart - present on
-                   the row in BOTH the Favorites section AND its natural
-                   slot in the main list, so a favorited row in the main
-                   list is visibly marked too. -->
-              <span
-                class="recipe-list-favorite-mark"
-                aria-label="Favorite"
-                title="Favorite"
-              >
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                     stroke-linejoin="round" aria-hidden="true">
-                  <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z" />
-                  <path d="M7 11l4-7a2 2 0 0 1 4 0v4h5a2 2 0 0 1 2 2.4l-2 7A2 2 0 0 1 18 20H7z" />
-                </svg>
-              </span>
-            {/if}
-            {r.title}
-          </span>
-          {#if r.rating !== null && r.rating !== undefined}
-            <span class="recipe-list-rating">
-              <RecipeRating value={r.rating} size={12} />
+          <span class="recipe-list-title">{r.title}</span>
+          {#if r.upcoming || r.favorite}
+            <!-- Status glyphs ride at the row's right edge after the
+                 title, not before it, so every title shares a common
+                 left edge regardless of which marks a row carries.
+                 The marks group is flex-shrink:0 and the title takes
+                 the slack, so a long title truncates with an ellipsis
+                 against the marks rather than pushing them out of the
+                 row. -->
+            <span class="recipe-list-marks">
+              {#if r.upcoming}
+                <!-- Cart glyph: the user marked this for the current
+                     grocery-shopping cycle. Shown in BOTH the Upcoming
+                     section above AND the row's natural spot in the
+                     main list, so the user can tell at a glance which
+                     "regular" rows are also in the bookmark set. -->
+                <span
+                  class="recipe-list-upcoming-mark"
+                  aria-label="Upcoming"
+                  title="Upcoming"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                       stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="9" cy="21" r="1" />
+                    <circle cx="20" cy="21" r="1" />
+                    <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+                  </svg>
+                </span>
+              {/if}
+              {#if r.favorite}
+                <!-- Thumbs-up glyph: parallel to the cart - present on
+                     the row in BOTH the Favorites section AND its natural
+                     slot in the main list, so a favorited row in the main
+                     list is visibly marked too. -->
+                <span
+                  class="recipe-list-favorite-mark"
+                  aria-label="Favorite"
+                  title="Favorite"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                       stroke-linejoin="round" aria-hidden="true">
+                    <path d="M7 11v9H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3z" />
+                    <path d="M7 11l4-7a2 2 0 0 1 4 0v4h5a2 2 0 0 1 2 2.4l-2 7A2 2 0 0 1 18 20H7z" />
+                  </svg>
+                </span>
+              {/if}
             </span>
           {/if}
         </button>
@@ -406,45 +409,52 @@
   .recipe-list-empty {
     padding: 0.75rem;
   }
-  /* Two-line recipe row: title on top, rating inline below. */
+  /* Single-line recipe row: title fills the row from a common left
+     edge, status marks ride at the right. */
   .recipe-list-row {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.1rem;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.3rem;
   }
   .recipe-list-title {
     font-weight: 500;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 100%;
+    /* flex:1 + min-width:0 lets the title consume the row's slack and
+       truncate with an ellipsis against the marks, instead of letting
+       its intrinsic width shove the marks past the row's right edge. */
+    flex: 1;
+    min-width: 0;
   }
-  /* Inline cart glyph that prefixes the title of any upcoming recipe.
-     Tinted with --accent so it reads as a "marked" affordance against
-     the rest of the row. The mark appears on the row in BOTH the
-     Upcoming section above and the main listing below so the user
-     can spot at a glance which "regular" rows are also bookmarked. */
+  /* Right-aligned group holding the status glyphs (cart, thumbs-up).
+     flex-shrink:0 keeps the marks at full size while the title
+     truncates to make room. */
+  .recipe-list-marks {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex-shrink: 0;
+  }
+  /* Cart glyph for any upcoming recipe. Tinted with --accent so it
+     reads as a "marked" affordance against the rest of the row. The
+     mark appears on the row in BOTH the Upcoming section above and the
+     main listing below so the user can spot at a glance which
+     "regular" rows are also bookmarked. */
   .recipe-list-upcoming-mark {
     display: inline-flex;
     align-items: center;
     color: var(--accent);
-    margin-right: 0.3rem;
-    vertical-align: -0.1em;
   }
   /* Thumbs-up glyph for favorited rows. Parallel to the upcoming
      mark; sits to the right of it when a row is flagged for both
-     (cart, then thumbs-up, then title). Same accent tint so the row
-     reads as "marked" without picking a competing color. */
+     (cart, then thumbs-up). Same accent tint so the row reads as
+     "marked" without picking a competing color. */
   .recipe-list-favorite-mark {
     display: inline-flex;
     align-items: center;
     color: var(--accent);
-    margin-right: 0.3rem;
-    vertical-align: -0.1em;
-  }
-  .recipe-list-rating {
-    opacity: 0.8;
   }
   /* Pagination sentinel. Needs a little height so the
      IntersectionObserver has a real box to catch as it nears the

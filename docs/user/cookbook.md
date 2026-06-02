@@ -201,8 +201,8 @@ deck" without scrolling.
   the Recipes drawer tab, AND in their natural spot in the main list
   below. The duplication is intentional - you can see "what's coming
   up" at a glance without losing the recipe from its usual position.
-  A small cart glyph appears next to upcoming recipes' titles in
-  the main list too, so you can tell at a glance which of the
+  A small cart glyph appears at the right edge of upcoming recipes'
+  rows in the main list too, so you can tell at a glance which of the
   regular entries are also bookmarked.
 - **Stable sort**: toggling the upcoming flag does NOT bump the
   recipe to the top of the recency sort - the flag is a workflow
@@ -231,8 +231,8 @@ or neither.
 - **Where they show up**: in a **Favorites** section right below
   **Upcoming** and above the main listing. As with Upcoming, the
   favorited row ALSO continues to appear in its natural position in
-  the main list, marked with a small thumbs-up glyph next to the
-  title so you can spot favorites at a glance.
+  the main list, marked with a small thumbs-up glyph at the right
+  edge of the row so you can spot favorites at a glance.
 - **Stable sort**: toggling favorite does not bump the recipe in the
   recency sort - it's a bookmark, not an edit.
 
