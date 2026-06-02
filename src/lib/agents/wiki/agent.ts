@@ -329,7 +329,6 @@ export class WikiAgent implements Agent<WikiInput, WikiOutput> {
     );
     try {
       const result = await runHeadlessToolLoop({
-        venice: this.venice,
         model: args.modelId,
         messages: args.convo,
         toolbox: this.toolbox,

@@ -159,31 +159,37 @@ list above) onto `SupabaseService.complete` so
 Step shape, in the order that lets each step ship with a
 green gate:
 
-1. **Pick the worker-start protocol shape.** Each Web Worker
-   today receives `{ supabaseUrl, supabasePublishableKey,
-   veniceApiKey, ... }` from the main thread (see
-   `src/lib/agents/deep-sleep/worker.ts` as the canonical
-   example post-embeddings). The migrated protocol drops
-   `veniceApiKey` and keeps the Supabase fields, then
-   constructs `new SupabaseService({...})` once per worker
-   - the same shape the main thread already uses. Decide
-   whether the worker also needs the session JWT (probably
-   yes, so `SupabaseService.complete` calls
-   `functions.invoke('venice/complete')` authenticated as
-   the signed-in user); if so, the postMessage carries
-   `sessionJwt` and the worker hydrates a client from it.
-   The auto-title worker's CycleContext (migrated in
-   milestone 6) is the template - it already stopped
-   carrying `venice`.
+1. **Pick the worker-start protocol shape. (DONE: no fork.)**
+   Each Web Worker today already receives `{ supabaseUrl,
+   supabasePublishableKey, accessToken, refreshToken,
+   veniceApiKey, ... }` from the main thread and does
+   `client.auth.setSession({ access_token, refresh_token })`
+   before wrapping in `SupabaseService`. The migrated protocol
+   just drops `veniceApiKey` + `veniceBaseUrl` from the start
+   message; the JWT-authenticated SupabaseService is already
+   in place, and `SupabaseService.complete` calls
+   `functions.invoke('venice/complete')` which inherits the
+   session JWT through `verify_jwt`. No architectural fork to
+   settle - per-worker migration is purely deletion of the
+   venice half. See deep-sleep/rem/wiki/wiki-librarian/bias/
+   samskara/supervisor worker.ts for the canonical shape.
 
 2. **Migrate the headless tool-loop driver
-   (`tools/run.ts:292`).** Drop `venice: VeniceClient` from
-   `HeadlessToolLoopOptions`; switch its inner Venice call
-   to `toolCtx.supabase.complete`. The recall family +
-   wiki-librarian (which drive sub-tool loops through this
-   helper) keep passing `toolCtx` unchanged - the swap is
-   inside the driver. Land this before the recall agents
-   so they keep working through the migration.
+   (`tools/run.ts:292`). (DONE.)** Dropped
+   `venice: VeniceClient` from `HeadlessToolLoopOptions`;
+   the loop now drives `toolCtx.supabase.complete`. The
+   recall family + wiki-librarian (which drive sub-tool
+   loops through this helper) keep passing `toolCtx`
+   unchanged - the swap is inside the driver. The agent
+   classes that compose `runHeadlessToolLoop` calls
+   (`rem`, `recall`, `conversation_recall`, `wiki_recall`,
+   `reflection`, `wiki`, `deep-sleep`, `wiki-librarian`)
+   stopped passing `venice: this.venice` at the top level;
+   the leftover `toolCtx.venice` field stays populated
+   because step 3 hasn't dropped it from `ToolContext`
+   yet. Tests for the 6 affected agent / tool surfaces
+   were rewritten to script `supabase.complete` instead of
+   `venice.completeChat`.
 
 3. **Migrate the worker-resident agents one family at a
    time.** For each of `bias`, `samskara`, `summary`,
@@ -198,7 +204,9 @@ green gate:
    the main-thread caller of the worker to stop sending
    `veniceApiKey`. One agent + its worker + its caller per
    commit so the gate stays green and the diff stays
-   reviewable.
+   reviewable. Step 2 left `toolCtx.venice` populated as a
+   no-op; this step is what finally drops it from
+   `ToolContext`.
 
 4. **Delete `VeniceClient.completeChat`.** Once step 3 is
    complete the method has no remaining callers; delete it

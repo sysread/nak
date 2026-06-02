@@ -108,22 +108,25 @@ describe('memory_recall — registry scoping', () => {
 describe('memory_recall — execute() routes through RecallAgent', () => {
   it('returns the parsed RecallNote as the tool result on the happy path', async () => {
     // The tool synthesises a RecallAgent with ctx.venice + ctx.supabase
-    // and calls run(). A scripted Venice stream drives the agent to a
-    // parsed note; the tool returns that note directly so the chat-
+    // and calls run(). A scripted supabase.complete drives the agent
+    // to a parsed note (the chat-completion seam moved off venice in
+    // milestone 6); the tool returns that note directly so the chat-
     // loop's JSON.stringify of the tool-result body is a clean
     // `{"kind":"note","note":"…"}` on the wire.
     const messages: Message[] = [
       makeMessage({ id: 'u1', role: 'user', content: 'how do I deploy' }),
     ];
     const listMessages = vi.fn(async () => messages);
-    const svc = { listMessages } as unknown as SupabaseService;
-
-    const completeChat = vi.fn(async () =>
+    const complete = vi.fn(async () =>
       makeCompletion(
         '{"kind":"note","note":"I remember the app deploys via Cloudflare Pages."}'
       )
     );
-    const venice = { completeChat, embed: vi.fn() } as unknown as VeniceClient;
+    const svc = { listMessages, complete } as unknown as SupabaseService;
+    const venice = {
+      completeChat: vi.fn(),
+      embed: vi.fn(),
+    } as unknown as VeniceClient;
 
     const result = await memoryRecall.execute({}, ctxFor(svc, venice));
 
@@ -138,11 +141,15 @@ describe('memory_recall — execute() routes through RecallAgent', () => {
     const messages: Message[] = [
       makeMessage({ id: 'u1', role: 'user', content: 'what time is it' }),
     ];
+    const complete = vi.fn(async () => makeCompletion('{"kind":"none"}'));
     const svc = {
       listMessages: vi.fn(async () => messages),
+      complete,
     } as unknown as SupabaseService;
-    const completeChat = vi.fn(async () => makeCompletion('{"kind":"none"}'));
-    const venice = { completeChat, embed: vi.fn() } as unknown as VeniceClient;
+    const venice = {
+      completeChat: vi.fn(),
+      embed: vi.fn(),
+    } as unknown as VeniceClient;
 
     const result = await memoryRecall.execute({}, ctxFor(svc, venice));
     expect(result).toEqual({ kind: 'none' });
@@ -157,6 +164,7 @@ describe('memory_recall — execute() routes through RecallAgent', () => {
       listMessages: vi.fn(async () => {
         throw new Error('supabase flaked');
       }),
+      complete: vi.fn(),
     } as unknown as SupabaseService;
     const venice = {
       completeChat: vi.fn(),

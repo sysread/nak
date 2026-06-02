@@ -118,18 +118,24 @@ describe('conversation_recall — registry scoping', () => {
 
 describe('conversation_recall — execute() routes through ConversationRecallAgent', () => {
   it('returns the parsed note on the happy path', async () => {
+    // The agent's chat-completion seam moved to supabase.complete in
+    // milestone 6; the ctx.venice handle is still threaded through
+    // because the agent constructor takes it, but the loop no longer
+    // drives it. Script the completion on the supabase fixture.
     const messages: Message[] = [
       makeMessage({ id: 'u1', role: 'user', content: 'remind me what we picked for dinner' }),
     ];
     const listMessages = vi.fn(async () => messages);
-    const svc = { listMessages } as unknown as SupabaseService;
-
-    const completeChat = vi.fn(async () =>
+    const complete = vi.fn(async () =>
       makeCompletion(
         '{"kind":"note","note":"I remember we settled on cacio e pepe last time we did Italian."}'
       )
     );
-    const venice = { completeChat, embed: vi.fn() } as unknown as VeniceClient;
+    const svc = { listMessages, complete } as unknown as SupabaseService;
+    const venice = {
+      completeChat: vi.fn(),
+      embed: vi.fn(),
+    } as unknown as VeniceClient;
 
     const result = await conversationRecall.execute({}, ctxFor(svc, venice));
 
@@ -142,21 +148,25 @@ describe('conversation_recall — execute() routes through ConversationRecallAge
 
   it('forwards the topic arg into the agent\u2019s prompt', async () => {
     // The topic string should reach the final user turn the agent
-    // sends to Venice. Intercept completeChat and grep for the topic
-    // in the last message.
+    // sends to the function. Intercept supabase.complete and grep for
+    // the topic in the last message.
     const messages: Message[] = [
       makeMessage({ id: 'u1', role: 'user', content: 'pick up where we left off' }),
     ];
-    const svc = {
-      listMessages: vi.fn(async () => messages),
-    } as unknown as SupabaseService;
 
     const seen: VeniceMessage[][] = [];
-    const completeChat = vi.fn(async (req: { messages: VeniceMessage[] }) => {
+    const complete = vi.fn(async (req: { messages: VeniceMessage[] }) => {
       seen.push(req.messages);
       return makeCompletion('{"kind":"none"}');
     });
-    const venice = { completeChat, embed: vi.fn() } as unknown as VeniceClient;
+    const svc = {
+      listMessages: vi.fn(async () => messages),
+      complete,
+    } as unknown as SupabaseService;
+    const venice = {
+      completeChat: vi.fn(),
+      embed: vi.fn(),
+    } as unknown as VeniceClient;
 
     await conversationRecall.execute(
       { topic: 'the Lisbon move' },
@@ -173,11 +183,15 @@ describe('conversation_recall — execute() routes through ConversationRecallAge
     const messages: Message[] = [
       makeMessage({ id: 'u1', role: 'user', content: 'small talk' }),
     ];
+    const complete = vi.fn(async () => makeCompletion('{"kind":"none"}'));
     const svc = {
       listMessages: vi.fn(async () => messages),
+      complete,
     } as unknown as SupabaseService;
-    const completeChat = vi.fn(async () => makeCompletion('{"kind":"none"}'));
-    const venice = { completeChat, embed: vi.fn() } as unknown as VeniceClient;
+    const venice = {
+      completeChat: vi.fn(),
+      embed: vi.fn(),
+    } as unknown as VeniceClient;
 
     const result = await conversationRecall.execute({}, ctxFor(svc, venice));
     expect(result).toEqual({ kind: 'none' });
@@ -192,6 +206,7 @@ describe('conversation_recall — execute() routes through ConversationRecallAge
       listMessages: vi.fn(async () => {
         throw new Error('supabase flaked');
       }),
+      complete: vi.fn(),
     } as unknown as SupabaseService;
     const venice = {
       completeChat: vi.fn(),

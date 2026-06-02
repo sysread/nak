@@ -5,13 +5,13 @@
  *   - terminal response (no tool calls) → returns finalText and exits
  *   - assistant emits tool_calls → we execute them and continue
  *   - execution concurrency — every call gets a child AbortController
- *   - pre-aborted signal short-circuits without invoking Venice
+ *   - pre-aborted signal short-circuits without invoking the function
  *   - maxRounds cap trips `stoppedByLimit`
  *
- * Venice is mocked as an async generator so each test can script the
- * exact event sequence the loop should see. The toolbox is mocked with
- * a single `spy` tool whose handler is a vi.fn — tests drive its
- * resolve/reject values and assert what arguments it saw.
+ * The non-streaming chat seam is mocked at `SupabaseService.complete`:
+ * each test scripts one ChatCompletion record per round. The toolbox
+ * is mocked with a single `spy` tool whose handler is a vi.fn — tests
+ * drive its resolve/reject values and assert what arguments it saw.
  */
 import { describe, it, expect, vi } from 'vitest';
 import {
@@ -22,6 +22,7 @@ import {
 import type { Toolbox, ToolContext, ToolDef } from '../src/lib/tools/types';
 import type {
   ChatCompletion,
+  ChatRequest,
   OpenAIToolCall,
   VeniceClient,
   VeniceMessage,
@@ -29,29 +30,35 @@ import type {
 import type { SupabaseService } from '../src/lib/supabase';
 
 /**
- * Per-round shape the test scripts. The headless loop now drives
- * `venice.completeChat`, which returns a single record per round
- * rather than a stream of events. Tests script `{text, toolCalls?}`
- * for each round; the helper fills the rest of the ChatCompletion
- * shape with empty defaults.
+ * Per-round shape the test scripts. The headless loop drives a single
+ * non-streaming chat completion per round through
+ * `SupabaseService.complete` (the venice/complete edge function).
+ * Tests script `{text, toolCalls?}` for each round; the helper fills
+ * the rest of the ChatCompletion shape with empty defaults.
  */
 interface RoundScript {
   text?: string;
   toolCalls?: OpenAIToolCall[];
 }
 
-/** Script a venice.completeChat with one canned ChatCompletion per round. */
-function makeVenice(
+/**
+ * Script a `SupabaseService.complete` mock with one canned
+ * ChatCompletion per round. The leftover `toolCtx.venice` field is
+ * irrelevant to the loop (the network seam is supabase.complete now)
+ * but the ToolContext interface still carries a `venice` slot until
+ * the worker-fleet sweep deletes it; tests pass an inert handle.
+ */
+function makeSupabase(
   rounds: RoundScript[]
-): { venice: VeniceClient; streamCalls: VeniceMessage[][] } {
+): { supabase: SupabaseService; streamCalls: VeniceMessage[][] } {
   // Each round's response comes from rounds[i]; we shift off the front
   // so call 1 sees rounds[0], call 2 sees rounds[1], etc. Naming the
-  // observation array `streamCalls` for diff churn reasons - it still
-  // captures the per-round message list.
+  // observation array `streamCalls` is historical - it captures the
+  // per-round message list the loop POSTed.
   const remaining = rounds.slice();
   const streamCalls: VeniceMessage[][] = [];
-  const completeChat = vi.fn(
-    async (req: { messages: VeniceMessage[] }): Promise<ChatCompletion> => {
+  const complete = vi.fn(
+    async (req: ChatRequest): Promise<ChatCompletion> => {
       // Snapshot the messages we were called with so assertions can
       // inspect round-N's payload without racing the loop's own
       // in-place extensions.
@@ -68,7 +75,7 @@ function makeVenice(
     }
   );
   return {
-    venice: { completeChat } as unknown as VeniceClient,
+    supabase: { complete } as unknown as SupabaseService,
     streamCalls,
   };
 }
@@ -89,9 +96,9 @@ function makeToolbox(handler: ToolDef['execute'] = async () => ({ ok: true })): 
   return { toolbox, spy };
 }
 
-function baseCtx(): Omit<ToolContext, 'signal'> {
+function baseCtx(supabase: SupabaseService): Omit<ToolContext, 'signal'> {
   return {
-    supabase: {} as unknown as SupabaseService,
+    supabase,
     venice: {} as unknown as VeniceClient,
     userId: 'u',
     threadId: 't',
@@ -100,15 +107,14 @@ function baseCtx(): Omit<ToolContext, 'signal'> {
 
 describe('runHeadlessToolLoop — terminal paths', () => {
   it('returns finalText and exits when round 1 has no tool calls', async () => {
-    const { venice } = makeVenice([{ text: 'hello world' }]);
+    const { supabase } = makeSupabase([{ text: 'hello world' }]);
     const { toolbox, spy } = makeToolbox();
 
     const result = await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'hi' }],
       toolbox,
-      toolCtx: baseCtx(),
+      toolCtx: baseCtx(supabase),
       signal: new AbortController().signal,
     });
 
@@ -120,7 +126,7 @@ describe('runHeadlessToolLoop — terminal paths', () => {
   });
 
   it('executes a tool call, feeds the result back, and exits on the next terminal round', async () => {
-    const { venice, streamCalls } = makeVenice([
+    const { supabase, streamCalls } = makeSupabase([
       // Round 1: model asks for one tool call.
       {
         toolCalls: [
@@ -137,11 +143,10 @@ describe('runHeadlessToolLoop — terminal paths', () => {
     const { toolbox, spy } = makeToolbox(async () => ({ echoed: true }));
 
     const result = await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'please call spy' }],
       toolbox,
-      toolCtx: baseCtx(),
+      toolCtx: baseCtx(supabase),
       signal: new AbortController().signal,
     });
 
@@ -175,7 +180,7 @@ describe('runHeadlessToolLoop — terminal paths', () => {
       release = r;
     });
 
-    const { venice } = makeVenice([
+    const { supabase } = makeSupabase([
       {
         toolCalls: [
           {
@@ -199,11 +204,10 @@ describe('runHeadlessToolLoop — terminal paths', () => {
     });
 
     const promise = runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'go' }],
       toolbox,
-      toolCtx: baseCtx(),
+      toolCtx: baseCtx(supabase),
       signal: new AbortController().signal,
     });
     // Let both tool handlers start (microtask + next tick).
@@ -217,7 +221,7 @@ describe('runHeadlessToolLoop — terminal paths', () => {
 
 describe('runHeadlessToolLoop — error paths', () => {
   it('surfaces a tool error as a JSON-encoded tool-result and continues', async () => {
-    const { venice, streamCalls } = makeVenice([
+    const { supabase, streamCalls } = makeSupabase([
       {
         toolCalls: [
           {
@@ -234,11 +238,10 @@ describe('runHeadlessToolLoop — error paths', () => {
     });
 
     const result = await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'go' }],
       toolbox,
-      toolCtx: baseCtx(),
+      toolCtx: baseCtx(supabase),
       signal: new AbortController().signal,
     });
 
@@ -258,7 +261,7 @@ describe('runHeadlessToolLoop — error paths', () => {
     // Model emitted a broken arguments string — a real failure mode.
     // The tool must not run with unparsed args; the model sees the
     // JSON parse error on its next turn and can retry.
-    const { venice } = makeVenice([
+    const { supabase } = makeSupabase([
       {
         toolCalls: [
           {
@@ -273,11 +276,10 @@ describe('runHeadlessToolLoop — error paths', () => {
     const { toolbox, spy } = makeToolbox();
 
     const result = await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'go' }],
       toolbox,
-      toolCtx: baseCtx(),
+      toolCtx: baseCtx(supabase),
       signal: new AbortController().signal,
     });
 
@@ -288,26 +290,25 @@ describe('runHeadlessToolLoop — error paths', () => {
 
 describe('runHeadlessToolLoop — abort and limits', () => {
   it('short-circuits with rounds=0 when the signal is already aborted', async () => {
-    // No rounds scripted - if the loop calls completeChat at all, the
+    // No rounds scripted - if the loop calls supabase.complete at all, the
     // default empty response would still drive a tool-less terminal
     // round. The pre-aborted check prevents the call entirely.
-    const { venice } = makeVenice([]);
+    const { supabase } = makeSupabase([]);
     const { toolbox } = makeToolbox();
     const ac = new AbortController();
     ac.abort();
 
     const result = await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'hi' }],
       toolbox,
-      toolCtx: baseCtx(),
+      toolCtx: baseCtx(supabase),
       signal: ac.signal,
     });
 
     expect(result.rounds).toBe(0);
     expect(result.finalText).toBe('');
-    expect(venice.completeChat).not.toHaveBeenCalled();
+    expect(supabase.complete).not.toHaveBeenCalled();
   });
 
   it('honors maxRounds as a circuit breaker and reports stoppedByLimit', async () => {
@@ -322,15 +323,14 @@ describe('runHeadlessToolLoop — abort and limits', () => {
         },
       ],
     });
-    const { venice } = makeVenice([makeRound('a'), makeRound('b'), makeRound('c')]);
+    const { supabase } = makeSupabase([makeRound('a'), makeRound('b'), makeRound('c')]);
     const { toolbox } = makeToolbox();
 
     const result = await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'go' }],
       toolbox,
-      toolCtx: baseCtx(),
+      toolCtx: baseCtx(supabase),
       signal: new AbortController().signal,
       maxRounds: 2,
     });
@@ -347,7 +347,7 @@ describe('runHeadlessToolLoop — abort and limits', () => {
     // without cancelling the outer context). We assert the seen signal
     // reports aborted once the parent is aborted.
     let seenSignal: AbortSignal | undefined;
-    const { venice } = makeVenice([
+    const { supabase } = makeSupabase([
       {
         toolCalls: [
           {
@@ -366,11 +366,10 @@ describe('runHeadlessToolLoop — abort and limits', () => {
 
     const ac = new AbortController();
     await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'go' }],
       toolbox,
-      toolCtx: baseCtx(),
+      toolCtx: baseCtx(supabase),
       signal: ac.signal,
     });
 
@@ -391,7 +390,7 @@ describe('runHeadlessToolLoop — agent recursion depth', () => {
     // see ctx.depth === 1 so a future spawn checks against the right
     // base.
     let seenDepth: number | undefined = -1;
-    const { venice } = makeVenice([
+    const { supabase } = makeSupabase([
       {
         toolCalls: [
           { id: 'c1', type: 'function', function: { name: 'spy', arguments: '{}' } },
@@ -405,11 +404,10 @@ describe('runHeadlessToolLoop — agent recursion depth', () => {
     });
 
     await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'go' }],
       toolbox,
-      toolCtx: baseCtx(),
+      toolCtx: baseCtx(supabase),
       signal: new AbortController().signal,
     });
 
@@ -420,7 +418,7 @@ describe('runHeadlessToolLoop — agent recursion depth', () => {
     // Caller at depth 1 (e.g. an agent's tool that spawned this one)
     // should see its tools running at depth 2.
     let seenDepth: number | undefined = -1;
-    const { venice } = makeVenice([
+    const { supabase } = makeSupabase([
       {
         toolCalls: [
           { id: 'c1', type: 'function', function: { name: 'spy', arguments: '{}' } },
@@ -434,11 +432,10 @@ describe('runHeadlessToolLoop — agent recursion depth', () => {
     });
 
     await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'go' }],
       toolbox,
-      toolCtx: { ...baseCtx(), depth: 1 },
+      toolCtx: { ...baseCtx(supabase), depth: 1 },
       signal: new AbortController().signal,
     });
 
@@ -448,35 +445,33 @@ describe('runHeadlessToolLoop — agent recursion depth', () => {
   it('throws before any Venice call when depth would exceed MAX_AGENT_DEPTH', async () => {
     // Caller already at the cap; the agent we are about to start
     // would run at MAX_AGENT_DEPTH + 1, which is over.
-    const { venice } = makeVenice([]);
+    const { supabase } = makeSupabase([]);
     const { toolbox } = makeToolbox();
 
     await expect(
       runHeadlessToolLoop({
-        venice,
         model: 'm',
         messages: [{ role: 'user', content: 'go' }],
         toolbox,
-        toolCtx: { ...baseCtx(), depth: MAX_AGENT_DEPTH },
+        toolCtx: { ...baseCtx(supabase), depth: MAX_AGENT_DEPTH },
         signal: new AbortController().signal,
       })
     ).rejects.toThrow(/depth limit/);
 
-    expect(venice.completeChat).not.toHaveBeenCalled();
+    expect(supabase.complete).not.toHaveBeenCalled();
   });
 
   it('allows depth exactly at MAX_AGENT_DEPTH (caller at MAX-1)', async () => {
     // Boundary case: caller depth MAX-1 means the agent runs at MAX.
     // That's the deepest legitimate level - it must not throw.
-    const { venice } = makeVenice([{ text: 'ok' }]);
+    const { supabase } = makeSupabase([{ text: 'ok' }]);
     const { toolbox } = makeToolbox();
 
     const result = await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'hi' }],
       toolbox,
-      toolCtx: { ...baseCtx(), depth: MAX_AGENT_DEPTH - 1 },
+      toolCtx: { ...baseCtx(supabase), depth: MAX_AGENT_DEPTH - 1 },
       signal: new AbortController().signal,
     });
 
@@ -486,7 +481,7 @@ describe('runHeadlessToolLoop — agent recursion depth', () => {
 
 describe('runHeadlessToolLoop — onProgress live events', () => {
   it('emits a `thinking` event per round and a `tool` event per settled call', async () => {
-    const { venice } = makeVenice([
+    const { supabase } = makeSupabase([
       // Round 1: model asks for two parallel tool calls, both with
       // their dispatcher-injected `activity` narrations populated.
       {
@@ -516,11 +511,10 @@ describe('runHeadlessToolLoop — onProgress live events', () => {
 
     const events: HeadlessToolLoopEvent[] = [];
     const result = await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'go' }],
       toolbox,
-      toolCtx: baseCtx(),
+      toolCtx: baseCtx(supabase),
       signal: new AbortController().signal,
       onProgress: (e) => events.push(e),
     });
@@ -545,7 +539,7 @@ describe('runHeadlessToolLoop — onProgress live events', () => {
   });
 
   it('emits a `tool` event with ok=false when the handler throws', async () => {
-    const { venice } = makeVenice([
+    const { supabase } = makeSupabase([
       {
         toolCalls: [
           {
@@ -566,11 +560,10 @@ describe('runHeadlessToolLoop — onProgress live events', () => {
 
     const events: HeadlessToolLoopEvent[] = [];
     await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'go' }],
       toolbox,
-      toolCtx: baseCtx(),
+      toolCtx: baseCtx(supabase),
       signal: new AbortController().signal,
       onProgress: (e) => events.push(e),
     });
@@ -585,7 +578,7 @@ describe('runHeadlessToolLoop — onProgress live events', () => {
   });
 
   it('swallows listener errors so the loop keeps running', async () => {
-    const { venice } = makeVenice([
+    const { supabase } = makeSupabase([
       {
         toolCalls: [
           {
@@ -600,11 +593,10 @@ describe('runHeadlessToolLoop — onProgress live events', () => {
     const { toolbox } = makeToolbox(async () => ({ ok: true }));
 
     const result = await runHeadlessToolLoop({
-      venice,
       model: 'm',
       messages: [{ role: 'user', content: 'go' }],
       toolbox,
-      toolCtx: baseCtx(),
+      toolCtx: baseCtx(supabase),
       signal: new AbortController().signal,
       onProgress: () => {
         throw new Error('listener broke');

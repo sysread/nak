@@ -318,7 +318,28 @@ The gated `images` toolbox carries:
 - `runHeadlessToolLoop(opts): Promise<HeadlessToolLoopResult>` -
   `opts.messages` is already composed by the caller (no system-
   prompt prepend). Returns `{ finalText, rounds, toolCalls,
-  stoppedByLimit }`. Default `maxRounds` is 8.
+  stoppedByLimit }`. Default `maxRounds` is 8. The loop drives each
+  round through `opts.toolCtx.supabase.complete` (the venice/complete
+  edge function), so the caller doesn't pass a `VeniceClient` -
+  whatever supabase service rides on the tool context IS the
+  chat-completion seam.
+- **Abort semantics on the headless loop.** `opts.signal` is checked
+  at each round boundary (`if (signal.aborted) break;` at the top of
+  the loop) and cascades into per-tool child controllers (every tool
+  execution gets `childController(signal)`, so in-flight tool fetches
+  reject with `AbortError` immediately). What `opts.signal` does NOT
+  do, since the supabase JS client's `functions.invoke` exposes no
+  abort hook: cancel an in-flight chat-completion POST mid-fetch.
+  When an abort lands while the function is still waiting on Venice,
+  the POST runs to completion, the response gets parsed and pushed
+  into the message list, and the abort fires at the next round-
+  boundary check. Same limitation applies to every M3+ migrated path
+  (`SupabaseService.embed`, `extractText`, `generateImage`,
+  `complete`); flagged here because the headless loop's worst-case
+  in-flight wait is several seconds per round, longer than a single
+  embed or text-parse round-trip. If a future Supabase client release
+  adds `signal:` to `functions.invoke` opts (or we switch to raw
+  `fetch` against the function URL), this gap closes for free.
 - **Toggle semantics.** The `toggle_toolbox` tool takes
   `{enabled: string[]}` and replaces the thread's set. Passing
   `{enabled: []}` disables every gated toolbox. The tool returns

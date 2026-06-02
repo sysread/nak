@@ -162,7 +162,6 @@ export class ReflectionAgent implements Agent<ReflectionInput, ReflectionOutput>
       convo.push({ role: 'user', content: REFLECTION_PROMPT });
 
       const result = await runHeadlessToolLoop({
-        venice: this.venice,
         model: this.model,
         messages: convo,
         toolbox: this.toolbox,

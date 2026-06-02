@@ -26,6 +26,7 @@ import { recallToolbox } from '../src/lib/tools/recall_toolbox';
 import type { SupabaseService, Message } from '../src/lib/supabase';
 import type {
   ChatCompletion,
+  ChatRequest,
   OpenAIToolCall,
   VeniceClient,
   VeniceMessage,
@@ -47,26 +48,9 @@ function makeMessage(overrides: Partial<Message>): Message {
   } as Message;
 }
 
-function makeSupabase(messages: Message[]): {
-  svc: SupabaseService;
-  spies: { listMessages: ReturnType<typeof vi.fn> };
-} {
-  const spies = {
-    listMessages: vi.fn(async () => messages),
-    // Recall toolbox only exposes memory_search, which goes through
-    // the RPC helpers below. Memory_create / _update / _invalidate
-    // are deliberately absent — a test that accidentally routes to
-    // them should fail on the missing method, not succeed silently.
-    searchMemories: vi.fn(async () => []),
-    searchMemoriesByEmbedding: vi.fn(async () => []),
-    searchUnembeddedMemoriesByText: vi.fn(async () => []),
-  };
-  return { svc: spies as unknown as SupabaseService, spies };
-}
-
 /**
- * Scripted venice whose `completeChat` returns a canned response per
- * round. `streamCalls` captures every call's full request so tests can
+ * Per-round completion script consumed by `supabase.complete`.
+ * `streamCalls` captures every call's full request so tests can
  * inspect messages AND the response_format / tools fields.
  */
 interface RecordedStreamCall {
@@ -80,46 +64,63 @@ interface RoundScript {
   toolCalls?: OpenAIToolCall[];
 }
 
-function makeVenice(rounds: RoundScript[]): {
-  venice: VeniceClient;
+function makeSupabase(
+  messages: Message[],
+  rounds: RoundScript[] = []
+): {
+  svc: SupabaseService;
+  spies: { listMessages: ReturnType<typeof vi.fn>; complete: ReturnType<typeof vi.fn> };
   streamCalls: RecordedStreamCall[];
 } {
   const remaining = rounds.slice();
   const streamCalls: RecordedStreamCall[] = [];
-  const completeChat = vi.fn(
-    async (req: {
-      messages: VeniceMessage[];
-      responseFormat?: unknown;
-      tools?: Array<{ function: { name: string } }>;
-    }): Promise<ChatCompletion> => {
-      streamCalls.push({
-        messages: req.messages.map((m) => ({ ...m })),
-        responseFormat: req.responseFormat,
-        toolNames: (req.tools ?? []).map((t) => t.function.name),
-      });
-      const script = remaining.shift() ?? {};
-      return {
-        text: script.text ?? '',
-        reasoning: '',
-        toolCalls: script.toolCalls ?? [],
-        usage: null,
-        citations: [],
-        finishReason: (script.toolCalls ?? []).length > 0 ? 'tool_calls' : 'stop',
-      };
-    }
-  );
-  return {
-    venice: {
-      completeChat,
-      // Embedding calls happen inside memory_search; stub a 1024-dim
-      // vector so any round that routes through searchMemoriesByEmbedding
-      // doesn't explode on the tool-side Math.
-      embed: vi.fn(async () => ({
-        data: [{ index: 0, embedding: new Array(1024).fill(0) }],
-      })),
-    } as unknown as VeniceClient,
-    streamCalls,
+  const complete = vi.fn(async (req: ChatRequest): Promise<ChatCompletion> => {
+    streamCalls.push({
+      messages: req.messages.map((m) => ({ ...m })),
+      responseFormat: req.responseFormat,
+      toolNames: (req.tools ?? []).map((t) => t.function.name),
+    });
+    const script = remaining.shift() ?? {};
+    return {
+      text: script.text ?? '',
+      reasoning: '',
+      toolCalls: script.toolCalls ?? [],
+      usage: null,
+      citations: [],
+      finishReason: (script.toolCalls ?? []).length > 0 ? 'tool_calls' : 'stop',
+    };
+  });
+  const spies = {
+    listMessages: vi.fn(async () => messages),
+    // Recall toolbox only exposes memory_search, which goes through
+    // the RPC helpers below. Memory_create / _update / _invalidate
+    // are deliberately absent - a test that accidentally routes to
+    // them should fail on the missing method, not succeed silently.
+    searchMemories: vi.fn(async () => []),
+    searchMemoriesByEmbedding: vi.fn(async () => []),
+    searchUnembeddedMemoriesByText: vi.fn(async () => []),
+    complete,
   };
+  return { svc: spies as unknown as SupabaseService, spies, streamCalls };
+}
+
+/**
+ * Inert VeniceClient for RecallAgent's leftover `venice` constructor
+ * argument. The agent's chat-completion seam moved to
+ * `supabase.complete` in milestone 6; the venice handle is still
+ * required by the constructor only because the worker-fleet sweep
+ * that drops it hasn't shipped. The `embed` stub covers any
+ * memory_search round that routes through searchMemoriesByEmbedding -
+ * those still call venice.embed directly inside the embeddings
+ * helpers.
+ */
+function makeInertVenice(): VeniceClient {
+  return {
+    completeChat: vi.fn(),
+    embed: vi.fn(async () => ({
+      data: [{ index: 0, embedding: new Array(1024).fill(0) }],
+    })),
+  } as unknown as VeniceClient;
 }
 
 describe('trimToLastUserTurn', () => {
@@ -249,8 +250,7 @@ describe('parseRecallOutput', () => {
 describe('RecallAgent — identity + contract', () => {
   it('advertises the recall toolbox (read-only), recall name, and a model id', () => {
     const { svc } = makeSupabase([]);
-    const { venice } = makeVenice([]);
-    const agent = new RecallAgent(venice, svc);
+    const agent = new RecallAgent(makeInertVenice(), svc);
     expect(agent.name).toBe('recall');
     expect(agent.toolbox).toBe(recallToolbox);
     expect(agent.model.length).toBeGreaterThan(0);
@@ -263,8 +263,7 @@ describe('RecallAgent — identity + contract', () => {
 
   it('accepts a model override for tests and future A/B runs', () => {
     const { svc } = makeSupabase([]);
-    const { venice } = makeVenice([]);
-    const agent = new RecallAgent(venice, svc, 'custom-test-model');
+    const agent = new RecallAgent(makeInertVenice(), svc, 'custom-test-model');
     expect(agent.model).toBe('custom-test-model');
   });
 });
@@ -302,13 +301,12 @@ describe('RecallAgent — run() happy path', () => {
         ],
       }),
     ];
-    const { svc } = makeSupabase(messages);
-    const { venice, streamCalls } = makeVenice([
+    const { svc, streamCalls } = makeSupabase(messages, [
       {
         text: '{"kind":"note","note":"I remember the user already has a dentist back home."}',
       },
     ]);
-    const agent = new RecallAgent(venice, svc, 'test-model');
+    const agent = new RecallAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -343,11 +341,11 @@ describe('RecallAgent — run() happy path', () => {
   });
 
   it('returns an empty-kind note when the model emits the no-op signal', async () => {
-    const { svc } = makeSupabase([
-      makeMessage({ id: 'u1', role: 'user', content: 'what time is it' }),
-    ]);
-    const { venice } = makeVenice([{ text: '{"kind":"none"}' }]);
-    const agent = new RecallAgent(venice, svc, 'test-model');
+    const { svc } = makeSupabase(
+      [makeMessage({ id: 'u1', role: 'user', content: 'what time is it' })],
+      [{ text: '{"kind":"none"}' }]
+    );
+    const agent = new RecallAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -359,13 +357,11 @@ describe('RecallAgent — run() happy path', () => {
   });
 
   it('falls back to {kind:"none"} when the model returns malformed JSON', async () => {
-    const { svc } = makeSupabase([
-      makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
-    ]);
-    const { venice } = makeVenice([
-      { text: 'I could not remember anything.' },
-    ]);
-    const agent = new RecallAgent(venice, svc, 'test-model');
+    const { svc } = makeSupabase(
+      [makeMessage({ id: 'u1', role: 'user', content: 'hi' })],
+      [{ text: 'I could not remember anything.' }]
+    );
+    const agent = new RecallAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -388,12 +384,11 @@ describe('RecallAgent — run() happy path', () => {
 });
 
 describe('RecallAgent — edge cases', () => {
-  it('short-circuits on a pre-aborted signal without calling Supabase or Venice', async () => {
-    const { svc } = makeSupabase([
+  it('short-circuits on a pre-aborted signal without calling Supabase or the chat-completion edge', async () => {
+    const { svc, spies } = makeSupabase([
       makeMessage({ id: 'u1', role: 'user', content: 'x' }),
     ]);
-    const { venice } = makeVenice([]);
-    const agent = new RecallAgent(venice, svc, 'test-model');
+    const agent = new RecallAgent(makeInertVenice(), svc, 'test-model');
     const ac = new AbortController();
     ac.abort();
 
@@ -405,18 +400,17 @@ describe('RecallAgent — edge cases', () => {
 
     expect(result.stoppedReason).toBe('aborted');
     expect(svc.listMessages).not.toHaveBeenCalled();
-    expect(venice.completeChat).not.toHaveBeenCalled();
+    expect(spies.complete).not.toHaveBeenCalled();
   });
 
   it('returns done with an empty note when no user turn is in the thread', async () => {
     // Pathological: the first row is an assistant greeting. Nothing
-    // to recall against, and we avoid a wasted Venice call by
-    // short-circuiting before completeChat.
-    const { svc } = makeSupabase([
+    // to recall against, and we avoid a wasted completion call by
+    // short-circuiting before supabase.complete.
+    const { svc, spies } = makeSupabase([
       makeMessage({ id: 'a1', role: 'assistant', content: 'auto-greet' }),
     ]);
-    const { venice } = makeVenice([]);
-    const agent = new RecallAgent(venice, svc, 'test-model');
+    const agent = new RecallAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -426,7 +420,7 @@ describe('RecallAgent — edge cases', () => {
     expect(result.stoppedReason).toBe('done');
     expect(result.output.note).toEqual({ kind: 'none' });
     expect(result.output.inputMessageCount).toBe(0);
-    expect(venice.completeChat).not.toHaveBeenCalled();
+    expect(spies.complete).not.toHaveBeenCalled();
   });
 
   it('captures a thrown error and returns stoppedReason=error with a message', async () => {
@@ -435,8 +429,7 @@ describe('RecallAgent — edge cases', () => {
         throw new Error('network flaked');
       }),
     } as unknown as SupabaseService;
-    const { venice } = makeVenice([]);
-    const agent = new RecallAgent(venice, svc, 'test-model');
+    const agent = new RecallAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },

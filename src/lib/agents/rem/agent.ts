@@ -84,7 +84,6 @@ export class RemAgent implements Agent<RemInput, RemOutput> {
       ];
 
       const result = await runHeadlessToolLoop({
-        venice: this.venice,
         model: this.model,
         messages,
         toolbox: this.toolbox,

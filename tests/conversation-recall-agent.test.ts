@@ -16,6 +16,7 @@ import { conversationRecallToolbox } from '../src/lib/tools/conversation_recall_
 import type { SupabaseService, Message } from '../src/lib/supabase';
 import type {
   ChatCompletion,
+  ChatRequest,
   OpenAIToolCall,
   VeniceClient,
   VeniceMessage,
@@ -37,22 +38,6 @@ function makeMessage(overrides: Partial<Message>): Message {
   } as Message;
 }
 
-function makeSupabase(messages: Message[]): {
-  svc: SupabaseService;
-  spies: { listMessages: ReturnType<typeof vi.fn> };
-} {
-  const spies = {
-    listMessages: vi.fn(async () => messages),
-    // `conversation_search` is the only tool in the toolbox. The
-    // search + hydrate stubs are present so a round that routes
-    // through the tool doesn't blow up — we don't assert on them
-    // here, recall tests just want to pin the agent's shape.
-    searchThreads: vi.fn(async () => []),
-    listThreadSummariesByIds: vi.fn(async () => []),
-  };
-  return { svc: spies as unknown as SupabaseService, spies };
-}
-
 interface RecordedStreamCall {
   messages: VeniceMessage[];
   responseFormat: unknown;
@@ -64,45 +49,59 @@ interface RoundScript {
   toolCalls?: OpenAIToolCall[];
 }
 
-function makeVenice(rounds: RoundScript[]): {
-  venice: VeniceClient;
+function makeSupabase(
+  messages: Message[],
+  rounds: RoundScript[] = []
+): {
+  svc: SupabaseService;
+  spies: { listMessages: ReturnType<typeof vi.fn>; complete: ReturnType<typeof vi.fn> };
   streamCalls: RecordedStreamCall[];
 } {
   const remaining = rounds.slice();
   const streamCalls: RecordedStreamCall[] = [];
-  const completeChat = vi.fn(
-    async (req: {
-      messages: VeniceMessage[];
-      responseFormat?: unknown;
-      tools?: Array<{ function: { name: string } }>;
-    }): Promise<ChatCompletion> => {
-      streamCalls.push({
-        messages: req.messages.map((m) => ({ ...m })),
-        responseFormat: req.responseFormat,
-        toolNames: (req.tools ?? []).map((t) => t.function.name),
-      });
-      const script = remaining.shift() ?? {};
-      return {
-        text: script.text ?? '',
-        reasoning: '',
-        toolCalls: script.toolCalls ?? [],
-        usage: null,
-        citations: [],
-        finishReason: (script.toolCalls ?? []).length > 0 ? 'tool_calls' : 'stop',
-      };
-    }
-  );
-  return {
-    venice: {
-      completeChat,
-      // conversation_search embeds the query before hitting
-      // searchThreads. A 1024-dim zero vector satisfies padding math.
-      embed: vi.fn(async () => ({
-        data: [{ index: 0, embedding: new Array(1024).fill(0) }],
-      })),
-    } as unknown as VeniceClient,
-    streamCalls,
+  const complete = vi.fn(async (req: ChatRequest): Promise<ChatCompletion> => {
+    streamCalls.push({
+      messages: req.messages.map((m) => ({ ...m })),
+      responseFormat: req.responseFormat,
+      toolNames: (req.tools ?? []).map((t) => t.function.name),
+    });
+    const script = remaining.shift() ?? {};
+    return {
+      text: script.text ?? '',
+      reasoning: '',
+      toolCalls: script.toolCalls ?? [],
+      usage: null,
+      citations: [],
+      finishReason: (script.toolCalls ?? []).length > 0 ? 'tool_calls' : 'stop',
+    };
+  });
+  const spies = {
+    listMessages: vi.fn(async () => messages),
+    // `conversation_search` is the only tool in the toolbox. The
+    // search + hydrate stubs are present so a round that routes
+    // through the tool doesn't blow up - we don't assert on them
+    // here, recall tests just want to pin the agent's shape.
+    searchThreads: vi.fn(async () => []),
+    listThreadSummariesByIds: vi.fn(async () => []),
+    complete,
   };
+  return { svc: spies as unknown as SupabaseService, spies, streamCalls };
+}
+
+/**
+ * Inert VeniceClient for the agent constructor's leftover `venice`
+ * slot. The chat-completion seam moved to `supabase.complete` in
+ * milestone 6; this stub covers the embed call conversation_search
+ * makes before hitting searchThreads (a 1024-dim zero vector
+ * satisfies the padding math).
+ */
+function makeInertVenice(): VeniceClient {
+  return {
+    completeChat: vi.fn(),
+    embed: vi.fn(async () => ({
+      data: [{ index: 0, embedding: new Array(1024).fill(0) }],
+    })),
+  } as unknown as VeniceClient;
 }
 
 describe('buildConversationRecallPrompt', () => {
@@ -131,8 +130,7 @@ describe('buildConversationRecallPrompt', () => {
 describe('ConversationRecallAgent — identity + contract', () => {
   it('pins the conversation-recall toolbox, advertises the right name + a model id', () => {
     const { svc } = makeSupabase([]);
-    const { venice } = makeVenice([]);
-    const agent = new ConversationRecallAgent(venice, svc);
+    const agent = new ConversationRecallAgent(makeInertVenice(), svc);
     expect(agent.name).toBe('conversation-recall');
     expect(agent.toolbox).toBe(conversationRecallToolbox);
     expect(agent.model.length).toBeGreaterThan(0);
@@ -145,8 +143,7 @@ describe('ConversationRecallAgent — identity + contract', () => {
 
   it('accepts a model override for tests', () => {
     const { svc } = makeSupabase([]);
-    const { venice } = makeVenice([]);
-    const agent = new ConversationRecallAgent(venice, svc, 'custom-test-model');
+    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'custom-test-model');
     expect(agent.model).toBe('custom-test-model');
   });
 });
@@ -173,13 +170,12 @@ describe('ConversationRecallAgent — run() happy path', () => {
         ],
       }),
     ];
-    const { svc } = makeSupabase(messages);
-    const { venice, streamCalls } = makeVenice([
+    const { svc, streamCalls } = makeSupabase(messages, [
       {
         text: '{"kind":"note","note":"I remember the user prefers cacio e pepe when they pick Italian."}',
       },
     ]);
-    const agent = new ConversationRecallAgent(venice, svc, 'test-model');
+    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -211,11 +207,11 @@ describe('ConversationRecallAgent — run() happy path', () => {
     // first" — testing that the hint actually reaches the prompt is
     // the only way to catch a regression where the agent silently
     // drops it.
-    const { svc } = makeSupabase([
-      makeMessage({ id: 'u1', role: 'user', content: 'same topic as before' }),
-    ]);
-    const { venice, streamCalls } = makeVenice([{ text: '{"kind":"none"}' }]);
-    const agent = new ConversationRecallAgent(venice, svc, 'test-model');
+    const { svc, streamCalls } = makeSupabase(
+      [makeMessage({ id: 'u1', role: 'user', content: 'same topic as before' })],
+      [{ text: '{"kind":"none"}' }]
+    );
+    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
 
     await agent.run({
       input: { threadId: 't-1', topic: 'moving to Lisbon' },
@@ -228,11 +224,11 @@ describe('ConversationRecallAgent — run() happy path', () => {
   });
 
   it('returns an empty-kind note when the model emits the no-op signal', async () => {
-    const { svc } = makeSupabase([
-      makeMessage({ id: 'u1', role: 'user', content: 'what time is it' }),
-    ]);
-    const { venice } = makeVenice([{ text: '{"kind":"none"}' }]);
-    const agent = new ConversationRecallAgent(venice, svc, 'test-model');
+    const { svc } = makeSupabase(
+      [makeMessage({ id: 'u1', role: 'user', content: 'what time is it' })],
+      [{ text: '{"kind":"none"}' }]
+    );
+    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -244,13 +240,11 @@ describe('ConversationRecallAgent — run() happy path', () => {
   });
 
   it('falls back to {kind:"none"} when the model returns malformed JSON', async () => {
-    const { svc } = makeSupabase([
-      makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
-    ]);
-    const { venice } = makeVenice([
-      { text: 'I could not recall anything relevant.' },
-    ]);
-    const agent = new ConversationRecallAgent(venice, svc, 'test-model');
+    const { svc } = makeSupabase(
+      [makeMessage({ id: 'u1', role: 'user', content: 'hi' })],
+      [{ text: 'I could not recall anything relevant.' }]
+    );
+    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -267,12 +261,11 @@ describe('ConversationRecallAgent — run() happy path', () => {
 });
 
 describe('ConversationRecallAgent — edge cases', () => {
-  it('short-circuits on a pre-aborted signal without calling Supabase or Venice', async () => {
-    const { svc } = makeSupabase([
+  it('short-circuits on a pre-aborted signal without calling Supabase or the chat-completion edge', async () => {
+    const { svc, spies } = makeSupabase([
       makeMessage({ id: 'u1', role: 'user', content: 'x' }),
     ]);
-    const { venice } = makeVenice([]);
-    const agent = new ConversationRecallAgent(venice, svc, 'test-model');
+    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
     const ac = new AbortController();
     ac.abort();
 
@@ -284,15 +277,14 @@ describe('ConversationRecallAgent — edge cases', () => {
 
     expect(result.stoppedReason).toBe('aborted');
     expect(svc.listMessages).not.toHaveBeenCalled();
-    expect(venice.completeChat).not.toHaveBeenCalled();
+    expect(spies.complete).not.toHaveBeenCalled();
   });
 
   it('returns done with an empty note when no user turn is in the thread', async () => {
-    const { svc } = makeSupabase([
+    const { svc, spies } = makeSupabase([
       makeMessage({ id: 'a1', role: 'assistant', content: 'auto-greet' }),
     ]);
-    const { venice } = makeVenice([]);
-    const agent = new ConversationRecallAgent(venice, svc, 'test-model');
+    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -302,7 +294,7 @@ describe('ConversationRecallAgent — edge cases', () => {
     expect(result.stoppedReason).toBe('done');
     expect(result.output.note).toEqual({ kind: 'none' });
     expect(result.output.inputMessageCount).toBe(0);
-    expect(venice.completeChat).not.toHaveBeenCalled();
+    expect(spies.complete).not.toHaveBeenCalled();
   });
 
   it('captures a thrown error and returns stoppedReason=error with a message', async () => {
@@ -311,8 +303,7 @@ describe('ConversationRecallAgent — edge cases', () => {
         throw new Error('network flaked');
       }),
     } as unknown as SupabaseService;
-    const { venice } = makeVenice([]);
-    const agent = new ConversationRecallAgent(venice, svc, 'test-model');
+    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },

@@ -12,6 +12,7 @@ import { WikiAgent, isContentFilterRejection } from '../src/lib/agents/wiki/agen
 import type { SupabaseService, Message } from '../src/lib/supabase';
 import type {
   ChatCompletion,
+  ChatRequest,
   VeniceClient,
   VeniceMessage,
 } from '../src/lib/venice';
@@ -32,12 +33,21 @@ function makeMessage(overrides: Partial<Message>): Message {
   } as Message;
 }
 
-function makeSupabase(messages: Message[]): SupabaseService {
+/**
+ * Build a Supabase stub for the wiki agent's needs. The chat-
+ * completion seam moved to `supabase.complete` in milestone 6 - pass
+ * the per-round handler as `complete`, or omit it for tests that
+ * never reach the chat-completion path.
+ */
+function makeSupabase(
+  messages: Message[],
+  complete?: (req: ChatRequest) => Promise<ChatCompletion>
+): SupabaseService {
   return {
     listMessages: vi.fn(async () => messages),
     // The wiki toolbox would reach for these if the model issued a
-    // tool call. Our scripted venice returns a terminal text round
-    // every time so the tool path is not exercised here.
+    // tool call. The scripted complete handler returns a terminal text
+    // round every time so the tool path is not exercised here.
     searchWikiArticles: vi.fn(async () => []),
     createWikiArticle: vi.fn(async () => ({ id: 'w-1' })),
     updateWikiArticle: vi.fn(async () => undefined),
@@ -45,52 +55,60 @@ function makeSupabase(messages: Message[]): SupabaseService {
     // retrySkippedThread reaches these.
     computeWikiTerminalMsgId: vi.fn(async () => 'a-default'),
     manualAdvanceWikiPointer: vi.fn(async () => undefined),
+    complete: complete ? vi.fn(complete) : vi.fn(),
   } as unknown as SupabaseService;
 }
 
 /**
- * Convenience: build a venice whose `completeChat` throws for the
- * primary model with the content-classifier sentinel, and returns a
- * happy terminal response for the fallback. Lets the agent's two-shot
- * retry path resolve in a single test step.
+ * Inert VeniceClient for the WikiAgent constructor's leftover `venice`
+ * slot. The agent's network seam is `supabase.complete` post-milestone-
+ * 6; the venice handle survives only because the worker-fleet sweep
+ * that drops it from the constructor signature hasn't shipped.
  */
-function makeVeniceWithFilterOnPrimary(
+function makeInertVenice(): VeniceClient {
+  return {
+    completeChat: vi.fn(),
+    embed: vi.fn(async () => ({ data: [] })),
+  } as unknown as VeniceClient;
+}
+
+/**
+ * Convenience: build a `supabase.complete` handler that throws for
+ * the primary model with the content-classifier sentinel and returns
+ * a happy terminal response for the fallback. Lets the agent's two-
+ * shot retry path resolve in a single test step.
+ */
+function makeFilterCompleteOnPrimary(
   primaryModel: string,
   fallbackModel: string,
   fallbackText: string
 ): {
-  venice: VeniceClient;
+  complete: (req: ChatRequest) => Promise<ChatCompletion>;
   calls: { model: string }[];
 } {
   const calls: { model: string }[] = [];
-  const completeChat = vi.fn(
-    async (req: { model: string; messages: VeniceMessage[] }): Promise<ChatCompletion> => {
-      calls.push({ model: req.model });
-      if (req.model === primaryModel) {
-        throw new Error(
-          'Venice HTTP 400: {"error":"Input text data may contain inappropriate content.","request_id":"abc"}'
-        );
-      }
-      if (req.model === fallbackModel) {
-        return {
-          text: fallbackText,
-          reasoning: '',
-          toolCalls: [],
-          usage: null,
-          citations: [],
-          finishReason: 'stop',
-        };
-      }
-      throw new Error(`unexpected model ${req.model}`);
+  const complete = async (
+    req: { model: string; messages: VeniceMessage[] }
+  ): Promise<ChatCompletion> => {
+    calls.push({ model: req.model });
+    if (req.model === primaryModel) {
+      throw new Error(
+        'Venice HTTP 400: {"error":"Input text data may contain inappropriate content.","request_id":"abc"}'
+      );
     }
-  );
-  return {
-    venice: {
-      completeChat,
-      embed: vi.fn(async () => ({ data: [] })),
-    } as unknown as VeniceClient,
-    calls,
+    if (req.model === fallbackModel) {
+      return {
+        text: fallbackText,
+        reasoning: '',
+        toolCalls: [],
+        usage: null,
+        citations: [],
+        finishReason: 'stop',
+      };
+    }
+    throw new Error(`unexpected model ${req.model}`);
   };
+  return { complete, calls };
 }
 
 describe('isContentFilterRejection', () => {
@@ -130,13 +148,13 @@ describe('WikiAgent - content-classifier fallback', () => {
       makeMessage({ id: 'u1', role: 'user', content: 'tell me about my dog' }),
       makeMessage({ id: 'a1', role: 'assistant', content: 'Got it.' }),
     ];
-    const svc = makeSupabase(messages);
-    const { venice, calls } = makeVeniceWithFilterOnPrimary(
+    const { complete, calls } = makeFilterCompleteOnPrimary(
       'deepseek-v4-flash',
       'arcee-trinity-large-thinking',
       'Fallback ran, no edits warranted.'
     );
-    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+    const svc = makeSupabase(messages, complete);
+    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -158,19 +176,12 @@ describe('WikiAgent - content-classifier fallback', () => {
       makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
       makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
     ];
-    const svc = makeSupabase(messages);
     const calls: { model: string }[] = [];
-    const completeChat = vi.fn(
-      async (req: { model: string }): Promise<ChatCompletion> => {
-        calls.push({ model: req.model });
-        throw new Error('Venice HTTP 500: gateway error');
-      }
-    );
-    const venice = {
-      completeChat,
-      embed: vi.fn(async () => ({ data: [] })),
-    } as unknown as VeniceClient;
-    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+    const svc = makeSupabase(messages, async (req) => {
+      calls.push({ model: req.model });
+      throw new Error('Venice HTTP 500: gateway error');
+    });
+    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -189,24 +200,17 @@ describe('WikiAgent - content-classifier fallback', () => {
       makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
       makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
     ];
-    const svc = makeSupabase(messages);
     const calls: { model: string }[] = [];
-    const completeChat = vi.fn(
-      async (req: { model: string }): Promise<ChatCompletion> => {
-        calls.push({ model: req.model });
-        if (req.model === 'deepseek-v4-flash') {
-          throw new Error(
-            'Venice HTTP 400: {"error":"Input text data may contain inappropriate content."}'
-          );
-        }
-        throw new Error('arcee timeout');
+    const svc = makeSupabase(messages, async (req) => {
+      calls.push({ model: req.model });
+      if (req.model === 'deepseek-v4-flash') {
+        throw new Error(
+          'Venice HTTP 400: {"error":"Input text data may contain inappropriate content."}'
+        );
       }
-    );
-    const venice = {
-      completeChat,
-      embed: vi.fn(async () => ({ data: [] })),
-    } as unknown as VeniceClient;
-    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+      throw new Error('arcee timeout');
+    });
+    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -231,21 +235,14 @@ describe('WikiAgent - content-classifier fallback', () => {
       makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
       makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
     ];
-    const svc = makeSupabase(messages);
     const calls: { model: string }[] = [];
-    const completeChat = vi.fn(
-      async (req: { model: string }): Promise<ChatCompletion> => {
-        calls.push({ model: req.model });
-        throw new Error(
-          'Venice HTTP 400: {"error":"Input text data may contain inappropriate content."}'
-        );
-      }
-    );
-    const venice = {
-      completeChat,
-      embed: vi.fn(async () => ({ data: [] })),
-    } as unknown as VeniceClient;
-    const agent = new WikiAgent(venice, svc, 'arcee-trinity-large-thinking');
+    const svc = makeSupabase(messages, async (req) => {
+      calls.push({ model: req.model });
+      throw new Error(
+        'Venice HTTP 400: {"error":"Input text data may contain inappropriate content."}'
+      );
+    });
+    const agent = new WikiAgent(makeInertVenice(), svc, 'arcee-trinity-large-thinking');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -264,18 +261,18 @@ describe('WikiAgent.retrySkippedThread', () => {
       makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
       makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
     ];
-    const svc = makeSupabase(messages);
+    const { complete } = makeFilterCompleteOnPrimary(
+      'deepseek-v4-flash',
+      'arcee-trinity-large-thinking',
+      'Recovered on the fallback.'
+    );
+    const svc = makeSupabase(messages, complete);
     // Override the default mock so we can assert it was called with
     // the specific thread id the test passes in.
     (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
       'a1'
     );
-    const { venice } = makeVeniceWithFilterOnPrimary(
-      'deepseek-v4-flash',
-      'arcee-trinity-large-thinking',
-      'Recovered on the fallback.'
-    );
-    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
 
     const result = await agent.retrySkippedThread({
       threadId: 't-1',
@@ -301,25 +298,18 @@ describe('WikiAgent.retrySkippedThread', () => {
       makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
       makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
     ];
-    const svc = makeSupabase(messages);
+    const svc = makeSupabase(messages, async () => ({
+      text: '   \n   ',
+      reasoning: '',
+      toolCalls: [],
+      usage: null,
+      citations: [],
+      finishReason: 'stop',
+    }));
     (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
       'a1'
     );
-    const completeChat = vi.fn(
-      async (): Promise<ChatCompletion> => ({
-        text: '   \n   ',
-        reasoning: '',
-        toolCalls: [],
-        usage: null,
-        citations: [],
-        finishReason: 'stop',
-      })
-    );
-    const venice = {
-      completeChat,
-      embed: vi.fn(async () => ({ data: [] })),
-    } as unknown as VeniceClient;
-    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
 
     const result = await agent.retrySkippedThread({
       threadId: 't-2',
@@ -332,19 +322,14 @@ describe('WikiAgent.retrySkippedThread', () => {
     }
   });
 
-  it('returns no-op (without calling Venice) when the thread has no anchor', async () => {
-    const svc = makeSupabase([]);
+  it('returns no-op (without calling the chat-completion edge) when the thread has no anchor', async () => {
+    const svc = makeSupabase([], async () => {
+      throw new Error('should not have been called');
+    });
     (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
       null
     );
-    const completeChat = vi.fn(async (): Promise<ChatCompletion> => {
-      throw new Error('should not have been called');
-    });
-    const venice = {
-      completeChat,
-      embed: vi.fn(async () => ({ data: [] })),
-    } as unknown as VeniceClient;
-    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
 
     const result = await agent.retrySkippedThread({
       threadId: 't-empty',
@@ -352,7 +337,7 @@ describe('WikiAgent.retrySkippedThread', () => {
     });
 
     expect(result.kind).toBe('no-op');
-    expect(completeChat).not.toHaveBeenCalled();
+    expect(svc.complete).not.toHaveBeenCalled();
     expect(svc.manualAdvanceWikiPointer).not.toHaveBeenCalled();
   });
 
@@ -361,18 +346,13 @@ describe('WikiAgent.retrySkippedThread', () => {
       makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
       makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
     ];
-    const svc = makeSupabase(messages);
+    const svc = makeSupabase(messages, async () => {
+      throw new Error('Venice HTTP 500: upstream');
+    });
     (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
       'a1'
     );
-    const completeChat = vi.fn(async (): Promise<ChatCompletion> => {
-      throw new Error('Venice HTTP 500: upstream');
-    });
-    const venice = {
-      completeChat,
-      embed: vi.fn(async () => ({ data: [] })),
-    } as unknown as VeniceClient;
-    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
 
     const result = await agent.retrySkippedThread({
       threadId: 't-1',
@@ -393,28 +373,21 @@ describe('WikiAgent.retrySkippedThread', () => {
       makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
       makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
     ];
-    const svc = makeSupabase(messages);
+    const svc = makeSupabase(messages, async () => ({
+      text: 'done',
+      reasoning: '',
+      toolCalls: [],
+      usage: null,
+      citations: [],
+      finishReason: 'stop',
+    }));
     (svc.computeWikiTerminalMsgId as ReturnType<typeof vi.fn>).mockResolvedValue(
       'a1'
     );
     (svc.manualAdvanceWikiPointer as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('RPC blew up')
     );
-    const completeChat = vi.fn(
-      async (): Promise<ChatCompletion> => ({
-        text: 'done',
-        reasoning: '',
-        toolCalls: [],
-        usage: null,
-        citations: [],
-        finishReason: 'stop',
-      })
-    );
-    const venice = {
-      completeChat,
-      embed: vi.fn(async () => ({ data: [] })),
-    } as unknown as VeniceClient;
-    const agent = new WikiAgent(venice, svc, 'deepseek-v4-flash');
+    const agent = new WikiAgent(makeInertVenice(), svc, 'deepseek-v4-flash');
 
     const result = await agent.retrySkippedThread({
       threadId: 't-1',

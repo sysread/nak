@@ -109,7 +109,6 @@ export class DeepSleepAgent implements Agent<DeepSleepInput, DeepSleepOutput> {
       ];
 
       const result = await runHeadlessToolLoop({
-        venice: this.venice,
         model: this.model,
         messages,
         toolbox: this.toolbox,

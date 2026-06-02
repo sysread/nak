@@ -106,18 +106,24 @@ describe('wiki_recall - registry scoping', () => {
 
 describe('wiki_recall - execute() routes through WikiRecallAgent', () => {
   it('returns the parsed RecallNote as the tool result on the happy path', async () => {
+    // The agent's chat-completion seam moved to supabase.complete in
+    // milestone 6; the ctx.venice handle is still threaded through
+    // because the agent constructor takes it, but the loop no longer
+    // drives it. Script the completion on the supabase fixture.
     const messages: Message[] = [
       makeMessage({ id: 'u1', role: 'user', content: 'how is the garden?' }),
     ];
     const listMessages = vi.fn(async () => messages);
-    const svc = { listMessages } as unknown as SupabaseService;
-
-    const completeChat = vi.fn(async () =>
+    const complete = vi.fn(async () =>
       makeCompletion(
         '{"kind":"note","note":"the gardening article lists basil, thyme, and a perennial bed plan."}'
       )
     );
-    const venice = { completeChat, embed: vi.fn() } as unknown as VeniceClient;
+    const svc = { listMessages, complete } as unknown as SupabaseService;
+    const venice = {
+      completeChat: vi.fn(),
+      embed: vi.fn(),
+    } as unknown as VeniceClient;
 
     const result = await wikiRecall.execute({}, ctxFor(svc, venice));
 
@@ -132,11 +138,15 @@ describe('wiki_recall - execute() routes through WikiRecallAgent', () => {
     const messages: Message[] = [
       makeMessage({ id: 'u1', role: 'user', content: 'what time is it' }),
     ];
+    const complete = vi.fn(async () => makeCompletion('{"kind":"none"}'));
     const svc = {
       listMessages: vi.fn(async () => messages),
+      complete,
     } as unknown as SupabaseService;
-    const completeChat = vi.fn(async () => makeCompletion('{"kind":"none"}'));
-    const venice = { completeChat, embed: vi.fn() } as unknown as VeniceClient;
+    const venice = {
+      completeChat: vi.fn(),
+      embed: vi.fn(),
+    } as unknown as VeniceClient;
 
     const result = await wikiRecall.execute({}, ctxFor(svc, venice));
     expect(result).toEqual({ kind: 'none' });
@@ -151,6 +161,7 @@ describe('wiki_recall - execute() routes through WikiRecallAgent', () => {
       listMessages: vi.fn(async () => {
         throw new Error('supabase flaked');
       }),
+      complete: vi.fn(),
     } as unknown as SupabaseService;
     const venice = {
       completeChat: vi.fn(),

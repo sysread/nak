@@ -159,7 +159,6 @@ export class WikiLibrarianAgent
       ];
 
       const result = await runHeadlessToolLoop({
-        venice: this.venice,
         model: this.model,
         messages,
         toolbox: this.toolbox,

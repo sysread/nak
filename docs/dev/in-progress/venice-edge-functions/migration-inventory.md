@@ -10,14 +10,17 @@ status.
 **Iteratively audited - not exhaustive or final.** Each milestone re-audits and
 updates this. Last full audit: **2026-06-02**, after the chat-completions
 non-streaming leaf landed PARTIALLY: tools + intuition + auto-title moved
-through `SupabaseService.complete`, but the background-agent Web Workers
-(bias, samskara, summary, topics, etc.) still bootstrap their own
-`VeniceClient` via `veniceApiKey` postMessage and call
-`VeniceClient.completeChat` directly - their migration is deferred to a
-follow-up milestone where the worker-message protocol can be reshaped
-cleanly. Audit walks `src/lib/venice.ts` callers (`grep`), the
-`src/lib/agents/` worker fleet, and the `supabase/functions/` directory.
-Line numbers drift; re-grep before relying on one.
+through `SupabaseService.complete`, the headless tool-loop driver
+(`tools/run.ts`) followed in `claude/headless-tool-loop-complete`, but the
+background-agent Web Workers (bias, samskara, summary, topics, etc.) still
+bootstrap their own `VeniceClient` via `veniceApiKey` postMessage and call
+`VeniceClient.completeChat` directly. The protocol shape that supports the
+remaining sweep is already in place (every worker JWT-authenticates a
+`SupabaseService` at startup); the deferred work is per-worker deletion of
+the venice half, one agent + worker + manager per commit. Audit walks
+`src/lib/venice.ts` callers (`grep`), the `src/lib/agents/` worker fleet,
+and the `supabase/functions/` directory. Line numbers drift; re-grep
+before relying on one.
 
 Status key:
 
@@ -76,6 +79,18 @@ stays in one place.
 - auto-title: `title-gen.ts` (called from `agents/auto_title/loop.ts`
   and the supervisor's auto-title unit)
 
+**Headless tool-loop driver** (`tools/run.ts:292`):
+MIGRATED in `claude/headless-tool-loop-complete`. The driver itself
+drives `toolCtx.supabase.complete` instead of taking a `venice` opt;
+the 8 agent classes that compose it (`rem`, `recall`,
+`conversation_recall`, `wiki_recall`, `reflection`, `wiki`,
+`deep-sleep`, `wiki-librarian`) stopped passing `venice: this.venice`
+at the top of each `runHeadlessToolLoop({ ... })` call. They still
+populate `toolCtx.venice` because the recall agents are still
+constructed with a `venice` parameter from `ctx.venice` in the
+tool-dispatch seam; that gets dropped one family at a time as part
+of the worker-fleet sweep.
+
 **Deferred callers** (still hold `VeniceClient.completeChat`):
 
 - background-agent Web Workers: `agents/bias/`, `agents/samskara/`,
@@ -83,15 +98,17 @@ stays in one place.
   `agents/recipe_topics/`, `agents/wiki/`, `agents/wiki-librarian/`,
   `agents/deep-sleep/`, `agents/rem/`, plus the recall family
   (`agents/recall/`, `agents/conversation_recall/`, `agents/wiki_recall/`)
-- the headless tool-loop driver `tools/run.ts:292` (used by the recall
-  family and the wiki librarian)
 
 Why deferred: each worker bootstraps its own `VeniceClient` from a
-`veniceApiKey` postMessage from the main thread; migrating means
-reshaping the worker-message protocol to thread a `SupabaseService`
-in instead, plus dropping `veniceApiKey` from every worker-start path.
-Larger blast radius than this milestone could land cleanly. Tracked
-as the next driver-B mover.
+`veniceApiKey` postMessage from the main thread; the protocol shape
+is already JWT-authenticated (every worker does
+`client.auth.setSession({ access_token, refresh_token })` before
+wrapping in `SupabaseService`), so migrating per worker is purely
+"delete `VeniceClient` construction + `veniceApiKey` field, drop
+`venice` from the agent constructor, swap
+`this.venice.completeChat(...)` -> `this.supabase.complete(...)`,
+drop `veniceApiKey` from the manager.ts postMessage payload." One
+agent + its worker + its manager per commit.
 
 ### `streamChat` (`/chat/completions` streaming)
 

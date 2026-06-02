@@ -147,7 +147,6 @@ export class ConversationRecallAgent
       });
 
       const result = await runHeadlessToolLoop({
-        venice: this.venice,
         model: this.model,
         messages: convo,
         toolbox: this.toolbox,

@@ -18,6 +18,7 @@ import { memoryToolbox } from '../src/lib/tools';
 import type { SupabaseService, Message } from '../src/lib/supabase';
 import type {
   ChatCompletion,
+  ChatRequest,
   OpenAIToolCall,
   VeniceClient,
   VeniceMessage,
@@ -39,20 +40,52 @@ function makeMessage(overrides: Partial<Message>): Message {
   } as Message;
 }
 
+interface RoundScript {
+  text?: string;
+  toolCalls?: OpenAIToolCall[];
+}
+
 /**
  * Build a SupabaseService stub with just the methods ReflectionAgent
  * touches. `listMessages` resolves with whatever `messages` was
- * assembled to; tool calls made by the agent are captured on
- * `toolCalls` if the test triggers any.
+ * assembled to; `complete` is scripted from `rounds` so each
+ * runHeadlessToolLoop round returns the canned ChatCompletion. The
+ * non-streaming chat seam now lives on the supabase service (post
+ * milestone 6) - the agent's leftover `venice` constructor argument
+ * is an inert handle, captured separately via makeInertVenice().
+ *
+ * `streamCalls` captures every supabase.complete call's messages so
+ * tests can inspect what the agent composed.
  */
-function makeSupabase(messages: Message[]): {
+function makeSupabase(
+  messages: Message[],
+  rounds: RoundScript[] = []
+): {
   svc: SupabaseService;
   spies: {
     listMessages: ReturnType<typeof vi.fn>;
     createMemory: ReturnType<typeof vi.fn>;
     decayMemoryConfidence: ReturnType<typeof vi.fn>;
+    complete: ReturnType<typeof vi.fn>;
   };
+  streamCalls: VeniceMessage[][];
 } {
+  const remaining = rounds.slice();
+  const streamCalls: VeniceMessage[][] = [];
+  const complete = vi.fn(
+    async (req: ChatRequest): Promise<ChatCompletion> => {
+      streamCalls.push(req.messages.map((m) => ({ ...m })));
+      const script = remaining.shift() ?? {};
+      return {
+        text: script.text ?? '',
+        reasoning: '',
+        toolCalls: script.toolCalls ?? [],
+        usage: null,
+        citations: [],
+        finishReason: (script.toolCalls ?? []).length > 0 ? 'tool_calls' : 'stop',
+      };
+    }
+  );
   const spies = {
     listMessages: vi.fn(async () => messages),
     // The reflection agent's toolbox might reach into these via the
@@ -69,54 +102,34 @@ function makeSupabase(messages: Message[]): {
     searchMemories: vi.fn(async () => []),
     searchMemoriesByEmbedding: vi.fn(async () => []),
     searchUnembeddedMemoriesByText: vi.fn(async () => []),
+    complete,
   };
-  return { svc: spies as unknown as SupabaseService, spies };
+  return {
+    svc: spies as unknown as SupabaseService,
+    spies,
+    streamCalls,
+  };
 }
 
 /**
- * Scripted venice whose `completeChat` returns a canned response per
- * round. `streamCalls` captures every call's messages so tests can
- * inspect what the agent composed.
+ * Inert VeniceClient for the ReflectionAgent constructor's leftover
+ * `venice` slot. The agent's network seam moved to supabase.complete
+ * in milestone 6; the venice handle survives only because the
+ * worker-fleet sweep that drops it from the constructor signature
+ * hasn't shipped yet. Tests pass this so the leftover slot doesn't
+ * silently absorb a real client.
  */
-interface RoundScript {
-  text?: string;
-  toolCalls?: OpenAIToolCall[];
-}
-
-function makeVenice(rounds: RoundScript[]): {
-  venice: VeniceClient;
-  streamCalls: VeniceMessage[][];
-} {
-  const remaining = rounds.slice();
-  const streamCalls: VeniceMessage[][] = [];
-  const completeChat = vi.fn(
-    async (req: { messages: VeniceMessage[] }): Promise<ChatCompletion> => {
-      streamCalls.push(req.messages.map((m) => ({ ...m })));
-      const script = remaining.shift() ?? {};
-      return {
-        text: script.text ?? '',
-        reasoning: '',
-        toolCalls: script.toolCalls ?? [],
-        usage: null,
-        citations: [],
-        finishReason: (script.toolCalls ?? []).length > 0 ? 'tool_calls' : 'stop',
-      };
-    }
-  );
+function makeInertVenice(): VeniceClient {
   return {
-    venice: {
-      completeChat,
-      embed: vi.fn(async () => ({ data: [] })),
-    } as unknown as VeniceClient,
-    streamCalls,
-  };
+    completeChat: vi.fn(),
+    embed: vi.fn(async () => ({ data: [] })),
+  } as unknown as VeniceClient;
 }
 
 describe('ReflectionAgent — identity + contract', () => {
   it('advertises the reflection toolbox, reflection name, and a model id', () => {
     const { svc } = makeSupabase([]);
-    const { venice } = makeVenice([]);
-    const agent = new ReflectionAgent(venice, svc);
+    const agent = new ReflectionAgent(makeInertVenice(), svc);
     expect(agent.name).toBe('reflection');
     expect(agent.toolbox).toBe(memoryToolbox);
     expect(agent.model.length).toBeGreaterThan(0);
@@ -124,8 +137,7 @@ describe('ReflectionAgent — identity + contract', () => {
 
   it('accepts a model override for tests and future A/B runs', () => {
     const { svc } = makeSupabase([]);
-    const { venice } = makeVenice([]);
-    const agent = new ReflectionAgent(venice, svc, 'custom-test-model');
+    const agent = new ReflectionAgent(makeInertVenice(), svc, 'custom-test-model');
     expect(agent.model).toBe('custom-test-model');
   });
 });
@@ -140,9 +152,8 @@ describe('ReflectionAgent — run() happy path', () => {
       makeMessage({ id: 'a1', role: 'assistant', content: 'Cats are great.', created_at: '2024-01-01T00:00:01Z' }),
       makeMessage({ id: 'u2', role: 'user', content: 'and also dogs', created_at: '2024-01-01T00:00:02Z' }),
     ];
-    const { svc } = makeSupabase(messages);
-    const { venice, streamCalls } = makeVenice([{ text: 'done' }]);
-    const agent = new ReflectionAgent(venice, svc, 'test-model');
+    const { svc, streamCalls } = makeSupabase(messages, [{ text: 'done' }]);
+    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -170,26 +181,28 @@ describe('ReflectionAgent — run() happy path', () => {
   it('counts tool calls the agent issued during reflection', async () => {
     // Model asks for one memory_create, then a terminal text round.
     // We expect toolCalls=1 on the AgentRunResult.
-    const { svc, spies } = makeSupabase([
-      makeMessage({ id: 'u1', role: 'user', content: 'My birthday is in June.' }),
-      makeMessage({ id: 'a1', role: 'assistant', content: 'Got it.' }),
-    ]);
-    const { venice } = makeVenice([
-      {
-        toolCalls: [
-          {
-            id: 'c1',
-            type: 'function',
-            function: {
-              name: 'memory_create',
-              arguments: JSON.stringify({ label: 'birthday', data: 'June', message: 'noted birthday' }),
+    const { svc, spies } = makeSupabase(
+      [
+        makeMessage({ id: 'u1', role: 'user', content: 'My birthday is in June.' }),
+        makeMessage({ id: 'a1', role: 'assistant', content: 'Got it.' }),
+      ],
+      [
+        {
+          toolCalls: [
+            {
+              id: 'c1',
+              type: 'function',
+              function: {
+                name: 'memory_create',
+                arguments: JSON.stringify({ label: 'birthday', data: 'June', message: 'noted birthday' }),
+              },
             },
-          },
-        ],
-      },
-      { text: 'ok' },
-    ]);
-    const agent = new ReflectionAgent(venice, svc, 'test-model');
+          ],
+        },
+        { text: 'ok' },
+      ]
+    );
+    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -214,9 +227,8 @@ describe('ReflectionAgent — edge cases', () => {
       makeMessage({ id: 'u1', role: 'user', content: 'hi' }),
       makeMessage({ id: 'a1', role: 'assistant', content: 'hello' }),
     ];
-    const { svc } = makeSupabase(messages);
-    const { venice } = makeVenice([{ text: 'x' }]);
-    const agent = new ReflectionAgent(venice, svc, 'test-model');
+    const { svc } = makeSupabase(messages, [{ text: 'x' }]);
+    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'nonexistent-id' },
@@ -228,9 +240,8 @@ describe('ReflectionAgent — edge cases', () => {
   });
 
   it('returns done with zero work when the thread has no messages', async () => {
-    const { svc } = makeSupabase([]);
-    const { venice } = makeVenice([]);
-    const agent = new ReflectionAgent(venice, svc, 'test-model');
+    const { svc, spies } = makeSupabase([]);
+    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'whatever' },
@@ -239,13 +250,14 @@ describe('ReflectionAgent — edge cases', () => {
 
     expect(result.stoppedReason).toBe('done');
     expect(result.output.inputMessageCount).toBe(0);
-    expect(venice.completeChat).not.toHaveBeenCalled();
+    expect(spies.complete).not.toHaveBeenCalled();
   });
 
-  it('short-circuits on a pre-aborted signal without calling Supabase or Venice', async () => {
-    const { svc } = makeSupabase([makeMessage({ id: 'a1', role: 'assistant', content: 'x' })]);
-    const { venice } = makeVenice([]);
-    const agent = new ReflectionAgent(venice, svc, 'test-model');
+  it('short-circuits on a pre-aborted signal without calling Supabase or the chat-completion edge', async () => {
+    const { svc, spies } = makeSupabase([
+      makeMessage({ id: 'a1', role: 'assistant', content: 'x' }),
+    ]);
+    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
     const ac = new AbortController();
     ac.abort();
 
@@ -257,7 +269,7 @@ describe('ReflectionAgent — edge cases', () => {
 
     expect(result.stoppedReason).toBe('aborted');
     expect(svc.listMessages).not.toHaveBeenCalled();
-    expect(venice.completeChat).not.toHaveBeenCalled();
+    expect(spies.complete).not.toHaveBeenCalled();
   });
 
   it('captures a thrown error and returns stoppedReason=error with a message', async () => {
@@ -266,8 +278,7 @@ describe('ReflectionAgent — edge cases', () => {
         throw new Error('network flaked');
       }),
     } as unknown as SupabaseService;
-    const { venice } = makeVenice([]);
-    const agent = new ReflectionAgent(venice, svc, 'test-model');
+    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a1' },
@@ -308,9 +319,8 @@ describe('ReflectionAgent — edge cases', () => {
       }),
       makeMessage({ id: 'a2', role: 'assistant', content: 'here you go' }),
     ];
-    const { svc } = makeSupabase(messages);
-    const { venice, streamCalls } = makeVenice([{ text: 'ok' }]);
-    const agent = new ReflectionAgent(venice, svc, 'test-model');
+    const { svc, streamCalls } = makeSupabase(messages, [{ text: 'ok' }]);
+    const agent = new ReflectionAgent(makeInertVenice(), svc, 'test-model');
 
     await agent.run({
       input: { threadId: 't-1', terminalMsgId: 'a2' },

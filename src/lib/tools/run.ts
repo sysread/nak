@@ -18,10 +18,22 @@
  * list of optional flags; two focused functions are easier to read
  * and easier to evolve independently.
  *
+
  * Cancellation: each tool execution gets a child AbortController
  * linked to `opts.signal`, same pattern as the chat loop, so aborting
- * the caller's signal tears down in-flight Venice and Supabase
- * requests across every tool in parallel.
+ * the caller's signal tears down in-flight Supabase requests across
+ * every tool in parallel. The signal is also checked at each round
+ * boundary so a queued next round short-circuits.
+ *
+ * The one gap, inherited from the rest of the venice-edge-function
+ * migration: the in-flight chat-completion POST itself does NOT see
+ * the abort. `SupabaseService.complete` goes through
+ * `functions.invoke('venice/complete')`, and the supabase JS client
+ * doesn't expose a `signal:` option on that surface. An abort that
+ * lands mid-fetch waits for the POST to settle, then fires at the
+ * next round check. Same limitation `embed` / `extractText` /
+ * `generateImage` have signed up for since milestones 3-5; see
+ * docs/dev/tools.md "Abort semantics on the headless loop".
  */
 import type { Toolbox, ToolContext, OpenAIToolCall } from './types';
 // Import from the leaf `./dispatch` rather than the `./index` barrel.
@@ -37,7 +49,7 @@ import {
   sanitizeToolCallIdForWire,
   sanitizeToolCallsForWire,
 } from './wire';
-import type { VeniceClient, VeniceMessage, ResponseFormat } from '../venice';
+import type { VeniceMessage, ResponseFormat } from '../venice';
 import type { ReasoningEffort } from '../models';
 
 /**
@@ -109,7 +121,6 @@ function encodeToolContent(
 }
 
 export interface HeadlessToolLoopOptions {
-  venice: VeniceClient;
   /** Concrete Venice model id sent as `model` on every round. */
   model: string;
   /**
@@ -132,6 +143,11 @@ export interface HeadlessToolLoopOptions {
    * Base fields for the per-call ToolContext. We fill in `signal`
    * per-call with a child controller so parallel tool runs can be
    * torn down independently under one outer abort.
+   *
+   * The non-streaming completion that drives each round runs through
+   * `toolCtx.supabase.complete` (the venice edge function), so the
+   * loop has no separate Venice handle - the supabase service the
+   * caller passes through `toolCtx` is the only network seam.
    */
   toolCtx: Omit<ToolContext, 'signal'>;
   signal: AbortSignal;
@@ -235,7 +251,7 @@ export interface HeadlessToolLoopResult {
 export async function runHeadlessToolLoop(
   opts: HeadlessToolLoopOptions
 ): Promise<HeadlessToolLoopResult> {
-  const { venice, model, toolbox, toolCtx, signal } = opts;
+  const { model, toolbox, toolCtx, signal } = opts;
   const maxRounds = opts.maxRounds ?? DEFAULT_MAX_ROUNDS;
 
   // Recursion-depth check. `toolCtx.depth` is the agent depth of the
@@ -289,7 +305,10 @@ export async function runHeadlessToolLoop(
     // Background agents don't have a UI surface to render tokens
     // incrementally into, and the multi-round tool loop already
     // serialises rounds anyway - streaming would only add latency.
-    const completion = await venice.completeChat({
+    // Routes through the venice/complete edge function via the
+    // shared SupabaseService on the tool context - the same gateway
+    // the chat-completion leaf migrated to in milestone 6.
+    const completion = await toolCtx.supabase.complete({
       model,
       messages,
       signal,
