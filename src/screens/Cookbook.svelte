@@ -42,7 +42,14 @@
     recipeToPlainText,
   } from '$lib/cooklang';
   import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '$lib/recipe-limits';
-  import { recipeSourceLine, wrapIndex, swipeNavStep } from '$lib/ui/recipe-detail';
+  import {
+    recipeSourceLine,
+    wrapIndex,
+    swipeNavStep,
+    lightboxTrackStyle,
+    LIGHTBOX_SLIDE_MS,
+    type LightboxSlidePhase,
+  } from '$lib/ui/recipe-detail';
   import type { Recipe, RecipeVersion } from '$lib/supabase';
   import {
     arrayBufferToBase64,
@@ -616,7 +623,46 @@
 
   // --- lightbox ---
 
+  // The lightbox is a 3-slide carousel: [prev | current | next]. The
+  // track slides horizontally so a swipe can follow the finger and a
+  // commit animates the neighbour into view. `slidePhase` drives the
+  // track transform (see lightboxTrackStyle); `dragDx` is the live
+  // finger offset during a drag.
+  let slidePhase = $state<LightboxSlidePhase>('idle');
+  let dragDx = $state(0);
+  const lightboxTrackStyleStr = $derived(lightboxTrackStyle(slidePhase, dragDx));
+
+  // Single-finger drag bookkeeping. A second touch is a pinch-zoom, so
+  // we abandon the drag the instant it lands and never call
+  // preventDefault - the browser's native zoom and scroll stay intact.
+  let swipeStartX = 0;
+  let swipeStartY = 0;
+  let dragging = false;
+
+  // Pending index swap at the end of a commit animation. Held so a
+  // close (or recipe change) mid-slide can cancel it before it fires
+  // and re-opens the lightbox on a now-stale index.
+  let commitTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearCommitTimer(): void {
+    if (commitTimer !== null) {
+      clearTimeout(commitTimer);
+      commitTimer = null;
+    }
+  }
+
+  // Reset all carousel state to its resting shape. Called on open (so a
+  // reopen never inherits a stale phase) and whenever the lightbox
+  // closes (so a pending commit timer can't fire on a closed viewer).
+  function resetSlideState(): void {
+    clearCommitTimer();
+    slidePhase = 'idle';
+    dragDx = 0;
+    dragging = false;
+  }
+
   function openLightbox(index: number): void {
+    resetSlideState();
     lightboxIndex = index;
   }
 
@@ -624,49 +670,100 @@
     lightboxIndex = null;
   }
 
-  // Page the lightbox by `delta`, treating the photo set as a loop
-  // (prev from the first wraps to the last, next from the last wraps
-  // to the first). Shared by the on-screen arrows, the swipe gesture,
-  // and the Left/Right arrow keys.
-  function stepLightbox(delta: number): void {
-    if (lightboxIndex === null) return;
-    const photos = activePhotos;
-    if (!Array.isArray(photos) || photos.length === 0) return;
-    lightboxIndex = wrapIndex(lightboxIndex, delta, photos.length);
+  // Tear down any in-flight slide whenever the lightbox closes, by any
+  // path - close button, Escape, or the selected recipe changing out
+  // from under it (which nulls lightboxIndex directly). Without this a
+  // commit timer queued just before the close would fire and re-open
+  // the viewer on a stale index.
+  $effect(() => {
+    if (lightboxIndex === null) resetSlideState();
+  });
+
+  // True while a commit animation is mid-flight; new gestures and key
+  // presses are ignored until the slide settles so they can't strand
+  // the track between slides.
+  function isAnimatingCommit(): boolean {
+    return slidePhase === 'to-next' || slidePhase === 'to-prev' || slidePhase === 'cancel';
   }
 
-  // Swipe-to-page state. We track only single-finger drags; the moment
-  // a second touch lands the gesture is a pinch-zoom, so we stop
-  // tracking and never page the photo. Nothing here calls
-  // preventDefault, so the browser's native pinch/zoom and scroll are
-  // left intact on mobile.
-  let swipeStartX = 0;
-  let swipeStartY = 0;
-  let swipeTracking = false;
+  // Page by `delta` with a slide animation, looping the photo set. The
+  // track animates one slide over; LIGHTBOX_SLIDE_MS later we swap the
+  // index and snap back to center - invisibly, because the slid-to
+  // photo already fills the slot we land on. Shared by the arrows, the
+  // arrow keys, and a committed swipe.
+  function animateStep(delta: number): void {
+    if (lightboxIndex === null || isAnimatingCommit()) return;
+    const photos = activePhotos;
+    if (!Array.isArray(photos) || photos.length < 2) return;
+    const target = wrapIndex(lightboxIndex, delta, photos.length);
+    slidePhase = delta > 0 ? 'to-next' : 'to-prev';
+    clearCommitTimer();
+    commitTimer = setTimeout(() => {
+      commitTimer = null;
+      lightboxIndex = target;
+      slidePhase = 'idle';
+      dragDx = 0;
+    }, LIGHTBOX_SLIDE_MS + 40);
+  }
+
+  // Ease an under-threshold drag back to center.
+  function cancelDrag(): void {
+    slidePhase = 'cancel';
+    dragDx = 0;
+    clearCommitTimer();
+    commitTimer = setTimeout(() => {
+      commitTimer = null;
+      slidePhase = 'idle';
+    }, LIGHTBOX_SLIDE_MS + 40);
+  }
 
   function onLightboxTouchStart(e: TouchEvent): void {
+    // Don't start a drag on top of a commit animation, and treat any
+    // multi-touch as a pinch: snap to center so the image is square for
+    // zooming.
+    if (isAnimatingCommit()) return;
     if (e.touches.length !== 1) {
-      swipeTracking = false;
+      dragging = false;
+      resetSlideState();
       return;
     }
-    swipeTracking = true;
+    dragging = true;
     swipeStartX = e.touches[0]!.clientX;
     swipeStartY = e.touches[0]!.clientY;
   }
 
   function onLightboxTouchMove(e: TouchEvent): void {
-    // A second finger joining mid-drag means a pinch is starting; bail
-    // so we don't flip the photo when the user meant to zoom.
-    if (e.touches.length > 1) swipeTracking = false;
+    if (!dragging) return;
+    // A second finger joining mid-drag is a pinch starting; abandon the
+    // drag and snap to center so native zoom takes over cleanly.
+    if (e.touches.length > 1) {
+      dragging = false;
+      resetSlideState();
+      return;
+    }
+    const photos = activePhotos;
+    if (!Array.isArray(photos) || photos.length < 2) return;
+    dragDx = e.touches[0]!.clientX - swipeStartX;
+    slidePhase = 'drag';
   }
 
   function onLightboxTouchEnd(e: TouchEvent): void {
-    if (!swipeTracking) return;
-    swipeTracking = false;
+    if (!dragging) return;
+    dragging = false;
     const t = e.changedTouches[0];
-    if (!t) return;
+    if (!t) {
+      if (slidePhase === 'drag') cancelDrag();
+      return;
+    }
     const step = swipeNavStep(swipeStartX, swipeStartY, t.clientX, t.clientY);
-    if (step !== 0) stepLightbox(step);
+    if (step === 0) {
+      // Tap or too-short drag. Only animate back if we actually moved;
+      // a clean tap leaves the phase idle and lets the click handler
+      // (dismiss / button) run.
+      if (slidePhase === 'drag') cancelDrag();
+      return;
+    }
+    animateStep(step);
   }
 
   // Persist a rating change made on the detail pane. Click-to-rate is
@@ -852,7 +949,7 @@
       return;
     }
     if (lightboxIndex !== null && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-      stepLightbox(e.key === 'ArrowLeft' ? -1 : 1);
+      animateStep(e.key === 'ArrowLeft' ? -1 : 1);
     }
   }
 
@@ -1502,20 +1599,27 @@
 </div>
 
 <!-- Lightbox. Mounted only while open so the DOM stays clean.
-     Click the dim backdrop to dismiss; click the image stops the
-     event so a misclick on the image doesn't drop the modal. The
-     close button is the redundant escape hatch for users who
-     don't realise the backdrop is clickable. -->
+     A 3-slide carousel - [prev | current | next] - whose track
+     slides under the finger on a swipe and animates one slide over on
+     a commit (swipe past threshold, arrow, or arrow key). Click the
+     dim area around the photo to dismiss; clicking the image keeps it
+     open. The close button is the redundant escape hatch. -->
 {#if lightboxIndex !== null && Array.isArray(activePhotos) && activePhotos.length > 0}
+  {@const len = activePhotos.length}
   {@const p = activePhotos[lightboxIndex]}
+  {@const prevP = activePhotos[wrapIndex(lightboxIndex, -1, len)]}
+  {@const nextP = activePhotos[wrapIndex(lightboxIndex, 1, len)]}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     class="recipe-lightbox-backdrop"
     onclick={(e) => {
-      // Only the backdrop dismisses; clicks bubbled up from the
-      // image or the close button leave it open. Equivalent to the
-      // image-stops-propagation trick but keeps the click handler
-      // off the non-interactive <img>.
+      // Dismiss on a click in the dim area, not on the photo. The
+      // viewport and slides are pointer-events:none so a click on the
+      // dark surround falls through to the backdrop (target ===
+      // currentTarget here); only the <img> opts back into pointer
+      // events, so a click on the photo lands on the image and leaves
+      // the viewer open. Escape and the close button are the keyboard
+      // and explicit-control paths.
       if (e.target === e.currentTarget) closeLightbox();
     }}
     ontouchstart={onLightboxTouchStart}
@@ -1526,6 +1630,34 @@
     aria-label="Photo viewer"
     tabindex="-1"
   >
+    <!-- The viewport clips the track; the track is a flex row of three
+         viewport-width slides. It renders behind the chrome (close,
+         arrows, caption, counter), which all come after it in the DOM
+         so they stack on top and stay clickable. -->
+    <div class="recipe-lightbox-viewport">
+      <div class="recipe-lightbox-track" style={lightboxTrackStyleStr}>
+        <div class="recipe-lightbox-slide">
+          {#if len > 1 && prevP}
+            <img class="recipe-lightbox-img" src={prevP.url} alt={prevP.label ?? ''} />
+          {/if}
+        </div>
+        <div class="recipe-lightbox-slide">
+          {#if p}
+            <img
+              class="recipe-lightbox-img"
+              src={p.url}
+              alt={p.label ?? ''}
+              title={p.label ?? ''}
+            />
+          {/if}
+        </div>
+        <div class="recipe-lightbox-slide">
+          {#if len > 1 && nextP}
+            <img class="recipe-lightbox-img" src={nextP.url} alt={nextP.label ?? ''} />
+          {/if}
+        </div>
+      </div>
+    </div>
     <button
       type="button"
       class="recipe-lightbox-close"
@@ -1533,47 +1665,39 @@
       title="Close"
       aria-label="Close photo viewer"
     >×</button>
-    {#if activePhotos.length > 1}
+    {#if len > 1}
       <!-- Edge-pinned, vertically-centered paging arrows. Mounted only
            for multi-photo recipes; a single photo has nothing to page
-           to. Looping is handled by stepLightbox, so both arrows are
+           to. Looping is handled by animateStep, so both arrows are
            always live - there is no disabled end state. -->
       <button
         type="button"
         class="recipe-lightbox-nav prev"
-        onclick={() => stepLightbox(-1)}
+        onclick={() => animateStep(-1)}
         title="Previous photo"
         aria-label="Previous photo"
       >‹</button>
       <button
         type="button"
         class="recipe-lightbox-nav next"
-        onclick={() => stepLightbox(1)}
+        onclick={() => animateStep(1)}
         title="Next photo"
         aria-label="Next photo"
       >›</button>
     {/if}
-    {#if p}
-      <img
-        class="recipe-lightbox-img"
-        src={p.url}
-        alt={p.label ?? ''}
-        title={p.label ?? ''}
-      />
-      {#if p.label}
-        <!-- Caption pinned above the counter so the two pieces of
-             chrome don't overlap on narrow viewports. The italic
-             treatment matches the thumb-strip caption so the same
-             text reads consistently across the strip and the
-             lightbox. -->
-        <span class="recipe-lightbox-caption" aria-live="polite">
-          <em>{p.label}</em>
-        </span>
-      {/if}
+    {#if p?.label}
+      <!-- Caption pinned above the counter so the two pieces of chrome
+           don't overlap on narrow viewports. The italic treatment
+           matches the thumb-strip caption so the same text reads
+           consistently across the strip and the lightbox. Tied to the
+           current photo, so it updates when a slide commits. -->
+      <span class="recipe-lightbox-caption" aria-live="polite">
+        <em>{p.label}</em>
+      </span>
     {/if}
-    {#if activePhotos.length > 1}
+    {#if len > 1}
       <span class="subtle recipe-lightbox-counter" aria-live="polite">
-        {lightboxIndex + 1} / {activePhotos.length}
+        {lightboxIndex + 1} / {len}
       </span>
     {/if}
   </div>
@@ -2217,9 +2341,42 @@
     inset: 0;
     z-index: 1000;
     background: rgba(0, 0, 0, 0.85);
+  }
+  /* Clips the carousel track so the parked prev/next slides and any
+     mid-drag overscroll stay hidden. Fills the backdrop; the chrome
+     (close, arrows, caption, counter) are siblings rendered after it,
+     so they sit on top without being clipped. */
+  .recipe-lightbox-viewport {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    /* Let clicks on the dim surround fall through to the backdrop's
+       dismiss handler; only the <img> below opts back in, so clicking
+       the photo keeps the viewer open while clicking around it closes
+       it. Touch events still reach the backdrop's swipe handlers via
+       bubbling, so this doesn't affect the gesture. */
+    pointer-events: none;
+  }
+  /* Flex row of three viewport-width slides. Its own box width is one
+     viewport, so the percentage transforms in lightboxTrackStyle land
+     exactly on slide boundaries. transform + transition are supplied
+     inline per phase. will-change keeps the slide on its own layer so
+     the finger-follow stays smooth on mobile. */
+  .recipe-lightbox-track {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    will-change: transform;
+  }
+  .recipe-lightbox-slide {
+    flex: 0 0 100%;
+    width: 100%;
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
+    /* The 1rem gutter that used to live on the backdrop's padding;
+       keeps the image off the very edge on small screens. */
     padding: 1rem;
   }
   .recipe-lightbox-img {
@@ -2229,6 +2386,14 @@
     border-radius: 6px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     cursor: default;
+    /* Re-enable pointer events the viewport turned off, so a click on
+       the photo registers on the image (target !== backdrop) and does
+       not dismiss the viewer. */
+    pointer-events: auto;
+    /* Suppress the browser's native image-drag ghost so a mouse drag
+       across the photo doesn't fight the swipe affordance. */
+    user-select: none;
+    -webkit-user-drag: none;
   }
   .recipe-lightbox-close {
     position: absolute;

@@ -92,3 +92,61 @@ export function swipeNavStep(
   if (Math.abs(dx) <= Math.abs(dy)) return 0;
   return dx < 0 ? 1 : -1;
 }
+
+/**
+ * Phases of the lightbox photo carousel, which renders a 3-slide track
+ * - [prev | current | next] - and slides it horizontally:
+ *
+ *   - `idle`   - resting on the middle slide, no animation. Also the
+ *                landing phase after a commit: the slid-to photo now
+ *                occupies the middle slot, so snapping the track back
+ *                to center here is invisible.
+ *   - `drag`   - tracking a finger mid-swipe; the track follows by
+ *                `dragDx` px with no transition.
+ *   - `to-next`/`to-prev` - committing a swipe (or an arrow / key
+ *                press): animate the track one slide left or right.
+ *   - `cancel` - a swipe that fell short of the threshold; ease the
+ *                track back to center.
+ */
+export type LightboxSlidePhase = 'idle' | 'drag' | 'to-next' | 'to-prev' | 'cancel';
+
+/**
+ * Duration of the lightbox slide animation. Shared by the CSS
+ * transition baked into `lightboxTrackStyle` and the commit timer in
+ * `Cookbook.svelte` that swaps the photo index once the slide settles.
+ * The two MUST agree: if the timer fired before the transition
+ * finished, the track would visibly jump mid-slide. The component adds
+ * a small buffer on top so it always waits for the transition to end.
+ */
+export const LIGHTBOX_SLIDE_MS = 250;
+
+/**
+ * Inline `style` for the carousel track in a given phase. The track is
+ * a flex row of three viewport-width slides; its own width is one
+ * viewport, so `translateX(-100%)` centers the middle slide,
+ * `translateX(0%)` reveals the prev slide, and `translateX(-200%)`
+ * reveals the next.
+ *
+ * Only `drag` mixes in pixels (`-100%` plus the live finger offset);
+ * the animated phases use whole-slide percentages so the transition
+ * lands exactly on a slide boundary regardless of how far the drag
+ * traveled. `idle` and `drag` carry `transition: none` so the resting
+ * snap-back and the finger-follow never animate; the rest carry the
+ * shared-duration transition.
+ */
+export function lightboxTrackStyle(phase: LightboxSlidePhase, dragDx: number): string {
+  const ease = `transform ${LIGHTBOX_SLIDE_MS}ms ease-out`;
+  switch (phase) {
+    case 'drag':
+      return `transform: translateX(calc(-100% + ${dragDx}px)); transition: none;`;
+    case 'to-next':
+      return `transform: translateX(-200%); transition: ${ease};`;
+    case 'to-prev':
+      return `transform: translateX(0%); transition: ${ease};`;
+    case 'cancel':
+      return `transform: translateX(-100%); transition: ${ease};`;
+    case 'idle':
+    default:
+      return 'transform: translateX(-100%); transition: none;';
+  }
+}
