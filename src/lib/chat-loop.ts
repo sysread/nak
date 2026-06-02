@@ -1575,7 +1575,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
             'intuition',
             withIntuitionInflight(thread.id, () =>
               runIntuitionPipeline({
-                venice,
+                supabase,
                 model: intuitionModelId,
                 history,
                 signal,
@@ -2202,7 +2202,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
                 'intuition',
                 withIntuitionInflight(thread.id, () =>
                   runIntuitionPipeline({
-                    venice,
+                    supabase,
                     model: intuitionModelId,
                     history,
                     signal,

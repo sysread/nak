@@ -17,8 +17,14 @@
 //                     it; the function pins variants=1/return_binary=false
 //                     so the response is a single base64 image ready for the
 //                     attachments path.
-// `/complete` is the planned sibling - see
-// docs/dev/in-progress/venice-edge-functions/.
+//   /complete - browser-triggered, thin proxy for Venice's /chat/completions
+//               (non-streaming). The body-shaping helper buildChatBody lives
+//               in src/lib/venice.ts and runs browser-side; this route just
+//               attaches the shared key, forwards, and relays Venice's
+//               response - including a parsed retryAfterMs on 429 so the
+//               browser's retry loop can act on Venice's hint. The streaming
+//               sibling (streamChat) is the project's final attractor and
+//               does not move yet.
 //
 // The handlers are intentionally thin: request/response shaping, the Venice
 // call, and the backfill orchestration live in ../_shared/* (pure, unit-tested
@@ -26,6 +32,7 @@
 // shared key, and error mapping.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
+  veniceComplete,
   veniceEmbed,
   veniceExtractText,
   veniceFetchUsagePage,
@@ -216,6 +223,65 @@ async function handleUsage(req: Request): Promise<Response> {
       // Mirror handleEmbed: surface Venice's 429 as a 429 so the browser loop
       // can back off; everything else collapses to 502 (bad upstream).
       return json({ error: err.message, kind: err.kind }, err.kind === 'rate_limit' ? 429 : 502);
+    }
+    return json({ error: (err as Error).message }, 500);
+  }
+}
+
+/**
+ * Browser-triggered thin proxy for POST /chat/completions. The browser
+ * already builds Venice's wire-shape body via the exported buildChatBody
+ * helper in src/lib/venice.ts; the function forwards it untouched with the
+ * shared key attached and returns Venice's JSON verbatim. parseChatCompletion
+ * on the browser side handles response shaping.
+ *
+ * Auth: verify_jwt on (the gateway has already validated the session JWT),
+ * shared key from app_config via the service role - same model as /embed.
+ * No service-role check, since this is user-triggered.
+ *
+ * Error relay: VeniceError carries kind + status; on rate_limit we also
+ * include retryAfterMs in the JSON body so the browser's retry loop can
+ * read Venice's Retry-After / x-ratelimit-reset-* hint rather than picking
+ * a backoff blindly. Other VeniceErrors collapse to 502; non-VeniceError
+ * exceptions to 500.
+ */
+async function handleComplete(req: Request): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return json({ error: 'body must be a JSON object' }, 400);
+  }
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+  const apiKey = await readVeniceKey(admin);
+  if (!apiKey) {
+    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
+  }
+
+  try {
+    const result = await veniceComplete({
+      apiKey,
+      body: body as Record<string, unknown>,
+    });
+    return json(result);
+  } catch (err) {
+    if (err instanceof VeniceError) {
+      if (err.kind === 'rate_limit') {
+        // Surface Retry-After / x-ratelimit-reset-* through the JSON body
+        // so the browser's retry loop can act on Venice's hint - the
+        // headers themselves do not survive the functions.invoke round
+        // trip cleanly.
+        return json(
+          { error: err.message, kind: err.kind, retryAfterMs: err.retryAfterMs ?? null },
+          429
+        );
+      }
+      return json({ error: err.message, kind: err.kind }, 502);
     }
     return json({ error: (err as Error).message }, 500);
   }
@@ -412,6 +478,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'backfill' && req.method === 'POST') return handleBackfill(req);
   if (route === 'text-parser' && req.method === 'POST') return handleTextParser(req);
   if (route === 'image-generate' && req.method === 'POST') return handleImageGenerate(req);
+  if (route === 'complete' && req.method === 'POST') return handleComplete(req);
 
   return json({ error: 'not found' }, 404);
 });

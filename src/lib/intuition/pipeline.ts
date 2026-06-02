@@ -37,8 +37,9 @@
  * would mean a stale read drives the next several turns even after
  * the underlying state has shifted.
  */
-import type { VeniceClient, VeniceMessage } from '../venice';
+import type { VeniceMessage } from '../venice';
 import { VeniceError } from '../venice';
+import type { SupabaseService } from '../supabase';
 import { createLogger } from '../logger.svelte';
 // The bulky template strings (PERCEPTION_PROMPT, SYNTHESIS_PROMPT,
 // DRIVE_BASE_PROMPT, DRIVE_PROMPTS) and DRIVE_NAMES live in
@@ -67,14 +68,14 @@ const log = createLogger('intuition');
  * anyway.
  */
 async function callOnce(
-  venice: VeniceClient,
+  supabase: SupabaseService,
   model: string,
   systemPrompt: string,
   userContent: string,
   signal: AbortSignal,
   maxTokens: number
 ): Promise<string> {
-  const result = await venice.completeChat({
+  const result = await supabase.complete({
     model,
     messages: [
       { role: 'system', content: systemPrompt },
@@ -138,7 +139,7 @@ function ensureClassificationPrefix(raw: string): string {
 }
 
 export interface RunIntuitionInputs {
-  venice: VeniceClient;
+  supabase: SupabaseService;
   /** Concrete Venice model id. Caller resolves the fast tier. */
   model: string;
   /** History up to and including the most recent user message; same
@@ -170,7 +171,7 @@ export interface RunIntuitionInputs {
 export async function runIntuitionPipeline(
   inputs: RunIntuitionInputs
 ): Promise<IntuitionPayload | null> {
-  const { venice, model, history, signal, round, mood, trigger } = inputs;
+  const { supabase, model, history, signal, round, mood, trigger } = inputs;
   const startedAt = Date.now();
   // Log at info so a user troubleshooting "the brain icon never
   // showed" can see whether the pipeline ever started. The matching
@@ -204,7 +205,7 @@ export async function runIntuitionPipeline(
   let perceptionRaw: string;
   try {
     perceptionRaw = await callOnce(
-      venice,
+      supabase,
       model,
       PERCEPTION_PROMPT,
       transcript,
@@ -238,7 +239,7 @@ export async function runIntuitionPipeline(
         // headroom only matters when an alarmed drive earns the air
         // to push harder.
         const text = await callOnce(
-          venice,
+          supabase,
           model,
           systemPrompt,
           `# My perception of the discussion:\n${perception}`,
@@ -289,7 +290,7 @@ export async function runIntuitionPipeline(
 
   let synthesisRaw: string;
   try {
-    const result = await venice.completeChat({
+    const result = await supabase.complete({
       model,
       messages: [
         { role: 'system', content: SYNTHESIS_PROMPT },

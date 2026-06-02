@@ -11,7 +11,6 @@ import type { LeaseCoordinator } from '../src/lib/embeddings/lease';
 import type {
   ChatRequest,
   ChatCompletion,
-  VeniceClient,
 } from '../src/lib/venice';
 
 type ClaimShape = { threadId: string; userText: string } | null;
@@ -27,15 +26,16 @@ function mkCompletion(text: string): ChatCompletion {
   };
 }
 
-function makeVenice(
-  impl: (req: ChatRequest) => Promise<ChatCompletion> = async () =>
-    mkCompletion('A useful title'),
-): VeniceClient {
-  return {
-    async completeChat(req: ChatRequest): Promise<ChatCompletion> {
-      return impl(req);
-    },
-  } as unknown as VeniceClient;
+/**
+ * Default `SupabaseService.complete` stub used by makeCtx. title-gen
+ * (which the cycle calls into) now talks to the venice edge function
+ * via SupabaseService.complete instead of VeniceClient.completeChat,
+ * so the mock lives on the supabase side. Tests that need a different
+ * completion shape override the function through makeCtx's `complete`
+ * opt.
+ */
+function defaultComplete(): (req: ChatRequest) => Promise<ChatCompletion> {
+  return async () => mkCompletion('A useful title');
 }
 
 function makeCtx(opts: {
@@ -46,7 +46,7 @@ function makeCtx(opts: {
   save?: (t: string, h: string, title: string) => Promise<boolean>;
   saveThrows?: boolean;
   clearClaim?: (t: string, h: string) => Promise<void>;
-  venice?: VeniceClient;
+  complete?: (req: ChatRequest) => Promise<ChatCompletion>;
   signal?: AbortSignal;
 }): CycleContext {
   const coordinator = {
@@ -68,10 +68,10 @@ function makeCtx(opts: {
       },
     ),
     clearAutoTitleClaim: vi.fn(opts.clearClaim ?? (async () => {})),
+    complete: vi.fn(opts.complete ?? defaultComplete()),
   } as unknown as SupabaseService;
 
   return {
-    venice: opts.venice ?? makeVenice(),
     supabase,
     coordinator,
     holderId: 'h-1',
@@ -107,12 +107,11 @@ describe('runOneCycle', () => {
   });
 
   it('returns empty-queue when the claim RPC has nothing to hand out', async () => {
-    const venice = makeVenice();
-    const completeChatSpy = vi.spyOn(venice, 'completeChat');
-    const ctx = makeCtx({ isHolding: true, claim: null, venice });
+    const completeFn = vi.fn(async () => mkCompletion('A useful title'));
+    const ctx = makeCtx({ isHolding: true, claim: null, complete: completeFn });
     expect(await runOneCycle(ctx)).toBe('empty-queue');
-    // No claim => no Venice call. Don't burn a request on an empty queue.
-    expect(completeChatSpy).not.toHaveBeenCalled();
+    // No claim => no completion call. Don't burn a request on an empty queue.
+    expect(completeFn).not.toHaveBeenCalled();
   });
 
   it('maps a claim RPC throw to error (outer loop backs off)', async () => {
@@ -135,15 +134,14 @@ describe('runOneCycle', () => {
     // context, no priming). The worker is a clean re-implementation of
     // the in-Chat trigger's call site - same input, same model.
     const seen: ChatRequest[] = [];
-    const venice = makeVenice(async (req) => {
-      seen.push(req);
-      return mkCompletion('Decorators primer');
-    });
     const ctx = makeCtx({
       isHolding: true,
       claim: { threadId: 't-1', userText: 'help me understand python decorators' },
       save: async () => true,
-      venice,
+      complete: async (req) => {
+        seen.push(req);
+        return mkCompletion('Decorators primer');
+      },
     });
     expect(await runOneCycle(ctx)).toBe('titled');
     expect(seen).toHaveLength(1);
@@ -159,7 +157,6 @@ describe('runOneCycle', () => {
     // returns null. The loop releases the per-thread claim so the row
     // re-enters the queue immediately rather than waiting for the 60s
     // claim TTL to expire.
-    const venice = makeVenice(async () => mkCompletion('   '));
     const clearSpy = vi.fn(async () => {});
     const saveFn = vi.fn(async () => true);
     const ctx = makeCtx({
@@ -167,7 +164,7 @@ describe('runOneCycle', () => {
       claim: { threadId: 't-1', userText: 'hello' },
       save: saveFn,
       clearClaim: clearSpy,
-      venice,
+      complete: async () => mkCompletion('   '),
     });
     expect(await runOneCycle(ctx)).toBe('no-title');
     expect(clearSpy).toHaveBeenCalledWith('t-1', 'h-1');
@@ -179,14 +176,13 @@ describe('runOneCycle', () => {
     // fails the per-thread TTL takes over. The cycle must not turn
     // a failed clear into an error - that would muddle the transition
     // semantics for the outer loop.
-    const venice = makeVenice(async () => mkCompletion(''));
     const ctx = makeCtx({
       isHolding: true,
       claim: { threadId: 't-1', userText: 'hi' },
       clearClaim: async () => {
         throw new Error('clear boom');
       },
-      venice,
+      complete: async () => mkCompletion(''),
     });
     expect(await runOneCycle(ctx)).toBe('no-title');
   });
@@ -214,15 +210,14 @@ describe('runOneCycle', () => {
     // the loop's perspective that's the same as an empty completion -
     // no title to save, release the claim and let the next cycle retry.
     // This is the auto-title pipeline's load-bearing best-effort posture.
-    const venice = makeVenice(async () => {
-      throw new Error('venice exploded');
-    });
     const clearSpy = vi.fn(async () => {});
     const ctx = makeCtx({
       isHolding: true,
       claim: { threadId: 't-1', userText: 'hello' },
       clearClaim: clearSpy,
-      venice,
+      complete: async () => {
+        throw new Error('venice exploded');
+      },
     });
     expect(await runOneCycle(ctx)).toBe('no-title');
     expect(clearSpy).toHaveBeenCalledWith('t-1', 'h-1');

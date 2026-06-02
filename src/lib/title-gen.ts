@@ -38,7 +38,7 @@
  * message nag is a further fallback when the worker hasn't yet
  * polled the row.
  */
-import type { VeniceClient } from './venice';
+import type { SupabaseService } from './supabase';
 import { agentModel } from './models';
 import { sanitizeTitle } from './tools/update_title';
 import { createLogger } from './logger.svelte';
@@ -76,7 +76,7 @@ const TITLE_GEN_SYSTEM_PROMPT = [
  * so the caller's await doesn't need a try/catch.
  */
 export async function generateThreadTitle(
-  venice: VeniceClient,
+  supabase: SupabaseService,
   userText: string,
   signal: AbortSignal,
 ): Promise<string | null> {
@@ -84,7 +84,7 @@ export async function generateThreadTitle(
   if (trimmed.length === 0) return null;
 
   try {
-    const result = await venice.completeChat({
+    const result = await supabase.complete({
       model: agentModel('autoTitle').id,
       messages: [
         { role: 'system', content: TITLE_GEN_SYSTEM_PROMPT },

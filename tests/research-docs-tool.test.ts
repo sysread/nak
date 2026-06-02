@@ -31,10 +31,16 @@ import { AGENT_MODELS, agentModel } from '../src/lib/models';
 import type { SupabaseService } from '../src/lib/supabase';
 import type { ChatCompletion, ChatRequest, VeniceClient } from '../src/lib/venice';
 
-function ctxFor(venice: VeniceClient): ToolContext {
+// research_docs talks to the venice edge function via SupabaseService.complete
+// (milestone 6) - the leftover `venice: VeniceClient` field on ToolContext is
+// still there because background-agent workers (samskara, summary, bias, ...)
+// haven't migrated yet. ctxFor stubs both: a stub VeniceClient that the tool
+// no longer reads, and a SupabaseService whose `complete` is the actual
+// fixture point.
+function ctxFor(supabase: SupabaseService): ToolContext {
   return {
-    supabase: {} as SupabaseService,
-    venice,
+    supabase,
+    venice: { completeChat: vi.fn(), embed: vi.fn() } as unknown as VeniceClient,
     userId: 'u-1',
     threadId: 't-1',
     signal: new AbortController().signal,
@@ -52,17 +58,17 @@ function makeCompletion(text: string): ChatCompletion {
   };
 }
 
-function mkVenice(handler: (req: ChatRequest) => string): {
-  venice: VeniceClient;
+function mkSupabase(handler: (req: ChatRequest) => string): {
+  supabase: SupabaseService;
   seen: ChatRequest[];
 } {
   const seen: ChatRequest[] = [];
-  const completeChat = vi.fn(async (req: ChatRequest): Promise<ChatCompletion> => {
+  const complete = vi.fn(async (req: ChatRequest): Promise<ChatCompletion> => {
     seen.push(req);
     return makeCompletion(handler(req));
   });
   return {
-    venice: { completeChat, embed: vi.fn() } as unknown as VeniceClient,
+    supabase: { complete } as unknown as SupabaseService,
     seen,
   };
 }
@@ -144,25 +150,25 @@ describe('research_docs - registry scoping', () => {
 
 describe('research_docs - execute() shape', () => {
   it('throws on an empty or missing query', async () => {
-    const { venice } = mkVenice(() => '');
+    const { supabase } = mkSupabase(() => '');
     await expect(
-      researchDocs.execute({} as Record<string, unknown>, ctxFor(venice))
+      researchDocs.execute({} as Record<string, unknown>, ctxFor(supabase))
     ).rejects.toThrow(/non-empty.*query/i);
     await expect(
-      researchDocs.execute({ query: '' }, ctxFor(venice))
+      researchDocs.execute({ query: '' }, ctxFor(supabase))
     ).rejects.toThrow(/non-empty.*query/i);
     await expect(
-      researchDocs.execute({ query: '   ' }, ctxFor(venice))
+      researchDocs.execute({ query: '   ' }, ctxFor(supabase))
     ).rejects.toThrow(/non-empty.*query/i);
   });
 
   it('fires a sub-completion with the researchDocs model, bundled docs in system prompt, capped tokens', async () => {
-    const { venice, seen } = mkVenice(
+    const { supabase, seen } = mkSupabase(
       () => 'Nak stores memories in IndexedDB. \n\nSources: memory.md'
     );
     await researchDocs.execute(
       { query: 'where does Nak store memories?' },
-      ctxFor(venice)
+      ctxFor(supabase)
     );
     expect(seen).toHaveLength(1);
     const req = seen[0];
@@ -189,14 +195,14 @@ describe('research_docs - execute() shape', () => {
   });
 
   it('returns { answer, sources } by parsing the trailing Sources line', async () => {
-    const { venice } = mkVenice(
+    const { supabase } = mkSupabase(
       () =>
         'Yes. Nak supports PWA install on iOS. See the install guide for details.\n\n' +
         'Sources: install-pwa.md, getting-started.md'
     );
     const result = await researchDocs.execute(
       { query: 'can I install Nak as a PWA?' },
-      ctxFor(venice)
+      ctxFor(supabase)
     );
     expect(result).toEqual({
       answer:
@@ -206,12 +212,12 @@ describe('research_docs - execute() shape', () => {
   });
 
   it('returns an empty sources array when the sub-model writes "Sources: none"', async () => {
-    const { venice } = mkVenice(
+    const { supabase } = mkSupabase(
       () => 'The docs do not cover that.\n\nSources: none'
     );
     const result = (await researchDocs.execute(
       { query: 'does Nak support voice input?' },
-      ctxFor(venice)
+      ctxFor(supabase)
     )) as { answer: string; sources: string[] };
     expect(result.sources).toEqual([]);
     expect(result.answer).toBe('The docs do not cover that.');
@@ -225,9 +231,9 @@ describe('research_docs - execute() shape', () => {
     // to tell whether to retry, rephrase, or surface the failure to
     // the user. The throw routes through chat-loop's
     // encodeToolContent into `{error: "..."}` on the tool-result row.
-    const { venice } = mkVenice(() => '');
+    const { supabase } = mkSupabase(() => '');
     await expect(
-      researchDocs.execute({ query: 'q' }, ctxFor(venice))
+      researchDocs.execute({ query: 'q' }, ctxFor(supabase))
     ).rejects.toThrow(/completion produced no text content/i);
   });
 
@@ -238,9 +244,9 @@ describe('research_docs - execute() shape', () => {
     // silently return `{answer: '', sources: []}` - same problem as the
     // empty-completion case. Sources can be empty (Sources: none) or
     // non-empty; either way an empty answer is the misbehavior we surface.
-    const { venice } = mkVenice(() => 'Sources: none');
+    const { supabase } = mkSupabase(() => 'Sources: none');
     await expect(
-      researchDocs.execute({ query: 'q' }, ctxFor(venice))
+      researchDocs.execute({ query: 'q' }, ctxFor(supabase))
     ).rejects.toThrow(/Sources.*trailer.*no prose/i);
   });
 
@@ -248,9 +254,9 @@ describe('research_docs - execute() shape', () => {
     // Tripwire on the second branch of the empty-answer check. A trailer
     // that names sources is no more useful than `Sources: none` if the
     // answer is empty - the calling LLM has no synthesis to act on.
-    const { venice } = mkVenice(() => '\n\nSources: memory.md');
+    const { supabase } = mkSupabase(() => '\n\nSources: memory.md');
     await expect(
-      researchDocs.execute({ query: 'q' }, ctxFor(venice))
+      researchDocs.execute({ query: 'q' }, ctxFor(supabase))
     ).rejects.toThrow(/Sources.*trailer.*no prose/i);
   });
 
@@ -258,20 +264,20 @@ describe('research_docs - execute() shape', () => {
     // `raw.trim().length === 0` catches the case where the sub-model
     // produced only whitespace. Same failure-shape as a fully empty
     // completion from the calling LLM's perspective.
-    const { venice } = mkVenice(() => '   \n\n');
+    const { supabase } = mkSupabase(() => '   \n\n');
     await expect(
-      researchDocs.execute({ query: 'q' }, ctxFor(venice))
+      researchDocs.execute({ query: 'q' }, ctxFor(supabase))
     ).rejects.toThrow(/completion produced no text content/i);
   });
 
   it('forwards context_hint into the user turn when provided', async () => {
-    const { venice, seen } = mkVenice(() => 'ok\n\nSources: none');
+    const { supabase, seen } = mkSupabase(() => 'ok\n\nSources: none');
     await researchDocs.execute(
       {
         query: 'how do I change the model?',
         context_hint: 'User is asking mid-thread about switching tiers.',
       },
-      ctxFor(venice)
+      ctxFor(supabase)
     );
     const userMsg = seen[0].messages.find((m) => m.role === 'user');
     const content = typeof userMsg?.content === 'string' ? userMsg.content : '';
@@ -280,18 +286,21 @@ describe('research_docs - execute() shape', () => {
   });
 
   it('omits the context_hint preamble when absent', async () => {
-    const { venice, seen } = mkVenice(() => 'ok\n\nSources: none');
-    await researchDocs.execute({ query: 'q' }, ctxFor(venice));
+    const { supabase, seen } = mkSupabase(() => 'ok\n\nSources: none');
+    await researchDocs.execute({ query: 'q' }, ctxFor(supabase));
     const userMsg = seen[0].messages.find((m) => m.role === 'user');
     expect(userMsg?.content).toBe('Question: q');
   });
 
   it('propagates ctx.signal into the sub-call so cancellation cascades', async () => {
-    const { venice, seen } = mkVenice(() => 'ok\n\nSources: none');
+    const { supabase, seen } = mkSupabase(() => 'ok\n\nSources: none');
     const ctl = new AbortController();
+    // Build the ToolContext inline (rather than reusing ctxFor) because the
+    // assertion targets ctx.signal specifically - we need to pin the
+    // controller we constructed, not the default ctxFor wires up.
     const ctx: ToolContext = {
-      supabase: {} as SupabaseService,
-      venice,
+      supabase,
+      venice: { completeChat: vi.fn(), embed: vi.fn() } as unknown as VeniceClient,
       userId: 'u-1',
       threadId: 't-1',
       signal: ctl.signal,
@@ -303,10 +312,10 @@ describe('research_docs - execute() shape', () => {
 
 describe('research_docs - include_internal_dev_docs', () => {
   it('swaps in the dev-aware system prompt header when the flag is true', async () => {
-    const { venice, seen } = mkVenice(() => 'arch answer\n\nSources: none');
+    const { supabase, seen } = mkSupabase(() => 'arch answer\n\nSources: none');
     await researchDocs.execute(
       { query: 'how is memory wired internally?', include_internal_dev_docs: true },
-      ctxFor(venice)
+      ctxFor(supabase)
     );
     const sys = seen[0].messages.find((m) => m.role === 'system');
     const sysContent = typeof sys?.content === 'string' ? sys.content : '';
@@ -317,10 +326,10 @@ describe('research_docs - include_internal_dev_docs', () => {
   });
 
   it('bundles both user and dev docs into the system prompt when the flag is true', async () => {
-    const { venice, seen } = mkVenice(() => 'arch answer\n\nSources: none');
+    const { supabase, seen } = mkSupabase(() => 'arch answer\n\nSources: none');
     await researchDocs.execute(
       { query: 'q', include_internal_dev_docs: true },
-      ctxFor(venice)
+      ctxFor(supabase)
     );
     const sys = seen[0].messages.find((m) => m.role === 'system');
     const sysContent = typeof sys?.content === 'string' ? sys.content : '';
@@ -334,10 +343,10 @@ describe('research_docs - include_internal_dev_docs', () => {
   });
 
   it('does not bundle dev docs when the flag is explicitly false', async () => {
-    const { venice, seen } = mkVenice(() => 'answer\n\nSources: none');
+    const { supabase, seen } = mkSupabase(() => 'answer\n\nSources: none');
     await researchDocs.execute(
       { query: 'q', include_internal_dev_docs: false },
-      ctxFor(venice)
+      ctxFor(supabase)
     );
     const sys = seen[0].messages.find((m) => m.role === 'system');
     const sysContent = typeof sys?.content === 'string' ? sys.content : '';
@@ -351,14 +360,14 @@ describe('research_docs - include_internal_dev_docs', () => {
     // "docs/dev/memory.md" into "memory.md" and make the source
     // ambiguous with "docs/user/memory.md". This test locks the
     // preservation behavior.
-    const { venice } = mkVenice(
+    const { supabase } = mkSupabase(
       () =>
         'Memories live in IndexedDB locally, synced via Supabase.\n\n' +
         'Sources: docs/user/memory.md, docs/dev/memory.md'
     );
     const result = (await researchDocs.execute(
       { query: 'where do memories live?', include_internal_dev_docs: true },
-      ctxFor(venice)
+      ctxFor(supabase)
     )) as { answer: string; sources: string[] };
     expect(result.sources).toEqual(['docs/user/memory.md', 'docs/dev/memory.md']);
   });
@@ -369,17 +378,17 @@ describe('research_docs - include_internal_dev_docs', () => {
     // explanations). Assert that the cap is at least strictly larger
     // than the default, without pinning an exact number - future
     // tuning can lift either bound without churning this test.
-    const { venice: veniceDefault, seen: seenDefault } = mkVenice(
+    const { supabase: supabaseDefault, seen: seenDefault } = mkSupabase(
       () => 'x\n\nSources: none'
     );
-    await researchDocs.execute({ query: 'q' }, ctxFor(veniceDefault));
+    await researchDocs.execute({ query: 'q' }, ctxFor(supabaseDefault));
 
-    const { venice: veniceDev, seen: seenDev } = mkVenice(
+    const { supabase: supabaseDev, seen: seenDev } = mkSupabase(
       () => 'x\n\nSources: none'
     );
     await researchDocs.execute(
       { query: 'q', include_internal_dev_docs: true },
-      ctxFor(veniceDev)
+      ctxFor(supabaseDev)
     );
 
     expect(seenDev[0].maxTokens).toBeGreaterThan(seenDefault[0].maxTokens ?? 0);

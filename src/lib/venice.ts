@@ -472,7 +472,7 @@ function parseRetryAfterMs(headers: Headers): number | null {
  * result row or a swallowed agent failure - being a bit more patient
  * here trades a few seconds of latency for not burning a turn.
  */
-const COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS = 5;
+export const COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS = 5;
 
 /**
  * Fallback wait schedule for completeChat 429s, used only when Venice
@@ -481,7 +481,7 @@ const COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS = 5;
  * i in 0..3. Smooths the request burst across a quota reset window
  * without piling up several seconds of wait on the first retry.
  */
-const COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS = [1_000, 1_710, 2_924, 5_000];
+export const COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS = [1_000, 1_710, 2_924, 5_000];
 
 /**
  * Hard cap on a single 429 wait inside completeChat. Mirrors
@@ -491,7 +491,7 @@ const COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS = [1_000, 1_710, 2_924, 5_000];
  * blocking a tool sub-call (or, worse, a background agent the user
  * can't see) for that long.
  */
-const COMPLETE_CHAT_RATE_LIMIT_WAIT_CAP_MS = 60_000;
+export const COMPLETE_CHAT_RATE_LIMIT_WAIT_CAP_MS = 60_000;
 
 /**
  * Sleep that resolves either when `ms` elapses or `signal` aborts.
@@ -502,7 +502,7 @@ const COMPLETE_CHAT_RATE_LIMIT_WAIT_CAP_MS = 60_000;
  * UI lifecycle events on either side of the sleep; this one just
  * waits).
  */
-function sleepCancellable(
+export function sleepCancellable(
   ms: number,
   signal: AbortSignal | undefined
 ): Promise<boolean> {
@@ -526,6 +526,155 @@ export interface VeniceClientOptions {
   apiKey: string;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+}
+
+/**
+ * Build the JSON body for a Venice `/chat/completions` request. The
+ * `streaming` arg toggles the `stream` / `stream_options` fields and
+ * the `include_search_results_in_stream` venice_parameter - everything
+ * else (tools, reasoning, verbosity, response_format, web search,
+ * scraping, the system-prompt opt-out) lands on both paths identically.
+ * Centralising the build means a wire-shape change can't accidentally
+ * land on one path and not the other.
+ *
+ * Exported as a free function so SupabaseService.complete can build the
+ * same Venice wire shape and send it through the function as a thin
+ * proxy - sidesteps the wire-shape duplication question
+ * docs/dev/in-progress/venice-edge-functions/chat-completions.md flagged,
+ * since the body-shaping stays on the browser side rather than being
+ * copied to the Deno helper.
+ */
+export function buildChatBody(req: ChatRequest, streaming: boolean): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: req.model,
+    messages: req.messages,
+    temperature: req.temperature,
+    max_tokens: req.maxTokens,
+  };
+  if (streaming) {
+    body.stream = true;
+    // Ask for a token-usage epilogue frame on the SSE stream. Without
+    // this flag Venice (and OpenAI-compatible providers generally)
+    // only emit usage on non-streaming responses; with it, a final
+    // frame carries `{choices:[], usage:{...}}` after [DONE] logic
+    // would otherwise fire. Drives the per-message context-window
+    // indicator - a silently-unsupported provider just yields no
+    // usage event and the indicator stays hidden. Non-streaming
+    // responses always carry `usage` at the top level so this flag
+    // is meaningless on the /complete path.
+    body.stream_options = { include_usage: true };
+  }
+  if (req.tools && req.tools.length > 0) {
+    body.tools = req.tools;
+  }
+  // Only send reasoning_effort when the caller opted in. Keeps the
+  // wire payload clean for non-reasoning models and for test / utility
+  // call paths (auto-titling) that shouldn't pay the latency tax.
+  if (req.reasoningEffort) {
+    body.reasoning_effort = req.reasoningEffort;
+  }
+  // Same discipline for text.verbosity - only forward when the
+  // caller opted in, and nest under `text` to match the OpenAI
+  // spec shape. Providers that don't recognize the field silently
+  // ignore it; ones that 400 on unknown params never see it.
+  if (req.verbosity) {
+    body.text = { verbosity: req.verbosity };
+  }
+  // Same discipline for response_format - only forwarded when the
+  // caller asked. Some providers (and Venice's non-default models)
+  // reject the field when its value isn't recognised, so silence is
+  // the safer default.
+  if (req.responseFormat) {
+    body.response_format = req.responseFormat;
+  }
+  // Venice-specific: request web-search behavior via venice_parameters.
+  // We send the field only when the caller passed an explicit mode so
+  // that unrelated tests / callers that never opt in don't carry an
+  // extra body key. Pair an active search mode with
+  // `enable_web_citations` so sourced claims come back marked up -
+  // without that flag Venice merges the fetched content into the
+  // answer but strips the attribution. Citations are meaningless
+  // when search is 'off', so we omit that field in that case.
+  //
+  // `include_search_results_in_stream` is the opt-in for receiving
+  // the `web_search_citations` array during a streaming response -
+  // it defaults to `false` server-side, meaning citations would
+  // otherwise only appear in non-streaming responses. Without this
+  // flag the model still adds `^N^` superscripts to the content
+  // (that's what `enable_web_citations` gates), but the matching
+  // list never arrives and the superscripts become orphaned.
+  // Flagged experimental in the Venice docs but it's the only way
+  // to surface citations in our streaming pipeline. Non-streaming
+  // responses always include the citations list at the top level
+  // so the flag is unnecessary there.
+  //
+  // Disable Venice's platform-level system prompt. By default
+  // Venice prepends its own generic "you are a helpful assistant"
+  // framing to every request, which stacks on top of our
+  // `buildSystemPrompt()` output and can drag responses back toward
+  // the diplomatic / comfort-first tone our Voice block is
+  // specifically pushing away from. Nak's baseline system prompt
+  // is intentional and covers identity, tool framing, and voice on
+  // its own - Venice's prefix is redundant at best and counter-
+  // productive at worst. The flag is `include_venice_system_prompt`;
+  // it defaults to true server-side, so we have to explicitly opt
+  // out.
+  //
+  // Applies to every chat-completion call (main chat + all sub-
+  // agents - recall, conversation_recall, reflection, summary,
+  // auto-title, samskara, intuition, the web_search /
+  // research_docs / analyze_image tools). Each of those prompts is
+  // self-sufficient; none of them benefit from a Venice generic
+  // preamble landing on top.
+  //
+  // `enable_web_scraping` (caller-gated, off by default): tells
+  // Venice to fetch the full content of any URL the user pastes
+  // into their latest message, via Firecrawl on Venice's side.
+  // Independent of `enable_web_search` per Venice's docs - search
+  // augments the turn with results from a query, scraping reads
+  // URLs the user explicitly provided. The main chat loop leaves
+  // this unset: implicit URL-inlining made it hard for the model
+  // to tell its own anchor (the user's actual typed words) apart
+  // from platform-injected reference material, and required
+  // structural workarounds (`<user_message>` fences, attribution
+  // guards in the system prompt) just to keep the boundary
+  // legible. URL handling goes through the `web_search` tool now,
+  // which still sets `webScraping: true` on its sub-completion so
+  // a research query that quotes a URL can pull the page content
+  // as part of resolving the query.
+  const veniceParams: Record<string, unknown> = {
+    include_venice_system_prompt: false,
+  };
+  if (req.webScraping) {
+    veniceParams.enable_web_scraping = true;
+  }
+  // Venice-specific reasoning kill switch. Only forwarded when the
+  // caller explicitly opted in; an unset field leaves Venice's
+  // server-side default ("thinking on" for reasoning models) in
+  // place. The web_search tool flips this on because the fast tier
+  // currently routes to a reasoning model whose CoT preamble would
+  // otherwise eat the entire `maxTokens` cap before the model emits
+  // a single character of answer text.
+  if (req.disableThinking) {
+    veniceParams.disable_thinking = true;
+  }
+  if (req.webSearch) {
+    veniceParams.enable_web_search = req.webSearch;
+    if (req.webSearch !== 'off') {
+      // Inline citations default to on for backwards-compat; the
+      // caller flips this off to keep grounding but strip the
+      // `[1]` / `[2]` markers from the answer body. Gated inside
+      // the active-search branch because citations without a
+      // search are sourceless - no `enable_web_search=off` request
+      // should ever carry a citations flag.
+      veniceParams.enable_web_citations = req.webCitations ?? true;
+      if (streaming) {
+        veniceParams.include_search_results_in_stream = true;
+      }
+    }
+  }
+  body.venice_parameters = veniceParams;
+  return body;
 }
 
 export class VeniceClient {
@@ -577,150 +726,6 @@ export class VeniceClient {
   }
 
   /**
-   * Build the JSON body shared by streamChat and completeChat. The
-   * `streaming` arg toggles the `stream` / `stream_options` fields
-   * and the `include_search_results_in_stream` venice_parameter -
-   * everything else (tools, reasoning, verbosity, response_format,
-   * web search, scraping, the system-prompt opt-out) lands on both
-   * paths identically. Centralising the build means a wire-shape
-   * change can't accidentally land on one path and not the other.
-   */
-  private buildChatBody(req: ChatRequest, streaming: boolean): Record<string, unknown> {
-    const body: Record<string, unknown> = {
-      model: req.model,
-      messages: req.messages,
-      temperature: req.temperature,
-      max_tokens: req.maxTokens,
-    };
-    if (streaming) {
-      body.stream = true;
-      // Ask for a token-usage epilogue frame on the SSE stream. Without
-      // this flag Venice (and OpenAI-compatible providers generally)
-      // only emit usage on non-streaming responses; with it, a final
-      // frame carries `{choices:[], usage:{...}}` after [DONE] logic
-      // would otherwise fire. Drives the per-message context-window
-      // indicator — a silently-unsupported provider just yields no
-      // usage event and the indicator stays hidden. Non-streaming
-      // responses always carry `usage` at the top level so this flag
-      // is meaningless on the completeChat path.
-      body.stream_options = { include_usage: true };
-    }
-    if (req.tools && req.tools.length > 0) {
-      body.tools = req.tools;
-    }
-    // Only send reasoning_effort when the caller opted in. Keeps the
-    // wire payload clean for non-reasoning models and for test / utility
-    // call paths (auto-titling) that shouldn't pay the latency tax.
-    if (req.reasoningEffort) {
-      body.reasoning_effort = req.reasoningEffort;
-    }
-    // Same discipline for text.verbosity — only forward when the
-    // caller opted in, and nest under `text` to match the OpenAI
-    // spec shape. Providers that don't recognize the field silently
-    // ignore it; ones that 400 on unknown params never see it.
-    if (req.verbosity) {
-      body.text = { verbosity: req.verbosity };
-    }
-    // Same discipline for response_format — only forwarded when the
-    // caller asked. Some providers (and Venice's non-default models)
-    // reject the field when its value isn't recognised, so silence is
-    // the safer default.
-    if (req.responseFormat) {
-      body.response_format = req.responseFormat;
-    }
-    // Venice-specific: request web-search behavior via venice_parameters.
-    // We send the field only when the caller passed an explicit mode so
-    // that unrelated tests / callers that never opt in don't carry an
-    // extra body key. Pair an active search mode with
-    // `enable_web_citations` so sourced claims come back marked up —
-    // without that flag Venice merges the fetched content into the
-    // answer but strips the attribution. Citations are meaningless
-    // when search is 'off', so we omit that field in that case.
-    // (We deliberately do NOT set the xAI xsearch knob — that's a
-    // separate server-side tool and the user hasn't opted in.)
-    //
-    // `include_search_results_in_stream` is the opt-in for receiving
-    // the `web_search_citations` array during a streaming response -
-    // it defaults to `false` server-side, meaning citations would
-    // otherwise only appear in non-streaming responses. Without this
-    // flag the model still adds `^N^` superscripts to the content
-    // (that's what `enable_web_citations` gates), but the matching
-    // list never arrives and the superscripts become orphaned.
-    // Flagged experimental in the Venice docs but it's the only way
-    // to surface citations in our streaming pipeline. Non-streaming
-    // responses always include the citations list at the top level
-    // so the flag is unnecessary there.
-    //
-    // Disable Venice's platform-level system prompt. By default
-    // Venice prepends its own generic "you are a helpful assistant"
-    // framing to every request, which stacks on top of our
-    // `buildSystemPrompt()` output and can drag responses back
-    // toward the diplomatic / comfort-first tone our Voice block is
-    // specifically pushing away from. Nak's baseline system prompt
-    // is intentional and covers identity, tool framing, and voice
-    // on its own — Venice's prefix is redundant at best and
-    // counter-productive at worst. The flag is
-    // `include_venice_system_prompt`; it defaults to true server-
-    // side, so we have to explicitly opt out.
-    //
-    // Applies to every chat-completion call (main chat + all sub-
-    // agents - recall, conversation_recall, reflection, summary,
-    // auto-title, samskara, intuition, the web_search /
-    // research_docs / analyze_image tools). Each of those prompts is
-    // self-sufficient; none of them benefit from a Venice generic
-    // preamble landing on top.
-    //
-    // `enable_web_scraping` (caller-gated, off by default): tells
-    // Venice to fetch the full content of any URL the user pastes
-    // into their latest message, via Firecrawl on Venice's side.
-    // Independent of `enable_web_search` per Venice's docs - search
-    // augments the turn with results from a query, scraping reads
-    // URLs the user explicitly provided. The main chat loop leaves
-    // this unset: implicit URL-inlining made it hard for the model
-    // to tell its own anchor (the user's actual typed words) apart
-    // from platform-injected reference material, and required
-    // structural workarounds (`<user_message>` fences, attribution
-    // guards in the system prompt) just to keep the boundary
-    // legible. URL handling goes through the `web_search` tool now,
-    // which still sets `webScraping: true` on its sub-completion
-    // so a research query that quotes a URL can pull the page
-    // content as part of resolving the query.
-    const veniceParams: Record<string, unknown> = {
-      include_venice_system_prompt: false,
-    };
-    if (req.webScraping) {
-      veniceParams.enable_web_scraping = true;
-    }
-    // Venice-specific reasoning kill switch. Only forwarded when the
-    // caller explicitly opted in; an unset field leaves Venice's
-    // server-side default ("thinking on" for reasoning models) in
-    // place. The web_search tool flips this on because the fast
-    // tier currently routes to a reasoning model whose CoT preamble
-    // would otherwise eat the entire `maxTokens` cap before the
-    // model emits a single character of answer text.
-    if (req.disableThinking) {
-      veniceParams.disable_thinking = true;
-    }
-    if (req.webSearch) {
-      veniceParams.enable_web_search = req.webSearch;
-      if (req.webSearch !== 'off') {
-        // Inline citations default to on for backwards-compat; the
-        // caller flips this off to keep grounding but strip the
-        // `[1]` / `[2]` markers from the answer body. Gated inside
-        // the active-search branch because citations without a
-        // search are sourceless - no `enable_web_search=off` request
-        // should ever carry a citations flag.
-        veniceParams.enable_web_citations = req.webCitations ?? true;
-        if (streaming) {
-          veniceParams.include_search_results_in_stream = true;
-        }
-      }
-    }
-    body.venice_parameters = veniceParams;
-    return body;
-  }
-
-  /**
    * Streaming chat completion. Yields a mix of text deltas (as they
    * arrive) and tool_call events (each emitted once, after its
    * arguments string has been fully assembled).
@@ -730,7 +735,7 @@ export class VeniceClient {
    * rationale.
    */
   async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
-    const body = this.buildChatBody(req, true);
+    const body = buildChatBody(req, true);
     let res: Response;
     try {
       res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
@@ -907,11 +912,26 @@ export class VeniceClient {
    * parameter), parses the single JSON response, and returns a flat
    * {@link ChatCompletion} record.
    *
-   * Used by every background path - sub-agents, headless tool loops,
-   * and the auto-running pipelines (intuition, samskara, summary,
-   * recall). See the file header for why background callers
-   * shouldn't use streamChat: SSE adds latency the user can't see
-   * and exposes us to provider-specific stream-only failure modes.
+   * MIGRATION STATE (chat-completions milestone 6, partial).
+   * `SupabaseService.complete` (src/lib/supabase.ts) is the post-
+   * milestone path - browser-direct -> /complete edge route -> Venice
+   * server-side, with the same retry semantics. The leaf callers that
+   * already migrated: tools (analyze_image, research_docs, web_search),
+   * the intuition pipeline, generateThreadTitle / the auto-title
+   * worker. The callers that STILL reach for `VeniceClient.completeChat`
+   * are the background-agent Web Workers (bias, samskara, summary,
+   * topics, memory_topics, recipe_topics, wiki, wiki-librarian,
+   * deep-sleep, rem, the recall family) and `runHeadlessToolLoop`,
+   * which background agents drive. Each worker bootstraps its own
+   * VeniceClient via a `veniceApiKey` postMessage; the next milestone
+   * threads SupabaseService into the worker context instead and the
+   * delete becomes safe. See docs/dev/in-progress/venice-edge-functions/
+   * migration-inventory.md for the deferred list.
+   *
+   * Until then, callers in the *migrated* set should NOT switch to
+   * this method - their migration is exactly what makes
+   * SupabaseService.complete the load-bearing path. Add new callers
+   * there.
    *
    * Message-shape gotcha: keep the conversation in the conventional
    * `system` + `(user|assistant)+ user` shape. The fast tier
@@ -939,7 +959,7 @@ export class VeniceClient {
    * behind tool sub-calls / background agents with no UI surface.
    */
   async completeChat(req: ChatRequest): Promise<ChatCompletion> {
-    const body = this.buildChatBody(req, false);
+    const body = buildChatBody(req, false);
     const bodyJson = JSON.stringify(body);
     let attempt = 0;
     // Retry loop: every iteration runs one POST attempt. On 429 we

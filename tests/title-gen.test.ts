@@ -6,7 +6,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { generateThreadTitle } from '../src/lib/title-gen';
 import { agentModel } from '../src/lib/models';
-import type { ChatRequest, ChatCompletion, VeniceClient } from '../src/lib/venice';
+import type { ChatRequest, ChatCompletion } from '../src/lib/venice';
+import type { SupabaseService } from '../src/lib/supabase';
 
 function mkCompletion(text: string): ChatCompletion {
   return {
@@ -19,15 +20,20 @@ function mkCompletion(text: string): ChatCompletion {
   };
 }
 
-function mkVenice(impl: (req: ChatRequest) => Promise<ChatCompletion>) {
+// The auto-title pipeline goes through SupabaseService.complete now (the
+// venice edge function holds the key); pre-milestone-6 these tests stubbed
+// VeniceClient.completeChat instead. Mirror that contract on a
+// SupabaseService cast - the function we exercise only touches
+// `.complete()`, so the rest of the shape stays absent.
+function mkSupabase(impl: (req: ChatRequest) => Promise<ChatCompletion>) {
   const seen: ChatRequest[] = [];
-  const venice = {
-    async completeChat(req: ChatRequest): Promise<ChatCompletion> {
+  const supabase = {
+    async complete(req: ChatRequest): Promise<ChatCompletion> {
       seen.push(req);
       return impl(req);
     },
-  } as unknown as VeniceClient;
-  return { venice, seen };
+  } as unknown as SupabaseService;
+  return { supabase, seen };
 }
 
 describe('generateThreadTitle', () => {
@@ -36,11 +42,11 @@ describe('generateThreadTitle', () => {
     // period; sanitiser strips both. Same shape the update_title tool
     // uses, so manual + tool-driven + auto-generated renames all land
     // with identical formatting.
-    const { venice } = mkVenice(async () =>
+    const { supabase } = mkSupabase(async () =>
       mkCompletion('"Python decorators primer."'),
     );
     const out = await generateThreadTitle(
-      venice,
+      supabase,
       'help me understand python decorators',
       new AbortController().signal,
     );
@@ -53,9 +59,9 @@ describe('generateThreadTitle', () => {
     // future revert (or a copy of this shape) doesn't silently regress
     // into "model emits empty content after burning tokens on
     // reasoning_content."
-    const { venice, seen } = mkVenice(async () => mkCompletion('A title'));
+    const { supabase, seen } = mkSupabase(async () => mkCompletion('A title'));
     await generateThreadTitle(
-      venice,
+      supabase,
       'hello there',
       new AbortController().signal,
     );
@@ -73,9 +79,9 @@ describe('generateThreadTitle', () => {
     // the whole input. A future caller adding "context" to the
     // title-gen prompt is exactly the kind of regression this test
     // exists to catch.
-    const { venice, seen } = mkVenice(async () => mkCompletion('Title'));
+    const { supabase, seen } = mkSupabase(async () => mkCompletion('Title'));
     await generateThreadTitle(
-      venice,
+      supabase,
       'tell me about the moons of jupiter',
       new AbortController().signal,
     );
@@ -91,20 +97,20 @@ describe('generateThreadTitle', () => {
   it('returns null on an empty / whitespace-only user message rather than firing the completion', async () => {
     // No prompt = no title. Skip the call entirely so we don't burn
     // a Venice request on a guaranteed-useless answer.
-    const { venice, seen } = mkVenice(async () => mkCompletion('Title'));
+    const { supabase, seen } = mkSupabase(async () => mkCompletion('Title'));
     expect(
-      await generateThreadTitle(venice, '', new AbortController().signal),
+      await generateThreadTitle(supabase, '', new AbortController().signal),
     ).toBeNull();
     expect(
-      await generateThreadTitle(venice, '   ', new AbortController().signal),
+      await generateThreadTitle(supabase, '   ', new AbortController().signal),
     ).toBeNull();
     expect(seen).toHaveLength(0);
   });
 
   it('returns null when the completion comes back with empty / whitespace text', async () => {
-    const { venice } = mkVenice(async () => mkCompletion('   '));
+    const { supabase } = mkSupabase(async () => mkCompletion('   '));
     expect(
-      await generateThreadTitle(venice, 'real question', new AbortController().signal),
+      await generateThreadTitle(supabase, 'real question', new AbortController().signal),
     ).toBeNull();
   });
 
@@ -113,13 +119,13 @@ describe('generateThreadTitle', () => {
     // so a failed background completion just delays the rename by one
     // round at worst. Caller awaits null and moves on without a try
     // around it.
-    const venice = {
-      async completeChat(): Promise<ChatCompletion> {
+    const supabase = {
+      async complete(): Promise<ChatCompletion> {
         throw new Error('venice exploded');
       },
-    } as unknown as VeniceClient;
+    } as unknown as SupabaseService;
     expect(
-      await generateThreadTitle(venice, 'hello', new AbortController().signal),
+      await generateThreadTitle(supabase, 'hello', new AbortController().signal),
     ).toBeNull();
   });
 
@@ -128,17 +134,17 @@ describe('generateThreadTitle', () => {
     // so an early abort cancels the in-flight Venice call. Resolving
     // null (rather than re-raising) means the caller's
     // .then(...) handler can be unconditional.
-    const venice = {
-      async completeChat(): Promise<ChatCompletion> {
+    const supabase = {
+      async complete(): Promise<ChatCompletion> {
         const err = new Error('aborted');
         err.name = 'AbortError';
         throw err;
       },
-    } as unknown as VeniceClient;
+    } as unknown as SupabaseService;
     const ctl = new AbortController();
     ctl.abort();
     expect(
-      await generateThreadTitle(venice, 'hello', ctl.signal),
+      await generateThreadTitle(supabase, 'hello', ctl.signal),
     ).toBeNull();
   });
 
@@ -148,8 +154,8 @@ describe('generateThreadTitle', () => {
     // titles greeting-prefixed messages. The "look past pleasantries"
     // framing is what stops "hey, can you help me with X?" from
     // titling as "Greeting".
-    const { venice, seen } = mkVenice(async () => mkCompletion('Title'));
-    await generateThreadTitle(venice, 'hi', new AbortController().signal);
+    const { supabase, seen } = mkSupabase(async () => mkCompletion('Title'));
+    await generateThreadTitle(supabase, 'hi', new AbortController().signal);
     const sys = seen[0].messages[0].content;
     expect(typeof sys).toBe('string');
     expect(sys as string).toMatch(/greeting|pleasantr/i);

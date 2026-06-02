@@ -18,9 +18,9 @@ import {
 import type {
   ChatRequest,
   ChatCompletion,
-  VeniceClient,
   VeniceMessage,
 } from '../src/lib/venice';
+import type { SupabaseService } from '../src/lib/supabase';
 
 /**
  * Build a fake VeniceClient whose completeChat returns a canned
@@ -28,12 +28,12 @@ import type {
  * prompt substring -> response text" so a single mock can serve
  * perception, every drive, and synthesis.
  */
-function fakeVenice(
+function fakeSupabase(
   responseFor: (systemPrompt: string) => string | Error,
   opts: { calls?: ChatRequest[] } = {}
-): VeniceClient {
+): SupabaseService {
   const client = {
-    completeChat: async (req: ChatRequest): Promise<ChatCompletion> => {
+    complete: async (req: ChatRequest): Promise<ChatCompletion> => {
       // Capture the full request so per-call assertions (e.g. that
       // disableThinking was set) can run after the pipeline returns.
       // Tests pass an external array; the mock pushes into it in
@@ -52,7 +52,7 @@ function fakeVenice(
         finishReason: 'stop',
       };
     },
-  } as unknown as VeniceClient;
+  } as unknown as SupabaseService;
   return client;
 }
 
@@ -71,7 +71,7 @@ const HISTORY: VeniceMessage[] = [
 
 describe('runIntuitionPipeline', () => {
   it('assembles all three stages and returns a complete payload', async () => {
-    const venice = fakeVenice((sys) => {
+    const supabase = fakeSupabase((sys) => {
       // The drive base prompt mentions "phantasia" too; the perception
       // prompt is the only one that contains "objective *perception*".
       if (sys.includes('objective *perception*')) {
@@ -90,7 +90,7 @@ describe('runIntuitionPipeline', () => {
     });
 
     const payload = await runIntuitionPipeline({
-      venice,
+      supabase,
       model: 'fake-fast',
       history: HISTORY,
       signal: new AbortController().signal,
@@ -118,7 +118,7 @@ describe('runIntuitionPipeline', () => {
   });
 
   it('prepends Classification: ambiguous when the model elides the prefix', async () => {
-    const venice = fakeVenice((sys) => {
+    const supabase = fakeSupabase((sys) => {
       if (sys.includes('objective *perception*')) {
         // Perception output without the prefix line.
         return 'The user is asking about something or other.';
@@ -129,7 +129,7 @@ describe('runIntuitionPipeline', () => {
     });
 
     const payload = await runIntuitionPipeline({
-      venice,
+      supabase,
       model: 'fake-fast',
       history: HISTORY,
       signal: new AbortController().signal,
@@ -142,7 +142,7 @@ describe('runIntuitionPipeline', () => {
   });
 
   it('tolerates a single drive failure - synthesis still runs', async () => {
-    const venice = fakeVenice((sys) => {
+    const supabase = fakeSupabase((sys) => {
       if (sys.includes('objective *perception*')) {
         return 'Classification: research\n\nThe user is asking a factual question.';
       }
@@ -156,7 +156,7 @@ describe('runIntuitionPipeline', () => {
     });
 
     const payload = await runIntuitionPipeline({
-      venice,
+      supabase,
       model: 'fake-fast',
       history: HISTORY,
       signal: new AbortController().signal,
@@ -171,12 +171,12 @@ describe('runIntuitionPipeline', () => {
   });
 
   it('returns null when perception fails entirely', async () => {
-    const venice = fakeVenice((sys) => {
+    const supabase = fakeSupabase((sys) => {
       if (sys.includes('objective *perception*')) return new Error('boom');
       return 'should not be reached';
     });
     const payload = await runIntuitionPipeline({
-      venice,
+      supabase,
       model: 'fake-fast',
       history: HISTORY,
       signal: new AbortController().signal,
@@ -188,7 +188,7 @@ describe('runIntuitionPipeline', () => {
   });
 
   it('returns null when every drive fails (nothing to synthesize)', async () => {
-    const venice = fakeVenice((sys) => {
+    const supabase = fakeSupabase((sys) => {
       if (sys.includes('objective *perception*')) {
         return 'Classification: chitchat\n\nthe user said hi';
       }
@@ -196,7 +196,7 @@ describe('runIntuitionPipeline', () => {
       return 'unreached';
     });
     const payload = await runIntuitionPipeline({
-      venice,
+      supabase,
       model: 'fake-fast',
       history: HISTORY,
       signal: new AbortController().signal,
@@ -208,9 +208,9 @@ describe('runIntuitionPipeline', () => {
   });
 
   it('returns null on empty transcript', async () => {
-    const venice = fakeVenice(() => 'unreached');
+    const supabase = fakeSupabase(() => 'unreached');
     const payload = await runIntuitionPipeline({
-      venice,
+      supabase,
       model: 'fake-fast',
       history: [],
       signal: new AbortController().signal,
@@ -232,7 +232,7 @@ describe('runIntuitionPipeline', () => {
     // broken. Every stage call must carry the flag - perception,
     // five drives, synthesis: 7 calls in total on a successful run.
     const calls: ChatRequest[] = [];
-    const venice = fakeVenice((sys) => {
+    const supabase = fakeSupabase((sys) => {
       if (sys.includes('objective *perception*')) {
         return 'Classification: chitchat\n\nThe user said hi.';
       }
@@ -241,7 +241,7 @@ describe('runIntuitionPipeline', () => {
       throw new Error(`unexpected: ${sys.slice(0, 60)}`);
     }, { calls });
     const payload = await runIntuitionPipeline({
-      venice,
+      supabase,
       model: 'fake-fast',
       history: HISTORY,
       signal: new AbortController().signal,
@@ -264,12 +264,12 @@ describe('runIntuitionPipeline', () => {
     // thinking is the actual fix; this test pins the failure-mode
     // contract so a future regression on the budget side surfaces
     // here instead of as "the icon never shows up" in the field.
-    const venice = fakeVenice((sys) => {
+    const supabase = fakeSupabase((sys) => {
       if (sys.includes('objective *perception*')) return ''; // empty content
       return 'unreached';
     });
     const payload = await runIntuitionPipeline({
-      venice,
+      supabase,
       model: 'fake-fast',
       history: HISTORY,
       signal: new AbortController().signal,

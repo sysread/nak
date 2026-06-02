@@ -156,7 +156,6 @@ async function runAutoTitleUnit(
   ctx: SupervisorContext
 ): Promise<SupervisorCycleResult> {
   const result = await runAutoTitle({
-    venice: ctx.venice,
     supabase: ctx.supabase,
     coordinator: heldCoordinator,
     holderId: ctx.holderId,

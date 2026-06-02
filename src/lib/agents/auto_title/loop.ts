@@ -23,7 +23,6 @@
  * Venice 4xx, page refresh) gets retried as soon as the next cycle
  * sees the row.
  */
-import type { VeniceClient } from '../../venice';
 import type { SupabaseService } from '../../supabase';
 import type { LeaseCoordinator } from '../../embeddings/lease';
 import { generateThreadTitle } from '../../title-gen';
@@ -57,7 +56,6 @@ export type CycleResult =
   | 'error';
 
 export interface CycleContext {
-  venice: VeniceClient;
   supabase: SupabaseService;
   coordinator: LeaseCoordinator;
   holderId: string;
@@ -97,7 +95,7 @@ export async function runOneCycle(ctx: CycleContext): Promise<CycleResult> {
 
   log.info(`picked up thread ${claim.threadId}`);
 
-  const title = await generateThreadTitle(ctx.venice, claim.userText, ctx.signal);
+  const title = await generateThreadTitle(ctx.supabase, claim.userText, ctx.signal);
   if (title === null) {
     // Best-effort: title-gen swallowed whatever went wrong (network,
     // 4xx, abort, empty completion) and returned null. Release the

@@ -178,7 +178,7 @@ export const researchDocs: ToolDef = {
     // Non-streaming sub-completion: there's no UI surface to render
     // tokens incrementally, and the one-shot endpoint avoids the SSE
     // failure modes streaming sub-calls exhibit.
-    const result = await ctx.venice.completeChat({
+    const result = await ctx.supabase.complete({
       model: agentModel('researchDocs').id,
       messages,
       signal: ctx.signal,

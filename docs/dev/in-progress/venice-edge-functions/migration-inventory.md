@@ -8,12 +8,16 @@ This file is the concrete punch list: call sites, workers, and processes, with
 status.
 
 **Iteratively audited - not exhaustive or final.** Each milestone re-audits and
-updates this. Last full audit: **2026-06-02**, after the text-parser and
-image-generate milestones landed. Driver B's remaining surface is now
-chat-completions alone (the attractor). Audit walks `src/lib/venice.ts`
-callers (`grep`), the `src/lib/agents/` worker fleet, and the
-`supabase/functions/` directory. Line numbers drift; re-grep before relying on
-one.
+updates this. Last full audit: **2026-06-02**, after the chat-completions
+non-streaming leaf landed PARTIALLY: tools + intuition + auto-title moved
+through `SupabaseService.complete`, but the background-agent Web Workers
+(bias, samskara, summary, topics, etc.) still bootstrap their own
+`VeniceClient` via `veniceApiKey` postMessage and call
+`VeniceClient.completeChat` directly - their migration is deferred to a
+follow-up milestone where the worker-message protocol can be reshaped
+cleanly. Audit walks `src/lib/venice.ts` callers (`grep`), the
+`src/lib/agents/` worker fleet, and the `supabase/functions/` directory.
+Line numbers drift; re-grep before relying on one.
 
 Status key:
 
@@ -28,7 +32,7 @@ Status key:
 | Endpoint | `VeniceClient` method | Status |
 | --- | --- | --- |
 | `POST /embeddings` | `embed` (deleted from `VeniceClient`) | DONE - backfill (milestone 1, cron) + query-time (milestone 3, `/embed` route from the browser via `SupabaseService.embed`) |
-| `POST /chat/completions` | `completeChat`, `streamChat` | TODO - the hard one; streaming is the attractor |
+| `POST /chat/completions` | `completeChat` (PARTIAL - tools + intuition + auto-title moved; background workers deferred), `streamChat` (TODO - the attractor) | PARTIAL - milestone 6 (`claude/complete-edge-function`), `/complete` route. See "completeChat (`/chat/completions` non-streaming)" below for the deferred caller list. |
 | `GET /billing/usage` | (was `fetchUsage`, now `SupabaseService.fetchUsage`) | DONE - milestone 2, `/usage` route |
 | `POST /augment/text-parser` | `extractText` (deleted from `VeniceClient`) | DONE - milestone 4, `/text-parser` route. Fixed the CORS-broken browser path (every non-image upload had been "Failed to fetch"). Empirical: Venice caps at ~25 MB; the Supabase edge-function gateway is transparent at that scale (no escape hatch needed). `MAX_DOCUMENT_FILE_BYTES` clamped to 24 MiB to fail at the form guard instead of mid-upload. |
 | `POST /image/generate` | `generateImage` (deleted from `VeniceClient`) | DONE - milestone 5, `/image-generate` route. Single browser caller (the `generate_image` tool) routes through `SupabaseService.generateImage`; the content-policy header check + variants=1/return_binary=false defaults moved into the Deno helper. |
@@ -51,22 +55,49 @@ backfill (memories, threads, recipes, wiki, samskara-substrate,
 document-chunks - the six `EMBED_SOURCES`) is still milestone 1's
 server-side path.
 
-### `completeChat` / `streamChat` (`/chat/completions`)
+### `completeChat` (`/chat/completions` non-streaming)
 
-Non-streaming (`completeChat`) - the leaf that tools, workers, and the intuition
-pipeline call:
+PARTIAL - milestone 6 (`claude/complete-edge-function`). The function-side
+`/complete` route is a thin proxy: the browser builds Venice's wire shape
+via the exported `buildChatBody` helper (in `src/lib/venice.ts`) and
+forwards it; the function attaches the shared key and returns Venice's
+response verbatim, plus a parsed `retryAfterMs` on 429 so the browser's
+retry loop can act on Venice's hint. `parseChatCompletion` + the rate-
+limit retry loop stay browser-side in `SupabaseService.complete`. This
+sidesteps the wire-shape duplication question
+[chat-completions.md](./chat-completions.md) flagged - the body builder
+stays in one place.
 
-- workers: `bias/agent.ts:67`, `memory_topics/agent.ts:183`,
-  `recipe_topics/agent.ts:185`, `samskara/agent.ts:108`, `summary/agent.ts:199`,
-  `topics/agent.ts:252`, `wiki/agent.ts:568`
+**Migrated callers** (call `SupabaseService.complete`):
+
+- tools: `tools/analyze_image.ts:180`, `tools/research_docs.ts:181`,
+  `tools/web_search.ts:146`
 - intuition: `intuition/pipeline.ts:77`, `intuition/pipeline.ts:292`
-- auto-title: `title-gen.ts:87`
-- tools: `tools/analyze_image.ts:192`, `tools/research_docs.ts:181`,
-  `tools/run.ts:292`, `tools/web_search.ts:146`
+- auto-title: `title-gen.ts` (called from `agents/auto_title/loop.ts`
+  and the supervisor's auto-title unit)
 
-Streaming (`streamChat`) - the attractor, the live chat turn:
+**Deferred callers** (still hold `VeniceClient.completeChat`):
 
-- `src/lib/chat-loop.ts:614`
+- background-agent Web Workers: `agents/bias/`, `agents/samskara/`,
+  `agents/summary/`, `agents/topics/`, `agents/memory_topics/`,
+  `agents/recipe_topics/`, `agents/wiki/`, `agents/wiki-librarian/`,
+  `agents/deep-sleep/`, `agents/rem/`, plus the recall family
+  (`agents/recall/`, `agents/conversation_recall/`, `agents/wiki_recall/`)
+- the headless tool-loop driver `tools/run.ts:292` (used by the recall
+  family and the wiki librarian)
+
+Why deferred: each worker bootstraps its own `VeniceClient` from a
+`veniceApiKey` postMessage from the main thread; migrating means
+reshaping the worker-message protocol to thread a `SupabaseService`
+in instead, plus dropping `veniceApiKey` from every worker-start path.
+Larger blast radius than this milestone could land cleanly. Tracked
+as the next driver-B mover.
+
+### `streamChat` (`/chat/completions` streaming)
+
+TODO - the attractor, the live chat turn.
+
+- `src/lib/chat-loop.ts:614` - the sole caller.
 
 ### `extractText` (`/augment/text-parser`)
 

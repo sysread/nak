@@ -121,6 +121,13 @@ interface MockSupabase {
   // Required by the update_title tool. Default no-op so tests that
   // exercise the mid-turn title trigger succeed.
   renameThread: ReturnType<typeof vi.fn>;
+  // The intuition pipeline + tool sub-completions (web_search,
+  // research_docs, analyze_image) and the auto-title pipeline now ride
+  // on SupabaseService.complete instead of VeniceClient.completeChat
+  // (milestone 6). Default absent so tests that don't exercise these
+  // paths stay laser-focused on streamChat. Tests that DO exercise them
+  // pass an impl via mockSupabase({ complete: ... }).
+  complete?: ReturnType<typeof vi.fn>;
 }
 
 function mockSupabase(overrides: Partial<MockSupabase> = {}): {
@@ -192,16 +199,30 @@ function mockSupabase(overrides: Partial<MockSupabase> = {}): {
  * for round N on its Nth invocation. Used to script a multi-round
  * conversation.
  *
- * Both `streamChat` and `completeChat` draw from the same round queue
- * - the main chat loop streams (so its rounds come off the queue as
- * SSE events) and the background sub-tools (web_search,
- * research_docs, analyze_image, the headless tool loop) call
- * completeChat (so for those rounds the helper folds the same event
- * list into a single ChatCompletion record). Tests script every round
- * the same way regardless of which path consumes it - the per-round
- * counter advances on either method.
+ * Both the streamChat path and the tool-side non-streaming completion
+ * path draw from the same round queue - the main chat loop streams (so
+ * its rounds come off the queue as SSE events) and the background sub-
+ * tools (web_search, research_docs, analyze_image, the headless tool
+ * loop) call the non-streaming completion (for those rounds the helper
+ * folds the same event list into a single ChatCompletion record). Tests
+ * script every round the same way regardless of which path consumes it -
+ * the per-round counter advances on either method.
+ *
+ * Post-milestone-6: the tool-side completion runs through
+ * SupabaseService.complete instead of VeniceClient.completeChat. The
+ * shared completion impl is exposed via the returned `complete`
+ * callback, so tests that drive tool rounds pass it through to
+ * mockSupabase({ complete }). VeniceClient.completeChat is still
+ * present on the returned client to satisfy the small set of legacy
+ * callers that have not yet migrated (background-agent workers - see
+ * docs/dev/in-progress/venice-edge-functions/migration-inventory.md).
  */
-function mockVenice(roundEvents: StreamEvent[][]): VeniceClient {
+function mockVenice(
+  roundEvents: StreamEvent[][]
+): {
+  venice: VeniceClient;
+  complete: (req: ChatRequest) => Promise<ChatCompletion>;
+} {
   let i = 0;
   function nextRound(): StreamEvent[] {
     return roundEvents[i++] ?? [];
@@ -228,7 +249,7 @@ function mockVenice(roundEvents: StreamEvent[][]): VeniceClient {
       finishReason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
     };
   }
-  return {
+  const venice = {
     async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
       const events = nextRound();
       for (const ev of events) {
@@ -249,6 +270,9 @@ function mockVenice(roundEvents: StreamEvent[][]): VeniceClient {
       data: [{ index: 0, embedding: new Array(1024).fill(0) }],
     })),
   } as unknown as VeniceClient;
+  const complete = async (_req: ChatRequest): Promise<ChatCompletion> =>
+    eventsToCompletion(nextRound());
+  return { venice, complete };
 }
 
 function summary(
@@ -1144,7 +1168,7 @@ describe('runChatLoop', () => {
   });
 
   it('persists a plain text response in one round', async () => {
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       [{ type: 'text', delta: 'Hello' }, { type: 'text', delta: ' there' }],
     ]);
     const { svc, messagesOut } = mockSupabase();
@@ -1318,7 +1342,7 @@ describe('runChatLoop', () => {
     // persisted row so a page refresh restores the full UI — the
     // collapsible thought panel, the citation superscripts in the
     // body, and the source list under the action bar.
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       [
         { type: 'reasoning', delta: 'weighing ' },
         { type: 'reasoning', delta: 'options...' },
@@ -1373,7 +1397,7 @@ describe('runChatLoop', () => {
     const citations: Citation[] = [
       { index: 1, url: 'https://coinbase.example/btc', title: 'BTC price' },
     ];
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       [{ type: 'tool_call', toolCall: call }],
       [
         { type: 'text', delta: 'Bitcoin is around $70k today.' },
@@ -1420,7 +1444,7 @@ describe('runChatLoop', () => {
     //   R4 main : final text
     const c1 = mkCall('web_search', { query: 'a' }, 'call_a');
     const c2 = mkCall('web_search', { query: 'b' }, 'call_b');
-    const venice = mockVenice([
+    const { venice, complete } = mockVenice([
       [
         { type: 'tool_call', toolCall: c1 },
         { type: 'tool_call', toolCall: c2 },
@@ -1441,7 +1465,7 @@ describe('runChatLoop', () => {
       ],
       [{ type: 'text', delta: 'done' }],
     ]);
-    const { svc, mocks } = mockSupabase();
+    const { svc, mocks } = mockSupabase({ complete: vi.fn(complete) });
     await runChatLoop({
       venice,
       supabase: svc,
@@ -1464,7 +1488,7 @@ describe('runChatLoop', () => {
     // still write the column — as null — so older rows (before the
     // column existed) stay distinguishable from rows that had no
     // reasoning on this specific turn.
-    const venice = mockVenice([[{ type: 'text', delta: 'hi' }]]);
+    const { venice } = mockVenice([[{ type: 'text', delta: 'hi' }]]);
     const { svc, mocks } = mockSupabase();
     await runChatLoop({
       venice,
@@ -1481,7 +1505,7 @@ describe('runChatLoop', () => {
 
   it('runs a round of tool calls then a final text round', async () => {
     const call = mkCall('memory_search', { query: 'cat' });
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       [{ type: 'tool_call', toolCall: call }],
       [{ type: 'text', delta: 'You have a cat named Whiskers.' }],
     ]);
@@ -1517,7 +1541,7 @@ describe('runChatLoop', () => {
 
   it('executes parallel tool calls concurrently', async () => {
     const calls = [mkCall('memory_search', {}, 'c0'), mkCall('memory_search', {}, 'c1')];
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       calls.map((c) => ({ type: 'tool_call' as const, toolCall: c })),
       [{ type: 'text', delta: 'done' }],
     ]);
@@ -1545,7 +1569,7 @@ describe('runChatLoop', () => {
   });
 
   it('updates toolboxes_enabled when the model calls toggle_toolbox', async () => {
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       [
         {
           type: 'tool_call',
@@ -1584,7 +1608,7 @@ describe('runChatLoop', () => {
     // Calling toggle_toolbox with the same array the thread already
     // has should persist (the model re-affirms its intent) but the UI
     // notification must not flash - nothing visible changed.
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       [
         {
           type: 'tool_call',
@@ -1614,7 +1638,7 @@ describe('runChatLoop', () => {
 
   it('surfaces a tool error via onToolError and as a tool-result row', async () => {
     const call = mkCall('memory_search', {});
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       [{ type: 'tool_call', toolCall: call }],
       [{ type: 'text', delta: 'sorry, failed' }],
     ]);
@@ -1656,7 +1680,7 @@ describe('runChatLoop', () => {
         },
       ]);
     }
-    const venice = mockVenice(rounds);
+    const { venice } = mockVenice(rounds);
     const { svc } = mockSupabase();
     const result = await runChatLoop({
       venice,
@@ -1672,7 +1696,7 @@ describe('runChatLoop', () => {
   });
 
   it('fires onTextUpdate with cumulative round text', async () => {
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       [
         { type: 'text', delta: 'He' },
         { type: 'text', delta: 'llo' },
@@ -1696,7 +1720,7 @@ describe('runChatLoop', () => {
 
   it('invokes onAssistantPersisted and onToolResultPersisted in order', async () => {
     const call = mkCall('memory_search', {});
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       [{ type: 'tool_call', toolCall: call }],
       [{ type: 'text', delta: 'final' }],
     ]);
@@ -1719,7 +1743,7 @@ describe('runChatLoop', () => {
   });
 
   it('persists model id and usage on a plain text assistant row', async () => {
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       [
         { type: 'text', delta: 'hi' },
         {
@@ -1752,7 +1776,7 @@ describe('runChatLoop', () => {
     // reflect that even though the content-less assistant row won't
     // surface the ring in the UI.
     const call = mkCall('memory_search', {});
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       [
         { type: 'tool_call', toolCall: call },
         {
@@ -1780,7 +1804,7 @@ describe('runChatLoop', () => {
   });
 
   it('leaves usage undefined when the stream skipped the epilogue', async () => {
-    const venice = mockVenice([[{ type: 'text', delta: 'hi' }]]);
+    const { venice } = mockVenice([[{ type: 'text', delta: 'hi' }]]);
     const { svc, messagesOut } = mockSupabase();
     await runChatLoop({
       venice,
@@ -1804,7 +1828,7 @@ describe('runChatLoop', () => {
       type: 'function',
       function: { name: 'memory_search', arguments: '{not json' },
     };
-    const venice = mockVenice([
+    const { venice } = mockVenice([
       [{ type: 'tool_call', toolCall: bogus }],
       [{ type: 'text', delta: 'ok' }],
     ]);
@@ -2052,50 +2076,60 @@ describe('runChatLoop', () => {
 
   describe('intuition wiring', () => {
     /**
-     * Build a Venice mock that handles BOTH the conscious chat-loop
-     * stream (one terminal text round) and the intuition pipeline's
-     * 7 completeChat calls (perception, 5 drives, synthesis). The
-     * intuition pipeline keys off the system prompt to know which
-     * stage it's serving; we mirror the same disambiguation here.
-     *
-     * Captured ChatRequests on `intuitionCalls` so tests can assert
-     * disableThinking landed on every stage and the count matches
-     * the expected fan-out.
+     * Build a Venice mock for the conscious chat-loop's terminal text
+     * round. The intuition pipeline's 7 completion calls (perception, 5
+     * drives, synthesis) now ride on SupabaseService.complete - see
+     * intuitionCompleteImpl below for the disambiguation. Keeping the
+     * conscious-stream stub here mirrors the pre-migration shape so the
+     * tests stay legible alongside the rest of the suite.
      */
-    function intuitionVenice(intuitionCalls: ChatRequest[]): VeniceClient {
+    function intuitionVenice(): VeniceClient {
       return {
         async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
           // One terminal round so the chat loop exits cleanly.
           yield { type: 'text', delta: 'ok' };
         },
-        async completeChat(req: ChatRequest): Promise<ChatCompletion> {
-          intuitionCalls.push(req);
-          const sys = req.messages.find((m) => m.role === 'system');
-          const sysText = typeof sys?.content === 'string' ? sys.content : '';
-          let text = '';
-          if (sysText.includes('objective *perception*')) {
-            text = 'Classification: chitchat\n\nThe user is saying hi.';
-          } else if (sysText.includes('# Your Drive:')) {
-            text = 'a drive reaction';
-          } else if (sysText.includes('synthesize')) {
-            text = 'be warm and brief';
-          }
-          return {
-            text,
-            reasoning: '',
-            toolCalls: [],
-            usage: null,
-            citations: [],
-            finishReason: 'stop',
-          };
-        },
       } as unknown as VeniceClient;
+    }
+
+    /**
+     * Drop-in for mockSupabase's `complete` override. The pipeline keys
+     * off the system prompt to know which stage it's serving (perception,
+     * one of 5 drives, or synthesis); we mirror the disambiguation here
+     * so a single impl serves the whole fan-out. Captured ChatRequests
+     * on `intuitionCalls` so tests can assert disableThinking landed on
+     * every stage and the count matches the expected fan-out.
+     */
+    function intuitionCompleteImpl(intuitionCalls: ChatRequest[]) {
+      return async (req: ChatRequest): Promise<ChatCompletion> => {
+        intuitionCalls.push(req);
+        const sys = req.messages.find((m) => m.role === 'system');
+        const sysText = typeof sys?.content === 'string' ? sys.content : '';
+        let text = '';
+        if (sysText.includes('objective *perception*')) {
+          text = 'Classification: chitchat\n\nThe user is saying hi.';
+        } else if (sysText.includes('# Your Drive:')) {
+          text = 'a drive reaction';
+        } else if (sysText.includes('synthesize')) {
+          text = 'be warm and brief';
+        }
+        return {
+          text,
+          reasoning: '',
+          toolCalls: [],
+          usage: null,
+          citations: [],
+          finishReason: 'stop',
+        };
+      };
     }
 
     it('fires the pipeline on a cold thread and persists the payload', async () => {
       const intuitionCalls: ChatRequest[] = [];
-      const venice = intuitionVenice(intuitionCalls);
-      const { svc, mocks } = mockSupabase();
+      const venice = intuitionVenice();
+      const { svc, mocks } = mockSupabase({
+        complete: vi.fn(intuitionCompleteImpl(intuitionCalls)),
+      });
       const updates: unknown[] = [];
       await runChatLoop({
         venice,
@@ -2156,12 +2190,13 @@ describe('runChatLoop', () => {
         resolveWrite = r;
       });
       const intuitionCalls: ChatRequest[] = [];
-      const venice = intuitionVenice(intuitionCalls);
+      const venice = intuitionVenice();
       const { svc } = mockSupabase({
         setThreadIntuitionPayload: vi.fn(async () => {
           await writePromise;
           completionOrder.push('write');
         }),
+        complete: vi.fn(intuitionCompleteImpl(intuitionCalls)),
       });
       const updates: unknown[] = [];
       const runPromise = runChatLoop({
@@ -2203,8 +2238,10 @@ describe('runChatLoop', () => {
       // onIntuitionUpdate never invokes - identical pre-feature
       // behaviour.
       const intuitionCalls: ChatRequest[] = [];
-      const venice = intuitionVenice(intuitionCalls);
-      const { svc, mocks } = mockSupabase();
+      const venice = intuitionVenice();
+      const { svc, mocks } = mockSupabase({
+        complete: vi.fn(intuitionCompleteImpl(intuitionCalls)),
+      });
       const updates: unknown[] = [];
       await runChatLoop({
         venice,
@@ -2418,55 +2455,36 @@ describe('runChatLoop', () => {
       });
       let perceptionAt = 0;
       let memorySearchAt = 0;
+      // The intuition pipeline now drives perception / drives / synthesis
+      // through SupabaseService.complete (milestone 6) - the canned
+      // responses moved off the VeniceClient stub onto the supabase mock.
+      // The conscious chat-loop's terminal text still streams through
+      // venice.streamChat.
       const venice: VeniceClient = {
         async *streamChat(): AsyncGenerator<StreamEvent, void, void> {
           yield { type: 'text', delta: 'ok' };
         },
-        async completeChat(req: ChatRequest): Promise<ChatCompletion> {
-          const sys = req.messages.find((m) => m.role === 'system');
-          const sysText = typeof sys?.content === 'string' ? sys.content : '';
-          if (sysText.includes('objective *perception*')) {
-            perceptionAt = Date.now();
-            queueMicrotask(() => resolveRecallGate());
-            return {
-              text: 'Classification: chitchat\n\nThe user is saying hi.',
-              reasoning: '',
-              toolCalls: [],
-              usage: null,
-              citations: [],
-              finishReason: 'stop',
-            };
-          }
-          if (sysText.includes('# Your Drive:')) {
-            return {
-              text: 'a drive reaction',
-              reasoning: '',
-              toolCalls: [],
-              usage: null,
-              citations: [],
-              finishReason: 'stop',
-            };
-          }
-          if (sysText.includes('synthesize')) {
-            return {
-              text: 'be warm and brief',
-              reasoning: '',
-              toolCalls: [],
-              usage: null,
-              citations: [],
-              finishReason: 'stop',
-            };
-          }
-          return {
-            text: '',
-            reasoning: '',
-            toolCalls: [],
-            usage: null,
-            citations: [],
-            finishReason: 'stop',
-          };
-        },
       } as unknown as VeniceClient;
+      const intuitionComplete = async (req: ChatRequest): Promise<ChatCompletion> => {
+        const sys = req.messages.find((m) => m.role === 'system');
+        const sysText = typeof sys?.content === 'string' ? sys.content : '';
+        const blank: ChatCompletion = {
+          text: '',
+          reasoning: '',
+          toolCalls: [],
+          usage: null,
+          citations: [],
+          finishReason: 'stop',
+        };
+        if (sysText.includes('objective *perception*')) {
+          perceptionAt = Date.now();
+          queueMicrotask(() => resolveRecallGate());
+          return { ...blank, text: 'Classification: chitchat\n\nThe user is saying hi.' };
+        }
+        if (sysText.includes('# Your Drive:')) return { ...blank, text: 'a drive reaction' };
+        if (sysText.includes('synthesize')) return { ...blank, text: 'be warm and brief' };
+        return blank;
+      };
       const { svc, mocks } = mockSupabase({
         listMessages: vi.fn(async () => [userRow('hi')]),
         searchMemories: vi.fn(async () => {
@@ -2474,6 +2492,7 @@ describe('runChatLoop', () => {
           memorySearchAt = Date.now();
           return [memRow('m1', 'recall fact.')];
         }),
+        complete: vi.fn(intuitionComplete),
       });
       await runChatLoop({
         venice,
@@ -2509,10 +2528,14 @@ describe('runChatLoop', () => {
       // synthetic <think> blocks rather than appending.
       const allCalls: ChatRequest[] = [];
       const seenStreamRequests: ChatRequest[] = [];
+      // streamChat covers the conscious chat rounds (round 1 fires
+      // update_title; round 2 settles). The intuition pipeline now drives
+      // its perception / drives / synthesis through SupabaseService.complete
+      // (milestone 6), so the canned responses live on the supabase mock
+      // below.
       const venice: VeniceClient = {
         async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
           seenStreamRequests.push(req);
-          // Round 1 fires update_title, round 2 settles.
           if (seenStreamRequests.length === 1) {
             yield {
               type: 'tool_call',
@@ -2522,52 +2545,28 @@ describe('runChatLoop', () => {
             yield { type: 'text', delta: 'final' } as StreamEvent;
           }
         },
-        async completeChat(req: ChatRequest): Promise<ChatCompletion> {
-          allCalls.push(req);
-          const sys = req.messages.find((m) => m.role === 'system');
-          const sysText = typeof sys?.content === 'string' ? sys.content : '';
-          if (sysText.includes('objective *perception*')) {
-            return {
-              text: 'Classification: chitchat\n\nA topic.',
-              reasoning: '',
-              toolCalls: [],
-              usage: null,
-              citations: [],
-              finishReason: 'stop',
-            };
-          }
-          if (sysText.includes('# Your Drive:')) {
-            return {
-              text: 'react',
-              reasoning: '',
-              toolCalls: [],
-              usage: null,
-              citations: [],
-              finishReason: 'stop',
-            };
-          }
-          if (sysText.includes('synthesize')) {
-            return {
-              text: 'be brief',
-              reasoning: '',
-              toolCalls: [],
-              usage: null,
-              citations: [],
-              finishReason: 'stop',
-            };
-          }
-          // Context recall no longer makes model calls; its fresh
-          // content comes from the searchMemories override below.
-          return {
-            text: '',
-            reasoning: '',
-            toolCalls: [],
-            usage: null,
-            citations: [],
-            finishReason: 'stop',
-          };
-        },
       } as unknown as VeniceClient;
+      const intuitionComplete = async (req: ChatRequest): Promise<ChatCompletion> => {
+        allCalls.push(req);
+        const sys = req.messages.find((m) => m.role === 'system');
+        const sysText = typeof sys?.content === 'string' ? sys.content : '';
+        const blank: ChatCompletion = {
+          text: '',
+          reasoning: '',
+          toolCalls: [],
+          usage: null,
+          citations: [],
+          finishReason: 'stop',
+        };
+        if (sysText.includes('objective *perception*')) {
+          return { ...blank, text: 'Classification: chitchat\n\nA topic.' };
+        }
+        if (sysText.includes('# Your Drive:')) return { ...blank, text: 'react' };
+        if (sysText.includes('synthesize')) return { ...blank, text: 'be brief' };
+        // Context recall no longer makes model calls; its fresh content
+        // comes from the searchMemories override below.
+        return blank;
+      };
       const { svc, mocks } = mockSupabase({
         listMessages: vi.fn(async () => [userRow('hi')]),
         // The title-triggered refresh gathers fresh context; this fact
@@ -2575,6 +2574,7 @@ describe('runChatLoop', () => {
         searchMemories: vi.fn(async () => [
           memRow('m-fresh', 'fresh recall fact from the refresh.'),
         ]),
+        complete: vi.fn(intuitionComplete),
       });
       const intuitionUpdates: unknown[] = [];
       const recallUpdates: unknown[] = [];
@@ -2698,7 +2698,7 @@ describe('runChatLoop', () => {
         },
         'call_ask'
       );
-      const venice = mockVenice([[{ type: 'tool_call', toolCall: askCall }]]);
+      const { venice } = mockVenice([[{ type: 'tool_call', toolCall: askCall }]]);
       const { svc, mocks } = mockSupabase();
       const result = await runChatLoop({
         venice,
@@ -2761,7 +2761,7 @@ describe('runChatLoop', () => {
         },
         'call_ask_2'
       );
-      const venice = mockVenice([
+      const { venice } = mockVenice([
         [
           { type: 'tool_call', toolCall: ask1 },
           { type: 'tool_call', toolCall: ask2 },
@@ -2808,7 +2808,7 @@ describe('runChatLoop', () => {
         },
         'call_ask'
       );
-      const venice = mockVenice([
+      const { venice } = mockVenice([
         [
           { type: 'tool_call', toolCall: memCall },
           { type: 'tool_call', toolCall: askCall },

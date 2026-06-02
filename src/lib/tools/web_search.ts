@@ -143,7 +143,7 @@ export const webSearch: ToolDef = {
     // queries where 2048 is uncomfortably close to the wire.
     let result;
     try {
-      result = await ctx.venice.completeChat({
+      result = await ctx.supabase.complete({
         model: agentModel('webSearch').id,
         messages,
         signal: ctx.signal,

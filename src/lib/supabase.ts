@@ -32,6 +32,8 @@ import { isLogLevel, createLogger, type LogLevel } from './logger.svelte';
 const log = createLogger('supabase');
 import type { OpenAIToolCall } from './tools/types';
 import type {
+  ChatCompletion,
+  ChatRequest,
   Citation,
   EmbeddingRequest,
   EmbeddingResponse,
@@ -39,7 +41,15 @@ import type {
   ImageGenResult,
   TokenUsage,
 } from './venice';
-import { VeniceError } from './venice';
+import {
+  buildChatBody,
+  COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS,
+  COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS,
+  COMPLETE_CHAT_RATE_LIMIT_WAIT_CAP_MS,
+  parseChatCompletion,
+  sleepCancellable,
+  VeniceError,
+} from './venice';
 import {
   collectUsagePages,
   type UsageRequestOptions,
@@ -1322,14 +1332,21 @@ export function coerceSettings(raw: unknown): UserSettings {
 async function veniceFunctionError(error: unknown): Promise<VeniceError> {
   const ctx = (error as { context?: unknown }).context;
   if (ctx instanceof Response) {
-    let payload: { error?: string } = {};
+    let payload: { error?: string; kind?: string; retryAfterMs?: number | null } = {};
     try {
       payload = await ctx.clone().json();
     } catch {
       // Non-JSON error body - fall back to the status line.
     }
     const message = payload.error ?? `venice function request failed (HTTP ${ctx.status})`;
-    return new VeniceError(message, ctx.status === 429 ? 'rate_limit' : 'http', ctx.status);
+    const kind = ctx.status === 429 ? 'rate_limit' : 'http';
+    // The /complete route relays Venice's Retry-After / x-ratelimit-reset-*
+    // hint through the JSON body since the headers themselves don't survive
+    // the functions.invoke round trip. Carry the parsed window onto the
+    // VeniceError so the browser's retry loop can act on it.
+    const retryAfterMs =
+      typeof payload.retryAfterMs === 'number' ? payload.retryAfterMs : null;
+    return new VeniceError(message, kind, ctx.status, retryAfterMs);
   }
   const message = error instanceof Error ? error.message : String(error);
   return new VeniceError(`Network error contacting the venice function: ${message}`, 'network');
@@ -1645,6 +1662,75 @@ export class SupabaseService {
    * still spends Venice credits - the chat-loop's tool-side handling treats
    * the discarded result the same as a model-side retry.
    */
+  /**
+   * Non-streaming chat completion through the venice edge function's
+   * /complete route. The browser builds Venice's wire-shape body via
+   * buildChatBody and forwards it; the function holds the shared key
+   * server-side and relays Venice's response (or error) verbatim. The
+   * 429 retry loop stays browser-side: completeChat sits behind tool
+   * sub-calls and background agents with no UI feedback, so a
+   * propagated 429 lands silently in a tool-result row or a swallowed
+   * agent failure - being a bit patient here trades a few seconds of
+   * latency for not burning a turn.
+   *
+   * Retry-After: Venice's hint travels through the function's 429
+   * response body (retryAfterMs) since the underlying header does not
+   * survive the functions.invoke round trip. Fallback when the hint is
+   * absent: a log10-spaced 1s -> 5s schedule, hard-capped at 60s.
+   * req.signal aborts both the in-flight invoke (when supabase-js
+   * supports it) and the inter-attempt sleep.
+   *
+   * Streaming chat completion still talks to Venice directly from
+   * src/lib/chat-loop.ts; the streaming attractor is the next driver-B
+   * milestone.
+   */
+  async complete(req: ChatRequest): Promise<ChatCompletion> {
+    const body = buildChatBody(req, false);
+    let attempt = 0;
+    while (true) {
+      let payload: unknown;
+      try {
+        const { data, error } = await this.client.functions.invoke('venice/complete', {
+          body,
+        });
+        if (error) throw await veniceFunctionError(error);
+        payload = data;
+      } catch (err) {
+        if (!(err instanceof VeniceError)) throw err;
+        const retriesExhausted = attempt >= COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS - 1;
+        if (
+          err.kind !== 'rate_limit' ||
+          retriesExhausted ||
+          req.signal?.aborted === true
+        ) {
+          throw err;
+        }
+        const hint = err.retryAfterMs;
+        const fallbackIdx = Math.min(
+          attempt,
+          COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS.length - 1
+        );
+        const baseMs = hint ?? COMPLETE_CHAT_RATE_LIMIT_FALLBACK_WAIT_MS[fallbackIdx];
+        const waitMs = Math.min(baseMs, COMPLETE_CHAT_RATE_LIMIT_WAIT_CAP_MS);
+        log.info(
+          `complete rate-limited (attempt ${attempt + 1}/${COMPLETE_CHAT_RATE_LIMIT_MAX_ATTEMPTS}); waiting ${waitMs}ms before retry`
+        );
+        const interrupted = await sleepCancellable(waitMs, req.signal);
+        if (interrupted) {
+          // Aborted during the sleep. Throw a spec-shaped AbortError so
+          // callers' existing AbortError branches fire - same path a
+          // mid-fetch abort would have taken.
+          const abortErr = new Error('Aborted');
+          abortErr.name = 'AbortError';
+          throw abortErr;
+        }
+        attempt += 1;
+        continue;
+      }
+      return parseChatCompletion(payload);
+    }
+  }
+
   async generateImage(req: ImageGenRequest): Promise<ImageGenResult> {
     const { data, error } = await this.client.functions.invoke('venice/image-generate', {
       body: {

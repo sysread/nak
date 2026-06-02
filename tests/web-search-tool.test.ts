@@ -24,10 +24,15 @@ import type {
   Citation,
 } from '../src/lib/venice';
 
-function ctxFor(venice: VeniceClient): ToolContext {
+// web_search talks to the venice edge function via SupabaseService.complete
+// (milestone 6). The leftover `venice: VeniceClient` field on ToolContext
+// is still there because background-agent workers haven't migrated yet -
+// ctxFor stubs an inert VeniceClient and threads the real fixture through
+// supabase.complete.
+function ctxFor(supabase: SupabaseService): ToolContext {
   return {
-    supabase: {} as SupabaseService,
-    venice,
+    supabase,
+    venice: { completeChat: vi.fn(), embed: vi.fn() } as unknown as VeniceClient,
     userId: 'u-1',
     threadId: 't-1',
     signal: new AbortController().signal,
@@ -45,17 +50,17 @@ function makeCompletion(text: string, citations: Citation[] = []): ChatCompletio
   };
 }
 
-function mkVenice(handler: (req: ChatRequest) => ChatCompletion): {
-  venice: VeniceClient;
+function mkSupabase(handler: (req: ChatRequest) => ChatCompletion): {
+  supabase: SupabaseService;
   seen: ChatRequest[];
 } {
   const seen: ChatRequest[] = [];
-  const completeChat = vi.fn(async (req: ChatRequest): Promise<ChatCompletion> => {
+  const complete = vi.fn(async (req: ChatRequest): Promise<ChatCompletion> => {
     seen.push(req);
     return handler(req);
   });
   return {
-    venice: { completeChat, embed: vi.fn() } as unknown as VeniceClient,
+    supabase: { complete } as unknown as SupabaseService,
     seen,
   };
 }
@@ -102,25 +107,25 @@ describe('web_search — registry scoping', () => {
 
 describe('web_search — execute() shape', () => {
   it('throws on an empty or missing query', async () => {
-    const { venice } = mkVenice(() => makeCompletion(''));
+    const { supabase } = mkSupabase(() => makeCompletion(''));
     await expect(
-      webSearch.execute({} as Record<string, unknown>, ctxFor(venice))
+      webSearch.execute({} as Record<string, unknown>, ctxFor(supabase))
     ).rejects.toThrow(/non-empty.*query/i);
     await expect(
-      webSearch.execute({ query: '' }, ctxFor(venice))
+      webSearch.execute({ query: '' }, ctxFor(supabase))
     ).rejects.toThrow(/non-empty.*query/i);
     await expect(
-      webSearch.execute({ query: '   ' }, ctxFor(venice))
+      webSearch.execute({ query: '   ' }, ctxFor(supabase))
     ).rejects.toThrow(/non-empty.*query/i);
   });
 
   it('fires a sub-completion with webSearch=on, webCitations=true, webScraping=true, fast-tier model', async () => {
-    const { venice, seen } = mkVenice(() =>
+    const { supabase, seen } = mkSupabase(() =>
       makeCompletion('bitcoin is at ~$70k today^1^.', [
         { index: 1, url: 'https://example.com/btc', title: 'BTC price' },
       ])
     );
-    await webSearch.execute({ query: 'current price of bitcoin' }, ctxFor(venice));
+    await webSearch.execute({ query: 'current price of bitcoin' }, ctxFor(supabase));
     expect(seen).toHaveLength(1);
     const req = seen[0];
     expect(req.model).toBe(agentModel('webSearch').id);
@@ -152,10 +157,10 @@ describe('web_search — execute() shape', () => {
       { index: 1, url: 'https://example.com/a', title: 'A' },
       { index: 2, url: 'https://example.com/b' },
     ];
-    const { venice } = mkVenice(() => makeCompletion('part one part two', citations));
+    const { supabase } = mkSupabase(() => makeCompletion('part one part two', citations));
     const result = await webSearch.execute(
       { query: 'who won the 2024 election' },
-      ctxFor(venice)
+      ctxFor(supabase)
     );
     expect(result).toEqual({
       answer: 'part one part two',
@@ -169,8 +174,8 @@ describe('web_search — execute() shape', () => {
     // still return a well-shaped result so the chat-loop's citation
     // harvester sees `citations: []` and does nothing rather than
     // choking on an absent field.
-    const { venice } = mkVenice(() => makeCompletion('nothing to cite'));
-    const result = await webSearch.execute({ query: 'x' }, ctxFor(venice));
+    const { supabase } = mkSupabase(() => makeCompletion('nothing to cite'));
+    const result = await webSearch.execute({ query: 'x' }, ctxFor(supabase));
     expect(result).toEqual({ answer: 'nothing to cite', citations: [] });
   });
 
@@ -182,9 +187,9 @@ describe('web_search — execute() shape', () => {
     // no way to tell whether to retry, rephrase, or surface the
     // failure to the user. The throw routes through chat-loop's
     // encodeToolContent into `{error: "..."}` on the tool-result row.
-    const { venice } = mkVenice(() => makeCompletion(''));
+    const { supabase } = mkSupabase(() => makeCompletion(''));
     await expect(
-      webSearch.execute({ query: 'q' }, ctxFor(venice))
+      webSearch.execute({ query: 'q' }, ctxFor(supabase))
     ).rejects.toThrow(/no answer text/i);
   });
 
@@ -192,9 +197,9 @@ describe('web_search — execute() shape', () => {
     // Tripwire on the trim() check: a completion that contains only
     // whitespace is the same failure shape as a fully empty result
     // from the calling LLM's perspective.
-    const { venice } = mkVenice(() => makeCompletion('   \n\n'));
+    const { supabase } = mkSupabase(() => makeCompletion('   \n\n'));
     await expect(
-      webSearch.execute({ query: 'q' }, ctxFor(venice))
+      webSearch.execute({ query: 'q' }, ctxFor(supabase))
     ).rejects.toThrow(/no answer text/i);
   });
 
@@ -204,23 +209,23 @@ describe('web_search — execute() shape', () => {
     // alone are not a usable tool result - the calling LLM gets no
     // synthesis to relay or build on - so we surface this as an
     // error rather than handing back a bare citation list.
-    const { venice } = mkVenice(() =>
+    const { supabase } = mkSupabase(() =>
       makeCompletion('', [{ index: 1, url: 'https://example.com/a' }])
     );
     await expect(
-      webSearch.execute({ query: 'q' }, ctxFor(venice))
+      webSearch.execute({ query: 'q' }, ctxFor(supabase))
     ).rejects.toThrow(/no answer text/i);
   });
 
   it('forwards context_hint into the user turn when provided', async () => {
-    const { venice, seen } = mkVenice(() => makeCompletion('ok'));
+    const { supabase, seen } = mkSupabase(() => makeCompletion('ok'));
     await webSearch.execute(
       {
         query: 'latest llm release',
         context_hint:
           'User is asking whether a new Claude model dropped this week.',
       },
-      ctxFor(venice)
+      ctxFor(supabase)
     );
     const userMsg = seen[0].messages.find((m) => m.role === 'user');
     const content = typeof userMsg?.content === 'string' ? userMsg.content : '';
@@ -231,8 +236,8 @@ describe('web_search — execute() shape', () => {
   });
 
   it('omits the context_hint preamble when absent', async () => {
-    const { venice, seen } = mkVenice(() => makeCompletion('ok'));
-    await webSearch.execute({ query: 'q' }, ctxFor(venice));
+    const { supabase, seen } = mkSupabase(() => makeCompletion('ok'));
+    await webSearch.execute({ query: 'q' }, ctxFor(supabase));
     const userMsg = seen[0].messages.find((m) => m.role === 'user');
     expect(userMsg?.content).toBe('Query: q');
   });
@@ -241,11 +246,14 @@ describe('web_search — execute() shape', () => {
     // A user aborting the outer send must cascade through into the
     // sub-completion. The tool is required to pass the ctx.signal
     // through verbatim, not spin up an unrelated controller.
-    const { venice, seen } = mkVenice(() => makeCompletion('ok'));
+    const { supabase, seen } = mkSupabase(() => makeCompletion('ok'));
     const ctl = new AbortController();
+    // Build the ToolContext inline (rather than reusing ctxFor) because the
+    // assertion targets ctx.signal specifically - we need to pin the
+    // controller we constructed, not the default ctxFor wires up.
     const ctx: ToolContext = {
-      supabase: {} as SupabaseService,
-      venice,
+      supabase,
+      venice: { completeChat: vi.fn(), embed: vi.fn() } as unknown as VeniceClient,
       userId: 'u-1',
       threadId: 't-1',
       signal: ctl.signal,

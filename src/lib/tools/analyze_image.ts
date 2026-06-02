@@ -177,7 +177,7 @@ export const analyzeImage: ToolDef = {
     let lastFinishReason: string | null = null;
     let lastLength = 0;
     for (let attempt = 1; attempt <= MAX_VISION_ATTEMPTS; attempt += 1) {
-      const result = await ctx.venice.completeChat({
+      const result = await ctx.supabase.complete({
         model: agentModel('visionAnalysis').id,
         messages,
         signal: ctx.signal,
