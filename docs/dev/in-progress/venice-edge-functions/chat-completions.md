@@ -45,10 +45,74 @@ do not share a difficulty class or a schedule.
 
 ## Current state
 
-To document: `streamChat` / `completeChat` in
-`src/lib/venice.ts`, their call sites (chat loop, headless
-agents, auto-title, summaries, the recall agents), and the
-`ChatRequest` / `StreamEvent` / `ChatCompletion` contracts.
+The non-streaming leaf landed in two halves; the streaming root
+still sits where this doc originally framed it.
+
+### Front half: tools + intuition + auto-title (milestone 6, DONE)
+
+Branch `claude/complete-edge-function` (commit `f5b2e95`). The
+`/complete` route on the venice function runs as a thin proxy:
+the browser already owns `buildChatBody` (now a free export from
+`src/lib/venice.ts`) and `parseChatCompletion`; the function
+attaches the shared key, forwards Venice's wire-shape body, and
+relays the response verbatim. On 429 the function reads
+Venice's `Retry-After` / `x-ratelimit-reset-*` header into a
+`retryAfterMs` field on the JSON error body so the browser's
+retry loop can act on the hint - the headers themselves do not
+survive the `functions.invoke` round trip.
+
+`SupabaseService.complete` owns the 429 retry loop (same
+`COMPLETE_CHAT_RATE_LIMIT_*` schedule the old
+`VeniceClient.completeChat` used; the constants are exported
+now so the loop lives on one side without duplication). This
+sidesteps the wire-shape duplication question raised below -
+the body builder stays browser-side rather than being copied
+into the Deno helper, and the function ends up ~30 lines.
+
+Migrated callers: the tools `analyze_image`, `research_docs`,
+and `web_search`; the full intuition pipeline (perception + 5
+drives + synthesis); `generateThreadTitle` and the auto-title
+worker's `CycleContext` plus the supervisor wiring.
+
+### Back half: background-agent worker fleet (next milestone, DEFERRED)
+
+`VeniceClient.completeChat` is intentionally NOT deleted yet.
+The remaining callers each bootstrap their own `VeniceClient`
+inside a Web Worker from a `veniceApiKey` postMessage:
+
+- background agents: `bias`, `samskara`, `summary`, `topics`,
+  `memory_topics`, `recipe_topics`, `wiki`, `wiki-librarian`,
+  `deep-sleep`, `rem`.
+- recall family: `recall`, `conversation_recall`, `wiki_recall`.
+- the headless tool-loop driver `tools/run.ts:292`
+  (`runHeadlessToolLoop`), which the recall family and the wiki
+  librarian drive sub-tool loops with.
+
+Why deferred: migrating means reshaping every worker-start
+message protocol (`{ veniceApiKey, ... }` -> `{ supabaseUrl,
+supabasePublishableKey, sessionJwt, ... }` or similar), then
+threading a `SupabaseService` instance into the worker context
+in place of the per-worker `new VeniceClient(...)`. Each
+worker has its own caller in the main thread that has to
+update in lockstep. That's a bigger blast radius than the
+front-half leaf could land cleanly alongside.
+
+`VeniceClient.completeChat` carries an inline docstring naming
+this state explicitly so a future session reading the file
+cannot mistake the leftover for an intentional divergence.
+[migration-inventory.md](./migration-inventory.md) carries the
+caller-level punch list.
+
+See [Worker-fleet migration plan](#worker-fleet-migration-plan)
+below for the concrete next-milestone shape.
+
+### Streaming root (untouched)
+
+`VeniceClient.streamChat` and its single caller
+`src/lib/chat-loop.ts:614` remain browser-direct. The
+[Target state](#target-state) section below still describes
+where they go; the design fork on client-side stream
+collection is still open. No work here this milestone.
 
 ## Target state
 
@@ -85,13 +149,95 @@ The fork stays open until this milestone goes active - naming the
 destination lets future tactical choices climb toward it without
 committing the channel mechanism prematurely.
 
+## Worker-fleet migration plan
+
+The next driver-B milestone. Scope: move every remaining
+`VeniceClient.completeChat` caller (the [Back half](#back-half-background-agent-worker-fleet-next-milestone-deferred)
+list above) onto `SupabaseService.complete` so
+`VeniceClient.completeChat` can finally delete.
+
+Step shape, in the order that lets each step ship with a
+green gate:
+
+1. **Pick the worker-start protocol shape.** Each Web Worker
+   today receives `{ supabaseUrl, supabasePublishableKey,
+   veniceApiKey, ... }` from the main thread (see
+   `src/lib/agents/deep-sleep/worker.ts` as the canonical
+   example post-embeddings). The migrated protocol drops
+   `veniceApiKey` and keeps the Supabase fields, then
+   constructs `new SupabaseService({...})` once per worker
+   - the same shape the main thread already uses. Decide
+   whether the worker also needs the session JWT (probably
+   yes, so `SupabaseService.complete` calls
+   `functions.invoke('venice/complete')` authenticated as
+   the signed-in user); if so, the postMessage carries
+   `sessionJwt` and the worker hydrates a client from it.
+   The auto-title worker's CycleContext (migrated in
+   milestone 6) is the template - it already stopped
+   carrying `venice`.
+
+2. **Migrate the headless tool-loop driver
+   (`tools/run.ts:292`).** Drop `venice: VeniceClient` from
+   `HeadlessToolLoopOptions`; switch its inner Venice call
+   to `toolCtx.supabase.complete`. The recall family +
+   wiki-librarian (which drive sub-tool loops through this
+   helper) keep passing `toolCtx` unchanged - the swap is
+   inside the driver. Land this before the recall agents
+   so they keep working through the migration.
+
+3. **Migrate the worker-resident agents one family at a
+   time.** For each of `bias`, `samskara`, `summary`,
+   `topics`, `memory_topics`, `recipe_topics`, `wiki`,
+   `wiki-librarian`, `deep-sleep`, `rem`, the recall
+   family: drop `venice: VeniceClient` from the agent
+   constructor and the cycle context; replace
+   `this.venice.completeChat(...)` with
+   `this.supabase.complete(...)`; update the agent's
+   worker.ts to stop creating the `VeniceClient` and stop
+   reading `veniceApiKey` from the start message; update
+   the main-thread caller of the worker to stop sending
+   `veniceApiKey`. One agent + its worker + its caller per
+   commit so the gate stays green and the diff stays
+   reviewable.
+
+4. **Delete `VeniceClient.completeChat`.** Once step 3 is
+   complete the method has no remaining callers; delete it
+   along with the now-unused
+   `COMPLETE_CHAT_RATE_LIMIT_*` re-exports (their
+   consumers, `SupabaseService.complete`, can pull them
+   from a smaller internal home or inline them). Drop the
+   "MIGRATION STATE" docstring block. Update
+   `migration-inventory.md` to mark `completeChat` DONE.
+
+5. **Audit `veniceApiKey` removal from worker-start
+   messages.** A worker that no longer needs the key
+   shouldn't be sent one; the encrypted `app_config` field
+   in localStorage will become smaller. svelte-check
+   enumerates the stragglers if the field is dropped from
+   the type, which is the planned static-completeness fence
+   the embeddings milestone established.
+
+Open question deferred to the worker-fleet milestone, not
+this one: whether to also delete `veniceApiKey` from the
+project-wide config blob after this lands, or keep it for
+the streaming root. The streaming root is the only thing
+that needs the local key after this; whether it gets
+collapsed onto the shared key (and the local field
+deleted) is a streaming-milestone decision.
+
 ## Open questions
 
 - Channel mechanism for the streaming root: dual-sink (live SSE +
   DB persist) or single-sink (DB row + realtime)? See Target state.
   Decide when this milestone goes active, not before.
 - How do `venice_parameters` (web search, citations) survive the
-  proxy?
+  proxy? *Front-half answer*: in the non-streaming leaf they do
+  survive cleanly - the function is a thin proxy, so the wire
+  body lands at Venice unchanged. The streaming root will have
+  to revisit this once SSE frame relay enters the picture.
+- Worker-start protocol shape: bare `sessionJwt` vs reconstructed
+  `Session` vs Supabase's own worker-side client init story.
+  Settle in the worker-fleet milestone, not before.
 
 ## Lessons from the embeddings milestone
 

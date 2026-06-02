@@ -171,28 +171,38 @@ browser call site, worker, and process to migrate, with status -
 lives in [migration-inventory.md](./migration-inventory.md):
 
 - [Embeddings](./embeddings.md) - `POST /embeddings` via
-  `VeniceClient.embed`. **Milestone 1, fleshed out.** The
-  natural first mover: generation is already background, the
-  DB side is already claim-RPC structured, and there are no
-  streaming or file-upload complications.
+  `VeniceClient.embed`. **Milestone 1 (backfill, cron) + milestone 3
+  (query-time embeds, browser->function).** Both halves DONE;
+  `VeniceClient.embed` is deleted.
+- [Billing usage](./billing-usage.md) - `GET /billing/usage`.
+  **Milestone 2, DONE.** Read-only, paginated, account-scoped -
+  and the first browser->function call, so it served as the
+  client-invoke canary (session-JWT auth, CORS, error mapping)
+  for the driver-B migrations that follow.
+- [Text parser](./text-parser.md) - `POST
+  /augment/text-parser` via `extractText`. **Milestone 4, DONE.**
+  Bug-driven: browser-direct calls were CORS-rejected on
+  non-image files. Fixed both the attachments flow and the
+  Library document-ingestion flow in one move.
+- Image generation - `POST /image/generate` via
+  `VeniceClient.generateImage`. **Milestone 5, DONE.** Single
+  browser caller (the `generate_image` tool) routes through
+  `SupabaseService.generateImage`. No standalone sub-plan
+  file - the design was small enough to land directly. Tracked
+  in [migration-inventory.md](./migration-inventory.md).
 - [Chat completions](./chat-completions.md) - `POST
   /chat/completions` via `streamChat` and `completeChat`.
-  *Skeleton.* The hard one: streaming SSE through a function
-  plus abort semantics.
-- [Billing usage](./billing-usage.md) - `GET /billing/usage`.
-  **Milestone 2, implemented.** Read-only, paginated,
-  account-scoped - and the first browser->function call, so it
-  served as the client-invoke canary (session-JWT auth, CORS,
-  error mapping) for the driver-B migrations that follow.
-- [Text parser](./text-parser.md) - `POST
-  /augment/text-parser` via `extractText`. *Skeleton.*
-  Multipart file upload from the attachments flow, and now the
-  Library document-ingestion flow (a second caller).
-- Image generation - `POST /image/generate` via
-  `VeniceClient.generateImage`. *No sub-plan yet.* One browser
-  caller (the `generate_image` tool); least-used, but still a
-  driver-B item while it holds the local Venice key. Tracked in
-  [migration-inventory.md](./migration-inventory.md).
+  **Milestone 6 (front half of the non-streaming leaf), PARTIAL.**
+  Tools (analyze_image, research_docs, web_search), the intuition
+  pipeline, and the auto-title pipeline now talk to
+  `SupabaseService.complete`. The background-agent Web Worker
+  fleet still calls `VeniceClient.completeChat` because each
+  worker bootstraps its own VeniceClient via a `veniceApiKey`
+  postMessage - the worker-fleet milestone is broken out
+  explicitly in
+  [chat-completions.md](./chat-completions.md#worker-fleet-migration-plan).
+  The streaming root (`streamChat`) is still TODO and remains
+  the strategic attractor.
 
 ## Strategic spine: climbing to streaming chat
 
@@ -221,11 +231,26 @@ So the climb is leaf-first:
    `completeChat` path as its own route, beside `/embed`. The leaf
    that intuition and the completion-using tools call. Per-user JWT
    auth like `/embed` - synchronous and user-triggered, so no cron
-   and no service-role sweep.
-2. **Migrate the tool / intuition callers onto it.** Point web
-   search, doc research, image analysis, and the intuition pipeline
-   at the primitive instead of calling Venice directly. Behavior
-   unchanged; this phase irons out payload and auth.
+   and no service-role sweep. **DONE (milestone 6).**
+2. **Migrate the completion callers onto it.** Point every
+   `VeniceClient.completeChat` caller at the primitive. The naive
+   read of this step was "all callers move in one milestone"; in
+   practice the surface split cleanly into two halves with
+   different blast radii:
+   - **2a. Main-thread callers (DONE, milestone 6).** Tools (web
+     search, doc research, image analysis), the intuition
+     pipeline, the auto-title pipeline. Behaviour unchanged; this
+     phase ironed out payload, auth, and the 429 retry-hint
+     plumbing.
+   - **2b. Worker-resident callers (NEXT, broken out as its own
+     milestone).** Background-agent Web Workers (bias, samskara,
+     summary, topics, memory_topics, recipe_topics, wiki,
+     wiki-librarian, deep-sleep, rem, the recall family) plus
+     `runHeadlessToolLoop`. Each worker bootstraps its own
+     `VeniceClient` via a `veniceApiKey` postMessage; migrating
+     means reshaping the worker-start protocol for every
+     family. Plan in
+     [chat-completions.md - Worker-fleet migration plan](./chat-completions.md#worker-fleet-migration-plan).
 3. **Move the tools into edge functions.** Each tool becomes a
    server-side handler *composed of* the primitives it needs
    (non-streaming completion, embeddings) by importing the shared
