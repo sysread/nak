@@ -10,8 +10,8 @@
  *   2. TIERS - user-facing tier wrappers (Smart / Balanced / Fast). Each
  *      TierSpec carries a ModelSpec entry's capability data plus the UI
  *      fields the tier picker reads (label, icon, description) and an
- *      optional defaultReasoningEffort that lets two tiers fronting the
- *      same Venice id still feel different.
+ *      optional defaultThinking level (including 'off') that lets tiers
+ *      feel different in their default reasoning budget.
  *
  *   3. AGENT_MODELS - one-line-per-role mapping from background-agent
  *      roles (reflection, wiki, intuition, ...) to a registered
@@ -69,6 +69,33 @@ export const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
   low: 'Low',
   medium: 'Medium',
   high: 'High',
+};
+
+/**
+ * The composer reasoning picker's domain: the three reasoning_effort
+ * levels plus an explicit 'off'. Kept separate from ReasoningEffort on
+ * purpose - ReasoningEffort is wire-faithful to the `reasoning_effort`
+ * body field (Venice 400s on anything outside low/medium/high), whereas
+ * 'off' is not a reasoning_effort value at all: it maps to the distinct
+ * `venice_parameters.disable_thinking` knob. The two wire knobs are
+ * mutually exclusive (off wins), so the picker offers a single 4-way
+ * choice and `thinkingToWire` splits it back into whichever knob the
+ * level implies. The Settings account-default picker deliberately does
+ * NOT use this domain - an account-wide "off" doesn't make sense, so it
+ * stays on REASONING_EFFORTS (low/medium/high only).
+ */
+export type ThinkingLevel = 'off' | ReasoningEffort;
+
+export const THINKING_LEVELS: readonly ThinkingLevel[] = ['off', 'low', 'medium', 'high'];
+
+export function isThinkingLevel(v: unknown): v is ThinkingLevel {
+  return v === 'off' || isReasoningEffort(v);
+}
+
+/** Display labels for the picker. 'Off' reads as "no thinking pass." */
+export const THINKING_LEVEL_LABELS: Record<ThinkingLevel, string> = {
+  off: 'Off',
+  ...REASONING_EFFORT_LABELS,
 };
 
 /**
@@ -268,30 +295,24 @@ export interface TierSpec extends ModelSpec {
   readonly icon: string;
   readonly description: string;
   /**
-   * Tier-level reasoning_effort default. When set, wins over the user's
-   * account-level default (but not the per-thread override). Smart
-   * fronts qwen-3-6-plus with this set to 'medium'; Balanced and Fast
-   * both run with `disableThinking` instead (no CoT on the wire), so
-   * neither carries this field. Absent means "no tier opinion - fall
-   * through to the user default." Only consulted when the underlying
-   * model's supportsReasoning is also true and `disableThinking` is
-   * not set.
+   * Tier-level default thinking level - the picker position a thread
+   * starts at before the user touches it. Sits in the resolution
+   * cascade between the per-thread override (wins) and the user's
+   * account-level reasoning default (loses): see resolveThinking. The
+   * value can be 'off', which is how a tier ships with thinking
+   * disabled - 'off' resolves to `venice_parameters.disable_thinking`
+   * rather than a `reasoning_effort` value (reasoning_effort: 'low'
+   * shrinks the CoT but doesn't zero it; only disable_thinking does).
+   * Smart defaults to 'medium', Balanced and Fast to 'off'. Absent
+   * means "no tier opinion - fall through to the user default." Only
+   * consulted when the underlying model's supportsReasoning is true.
+   *
+   * Note this is a DEFAULT, not a lock: the composer reasoning picker
+   * stays visible on every reasoning-capable tier, so a user can move
+   * an 'off'-defaulted thread up to low/medium/high (or vice versa)
+   * for that one conversation.
    */
-  readonly defaultReasoningEffort?: ReasoningEffort;
-  /**
-   * Tier-level kill switch for reasoning. When true, the tier sends
-   * `venice_parameters.disable_thinking: true` on every wire call and
-   * skips `reasoning_effort` entirely - reasoning_effort: 'low' shrinks
-   * the CoT but doesn't disable it, so an explicit disableThinking is
-   * the only way to get "zero thinking" out of a reasoning-capable
-   * model. Used by the Fast and Balanced tiers so a tier swap to a
-   * reasoning-capable model doesn't silently leak default-budget CoT
-   * into the response latency. The per-thread reasoning picker is
-   * also hidden when this is true (see Chat.svelte's
-   * `currentSupportsReasoning` derived), since a picker that does
-   * nothing on the wire would just confuse the user.
-   */
-  readonly disableThinking?: boolean;
+  readonly defaultThinking?: ThinkingLevel;
 }
 
 export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
@@ -301,7 +322,7 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     label: 'Smart',
     icon: '🧠',
     description: 'Qwen 3.6 Plus with medium thinking. 1M context, native vision. Best for hard problems.',
-    defaultReasoningEffort: 'medium',
+    defaultThinking: 'medium',
   },
   balanced: {
     ...MODELS['minimax-m3'],
@@ -314,14 +335,16 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     // any size.
     icon: '\u262F\uFE0F',
     description: 'MiniMax M3 with thinking off. 500k context, native vision. Good default for most turns.',
-    // Thinking disabled while we evaluate minimax-m3's latency. 'low'
-    // is the floor for reasoning_effort but still emits a CoT pass;
-    // disableThinking is the only way to get zero thinking out of a
-    // reasoning-capable model. Balanced and Fast now differ only by
-    // underlying model (minimax-m3 vs deepseek-v4-flash), not thinking
+    // Defaults to thinking off while we evaluate minimax-m3's latency.
+    // 'low' is the floor for reasoning_effort but still emits a CoT
+    // pass; 'off' is the only way to get zero thinking out of a
+    // reasoning-capable model. This is a default, not a lock - the
+    // composer picker still lets a user turn thinking back on for a
+    // single thread. Balanced and Fast now differ only by underlying
+    // model (minimax-m3 vs deepseek-v4-flash), not default thinking
     // budget - if M3 is no faster than DeepSeek with CoT off, the tier
     // swap isn't buying anything and should revert.
-    disableThinking: true,
+    defaultThinking: 'off',
   },
   fast: {
     ...MODELS['deepseek-v4-flash'],
@@ -329,11 +352,12 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     label: 'Fast',
     icon: '\u26A1\uFE0F',
     description: 'DeepSeek V4 Flash with thinking off. Quickest replies.',
-    // disableThinking is what makes the Fast tier feel fast even though
-    // it fronts a reasoning-capable model - without it the model would
-    // burn its default thinking budget on CoT before writing any
-    // user-visible text.
-    disableThinking: true,
+    // Defaulting to 'off' is what makes the Fast tier feel fast even
+    // though it fronts a reasoning-capable model - without it the model
+    // would burn its default thinking budget on CoT before writing any
+    // user-visible text. A user can still bump a single thread back to
+    // low/medium/high via the composer picker.
+    defaultThinking: 'off',
   },
 };
 
@@ -649,35 +673,72 @@ export function resolveTier(
 }
 
 /**
- * Resolve the reasoning effort to use for a given thread. Cascade:
+ * Resolve the thinking level to use for a given thread. Cascade:
  *
  *   per-thread override -> tier default -> user account default
  *
- * The tier default is the mechanism that lets Smart + Balanced share
- * one Venice model id and still feel different - Smart's
- * `defaultReasoningEffort: 'high'` and Balanced's `'low'` win over the
- * user's account default when the user hasn't explicitly set a per-
- * thread effort. The user's thread-level choice still wins over
- * everything, so anyone who prefers the account default can pin it
- * per thread and Nak won't override.
+ * The tier default is the mechanism that lets the three tiers feel
+ * different - Smart's `defaultThinking: 'medium'` and Balanced/Fast's
+ * `'off'` win over the user's account default when the user hasn't
+ * explicitly set a per-thread level. The user's thread-level choice
+ * still wins over everything, so anyone who wants thinking back on (or
+ * off) for one conversation can pin it per thread and Nak won't
+ * override.
  *
- * Callers still have to gate on `TIERS[tier].supportsReasoning` (or
- * the agent's spec from `agentModel(role)`) before putting the result
- * on the wire - some providers 400 on a `reasoning_effort` field they
- * don't recognise.
+ * Returns a ThinkingLevel, which may be 'off'. The account default is
+ * a ReasoningEffort (never 'off'), so 'off' only enters the result via
+ * a tier default or an explicit per-thread pick. Use `thinkingToWire`
+ * to turn the result into the actual wire knobs, and gate on
+ * `TIERS[tier].supportsReasoning` first - some providers 400 on a
+ * `reasoning_effort` field they don't recognise.
  */
-export function resolveReasoningEffort(
-  threadEffort: ReasoningEffort | null,
+export function resolveThinking(
+  threadLevel: ThinkingLevel | null,
   defaultEffort: ReasoningEffort,
-  tierDefault?: ReasoningEffort | null
-): ReasoningEffort {
-  return threadEffort ?? tierDefault ?? defaultEffort;
+  tierDefault?: ThinkingLevel | null
+): ThinkingLevel {
+  return threadLevel ?? tierDefault ?? defaultEffort;
+}
+
+/**
+ * Split a resolved thinking level into the two mutually-exclusive wire
+ * knobs. 'off' maps to `venice_parameters.disable_thinking: true` (and
+ * no `reasoning_effort`); the three effort levels map to
+ * `reasoning_effort` (and no disable_thinking). Centralised so the
+ * off<->wire mapping lives in one place rather than re-derived at each
+ * send site. Kept internal - the composer goes through
+ * `thinkingWireForTier`, which also applies the supportsReasoning gate.
+ */
+function thinkingToWire(level: ThinkingLevel): {
+  reasoningEffort?: ReasoningEffort;
+  disableThinking: boolean;
+} {
+  return level === 'off'
+    ? { disableThinking: true }
+    : { reasoningEffort: level, disableThinking: false };
+}
+
+/**
+ * Composer send-path convenience: resolve a thread's thinking level
+ * against a tier and split it into wire knobs in one step. Non-
+ * reasoning models get neither field (some providers 400 on a
+ * `reasoning_effort` they don't recognise, and disable_thinking is
+ * meaningless without a thinking pass to disable). Collapses what was
+ * five copies of the same resolve-then-gate dance at the call sites.
+ */
+export function thinkingWireForTier(
+  tier: TierSpec,
+  threadLevel: ThinkingLevel | null,
+  defaultEffort: ReasoningEffort
+): { reasoningEffort?: ReasoningEffort; disableThinking: boolean } {
+  if (!tier.supportsReasoning) return { disableThinking: false };
+  return thinkingToWire(resolveThinking(threadLevel, defaultEffort, tier.defaultThinking));
 }
 
 /**
  * Resolve the verbosity level to use for a given thread. Same
  * "override wins over default" shape as resolveTier /
- * resolveReasoningEffort. Unlike reasoning_effort, we don't gate on
+ * resolveThinking. Unlike reasoning_effort, we don't gate on
  * a `supportsVerbosity` capability flag - `text.verbosity` is a
  * plain OpenAI-shape field that providers either honor or silently
  * ignore. The caller is responsible for deciding whether to send it.

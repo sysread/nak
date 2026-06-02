@@ -101,12 +101,14 @@
     VENICE_EMBEDDING_MODEL,
     agentModel,
     padEmbeddingForStorage,
-    resolveReasoningEffort,
+    resolveThinking,
     resolveTier,
     resolveVerbosity,
+    thinkingWireForTier,
     type ModelSpec,
     type ModelTier,
     type ReasoningEffort,
+    type ThinkingLevel,
     type Verbosity,
   } from '$lib/models';
   // Every screen rendered from this file is loaded lazily. None of
@@ -2317,22 +2319,25 @@
   const defaultReasoning = $derived<ReasoningEffort>(
     app.defaultReasoningEffort ?? DEFAULT_REASONING_EFFORT
   );
-  // Resolved reasoning for the current thread — per-thread override wins,
-  // otherwise the user default. Only surfaced in the UI / sent on the wire
-  // when `TIERS[currentTier].supportsReasoning`.
-  const currentReasoning = $derived<ReasoningEffort>(
-    resolveReasoningEffort(
+  // Resolved thinking level for the current thread (override -> tier
+  // default -> user default). Drives the picker's displayed value; may
+  // be 'off' when the tier defaults off or the user picked Off for this
+  // thread. Only surfaced when `TIERS[currentTier].supportsReasoning`.
+  const currentReasoning = $derived<ThinkingLevel>(
+    resolveThinking(
       currentThread?.reasoning_effort ?? null,
       defaultReasoning,
-      TIERS[currentTier].defaultReasoningEffort
+      TIERS[currentTier].defaultThinking
     )
   );
-  // Hide the per-thread reasoning picker when the model can't reason,
-  // OR when the current tier explicitly disables thinking (Fast tier
-  // ships `venice_parameters.disable_thinking: true` so a picker
-  // would show effort levels that have no wire effect).
+  // Show the per-thread reasoning picker on any reasoning-capable tier.
+  // 'Off' is now one of the picker's positions rather than a reason to
+  // hide it, so a tier that defaults thinking off still shows the picker
+  // (the user can bump it back up for one thread). Only a model that
+  // can't reason at all hides the control - a knob the provider would
+  // reject.
   const currentSupportsReasoning = $derived<boolean>(
-    TIERS[currentTier].supportsReasoning && !TIERS[currentTier].disableThinking
+    TIERS[currentTier].supportsReasoning
   );
   const defaultVerbosity = $derived<Verbosity>(
     app.defaultVerbosity ?? DEFAULT_VERBOSITY
@@ -2444,17 +2449,20 @@
   // the user picks the current default is deliberate: that way a later
   // change to their default propagates to this thread automatically, and
   // we don't pin a stale value just because it happened to match once.
-  async function setReasoning(effort: ReasoningEffort): Promise<void> {
+  async function setReasoning(level: ThinkingLevel): Promise<void> {
     if (!app.supabase) return;
     // Same fresh-session pattern as setTier — without a thread to land
-    // the override on, picking an effort would silently no-op. Auto-
+    // the override on, picking a level would silently no-op. Auto-
     // create a draft so the choice has somewhere to go; the draft is
     // local-only until the first send materializes it.
     if (!currentThread) {
       await newThread();
       if (!currentThread) return;
     }
-    const next: ReasoningEffort | null = effort === defaultReasoning ? null : effort;
+    // Clear the override when the pick matches the account default so the
+    // thread keeps tracking a later default change. 'off' is never the
+    // account default, so picking Off always pins explicitly.
+    const next: ThinkingLevel | null = level === defaultReasoning ? null : level;
     if ((currentThread.reasoning_effort ?? null) === next) return;
     const threadId = currentThread.id;
     patchThread(threadId, { reasoning_effort: next });
@@ -2641,19 +2649,12 @@
     const tier = resolveTier(active?.model ?? null, defaultTier);
     const modelId = TIERS[tier].id;
     const tierSpec = TIERS[tier];
-    // Skip reasoning_effort in two cases: the model can't reason
-    // (some providers 400 on the unknown field) OR the tier explicitly
-    // disables thinking. disable_thinking and reasoning_effort are
-    // mutually exclusive on the wire - the off-switch wins.
-    const sendReasoning: ReasoningEffort | undefined =
-      tierSpec.supportsReasoning && !tierSpec.disableThinking
-        ? resolveReasoningEffort(
-            active?.reasoning_effort ?? null,
-            defaultReasoning,
-            tierSpec.defaultReasoningEffort
-          )
-        : undefined;
-    const sendDisableThinking: boolean = tierSpec.disableThinking ?? false;
+    // Resolve the thread's thinking level against the tier and split it
+    // into the two mutually-exclusive wire knobs (reasoning_effort vs
+    // disable_thinking). 'off' -> disable_thinking; non-reasoning models
+    // get neither. See thinkingWireForTier.
+    const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
+      thinkingWireForTier(tierSpec, active?.reasoning_effort ?? null, defaultReasoning);
     // Verbosity is safe to send unconditionally — providers that don't
     // recognize `text.verbosity` silently ignore it.
     const sendVerbosity: Verbosity = resolveVerbosity(
@@ -3875,17 +3876,9 @@
     if (!active || active.isDraft || active.archived) return;
     const tier = resolveTier(active.model ?? null, defaultTier);
     const tierSpec = TIERS[tier];
-    // Skip reasoning_effort when the model can't reason OR when the
-    // tier explicitly disables thinking - mirror of the send() path.
-    const sendReasoning: ReasoningEffort | undefined =
-      tierSpec.supportsReasoning && !tierSpec.disableThinking
-        ? resolveReasoningEffort(
-            active.reasoning_effort ?? null,
-            defaultReasoning,
-            tierSpec.defaultReasoningEffort
-          )
-        : undefined;
-    const sendDisableThinking: boolean = tierSpec.disableThinking ?? false;
+    // Resolve thinking level -> wire knobs; mirror of the send() path.
+    const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
+      thinkingWireForTier(tierSpec, active.reasoning_effort ?? null, defaultReasoning);
     const sendVerbosity: Verbosity = resolveVerbosity(active.verbosity ?? null, defaultVerbosity);
     const systemMessages: { role: 'system'; content: string }[] = app.systemPrompts
       .filter((p) => activePromptIds.has(p.id) && p.body.trim().length > 0)
@@ -3948,17 +3941,9 @@
     const tier = resolveTier(active.model ?? null, defaultTier);
     const tierSpec = TIERS[tier];
     const modelId = tierSpec.id;
-    // Skip reasoning_effort when the model can't reason OR when the
-    // tier explicitly disables thinking - mirror of the send() path.
-    const sendReasoning: ReasoningEffort | undefined =
-      tierSpec.supportsReasoning && !tierSpec.disableThinking
-        ? resolveReasoningEffort(
-            active.reasoning_effort ?? null,
-            defaultReasoning,
-            tierSpec.defaultReasoningEffort
-          )
-        : undefined;
-    const sendDisableThinking: boolean = tierSpec.disableThinking ?? false;
+    // Resolve thinking level -> wire knobs; mirror of the send() path.
+    const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
+      thinkingWireForTier(tierSpec, active.reasoning_effort ?? null, defaultReasoning);
     const sendVerbosity: Verbosity = resolveVerbosity(
       active.verbosity ?? null,
       defaultVerbosity
@@ -4042,17 +4027,9 @@
     const tier = resolveTier(active.model ?? null, defaultTier);
     const tierSpec = TIERS[tier];
     const modelId = tierSpec.id;
-    // Skip reasoning_effort when the model can't reason OR when the
-    // tier explicitly disables thinking - mirror of the send() path.
-    const sendReasoning: ReasoningEffort | undefined =
-      tierSpec.supportsReasoning && !tierSpec.disableThinking
-        ? resolveReasoningEffort(
-            active.reasoning_effort ?? null,
-            defaultReasoning,
-            tierSpec.defaultReasoningEffort
-          )
-        : undefined;
-    const sendDisableThinking: boolean = tierSpec.disableThinking ?? false;
+    // Resolve thinking level -> wire knobs; mirror of the send() path.
+    const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
+      thinkingWireForTier(tierSpec, active.reasoning_effort ?? null, defaultReasoning);
     const sendVerbosity: Verbosity = resolveVerbosity(
       active.verbosity ?? null,
       defaultVerbosity
@@ -4961,15 +4938,8 @@
       const tier = resolveTier(freshThread.model ?? null, defaultTier);
       const tierSpec = TIERS[tier];
       const modelId = TIERS[tier].id;
-      const sendReasoning: ReasoningEffort | undefined =
-        tierSpec.supportsReasoning && !tierSpec.disableThinking
-          ? resolveReasoningEffort(
-              freshThread.reasoning_effort ?? null,
-              defaultReasoning,
-              tierSpec.defaultReasoningEffort
-            )
-          : undefined;
-      const sendDisableThinking: boolean = tierSpec.disableThinking ?? false;
+      const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
+        thinkingWireForTier(tierSpec, freshThread.reasoning_effort ?? null, defaultReasoning);
       const sendVerbosity: Verbosity = resolveVerbosity(
         freshThread.verbosity ?? null,
         defaultVerbosity
@@ -7264,14 +7234,17 @@
                 </svg>
               </button>
 
-              <!-- Reasoning-effort picker: per-thread override, stored on
-                   threads.reasoning_effort. Hidden when the resolved model
-                   doesn't advertise reasoning support — no point offering
-                   a knob the provider will reject. Renders with no active
-                   thread too: `currentReasoning` falls back to the user
-                   default via `resolveReasoningEffort`, and `setReasoning`
-                   auto-creates a draft on first pick so the choice has
-                   somewhere to land — same pattern as the model picker.
+              <!-- Reasoning picker: per-thread override, stored on
+                   threads.reasoning_effort (which can hold 'off' as well
+                   as low/medium/high). Shows on any reasoning-capable
+                   tier; 'Off' is a picker position rather than a reason to
+                   hide the control, so a tier that defaults thinking off
+                   still offers the knob. Hidden only when the model can't
+                   reason at all. Renders with no active thread too:
+                   `currentReasoning` falls back to the tier/user default
+                   via `resolveThinking`, and `setReasoning` auto-creates a
+                   draft on first pick so the choice has somewhere to land
+                   — same pattern as the model picker.
                    Extracted so the picker is mountable in isolation under
                    @testing-library/svelte; Chat.svelte itself is too
                    coupled to the live app state to mount cleanly. -->

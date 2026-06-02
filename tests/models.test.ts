@@ -9,6 +9,8 @@ import {
   MODELS,
   REASONING_EFFORTS,
   REASONING_EFFORT_LABELS,
+  THINKING_LEVELS,
+  THINKING_LEVEL_LABELS,
   TIERS,
   TIER_ORDER,
   VENICE_EMBEDDING_DIMS,
@@ -20,11 +22,13 @@ import {
   findModelById,
   isModelTier,
   isReasoningEffort,
+  isThinkingLevel,
   isVerbosity,
   padEmbeddingForStorage,
-  resolveReasoningEffort,
+  resolveThinking,
   resolveTier,
   resolveVerbosity,
+  thinkingWireForTier,
   type AgentRole,
 } from '../src/lib/models';
 
@@ -77,19 +81,14 @@ describe('TIERS (user-facing wrappers)', () => {
       expect(spec.supportsResponseFormat).toBe(model.supportsResponseFormat);
     }
   });
-  it('differentiates the tiers by reasoning configuration', () => {
-    // Smart is the only tier that runs with thinking on; it carries a
-    // tier-level reasoning_effort default.
-    expect(TIERS.smart.defaultReasoningEffort).toBe('medium');
-    expect(TIERS.smart.disableThinking).toBeUndefined();
-    // Balanced and Fast both disable thinking entirely - reasoning_effort:
-    // 'low' would shrink the CoT but not zero it. With the kill switch on,
-    // neither carries a tier-level defaultReasoningEffort (it would be dead
-    // - disableThinking wins on the wire and the picker is hidden).
-    expect(TIERS.balanced.disableThinking).toBe(true);
-    expect(TIERS.balanced.defaultReasoningEffort).toBeUndefined();
-    expect(TIERS.fast.disableThinking).toBe(true);
-    expect(TIERS.fast.defaultReasoningEffort).toBeUndefined();
+  it('differentiates the tiers by default thinking level', () => {
+    // Smart runs with thinking on by default ('medium'); Balanced and
+    // Fast default to 'off' (no CoT). These are defaults, not locks -
+    // the composer picker stays available on all three so a user can
+    // override per thread (see thinkingWireForTier tests below).
+    expect(TIERS.smart.defaultThinking).toBe('medium');
+    expect(TIERS.balanced.defaultThinking).toBe('off');
+    expect(TIERS.fast.defaultThinking).toBe('off');
   });
   it('has matching tier/label and sensible context windows', () => {
     for (const t of TIER_ORDER) {
@@ -187,24 +186,68 @@ describe('reasoning effort', () => {
     expect(isReasoningEffort(undefined)).toBe(false);
     expect(isReasoningEffort(1)).toBe(false);
   });
-  it('resolveReasoningEffort prefers thread override over every default', () => {
-    expect(resolveReasoningEffort('high', 'low')).toBe('high');
-    expect(resolveReasoningEffort('high', 'low', 'medium')).toBe('high');
+  it('resolveThinking prefers thread override over every default', () => {
+    expect(resolveThinking('high', 'low')).toBe('high');
+    expect(resolveThinking('high', 'low', 'medium')).toBe('high');
+    // A per-thread 'off' override wins even when the tier default would
+    // have turned thinking on.
+    expect(resolveThinking('off', 'low', 'medium')).toBe('off');
   });
 
-  it('resolveReasoningEffort prefers tier default over user default', () => {
-    // Tier-level default (e.g. Smart: 'high', Balanced: 'low') has to
-    // win over the account default so the two tiers that share a
-    // Venice model id still feel different when the user hasn't set
-    // a per-thread effort.
-    expect(resolveReasoningEffort(null, 'medium', 'high')).toBe('high');
-    expect(resolveReasoningEffort(null, 'medium', 'low')).toBe('low');
+  it('resolveThinking prefers tier default over user default', () => {
+    // Tier-level default (Smart: 'medium', Balanced/Fast: 'off') has to
+    // win over the account default so the tiers feel different when the
+    // user hasn't set a per-thread level.
+    expect(resolveThinking(null, 'medium', 'high')).toBe('high');
+    expect(resolveThinking(null, 'low', 'off')).toBe('off');
   });
 
-  it('resolveReasoningEffort falls through to user default when no tier default is set', () => {
-    expect(resolveReasoningEffort(null, 'medium')).toBe('medium');
-    expect(resolveReasoningEffort(null, 'medium', undefined)).toBe('medium');
-    expect(resolveReasoningEffort(null, 'medium', null)).toBe('medium');
+  it('resolveThinking falls through to user default when no tier default is set', () => {
+    expect(resolveThinking(null, 'medium')).toBe('medium');
+    expect(resolveThinking(null, 'medium', undefined)).toBe('medium');
+    expect(resolveThinking(null, 'medium', null)).toBe('medium');
+  });
+});
+
+describe('thinking level (composer picker domain)', () => {
+  it('exposes off + the three effort levels in picker order', () => {
+    expect(THINKING_LEVELS).toEqual(['off', 'low', 'medium', 'high']);
+  });
+  it('has a human-readable label for every level', () => {
+    for (const l of THINKING_LEVELS) {
+      expect(THINKING_LEVEL_LABELS[l]).toMatch(/^[A-Z]/);
+    }
+    expect(THINKING_LEVEL_LABELS.off).toBe('Off');
+  });
+  it('isThinkingLevel accepts off plus the three levels and rejects the rest', () => {
+    expect(isThinkingLevel('off')).toBe(true);
+    expect(isThinkingLevel('low')).toBe(true);
+    expect(isThinkingLevel('high')).toBe(true);
+    expect(isThinkingLevel('none')).toBe(false);
+    expect(isThinkingLevel('OFF')).toBe(false);
+    expect(isThinkingLevel(null)).toBe(false);
+    expect(isThinkingLevel(undefined)).toBe(false);
+  });
+  it('thinkingWireForTier maps off -> disable_thinking and levels -> reasoning_effort', () => {
+    // Smart defaults to 'medium' thinking on.
+    expect(thinkingWireForTier(TIERS.smart, null, 'low')).toEqual({
+      reasoningEffort: 'medium',
+      disableThinking: false,
+    });
+    // Balanced defaults to 'off' -> the off-switch, no reasoning_effort.
+    expect(thinkingWireForTier(TIERS.balanced, null, 'low')).toEqual({
+      disableThinking: true,
+    });
+    // A per-thread level beats the tier's off default (user turned
+    // thinking back on for this one conversation).
+    expect(thinkingWireForTier(TIERS.balanced, 'high', 'low')).toEqual({
+      reasoningEffort: 'high',
+      disableThinking: false,
+    });
+    // And a per-thread 'off' beats a thinking-on tier default.
+    expect(thinkingWireForTier(TIERS.smart, 'off', 'low')).toEqual({
+      disableThinking: true,
+    });
   });
 });
 
