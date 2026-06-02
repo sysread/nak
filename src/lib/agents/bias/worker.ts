@@ -25,7 +25,6 @@
  *     base manager routes into the logs drawer.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { VeniceClient } from '../../venice';
 import { SupabaseService } from '../../supabase';
 import { LeaseCoordinator } from '../../embeddings/lease';
 import { BiasObserverAgent } from './agent';
@@ -43,8 +42,6 @@ interface StartMessage {
   supabasePublishableKey: string;
   accessToken: string;
   refreshToken: string;
-  veniceApiKey: string;
-  veniceBaseUrl?: string;
   fastModel: string;
   holderId: string;
   /** Initial active-conv set; updates land via `active-conv-ids`. */
@@ -191,16 +188,12 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
     { supabaseUrl: msg.supabaseUrl, supabasePublishableKey: msg.supabasePublishableKey },
     { client }
   );
-  const venice = new VeniceClient({
-    apiKey: msg.veniceApiKey,
-    baseUrl: msg.veniceBaseUrl,
-  });
   const coordinator = new LeaseCoordinator(supabase, 'bias', msg.holderId, {
     ttlSeconds: msg.leaseTtlSeconds,
     heartbeatMs: msg.leaseHeartbeatMs,
   });
 
-  const agent = new BiasObserverAgent(venice, msg.fastModel);
+  const agent = new BiasObserverAgent(supabase, msg.fastModel);
 
   const napConfig: NapConfig = {
     leasePollMs: msg.leasePollMs,
@@ -233,7 +226,6 @@ async function runWorker(msg: StartMessage, signal: AbortSignal): Promise<void> 
         const ctx: CycleContext = {
           agent,
           supabase,
-          venice,
           coordinator,
           holderId: msg.holderId,
           claimTtlSeconds: msg.claimTtlSeconds,

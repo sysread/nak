@@ -56,7 +56,6 @@
  * window expires.
  */
 import type { SupabaseService } from '../../supabase';
-import type { VeniceClient } from '../../venice';
 import { VeniceError } from '../../venice';
 import type { LeaseCoordinator } from '../../embeddings/lease';
 import type { BiasObserverAgent, TranscriptLine } from './agent';
@@ -107,7 +106,6 @@ export type CycleResult =
 export interface CycleContext {
   agent: BiasObserverAgent;
   supabase: SupabaseService;
-  venice: VeniceClient;
   coordinator: LeaseCoordinator;
   holderId: string;
   /** Per-thread claim TTL, seconds. Generous enough that one LLM

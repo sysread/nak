@@ -208,7 +208,7 @@ green gate:
    wiki-librarian sweep ships.
 
 4. **Migrate the worker-resident agent families one at a
-   time.** For each of `bias`, `samskara`, `wiki`,
+   time.** For each of `samskara`, `wiki`,
    `wiki-librarian`, and the supervisor-hosted set
    (`summary`, `topics`, `memory_topics`, `recipe_topics`):
    drop `venice: VeniceClient` from the agent constructor
@@ -223,7 +223,12 @@ green gate:
    reviewable. `deep-sleep` + `rem` shipped first as the
    `memory-librarian` pair (`claude/deep-sleep-rem-complete`)
    because they share a runner-svelte.ts pattern that made
-   batching the pair natural. When `wiki-librarian`'s
+   batching the pair natural. `bias` shipped next
+   (`claude/bias-agent-complete`) as the first no-tool-loop
+   agent migration -- it calls `SupabaseService.complete`
+   directly via a `callOnce` helper rather than going through
+   `runHeadlessToolLoop`. `samskara` follows the same shape.
+   When `wiki-librarian`'s
    family ships, also drop `venice` from `ToolContext`
    entirely and remove the non-null assertion from the
    `wiki_librarian` tool dispatcher.

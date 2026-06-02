@@ -110,9 +110,22 @@ shared `memory-librarian-run.svelte.ts` dispatcher dropped venice
 from its StartDeps. Only main-thread caller (`Memories.svelte`'s
 `confirmLibrarianRun`) stopped guarding on `app.venice`.
 
+**Bias** MIGRATED in `claude/bias-agent-complete`. Bias is the first
+of the no-tool-loop agents to migrate -- it calls Venice directly
+through a `callOnce` helper rather than going through
+`runHeadlessToolLoop`, so the migration moves `callOnce` to
+`SupabaseService.complete` while keeping the `VeniceError`
+`rate_limit` discrimination intact (the error class still wraps
+function-side 429s). Agent constructor switched to `supabase`;
+loop CycleContext lost its venice field (it was pass-through only);
+worker dropped `VeniceClient` + `veniceApiKey`/`veniceBaseUrl` from
+StartMessage + `venice` from CycleContext literal; manager dropped
+`veniceApiKey` from `buildStartPayload`. The same callOnce/observe
+shape applies to samskara, which follows in a separate sweep.
+
 **Deferred callers** (still hold `VeniceClient.completeChat`):
 
-- background-agent Web Workers: `agents/bias/`, `agents/samskara/`,
+- background-agent Web Workers: `agents/samskara/`,
   `agents/summary/`, `agents/topics/`, `agents/memory_topics/`,
   `agents/recipe_topics/`, `agents/wiki/`, `agents/wiki-librarian/`
 

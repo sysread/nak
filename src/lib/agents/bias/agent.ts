@@ -14,7 +14,7 @@
  * `callOnce` + `tryParseJson` plumbing - so the maintenance cost of
  * the agent layer stays constant as features land.
  */
-import type { VeniceClient } from '../../venice';
+import type { SupabaseService } from '../../supabase';
 import { VeniceError } from '../../venice';
 import {
   BIAS_OBSERVER_PROMPT,
@@ -57,14 +57,14 @@ function tryParseJson<T>(raw: string): T | null {
 }
 
 async function callOnce(
-  venice: VeniceClient,
+  supabase: SupabaseService,
   model: string,
   systemPrompt: string,
   userPayload: string,
   signal: AbortSignal,
   maxTokens: number
 ): Promise<string> {
-  const result = await venice.completeChat({
+  const result = await supabase.complete({
     model,
     messages: [
       { role: 'system', content: systemPrompt },
@@ -78,7 +78,7 @@ async function callOnce(
 
 export class BiasObserverAgent {
   constructor(
-    private venice: VeniceClient,
+    private supabase: SupabaseService,
     /** Fast model id. Worker passes whatever `agentModel('bias')`
      *  resolves to; tests pass a deterministic stub. */
     private model: string
@@ -122,7 +122,7 @@ export class BiasObserverAgent {
     let raw: string;
     try {
       raw = await callOnce(
-        this.venice,
+        this.supabase,
         this.model,
         BIAS_OBSERVER_PROMPT,
         payload,

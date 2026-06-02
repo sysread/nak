@@ -25,7 +25,6 @@ import {
 } from '../src/lib/agents/bias/loop';
 import { LeaseCoordinator, type LeaseTimers } from '../src/lib/embeddings/lease';
 import type { SupabaseService } from '../src/lib/supabase';
-import type { VeniceClient } from '../src/lib/venice';
 import type { BiasObserverAgent } from '../src/lib/agents/bias/agent';
 import { BIAS_KEYS } from '../src/lib/bias/catalog-keys';
 
@@ -113,7 +112,6 @@ function buildContext(opts: {
     ctx: {
       agent: opts.agent ?? fakeAgent(),
       supabase: opts.supabase,
-      venice: {} as VeniceClient,
       coordinator,
       holderId: 'holder-test',
       claimTtlSeconds: 60,
