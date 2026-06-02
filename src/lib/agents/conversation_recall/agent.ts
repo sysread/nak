@@ -20,7 +20,7 @@
  */
 import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
-import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
+import type { VeniceMessage, ResponseFormat } from '../../venice';
 // Import the toolbox directly — same circular-import dodge that
 // memory recall uses. See `tools/conversation_recall_toolbox.ts` for
 // the full explanation.
@@ -101,7 +101,6 @@ export class ConversationRecallAgent
   readonly toolbox = conversationRecallToolbox;
 
   constructor(
-    private venice: VeniceClient,
     private supabase: SupabaseService,
     /**
      * Optional model override for tests / future A/B. Defaults to
@@ -152,7 +151,6 @@ export class ConversationRecallAgent
         toolbox: this.toolbox,
         toolCtx: {
           supabase: this.supabase,
-          venice: this.venice,
           userId: req.userId,
           threadId: req.input.threadId,
           // Forward the caller's depth; runHeadlessToolLoop bumps

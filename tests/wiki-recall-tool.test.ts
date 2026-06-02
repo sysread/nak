@@ -25,7 +25,7 @@ import {
 } from '../src/lib/tools';
 import { wikiRecall } from '../src/lib/tools/wiki_recall';
 import type { SupabaseService, Message } from '../src/lib/supabase';
-import type { ChatCompletion, VeniceClient } from '../src/lib/venice';
+import type { ChatCompletion } from '../src/lib/venice';
 
 function makeCompletion(text: string): ChatCompletion {
   return {
@@ -54,10 +54,12 @@ function makeMessage(overrides: Partial<Message>): Message {
   } as Message;
 }
 
-function ctxFor(svc: SupabaseService, venice: VeniceClient): ToolContext {
+function ctxFor(svc: SupabaseService): ToolContext {
+  // venice is optional on ToolContext post-recall-family migration; the
+  // chat loop still populates it in production for wiki_librarian, but
+  // wiki_recall doesn't reach for it.
   return {
     supabase: svc,
-    venice,
     userId: 'u-1',
     threadId: 't-1',
     signal: new AbortController().signal,
@@ -107,9 +109,9 @@ describe('wiki_recall - registry scoping', () => {
 describe('wiki_recall - execute() routes through WikiRecallAgent', () => {
   it('returns the parsed RecallNote as the tool result on the happy path', async () => {
     // The agent's chat-completion seam moved to supabase.complete in
-    // milestone 6; the ctx.venice handle is still threaded through
-    // because the agent constructor takes it, but the loop no longer
-    // drives it. Script the completion on the supabase fixture.
+    // milestone 6; the recall-family sweep that followed dropped the
+    // leftover venice constructor arg. Script the completion on the
+    // supabase fixture.
     const messages: Message[] = [
       makeMessage({ id: 'u1', role: 'user', content: 'how is the garden?' }),
     ];
@@ -120,12 +122,8 @@ describe('wiki_recall - execute() routes through WikiRecallAgent', () => {
       )
     );
     const svc = { listMessages, complete } as unknown as SupabaseService;
-    const venice = {
-      completeChat: vi.fn(),
-      embed: vi.fn(),
-    } as unknown as VeniceClient;
 
-    const result = await wikiRecall.execute({}, ctxFor(svc, venice));
+    const result = await wikiRecall.execute({}, ctxFor(svc));
 
     expect(result).toEqual({
       kind: 'note',
@@ -143,12 +141,8 @@ describe('wiki_recall - execute() routes through WikiRecallAgent', () => {
       listMessages: vi.fn(async () => messages),
       complete,
     } as unknown as SupabaseService;
-    const venice = {
-      completeChat: vi.fn(),
-      embed: vi.fn(),
-    } as unknown as VeniceClient;
 
-    const result = await wikiRecall.execute({}, ctxFor(svc, venice));
+    const result = await wikiRecall.execute({}, ctxFor(svc));
     expect(result).toEqual({ kind: 'none' });
   });
 
@@ -163,12 +157,8 @@ describe('wiki_recall - execute() routes through WikiRecallAgent', () => {
       }),
       complete: vi.fn(),
     } as unknown as SupabaseService;
-    const venice = {
-      completeChat: vi.fn(),
-      embed: vi.fn(),
-    } as unknown as VeniceClient;
 
-    const result = await wikiRecall.execute({}, ctxFor(svc, venice));
+    const result = await wikiRecall.execute({}, ctxFor(svc));
     expect(result).toEqual({ kind: 'none' });
   });
 });

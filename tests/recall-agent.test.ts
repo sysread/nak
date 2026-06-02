@@ -28,7 +28,6 @@ import type {
   ChatCompletion,
   ChatRequest,
   OpenAIToolCall,
-  VeniceClient,
   VeniceMessage,
 } from '../src/lib/venice';
 
@@ -102,25 +101,6 @@ function makeSupabase(
     complete,
   };
   return { svc: spies as unknown as SupabaseService, spies, streamCalls };
-}
-
-/**
- * Inert VeniceClient for RecallAgent's leftover `venice` constructor
- * argument. The agent's chat-completion seam moved to
- * `supabase.complete` in milestone 6; the venice handle is still
- * required by the constructor only because the worker-fleet sweep
- * that drops it hasn't shipped. The `embed` stub covers any
- * memory_search round that routes through searchMemoriesByEmbedding -
- * those still call venice.embed directly inside the embeddings
- * helpers.
- */
-function makeInertVenice(): VeniceClient {
-  return {
-    completeChat: vi.fn(),
-    embed: vi.fn(async () => ({
-      data: [{ index: 0, embedding: new Array(1024).fill(0) }],
-    })),
-  } as unknown as VeniceClient;
 }
 
 describe('trimToLastUserTurn', () => {
@@ -250,7 +230,7 @@ describe('parseRecallOutput', () => {
 describe('RecallAgent — identity + contract', () => {
   it('advertises the recall toolbox (read-only), recall name, and a model id', () => {
     const { svc } = makeSupabase([]);
-    const agent = new RecallAgent(makeInertVenice(), svc);
+    const agent = new RecallAgent(svc);
     expect(agent.name).toBe('recall');
     expect(agent.toolbox).toBe(recallToolbox);
     expect(agent.model.length).toBeGreaterThan(0);
@@ -263,7 +243,7 @@ describe('RecallAgent — identity + contract', () => {
 
   it('accepts a model override for tests and future A/B runs', () => {
     const { svc } = makeSupabase([]);
-    const agent = new RecallAgent(makeInertVenice(), svc, 'custom-test-model');
+    const agent = new RecallAgent(svc, 'custom-test-model');
     expect(agent.model).toBe('custom-test-model');
   });
 });
@@ -306,7 +286,7 @@ describe('RecallAgent — run() happy path', () => {
         text: '{"kind":"note","note":"I remember the user already has a dentist back home."}',
       },
     ]);
-    const agent = new RecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new RecallAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -345,7 +325,7 @@ describe('RecallAgent — run() happy path', () => {
       [makeMessage({ id: 'u1', role: 'user', content: 'what time is it' })],
       [{ text: '{"kind":"none"}' }]
     );
-    const agent = new RecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new RecallAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -361,7 +341,7 @@ describe('RecallAgent — run() happy path', () => {
       [makeMessage({ id: 'u1', role: 'user', content: 'hi' })],
       [{ text: 'I could not remember anything.' }]
     );
-    const agent = new RecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new RecallAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -388,7 +368,7 @@ describe('RecallAgent — edge cases', () => {
     const { svc, spies } = makeSupabase([
       makeMessage({ id: 'u1', role: 'user', content: 'x' }),
     ]);
-    const agent = new RecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new RecallAgent(svc, 'test-model');
     const ac = new AbortController();
     ac.abort();
 
@@ -410,7 +390,7 @@ describe('RecallAgent — edge cases', () => {
     const { svc, spies } = makeSupabase([
       makeMessage({ id: 'a1', role: 'assistant', content: 'auto-greet' }),
     ]);
-    const agent = new RecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new RecallAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -429,7 +409,7 @@ describe('RecallAgent — edge cases', () => {
         throw new Error('network flaked');
       }),
     } as unknown as SupabaseService;
-    const agent = new RecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new RecallAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },

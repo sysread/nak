@@ -25,7 +25,7 @@ import {
 } from '../src/lib/tools';
 import { conversationRecall } from '../src/lib/tools/conversation_recall';
 import type { SupabaseService, Message } from '../src/lib/supabase';
-import type { ChatCompletion, VeniceClient, VeniceMessage } from '../src/lib/venice';
+import type { ChatCompletion, VeniceMessage } from '../src/lib/venice';
 
 function makeCompletion(text: string): ChatCompletion {
   return {
@@ -54,10 +54,12 @@ function makeMessage(overrides: Partial<Message>): Message {
   } as Message;
 }
 
-function ctxFor(svc: SupabaseService, venice: VeniceClient): ToolContext {
+function ctxFor(svc: SupabaseService): ToolContext {
+  // venice is optional on ToolContext post-recall-family migration; the
+  // chat loop still populates it in production for wiki_librarian, but
+  // conversation_recall doesn't reach for it.
   return {
     supabase: svc,
-    venice,
     userId: 'u-1',
     threadId: 't-1',
     signal: new AbortController().signal,
@@ -132,12 +134,8 @@ describe('conversation_recall — execute() routes through ConversationRecallAge
       )
     );
     const svc = { listMessages, complete } as unknown as SupabaseService;
-    const venice = {
-      completeChat: vi.fn(),
-      embed: vi.fn(),
-    } as unknown as VeniceClient;
 
-    const result = await conversationRecall.execute({}, ctxFor(svc, venice));
+    const result = await conversationRecall.execute({}, ctxFor(svc));
 
     expect(result).toEqual({
       kind: 'note',
@@ -163,14 +161,10 @@ describe('conversation_recall — execute() routes through ConversationRecallAge
       listMessages: vi.fn(async () => messages),
       complete,
     } as unknown as SupabaseService;
-    const venice = {
-      completeChat: vi.fn(),
-      embed: vi.fn(),
-    } as unknown as VeniceClient;
 
     await conversationRecall.execute(
       { topic: 'the Lisbon move' },
-      ctxFor(svc, venice)
+      ctxFor(svc)
     );
 
     expect(seen).toHaveLength(1);
@@ -188,12 +182,8 @@ describe('conversation_recall — execute() routes through ConversationRecallAge
       listMessages: vi.fn(async () => messages),
       complete,
     } as unknown as SupabaseService;
-    const venice = {
-      completeChat: vi.fn(),
-      embed: vi.fn(),
-    } as unknown as VeniceClient;
 
-    const result = await conversationRecall.execute({}, ctxFor(svc, venice));
+    const result = await conversationRecall.execute({}, ctxFor(svc));
     expect(result).toEqual({ kind: 'none' });
   });
 
@@ -208,12 +198,8 @@ describe('conversation_recall — execute() routes through ConversationRecallAge
       }),
       complete: vi.fn(),
     } as unknown as SupabaseService;
-    const venice = {
-      completeChat: vi.fn(),
-      embed: vi.fn(),
-    } as unknown as VeniceClient;
 
-    const result = await conversationRecall.execute({}, ctxFor(svc, venice));
+    const result = await conversationRecall.execute({}, ctxFor(svc));
     expect(result).toEqual({ kind: 'none' });
   });
 });

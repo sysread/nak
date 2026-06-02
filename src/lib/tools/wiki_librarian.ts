@@ -60,9 +60,14 @@ export const wikiLibrarian: ToolDef = {
       `dispatching librarian: "${instructions.slice(0, 80)}${instructions.length > 80 ? '...' : ''}"`
     );
 
+    // ctx.venice is optional on the ToolContext type since the
+    // recall-family sweep stopped requiring it; wiki-librarian is the
+    // last main-thread consumer until its own family migrates. The
+    // chat loop always populates ctx.venice, so the non-null
+    // assertion is safe at this dispatch site.
     const result = await runManually({
       supabase: ctx.supabase,
-      venice: ctx.venice,
+      venice: ctx.venice!,
       userId: ctx.userId,
       userName,
       userLocation,

@@ -41,7 +41,7 @@ export const memoryRecall: ToolDef = {
     // main bundle. Recall is gated on the model invoking the tool;
     // on cold-boot we don't need the agent code resident.
     const { RecallAgent } = await import('../agents/recall/agent');
-    const agent = new RecallAgent(ctx.venice, ctx.supabase);
+    const agent = new RecallAgent(ctx.supabase);
     const result = await agent.run({
       input: { threadId: ctx.threadId },
       userId: ctx.userId,

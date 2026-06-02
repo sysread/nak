@@ -191,12 +191,28 @@ green gate:
    were rewritten to script `supabase.complete` instead of
    `venice.completeChat`.
 
-3. **Migrate the worker-resident agents one family at a
+3. **Migrate the recall family. (DONE.)** `RecallAgent`,
+   `ConversationRecallAgent`, `WikiRecallAgent` -- all
+   main-thread, no workers, all driven through the
+   migrated headless tool loop. Each class dropped `venice`
+   from its constructor; the three matching tool
+   dispatchers (`memory_recall`, `conversation_recall`,
+   `wiki_recall`) stopped passing `ctx.venice`. To stop the
+   recall agents from having to populate a `venice` slot on
+   their `toolCtx` literal, `ToolContext.venice` became
+   optional. `wiki_librarian` -- the one remaining
+   main-thread consumer of `ctx.venice` until its worker
+   family migrates -- uses a non-null assertion at its
+   dispatch site (`ctx.venice!`); the chat loop keeps
+   populating the field for that path until the
+   wiki-librarian sweep ships.
+
+4. **Migrate the worker-resident agent families one at a
    time.** For each of `bias`, `samskara`, `summary`,
    `topics`, `memory_topics`, `recipe_topics`, `wiki`,
-   `wiki-librarian`, `deep-sleep`, `rem`, the recall
-   family: drop `venice: VeniceClient` from the agent
-   constructor and the cycle context; replace
+   `wiki-librarian`, `deep-sleep`, `rem`: drop
+   `venice: VeniceClient` from the agent constructor and
+   the cycle context; replace
    `this.venice.completeChat(...)` with
    `this.supabase.complete(...)`; update the agent's
    worker.ts to stop creating the `VeniceClient` and stop
@@ -204,11 +220,12 @@ green gate:
    the main-thread caller of the worker to stop sending
    `veniceApiKey`. One agent + its worker + its caller per
    commit so the gate stays green and the diff stays
-   reviewable. Step 2 left `toolCtx.venice` populated as a
-   no-op; this step is what finally drops it from
-   `ToolContext`.
+   reviewable. When `wiki-librarian`'s family ships, also
+   drop `venice` from `ToolContext` entirely and remove the
+   non-null assertion from the `wiki_librarian` tool
+   dispatcher.
 
-4. **Delete `VeniceClient.completeChat`.** Once step 3 is
+5. **Delete `VeniceClient.completeChat`.** Once step 4 is
    complete the method has no remaining callers; delete it
    along with the now-unused
    `COMPLETE_CHAT_RATE_LIMIT_*` re-exports (their
@@ -217,7 +234,7 @@ green gate:
    "MIGRATION STATE" docstring block. Update
    `migration-inventory.md` to mark `completeChat` DONE.
 
-5. **Audit `veniceApiKey` removal from worker-start
+6. **Audit `veniceApiKey` removal from worker-start
    messages.** A worker that no longer needs the key
    shouldn't be sent one; the encrypted `app_config` field
    in localStorage will become smaller. svelte-check

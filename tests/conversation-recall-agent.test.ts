@@ -18,7 +18,6 @@ import type {
   ChatCompletion,
   ChatRequest,
   OpenAIToolCall,
-  VeniceClient,
   VeniceMessage,
 } from '../src/lib/venice';
 
@@ -88,22 +87,6 @@ function makeSupabase(
   return { svc: spies as unknown as SupabaseService, spies, streamCalls };
 }
 
-/**
- * Inert VeniceClient for the agent constructor's leftover `venice`
- * slot. The chat-completion seam moved to `supabase.complete` in
- * milestone 6; this stub covers the embed call conversation_search
- * makes before hitting searchThreads (a 1024-dim zero vector
- * satisfies the padding math).
- */
-function makeInertVenice(): VeniceClient {
-  return {
-    completeChat: vi.fn(),
-    embed: vi.fn(async () => ({
-      data: [{ index: 0, embedding: new Array(1024).fill(0) }],
-    })),
-  } as unknown as VeniceClient;
-}
-
 describe('buildConversationRecallPrompt', () => {
   it('returns the base prompt when no topic is provided', () => {
     expect(buildConversationRecallPrompt()).toBe(CONVERSATION_RECALL_PROMPT);
@@ -130,7 +113,7 @@ describe('buildConversationRecallPrompt', () => {
 describe('ConversationRecallAgent — identity + contract', () => {
   it('pins the conversation-recall toolbox, advertises the right name + a model id', () => {
     const { svc } = makeSupabase([]);
-    const agent = new ConversationRecallAgent(makeInertVenice(), svc);
+    const agent = new ConversationRecallAgent(svc);
     expect(agent.name).toBe('conversation-recall');
     expect(agent.toolbox).toBe(conversationRecallToolbox);
     expect(agent.model.length).toBeGreaterThan(0);
@@ -143,7 +126,7 @@ describe('ConversationRecallAgent — identity + contract', () => {
 
   it('accepts a model override for tests', () => {
     const { svc } = makeSupabase([]);
-    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'custom-test-model');
+    const agent = new ConversationRecallAgent(svc, 'custom-test-model');
     expect(agent.model).toBe('custom-test-model');
   });
 });
@@ -175,7 +158,7 @@ describe('ConversationRecallAgent — run() happy path', () => {
         text: '{"kind":"note","note":"I remember the user prefers cacio e pepe when they pick Italian."}',
       },
     ]);
-    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ConversationRecallAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -211,7 +194,7 @@ describe('ConversationRecallAgent — run() happy path', () => {
       [makeMessage({ id: 'u1', role: 'user', content: 'same topic as before' })],
       [{ text: '{"kind":"none"}' }]
     );
-    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ConversationRecallAgent(svc, 'test-model');
 
     await agent.run({
       input: { threadId: 't-1', topic: 'moving to Lisbon' },
@@ -228,7 +211,7 @@ describe('ConversationRecallAgent — run() happy path', () => {
       [makeMessage({ id: 'u1', role: 'user', content: 'what time is it' })],
       [{ text: '{"kind":"none"}' }]
     );
-    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ConversationRecallAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -244,7 +227,7 @@ describe('ConversationRecallAgent — run() happy path', () => {
       [makeMessage({ id: 'u1', role: 'user', content: 'hi' })],
       [{ text: 'I could not recall anything relevant.' }]
     );
-    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ConversationRecallAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -265,7 +248,7 @@ describe('ConversationRecallAgent — edge cases', () => {
     const { svc, spies } = makeSupabase([
       makeMessage({ id: 'u1', role: 'user', content: 'x' }),
     ]);
-    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ConversationRecallAgent(svc, 'test-model');
     const ac = new AbortController();
     ac.abort();
 
@@ -284,7 +267,7 @@ describe('ConversationRecallAgent — edge cases', () => {
     const { svc, spies } = makeSupabase([
       makeMessage({ id: 'a1', role: 'assistant', content: 'auto-greet' }),
     ]);
-    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ConversationRecallAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },
@@ -303,7 +286,7 @@ describe('ConversationRecallAgent — edge cases', () => {
         throw new Error('network flaked');
       }),
     } as unknown as SupabaseService;
-    const agent = new ConversationRecallAgent(makeInertVenice(), svc, 'test-model');
+    const agent = new ConversationRecallAgent(svc, 'test-model');
 
     const result = await agent.run({
       input: { threadId: 't-1' },

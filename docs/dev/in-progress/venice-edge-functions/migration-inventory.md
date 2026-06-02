@@ -85,19 +85,24 @@ drives `toolCtx.supabase.complete` instead of taking a `venice` opt;
 the 8 agent classes that compose it (`rem`, `recall`,
 `conversation_recall`, `wiki_recall`, `reflection`, `wiki`,
 `deep-sleep`, `wiki-librarian`) stopped passing `venice: this.venice`
-at the top of each `runHeadlessToolLoop({ ... })` call. They still
-populate `toolCtx.venice` because the recall agents are still
-constructed with a `venice` parameter from `ctx.venice` in the
-tool-dispatch seam; that gets dropped one family at a time as part
-of the worker-fleet sweep.
+at the top of each `runHeadlessToolLoop({ ... })` call.
+
+**Recall family** (`RecallAgent`, `ConversationRecallAgent`,
+`WikiRecallAgent`) MIGRATED in `claude/recall-family-complete`. Each
+class dropped `venice` from its constructor; the matching tool
+dispatchers (`memory_recall`, `conversation_recall`, `wiki_recall`)
+stopped passing `ctx.venice`. `ToolContext.venice` became optional
+to accommodate the recall agents not populating it; the chat loop
+still populates the field in production for `wiki_librarian`'s sake
+until the wiki-librarian family migrates. After wiki-librarian's
+sweep ships, `ToolContext.venice` deletes outright.
 
 **Deferred callers** (still hold `VeniceClient.completeChat`):
 
 - background-agent Web Workers: `agents/bias/`, `agents/samskara/`,
   `agents/summary/`, `agents/topics/`, `agents/memory_topics/`,
   `agents/recipe_topics/`, `agents/wiki/`, `agents/wiki-librarian/`,
-  `agents/deep-sleep/`, `agents/rem/`, plus the recall family
-  (`agents/recall/`, `agents/conversation_recall/`, `agents/wiki_recall/`)
+  `agents/deep-sleep/`, `agents/rem/`
 
 Why deferred: each worker bootstraps its own `VeniceClient` from a
 `veniceApiKey` postMessage from the main thread; the protocol shape

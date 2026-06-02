@@ -28,7 +28,7 @@
  */
 import type { Agent, AgentRunRequest, AgentRunResult } from '../types';
 import type { SupabaseService, Message } from '../../supabase';
-import type { VeniceClient, VeniceMessage, ResponseFormat } from '../../venice';
+import type { VeniceMessage, ResponseFormat } from '../../venice';
 // Import directly from the toolbox file rather than through
 // `tools/index.ts` — memory_recall sits in that barrel and pulls
 // RecallAgent back in, so an index-level import here would be a
@@ -224,7 +224,6 @@ export class RecallAgent implements Agent<RecallInput, RecallOutput> {
   readonly toolbox = recallToolbox;
 
   constructor(
-    private venice: VeniceClient,
     private supabase: SupabaseService,
     /**
      * Optional model override, mirroring ReflectionAgent. Defaults to
@@ -296,7 +295,6 @@ export class RecallAgent implements Agent<RecallInput, RecallOutput> {
         toolbox: this.toolbox,
         toolCtx: {
           supabase: this.supabase,
-          venice: this.venice,
           userId: req.userId,
           threadId: req.input.threadId,
           // Forward the caller's depth; runHeadlessToolLoop bumps

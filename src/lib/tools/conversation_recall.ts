@@ -45,7 +45,7 @@ export const conversationRecall: ToolDef = {
     const { ConversationRecallAgent } = await import(
       '../agents/conversation_recall/agent'
     );
-    const agent = new ConversationRecallAgent(ctx.venice, ctx.supabase);
+    const agent = new ConversationRecallAgent(ctx.supabase);
     const result = await agent.run({
       input: { threadId: ctx.threadId, topic },
       userId: ctx.userId,

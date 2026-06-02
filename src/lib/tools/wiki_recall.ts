@@ -45,7 +45,7 @@ export const wikiRecall: ToolDef = {
     log.info(`picked up thread ${ctx.threadId}`);
 
     const { WikiRecallAgent } = await import('../agents/wiki_recall/agent');
-    const agent = new WikiRecallAgent(ctx.venice, ctx.supabase);
+    const agent = new WikiRecallAgent(ctx.supabase);
     const result = await agent.run({
       input: { threadId: ctx.threadId, topic },
       userId: ctx.userId,
