@@ -37,59 +37,48 @@ import { analyzeImageSchema } from './analyze_image.schema';
 
 const log = createLogger('analyze-image-tool');
 
-// Max attempts (initial + retries) for the vision sub-call. Vision
-// completions occasionally come back empty or truncated mid-sentence
-// - the SSE stream finishes before the model has actually wrapped up,
-// or the provider returns a finish_reason that says otherwise. Three
-// attempts is the same shape the streaming chat path uses for its
-// rate-limit retries and is enough that a single transient blip
-// doesn't surface to the user as a half-sentence "answer".
+// Max attempts (initial + retries) for the vision sub-call. The
+// non-streaming completion endpoint occasionally comes back with an
+// empty body (provider blip - the choice carries no content) or with
+// finish_reason='length' when a dense photo's description runs past the
+// maxTokens cap mid-sentence. Three attempts is the same shape the
+// streaming chat path uses for its rate-limit retries and is enough
+// that a single transient blip doesn't surface to the user as a failed
+// analysis.
 const MAX_VISION_ATTEMPTS = 3;
 
-// Characters that signal a vision description finished on a complete
-// thought. `.`, `!`, `?`, `…` are sentence terminators; the quote and
-// bracket variants close a sentence that ended inside them; backtick
-// and asterisk catch responses whose tail is a closed code/emphasis
-// span. We don't include digits or letters - those would over-fire.
-const TERMINAL_TAIL_CHARS = new Set([
-  '.', '!', '?', '…',
-  '"', '”', // closing double quote
-  "'", '’', // closing single quote
-  ')', ']', '}',
-  '`', '*', '_',
-]);
-
 /**
- * Detect responses that look like the vision stream ended before the
- * model finished. Two signals:
+ * Detect a vision sub-completion that ended before the model finished.
  *
- *   1. `finish_reason` is anything other than 'stop'. 'length' means
- *      the model hit the maxTokens cap; null / 'content_filter' /
- *      'error' / unknown values all indicate the provider aborted
- *      rather than completed.
- *   2. The trimmed text does not end on terminal punctuation. Vision
- *      descriptions are prose and effectively always end on a period
- *      or close-quote; a tail like "description of the" with no
- *      terminator is the observable signature of an SSE that closed
- *      mid-clause even when the provider reported finish_reason='stop'.
+ * analyze_image calls the non-streaming completion endpoint
+ * (VeniceClient.completeChat), so the response is a single atomic JSON
+ * body and its `finish_reason` is authoritative - there is no SSE
+ * stream that could close mid-clause behind the provider's back. That
+ * makes finish_reason the only truncation signal we need:
+ *
+ *   - 'stop' -> the model emitted its end token; the response is
+ *     complete however it ends. We deliberately do NOT inspect the text
+ *     tail: text-heavy images (transcriptions, numbered lists, markdown
+ *     tables) legitimately end on a list item or table cell with no
+ *     trailing punctuation - e.g. a 42-item readout ending on
+ *     "...42. I embrace the All". A "must end on terminal punctuation"
+ *     check would false-flag those complete responses as truncated and
+ *     burn every retry before throwing, turning a perfect transcription
+ *     into a "the image analysis failed" error.
+ *   - 'length' -> hit the maxTokens cap mid-output; genuinely truncated.
+ *   - null / 'content_filter' / 'error' / any other value -> the
+ *     provider aborted rather than completed.
  *
  * Returns a short reason string for the log drawer when truncated, or
- * null when the response looks complete.
+ * null when the response looks complete. The empty-body case is handled
+ * separately by the caller.
  */
-function detectTruncation(
-  text: string,
-  finishReason: string | null
-): string | null {
-  if (finishReason && finishReason !== 'stop') {
-    return `finish_reason=${finishReason}`;
-  }
+function detectTruncation(finishReason: string | null): string | null {
   if (finishReason === null) {
     return 'no finish_reason in response';
   }
-  if (text.length === 0) return null; // caller handles empty separately
-  const lastChar = text.slice(-1);
-  if (!TERMINAL_TAIL_CHARS.has(lastChar)) {
-    return 'response does not end on terminal punctuation';
+  if (finishReason !== 'stop') {
+    return `finish_reason=${finishReason}`;
   }
   return null;
 }
@@ -176,18 +165,11 @@ export const analyzeImage: ToolDef = {
 
     // Vision sub-call retry loop. The non-streaming completion endpoint
     // is normally a one-shot, but the vision model has been observed to
-    // return:
-    //   - an empty body (provider blip; no deltas before the stream
-    //     closed)
-    //   - a body that ends mid-clause ("...description of the") even
-    //     when finish_reason is 'stop' - the SSE finished before the
-    //     model actually did
-    //   - a body with finish_reason='length' when the model genuinely
-    //     runs out of budget. 1024 was too tight for dense photos -
-    //     the model burned a few hundred tokens on preamble and then
-    //     truncated mid-description. 8196 is the new cap; still
-    //     bounded, but enough headroom that a verbose describe-this-
-    //     photo response wraps up naturally.
+    // return either an empty body (provider blip - the choice carries
+    // no content) or finish_reason='length' when a dense photo's
+    // description runs past the token cap. maxTokens is 8196: bounded,
+    // but enough headroom that a verbose describe-this-photo response
+    // wraps up naturally rather than getting cut mid-description.
     // The retry burns another vision call but produces a usable answer
     // ~95% of the time on the second attempt. Each retry logs a warning
     // to the log drawer so a sticky failure stays visible to the user
@@ -213,7 +195,7 @@ export const analyzeImage: ToolDef = {
         continue;
       }
 
-      const truncationReason = detectTruncation(trimmed, result.finishReason);
+      const truncationReason = detectTruncation(result.finishReason);
       if (truncationReason) {
         // Capture the tail so the drawer entry is enough to diagnose
         // the failure without needing to re-run with extra logging.
