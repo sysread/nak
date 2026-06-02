@@ -225,18 +225,6 @@ export const MODELS = {
     // See ModelSpec.leaksSpecialTokens.
     leaksSpecialTokens: true,
   },
-  'minimax-m3': {
-    id: 'minimax-m3',
-    contextWindow: 500_000,
-    supportsReasoning: true,
-    // Native vision: image_url parts inline directly, no analyze_image
-    // round-trip.
-    supportsVision: true,
-    // Function-calling + structured-output capable. The earlier minimax
-    // generation (minimax-m25) 4xx'd on response_format, which is the
-    // bug ModelSpec.supportsResponseFormat documents; m3 accepts it.
-    supportsResponseFormat: true,
-  },
   'mistral-small-3-2-24b-instruct': {
     id: 'mistral-small-3-2-24b-instruct',
     contextWindow: 256_000,
@@ -325,7 +313,7 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     defaultThinking: 'medium',
   },
   balanced: {
-    ...MODELS['minimax-m3'],
+    ...MODELS['deepseek-v4-flash'],
     tier: 'balanced',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
@@ -334,17 +322,13 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     // in both themes; yin-yang is a solid bi-tonal disc that reads at
     // any size.
     icon: '\u262F\uFE0F',
-    description: 'MiniMax M3 with thinking off. 500k context, native vision. Good default for most turns.',
-    // Defaults to thinking off while we evaluate minimax-m3's latency.
-    // 'low' is the floor for reasoning_effort but still emits a CoT
-    // pass; 'off' is the only way to get zero thinking out of a
-    // reasoning-capable model. This is a default, not a lock - the
-    // composer picker still lets a user turn thinking back on for a
-    // single thread. Balanced and Fast now differ only by underlying
-    // model (minimax-m3 vs deepseek-v4-flash), not default thinking
-    // budget - if M3 is no faster than DeepSeek with CoT off, the tier
-    // swap isn't buying anything and should revert.
-    defaultThinking: 'off',
+    description: 'DeepSeek V4 Flash with light thinking. Good default for most turns.',
+    // Light thinking by default - 'low' keeps a short CoT pass that
+    // helps on most turns without the latency of medium/high. Balanced
+    // and Fast front the same DeepSeek model and differ only in default
+    // thinking budget (low vs off); the composer picker lets a user
+    // override either per thread.
+    defaultThinking: 'low',
   },
   fast: {
     ...MODELS['deepseek-v4-flash'],

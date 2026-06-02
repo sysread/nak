@@ -50,12 +50,11 @@ describe('MODELS (active registry)', () => {
     expect(MODELS['mistral-small-3-2-24b-instruct'].supportsReasoning).toBe(false);
   });
   it('marks the vision-capable ids as supportsVision=true', () => {
-    // Three vision-capable entries today: the analyze_image sub-call
-    // (e2ee-qwen3-vl-30b-a3b-p), the Smart tier's foreground model
-    // (qwen-3-6-plus), and the Balanced tier's foreground model
-    // (minimax-m3). All inline image_url parts directly rather than
-    // routing through analyze_image.
-    const visionIds = new Set(['e2ee-qwen3-vl-30b-a3b-p', 'qwen-3-6-plus', 'minimax-m3']);
+    // Two vision-capable entries today: the analyze_image sub-call
+    // (e2ee-qwen3-vl-30b-a3b-p) and the Smart tier's foreground model
+    // (qwen-3-6-plus, which inlines image_url parts directly rather
+    // than routing through analyze_image).
+    const visionIds = new Set(['e2ee-qwen3-vl-30b-a3b-p', 'qwen-3-6-plus']);
     for (const [id, spec] of Object.entries(MODELS)) {
       expect(spec.supportsVision).toBe(visionIds.has(id));
     }
@@ -64,11 +63,11 @@ describe('MODELS (active registry)', () => {
 
 describe('TIERS (user-facing wrappers)', () => {
   it('has the three tiers with the expected Venice model ids', () => {
-    // Smart fronts qwen-3-6-plus (1M context, native vision), Balanced
-    // fronts minimax-m3 (500k context, native vision), and Fast fronts
-    // deepseek-v4-flash with thinking disabled.
+    // Smart fronts qwen-3-6-plus (1M context, native vision); Balanced
+    // and Fast both front deepseek-v4-flash, differing only in their
+    // default thinking level (low vs off).
     expect(TIERS.smart.id).toBe('qwen-3-6-plus');
-    expect(TIERS.balanced.id).toBe('minimax-m3');
+    expect(TIERS.balanced.id).toBe('deepseek-v4-flash');
     expect(TIERS.fast.id).toBe('deepseek-v4-flash');
   });
   it('each tier wraps its corresponding MODELS entry', () => {
@@ -82,12 +81,12 @@ describe('TIERS (user-facing wrappers)', () => {
     }
   });
   it('differentiates the tiers by default thinking level', () => {
-    // Smart runs with thinking on by default ('medium'); Balanced and
-    // Fast default to 'off' (no CoT). These are defaults, not locks -
-    // the composer picker stays available on all three so a user can
+    // Smart defaults to 'medium' thinking, Balanced to 'low' (light
+    // CoT), Fast to 'off' (none). These are defaults, not locks - the
+    // composer picker stays available on all three so a user can
     // override per thread (see thinkingWireForTier tests below).
     expect(TIERS.smart.defaultThinking).toBe('medium');
-    expect(TIERS.balanced.defaultThinking).toBe('off');
+    expect(TIERS.balanced.defaultThinking).toBe('low');
     expect(TIERS.fast.defaultThinking).toBe('off');
   });
   it('has matching tier/label and sensible context windows', () => {
@@ -229,24 +228,29 @@ describe('thinking level (composer picker domain)', () => {
     expect(isThinkingLevel(undefined)).toBe(false);
   });
   it('thinkingWireForTier maps off -> disable_thinking and levels -> reasoning_effort', () => {
-    // Smart defaults to 'medium' thinking on.
-    expect(thinkingWireForTier(TIERS.smart, null, 'low')).toEqual({
+    // Smart defaults to 'medium', Balanced to 'low' - both thinking-on,
+    // so they forward reasoning_effort.
+    expect(thinkingWireForTier(TIERS.smart, null, 'medium')).toEqual({
       reasoningEffort: 'medium',
       disableThinking: false,
     });
-    // Balanced defaults to 'off' -> the off-switch, no reasoning_effort.
-    expect(thinkingWireForTier(TIERS.balanced, null, 'low')).toEqual({
-      disableThinking: true,
-    });
-    // A per-thread level beats the tier's off default (user turned
-    // thinking back on for this one conversation).
-    expect(thinkingWireForTier(TIERS.balanced, 'high', 'low')).toEqual({
-      reasoningEffort: 'high',
+    expect(thinkingWireForTier(TIERS.balanced, null, 'medium')).toEqual({
+      reasoningEffort: 'low',
       disableThinking: false,
     });
-    // And a per-thread 'off' beats a thinking-on tier default.
-    expect(thinkingWireForTier(TIERS.smart, 'off', 'low')).toEqual({
+    // Fast defaults to 'off' -> the off-switch, no reasoning_effort.
+    expect(thinkingWireForTier(TIERS.fast, null, 'medium')).toEqual({
       disableThinking: true,
+    });
+    // A per-thread 'off' beats a thinking-on tier default.
+    expect(thinkingWireForTier(TIERS.balanced, 'off', 'medium')).toEqual({
+      disableThinking: true,
+    });
+    // And a per-thread level beats the tier's off default (user turned
+    // thinking back on for this one conversation on Fast).
+    expect(thinkingWireForTier(TIERS.fast, 'high', 'medium')).toEqual({
+      reasoningEffort: 'high',
+      disableThinking: false,
     });
   });
 });
