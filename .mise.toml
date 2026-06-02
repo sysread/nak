@@ -90,6 +90,11 @@ run = "node scripts/branch-cleanup.mjs"
 # raw = true so the y/N confirmation prompt has direct TTY access.
 raw = true
 
+[tasks.update-venice-skills]
+description = "Refresh the vendored Venice API skills in .claude/skills/ from upstream veniceai/skills. Leaves the working tree dirty for review; does not commit."
+run = "node scripts/update-venice-skills.mjs"
+raw = true
+
 [tasks.deps]
 description = "Sync npm devDependencies from the lockfile (idempotent)"
 # Chained as a `depends` on every task that needs vitest, svelte-check,

@@ -9,6 +9,7 @@
     "scripts/doctor.mjs",
     "scripts/setup-pages.mjs",
     "scripts/setup-supabase.mjs",
+    "scripts/update-venice-skills.mjs",
     "scripts/user-edit.mjs",
     "tests/**/*.test.ts"
   ],
