@@ -156,11 +156,15 @@ create table if not exists public.threads (
 alter table public.threads
   add column if not exists model text;
 
--- Optional per-thread reasoning_effort override ('low' | 'medium' | 'high').
--- Null means "use the user default" (profiles.settings.defaultReasoningEffort
--- → DEFAULT_REASONING_EFFORT). Plain text / no CHECK for the same reason as
--- `model` above: garbage is scrubbed by the app on read, and we want stored
--- rows to survive a future tier / provider change without a schema migration.
+-- Optional per-thread thinking-level override ('off' | 'low' | 'medium' |
+-- 'high'). 'off' maps to venice_parameters.disable_thinking; the rest map to
+-- reasoning_effort (see ThinkingLevel in src/lib/models). Null means "use the
+-- tier/user default" (profiles.settings.defaultReasoningEffort →
+-- DEFAULT_REASONING_EFFORT). Column keeps the reasoning_effort name for
+-- storage-compat. Plain text / no CHECK for the same reason as `model` above:
+-- garbage is scrubbed by the app on read, and we want stored rows to survive a
+-- future tier / provider change (such as adding 'off') without a schema
+-- migration.
 alter table public.threads
   add column if not exists reasoning_effort text;
 

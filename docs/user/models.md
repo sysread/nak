@@ -42,6 +42,34 @@ asking back.
 
 ## Reasoning effort
 
+Reasoning models can spend hidden "thinking" tokens before they start
+writing the reply. More thinking can help on hard problems; it also
+adds latency. The composer's lightbulb picker (next to the verbosity
+balloon) sets how much thinking the model does **for the current
+conversation**:
+
+- **Off** - no thinking pass at all. The model answers directly. This
+  is the quickest option and the right one for routine turns.
+- **Low** - a short thinking pass. The account-level default.
+- **Medium** / **High** - progressively more deliberation before the
+  reply, at the cost of more wait time.
+
+Notes on how it behaves:
+
+- The picker shows on every tier that uses a reasoning-capable model
+  (all three of Smart, Balanced, and Fast do today). Each tier just
+  starts at a different position - **Smart** defaults to *Medium*,
+  **Balanced** and **Fast** default to *Off* - and you can move any
+  conversation up or down from there.
+- Your pick is **per conversation** and sticky: it's saved on the
+  thread, so it survives refreshes and follows you across devices.
+- The row marked **default** is your account-level default (set in
+  Settings -> AI -> *Default reasoning effort*). Re-selecting it
+  clears the per-thread override, so a later change to your default
+  flows through to the conversation automatically.
+- Picking a level on a fresh conversation starts a draft so the choice
+  has somewhere to live, the same way the model picker does.
+
 ## Verbosity
 
 Verbosity suggests how long the model's answers should be. **Low**

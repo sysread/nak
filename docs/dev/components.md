@@ -127,18 +127,25 @@ Consumers: message action bar in `Chat.svelte`.
 File: `src/components/ReasoningPicker.svelte`.
 
 Composer-bar twin of the model tier picker. Renders a trigger
-button + a popover menu of `REASONING_EFFORTS` (low / medium /
-high) from `src/lib/models.ts`. Controlled — the parent owns
-open/closed state so it can coordinate with sibling popovers (model
-picker, prompt picker) and enforce "only one menu open at a time."
+button + a popover menu of `THINKING_LEVELS` (off / low / medium /
+high) from `src/lib/models.ts`. `off` maps to
+`venice_parameters.disable_thinking` rather than a `reasoning_effort`
+value; the other three map to `reasoning_effort`. Controlled — the
+parent owns open/closed state so it can coordinate with sibling
+popovers (model picker, prompt picker) and enforce "only one menu
+open at a time."
+
+`value` is a `ThinkingLevel` (may be `off`); `defaultEffort` is the
+account-level `ReasoningEffort` shown with the `default` badge, which
+therefore never lands on the Off row.
 
 ```ts
 interface Props {
-  value: ReasoningEffort;
+  value: ThinkingLevel;
   defaultEffort: ReasoningEffort;
   open: boolean;
   onToggle: () => void;
-  onSelect: (e: ReasoningEffort) => void;
+  onSelect: (level: ThinkingLevel) => void;
 }
 ```
 

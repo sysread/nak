@@ -19,9 +19,11 @@ import type { AppConfig } from './config';
 import {
   isModelTier,
   isReasoningEffort,
+  isThinkingLevel,
   isVerbosity,
   type ModelTier,
   type ReasoningEffort,
+  type ThinkingLevel,
   type Verbosity,
 } from './models';
 import { isAccent, isColorMode, type Accent, type ColorMode } from './theme';
@@ -58,12 +60,17 @@ export interface Thread {
   /** Per-thread model tier override. Null/absent means use user default. */
   model: ModelTier | null;
   /**
-   * Per-thread reasoning-effort override. Null/absent means use the
-   * user default. Only consulted on reasoning-capable models; the
-   * composer dropdown is hidden (and the field cleared on re-point)
-   * when the resolved model can't reason.
+   * Per-thread thinking-level override. Holds 'off' as well as
+   * low/medium/high - 'off' resolves to disable_thinking on the wire,
+   * the others to reasoning_effort (see ThinkingLevel / thinkingToWire
+   * in ./models). Null/absent means fall through to the tier/user
+   * default. Only consulted on reasoning-capable models; the composer
+   * picker is hidden (and the field cleared on re-point) when the
+   * resolved model can't reason. The column is still named
+   * reasoning_effort for storage-compat - no migration needed since it
+   * was already plain text with no CHECK.
    */
-  reasoning_effort: ReasoningEffort | null;
+  reasoning_effort: ThinkingLevel | null;
   /**
    * Per-thread text.verbosity override. Null/absent means use the
    * user default. Surfaced unconditionally in the composer —
@@ -172,7 +179,7 @@ export interface Thread {
  */
 function coerceThread(row: Record<string, unknown>): Thread {
   const model = isModelTier(row.model) ? row.model : null;
-  const reasoning_effort = isReasoningEffort(row.reasoning_effort)
+  const reasoning_effort = isThinkingLevel(row.reasoning_effort)
     ? row.reasoning_effort
     : null;
   const verbosity = isVerbosity(row.verbosity) ? row.verbosity : null;
@@ -2147,7 +2154,7 @@ export class SupabaseService {
   async createThread(
     title: string,
     model: ModelTier | null = null,
-    reasoningEffort: ReasoningEffort | null = null,
+    reasoningEffort: ThinkingLevel | null = null,
     verbosity: Verbosity | null = null,
     titleManuallySet = false,
     toolboxesEnabled: string[] = []
@@ -2228,7 +2235,7 @@ export class SupabaseService {
    */
   async setThreadReasoningEffort(
     threadId: string,
-    reasoningEffort: ReasoningEffort | null
+    reasoningEffort: ThinkingLevel | null
   ): Promise<void> {
     const { error } = await this.client
       .from('threads')

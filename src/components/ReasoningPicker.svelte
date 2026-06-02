@@ -14,22 +14,28 @@
 -->
 <script lang="ts">
   import {
-    REASONING_EFFORTS,
-    REASONING_EFFORT_LABELS,
+    THINKING_LEVELS,
+    THINKING_LEVEL_LABELS,
     type ReasoningEffort,
+    type ThinkingLevel,
   } from '$lib/models';
 
   interface Props {
-    /** Currently-resolved effort for the thread (override-or-default). */
-    value: ReasoningEffort;
-    /** User's default, shown with a `default` badge in the menu. */
+    /** Currently-resolved level for the thread (override-or-default). May be 'off'. */
+    value: ThinkingLevel;
+    /**
+     * User's account default, shown with a `default` badge in the menu.
+     * Always one of low/medium/high - the account default never carries
+     * an 'off' (see THINKING_LEVELS docblock), so the badge only ever
+     * lands on a reasoning level, never on the Off row.
+     */
     defaultEffort: ReasoningEffort;
     /** Controlled popover state. Parent coordinates "only one menu open". */
     open: boolean;
     /** Fired on button click; parent toggles `open` (and closes peers). */
     onToggle: () => void;
     /** Fired when the user picks a level. Parent closes the menu. */
-    onSelect: (effort: ReasoningEffort) => void;
+    onSelect: (level: ThinkingLevel) => void;
   }
   let { value, defaultEffort, open, onToggle, onSelect }: Props = $props();
 </script>
@@ -40,7 +46,7 @@
   onclick={onToggle}
   aria-haspopup="true"
   aria-expanded={open}
-  title={`Reasoning effort: ${REASONING_EFFORT_LABELS[value]}`}
+  title={`Reasoning effort: ${THINKING_LEVEL_LABELS[value]}`}
 >
   <!-- Lightbulb line icon rather than a 💭 emoji: the emoji renders as a
        thin monochrome text glyph against the toggle background and reads
@@ -55,7 +61,7 @@
     <path d="M9 18h6" />
     <path d="M10 22h4" />
   </svg>
-  <span class="model-picker-label">{REASONING_EFFORT_LABELS[value]}</span>
+  <span class="model-picker-label">{THINKING_LEVEL_LABELS[value]}</span>
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <polyline points="6 9 12 15 18 9" />
@@ -65,19 +71,19 @@
 {#if open}
   <div class="composer-menu composer-menu-left" role="menu">
     <div class="menu-header">Reasoning effort for this conversation</div>
-    {#each REASONING_EFFORTS as effort (effort)}
+    {#each THINKING_LEVELS as level (level)}
       <button
         type="button"
         class="menu-item menu-item-btn"
-        class:selected={value === effort}
-        onclick={() => onSelect(effort)}
+        class:selected={value === level}
+        onclick={() => onSelect(level)}
         role="menuitemradio"
-        aria-checked={value === effort}
+        aria-checked={value === level}
       >
         <span class="menu-item-label">
-          <strong>{REASONING_EFFORT_LABELS[effort]}</strong>
+          <strong>{THINKING_LEVEL_LABELS[level]}</strong>
         </span>
-        {#if effort === defaultEffort}<span class="menu-item-badge">default</span>{/if}
+        {#if level === defaultEffort}<span class="menu-item-badge">default</span>{/if}
       </button>
     {/each}
   </div>

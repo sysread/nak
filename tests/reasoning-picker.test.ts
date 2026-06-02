@@ -45,7 +45,7 @@ describe('ReasoningPicker', () => {
     expect(queryByRole('menu')).toBeNull();
   });
 
-  it('renders the three levels with the default badged and the current marked checked', () => {
+  it('renders the four levels with the default badged and the current marked checked', () => {
     const { getByRole, getAllByRole, getAllByText } = render(ReasoningPicker, {
       value: 'high',
       defaultEffort: 'low',
@@ -55,21 +55,54 @@ describe('ReasoningPicker', () => {
     });
     expect(getByRole('menu')).toBeInTheDocument();
     const items = getAllByRole('menuitemradio');
-    expect(items).toHaveLength(3);
+    expect(items).toHaveLength(4);
     // Labels, in order, so a reordering regression fails here rather
-    // than surfacing as a mysterious UX shift.
+    // than surfacing as a mysterious UX shift. 'Off' leads - it maps to
+    // disable_thinking rather than a reasoning_effort value.
     expect(items.map((el) => el.textContent?.replace(/\s+/g, ' ').trim())).toEqual([
+      'Off',
       'Low default',
       'Medium',
       'High',
     ]);
-    // Exactly one `default` badge — on the user's default, not the
-    // current thread value.
+    // Exactly one `default` badge — on the user's account default
+    // (low/medium/high), never on Off, never on the current thread value.
     expect(getAllByText('default')).toHaveLength(1);
-    // Exactly one aria-checked row — the currently-resolved effort.
+    // Exactly one aria-checked row — the currently-resolved level.
     const checked = items.filter((el) => el.getAttribute('aria-checked') === 'true');
     expect(checked).toHaveLength(1);
     expect(checked[0].textContent).toContain('High');
+  });
+
+  it('marks Off checked and badges no row when the resolved level is off', () => {
+    // A tier that defaults thinking off (Balanced/Fast) resolves to
+    // 'off'; the picker shows Off selected, and since 'off' is never the
+    // account default the badge still lands on a reasoning level.
+    const { getAllByRole, getAllByText } = render(ReasoningPicker, {
+      value: 'off',
+      defaultEffort: 'medium',
+      open: true,
+      onToggle: () => {},
+      onSelect: () => {},
+    });
+    const items = getAllByRole('menuitemradio');
+    const checked = items.filter((el) => el.getAttribute('aria-checked') === 'true');
+    expect(checked).toHaveLength(1);
+    expect(checked[0].textContent).toContain('Off');
+    expect(getAllByText('default')).toHaveLength(1);
+  });
+
+  it('fires onSelect with off when the Off row is clicked', async () => {
+    const onSelect = vi.fn();
+    const { getByRole } = render(ReasoningPicker, {
+      value: 'low',
+      defaultEffort: 'low',
+      open: true,
+      onToggle: () => {},
+      onSelect,
+    });
+    await fireEvent.click(getByRole('menuitemradio', { name: /Off/ }));
+    expect(onSelect).toHaveBeenCalledWith('off');
   });
 
   it('fires onToggle when the trigger is clicked (does not call onSelect)', async () => {

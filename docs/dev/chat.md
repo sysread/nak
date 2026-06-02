@@ -110,11 +110,17 @@ A chat turn goes:
   `profiles.settings.defaultModel`); `id` is the concrete Venice
   model, resolved at send-time. This indirection lets us retune
   a tier without orphaning stored rows.
-- **Reasoning effort** — same pattern: `profiles.settings.
-  defaultReasoningEffort` or per-thread `threads.reasoning_effort`,
-  resolved at send-time and only forwarded when
-  `ModelSpec.supportsReasoning` is true (some providers 400 on
-  the unknown field).
+- **Reasoning effort** — same pattern, but the per-thread value is
+  a `ThinkingLevel` (`off` | low | medium | high), not a bare
+  `ReasoningEffort`. Cascade `threads.reasoning_effort` (override) ->
+  `TIERS[tier].defaultThinking` -> `profiles.settings.
+  defaultReasoningEffort`, resolved at send-time by `resolveThinking`
+  and split into wire knobs by `thinkingWireForTier`: `off` ->
+  `venice_parameters.disable_thinking`, the rest -> `reasoning_effort`.
+  Only forwarded when `ModelSpec.supportsReasoning` is true (some
+  providers 400 on the unknown field). The account default stays
+  low/medium/high - `off` only enters via a tier default or a
+  per-thread pick.
 - **Verbosity** — `profiles.settings.defaultVerbosity` or
   per-thread `threads.verbosity`, resolved at send-time via
   `resolveVerbosity`. Forwarded unconditionally as
