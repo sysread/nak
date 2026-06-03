@@ -39,6 +39,22 @@ describe('parseCooklang — ingredients', () => {
     expect(r.ingredients).toEqual([{ name: 'olive oil', qty: '1', unit: 'tbsp' }]);
   });
 
+  it('keeps a parenthetical note in the braced name and binds its quantity', () => {
+    // Regression: `(` used to break the name token, so the braced
+    // alternative failed, the bare alternative grabbed just "flour" with
+    // no qty, and the orphaned `{200%g}` was misread as a phantom timer.
+    const r = parseCooklang('Add @flour (all-purpose){200%g} to the bowl.');
+    expect(r.ingredients).toEqual([{ name: 'flour (all-purpose)', qty: '200', unit: 'g' }]);
+    expect(r.timers).toEqual([]);
+    expect(r.steps[0]?.text).toBe('Add flour (all-purpose) to the bowl.');
+  });
+
+  it('binds the quantity to a parenthetical name even with no unit', () => {
+    const r = parseCooklang('Whisk @eggs (room temperature){2}.');
+    expect(r.ingredients).toEqual([{ name: 'eggs (room temperature)', qty: '2', unit: null }]);
+    expect(r.timers).toEqual([]);
+  });
+
   it('dedupes identical ingredient rows but keeps distinct quantities', () => {
     const r = parseCooklang(
       'Add @flour{1%cup}. Later, add @flour{1%cup}. And then @flour{2%tbsp}.'
