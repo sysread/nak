@@ -2111,8 +2111,12 @@ drop function if exists public.recipe_create_with_version(
   text, text, text, text, smallint, text);
 drop function if exists public.recipe_create_with_version(
   text, text, text, text, smallint, uuid[], text);
+-- p_user_id: b-strict escape hatch; see search_memories_by_embedding
+-- for the full rationale.
 drop function if exists public.recipe_create_with_version(
   text, text, text, text, smallint, uuid[], text[], text);
+drop function if exists public.recipe_create_with_version(
+  text, text, text, text, smallint, uuid[], text[], text, uuid);
 create or replace function public.recipe_create_with_version(
   p_title text,
   p_cooklang text,
@@ -2121,7 +2125,8 @@ create or replace function public.recipe_create_with_version(
   p_rating smallint,
   p_image_ids uuid[],
   p_image_labels text[],
-  p_change_message text
+  p_change_message text,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   title text,
@@ -2137,7 +2142,7 @@ create or replace function public.recipe_create_with_version(
 )
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_recipe_id uuid;
   v_version_id uuid;
   v_now timestamptz := now();
@@ -2231,9 +2236,14 @@ drop function if exists public.recipe_update_with_version(
 drop function if exists public.recipe_update_with_version(
   uuid, boolean, text, boolean, text, boolean, text, boolean, text,
   boolean, smallint, boolean, uuid[], text);
+-- p_user_id: b-strict escape hatch; see search_memories_by_embedding
+-- for the full rationale.
 drop function if exists public.recipe_update_with_version(
   uuid, boolean, text, boolean, text, boolean, text, boolean, text,
   boolean, smallint, boolean, uuid[], text[], text);
+drop function if exists public.recipe_update_with_version(
+  uuid, boolean, text, boolean, text, boolean, text, boolean, text,
+  boolean, smallint, boolean, uuid[], text[], text, uuid);
 create or replace function public.recipe_update_with_version(
   p_id uuid,
   p_set_title boolean,
@@ -2249,7 +2259,8 @@ create or replace function public.recipe_update_with_version(
   p_set_image_ids boolean,
   p_image_ids uuid[],
   p_image_labels text[],
-  p_change_message text
+  p_change_message text,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   title text,
@@ -2265,7 +2276,7 @@ create or replace function public.recipe_update_with_version(
 )
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_now timestamptz := now();
   v_title text;
   v_cooklang text;
@@ -3313,10 +3324,21 @@ grant execute on function public.save_memory_embedding_if_claimed(uuid, text, ve
 -- can prefix a qualitative tag ([corroborated]/[hedged]/[shaky]) without
 -- a second round trip. Thresholds live in src/lib/memories.ts so SQL and
 -- TS aren't both claiming authority over the classification.
+-- `p_user_id` is the b-strict service-role escape hatch (see
+-- docs/dev/edge-function-auth.md). Browser callers pass nothing and
+-- rely on `auth.uid()` for user scoping; the streaming function calls
+-- this with the validated userId so a service-role admin client can
+-- still get user-scoped results without RLS context. coalesce makes
+-- the parameter optional and backward-compatible. A malicious browser
+-- caller cannot escalate via this parameter because RLS on the
+-- underlying tables (SECURITY INVOKER preserves the calling user's
+-- RLS) still gates row visibility to the calling user's own data.
 drop function if exists public.search_memories_by_embedding(vector, int);
+drop function if exists public.search_memories_by_embedding(vector, int, uuid);
 create or replace function public.search_memories_by_embedding(
   query_embedding vector(2048),
-  match_limit int
+  match_limit int,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   label text,
@@ -3334,7 +3356,7 @@ language sql stable security invoker as $$
   -- query row counts we run.
   select id, label, data, confidence, topics, created_at, updated_at
     from public.memories
-   where user_id = auth.uid()
+   where user_id = coalesce(p_user_id, auth.uid())
      and embedding is not null
      and confidence >= 0.05
    order by (1 - (embedding <=> query_embedding))
@@ -4389,10 +4411,14 @@ grant execute on function public.save_thread_embedding_if_claimed(uuid, text, ve
 -- second fetch. Archived threads are included — the drawer greys them
 -- and the client-side rank stays "exact before semantic" regardless
 -- of which bucket each hit lives in.
+-- p_user_id: b-strict escape hatch; see search_memories_by_embedding
+-- for the full rationale.
 drop function if exists public.search_threads_by_embedding(vector, int);
+drop function if exists public.search_threads_by_embedding(vector, int, uuid);
 create or replace function public.search_threads_by_embedding(
   query_embedding vector(2048),
-  match_limit int
+  match_limit int,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   title text,
@@ -4404,7 +4430,7 @@ language sql stable security invoker as $$
   select id, title, archived, updated_at,
          (1 - (embedding <=> query_embedding))::real as similarity
     from public.threads
-   where user_id = auth.uid()
+   where user_id = coalesce(p_user_id, auth.uid())
      and embedding is not null
    order by embedding <=> query_embedding asc
    limit match_limit
@@ -4512,9 +4538,13 @@ $$;
 -- confidence too ([hedged] support vs [corroborated] support is a
 -- meaningful distinction for the LLM reading the block).
 
+-- p_user_id: b-strict escape hatch; see search_memories_by_embedding
+-- for the full rationale.
 drop function if exists public.get_memory_relations(uuid[]);
+drop function if exists public.get_memory_relations(uuid[], uuid);
 create or replace function public.get_memory_relations(
-  p_ids uuid[]
+  p_ids uuid[],
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   from_memory_id uuid,
@@ -4539,7 +4569,7 @@ language sql stable security invoker as $$
     from public.memory_relations r
     join public.memories m on m.id = r.to_memory_id
    where r.from_memory_id = any(p_ids)
-     and r.user_id = auth.uid()
+     and r.user_id = coalesce(p_user_id, auth.uid())
    order by r.created_at asc;
 $$;
 
@@ -6634,10 +6664,14 @@ grant execute on function public.save_wiki_article_embedding_if_claimed(uuid, te
 -- Similarity search RPC. Plain cosine ranking, no confidence boost
 -- (articles are direct user/agent assertions, not probabilistic
 -- memories). Scoped by RLS plus an explicit user_id guard.
+-- p_user_id: b-strict escape hatch; see search_memories_by_embedding
+-- for the full rationale.
 drop function if exists public.search_wiki_articles_by_embedding(vector, int);
+drop function if exists public.search_wiki_articles_by_embedding(vector, int, uuid);
 create or replace function public.search_wiki_articles_by_embedding(
   query_embedding vector(2048),
-  match_limit int
+  match_limit int,
+  p_user_id uuid default null
 ) returns table (
   id uuid,
   title text,
@@ -6650,7 +6684,7 @@ language sql stable security invoker as $$
   select id, title, content, created_at, updated_at,
          (1 - (embedding <=> query_embedding))::real as similarity
     from public.wiki_articles
-   where user_id = auth.uid()
+   where user_id = coalesce(p_user_id, auth.uid())
      and embedding is not null
    order by embedding <=> query_embedding asc
    limit match_limit
@@ -8031,13 +8065,17 @@ drop table if exists public.document_chunks;
 -- its own document_id + line). security invoker + the explicit user_id guard
 -- keep it scoped to the caller. An invalid regex raises; the calling tool
 -- rephrases that into actionable text.
+-- p_user_id: b-strict escape hatch; see search_memories_by_embedding
+-- for the full rationale.
 drop function if exists public.grep_documents(text, uuid, boolean, int, int);
+drop function if exists public.grep_documents(text, uuid, boolean, int, int, uuid);
 create or replace function public.grep_documents(
   p_pattern text,
   p_document_id uuid,
   p_case_sensitive boolean,
   p_context int,
-  p_max_matches int
+  p_max_matches int,
+  p_user_id uuid default null
 ) returns table (
   document_id uuid,
   title text,
@@ -8050,7 +8088,7 @@ language sql stable security invoker as $$
   with docs as (
     select d.id as document_id, d.title, d.extracted_text
       from public.documents d
-     where d.user_id = auth.uid()
+     where d.user_id = coalesce(p_user_id, auth.uid())
        and (p_document_id is null or d.id = p_document_id)
        and d.extracted_text is not null
   ),
@@ -8094,11 +8132,15 @@ $$;
 -- numbers agree. The calling tool clamps the span so a single read can't ship
 -- the whole document. Empty result = out-of-range range or a doc the caller
 -- doesn't own (RLS).
+-- p_user_id: b-strict escape hatch; see search_memories_by_embedding
+-- for the full rationale.
 drop function if exists public.read_document_lines(uuid, int, int);
+drop function if exists public.read_document_lines(uuid, int, int, uuid);
 create or replace function public.read_document_lines(
   p_document_id uuid,
   p_start int,
-  p_end int
+  p_end int,
+  p_user_id uuid default null
 ) returns table (
   line_number int,
   content text,
@@ -8109,7 +8151,7 @@ language sql stable security invoker as $$
     select d.extracted_text
       from public.documents d
      where d.id = p_document_id
-       and d.user_id = auth.uid()
+       and d.user_id = coalesce(p_user_id, auth.uid())
        and d.extracted_text is not null
   ),
   lines as materialized (
