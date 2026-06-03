@@ -534,3 +534,108 @@ export function streamChannelName(threadId: string): string {
 export function controlChannelName(threadId: string): string {
   return `thread:${threadId}:control`;
 }
+
+// ---------------------------------------------------------------------------
+// Output-guard primitives.
+//
+// A guard inspects an in-flight streaming attempt and votes on whether to
+// keep it ('keep'), throw it away and re-roll ('retry'), or wait for more
+// data ('undecided'). The driver lives in getStreamingCompletion; the
+// concrete guards (e.g. the special-token-leak detector) live next to it
+// in supabase/functions/venice/stream-guards.ts so the function side can
+// arm them by model id without dragging the browser's models registry
+// across the boundary.
+//
+// The interface itself is shared because the BROWSER and the FUNCTION
+// need to agree on what `guard_retry` events on the Broadcast channel
+// represent. Concrete impls do not have to match line-for-line on both
+// sides - same guard name, same semantics, two implementations is fine
+// during the migration.
+// ---------------------------------------------------------------------------
+
+/**
+ * What the guard wrapper knows about one attempt at the moment a guard
+ * is consulted. `ended` flips true once the underlying SSE stream
+ * returns - that's the moment a guard gets a last word on a short-but-
+ * legitimate reply it had been undecided about.
+ */
+export interface AttemptProgress {
+  /** Concatenated response_text deltas seen so far this attempt. */
+  visibleText: string;
+  /** True once any reasoning_text event has arrived. */
+  sawReasoning: boolean;
+  /** True once any tool_call_request event has arrived. */
+  sawToolCall: boolean;
+  /** True once the underlying stream returned (no more events incoming). */
+  ended: boolean;
+}
+
+/**
+ * A guard's read on the current attempt:
+ *   - 'keep'       commit to this attempt; flush buffered events live.
+ *   - 'retry'      this attempt is junk; drop buffered events and re-issue.
+ *   - 'undecided'  not enough has arrived to tell; keep buffering.
+ */
+export type GuardVerdict = 'keep' | 'retry' | 'undecided';
+
+/**
+ * Closed contract a concrete guard implements. The function-side
+ * `prepareRetry` mutates the Venice wire body (e.g. bumps temperature)
+ * for the next attempt rather than a ChatRequest-shaped object - the
+ * function only ever has the wire body, not the higher-level request.
+ */
+export interface StreamGuard {
+  readonly name: string;
+  verdict(progress: AttemptProgress): GuardVerdict;
+  /**
+   * Returns a new wire-body for the next attempt. Never mutates the
+   * input. The driver calls this once per guard per retry, folding the
+   * body through every armed guard so multiple guards can compose their
+   * mutations on the same re-roll.
+   */
+  prepareRetry(
+    body: Record<string, unknown>,
+    attempt: number,
+  ): Record<string, unknown>;
+}
+
+/**
+ * Maximum number of guard-driven re-rolls before the wrapper gives up
+ * and surfaces a GuardExhaustedError. Two re-rolls (three attempts
+ * total) clears a stochastic glitch like the special-token leak without
+ * spinning the user's turn forever when a model is stuck in a
+ * degenerate mode. Matches the browser-side value so the same model
+ * gets the same retry budget on either path during the migration.
+ */
+export const MAX_STREAM_GUARD_RETRIES = 2;
+
+/**
+ * Compose per-guard verdicts into the driver's decision. Any 'retry'
+ * wins (one guard rejecting is enough to re-roll). Otherwise any
+ * 'undecided' holds the decision open (keep buffering). Only when
+ * every guard is satisfied do we 'keep'.
+ */
+export function combineVerdicts(
+  verdicts: readonly GuardVerdict[],
+): GuardVerdict {
+  if (verdicts.some((v) => v === 'retry')) return 'retry';
+  if (verdicts.some((v) => v === 'undecided')) return 'undecided';
+  return 'keep';
+}
+
+/**
+ * Thrown by the guards driver when a guard kept voting to retry past
+ * the cap. Distinct from the streaming error vocabulary so the
+ * browser can surface a manual-retry affordance ("the model kept
+ * emitting a glitch") rather than treating it as a transport failure.
+ */
+export class GuardExhaustedError extends Error {
+  readonly guard: string;
+  readonly attempts: number;
+  constructor(guard: string, attempts: number) {
+    super(`Stream guard "${guard}" exhausted after ${attempts} attempts`);
+    this.name = 'GuardExhaustedError';
+    this.guard = guard;
+    this.attempts = attempts;
+  }
+}

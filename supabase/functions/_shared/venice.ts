@@ -13,7 +13,18 @@ export interface EmbeddingResponse {
   data: { index: number; embedding: number[] }[];
 }
 
-export type VeniceErrorKind = 'rate_limit' | 'http' | 'network' | 'parse';
+// The 'auth' kind covers Venice 401/403 - bad or missing key. Added
+// when the streaming-root migration started classifying Venice
+// auth failures distinctly so the function can surface them as a
+// terminal error event rather than collapsing to generic http.
+// The streaming SSE consumer in venice/getStreamingCompletion.ts is
+// the first caller that constructs a VeniceError with this kind; the
+// existing non-streaming helpers below have always collapsed 401/403
+// to 'http' and continue to do so (the function-side handlers route
+// non-OK Venice responses to 502 either way, and changing the kind
+// the embed/usage/complete/etc paths surface would change their
+// handler error mapping unrelated to streaming).
+export type VeniceErrorKind = 'rate_limit' | 'auth' | 'http' | 'network' | 'parse';
 
 export class VeniceError extends Error {
   readonly kind: VeniceErrorKind;
