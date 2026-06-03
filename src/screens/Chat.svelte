@@ -237,7 +237,7 @@
   import { logsDrawer, createLogger } from '$lib/logger.svelte';
 
   const log = createLogger('chat');
-  import { VeniceError, type VeniceMessage } from '$lib/venice';
+  import { VeniceError, cancelStream, type VeniceMessage } from '$lib/venice';
 
   const DEFAULT_TITLE = 'New conversation';
 
@@ -1576,6 +1576,16 @@
       // teardown will run, but a message queued in-flight may still
       // reach this closure before removeChannel completes.
       if (activeThreadId !== threadId) return;
+      // Skip in-flight streaming-row echoes. The streaming-root edge
+      // function INSERTs the assistant row with `status='streaming'`
+      // and content='' at first content delta, then UPDATEs the same
+      // row repeatedly as text accumulates. Appending those rows here
+      // would paint an empty (and then incrementally-filling) bubble
+      // alongside the live streamingText buffer the chat-loop is
+      // already rendering. The terminal UPDATE flips status to a
+      // non-streaming value and falls through to appendMessage, which
+      // is when the persisted row enters the local view.
+      if (msg.role === 'assistant' && msg.status === 'streaming') return;
       appendMessage(msg);
       // Hydrate attachments for rows that can carry them — user rows
       // (uploads) and assistant rows (generate_image output). The
@@ -4145,15 +4155,30 @@
   }
 
   /**
-   * Cancel the in-flight chat request. Fires the outer AbortController,
-   * which propagates through runChatLoop (where the stream consumer's
-   * abort-aware branch persists partial text / reasoning with a marker)
-   * and through any in-flight tool fetches (via childController). Safe
-   * to call repeatedly - once `activeSlot?.abortCtl` is nulled in runExchange's
-   * finally block this is a no-op.
+   * Cancel the in-flight chat request. Two paths, both fired together:
+   *
+   *   1. Local AbortController.abort() tears down our streamChat
+   *      consumer so the UI stops collecting events from the
+   *      Broadcast channel and the in-flight envelope POST aborts.
+   *   2. cancelStream() publishes a `{type:'cancel'}` event on the
+   *      thread's control channel. The streaming function (subscribed
+   *      to its own control channel) aborts its Venice fetch and any
+   *      in-flight server-side tool calls, persists the partial row
+   *      with status='aborted', and publishes END {terminalKind:
+   *      'aborted'} on the stream channel. Without this path the
+   *      function would keep generating after the browser disconnected
+   *      - the whole point of moving the loop server-side.
+   *
+   * Safe to call repeatedly - once `activeSlot?.abortCtl` is nulled in
+   * runExchange's finally block this is a no-op, and the control
+   * channel publish is idempotent (the function has already
+   * unsubscribed by then).
    */
   function stopStreaming(): void {
     activeSlot?.abortCtl?.abort();
+    if (activeSlot && app.supabase && activeThreadId) {
+      void cancelStream(app.supabase.client, activeThreadId);
+    }
   }
 
   // Platform-aware hint in the composer placeholder. Uses the modern

@@ -810,6 +810,12 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.config = config;
   app.supabase = new SupabaseService(config);
   app.venice = new VeniceClient({ apiKey: config.veniceApiKey });
+  // Streaming-root path: the venice client routes streamChat through
+  // the /stream edge function + Realtime Broadcast subscription, which
+  // requires the supabase client to mint the function call and the
+  // channel. Wired here once both objects exist; setSupabase is
+  // idempotent so re-activating with a fresh config stays safe.
+  app.venice.setSupabase(app.supabase.client);
   // Seed defaults synchronously so any code reading `app.*` before the
   // settings fetch resolves sees sane values. `applyServerSettings`
   // overwrites these from the blob if the fetch succeeds.

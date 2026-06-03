@@ -1,83 +1,62 @@
 /**
- * Chat-loop orchestrator — runs one user turn from submission through to
- * a final assistant answer, including any tool-call rounds in between.
+ * Chat-loop orchestrator - runs one user turn from submission through
+ * to a final assistant answer. After the streaming-root migration the
+ * round chain, tool dispatch, rate-limit retry, output-guard re-rolls,
+ * and assistant-row persistence all live server-side inside the venice
+ * edge function. This module's job shrinks to:
  *
- * One "round" = stream an assistant response → if it ended with
- * tool_calls, execute every call concurrently and append role='tool'
- * rows for each → start another round with the extended history. Loop
- * exits when an assistant response finishes with text and no
- * tool_calls, or when the MAX_ROUNDS guardrail trips.
+ *   - Build the per-turn priming layers (samskara fire + compound,
+ *     intuition, context recall) and stitch their synthetic `<think>`
+ *     blocks into the history baton.
+ *   - Assemble the three-layer system-prompt preamble (baseline +
+ *     user-configured + per-turn metadata).
+ *   - Issue a single `venice.streamChat` call with `streamCtx` pointed
+ *     at this thread + anchor user message. The venice client routes
+ *     through the /stream endpoint and yields the server-published
+ *     event union.
+ *   - Map each event onto the UI handler surface so the streaming
+ *     bubble, reasoning panel, tool timings, rate-limit indicator,
+ *     and slop-notice cards stay live during the turn.
+ *   - At END, capture the persisted assistant row id + terminal kind,
+ *     fire onAssistantPersisted with the canonical Message, and write
+ *     the samskara substrate stub anchoring the (user message, last
+ *     assistant) pair.
  *
- * Split from Chat.svelte.send() so the orchestration logic is
- * unit-testable without a Svelte runtime, and so the UI (pt 4) can
- * consume a stable event stream rather than threading callbacks through
- * the component.
- *
- * Cancellation: every tool execution gets a child AbortController
- * linked to the outer `signal`. Aborting the outer cancels in-flight
- * fetch requests in both the streaming path and the tool path,
- * propagates as rejections in the per-tool promises, and those
- * rejections land as tool-result rows with error content — keeping the
- * persisted history internally consistent even on cancellation.
- *
- * Ordering of persistence within a round: assistant message first (so
- * the tool rows have a parent to reference in future replay), then
- * one tool-result row per call in the order the model returned them.
+ * Cancellation: the caller's AbortSignal aborts the local stream
+ * consumer (so the UI stops collecting events). The function-side
+ * round chain is cancelled separately via a control-channel publish
+ * (see `cancelStream` in venice.ts). Both fire from the stop button
+ * so the in-flight Venice fetch and the local UI tear down in lock
+ * step.
  */
 
 import type { ReasoningEffort, Verbosity } from './models';
-import {
-  combineVerdicts,
-  GuardExhaustedError,
-  MAX_STREAM_GUARD_RETRIES,
-  streamGuardsFor,
-  type AttemptProgress,
-  type StreamGuard,
-} from './stream-guards';
 import type {
   SupabaseService,
   Message,
   Thread,
   ThreadAttachmentSummary,
   Attachment,
-  NewAttachment,
 } from './supabase';
 import type {
   VeniceClient,
   VeniceMessage,
   TokenUsage,
   Citation,
-  ChatRequest,
-  StreamEvent,
 } from './venice';
 import { VeniceError } from './venice';
 import { buildUserVeniceContent } from './attachments';
 import {
   buildToolList,
-  executeToolCall,
-  toggleToolbox,
-  updateTitle,
   type OpenAIToolCall,
-  type ToolContext,
 } from './tools';
 import { buildSystemPrompt } from './chat-prompt';
-import {
-  askUser,
-  ASK_USER_PENDING_FLAG,
-  buildAskUserAnswerContent,
-  type AskUserOption,
-} from './tools/ask_user';
+import { askUser, type AskUserOption } from './tools/ask_user';
 import {
   parseToolArguments,
   sanitizeToolCallIdForWire,
   sanitizeToolCallsForWire,
 } from './tools/wire';
-import {
-  extractGeneratedImage,
-  generatedImageToNewAttachment,
-  stripGeneratedImage,
-  type GeneratedImagePayload,
-} from './tools/generated-image';
 import {
   fireSamskaras,
   formatPrimingThinks,
@@ -96,7 +75,6 @@ import {
   buildIntuitionThinkMessage,
   countUserRounds,
   evaluatePreRoundTrigger,
-  evaluateTitleTrigger,
   readIntuitionCache,
   runIntuitionPipeline,
   withIntuitionInflight,
@@ -113,12 +91,11 @@ import {
 } from './context-recall';
 
 /**
- * Upper bound on rounds to prevent a runaway tool-call loop. Acts as
- * a coarse backstop only - the real bound on agent recursion lives in
- * `tools/run.ts` as `MAX_AGENT_DEPTH`. Set generously so a legitimate
- * multi-tool turn (web_search, then a memory_recall pass, then a
- * cookbook write, then a final reply) doesn't bump into it; if a turn
- * actually hits the cap, the model is misbehaving rather than working.
+ * Round-cap backstop. The browser-side loop ran with this bound
+ * before streaming-root collapsed it server-side; the actual cap now
+ * lives in `getStreamingResponse` (MAX_ROUNDS=24) and the model only
+ * sees one `streamChat` call from here. The constant stays exported
+ * for the few callers and tests that key off it as a sentinel.
  */
 export const MAX_ROUNDS = 20;
 
@@ -540,291 +517,7 @@ function splitSystemPreamble(
   return { userSystem, conversation };
 }
 
-/**
- * Order-insensitive equality for two toolbox-name arrays. Used to
- * decide whether a `toggle_toolbox` result changed the thread's
- * effective set - if it didn't (the model toggled to the same
- * array), we skip the onToolboxesEnabledChange notification so the
- * UI doesn't flash for a no-op. The toolbox name list is tiny (< 10
- * entries) so the nested-loop cost is negligible.
- */
-function sameToolboxSet(a: readonly string[], b: readonly string[]): boolean {
-  if (a.length !== b.length) return false;
-  const bSet = new Set(b);
-  for (const name of a) {
-    if (!bSet.has(name)) return false;
-  }
-  return true;
-}
 
-/**
- * Compose a child AbortController whose `.abort()` fires whenever the
- * parent signal aborts. Used to scope per-tool cancellation under the
- * outer send() signal: aborting the send cancels every in-flight tool
- * fetch as a side effect.
- */
-function childController(parent: AbortSignal): AbortController {
-  const child = new AbortController();
-  if (parent.aborted) {
-    child.abort(parent.reason);
-    return child;
-  }
-  const onAbort = (): void => child.abort(parent.reason);
-  parent.addEventListener('abort', onAbort, { once: true });
-  return child;
-}
-
-/**
- * Maximum number of attempts (initial + retries) for a single round
- * before a Venice rate-limit error propagates to the caller. Picked
- * so a brief quota dip recovers transparently while a stuck quota
- * still surfaces as a visible failure rather than spinning forever.
- */
-const RATE_LIMIT_MAX_ATTEMPTS = 3;
-/**
- * Per-attempt fallback wait, used only when Venice's response carries
- * neither Retry-After nor x-ratelimit-reset-{requests,tokens}. Indexed
- * by attempt number minus one. Kept short - in practice Venice always
- * supplies a hint, and these are belt-and-braces values for a
- * provider misbehaviour.
- */
-const RATE_LIMIT_FALLBACK_WAIT_MS = [2_000, 4_000];
-/**
- * Hard cap on a single rate-limit wait. Venice quotas typically reset
- * within a minute; a Retry-After longer than this almost certainly
- * means the user has hit a daily/monthly cap that won't clear during
- * the session, so we surface it as an error and let the user retry
- * manually rather than block the UI for that long.
- */
-const RATE_LIMIT_WAIT_CAP_MS = 60_000;
-
-/**
- * Sleep that resolves either when `ms` elapses or when `signal` aborts.
- * Returns true if the signal interrupted the sleep, false on a clean
- * timeout. Caller decides what to do with an interrupted return - the
- * rate-limit retry path treats it as a cancel and aborts the round.
- */
-function sleepCancellable(ms: number, signal: AbortSignal): Promise<boolean> {
-  if (signal.aborted) return Promise.resolve(true);
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve(false);
-    }, ms);
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-/**
- * Wrap venice.streamChat in a transparent rate-limit retry loop. When
- * Venice returns 429, sleep for the duration parsed from the response
- * headers (Retry-After, falling back to x-ratelimit-reset-*) and
- * re-issue the request. Caps at RATE_LIMIT_MAX_ATTEMPTS attempts; a
- * final 429 propagates as a VeniceError with kind 'rate_limit'.
- *
- * Retry only fires when no events have been yielded yet on the current
- * attempt. Venice's 429 path throws before the first yield (see the
- * !res.ok guard in venice.ts:streamChat), so in practice every retry
- * starts from a clean slate; the emitted-events guard is a defensive
- * invariant for future-proofing rather than a path we expect to hit.
- *
- * The wait is cancellable via `signal`. If the caller aborts during
- * the sleep, this generator throws an AbortError matching the shape
- * `fetch` raises on a normal mid-stream abort, so the caller's
- * existing AbortError branch handles it identically - the user's
- * cancel button works the same whether the round is mid-stream or
- * mid-rate-limit-wait.
- *
- * Fires `handlers.onRateLimitWait` immediately before each sleep and
- * `handlers.onRateLimitResolved` after the sleep ends (whether the
- * sleep timed out cleanly or the signal aborted). The UI uses this
- * pair to swap the streaming-bubble spinner for a "waiting on Venice"
- * indicator with a cancel button.
- */
-async function* streamChatWithRateLimitRetry(
-  venice: VeniceClient,
-  req: ChatRequest,
-  handlers: ChatLoopHandlers | undefined,
-): AsyncGenerator<StreamEvent, void, void> {
-  const signal = req.signal;
-  if (!signal) {
-    throw new Error('streamChatWithRateLimitRetry requires req.signal');
-  }
-  let attempt = 0;
-  while (true) {
-    let emitted = false;
-    try {
-      for await (const ev of venice.streamChat(req)) {
-        emitted = true;
-        yield ev;
-      }
-      return;
-    } catch (err) {
-      const isRateLimit =
-        err instanceof VeniceError && err.kind === 'rate_limit';
-      const retriesExhausted = attempt >= RATE_LIMIT_MAX_ATTEMPTS - 1;
-      if (!isRateLimit || emitted || retriesExhausted || signal.aborted) {
-        throw err;
-      }
-      attempt += 1;
-      const hint = (err as VeniceError).retryAfterMs;
-      const fallbackIdx = Math.min(
-        attempt - 1,
-        RATE_LIMIT_FALLBACK_WAIT_MS.length - 1
-      );
-      const baseMs = hint ?? RATE_LIMIT_FALLBACK_WAIT_MS[fallbackIdx];
-      const waitMs = Math.min(baseMs, RATE_LIMIT_WAIT_CAP_MS);
-      const until = Date.now() + waitMs;
-      handlers?.onRateLimitWait?.({ retryAfterMs: hint, attempt, until });
-      let interrupted = false;
-      try {
-        interrupted = await sleepCancellable(waitMs, signal);
-      } finally {
-        handlers?.onRateLimitResolved?.();
-      }
-      if (interrupted || signal.aborted) {
-        // Abort during the wait. Throw a spec-shaped AbortError so the
-        // caller's existing AbortError branch fires - same path the
-        // stop button takes during a mid-stream abort, so the user
-        // sees the same INTERRUPTED_MARKER outcome either way.
-        const abortErr = new Error('Aborted');
-        abortErr.name = 'AbortError';
-        throw abortErr;
-      }
-      // Loop body runs again; emitted resets to false on the next pass.
-    }
-  }
-}
-
-/**
- * Wrap {@link streamChatWithRateLimitRetry} in a generic output-guard
- * retry loop. A guard inspects each streaming attempt and can reject it
- * ("this completion is junk, re-roll") before any of its events reach
- * the consumer - so a discarded attempt never corrupts the round's
- * accumulated text. The first consumer is the special-token-leak guard
- * (see stream-guards.ts); the mechanism itself is guard-agnostic so
- * future model/provider gotchas plug in without touching this loop.
- *
- * How the buffering works: events from an attempt are held in a buffer
- * until the guards collectively 'keep' the attempt, at which point the
- * buffer is flushed and the rest of the stream passes through live. If
- * the guards 'retry' instead, the buffered events are dropped, this
- * attempt's stream is torn down (its child AbortController fires), and
- * the request is re-issued with whatever mutation the guard applied
- * (the leak guard bumps temperature so the re-roll samples
- * differently). The buffer window is short in the healthy case - the
- * first reasoning delta, tool call, or few characters of non-leak text
- * commits the attempt - so live streaming is preserved for real
- * replies.
- *
- * Nesting: this wraps the rate-limit retry, so each guard attempt gets
- * the full 429 handling. A re-roll re-enters with a fresh rate-limit
- * budget, which is correct - it's a brand-new request.
- *
- * Cap: MAX_STREAM_GUARD_RETRIES re-rolls, then a GuardExhaustedError
- * propagates for the UI to surface with a manual-retry affordance.
- *
- * Fires `handlers.onGuardRetry` once per re-roll, before the next
- * attempt starts, so the UI can mark the discarded attempt (the "oops,
- * all slop!" notice card) and reset its streaming buffers.
- *
- * With no armed guards the wrapper is a transparent pass-through - no
- * buffering, no behavioral change for models without configured
- * gotchas.
- */
-async function* streamChatWithGuards(
-  venice: VeniceClient,
-  req: ChatRequest,
-  handlers: ChatLoopHandlers | undefined,
-  guards: StreamGuard[],
-): AsyncGenerator<StreamEvent, void, void> {
-  const outerSignal = req.signal;
-  if (!outerSignal) {
-    throw new Error('streamChatWithGuards requires req.signal');
-  }
-  if (guards.length === 0) {
-    yield* streamChatWithRateLimitRetry(venice, req, handlers);
-    return;
-  }
-
-  let attemptReq = req;
-  let attempt = 0;
-  for (;;) {
-    // Scope each attempt to a child controller so a guard rejecting it
-    // can tear down that attempt's in-flight fetch immediately - we
-    // stop paying for a leak that's still streaming - without aborting
-    // the user's whole turn (the outer signal).
-    const child = childController(outerSignal);
-    const progress: AttemptProgress = {
-      visibleText: '',
-      sawReasoning: false,
-      sawToolCall: false,
-      ended: false,
-    };
-    const buffer: StreamEvent[] = [];
-    let committed = false;
-    let retryGuard: string | null = null;
-    try {
-      for await (const ev of streamChatWithRateLimitRetry(
-        venice,
-        { ...attemptReq, signal: child.signal },
-        handlers,
-      )) {
-        if (committed) {
-          yield ev;
-          continue;
-        }
-        buffer.push(ev);
-        if (ev.type === 'text') progress.visibleText += ev.delta;
-        else if (ev.type === 'reasoning') progress.sawReasoning = true;
-        else if (ev.type === 'tool_call') progress.sawToolCall = true;
-        const verdicts = guards.map((g) => g.verdict(progress));
-        const combined = combineVerdicts(verdicts);
-        if (combined === 'retry') {
-          retryGuard = guards[verdicts.indexOf('retry')].name;
-          break;
-        }
-        if (combined === 'keep') {
-          committed = true;
-          for (const b of buffer) yield b;
-          buffer.length = 0;
-        }
-      }
-    } finally {
-      // No-op when the attempt already finished cleanly; decisive when
-      // we broke out early on a retry. Breaking the for-await above also
-      // runs the inner generator's return() (releasing its reader), so
-      // this just severs the underlying fetch.
-      child.abort();
-    }
-
-    if (committed) return;
-
-    if (retryGuard === null) {
-      // Stream ended while still buffering (every guard was undecided).
-      // Resolve with `ended` set so a guard can give a final verdict on
-      // a short-but-legitimate reply.
-      progress.ended = true;
-      const verdicts = guards.map((g) => g.verdict(progress));
-      if (combineVerdicts(verdicts) !== 'retry') {
-        for (const b of buffer) yield b;
-        return;
-      }
-      retryGuard = guards[verdicts.indexOf('retry')].name;
-    }
-
-    if (attempt >= MAX_STREAM_GUARD_RETRIES) {
-      throw new GuardExhaustedError(retryGuard, attempt + 1);
-    }
-    attempt += 1;
-    handlers?.onGuardRetry?.({ guard: retryGuard, attempt });
-    attemptReq = guards.reduce((r, g) => g.prepareRetry(r, attempt), attemptReq);
-  }
-}
 
 /**
  * Which subconscious-priming pipeline a status signal refers to. These
@@ -1060,14 +753,16 @@ export interface ChatLoopOptions {
    */
   lastAssistantTimestamp?: string | null;
   /**
-   * Optional id of the user message that opened this turn. When set,
-   * the chat-loop pairs it with the terminal assistant message id and
-   * writes a samskara substrate stub at end-of-round (the formation
-   * worker enriches it later). When absent the substrate stub is
-   * skipped — older callers and tests don't need to know about
-   * samskara to keep working.
+   * Id of the user message that opened this turn. Anchors the
+   * streaming-root request: the function uses it to pair the streamed
+   * assistant row to its parent user message via the
+   * commit_assistant_message RPC's conflict check, and the browser
+   * passes it to /stream so a concurrent foreign send is detected
+   * server-side. Required since the streaming-root collapse - the
+   * direct-Venice path that previously coped with its absence no
+   * longer runs from here.
    */
-  userMessageId?: string;
+  userMessageId: string;
   /**
    * Concrete Venice model id used by the intuition pipeline (perception
    * + 5 drives + synthesis). Caller resolves the fast tier. Omitted /
@@ -1241,63 +936,6 @@ export function toVeniceMessage(
 }
 
 /**
- * Encode a tool's return value (or error) into the string `content`
- * field that OpenAI's tool-result messages expect. Always JSON so the
- * model sees structured data rather than a toString rendering.
- */
-function encodeToolContent(
-  result: { ok: true; value: unknown } | { ok: false; error: Error }
-): string {
-  if (result.ok) {
-    // Unknown values — stringify defensively so a thrown toString on a
-    // weird object doesn't bubble up as a tool result.
-    try {
-      return JSON.stringify(result.value ?? null);
-    } catch {
-      return JSON.stringify({ error: 'result not serializable' });
-    }
-  }
-  return JSON.stringify({ error: result.error.message || String(result.error) });
-}
-
-/**
- * Pick a `citations` array off a tool return value when the shape looks
- * like one. Used by the chat loop to harvest web-search sources out of
- * the `web_search` tool's `{answer, citations}` return and merge them
- * onto the terminal assistant row's `citations` column. The check is
- * structural rather than name-based so any future tool returning a
- * similarly shaped payload rides the same path without another branch.
- *
- * Defensive about the field shape: Venice's Citation requires `url`
- * and allows every other field to be absent, so we mirror that here.
- * Anything without a string `url` is skipped rather than silently
- * rendering an empty row.
- */
-function extractToolCitations(value: unknown): Citation[] {
-  if (!value || typeof value !== 'object') return [];
-  const raw = (value as { citations?: unknown }).citations;
-  if (!Array.isArray(raw)) return [];
-  const out: Citation[] = [];
-  for (const entry of raw) {
-    if (!entry || typeof entry !== 'object') continue;
-    const e = entry as Record<string, unknown>;
-    if (typeof e.url !== 'string' || e.url.length === 0) continue;
-    const cite: Citation = {
-      // Placeholder index - the caller rewrites this to a running
-      // 1-based global position so indexes stay contiguous across
-      // multiple tool calls within a turn.
-      index: 0,
-      url: e.url,
-    };
-    if (typeof e.title === 'string') cite.title = e.title;
-    if (typeof e.content === 'string') cite.content = e.content;
-    if (typeof e.date === 'string') cite.date = e.date;
-    out.push(cite);
-  }
-  return out;
-}
-
-/**
  * Pull the plain-text portion of a user message off the wire shape.
  * `VeniceMessage.content` is `string | ContentPart[]`; multimodal
  * user messages with attachments arrive as the array form, in which
@@ -1365,24 +1003,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // whichever assistant row closed the turn — final text or terminal
   // tool-using row, whichever the loop ends on.
   let lastAssistantId: string | null = null;
-
-  // Citations sourced from tool results over the whole turn. Accumulated
-  // across rounds with monotonic 1-based indexes so the rendered panel
-  // reads 1,2,3,... regardless of how many `web_search` calls fired or
-  // what per-call numbering each returned. Persisted on the terminal
-  // assistant row when `roundCitations` (Venice's direct citations on
-  // the outer stream) is empty - which is the common case now that the
-  // main chat-loop no longer sets `enable_web_search` on its own
-  // requests, so the only citation source is the tool path.
-  const toolCitations: Citation[] = [];
-
-  // Images produced by generate_image calls over the whole turn. The
-  // heavy base64 payload is harvested here and stripped from the
-  // model-visible tool-result row (see ./tools/generated-image); at end
-  // of turn these are written as message_attachments rows on the
-  // terminal assistant message so they render on the reply and ride the
-  // same 30-day retention as user uploads.
-  const generatedImages: GeneratedImagePayload[] = [];
 
   // Turn-open priming. Computed ONCE before the round loop so every
   // round in this turn sees the same compound + fire + opening-recall
@@ -1548,10 +1168,8 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // value - one user message, one round id, regardless of how many
   // tool calls happen during the response.
   let intuitionCache: IntuitionPayload | null = readIntuitionCache(thread);
-  let intuitionMessageIdx: number | null = null;
   let contextRecallCache: ContextRecallPayload | null =
     readContextRecallCache(thread);
-  let contextRecallMessageIdx: number | null = null;
 
   const intuitionPreTrigger =
     intuitionModelId !== undefined
@@ -1669,10 +1287,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // skips its push so we never burn tokens on an empty `<think>` block.
   if (contextRecallCache) {
     const msg = buildContextRecallThinkMessage(contextRecallCache);
-    if (msg !== null) {
-      history.push(msg);
-      contextRecallMessageIdx = history.length - 1;
-    }
+    if (msg !== null) history.push(msg);
   }
   if (priming.compoundThink !== null) {
     history.push({
@@ -1688,665 +1303,303 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   }
   if (intuitionCache) {
     history.push(buildIntuitionThinkMessage(intuitionCache));
-    intuitionMessageIdx = history.length - 1;
   }
 
-  // Output guards for this turn's model. Constant across rounds, so
-  // resolve once. A model with no configured gotchas gets an empty
-  // guard list and the wrapper is a pass-through. The guard detects
-  // junk completions (e.g. a leaked special token) client-side and
-  // re-rolls - there's no server-side stop, deliberately, so a reply
-  // that legitimately mentions one of these sequences mid-stream isn't
-  // truncated.
-  const streamGuards = streamGuardsFor(modelId);
+  // Three-layer system-prompt assembly. The baseline prompt
+  // (identity, voice, recall framing, toolbox catalog) leads;
+  // user-configured system prompts from Settings ride next so a
+  // custom "you are a pirate" prompt still wins on voice while the
+  // baseline tool framing stays in force; the per-turn metadata
+  // system message comes last among the system rows so the model
+  // reads ambient context (datetime, attachments inventory, title
+  // and emphasis nudges) immediately before the user turn. The
+  // user message itself rides bare - no `<user_message>` fence,
+  // no `<datetime>` tag, no `<system_reminder>` directive folded
+  // in. The role:user / role:system boundary is the structural
+  // signal now; the in-content tags were a workaround for the
+  // URL-scraping auto-injection that's no longer in play.
+  //
+  // The metadata message is built once per turn now. Multi-round
+  // tool chains live entirely server-side, so the browser-side
+  // wall-clock refresh between rounds the previous loop did is
+  // gone (the server's getStreamingResponse round chain reuses the
+  // same baton it was handed in the envelope POST). The title
+  // nudge captures the title at turn entry; a mid-turn
+  // update_title call lands in DB but doesn't re-render here -
+  // any next-turn priming picks it up on its next user message.
+  const { userSystem, conversation } = splitSystemPreamble(history);
+  const metadataMessage = buildMetadataSystemMessage({
+    userName,
+    userLocation,
+    displayTimezone,
+    lastAssistantTimestamp,
+    attachmentSummaries,
+    currentTurnHasAttachments: currentTurnHasAttachments ?? false,
+    emphasisMarkdown,
+    threadTitle: thread.title,
+    titleManuallySet: thread.title_manually_set,
+    currentUserRound,
+  });
+  const requestMessages: VeniceMessage[] = [
+    {
+      role: 'system',
+      content: buildSystemPrompt({
+        // Pass the thread's current gated-toolbox set so the catalog
+        // block renders [x]/[ ] marks that match what the model will
+        // actually see on the wire this turn. Server-side tools may
+        // flip the set via toggle_toolbox mid-turn; the realtime echo
+        // updates the thread row asynchronously, so this is the
+        // turn-entry snapshot.
+        enabledToolboxes: toolboxesEnabled,
+        biasProfile: biasProfileBlock,
+      }),
+    },
+    ...userSystem,
+    metadataMessage,
+    ...conversation,
+  ];
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    // Phase B abort exit: the prior round reached tool execution, then
-    // the user clicked stop while tools were running. Promise.all
-    // settled (each in-flight tool's childController fired; cancelled
-    // tools landed as error rows via the tool executor's catch), so
-    // the history is internally consistent. No content marker needed -
-    // the error tool rows already tell the story. Flag the result so
-    // the UI knows to suppress the inline error banner this failure
-    // would otherwise raise.
-    if (signal.aborted) {
-      interrupted = true;
-      break;
-    }
-    roundsRun++;
+  // ask_user request capture. The model emits a tool_call_request for
+  // ask_user with the question + options as its args; we parse them
+  // here so an END {terminalKind: 'suspended_for_ask_user'} can return
+  // the question/options to the caller without a separate fetch. Only
+  // the FIRST ask_user call captures - sibling ask_user calls are
+  // marked cancelled server-side. Cleared if a subsequent event
+  // supersedes (e.g. the suspend never materializes because the model
+  // changed its mind).
+  let pendingAskUser: ChatLoopResult['awaitingUserAnswer'] = null;
 
-    // System-prompt assembly with the per-turn metadata pinned LAST.
-    // The baseline prompt (identity, voice, recall framing, toolbox
-    // catalog) leads; user-configured system prompts from Settings
-    // ride next so a custom "you are a pirate" prompt still wins on
-    // voice while the baseline tool framing stays in force; then the
-    // whole conversation; then the per-turn metadata system message as
-    // the final row, immediately before the model generates.
-    //
-    // Metadata rides at the tail for prompt-cache economics, not
-    // reading order. Venice - like every OpenAI-compatible backend -
-    // can only reuse a cached prefix that is byte-identical from token
-    // 0, and this block carries a wall-clock timestamp that changes
-    // every turn. Positioned ahead of the conversation (where it used
-    // to sit) it pushed the first-differing byte to the top of the
-    // transcript, so the entire history had to be re-encoded on every
-    // turn and every tool round - the conversation never cached.
-    // Pinned after the conversation, the stable baseline + user-system
-    // + growing history form a cacheable prefix; only this small
-    // trailing block falls outside the cache (along with the
-    // regenerated <think> priming, which is volatile turn-to-turn
-    // regardless). The timestamp is minute-granular (see
-    // buildDatetimeParagraph) so multiple tool rounds inside the same
-    // minute keep even this trailing block byte-stable.
-    //
-    // Tradeoff accepted deliberately: the model reads ambient context
-    // (datetime, attachments inventory, title and emphasis nudges)
-    // AFTER its <think> priming chain rather than just before the user
-    // turn, and the final wire row is role:system rather than the
-    // intuition <think>. The user message still rides bare - no
-    // `<user_message>` fence, no `<datetime>` tag, no
-    // `<system_reminder>` directive; the role:user / role:system
-    // boundary is the structural signal.
-    //
-    // The metadata message is rebuilt every round so wall-clock,
-    // since-last-reply, and live title state stay current across
-    // multi-tool turns.
-    const { userSystem, conversation } = splitSystemPreamble(history);
-    const metadataMessage = buildMetadataSystemMessage({
-      userName,
-      userLocation,
-      displayTimezone,
-      lastAssistantTimestamp,
-      attachmentSummaries,
-      currentTurnHasAttachments: currentTurnHasAttachments ?? false,
-      emphasisMarkdown,
-      threadTitle: thread.title,
-      titleManuallySet: thread.title_manually_set,
-      currentUserRound,
-    });
-    const requestMessages: VeniceMessage[] = [
-      {
-        role: 'system',
-        content: buildSystemPrompt({
-          // Pass the thread's current gated-toolbox set so the
-          // catalog block renders [x]/[ ] marks that match what the
-          // model will actually see on the wire this round.
-          enabledToolboxes: toolboxesEnabled,
-          // Pre-rendered bias-profile block read once at turn entry
-          // (see `biasProfileBlock` above); reused across every
-          // round of this turn since it doesn't change inside a
-          // single user-message exchange.
-          biasProfile: biasProfileBlock,
-        }),
-      },
-      ...userSystem,
-      ...conversation,
-      metadataMessage,
-    ];
+  // Server-driven END marker. Populated by the END event and consumed
+  // after the loop closes; null when the stream never reached an END
+  // (caught error / aborted-before-end).
+  let endPersistedId: string | null = null;
+  let endTerminalKind: 'completed' | 'aborted' | 'error' | 'suspended_for_ask_user' | null = null;
+  let endConflict: string | undefined;
 
-    // streamChatWithRateLimitRetry transparently retries on Venice 429s,
-    // sleeping for the duration parsed from the response headers before
-    // re-issuing. A non-retryable error or a final 429 propagates here
-    // identically to a raw venice.streamChat call, so the abort and
-    // generic-error branches below need no special-casing for retries.
-    const stream = streamChatWithGuards(
-      venice,
-      {
-        model: modelId,
-        messages: requestMessages,
-        signal,
-        tools: buildToolList(toolboxesEnabled),
-        reasoningEffort,
-        disableThinking,
-        verbosity,
-      },
-      handlers,
-      streamGuards,
-    );
+  // Track the in-flight calls keyed by id so a tool_call_response can
+  // pair to the originating tool_call request for the UI's per-tool
+  // timing/state machinery. The server publishes tool_call_response
+  // separately from tool_call_request; the browser doesn't execute
+  // tools anymore, just reflects status.
+  const pendingCallsById = new Map<string, OpenAIToolCall>();
 
-    let roundText = '';
-    let roundReasoning = '';
-    let roundCitations: Citation[] | null = null;
-    const roundCalls: OpenAIToolCall[] = [];
-    let roundUsage: TokenUsage | null = null;
-    try {
-      for await (const ev of stream) {
-        if (ev.type === 'text') {
-          roundText += ev.delta;
-          handlers?.onTextUpdate?.(roundText);
-        } else if (ev.type === 'reasoning') {
-          roundReasoning += ev.delta;
-          handlers?.onReasoningUpdate?.(roundReasoning);
-        } else if (ev.type === 'tool_call') {
-          roundCalls.push(ev.toolCall);
-        } else if (ev.type === 'usage') {
-          // Captured from the stream's trailing usage frame. Persisted on
-          // every assistant row we write below — the tokens were spent
-          // regardless of whether the turn produced text or tool calls,
-          // and we want the per-row data honest for future aggregates.
-          roundUsage = ev.usage;
-        } else if (ev.type === 'citations') {
-          roundCitations = ev.citations;
-        }
-      }
-    } catch (err) {
-      // User clicked the stop button (or the caller aborted for any
-      // other reason) while the stream was still producing deltas.
-      // `fetch` rejects with an AbortError whose `.name` is literally
-      // 'AbortError'; we also check `signal.aborted` as a belt-and-
-      // braces fallback because a `reader.read()` rejection shape
-      // isn't fully standardized across browsers and some runtimes
-      // wrap the error.
-      //
-      // Persist whatever text / reasoning / citations arrived this
-      // round with a visible marker appended to the content field so
-      // the user can see exactly where the reply was cut. Partial
-      // tool-call fragments live inside venice.ts's private accumulator
-      // and are never emitted as tool_call events mid-stream, so there
-      // is nothing partial to drop here - any entries in roundCalls
-      // are fully-assembled-but-unexecuted, and we discard them per
-      // spec (the user asked to stop; an unexecuted tool call isn't
-      // "a tool call completed already"). Break out of the round loop
-      // without recursing into tool execution.
-      const isAbort =
-        signal.aborted ||
-        (err instanceof Error && err.name === 'AbortError');
-      if (!isAbort) throw err;
-      interrupted = true;
-      if (roundText.length > 0 || roundReasoning.length > 0) {
-        // Same citation priority as the clean-finish branch below:
-        // outer-stream citations win over accumulated tool citations.
-        const finalCitations =
-          roundCitations ?? (toolCitations.length > 0 ? toolCitations : null);
-        // Append the marker on its own line after whatever prose
-        // arrived. An empty roundText with reasoning-only still gets
-        // the marker as standalone content so the bubble renders
-        // something - otherwise the user sees only the reasoning
-        // panel with no indication the answer was cut.
-        const interruptedContent =
-          roundText.length > 0
-            ? `${roundText}\n\n${INTERRUPTED_MARKER}`
-            : INTERRUPTED_MARKER;
-        const commitOpts = {
-          model: modelId,
-          // Usage frame often doesn't land before the abort - Venice
-          // emits it after the last choice-bearing frame. The column
-          // is nullable; the context ring simply hides on absence.
-          usage: roundUsage,
-          reasoning: roundReasoning.length > 0 ? roundReasoning : null,
-          citations: finalCitations,
-        };
-        // Use the atomic commit path when we have a user message anchor so
-        // a conflicting send from another device blocks the insert. Fall
-        // back to addMessage for older callers / tests that don't supply it.
-        if (userMessageId) {
-          const result = await supabase.commitAssistantMessage(
-            thread.id, interruptedContent, commitOpts, userMessageId
-          );
-          if (result.conflict) {
-            conflictDetected = true;
-          } else {
-            handlers?.onAssistantPersisted?.(result.message);
-            lastAssistantId = result.message.id;
-          }
-        } else {
-          const msg = await supabase.addMessage(
-            thread.id, 'assistant', interruptedContent, commitOpts
-          );
-          handlers?.onAssistantPersisted?.(msg);
-          lastAssistantId = msg.id;
-        }
-      }
-      finalText = roundText;
-      break;
-    }
+  // Round-counter shim for output-guard retries. The server publishes
+  // guard_retry events with a reason string; the UI handler expects an
+  // attempt count, so we keep one locally.
+  let guardAttemptCount = 0;
 
-    // No tool calls → this is the final assistant message. Persist and
-    // exit; no need for a tool round.
-    if (roundCalls.length === 0) {
-      // Persist when there is text, reasoning, or both. A response with
-      // only reasoning_content (content === "") is valid - kimi-k2 and
-      // some other models emit reasoning-only turns - and must be saved
-      // so the streaming bubble isn't orphaned when the stream closes.
-      if (roundText.length > 0 || roundReasoning.length > 0) {
-        // Citations priority:
-        //   1. `roundCitations` from the outer stream - only non-null
-        //      when the main chat request itself asked Venice for
-        //      server-side search, which nak no longer does. Kept as
-        //      the first branch for defensive parity with the old
-        //      shape and so a future re-enablement of main-chat search
-        //      would Just Work without revisiting this line.
-        //   2. Accumulated tool citations from any `web_search` calls
-        //      that ran in the turn. This is the live path.
-        //   3. null - no citations to render.
-        const finalCitations =
-          roundCitations ?? (toolCitations.length > 0 ? toolCitations : null);
-        const commitOpts = {
-          model: modelId,
-          usage: roundUsage,
-          // Reasoning / citations ride along on the assistant row so
-          // the panels below the message survive a page refresh. Null
-          // when the model didn't produce either — keeps older rows
-          // (before the columns existed) distinguishable from "this
-          // turn actually had none."
-          reasoning: roundReasoning.length > 0 ? roundReasoning : null,
-          citations: finalCitations,
-        };
-        // Use the atomic commit path when we have a user message anchor so
-        // a conflicting send from another device blocks the insert. Fall
-        // back to addMessage for older callers / tests that don't supply it.
-        if (userMessageId) {
-          const result = await supabase.commitAssistantMessage(
-            thread.id, roundText, commitOpts, userMessageId
-          );
-          if (result.conflict) {
-            conflictDetected = true;
-          } else {
-            handlers?.onAssistantPersisted?.(result.message);
-            lastAssistantId = result.message.id;
-          }
-        } else {
-          const msg = await supabase.addMessage(thread.id, 'assistant', roundText, commitOpts);
-          handlers?.onAssistantPersisted?.(msg);
-          lastAssistantId = msg.id;
-        }
-      }
-      finalText = roundText;
-      break;
-    }
+  // Accumulators for streaming feedback. The server is the source of
+  // truth for the persisted assistant row; these drive the live
+  // streaming bubble + reasoning panel + citation panel rendering
+  // until END arrives, then feed the synthesized Message we hand to
+  // onAssistantPersisted so the slot's persistedRows replay buffer
+  // carries a row regardless of whether the realtime echo has landed.
+  let streamingText = '';
+  let streamingReasoning = '';
+  let streamingCitations: Citation[] | null = null;
+  let streamingUsage: TokenUsage | null = null;
 
-    // Persist the assistant row first so the tool rows below have
-    // something to pair to in future replays. `content` can be empty
-    // on a pure tool-call response — OpenAI sends content=null then,
-    // but our column is NOT NULL so we coerce to ''.
-    const assistantMsg = await supabase.addMessage(
-      thread.id,
-      'assistant',
-      roundText,
-      {
-        tool_calls: roundCalls,
-        model: modelId,
-        usage: roundUsage,
-        // Intermediate tool-invoking rounds rarely carry reasoning or
-        // citations — but when they do (some reasoning models think
-        // out loud before picking a tool), persist them so the
-        // per-round panels reflect what actually happened.
-        reasoning: roundReasoning.length > 0 ? roundReasoning : null,
-        citations: roundCitations,
-      }
-    );
-    handlers?.onAssistantPersisted?.(assistantMsg);
-    lastAssistantId = assistantMsg.id;
-
-    // Kick every tool off in parallel so the wall-clock latency is
-    // max(individual durations) rather than sum. Each promise catches
-    // internally so Promise.all never rejects — we want all of them to
-    // settle before moving on, mirroring OpenAI's requirement that
-    // every tool_call has a matching tool-result row.
-    const executions = roundCalls.map(async (call) => {
-      handlers?.onToolStart?.(call);
-      const ctl = childController(signal);
-      const ctx: ToolContext = {
-        supabase,
-        userId,
-        threadId: thread.id,
-        signal: ctl.signal,
-        // Main chat is the root of the agent-recursion tree; tools
-        // dispatched here run at depth 0. A tool that spawns an
-        // agent passes this through so `runHeadlessToolLoop` can
-        // compute the bumped depth and apply the MAX_AGENT_DEPTH cap.
-        depth: 0,
-        // Recall hygiene for wiki_search drill-downs from the main
-        // chat: drop articles whose only source is this thread. The
-        // autonomous wiki agent and the librarian leave this off so
-        // they can find articles to update; the main model surfacing
-        // its own thread's synthesis as recall would be circular.
-        wikiExcludeOwnThreadSoleSources: true,
-        // Same hygiene for conversation_search: when the main chat
-        // reaches for prior conversations as a drill-down, surface
-        // OTHER threads. The current thread's content is already in
-        // the working context.
-        conversationExcludeOwnThread: true,
-      };
-      let args: Record<string, unknown>;
-      try {
-        // Arguments arrive as a JSON string per the OpenAI spec. An
-        // invalid JSON blob is the model's fault, not ours - surface
-        // it as a tool error so the next round sees the parse failure.
-        // parseToolArguments also recovers from a known LLM
-        // double-escape bug on multi-line free-form fields (memory
-        // data, recipe instructions); see ./tools/wire.ts.
-        args = parseToolArguments(call.function.arguments);
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        handlers?.onToolError?.(call, error);
-        return { call, ok: false as const, error };
-      }
-      try {
-        const value = await executeToolCall(call.function.name, args, ctx);
-        handlers?.onToolDone?.(call, value);
-        // `toggle_toolbox` is the only tool that changes the gated-
-        // toolbox set; observe its return value instead of a separate
-        // DB re-fetch. The tool's execute handler already filtered the
-        // incoming names against the known toolbox list, so whatever
-        // we read back here is a valid array.
-        if (call.function.name === toggleToolbox.name) {
-          const raw = (value as { enabled?: unknown })?.enabled;
-          const next = Array.isArray(raw)
-            ? raw.filter((v): v is string => typeof v === 'string')
-            : [];
-          if (!sameToolboxSet(next, toolboxesEnabled)) {
-            toolboxesEnabled = next;
-            handlers?.onToolboxesEnabledChange?.(toolboxesEnabled);
-          }
-        }
-        // update_title returns the sanitised title; forward so the UI
-        // can patch the drawer row immediately rather than waiting for
-        // the end-of-turn refreshThreads() to pick up the change.
-        if (call.function.name === updateTitle.name) {
-          const newTitle = (value as { title?: string })?.title;
-          if (typeof newTitle === 'string' && newTitle.length > 0) {
-            handlers?.onTitleChange?.(newTitle);
-          }
-        }
-        return { call, ok: true as const, value };
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        handlers?.onToolError?.(call, error);
-        return { call, ok: false as const, error };
-      }
-    });
-    const settled = await Promise.all(executions);
-
-    // Identify the FIRST successful ask_user call in this round. Per
-    // the multi-call rule (see docs/dev/chat.md), only the first
-    // ask_user suspends the loop; any sibling ask_user calls land as
-    // pre-cancelled answer rows so the wire shape stays valid but the
-    // UI doesn't render a second pending card. The discriminator is
-    // call.id rather than call object identity so the rewrite below
-    // can compare against settled[].call.id without aliasing
-    // concerns.
-    let firstAskUserCallId: string | null = null;
-    let firstAskUserQuestion = '';
-    let firstAskUserOptions: AskUserOption[] = [];
-    for (const r of settled) {
-      if (!r.ok) continue;
-      if (r.call.function.name !== askUser.name) continue;
-      // The tool's execute() returns the pending sentinel shape;
-      // sniff for the magic flag to confirm we are looking at a
-      // legitimate suspend-bearing result rather than an error-
-      // shaped object that happens to be ok=true.
-      const v = r.value as Record<string, unknown> | null | undefined;
-      if (!v || v[ASK_USER_PENDING_FLAG] !== true) continue;
-      firstAskUserCallId = r.call.id;
-      firstAskUserQuestion = typeof v.question === 'string' ? v.question : '';
-      const rawOptions = Array.isArray(v.options) ? v.options : [];
-      firstAskUserOptions = rawOptions
-        .filter((o): o is { label: string; description: string } =>
-          !!o &&
-          typeof o === 'object' &&
-          typeof (o as { label?: unknown }).label === 'string' &&
-          typeof (o as { description?: unknown }).description === 'string'
-        )
-        .map((o) => ({ label: o.label, description: o.description }));
-      break;
-    }
-
-    // Extend the history with the assistant-with-tool-calls row plus
-    // one tool-result row per call. Order matters: the assistant row
-    // must precede its result rows in the array we send next round.
-    // Arguments are sanitised before going back on the wire - see
-    // sanitizeToolCallsForWire for the rationale (Venice 400s on a
-    // malformed arguments JSON string and the failure rides every
-    // subsequent round unless we normalise here).
-    history.push({
-      role: 'assistant',
-      content: roundText,
-      tool_calls: sanitizeToolCallsForWire(roundCalls),
-    });
-    for (const r of settled) {
-      // Sibling-cancel path: if the model issued ask_user alongside
-      // another ask_user call in the same round, the second (and
-      // beyond) lands as a pre-cancelled answer row so the UI never
-      // shows a second pending card and the resumed turn sees the
-      // cancellation explicitly. The first ask_user falls through to
-      // the normal encodeToolContent path - its pending sentinel
-      // ships verbatim and the loop suspends below.
-      let content: string;
-      if (
-        firstAskUserCallId !== null &&
-        r.call.function.name === askUser.name &&
-        r.call.id !== firstAskUserCallId
-      ) {
-        content = buildAskUserAnswerContent(
-          null,
-          'cancelled_by_sibling_ask_user'
-        );
-      } else {
-        // stripGeneratedImage drops the ~700KB base64 blob a
-        // generate_image result carries before it's encoded onto the
-        // role='tool' row - the model only needs the compact descriptor
-        // (filename + dimensions), and replaying the blob into context
-        // every round would be pure waste. No-op for every other tool.
-        content = r.ok
-          ? encodeToolContent({ ok: true, value: stripGeneratedImage(r.value) })
-          : encodeToolContent({ ok: false, error: r.error });
-      }
-      const msg = await supabase.addMessage(thread.id, 'tool', content, {
-        tool_call_id: r.call.id,
-        name: r.call.function.name,
-      });
-      handlers?.onToolResultPersisted?.(msg);
-      // Pair the in-loop tool result with its assistant call by id.
-      // The assistant row's tool_calls just above were rewritten through
-      // sanitizeToolCallsForWire, which mutates the id when it doesn't
-      // satisfy Venice's strict tool_call_id pattern; mirror that here
-      // so the next streamChat round sees a matching pair instead of
-      // an orphan result row.
-      history.push({
-        role: 'tool',
-        content,
-        tool_call_id: sanitizeToolCallIdForWire(r.call.id),
-        name: r.call.function.name,
-      });
-      // Harvest citations from any tool that returned them (web_search
-      // is the intended source; the shape check is structural, not
-      // name-based, so a future tool returning `{..., citations: [...]}`
-      // rides the same path without another branch here). Indexes are
-      // rewritten to the running 1-based global position so the
-      // rendered CitationsPanel sees a contiguous list regardless of
-      // per-tool numbering.
-      if (r.ok) {
-        const extracted = extractToolCitations(r.value);
-        for (const cite of extracted) {
-          toolCitations.push({ ...cite, index: toolCitations.length + 1 });
-        }
-        // Harvest a generate_image payload, if this result carried one,
-        // for the end-of-turn attach to the terminal assistant row.
-        const img = extractGeneratedImage(r.value);
-        if (img) generatedImages.push(img);
-      }
-    }
-
-    // Suspend the loop if ask_user landed this round. The pending
-    // tool row is already persisted (the encodeToolContent path above
-    // emits the sentinel verbatim), siblings are either real results
-    // or pre-cancelled markers, and the wire shape is internally
-    // consistent. The substrate stub is intentionally skipped at the
-    // bottom of this function when awaitingUserAnswer is set - the
-    // turn is not logically complete yet. The mid-turn title-trigger
-    // pipeline below is also skipped via this early break, which is
-    // the desired behaviour: a pending question is the next "user
-    // input" the topic-shift signal would react to, and re-firing
-    // intuition now would burn compute on a stale view.
-    if (firstAskUserCallId !== null) {
-      awaitingUserAnswer = {
-        toolCallId: firstAskUserCallId,
-        question: firstAskUserQuestion,
-        options: firstAskUserOptions,
-      };
-      break;
-    }
-
-    // Mid-turn title trigger: if any update_title call succeeded this
-    // round, the topic has meaningfully shifted - re-fire whichever
-    // subconscious-priming pipelines are enabled, in parallel, so the
-    // model's next streamChat round sees fresh subconscious priming
-    // computed against the post-rename topic. Each pipeline's same-
-    // round debounce prevents a duplicate fire when the pre-round
-    // trigger already covered this user-round (rare, but possible if
-    // the model called update_title twice in one turn).
-    //
-    // The replace-on-refresh discipline matters: the previous synthetic
-    // <think> block was computed against the pre-rename perception and
-    // is now obsolete. Replacing the slot keeps the model from seeing
-    // two competing <think> blocks for the same surface.
-    const titleSucceeded = settled.some(
-      (r) => r.ok && r.call.function.name === updateTitle.name
-    );
-    if (titleSucceeded && (intuitionModelId || contextRecallEnabled)) {
-      const intuitionTitleTrigger =
-        intuitionModelId !== undefined
-          ? evaluateTitleTrigger({
-              cache: intuitionCache,
-              round: currentUserRound,
-              mood: intuitionMood ?? null,
-            })
-          : null;
-      const contextRecallTitleTrigger = contextRecallEnabled
-        ? evaluateTitleTrigger({
-            cache: contextRecallCache,
-            round: currentUserRound,
-            mood: intuitionMood ?? null,
-          })
-        : null;
-
-      if (intuitionTitleTrigger || contextRecallTitleTrigger) {
-        const [freshIntuition, freshContextRecall] = await Promise.all([
-          intuitionTitleTrigger && intuitionModelId
-            ? trackSubconscious(
-                'intuition',
-                withIntuitionInflight(thread.id, () =>
-                  runIntuitionPipeline({
-                    supabase,
-                    model: intuitionModelId,
-                    history,
-                    signal,
-                    round: currentUserRound,
-                    mood: intuitionMood ?? null,
-                    trigger: intuitionTitleTrigger,
-                  })
+  try {
+    for await (const ev of venice.streamChat({
+      model: modelId,
+      messages: requestMessages,
+      signal,
+      tools: buildToolList(toolboxesEnabled),
+      reasoningEffort,
+      disableThinking,
+      verbosity,
+      streamCtx: { threadId: thread.id, userMessageId },
+    })) {
+      switch (ev.type) {
+        case 'text':
+          streamingText += ev.delta;
+          handlers?.onTextUpdate?.(streamingText);
+          break;
+        case 'reasoning':
+          streamingReasoning += ev.delta;
+          handlers?.onReasoningUpdate?.(streamingReasoning);
+          break;
+        case 'tool_call': {
+          pendingCallsById.set(ev.toolCall.id, ev.toolCall);
+          handlers?.onToolStart?.(ev.toolCall);
+          // Capture the ask_user question + options off the request
+          // args so an END {terminalKind: 'suspended_for_ask_user'}
+          // can return them without re-fetching the persisted tool
+          // row. The server enforces the first-call-wins suspend
+          // rule; we mirror that here by only writing pendingAskUser
+          // when the slot is empty.
+          if (
+            ev.toolCall.function.name === askUser.name &&
+            pendingAskUser === null
+          ) {
+            try {
+              const a = parseToolArguments(
+                ev.toolCall.function.arguments,
+              ) as Record<string, unknown>;
+              const question =
+                typeof a.question === 'string' ? a.question : '';
+              const rawOptions = Array.isArray(a.options) ? a.options : [];
+              const options: AskUserOption[] = rawOptions
+                .filter((o): o is { label: string; description: string } =>
+                  !!o &&
+                  typeof o === 'object' &&
+                  typeof (o as { label?: unknown }).label === 'string' &&
+                  typeof (o as { description?: unknown }).description ===
+                    'string',
                 )
-              )
-            : Promise.resolve<IntuitionPayload | null>(null),
-          contextRecallTitleTrigger
-            ? trackSubconscious(
-                'recall',
-                withContextRecallInflight(thread.id, () =>
-                  runContextRecallPipeline({
-                    supabase,
-                    threadId: thread.id,
-                    userId,
-                    signal,
-                    round: currentUserRound,
-                    mood: intuitionMood ?? null,
-                    trigger: contextRecallTitleTrigger,
-                  })
-                )
-              )
-            : Promise.resolve<ContextRecallPayload | null>(null),
-        ]);
-
-        const persistOps: Promise<void>[] = [];
-        if (freshIntuition) {
-          intuitionCache = freshIntuition;
-          persistOps.push(
-            writeIntuitionCache(supabase, thread.id, freshIntuition)
-          );
-        }
-        if (freshContextRecall) {
-          contextRecallCache = freshContextRecall;
-          persistOps.push(
-            writeContextRecallCache(supabase, thread.id, freshContextRecall)
-          );
-        }
-        if (persistOps.length > 0) await Promise.all(persistOps);
-
-        if (freshIntuition) handlers?.onIntuitionUpdate?.(freshIntuition);
-        if (freshContextRecall)
-          handlers?.onContextRecallUpdate?.(freshContextRecall);
-
-        // Replace-on-refresh for the synthetic <think> blocks. Each
-        // surface owns its own slot; if the slot was empty before
-        // (the pre-round trigger short-circuited), append instead.
-        if (freshIntuition) {
-          const refreshedMsg = buildIntuitionThinkMessage(freshIntuition);
-          if (intuitionMessageIdx !== null) {
-            history[intuitionMessageIdx] = refreshedMsg;
-          } else {
-            history.push(refreshedMsg);
-            intuitionMessageIdx = history.length - 1;
-          }
-        }
-        if (freshContextRecall) {
-          const refreshedMsg = buildContextRecallThinkMessage(
-            freshContextRecall
-          );
-          if (refreshedMsg !== null) {
-            if (contextRecallMessageIdx !== null) {
-              history[contextRecallMessageIdx] = refreshedMsg;
-            } else {
-              history.push(refreshedMsg);
-              contextRecallMessageIdx = history.length - 1;
+                .map((o) => ({ label: o.label, description: o.description }));
+              pendingAskUser = {
+                toolCallId: ev.toolCall.id,
+                question,
+                options,
+              };
+            } catch {
+              // Malformed args from the model. The server will surface
+              // this as a tool-error row and the model gets a chance to
+              // recover on the next round. UI just doesn't get the
+              // pre-populated AskUserCard data.
             }
-          } else if (contextRecallMessageIdx !== null) {
-            // Refreshed payload has an empty note. Replace the
-            // previous block with a still-non-empty marker turn
-            // would re-inject a stale recollection; instead we
-            // overwrite with an empty `<think></think>` placeholder
-            // so the slot index stays valid for any subsequent
-            // refresh. Empty-tag content is a no-op on the wire.
-            history[contextRecallMessageIdx] = {
-              role: 'assistant',
-              content: '<think></think>',
-            };
           }
+          break;
         }
+        case 'tool_call_response': {
+          // The server-side dispatcher finished executing the tool and
+          // wrote its result row. Surface to the existing onToolDone
+          // handler for timing animations and tool-state UI; the full
+          // payload travels on the tool-result row via the messages
+          // subscription, the wire ev.resultSummary is a preview only.
+          const call = pendingCallsById.get(ev.id);
+          if (call) {
+            handlers?.onToolDone?.(call, ev.resultSummary);
+          }
+          break;
+        }
+        case 'usage':
+          streamingUsage = ev.usage;
+          break;
+        case 'citations':
+          streamingCitations = ev.citations;
+          break;
+        case 'rate_limit_wait': {
+          // The wire carries an ISO 8601 timestamp; the UI handler
+          // wants epoch ms for a countdown render.
+          const untilMs = Date.parse(ev.until);
+          handlers?.onRateLimitWait?.({
+            retryAfterMs: ev.retryAfterMs,
+            attempt: ev.attempt,
+            until: Number.isFinite(untilMs)
+              ? untilMs
+              : Date.now() + ev.retryAfterMs,
+          });
+          break;
+        }
+        case 'rate_limit_resolved':
+          handlers?.onRateLimitResolved?.();
+          break;
+        case 'guard_retry': {
+          guardAttemptCount += 1;
+          handlers?.onGuardRetry?.({
+            guard: ev.reason || 'guard',
+            attempt: guardAttemptCount,
+          });
+          // The discarded attempt's buffered text/reasoning must be
+          // cleared so the re-roll renders into a clean streaming
+          // bubble. The server discards the same prefix on its end.
+          streamingText = '';
+          streamingReasoning = '';
+          break;
+        }
+        case 'error':
+          // The server reported a terminal stream failure. Throw with
+          // a kind matching the original VeniceError categorization so
+          // the outer try/catch surfaces a recognisable shape.
+          throw new VeniceError(
+            ev.message || 'stream error',
+            ev.kind === 'rate_limit' ? 'rate_limit' : 'http',
+          );
+        case 'end':
+          endPersistedId =
+            ev.persistedAssistantId.length > 0
+              ? ev.persistedAssistantId
+              : null;
+          endTerminalKind = ev.terminalKind;
+          endConflict = ev.conflict;
+          break;
       }
     }
-
-    // Loop back for another round. The model will see the tool results
-    // in the extended history and either produce a final answer or
-    // request more tool calls.
-    if (round === MAX_ROUNDS - 1) {
-      stoppedByLimit = true;
-    }
+  } catch (err) {
+    // User clicked the stop button (or the caller aborted for any
+    // other reason) while the stream consumer was still reading.
+    // The server-side function continues running until our control-
+    // channel cancel publish reaches it; both paths drive END
+    // {terminalKind: 'aborted'} eventually. Locally we just stop
+    // consuming and flag interrupted - the server owns persistence.
+    const isAbort =
+      signal.aborted || (err instanceof Error && err.name === 'AbortError');
+    if (!isAbort) throw err;
+    interrupted = true;
   }
 
-  // Attach any generate_image output to the assistant row that closed
-  // the turn. Done once, after the loop, against the final
-  // lastAssistantId so it works whether the model wrapped up with a
-  // text reply (terminal row) or ended on the tool-invoking row with no
-  // follow-up text. The attachment rows ride the same message_attachments
-  // table, 30-day expiry worker, and RLS chain as user uploads - no
-  // separate storage. Best-effort: a failed insert is logged but does
-  // not tear down the turn (the reply text is already persisted); the
-  // image just won't render on revisit.
-  if (lastAssistantId !== null && generatedImages.length > 0) {
-    const rows: NewAttachment[] = generatedImages.map((img, i) =>
-      generatedImageToNewAttachment(img, i)
-    );
-    try {
-      const attached = await supabase.addAttachments(lastAssistantId, rows);
-      handlers?.onAssistantAttachments?.(lastAssistantId, attached);
-    } catch (err) {
-      log.error(
-        `failed to attach ${rows.length} generated image(s) to assistant ${lastAssistantId}: ${
-          err instanceof Error ? err.message : String(err)
-        }`
+  // END routing. terminalKind is the canonical signal from the server;
+  // the local catch above only sets interrupted when the consumer
+  // never saw END. Translate each terminal kind into the legacy
+  // ChatLoopResult fields the caller expects.
+  if (endTerminalKind === 'aborted') {
+    interrupted = true;
+  }
+  if (endTerminalKind === 'error') {
+    // Server-side conflict shows up here with the reason on
+    // ev.conflict. Treat as the legacy "conflictDetected" path so the
+    // caller's "conversation changed on another device" UI fires.
+    if (endConflict) {
+      conflictDetected = true;
+    } else {
+      // Generic stream error that already published an END (vs the
+      // mid-stream 'error' event which throws). Surface as a thrown
+      // error so the caller's error banner shows.
+      throw new VeniceError(
+        `stream ended in error state${endConflict ? `: ${endConflict}` : ''}`,
+        'http',
       );
     }
   }
+  if (endTerminalKind === 'suspended_for_ask_user' && pendingAskUser) {
+    awaitingUserAnswer = pendingAskUser;
+  }
+  lastAssistantId = endPersistedId;
+  finalText = streamingText;
+  // The server-side round chain ran one or more rounds; we don't have
+  // a precise count here. Report 1 as a coarse signal - callers only
+  // distinguish "did anything run" vs "did MAX_ROUNDS hit", and the
+  // server-side cap is its own concern.
+  roundsRun = endTerminalKind !== null ? 1 : 0;
+
+  // Hydrate the persisted assistant row so the slot's persistedRows
+  // replay buffer carries a canonical record. The realtime UPDATE
+  // echo also delivers this row to subscribeToMessages, but exchanges
+  // on a non-active thread won't have a live subscription - and the
+  // slot's replay buffer is what populates `messages` on thread
+  // re-entry. Best-effort: if the fetch fails the realtime path will
+  // eventually catch up via the next listMessages.
+  if (lastAssistantId !== null) {
+    try {
+      const msg = await supabase.getMessage(lastAssistantId);
+      if (msg) handlers?.onAssistantPersisted?.(msg);
+    } catch (err) {
+      log.warn(
+        `getMessage(${lastAssistantId}) failed; relying on realtime UPDATE: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  // Suppress unused-name warnings on the round-only state we used to
+  // mutate. streamingCitations / streamingUsage land on the persisted
+  // assistant row server-side; nothing on the browser consumes them
+  // directly anymore.
+  void streamingCitations;
+  void streamingUsage;
 
   // Samskara substrate stub. Written once per turn after the loop
   // settles, paired with whichever assistant row closed the turn.
@@ -2387,8 +1640,4 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 // runChatLoop fixture per bucket.
 export const __test = {
   formatRelativeDuration,
-  // The output-guard wrapper is otherwise only reachable through a full
-  // runChatLoop fixture; exposing it lets the buffering / retry / cap
-  // edge cases be driven directly with a fake stream and fake guards.
-  streamChatWithGuards,
 };

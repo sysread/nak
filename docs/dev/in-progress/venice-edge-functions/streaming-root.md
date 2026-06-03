@@ -32,10 +32,48 @@ land the **server-side infrastructure + the browser transport seam**:
   discipline, and the trust-chain (gateway verify_jwt -> sub claim
   -> ownership probe -> orchestrator -> commit RPC).
 
-**Not yet activated on the chat path.** The chat-loop (`src/lib/
-chat-loop.ts`) still builds requests without `streamCtx`, so
-`streamChat` keeps using the legacy direct-Venice transport. The
-infrastructure is dormant until the chat-loop opts in.
+**Activated on the chat path.** `runChatLoop` now issues a single
+`venice.streamChat` call with `streamCtx` populated; the server-side
+round loop, tool dispatch, rate-limit retry, output-guards, and
+assistant-row persistence are all live. `Chat.svelte`'s stop button
+publishes to the control channel via `cancelStream()`. The browser
+streaming-row INSERTs are filtered out of the message-subscription
+echo (so empty bubbles don't paint alongside the live streaming
+buffer); the terminal UPDATE that flips status out of `'streaming'`
+falls through and `appendMessage` adds the row.
+
+**v1 gaps to address before merge to `main`:**
+
+- **Reconnect-on-thread-open** (section 2.9) is not wired yet. The
+  streaming-row INSERT filter means a thread reopened mid-stream
+  shows nothing until the terminal UPDATE arrives - no live
+  progress, no cross-device ape mode. Implementation outline:
+  `selectThread` checks `listMessages` tail for a `status='streaming'`
+  assistant row, finds its anchor user message id, allocates a slot,
+  and POSTs `/stream` with `reconnectOnly: true` via a new
+  `streamReconnect` helper in `venice.ts`.
+- **INTERRUPTED_MARKER** is no longer appended on abort. The
+  server persists the partial row with `status='aborted'` and the
+  browser renders it from realtime. UI keys off the row's content
+  alone today, so a stopped reply just looks short. Either render
+  an "interrupted" affordance from `status='aborted'` in the message
+  component or have the orchestrator append the marker before
+  committing the terminal write.
+- **Tool citations** (web_search returns `{answer, citations}`) are
+  not harvested onto the assistant row server-side. The browser
+  used to do this in `extractToolCitations`; the function-side path
+  has no equivalent yet. Citation panel will be empty for web_search
+  results until `getStreamingResponse` harvests them.
+- **roundsRun / stoppedByLimit** report coarse values (1 / false) -
+  the server doesn't surface a round counter. Callers don't branch
+  on these meaningfully, so this is a metric-only regression.
+- **toggle_toolbox and update_title optimistic UI** patches are
+  gone. The thread row UPDATE arrives via realtime, so the drawer
+  re-buckets and the toolbox flash fires on the echo (~200ms later
+  than the in-process patch used to be).
+- **Mid-turn title trigger for intuition / context-recall** removed;
+  pre-turn priming still fires. Documented in the "Regressions
+  accepted under the ramp" section below as an accepted tradeoff.
 
 ### Path to activation (revised 2026-06-03)
 

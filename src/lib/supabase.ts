@@ -806,6 +806,24 @@ export interface Message {
    * synthesizer no-ops. Never written to the DB.
    */
   synthetic?: boolean;
+  /**
+   * Lifecycle state of an assistant row written by the streaming-root
+   * edge function. Null on user/system/tool rows and on assistant rows
+   * written before the column existed. The streaming function INSERTs
+   * the row with `'streaming'` at first content delta and UPDATEs the
+   * status to a terminal value (`'complete' | 'aborted' | 'error' |
+   * 'suspended_for_ask_user'`) when the round chain settles. The
+   * browser subscriber filters `'streaming'` rows out of `appendMessage`
+   * so an in-flight row never paints as an empty bubble alongside the
+   * live streaming buffer.
+   */
+  status?:
+    | 'streaming'
+    | 'complete'
+    | 'aborted'
+    | 'error'
+    | 'suspended_for_ask_user'
+    | null;
 }
 
 class SupabaseError extends Error {
@@ -5932,8 +5950,19 @@ export class SupabaseService {
    */
   subscribeToMessages(
     threadId: string,
-    onInsert: (msg: Message) => void
+    onMessage: (msg: Message) => void
   ): () => void {
+    // Defend the realtime channel: if the consumer throws, the
+    // postgres_changes subscription dies silently and the transcript
+    // stops receiving echoes for this thread until the user re-selects
+    // it. Log and swallow so subsequent echoes still arrive.
+    const dispatch = (msg: Message): void => {
+      try {
+        onMessage(msg);
+      } catch (err) {
+        log.error('subscribeToMessages handler threw', err);
+      }
+    };
     const channel = this.client
       .channel(`messages:${threadId}`)
       .on(
@@ -5948,16 +5977,29 @@ export class SupabaseService {
           filter: `thread_id=eq.${threadId}`,
         },
         (payload: { new: Message }) => {
-          // Defend the realtime channel: if onInsert throws, the
-          // postgres_changes subscription dies silently (no error
-          // surfaced anywhere) and the transcript stops receiving
-          // echoes for this thread until the user re-selects it.
-          // Log and swallow so subsequent echoes still arrive.
-          try {
-            onInsert(payload.new);
-          } catch (err) {
-            log.error('subscribeToMessages onInsert threw', err);
-          }
+          dispatch(payload.new);
+        }
+      )
+      .on(
+        // UPDATE echoes are how the streaming-root assistant row arrives
+        // in its terminal state. The function INSERTs the row with
+        // `status='streaming'` at first content delta (which the
+        // subscriber filters out) and later UPDATEs the same row when
+        // the round chain settles - flipping status to `'complete' |
+        // 'aborted' | 'error' | 'suspended_for_ask_user'` and pinning
+        // the canonical content/reasoning/citations. Without listening
+        // for UPDATEs the terminal row would never enter the local
+        // `messages` array; the consumer's id-keyed append handles the
+        // INSERT-then-UPDATE ordering.
+        'postgres_changes' as never,
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'messages',
+          filter: `thread_id=eq.${threadId}`,
+        },
+        (payload: { new: Message }) => {
+          dispatch(payload.new);
         }
       )
       .subscribe();
@@ -5968,6 +6010,26 @@ export class SupabaseService {
       // matches the onAuthChange unsubscribe contract above.
       void this.client.removeChannel(channel);
     };
+  }
+
+  /**
+   * Fetch a single message by id. Returns null when the row doesn't
+   * exist or is owned by another user (RLS filters those rows out, so
+   * the two cases are indistinguishable). Used by the chat-loop at
+   * END time to hydrate the assistant row the streaming function just
+   * committed so the slot's persistedRows replay buffer carries a
+   * canonical record - the realtime UPDATE echo also delivers the
+   * same row separately for the live `messages` view, but the
+   * end-of-turn synth path needs the row before the echo races in.
+   */
+  async getMessage(id: string): Promise<Message | null> {
+    const { data, error } = await this.client
+      .from('messages')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new SupabaseError(error.message);
+    return (data as Message | null) ?? null;
   }
 
   /**
