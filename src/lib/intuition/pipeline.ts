@@ -58,15 +58,16 @@ const log = createLogger('intuition');
  * samskara and summary agents use; reasoning content on the response
  * is ignored, only the body text contributes.
  *
- * disableThinking is non-negotiable: the fast tier currently routes
- * to GLM-4.7, a reasoning model that by default emits chain-of-
- * thought through `reasoning_content` BEFORE writing any text into
- * `content`. Even with the 2048 floor we keep `disableThinking` set
- * so the budget goes to the answer instead of a CoT preamble that
- * sometimes still runs long enough to eat the cap. Web_search hit
- * the same trap and fixed it the same way; for an internal-
- * monologue prompt the reasoning pass wouldn't have added much
- * anyway.
+ * disableThinking is a defensive pin, not a per-call necessity. The
+ * intuition slot in AGENT_MODELS resolves to mistral-small, which is
+ * non-reasoning by spec - so the flag is a no-op on the current model.
+ * It stays set because the slot is swappable: if the pin ever moves to
+ * a reasoning model (one that emits chain-of-thought through
+ * `reasoning_content` BEFORE writing any text into `content`),
+ * disableThinking keeps the 2048-token budget on the answer instead of
+ * letting a CoT preamble eat the cap. Web_search hit that trap with a
+ * reasoning model and fixed it the same way; for an internal-monologue
+ * prompt the reasoning pass wouldn't add much anyway.
  */
 async function callOnce(
   supabase: SupabaseService,
@@ -276,15 +277,14 @@ export async function runIntuitionPipeline(
   // user message; the model's reply IS the synthesis. An earlier
   // shape passed drives in an assistant-role message (mirroring
   // fnord's "drives are the model's own internal voices already
-  // speaking" framing), but the fast tier (GLM-4.7 via Venice) on
-  // this conversation-shape was returning the SYNTHESIS_PROMPT body
-  // verbatim as its content - the model parsed "ends with assistant"
-  // as a prefix-completion / template-quirk situation and echoed the
-  // system prompt instead of producing a synthesis. The user saw
-  // the prompt rendered in both the intuition card and the
-  // diagnostics modal. Folding drives into the user turn keeps the
-  // shape conventional (system + single user) and the model produces
-  // a normal assistant reply.
+  // speaking" framing), but the fast model on this conversation-shape
+  // was returning the SYNTHESIS_PROMPT body verbatim as its content -
+  // the model parsed "ends with assistant" as a prefix-completion /
+  // template-quirk situation and echoed the system prompt instead of
+  // producing a synthesis. The user saw the prompt rendered in both
+  // the intuition card and the diagnostics modal. Folding drives into
+  // the user turn keeps the shape conventional (system + single user)
+  // and the model produces a normal assistant reply.
   const drivesText = DRIVE_NAMES.map((n) => drives[n])
     .filter((s): s is string => typeof s === 'string' && s.length > 0)
     .join('\n\n');
@@ -306,10 +306,10 @@ export async function runIntuitionPipeline(
       // prompt's 2-3 sentence target lands well under that; the
       // prompt itself is what discourages rambling, not the cap.
       maxTokens: 2048,
-      // Same rationale as callOnce above - the fast tier is a
-      // reasoning model and we cannot afford to spend the maxTokens
-      // budget on a CoT preamble that never reaches the content
-      // field.
+      // Same rationale as callOnce above - a defensive disableThinking
+      // pin that's a no-op on the current non-reasoning model but keeps
+      // the maxTokens budget on the answer if the slot is ever swapped
+      // to a reasoning model.
       disableThinking: true,
       signal,
     });
