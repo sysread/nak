@@ -35,6 +35,8 @@ If the suggestion fails any check, explain the problems directly, referencing th
 
 **Ask rather than hallucinate intent.** When the request is ambiguous and the cost of getting it wrong is non-trivial, ask before guessing.
 
+**One open question per round.** When a design or planning step has multiple decisions to make, do NOT dump them all into one message. Pick one, present it with enough context to decide on, and wait. When more than one decision is pending, end the message with a `[n/X] points to resolve` tracker (or similar concise progress marker) so the user knows the queue depth. Iterate across rounds. A wall of "and also, and also" forces the user to context-switch repeatedly inside a single response, which costs more than the round-trip latency saved by batching - and the second/third question often turns out to be downstream of the first answer, making the batched version actively wasteful.
+
 ## Keep the user informed while working
 
 The web UI for Claude Code is a little basic - a long tool call with no
