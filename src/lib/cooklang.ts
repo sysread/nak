@@ -275,14 +275,28 @@ function isDeclarationLine(line: string): boolean {
  * (`-`, `_`, `'`) so "olive-oil", "crème_fraîche", "grandmother's
  * chutney" all behave. Unicode letter support via `\p{L}` — modern
  * browsers all support the `u` flag.
+ *
+ * Inside the braced form the name is a "run" of segments, where a
+ * segment is either a word of name-chars OR a parenthetical note like
+ * "(all-purpose)". Only `{` ends the name - a `(` does not. Without
+ * this, `@flour (all-purpose){200%g}` breaks the name at the `(`, the
+ * braced alternative fails to find `{` right after "flour", the bare
+ * alternative claims just "flour" with no quantity, and the orphaned
+ * `{200%g}` is then misread by the bare-brace pass as a phantom "200 g"
+ * timer. Allowing parenthetical segments keeps the braces bound to the
+ * ingredient so the qty/unit survive. The run is braced-form only; the
+ * bare `@name` alternative stays single-word on purpose (otherwise
+ * `@salt and @pepper` would swallow "and").
  */
 const NAME_CHARS = "[\\p{L}\\p{N}\\-_']";
+const NAME_SEGMENT = `(?:${NAME_CHARS}+|\\([^)]*\\))`;
+const NAME_RUN = `${NAME_SEGMENT}(?:[ \\t]${NAME_SEGMENT})*`;
 const INGREDIENT_RE = new RegExp(
-  `@(?:(${NAME_CHARS}+(?:[ \\t]${NAME_CHARS}+)*)\\{([^}]*)\\}|(${NAME_CHARS}+))`,
+  `@(?:(${NAME_RUN})\\{([^}]*)\\}|(${NAME_CHARS}+))`,
   'gu'
 );
 const COOKWARE_RE = new RegExp(
-  `#(?:(${NAME_CHARS}+(?:[ \\t]${NAME_CHARS}+)*)\\{([^}]*)\\}|(${NAME_CHARS}+))`,
+  `#(?:(${NAME_RUN})\\{([^}]*)\\}|(${NAME_CHARS}+))`,
   'gu'
 );
 // Timers differ: `~` allows an empty name (anonymous timer) as long as
@@ -290,7 +304,7 @@ const COOKWARE_RE = new RegExp(
 // pass rather than making group 1 optional and muddying the regex.
 // Named timers always carry a body, so there's no "bare name" alt here.
 const TIMER_NAMED_RE = new RegExp(
-  `~(${NAME_CHARS}+(?:[ \\t]${NAME_CHARS}+)*)\\{([^}]*)\\}`,
+  `~(${NAME_RUN})\\{([^}]*)\\}`,
   'gu'
 );
 const TIMER_ANON_RE = /~\{([^}]*)\}/gu;
