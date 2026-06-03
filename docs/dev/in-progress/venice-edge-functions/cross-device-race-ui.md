@@ -22,11 +22,13 @@ Why it matters:
 ## Scope
 
 In:
+
 - Function-side detection of competing user messages at `/stream` entry.
 - Conflict response shape and persistence of the loser's row in a queryable "superseded" state.
 - Loser-device UI: red-border flash, fade-out animation, swap in the winner's user message + throbber.
 
 Out:
+
 - Splitting or merging the two user-message texts. Loser's text is discarded; if the user wants it, they retype.
 - Detecting "clearly staggered" sends as competing. Only true overlaps (both POSTs in flight when the function decides) get the treatment.
 - Composer mirroring across devices. The composer is a per-device local concern.

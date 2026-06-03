@@ -122,10 +122,12 @@ Text deltas (`response_text`, `reasoning_text`) are buffered with a tier-windowe
 Detection is reactive (catch 429 from `broadcast.send()`). There is no proactive API to query the project's current rate-limit headroom. Concurrent function invocations can't coordinate without an external coordinator; each backs off independently. At nak's scale this is sufficient.
 
 Buffered:
+
 - `response_text` deltas (concatenated per window, emitted as one event)
 - `reasoning_text` deltas (same)
 
 Prompt (never buffered):
+
 - `tool_call_request`, `tool_call_response` (latency-sensitive UI affordances)
 - `END {terminalKind}` (terminal)
 - `rate_limit_wait`, `rate_limit_resolved` (UI feedback)
