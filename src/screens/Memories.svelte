@@ -1617,6 +1617,19 @@
   .memory-card-data :global(p:last-child) {
     margin-bottom: 0;
   }
+  /* Boost the memory body prose a notch on desktop, mirroring the chat
+     bubbles and composer textarea (both 1.05rem behind this same
+     min-width:721px query - see src/styles.css). The desktop root is
+     13.5px and at the card's default 0.9rem this read-side content reads
+     small in the roomy panel; phones keep the 0.9rem since they inherit
+     the larger 15.5px mobile root (see the @media (max-width: 720px)
+     :root rule). Only the body data moves - the label is heading-like
+     and holds its rem-anchored size, same as chat headings. */
+  @media (min-width: 721px) {
+    .memory-card-data {
+      font-size: 1.05rem;
+    }
+  }
 
   .memory-card-actions {
     display: flex;
