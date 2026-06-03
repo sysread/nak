@@ -108,6 +108,10 @@ async function copyLicense(tmp) {
 // upstream URL. Links among the curated set are left relative.
 async function rewriteExcludedLinks() {
   step(3, 'Rewriting links to non-curated surfaces');
+  // The [0-9] in the skill-name class is load-bearing: some upstream skill
+  // slugs carry digits (venice-x402). A class of just [a-z-] silently fails
+  // to match those links, leaving a relative ../venice-x402/SKILL.md pointing
+  // at a folder we didn't vendor - a dangling link that reads fine in the diff.
   const linkRe = /\.\.\/(venice-[a-z0-9-]+)\/SKILL\.md/g;
   let rewritten = 0;
   for (const name of CURATED) {
