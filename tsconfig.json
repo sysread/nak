@@ -20,9 +20,15 @@
     "types": ["vite/client", "vitest/globals"],
     "baseUrl": ".",
     "paths": {
-      "$lib/*": ["src/lib/*"]
+      "$lib/*": ["src/lib/*"],
+      "$shared/*": ["supabase/functions/_shared/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte", "tests/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.svelte",
+    "tests/**/*.ts",
+    "supabase/functions/_shared/venice-stream.ts"
+  ],
   "exclude": ["node_modules", "dist", "e2e"]
 }

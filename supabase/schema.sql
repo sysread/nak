@@ -387,6 +387,54 @@ alter table public.messages
 alter table public.messages
   add column if not exists citations jsonb;
 
+-- Assistant-row lifecycle status. Meaningful only for role='assistant'
+-- rows written by the streaming chat edge function; null on every other
+-- row (user, system, tool) and on pre-migration assistant rows where the
+-- concept did not exist. The function creates a row with status='streaming'
+-- at the first content delta, UPDATEs its content on a debounced cadence
+-- as deltas arrive, and transitions to a terminal value when the round
+-- chain finishes.
+--
+--   'streaming'              row is currently being written by the function
+--   'complete'               terminal: round chain finished normally
+--   'aborted'                terminal: client published a cancel signal
+--                            on the thread:<id>:control channel
+--   'error'                  terminal: the function gave up on an
+--                            unrecoverable error and persisted what it had
+--   'suspended_for_ask_user' terminal-for-now: the ask_user tool returned
+--                            its pending sentinel. A fresh /stream
+--                            invocation creates a new assistant row when
+--                            the user submits an answer.
+--
+-- Render queries default to showing all statuses. Clients reading a
+-- status='streaming' row treat its content column as the completed-so-far
+-- buffer for resume; the live deltas continue arriving over Broadcast.
+alter table public.messages
+  add column if not exists status text;
+
+alter table public.messages drop constraint if exists messages_status_check;
+alter table public.messages
+  add constraint messages_status_check
+  check (
+    status is null
+    or status in (
+      'streaming',
+      'complete',
+      'aborted',
+      'error',
+      'suspended_for_ask_user'
+    )
+  );
+
+-- Partial index for the streaming function's "is there an in-flight stream
+-- anchored to this user message?" lookup, which runs on every /stream POST
+-- (fresh send and reconnect both probe it). At most ~one row per active
+-- thread sits in 'streaming' at any moment, so the partial keeps the index
+-- tiny under steady state.
+create index if not exists messages_streaming_idx
+  on public.messages (thread_id, created_at desc)
+  where status = 'streaming';
+
 -- Per-thread set of enabled gated toolboxes. Stored as text[] so the
 -- toolbox dimension sits in the thread row without a second table.
 -- The always_on toolbox is implicit and is NOT represented here - its
@@ -7083,6 +7131,137 @@ begin
 end;
 $$;
 
+-- Atomic terminal commit for streaming-root assistant rows --------------
+--
+-- The streaming chat edge function creates an assistant row with
+-- status='streaming' at the first content delta and UPDATEs its content
+-- as deltas arrive. When the round chain finishes, the function calls
+-- this RPC to atomically run the same "newer user message" conflict
+-- check that add_assistant_message uses on the legacy path and either
+-- flip status to 'complete' (writing the final content + provenance) or
+-- report the conflict so the function can transition the row to a
+-- terminal-error state instead. add_assistant_message stays in place for
+-- callers that still INSERT the assistant row in one shot at the end of
+-- the round (the browser-side chat-loop, pre-migration); this one is the
+-- UPDATE-the-existing-streaming-row variant.
+--
+-- security definer because the function calls this through the service-
+-- role admin client (b-strict; see docs/dev/edge-function-auth.md). The
+-- caller's session JWT may have expired by the time the round chain
+-- finishes - the whole point of the migration is the function outliving
+-- the browser connection - so auth.uid() is not available. p_user_id is
+-- passed explicitly and verified against the thread's owner inside the
+-- function to keep the ownership gate intact.
+drop function if exists public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb);
+create or replace function public.commit_assistant_message(
+  p_assistant_message_id uuid,
+  p_user_message_id      uuid,
+  p_user_id              uuid,
+  p_content              text,
+  p_model                text,
+  p_usage                jsonb,
+  p_reasoning            text,
+  p_citations            jsonb
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_thread_id uuid;
+  v_anchor_ts timestamptz;
+  v_owner_id  uuid;
+  v_msg       record;
+begin
+  -- Lock the streaming row. The status='streaming' filter doubles as
+  -- an idempotency guard: a retried commit on an already-terminal row
+  -- fails the lookup and returns conflict rather than overwriting a
+  -- completed state.
+  select m.thread_id
+    into v_thread_id
+    from public.messages m
+    where m.id = p_assistant_message_id
+      and m.role = 'assistant'
+      and m.status = 'streaming'
+    for update;
+
+  if not found then
+    return jsonb_build_object('conflict', true, 'reason', 'row_not_streaming');
+  end if;
+
+  -- Confirm the caller owns the thread. The function trusts its own
+  -- p_user_id (extracted from the gateway-verified JWT at request entry);
+  -- this is the integrity gate that catches a row-id from one thread
+  -- being committed under another user's context.
+  select user_id into v_owner_id
+    from public.threads
+    where id = v_thread_id
+    for update;
+
+  if v_owner_id is null or v_owner_id <> p_user_id then
+    return jsonb_build_object('conflict', true, 'reason', 'ownership_mismatch');
+  end if;
+
+  -- Anchor user message must still exist on the same thread.
+  select created_at into v_anchor_ts
+    from public.messages
+    where id = p_user_message_id
+      and thread_id = v_thread_id
+      and role = 'user';
+
+  if not found then
+    return jsonb_build_object('conflict', true, 'reason', 'anchor_missing');
+  end if;
+
+  -- Any user message newer than our anchor means a competing send
+  -- landed while the function was streaming. The response was computed
+  -- without that context, so we discard it. The cross-device-race-ui
+  -- v1+ plan covers the loser-UI affordance and the soft-delete
+  -- 'superseded' transition; for v1 we just return conflict and the
+  -- function persists status='error' on the row.
+  if exists (
+    select 1 from public.messages
+      where thread_id = v_thread_id
+        and role = 'user'
+        and id <> p_user_message_id
+        and created_at > v_anchor_ts
+  ) then
+    return jsonb_build_object('conflict', true, 'reason', 'newer_user_message');
+  end if;
+
+  update public.messages
+     set content   = trim(p_content),
+         model     = p_model,
+         usage     = p_usage,
+         reasoning = p_reasoning,
+         citations = p_citations,
+         status    = 'complete'
+   where id = p_assistant_message_id
+  returning * into v_msg;
+
+  -- Bump updated_at so the thread jumps to the top of the sidebar,
+  -- matching add_assistant_message's behavior.
+  update public.threads
+    set updated_at = now()
+    where id = v_thread_id;
+
+  return jsonb_build_object(
+    'conflict', false,
+    'message',  row_to_json(v_msg)
+  );
+end;
+$$;
+
+-- service-role only - mirrors the discipline elsewhere in this file for
+-- security-definer functions that the browser must never reach. The
+-- streaming function calls this through the admin client; no
+-- authenticated or anon user should be able to commit terminal state
+-- on an assistant row.
+revoke all on function public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.commit_assistant_message(uuid, uuid, uuid, text, text, jsonb, text, jsonb)
+  to service_role;
+
 -- Bias profile ----------------------------------------------------------
 --
 -- Per-conversation observations of cognitive biases / System-1
@@ -7664,6 +7843,78 @@ begin
     alter publication supabase_realtime add table public.messages;
   end if;
 end $$;
+
+-- ---------------------------------------------------------------------------
+-- Realtime Broadcast authorization (streaming-root channels)
+-- ---------------------------------------------------------------------------
+--
+-- The streaming chat edge function publishes live events to a
+-- 'thread:<uuid>:stream' Broadcast channel for each in-flight assistant
+-- turn, and subscribes to 'thread:<uuid>:control' to receive client-
+-- initiated cancel signals. The function uses the service-role admin
+-- client, so its publishes and subscribes bypass these RLS policies.
+-- These policies gate the *browser* side of the contract:
+--
+--   - Browsers subscribe to 'thread:<uuid>:stream' to receive deltas.
+--     A SELECT on realtime.messages keyed on the topic name is what the
+--     Realtime server checks against these policies.
+--   - Browsers publish '{"type":"cancel"}' to 'thread:<uuid>:control'
+--     when the user clicks Stop. An INSERT on realtime.messages is the
+--     check there.
+--
+-- For these policies to take effect on the wire, the browser must
+-- subscribe with `private: true` in its channel options. Subscribing
+-- with the default `private: false` produces a public broadcast room
+-- whose name we treat as unguessable but which is not formally
+-- authorized; the documented client path uses private channels.
+
+-- Helper that extracts the thread uuid from a topic of shape
+-- 'thread:<uuid>:<suffix>'. Returns null when the topic does not match,
+-- so policies that compare against threads.id silently exclude rows for
+-- non-streaming topics rather than throwing. Pure text manipulation, no
+-- DB read - immutable for planner caching.
+create or replace function public.realtime_topic_thread_id(p_topic text)
+returns uuid
+language sql immutable
+as $$
+  select case
+    when p_topic ~ '^thread:[0-9a-f-]{36}:(stream|control)$'
+      then substring(p_topic from 8 for 36)::uuid
+    else null
+  end;
+$$;
+
+-- Subscribers to the stream channel must own the thread the topic
+-- references. Anonymous users have no thread ownership and so are
+-- excluded; service_role bypasses RLS unconditionally and is what the
+-- function publishes under.
+drop policy if exists "streaming channel: owner subscribe" on realtime.messages;
+create policy "streaming channel: owner subscribe" on realtime.messages
+  for select to authenticated
+  using (
+    realtime.topic() like 'thread:%:stream'
+    and exists (
+      select 1 from public.threads t
+        where t.id = public.realtime_topic_thread_id(realtime.topic())
+          and t.user_id = (select auth.uid())
+    )
+  );
+
+-- Publishers to the control channel must own the thread. The browser
+-- emits exactly one event shape today ('{"type":"cancel"}'); future
+-- additions ride the same authorization gate. service_role is what the
+-- function subscribes under and bypasses this check.
+drop policy if exists "control channel: owner publish" on realtime.messages;
+create policy "control channel: owner publish" on realtime.messages
+  for insert to authenticated
+  with check (
+    realtime.topic() like 'thread:%:control'
+    and exists (
+      select 1 from public.threads t
+        where t.id = public.realtime_topic_thread_id(realtime.topic())
+          and t.user_id = (select auth.uid())
+    )
+  );
 
 -- ---------------------------------------------------------------------------
 -- User Documents (Library)

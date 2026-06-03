@@ -48,6 +48,15 @@ export default defineConfig({
   resolve: {
     alias: {
       $lib: path.resolve('./src/lib'),
+      // $shared is the boundary the browser and the Deno edge function
+      // share. Only modules that are framework-agnostic and Deno-
+      // portable belong under here - pure types, parsers, and Web-APIs-
+      // only helpers - so the same source file compiles cleanly in
+      // both runtimes. Streaming-root added the alias for venice-
+      // stream.ts; do not point this at anything that needs the
+      // Supabase client, EdgeRuntime, or Deno.env without splitting it
+      // first.
+      $shared: path.resolve('./supabase/functions/_shared'),
     },
     // Svelte 5 ships separate server/client entry points. Under vitest
     // we want the client runtime (jsdom + @testing-library/svelte can
