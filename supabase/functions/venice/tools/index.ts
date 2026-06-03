@@ -13,5 +13,12 @@
 // barrel itself stays mechanical; no export surface, no logic.
 
 import './ask_user.ts';
+import './conversation_get.ts';
+import './doc_get.ts';
+import './doc_list.ts';
+import './recipe_get.ts';
+import './recipe_list.ts';
 import './toggle_tools.ts';
 import './update_title.ts';
+import './wiki_get.ts';
+import './wiki_list.ts';
