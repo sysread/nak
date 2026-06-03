@@ -98,7 +98,7 @@ cut in one commit.
    retry / guards branches are gone. Deno-side tests for the
    function modules are separate scope.
 
-### Regression accepted under the ramp
+### Regressions accepted under the ramp
 
 - **Mid-turn title trigger for intuition / context-recall stops
   firing.** The current chat-loop re-runs intuition+recall when the
@@ -107,6 +107,51 @@ cut in one commit.
   turn" is invisible to the browser. Pre-turn priming still works;
   the next user turn picks up the new title. Cost: stale priming for
   the remainder of one turn, occasionally. Acceptable.
+- **Tools deferred to post-v1.** Each surfaces as
+  `ToolNotImplementedError` if the model calls it under the new
+  path; the orchestrator turns that into a tool-error row the model
+  sees on the next round and adapts. Skipped:
+  - `generate_image` (storage + base64 attachment harvest needs
+    server-side reproduction of the chat-loop end-of-turn attach).
+  - `research_docs` (would need ~250 KB of docs/user + docs/dev
+    bundled into the function; model can fall back to general
+    knowledge or wiki recall).
+  - `memory_recall`, `conversation_recall`, `wiki_recall`,
+    `context` (sub-agents driving `runHeadlessToolLoop` - port
+    that driver separately).
+  - `wiki_librarian` (multi-round sub-agent).
+  - `doc_create` (cross-bucket storage copy from attachments ->
+    documents).
+  - `recipe_photos_attach`, `recipe_photos_remove`,
+    `recipe_photos_reorder`, `recipe_photo_label_set` (cascading
+    RPC helper chain through `recipe_new_photo_version` needs the
+    same p_user_id escape hatch we did NOT apply there - photo
+    work via UI for now).
+  - `memory_consolidate`, `memory_invalidate` (agent-only - in
+    `memoryToolbox` / `librarianToolbox`, not the main chat
+    catalog).
+
+### Tools ported (function-side, this branch)
+
+Established the porting pattern; each tool registers itself via
+`registerTool()` at module load through `supabase/functions/venice/
+tools/index.ts` (side-effect barrel imported by `venice/index.ts`).
+
+Always-on (read-side):
+`memory_search`, `conversation_search`, `conversation_get`,
+`wiki_search`, `wiki_list`, `wiki_get`, `recipe_list`, `recipe_get`,
+`doc_list`, `doc_get`, `doc_grep`, `doc_read`, `web_search`,
+`analyze_image`, `update_title`, `toggle_toolbox`, `ask_user`.
+
+Gated:
+`memory_create`, `memory_update`, `memory_delete`,
+`memory_reaffirm`, `memory_doubt`, `memory_relate`,
+`memory_unrelate`, `recipe_save`, `recipe_update`, `recipe_delete`,
+`doc_update`, `doc_delete`.
+
+Total: 30 tools. The function's `performToolCall` registry now
+covers the dominant main-chat tool surface; the deferred set above
+takes the function path off-line for those operations.
 
 ### What stays exactly as built
 
