@@ -45,6 +45,8 @@ import {
   VENICE_EMBEDDING_MODEL,
   type BackfillDeps,
 } from '../_shared/backfill.ts';
+import { streamChannelName } from '../_shared/venice-stream.ts';
+import { getStreamingResponse } from './getStreamingResponse.ts';
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -130,6 +132,55 @@ function isServiceRole(req: Request): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Pull the authenticated user id from the request's bearer JWT.
+ * Returns null when the bearer is absent, malformed, or carries no
+ * `sub` claim. Same trust assumption as isServiceRole: the gateway's
+ * verify_jwt has already validated the signature, so reading the
+ * payload directly is safe. The streaming function lives or dies on
+ * this id - every downstream DB write filters by it.
+ */
+function userIdFromJwt(req: Request): string | null {
+  const auth = req.headers.get('Authorization') ?? '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const payload = JSON.parse(atob(b64)) as { sub?: unknown };
+    return typeof payload.sub === 'string' && payload.sub.length > 0
+      ? payload.sub
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hand off a promise to the Edge runtime so it continues executing
+ * after the response returns. Wrapped to make local-runtime calls
+ * (Deno without the Supabase edge globals, e.g. inside tests) a
+ * no-op fallback: the promise still resolves, it just isn't watched
+ * by a runtime. In production this is the load-bearing piece that
+ * lets the streaming function survive the browser disconnect.
+ */
+function edgeWaitUntil(promise: Promise<unknown>): void {
+  const er = (globalThis as {
+    EdgeRuntime?: { waitUntil?(p: Promise<unknown>): void };
+  }).EdgeRuntime;
+  if (er && typeof er.waitUntil === 'function') {
+    er.waitUntil(promise);
+    return;
+  }
+  // Locally: keep a reference so the rejection isn't lost; the
+  // top-level catch on getStreamingResponse handles failure modes,
+  // but a stray rejection here surfaces during tests.
+  promise.catch(() => {
+    /* errors are surfaced via the END event on the channel */
+  });
 }
 
 interface EmbedRequestBody {
@@ -466,6 +517,170 @@ async function handleBackfill(req: Request): Promise<Response> {
   return json(summary);
 }
 
+interface StreamRequestBody {
+  threadId?: string;
+  userMessageId?: string;
+  /**
+   * Full Venice wire body for the first round. The browser builds
+   * this via buildChatBody() (src/lib/venice.ts) and ships it
+   * verbatim; this route does not reshape it before getStreamingResponse
+   * picks it up.
+   */
+  body?: Record<string, unknown>;
+  /**
+   * Reconnect-only flag. When true, the function does NOT start a new
+   * completion - it returns the existing in-flight envelope (or a
+   * no-stream marker when nothing is in flight) so the browser can
+   * subscribe and observe. Set on reopen-thread / cross-device-ape paths.
+   */
+  reconnectOnly?: boolean;
+}
+
+interface StreamEnvelope {
+  channelName: string;
+  /**
+   * Existing assistant row id on a reconnect path; null on a fresh
+   * stream (the orchestrator creates the row lazily at the first
+   * content delta and the browser learns its id via the messages
+   * realtime subscription). Tests can also see null for an explicit
+   * reconnect-only request that found no in-flight stream.
+   */
+  assistantRowId: string | null;
+  /** Empty string on fresh; the streaming row's content on reconnect. */
+  completedSoFar: string;
+  /**
+   * Set true when the caller asked for reconnect-only and no in-
+   * flight stream was found. Lets the browser distinguish "this
+   * stream is already over - render terminal state from the row"
+   * from "subscribe and wait." Absent on every other path.
+   */
+  noStreamInFlight?: true;
+}
+
+/**
+ * Browser-triggered streaming chat completion. POSTs body with
+ * threadId, userMessageId, and a Venice wire body; the function
+ * returns the envelope synchronously and runs the round chain in
+ * the background via EdgeRuntime.waitUntil. Live events publish to
+ * the thread:<id>:stream Broadcast channel; the row persistence
+ * happens server-side so a backgrounded mobile PWA returns to find
+ * the assistant turn either complete or still in flight regardless
+ * of whether the tab survived.
+ *
+ * Auth model: b-strict. Gateway's verify_jwt validates the session
+ * JWT and the function extracts userId from the `sub` claim. Every
+ * DB write is service-role; ownership is gated by the explicit
+ * userId comparison against the thread row before anything starts.
+ */
+async function handleStream(req: Request): Promise<Response> {
+  let body: StreamRequestBody;
+  try {
+    body = (await req.json()) as StreamRequestBody;
+  } catch {
+    return json({ error: 'invalid JSON body' }, 400);
+  }
+  if (typeof body.threadId !== 'string' || body.threadId.length === 0) {
+    return json({ error: 'body.threadId is required' }, 400);
+  }
+  if (
+    typeof body.userMessageId !== 'string' ||
+    body.userMessageId.length === 0
+  ) {
+    return json({ error: 'body.userMessageId is required' }, 400);
+  }
+
+  const userId = userIdFromJwt(req);
+  if (!userId) {
+    return json({ error: 'unauthenticated' }, 401);
+  }
+
+  const admin = adminClient();
+  if (!admin) return json({ error: 'function env missing SUPABASE_* secrets' }, 503);
+
+  // Ownership gate. The thread row's user_id is authoritative; we
+  // never trust the body. Without this, a forged threadId in the
+  // request would let a JWT-authenticated user kick a stream against
+  // someone else's thread.
+  const { data: thread, error: threadErr } = await admin
+    .from('threads')
+    .select('user_id')
+    .eq('id', body.threadId)
+    .maybeSingle();
+  if (threadErr) {
+    return json({ error: `thread lookup failed: ${threadErr.message}` }, 502);
+  }
+  if (!thread || thread.user_id !== userId) {
+    // Same error shape for missing-thread and wrong-owner so a
+    // probe can't distinguish them.
+    return json({ error: 'thread not found' }, 404);
+  }
+
+  const channelName = streamChannelName(body.threadId);
+
+  // Reconnect probe: is there an in-flight streaming row on this
+  // thread? Same answer drives same-device-reload, cross-device
+  // ape-mode, and the explicit reconnectOnly path. Returning the
+  // existing envelope short-circuits a duplicate completion.
+  const { data: streamingRow } = await admin
+    .from('messages')
+    .select('id, content')
+    .eq('thread_id', body.threadId)
+    .eq('status', 'streaming')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (streamingRow) {
+    const envelope: StreamEnvelope = {
+      channelName,
+      assistantRowId: (streamingRow as { id: string }).id,
+      completedSoFar:
+        (streamingRow as { content?: string | null }).content ?? '',
+    };
+    return json(envelope);
+  }
+
+  if (body.reconnectOnly === true) {
+    const envelope: StreamEnvelope = {
+      channelName,
+      assistantRowId: null,
+      completedSoFar: '',
+      noStreamInFlight: true,
+    };
+    return json(envelope);
+  }
+
+  if (!body.body || typeof body.body !== 'object') {
+    return json({ error: 'body.body is required for fresh streams' }, 400);
+  }
+
+  const apiKey = await readVeniceKey(admin);
+  if (!apiKey) {
+    return json({ error: 'no Venice key configured (app_config unseeded)' }, 503);
+  }
+
+  // Kick off the orchestrator. It owns its own AbortController (the
+  // wall deadline + the control channel cancel) - the request signal
+  // is NOT passed in because the request returns immediately after
+  // this envelope and the orchestrator must survive that disconnect.
+  const promise = getStreamingResponse({
+    apiKey,
+    threadId: body.threadId,
+    userMessageId: body.userMessageId,
+    userId,
+    bodyTemplate: body.body as Record<string, unknown>,
+    adminClient: admin,
+  });
+  edgeWaitUntil(promise);
+
+  const envelope: StreamEnvelope = {
+    channelName,
+    assistantRowId: null,
+    completedSoFar: '',
+  };
+  return json(envelope);
+}
+
 Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS_HEADERS });
 
@@ -479,6 +694,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   if (route === 'text-parser' && req.method === 'POST') return handleTextParser(req);
   if (route === 'image-generate' && req.method === 'POST') return handleImageGenerate(req);
   if (route === 'complete' && req.method === 'POST') return handleComplete(req);
+  if (route === 'stream' && req.method === 'POST') return handleStream(req);
 
   return json({ error: 'not found' }, 404);
 });
