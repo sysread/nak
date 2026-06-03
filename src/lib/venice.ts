@@ -33,6 +33,7 @@
  * and how they consume the wire response.
  */
 
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ReasoningEffort, Verbosity } from './models';
 import type { OpenAIToolDef, OpenAIToolCall } from './tools/types';
 // Re-export so callers consuming a ChatCompletion (ChatCompletion.toolCalls
@@ -40,6 +41,12 @@ import type { OpenAIToolDef, OpenAIToolCall } from './tools/types';
 // reaching into ./tools/types.
 export type { OpenAIToolCall };
 import { createLogger } from './logger.svelte';
+import {
+  controlChannelName,
+  type TerminalKind,
+  type ToolCallRequest,
+  type VeniceErrorKind as SharedVeniceErrorKind,
+} from '$shared/venice-stream';
 
 const log = createLogger('venice');
 
@@ -257,6 +264,21 @@ export interface ChatRequest {
    * full off switch.
    */
   disableThinking?: boolean;
+  /**
+   * Routing context for the streaming-root migration. When set,
+   * streamChat POSTs to the venice/stream edge function with these
+   * identifiers and consumes the round chain via a Realtime Broadcast
+   * subscription instead of opening a Venice SSE connection from the
+   * browser. The fields together identify the thread + anchor user
+   * message the function should respond to. Required for the main
+   * chat path; absent on sub-completion callers that go through the
+   * non-streaming /complete edge function (these never hit
+   * streamChat).
+   */
+  streamCtx?: {
+    threadId: string;
+    userMessageId: string;
+  };
 }
 
 /**
@@ -295,7 +317,44 @@ export type StreamEvent =
   | { type: 'reasoning'; delta: string }
   | { type: 'tool_call'; toolCall: OpenAIToolCall }
   | { type: 'usage'; usage: TokenUsage }
-  | { type: 'citations'; citations: Citation[] };
+  | { type: 'citations'; citations: Citation[] }
+  // Server-driven events introduced by the streaming-root migration.
+  // The Broadcast channel publishes the wire shape from
+  // $shared/venice-stream and we translate to these for the browser
+  // chat-loop's consumer. tool_call_response is the server-emitted
+  // pairing for each tool_call_request - chat-loop fires its
+  // onToolDone handler off this rather than executing tools itself.
+  // end is the terminal marker; rate_limit_* and guard_retry are UI
+  // affordance signals.
+  | {
+      type: 'tool_call_response';
+      id: string;
+      name: string;
+      /** ~200-char preview of the tool result; the full payload is on the tool-result row. */
+      resultSummary: string;
+    }
+  | {
+      type: 'rate_limit_wait';
+      retryAfterMs: number;
+      attempt: number;
+      /** ISO 8601 wall-clock time the function intends to retry at. */
+      until: string;
+    }
+  | { type: 'rate_limit_resolved' }
+  | { type: 'guard_retry'; reason: string }
+  | {
+      type: 'error';
+      kind: SharedVeniceErrorKind;
+      message: string;
+      retryable: boolean;
+    }
+  | {
+      type: 'end';
+      /** assistant row id the server committed to a terminal state. */
+      persistedAssistantId: string;
+      terminalKind: TerminalKind;
+      conflict?: string;
+    };
 
 /**
  * Result returned by `SupabaseService.complete` (the non-streaming
@@ -455,6 +514,14 @@ export interface VeniceClientOptions {
   apiKey: string;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Supabase client used to route streaming chat through the venice
+   * edge function (POST /venice/stream + Broadcast subscription). When
+   * absent, streamChat falls back to the direct-Venice path - kept as
+   * a compatibility seam for tests and for any caller that constructs
+   * a venice client before the supabase client is ready.
+   */
+  supabase?: SupabaseClient;
 }
 
 /**
@@ -610,12 +677,24 @@ export class VeniceClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private supabase: SupabaseClient | null;
 
   constructor(opts: VeniceClientOptions) {
     if (!opts.apiKey) throw new VeniceError('API key is required', 'auth');
     this.apiKey = opts.apiKey;
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
     this.fetchImpl = opts.fetchImpl ?? fetch.bind(globalThis);
+    this.supabase = opts.supabase ?? null;
+  }
+
+  /**
+   * Attach a Supabase client after construction. State init creates
+   * the venice client before the supabase client is ready, so this
+   * lets the main chat path opt into streaming-root once both are
+   * available without ripping up the init ordering.
+   */
+  setSupabase(client: SupabaseClient): void {
+    this.supabase = client;
   }
 
   private headers(): Record<string, string> {
@@ -659,12 +738,39 @@ export class VeniceClient {
    * arrive) and tool_call events (each emitted once, after its
    * arguments string has been fully assembled).
    *
+   * Two transport paths:
+   *
+   *   1. Streaming-root (preferred). When `req.streamCtx` is set and
+   *      the venice client has a Supabase client attached, this POSTs
+   *      to the venice edge function's /stream route, subscribes to
+   *      the returned Broadcast channel, and yields events as the
+   *      server-side orchestrator (getStreamingResponse) publishes
+   *      them. The function owns the round chain, tool dispatch,
+   *      rate-limit retry, output guards, and assistant-row commit;
+   *      the browser is a pure observer. This is the load-bearing
+   *      path that lets the assistant turn survive browser disconnect
+   *      on mobile PWAs.
+   *
+   *   2. Direct Venice (legacy fallback). When streamCtx is absent,
+   *      this opens fetch directly to Venice /chat/completions and
+   *      parses SSE in-process. Kept for test ergonomics and any
+   *      caller wired before the supabase client lands.
+   *
    * Used only by the main user-facing chat loop. Background callers
    * go through `SupabaseService.complete` (the non-streaming
-   * venice/complete edge function); see the file header for the
-   * rationale.
+   * venice/complete edge function).
    */
   async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
+    if (req.streamCtx && this.supabase) {
+      yield* streamChatViaFunction(this.supabase, req, req.streamCtx);
+      return;
+    }
+    yield* this.streamChatDirect(req);
+  }
+
+  private async *streamChatDirect(
+    req: ChatRequest,
+  ): AsyncGenerator<StreamEvent, void, void> {
     const body = buildChatBody(req, true);
     let res: Response;
     try {
@@ -836,6 +942,315 @@ export class VeniceClient {
   }
 
 }
+
+// ---------------------------------------------------------------------------
+// Streaming-root transport.
+//
+// Routes the browser's streamChat call through the venice edge
+// function's /stream route + a Supabase Realtime Broadcast channel.
+// All the round-internal work (Venice fetch, rate-limit retry, output
+// guards, tool dispatch, assistant-row commit) lives server-side; the
+// browser is a pure event consumer.
+// ---------------------------------------------------------------------------
+
+interface StreamEnvelope {
+  channelName: string;
+  assistantRowId: string | null;
+  completedSoFar: string;
+  noStreamInFlight?: boolean;
+}
+
+async function* streamChatViaFunction(
+  supabase: SupabaseClient,
+  req: ChatRequest,
+  ctx: NonNullable<ChatRequest['streamCtx']>,
+): AsyncGenerator<StreamEvent, void, void> {
+  // Build the Venice wire body once and ship as the orchestrator's
+  // bodyTemplate. The function copies and mutates only `messages`
+  // between rounds; everything else (model, venice_parameters, tools)
+  // rides untouched.
+  const body = buildChatBody(req, true);
+
+  // Envelope POST. functions.invoke wraps the bearer token from the
+  // signed-in session so the edge function's verify_jwt accepts the
+  // call and the userIdFromJwt helper can read the sub claim.
+  const { data, error } = await supabase.functions.invoke<StreamEnvelope>(
+    'venice/stream',
+    {
+      body: {
+        threadId: ctx.threadId,
+        userMessageId: ctx.userMessageId,
+        body,
+      },
+    },
+  );
+  if (error) {
+    throw new VeniceError(
+      `/stream invoke failed: ${error.message}`,
+      'http',
+    );
+  }
+  if (!data) {
+    throw new VeniceError('/stream returned no envelope', 'parse');
+  }
+
+  // Reconnect-only short-circuit: when the envelope reports no
+  // in-flight stream, the caller asked us to observe rather than
+  // start. Emit a terminal end so the chat-loop's consumer wraps up
+  // cleanly without waiting for events that aren't coming.
+  if (data.noStreamInFlight) {
+    yield {
+      type: 'end',
+      persistedAssistantId: data.assistantRowId ?? '',
+      terminalKind: 'completed',
+    };
+    return;
+  }
+
+  // Channel subscribe. private:true engages the realtime.messages RLS
+  // policies in supabase/schema.sql that gate this topic to the
+  // thread owner. The function (service_role) is what publishes on
+  // the other side.
+  const channel = supabase.channel(data.channelName, {
+    config: { private: true },
+  });
+
+  // Producer queue. The Broadcast callbacks fire on a microtask
+  // outside the for-await consumer's frame; we buffer events here and
+  // resolve the awaiting consumer when one arrives.
+  const queue: StreamEvent[] = [];
+  let resolveNext: ((ev: StreamEvent | null) => void) | null = null;
+  let closed = false;
+
+  function push(ev: StreamEvent): void {
+    if (closed) return;
+    if (resolveNext) {
+      const r = resolveNext;
+      resolveNext = null;
+      r(ev);
+    } else {
+      queue.push(ev);
+    }
+  }
+
+  function close(): void {
+    closed = true;
+    if (resolveNext) {
+      const r = resolveNext;
+      resolveNext = null;
+      r(null);
+    }
+  }
+
+  // Map each Broadcast event name onto the legacy StreamEvent shape
+  // the chat-loop already understands, plus the new variants
+  // (tool_call_response, rate_limit_*, guard_retry, error, end). The
+  // server publishes the wire shape from $shared/venice-stream.
+  channel.on('broadcast', { event: 'response_text' }, ({ payload }) => {
+    const p = payload as { content?: string };
+    if (typeof p.content === 'string' && p.content.length > 0) {
+      push({ type: 'text', delta: p.content });
+    }
+  });
+  channel.on('broadcast', { event: 'reasoning_text' }, ({ payload }) => {
+    const p = payload as { content?: string };
+    if (typeof p.content === 'string' && p.content.length > 0) {
+      push({ type: 'reasoning', delta: p.content });
+    }
+  });
+  channel.on('broadcast', { event: 'tool_call_request' }, ({ payload }) => {
+    const p = payload as { request?: { id?: string; name?: string; args?: unknown } };
+    const r = p.request;
+    if (!r || typeof r.id !== 'string' || typeof r.name !== 'string') return;
+    let args: string;
+    try {
+      args = JSON.stringify(r.args ?? {});
+    } catch {
+      args = '{}';
+    }
+    push({
+      type: 'tool_call',
+      toolCall: {
+        id: r.id,
+        type: 'function',
+        function: { name: r.name, arguments: args },
+      },
+    });
+  });
+  channel.on('broadcast', { event: 'tool_call_response' }, ({ payload }) => {
+    const p = payload as { id?: string; name?: string; result_summary?: string };
+    if (typeof p.id !== 'string' || typeof p.name !== 'string') return;
+    push({
+      type: 'tool_call_response',
+      id: p.id,
+      name: p.name,
+      resultSummary: typeof p.result_summary === 'string' ? p.result_summary : '',
+    });
+  });
+  channel.on('broadcast', { event: 'usage' }, ({ payload }) => {
+    const p = payload as { usage?: TokenUsage };
+    if (p.usage) push({ type: 'usage', usage: p.usage });
+  });
+  channel.on('broadcast', { event: 'citations' }, ({ payload }) => {
+    const p = payload as { citations?: Citation[] };
+    if (Array.isArray(p.citations) && p.citations.length > 0) {
+      push({ type: 'citations', citations: p.citations });
+    }
+  });
+  channel.on('broadcast', { event: 'rate_limit_wait' }, ({ payload }) => {
+    const p = payload as {
+      retryAfterMs?: number;
+      attempt?: number;
+      until?: string;
+    };
+    if (
+      typeof p.retryAfterMs === 'number' &&
+      typeof p.attempt === 'number' &&
+      typeof p.until === 'string'
+    ) {
+      push({
+        type: 'rate_limit_wait',
+        retryAfterMs: p.retryAfterMs,
+        attempt: p.attempt,
+        until: p.until,
+      });
+    }
+  });
+  channel.on('broadcast', { event: 'rate_limit_resolved' }, () => {
+    push({ type: 'rate_limit_resolved' });
+  });
+  channel.on('broadcast', { event: 'guard_retry' }, ({ payload }) => {
+    const p = payload as { reason?: string };
+    push({ type: 'guard_retry', reason: typeof p.reason === 'string' ? p.reason : '' });
+  });
+  channel.on('broadcast', { event: 'error' }, ({ payload }) => {
+    const p = payload as {
+      kind?: SharedVeniceErrorKind;
+      message?: string;
+      retryable?: boolean;
+    };
+    push({
+      type: 'error',
+      kind: p.kind ?? 'internal',
+      message: typeof p.message === 'string' ? p.message : 'stream error',
+      retryable: p.retryable === true,
+    });
+    close();
+  });
+  channel.on('broadcast', { event: 'END' }, ({ payload }) => {
+    const p = payload as {
+      persistedAssistantId?: string;
+      terminalKind?: TerminalKind;
+      conflict?: string;
+    };
+    push({
+      type: 'end',
+      persistedAssistantId:
+        typeof p.persistedAssistantId === 'string' ? p.persistedAssistantId : '',
+      terminalKind: p.terminalKind ?? 'completed',
+      ...(p.conflict ? { conflict: p.conflict } : {}),
+    });
+    close();
+  });
+
+  // Subscribe, then drain any completedSoFar buffer the envelope
+  // surfaced. The subscribe-then-read pattern guards against the race
+  // where an UPDATE lands between the envelope read and the subscribe
+  // callback firing: anything in completedSoFar is what the row had
+  // at envelope time, and any new deltas after that point arrive
+  // through the Broadcast channel we just subscribed to.
+  await new Promise<void>((resolve, reject) => {
+    channel.subscribe((status, err) => {
+      if (status === 'SUBSCRIBED') resolve();
+      else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        reject(err ?? new Error(`Channel ${status}`));
+      }
+    });
+  });
+
+  if (data.completedSoFar.length > 0) {
+    yield { type: 'text', delta: data.completedSoFar };
+  }
+
+  // Wire the request's AbortSignal to local close-and-unsubscribe.
+  // The signal fires when the chat-loop's stop button or a foreign
+  // claim's abort propagates here; the FUNCTION continues regardless
+  // (cancel is the control-channel publish path, not this signal).
+  const signal = req.signal;
+  const onAbort = (): void => close();
+  signal?.addEventListener('abort', onAbort, { once: true });
+
+  try {
+    while (true) {
+      if (queue.length > 0) {
+        const ev = queue.shift();
+        if (ev) yield ev;
+        continue;
+      }
+      if (closed) break;
+      const next = await new Promise<StreamEvent | null>((r) => {
+        resolveNext = r;
+      });
+      if (next === null) break;
+      yield next;
+    }
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    try {
+      await channel.unsubscribe();
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+/**
+ * Publish a user-initiated cancel on the thread's control channel.
+ * The streaming function (which subscribes to this same channel)
+ * receives the event and aborts its in-flight Venice fetch + tool
+ * calls, then publishes END(aborted) on the stream channel. The
+ * browser observes the END event through its existing streamChat
+ * consumer.
+ *
+ * Idempotent: extra cancel publishes are no-ops once the orchestrator
+ * has unsubscribed.
+ */
+export async function cancelStream(
+  supabase: SupabaseClient,
+  threadId: string,
+): Promise<void> {
+  const ch = supabase.channel(controlChannelName(threadId), {
+    config: { private: true },
+  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      ch.subscribe((status, err) => {
+        if (status === 'SUBSCRIBED') resolve();
+        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          reject(err ?? new Error(`Cancel channel ${status}`));
+        }
+      });
+    });
+    await ch.send({
+      type: 'broadcast',
+      event: 'cancel',
+      payload: { type: 'cancel' },
+    });
+  } catch (err) {
+    log.warn(`cancelStream failed: ${(err as Error).message}`);
+  } finally {
+    try {
+      await ch.unsubscribe();
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+// Suppress unused-name warning on the imported ToolCallRequest type -
+// it's intentionally re-exported below for chat-loop consumers that
+// want the typed shape from the shared module.
+export type { ToolCallRequest };
 
 /**
  * A parsed SSE frame. Multiple fields may be set in a single frame —
