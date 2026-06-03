@@ -69,13 +69,16 @@ yarn-error.log*
 # into the repo. The pattern matches contents rather than the dir
 # itself (`.claude/**`, not `.claude/`) so the `!` exceptions below
 # can re-include the project-level config that every session should
-# see: settings.json and the hooks/ tree. Git's rule is that an
-# excluded *directory* can't have its contents re-included, so the
-# `**` form is load-bearing here.
+# see: settings.json, the hooks/ tree, and the skills/ tree (vendored
+# Venice API skills that Claude Code auto-discovers from the repo).
+# Git's rule is that an excluded *directory* can't have its contents
+# re-included, so the `**` form is load-bearing here.
 .claude/**
 !.claude/settings.json
 !.claude/hooks/
 !.claude/hooks/**
+!.claude/skills/
+!.claude/skills/**
 .mcp.json
 
 # scratch docs

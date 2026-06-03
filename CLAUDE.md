@@ -2,6 +2,16 @@
 
 Guidance for Claude Code / Claude sessions working in this repo. See `README.md` for the project-level overview, `docs/user/README.md` for the end-user manual (also rendered in-app via the **Help** button), and `docs/dev/README.md` for architecture + per-feature dev notes.
 
+## Start with the dev docs
+
+`docs/dev/` is the architecture-and-conventions tree: one overview plus one doc per feature, each with a "Gotchas" section and an "Interactions" ledger naming the other features it couples to. [`docs/dev/README.md`](docs/dev/README.md) is the index; [`docs/dev/architecture.md`](docs/dev/architecture.md) is the one to read first.
+
+**Read the relevant dev doc before starting any non-trivial work.** Before you touch a feature, open its doc - and the docs of the features its "Interactions" section names. Changing a contract other features depend on without reading their Interactions ledger is how coupling breaks silently. This is cheap insurance, not ceremony.
+
+**When the codebase surprises or confuses you, check the dev docs before guessing.** A line that looks removable, a constraint that seems arbitrary, a flow that doesn't match what you expected - the "Gotchas" section of the relevant feature doc, or its Interactions ledger, usually explains why. The docs are the first place to look when reality doesn't match your model, not a fallback after you've already changed something.
+
+If a dev doc is wrong, stale, or missing the thing that would have saved you, fix it in the same PR. A stale dev doc misleads the next session with full confidence - worse than no doc at all. (Where to *put* new dev docs is covered under "User-facing documentation" below.)
+
 ## Talking to the user
 
 Calibration that applies to every interaction. Hard constraints, not style preferences.
