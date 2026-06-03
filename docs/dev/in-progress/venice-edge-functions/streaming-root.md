@@ -35,34 +35,87 @@ land the **server-side infrastructure + the browser transport seam**:
 **Not yet activated on the chat path.** The chat-loop (`src/lib/
 chat-loop.ts`) still builds requests without `streamCtx`, so
 `streamChat` keeps using the legacy direct-Venice transport. The
-infrastructure is dormant until the chat-loop opts in - one field
-on the request shape today, plus the round-loop simplification
-the migration's whole point.
+infrastructure is dormant until the chat-loop opts in.
 
-**Follow-up work (v1+ in this branch or a successor):**
+### Path to activation (revised 2026-06-03)
 
-- **Collapse `src/lib/chat-loop.ts`** - drop the
-  `streamChatWithRateLimitRetry` + `streamChatWithGuards` wrappers
-  (server does both), drop the round loop (single streamChat call
-  covers all rounds), drop tool dispatch + `add_assistant_message`
-  (server does both), add handlers for the new event variants
-  (`end` terminal kind, `tool_call_response` for tool result UI).
-- **`src/screens/Chat.svelte`** - stop button publishes
-  `{type:'cancel'}` to `thread:<id>:control` via
-  `cancelStream(supabase, threadId)`; on thread open, probe for
-  `status='streaming'` rows and POST `/stream` with
-  `reconnectOnly: true` to subscribe and observe.
-- **Tests** - rewrite `tests/venice.test.ts` streaming describe
-  block around `functions.invoke` + Broadcast channel mocks; shrink
-  `tests/chat-loop.test.ts` (per-round tool/retry/guards tests move
-  function-side); add function-side tests under
-  `supabase/functions/tests/` once a Deno test harness is in place.
-- **Tool ports** - the function-side tool registry starts empty.
-  Each browser-side tool gets ported to a Deno-portable file and
-  `registerTool()`'d as the migration inventory progresses.
+The original waterfall plan ("collapse chat-loop, then port tools as
+a follow-up") doesn't survive contact with reality: the chat surface
+uses ~40 tools across six toolboxes, and a hard cut with an empty
+server-side registry would `ToolNotImplementedError` on the first
+tool call of any real chat. Tool ports are a prerequisite to A2 (no
+chat regression), not a follow-up.
 
-The v1 cut line below describes the end state; the implementation
-status above tracks what is in place today.
+No feature flag - this is a single-user app and the flag adds
+overhead without an addressee. Order the work so the broken-window
+between "old path deleted" and "new path complete" is as short as
+possible. That means porting prerequisites first, then doing the
+cut in one commit.
+
+1. **Port tools server-side, one family at a time.** Each port is
+   its own commit; the chat-loop is still on the legacy path so
+   nothing exercises the ports yet, but the code is in place and
+   compile-tested. Order (low coupling to high):
+   - Memory reads (`memory_search`, `memory_recall`)
+   - Conversation reads (`conversation_search`, `conversation_get`,
+     `conversation_recall`)
+   - Wiki reads (`wiki_search`, `wiki_list`, `wiki_get`,
+     `wiki_recall`)
+   - Doc reads (`doc_list`, `doc_get`, `doc_grep`, `doc_read`)
+   - Recipe reads (`recipe_list`, `recipe_get`)
+   - Memory writes (`memory_create`, `memory_update`, `memory_delete`,
+     `memory_reaffirm`, `memory_doubt`, `memory_relate`,
+     `memory_unrelate`, `memory_consolidate`, `memory_invalidate`)
+   - Recipe writes (`recipe_save`, `recipe_update`, `recipe_delete`,
+     `recipe_photos_*`, `recipe_photo_label_set`)
+   - Doc writes (`doc_create`, `doc_update`, `doc_delete`)
+   - LLM-coupled (`web_search`, `research_docs`, `analyze_image`)
+   - `update_title`, `toggle_toolbox`, `ask_user`, `context`
+   - `generate_image` (involves image-attachment harvest server-side)
+   - Sub-agents last: `wiki_librarian` (needs `runHeadlessToolLoop`
+     server-side), `contextTool` (orchestrates three recall agents)
+2. **Collapse + Chat.svelte cut.** Single commit lands the
+   architecture flip. In `chat-loop.ts`: set `streamCtx` + supabase
+   on every `streamChat` call; delete the round-loop body, the
+   `streamChatWithRateLimitRetry` + `streamChatWithGuards`
+   wrappers, the tool dispatch path, the `add_assistant_message`
+   path. Route new event variants (`tool_call_response`, `end`,
+   `rate_limit_*`, `guard_retry`, `error`) to the existing handler
+   surface. In `Chat.svelte`: same event-handler wiring at the UI
+   layer; stop button publishes to the control channel via
+   `cancelStream()`; thread-open probes for `status='streaming'`
+   rows and reconnects.
+3. **Smoke test on the dev env.** A1 (mobile-PWA backgrounding),
+   A3 (cancel), A4 (reconnect), A5 (ape mode). Fix what breaks.
+4. **Cleanup.** Run knip to surface now-unused browser-side tool
+   implementations; delete them (schemas stay for the system-
+   prompt catalog). Delete Venice key handling from
+   `src/lib/config.ts` + `state.svelte.ts` + the unlock flow.
+   Driver B finale.
+5. **Test rewrite.** Rewrite `tests/venice.test.ts` streaming
+   describe around `functions.invoke` + Broadcast channel mocks.
+   Shrink `tests/chat-loop.test.ts` as the round-loop / dispatch /
+   retry / guards branches are gone. Deno-side tests for the
+   function modules are separate scope.
+
+### Regression accepted under the ramp
+
+- **Mid-turn title trigger for intuition / context-recall stops
+  firing.** The current chat-loop re-runs intuition+recall when the
+  model calls `update_title` mid-turn so the rest of the turn sees
+  fresh priming. Under the server-side round loop, "the rest of the
+  turn" is invisible to the browser. Pre-turn priming still works;
+  the next user turn picks up the new title. Cost: stale priming for
+  the remainder of one turn, occasionally. Acceptable.
+
+### What stays exactly as built
+
+The whole server-side architecture - envelope, Broadcast publish
+with adaptive buffering, row-as-state, control channel, b-strict
+auth, `commit_assistant_message` RPC, `getStreamingResponse` round
+loop, `EdgeRuntime.waitUntil()` lifecycle - lands intact. The ramp
+changes the activation order, not the destination. The v1 cut line
+below remains the target.
 
 ## Synopsis
 
