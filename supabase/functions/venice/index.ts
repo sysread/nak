@@ -47,6 +47,10 @@ import {
 } from '../_shared/backfill.ts';
 import { streamChannelName } from '../_shared/venice-stream.ts';
 import { getStreamingResponse } from './getStreamingResponse.ts';
+// Side-effect import: every tool module under ./tools/ calls
+// registerTool() at module-load via this barrel, populating the
+// performToolCall registry before the first /stream request lands.
+import './tools/index.ts';
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
