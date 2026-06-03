@@ -1,5 +1,69 @@
 # Streaming-root edge function: design plan
 
+## Implementation status (2026-06-03)
+
+Branch: `claude/streaming-root-edge-function`. Commits 64d5a9b..9b53aaf
+land the **server-side infrastructure + the browser transport seam**:
+
+- **Schema** - `messages.status` enum, `commit_assistant_message` RPC,
+  and `realtime.messages` RLS policies for `thread:<id>:stream` and
+  `thread:<id>:control`. See `supabase/schema.sql`.
+- **Shared module** - `supabase/functions/_shared/venice-stream.ts`
+  hosts the typed event union, SSE parser, tool-call assembler,
+  channel-name helpers, guard primitives. `$shared/*` Vite alias +
+  tsconfig include wired so the browser imports the same source of
+  truth.
+- **Deno modules** - `getStreamingCompletion` (SSE consumer with
+  rate-limit retry + output-guards), `performToolCall` (dispatcher;
+  registry empty for v1), adaptive `broadcast` publisher,
+  `getStreamingResponse` (orchestrator: round loop, assistant-row
+  lifecycle, control-channel cancel, wall deadline, terminal
+  commit), and the `/stream` route on `venice/index.ts`.
+- **Browser transport** - `VeniceClient.streamChat` accepts an opt-in
+  `req.streamCtx` (threadId, userMessageId). With it set + a
+  Supabase client attached, streamChat POSTs to `/stream`,
+  subscribes to the returned Broadcast channel, and translates the
+  server's wire vocabulary to the existing StreamEvent union plus
+  the new variants (`tool_call_response`, `rate_limit_*`,
+  `guard_retry`, `error`, `end`). `cancelStream()` publishes to the
+  control channel.
+- **Docs** - `docs/dev/edge-function-auth.md` covers the b-strict
+  client model end-to-end, the `// RLS OFF: filter by userId`
+  discipline, and the trust-chain (gateway verify_jwt -> sub claim
+  -> ownership probe -> orchestrator -> commit RPC).
+
+**Not yet activated on the chat path.** The chat-loop (`src/lib/
+chat-loop.ts`) still builds requests without `streamCtx`, so
+`streamChat` keeps using the legacy direct-Venice transport. The
+infrastructure is dormant until the chat-loop opts in - one field
+on the request shape today, plus the round-loop simplification
+the migration's whole point.
+
+**Follow-up work (v1+ in this branch or a successor):**
+
+- **Collapse `src/lib/chat-loop.ts`** - drop the
+  `streamChatWithRateLimitRetry` + `streamChatWithGuards` wrappers
+  (server does both), drop the round loop (single streamChat call
+  covers all rounds), drop tool dispatch + `add_assistant_message`
+  (server does both), add handlers for the new event variants
+  (`end` terminal kind, `tool_call_response` for tool result UI).
+- **`src/screens/Chat.svelte`** - stop button publishes
+  `{type:'cancel'}` to `thread:<id>:control` via
+  `cancelStream(supabase, threadId)`; on thread open, probe for
+  `status='streaming'` rows and POST `/stream` with
+  `reconnectOnly: true` to subscribe and observe.
+- **Tests** - rewrite `tests/venice.test.ts` streaming describe
+  block around `functions.invoke` + Broadcast channel mocks; shrink
+  `tests/chat-loop.test.ts` (per-round tool/retry/guards tests move
+  function-side); add function-side tests under
+  `supabase/functions/tests/` once a Deno test harness is in place.
+- **Tool ports** - the function-side tool registry starts empty.
+  Each browser-side tool gets ported to a Deno-portable file and
+  `registerTool()`'d as the migration inventory progresses.
+
+The v1 cut line below describes the end state; the implementation
+status above tracks what is in place today.
+
 ## Synopsis
 
 Move `venice.streamChat` behind a new `/stream` endpoint on the venice edge function. Internally, decompose into three composable modules - `getStreamingCompletion` (Venice SSE consumer + normalizer), `performToolCall` (single tool execution), `getStreamingResponse` (round-loop orchestrator + persistence + event publisher). The endpoint is a one-shot envelope: it returns `{channelName, assistantRowId, completedSoFar}` immediately and continues the streaming completion in the background via `EdgeRuntime.waitUntil()`. Live events publish to a Supabase Realtime Broadcast channel; resume state lives on the in-flight assistant row. The function ignores client disconnect by design - the mobile-PWA case (backgrounded tab loses connection) is exactly what the migration is escaping.
