@@ -12,6 +12,7 @@
 // When a new tool ports, add one `import './name.ts'` line here. The
 // barrel itself stays mechanical; no export surface, no logic.
 
+import './analyze_image.ts';
 import './ask_user.ts';
 import './conversation_get.ts';
 import './conversation_search.ts';
@@ -36,6 +37,7 @@ import './recipe_save.ts';
 import './recipe_update.ts';
 import './toggle_tools.ts';
 import './update_title.ts';
+import './web_search.ts';
 import './wiki_get.ts';
 import './wiki_list.ts';
 import './wiki_search.ts';
