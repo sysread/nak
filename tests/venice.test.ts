@@ -2,9 +2,17 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   VeniceClient,
   VeniceError,
+  cancelStream,
   parseSseFrame,
   parseChatCompletion,
+  streamReconnect,
+  type StreamEvent,
 } from '../src/lib/venice';
+import type {
+  RealtimeChannel,
+  RealtimeChannelSendResponse,
+  SupabaseClient,
+} from '@supabase/supabase-js';
 
 function encoder(): TextEncoder {
   return new TextEncoder();
@@ -784,6 +792,548 @@ describe('VeniceClient.streamChat', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// Streaming-root transport test scaffolding.
+//
+// The browser's streaming chat path POSTs to the venice edge function's
+// /stream route, gets back an envelope ({channelName, assistantRowId,
+// completedSoFar}), and subscribes to a Supabase Realtime Broadcast
+// channel for live events. The unit tests below stub both halves of
+// that transport - functions.invoke for the envelope POST and channel
+// for the Broadcast subscription - so the streamChat / streamReconnect /
+// cancelStream paths can be exercised without a real Supabase client.
+//
+// MockChannel exposes an `emit(event, payload)` helper that fires
+// every registered broadcast handler for that event name, matching the
+// shape `channel.on('broadcast', { event }, cb)` registers. Tests
+// trigger the production code by awaiting subscribe -> then calling
+// emit() to simulate the function publishing events from the other
+// side of the channel.
+// ---------------------------------------------------------------------------
+
+interface MockChannel {
+  readonly name: string;
+  on(
+    type: 'broadcast',
+    opts: { event: string },
+    cb: (msg: { payload: unknown }) => void,
+  ): MockChannel;
+  subscribe(cb?: (status: string, err?: Error) => void): MockChannel;
+  send(msg: {
+    type: 'broadcast';
+    event: string;
+    payload: unknown;
+  }): Promise<RealtimeChannelSendResponse>;
+  unsubscribe(): Promise<'ok' | 'error' | 'timed out'>;
+  emit(event: string, payload: unknown): void;
+  readonly sent: Array<{ event: string; payload: unknown }>;
+}
+
+function makeChannel(
+  name: string,
+  opts: { subscribeStatus?: 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' } = {},
+): MockChannel {
+  const handlers = new Map<string, Array<(msg: { payload: unknown }) => void>>();
+  const sent: Array<{ event: string; payload: unknown }> = [];
+  const channel: MockChannel = {
+    name,
+    on(_type, { event }, cb) {
+      const arr = handlers.get(event) ?? [];
+      arr.push(cb);
+      handlers.set(event, arr);
+      return channel;
+    },
+    subscribe(cb) {
+      // Defer the status callback to a microtask so the production
+      // code's await Promise<void>(...) gets a chance to register the
+      // callback before we invoke it.
+      queueMicrotask(() => {
+        cb?.(opts.subscribeStatus ?? 'SUBSCRIBED');
+      });
+      return channel;
+    },
+    async send(msg) {
+      sent.push({ event: msg.event, payload: msg.payload });
+      return 'ok';
+    },
+    async unsubscribe() {
+      return 'ok';
+    },
+    emit(event, payload) {
+      const arr = handlers.get(event) ?? [];
+      for (const cb of arr) cb({ payload });
+    },
+    sent,
+  };
+  return channel;
+}
+
+interface MockSupabaseOpts {
+  envelope?: unknown;
+  invokeError?: Error;
+  channels?: Map<string, MockChannel>;
+}
+
+interface MockSupabase {
+  client: SupabaseClient;
+  channels: Map<string, MockChannel>;
+  invokeCalls: Array<{ name: string; body: unknown }>;
+}
+
+function makeSupabase(opts: MockSupabaseOpts = {}): MockSupabase {
+  const channels = opts.channels ?? new Map<string, MockChannel>();
+  const invokeCalls: Array<{ name: string; body: unknown }> = [];
+  const client = {
+    functions: {
+      invoke: vi.fn(async (name: string, args: { body: unknown }) => {
+        invokeCalls.push({ name, body: args.body });
+        if (opts.invokeError) {
+          return { data: null, error: opts.invokeError };
+        }
+        return { data: opts.envelope ?? null, error: null };
+      }),
+    },
+    channel: vi.fn((name: string) => {
+      const existing = channels.get(name);
+      if (existing) return existing as unknown as RealtimeChannel;
+      const ch = makeChannel(name);
+      channels.set(name, ch);
+      return ch as unknown as RealtimeChannel;
+    }),
+    removeChannel: vi.fn(async () => 'ok'),
+  } as unknown as SupabaseClient;
+  return { client, channels, invokeCalls };
+}
+
+async function collectFirst<T>(
+  gen: AsyncGenerator<T, void, void>,
+  max = 50,
+): Promise<T[]> {
+  const out: T[] = [];
+  for await (const ev of gen) {
+    out.push(ev);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+describe('streamChat (streaming-root transport)', () => {
+  it('POSTs the envelope to venice/stream with threadId, userMessageId, and the built body', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client, invokeCalls } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: null,
+        completedSoFar: '',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const consumer = venice.streamChat({
+      model: 'kimi-k2-5',
+      messages: [{ role: 'user', content: 'hi' }],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    // Start consuming so the await on functions.invoke fires.
+    const drained = collectFirst(consumer);
+    // After subscribe completes the consumer is parked on the queue;
+    // emit END to wind it down so the test can assert.
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('END', {
+      persistedAssistantId: 'A1',
+      terminalKind: 'completed',
+    });
+    await drained;
+
+    expect(invokeCalls).toHaveLength(1);
+    expect(invokeCalls[0].name).toBe('venice/stream');
+    const body = invokeCalls[0].body as {
+      threadId: string;
+      userMessageId: string;
+      body: { model: string; messages: unknown[]; stream: boolean };
+    };
+    expect(body.threadId).toBe('T1');
+    expect(body.userMessageId).toBe('U1');
+    expect(body.body.model).toBe('kimi-k2-5');
+    expect(body.body.stream).toBe(true);
+    expect(body.body.messages).toEqual([{ role: 'user', content: 'hi' }]);
+  });
+
+  it('translates response_text/reasoning_text/END broadcasts into StreamEvents in order', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: null,
+        completedSoFar: '',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const gen = venice.streamChat({
+      model: 'm',
+      messages: [],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    const collected: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const ev of gen) collected.push(ev);
+    })();
+    // Let subscribe resolve.
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('reasoning_text', { content: 'thinking…' });
+    channel.emit('response_text', { content: 'hello ' });
+    channel.emit('response_text', { content: 'world' });
+    channel.emit('END', {
+      persistedAssistantId: 'A1',
+      terminalKind: 'completed',
+    });
+    await drained;
+    expect(collected).toEqual([
+      { type: 'reasoning', delta: 'thinking…' },
+      { type: 'text', delta: 'hello ' },
+      { type: 'text', delta: 'world' },
+      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed' },
+    ]);
+  });
+
+  it('drops empty-content response_text / reasoning_text broadcasts', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: null,
+        completedSoFar: '',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const gen = venice.streamChat({
+      model: 'm',
+      messages: [],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    const collected: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const ev of gen) collected.push(ev);
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('response_text', { content: '' });
+    channel.emit('reasoning_text', { content: '' });
+    channel.emit('response_text', { content: 'real' });
+    channel.emit('END', {
+      persistedAssistantId: 'A',
+      terminalKind: 'completed',
+    });
+    await drained;
+    expect(collected).toEqual([
+      { type: 'text', delta: 'real' },
+      { type: 'end', persistedAssistantId: 'A', terminalKind: 'completed' },
+    ]);
+  });
+
+  it('yields completedSoFar as a text delta before live events on reconnect', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: 'A1',
+        completedSoFar: 'partial answer so far',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const gen = venice.streamChat({
+      model: 'm',
+      messages: [],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    const collected: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const ev of gen) collected.push(ev);
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('response_text', { content: ' more' });
+    channel.emit('END', {
+      persistedAssistantId: 'A1',
+      terminalKind: 'completed',
+    });
+    await drained;
+    expect(collected).toEqual([
+      { type: 'text', delta: 'partial answer so far' },
+      { type: 'text', delta: ' more' },
+      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed' },
+    ]);
+  });
+
+  it('translates tool_call_request and tool_call_response broadcasts into legacy shapes', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: null,
+        completedSoFar: '',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const gen = venice.streamChat({
+      model: 'm',
+      messages: [],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    const collected: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const ev of gen) collected.push(ev);
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('tool_call_request', {
+      request: { id: 'call_abc', name: 'memory_search', args: { q: 'cats' } },
+    });
+    channel.emit('tool_call_response', {
+      id: 'call_abc',
+      name: 'memory_search',
+      result_summary: '[3 results]',
+    });
+    channel.emit('END', {
+      persistedAssistantId: 'A',
+      terminalKind: 'completed',
+    });
+    await drained;
+    expect(collected).toEqual([
+      {
+        type: 'tool_call',
+        toolCall: {
+          id: 'call_abc',
+          type: 'function',
+          function: { name: 'memory_search', arguments: '{"q":"cats"}' },
+        },
+      },
+      {
+        type: 'tool_call_response',
+        id: 'call_abc',
+        name: 'memory_search',
+        resultSummary: '[3 results]',
+      },
+      { type: 'end', persistedAssistantId: 'A', terminalKind: 'completed' },
+    ]);
+  });
+
+  it('drops malformed tool_call_request broadcasts (missing id or name)', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: null,
+        completedSoFar: '',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const gen = venice.streamChat({
+      model: 'm',
+      messages: [],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    const collected: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const ev of gen) collected.push(ev);
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('tool_call_request', { request: { name: 'memory_search', args: {} } });
+    channel.emit('tool_call_request', { request: { id: 'x', args: {} } });
+    channel.emit('END', {
+      persistedAssistantId: 'A',
+      terminalKind: 'completed',
+    });
+    await drained;
+    expect(collected).toEqual([
+      { type: 'end', persistedAssistantId: 'A', terminalKind: 'completed' },
+    ]);
+  });
+
+  it('forwards a server END(error) on the channel as the consumer\'s last event', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: null,
+        completedSoFar: '',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const gen = venice.streamChat({
+      model: 'm',
+      messages: [],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    const collected: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const ev of gen) collected.push(ev);
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('END', {
+      persistedAssistantId: '',
+      terminalKind: 'error',
+      conflict: 'a newer user message landed first',
+    });
+    await drained;
+    expect(collected).toEqual([
+      {
+        type: 'end',
+        persistedAssistantId: '',
+        terminalKind: 'error',
+        conflict: 'a newer user message landed first',
+      },
+    ]);
+  });
+
+  it('throws VeniceError when functions.invoke returns an error', async () => {
+    const { client } = makeSupabase({ invokeError: new Error('boom') });
+    const venice = new VeniceClient({ supabase: client });
+    await expect(async () => {
+      for await (const _ of venice.streamChat({
+        model: 'm',
+        messages: [],
+        streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+      })) {
+        void _;
+      }
+    }).rejects.toBeInstanceOf(VeniceError);
+  });
+});
+
+describe('streamReconnect', () => {
+  it('POSTs reconnectOnly:true with the threadId only (no userMessageId required)', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client, invokeCalls } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: 'A1',
+        completedSoFar: 'hi',
+      },
+      channels,
+    });
+    const gen = streamReconnect(client, { threadId: 'T1' });
+    const collected: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const ev of gen) collected.push(ev);
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('END', {
+      persistedAssistantId: 'A1',
+      terminalKind: 'completed',
+    });
+    await drained;
+    expect(invokeCalls).toHaveLength(1);
+    expect(invokeCalls[0].body).toEqual({
+      threadId: 'T1',
+      reconnectOnly: true,
+    });
+  });
+
+  it('yields a synthetic terminal end when the envelope reports noStreamInFlight', async () => {
+    const { client } = makeSupabase({
+      envelope: {
+        channelName: 'thread:T1:stream',
+        assistantRowId: null,
+        completedSoFar: '',
+        noStreamInFlight: true,
+      },
+    });
+    const collected: StreamEvent[] = [];
+    for await (const ev of streamReconnect(client, { threadId: 'T1' })) {
+      collected.push(ev);
+    }
+    expect(collected).toEqual([
+      { type: 'end', persistedAssistantId: '', terminalKind: 'completed' },
+    ]);
+  });
+
+  it('subscribes the channel and replays live events when the envelope reports an in-flight stream', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: 'A1',
+        completedSoFar: 'partial',
+      },
+      channels,
+    });
+    const collected: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const ev of streamReconnect(client, { threadId: 'T1' })) {
+        collected.push(ev);
+      }
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('response_text', { content: ' more' });
+    channel.emit('END', {
+      persistedAssistantId: 'A1',
+      terminalKind: 'completed',
+    });
+    await drained;
+    expect(collected).toEqual([
+      { type: 'text', delta: 'partial' },
+      { type: 'text', delta: ' more' },
+      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed' },
+    ]);
+  });
+
+  it('throws VeniceError when the /stream reconnect invoke fails', async () => {
+    const { client } = makeSupabase({ invokeError: new Error('timeout') });
+    await expect(async () => {
+      for await (const _ of streamReconnect(client, { threadId: 'T1' })) {
+        void _;
+      }
+    }).rejects.toBeInstanceOf(VeniceError);
+  });
+});
+
+describe('cancelStream', () => {
+  it('subscribes the thread control channel and publishes a cancel broadcast', async () => {
+    const control = makeChannel('thread:T1:control');
+    const channels = new Map([[control.name, control]]);
+    const { client } = makeSupabase({ channels });
+    await cancelStream(client, 'T1');
+    expect(control.sent).toEqual([
+      { event: 'cancel', payload: { type: 'cancel' } },
+    ]);
+  });
+
+  it('swallows the error when the control channel subscribe fails', async () => {
+    const control = makeChannel('thread:T1:control', {
+      subscribeStatus: 'CHANNEL_ERROR',
+    });
+    const channels = new Map([[control.name, control]]);
+    const { client } = makeSupabase({ channels });
+    // Should not throw - the comment on cancelStream documents it as
+    // best-effort: a cancel that can't reach the channel becomes a
+    // no-op rather than a banner-raising error.
+    await expect(cancelStream(client, 'T1')).resolves.toBeUndefined();
+    expect(control.sent).toHaveLength(0);
+  });
+});
 
 describe('parseChatCompletion', () => {
   it('renders missing content as empty string rather than null', () => {
