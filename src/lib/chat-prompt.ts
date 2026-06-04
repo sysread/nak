@@ -47,8 +47,9 @@ const GATED_TOOLBOXES: readonly Toolbox[] = TOOLBOXES.filter(
  * `promptAppendix` has moved out. Identity facts, datetime, attachments
  * inventory, formatting and title nudges now ride as a dedicated
  * metadata system message that the chat-loop assembles per round and
- * positions AFTER the user-configured system prompts (see
- * `buildMetadataSystemMessage` in `chat-loop.ts`). The
+ * pins at the TAIL of the request, after the conversation (for prompt-
+ * cache stability - see `buildMetadataSystemMessage` and the request
+ * assembly in `chat-loop.ts`). The
  * samskara/intuition/context-recall priming projections ride as
  * assistant `<think>` messages after the user turn, not as appendix
  * text. Keeping this module's surface to "baseline only" lets the

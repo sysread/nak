@@ -279,7 +279,15 @@ function buildDatetimeParagraph(
   lastAssistantTimestamp: string | null | undefined,
 ): string {
   const now = new Date();
-  const utc = now.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  // Minute granularity, deliberately. This paragraph leads the per-turn
+  // metadata system message, which rides at the tail of every request
+  // and is rebuilt each round (see the assembly in runChatLoop). A
+  // seconds-precision clock would change the block's bytes between tool
+  // rounds seconds apart and defeat Venice's prompt-prefix cache on the
+  // trailing block; truncating to the minute keeps it byte-stable for
+  // every round inside the same minute. ISO 8601 minute form
+  // ('YYYY-MM-DDTHH:MMZ') is valid and unambiguous.
+  const utc = now.toISOString().slice(0, 16) + 'Z';
   const zone = typeof tz === 'string' && tz.length > 0 ? tz : detectTimezone();
   let local = utc;
   let zoneLabel = zone;
@@ -291,7 +299,6 @@ function buildDatetimeParagraph(
       day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit',
       hour12: false,
       // 'longOffset' returns 'GMT-07:00' / 'GMT+00:00' across modern
       // engines; older Safari has used 'GMT' alone for UTC, which the
@@ -306,7 +313,7 @@ function buildDatetimeParagraph(
     const tzn = get('timeZoneName');
     const m = /GMT([+-]\d{2}:\d{2})$/.exec(tzn);
     const offset = m ? m[1] : 'Z';
-    local = `${get('year')}-${get('month')}-${get('day')}T${h}:${get('minute')}:${get('second')}${offset}`;
+    local = `${get('year')}-${get('month')}-${get('day')}T${h}:${get('minute')}${offset}`;
   } catch {
     // Unknown / rejected zone (older Safari has been stricter about
     // unfamiliar IANA names). Fall back to UTC for both forms - the
@@ -503,12 +510,13 @@ function buildMetadataSystemMessage(
 
 /**
  * Split a history array into the leading user-configured system
- * messages and the conversation that follows. Used by the chat-loop
- * to insert the per-turn metadata system message between the two -
- * baseline system prompt first, then the user's enabled system
- * prompts (voice / persona tuning), then the metadata block (ambient
- * context the model should read just before the user turn), then
- * the actual conversation.
+ * messages and the conversation that follows. The chat-loop emits the
+ * baseline system prompt first, then this `userSystem` run (voice /
+ * persona tuning), then `conversation`, then the per-turn metadata
+ * block as the final row. Metadata is pinned at the tail rather than
+ * mixed into the preamble so the stable baseline + user-system +
+ * history form a cacheable request prefix (see the assembly in
+ * runChatLoop for the prompt-cache rationale).
  *
  * Stops collecting system messages at the first non-system row. A
  * legitimate `role: 'system'` row that arrives after the first
@@ -1650,7 +1658,10 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   //      turn, rendered as first-person observations with
   //      parenthetical confidence hedges.
   //   4. Intuition synthesis - the most-processed layer (perception +
-  //      5 drives + synthesis), reads cleanly when it lands last.
+  //      5 drives + synthesis), reads cleanly as the last think block.
+  //      The per-turn metadata system row rides after this whole chain
+  //      (see the request assembly below), so a trailing system block
+  //      follows intuition even though it is the final <think>.
   //
   // Each push is conditional: an empty-note context-recall, a
   // cold-start thread with no compound summary, a turn where the fire
@@ -1704,26 +1715,42 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     }
     roundsRun++;
 
-    // Three-layer system-prompt assembly. The baseline prompt
-    // (identity, voice, recall framing, toolbox catalog) leads;
-    // user-configured system prompts from Settings ride next so a
-    // custom "you are a pirate" prompt still wins on voice while the
-    // baseline tool framing stays in force; the per-turn metadata
-    // system message comes last among the system rows so the model
-    // reads ambient context (datetime, attachments inventory, title
-    // and emphasis nudges) immediately before the user turn. The
-    // user message itself rides bare - no `<user_message>` fence,
-    // no `<datetime>` tag, no `<system_reminder>` directive folded
-    // in. The role:user / role:system boundary is the structural
-    // signal now; the in-content tags were a workaround for the
-    // URL-scraping auto-injection that's no longer in play.
+    // System-prompt assembly with the per-turn metadata pinned LAST.
+    // The baseline prompt (identity, voice, recall framing, toolbox
+    // catalog) leads; user-configured system prompts from Settings
+    // ride next so a custom "you are a pirate" prompt still wins on
+    // voice while the baseline tool framing stays in force; then the
+    // whole conversation; then the per-turn metadata system message as
+    // the final row, immediately before the model generates.
+    //
+    // Metadata rides at the tail for prompt-cache economics, not
+    // reading order. Venice - like every OpenAI-compatible backend -
+    // can only reuse a cached prefix that is byte-identical from token
+    // 0, and this block carries a wall-clock timestamp that changes
+    // every turn. Positioned ahead of the conversation (where it used
+    // to sit) it pushed the first-differing byte to the top of the
+    // transcript, so the entire history had to be re-encoded on every
+    // turn and every tool round - the conversation never cached.
+    // Pinned after the conversation, the stable baseline + user-system
+    // + growing history form a cacheable prefix; only this small
+    // trailing block falls outside the cache (along with the
+    // regenerated <think> priming, which is volatile turn-to-turn
+    // regardless). The timestamp is minute-granular (see
+    // buildDatetimeParagraph) so multiple tool rounds inside the same
+    // minute keep even this trailing block byte-stable.
+    //
+    // Tradeoff accepted deliberately: the model reads ambient context
+    // (datetime, attachments inventory, title and emphasis nudges)
+    // AFTER its <think> priming chain rather than just before the user
+    // turn, and the final wire row is role:system rather than the
+    // intuition <think>. The user message still rides bare - no
+    // `<user_message>` fence, no `<datetime>` tag, no
+    // `<system_reminder>` directive; the role:user / role:system
+    // boundary is the structural signal.
     //
     // The metadata message is rebuilt every round so wall-clock,
     // since-last-reply, and live title state stay current across
-    // multi-tool turns that span tens of seconds. The split between
-    // baseline + user-system + metadata + conversation lets a
-    // single Venice request pass them through with no extra
-    // pre/post-processing.
+    // multi-tool turns.
     const { userSystem, conversation } = splitSystemPreamble(history);
     const metadataMessage = buildMetadataSystemMessage({
       userName,
@@ -1753,8 +1780,8 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         }),
       },
       ...userSystem,
-      metadataMessage,
       ...conversation,
+      metadataMessage,
     ];
 
     // streamChatWithRateLimitRetry transparently retries on Venice 429s,
