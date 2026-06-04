@@ -32,11 +32,15 @@ import {
   type AgentToolContext,
   type Toolbox,
 } from './_run.ts';
+import {
+  loadThreadSlice,
+  messageToVenice,
+  parseRecallOutput,
+  type RecallNote,
+  type VeniceWireMessage,
+} from './_recall_helpers.ts';
 
 const RECALL_MODEL = 'deepseek-v4-flash';
-// Same 200k-char window the browser uses. ~50k tokens at 4 chars/token,
-// well under the model's window while still covering long threads.
-const MAX_RECALL_CHARS = 200_000;
 
 const MEMORY_SEARCH_WIRE_SCHEMA: AgentTool['wire'] = {
   type: 'function',
@@ -169,123 +173,13 @@ Reply with JSON in one of exactly these two shapes:
 Do not emit any other keys. Do not wrap the JSON in prose or a code
 fence.`;
 
-interface StoredMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
-  content: string;
-  tool_calls: unknown[] | null;
-  tool_call_id: string | null;
-  name: string | null;
-}
-
-interface VeniceWireMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
-  tool_call_id?: string;
-  name?: string;
-  tool_calls?: Array<{
-    id: string;
-    type: 'function';
-    function: { name: string; arguments: string };
-  }>;
-}
-
-function trimToLastUserTurn(messages: StoredMessage[]): StoredMessage[] {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i].role === 'user') return messages.slice(0, i + 1);
-  }
-  return [];
-}
-
-function trimToCharBudget(
-  messages: StoredMessage[],
-  budget = MAX_RECALL_CHARS,
-): StoredMessage[] {
-  if (messages.length === 0) return [];
-  let chars = 0;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const m = messages[i];
-    chars +=
-      (m.content?.length ?? 0) +
-      (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0);
-    if (chars > budget && i < messages.length - 1) {
-      return messages.slice(i + 1);
-    }
-  }
-  return messages;
-}
-
-function messageToVenice(m: StoredMessage): VeniceWireMessage {
-  if (m.role === 'tool') {
-    return {
-      role: 'tool',
-      content: m.content,
-      ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-      ...(m.name ? { name: m.name } : {}),
-    };
-  }
-  const out: VeniceWireMessage = { role: m.role, content: m.content };
-  if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
-    out.tool_calls = m.tool_calls as VeniceWireMessage['tool_calls'];
-  }
-  return out;
-}
-
-type RecallNote =
-  | { kind: 'none'; reason?: string }
-  | { kind: 'note'; note: string };
-
-function parseRecallOutput(text: string): RecallNote {
-  const trimmed = text.trim();
-  if (trimmed.length === 0) {
-    return { kind: 'none', reason: 'empty model output' };
-  }
-  const fence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
-  const payload = fence ? fence[1] : trimmed;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(payload);
-  } catch {
-    return { kind: 'none', reason: 'JSON parse failed' };
-  }
-  if (!parsed || typeof parsed !== 'object') {
-    return { kind: 'none', reason: 'response was not a JSON object' };
-  }
-  const obj = parsed as Record<string, unknown>;
-  if (obj.kind === 'none') {
-    const reason =
-      typeof obj.reason === 'string' && obj.reason.trim().length > 0
-        ? obj.reason.trim()
-        : undefined;
-    return reason ? { kind: 'none', reason } : { kind: 'none' };
-  }
-  if (
-    obj.kind === 'note' &&
-    typeof obj.note === 'string' &&
-    obj.note.trim().length > 0
-  ) {
-    return { kind: 'note', note: obj.note.trim() };
-  }
-  return { kind: 'none', reason: 'response did not match expected schema' };
-}
-
 /**
  * Run one recall pass against `ctx.threadId`. Returns the structured
  * note (RecallNote) plus diagnostic context. The caller is expected to
  * hand the note back to the main model as the memory_recall tool result.
  */
 async function runRecall(ctx: ToolContext): Promise<RecallNote> {
-  // RLS OFF: scoped via parent thread. Pull the messages history the
-  // recall model needs to read.
-  const { data, error } = await ctx.adminClient
-    .from('messages')
-    .select('id, role, content, tool_calls, tool_call_id, name')
-    .eq('thread_id', ctx.threadId)
-    .order('created_at', { ascending: true });
-  if (error) throw new Error(`listMessages failed: ${error.message}`);
-  const allMessages = (data ?? []) as StoredMessage[];
-  const slice = trimToCharBudget(trimToLastUserTurn(allMessages));
-
+  const slice = await loadThreadSlice(ctx.adminClient, ctx.threadId);
   if (slice.length === 0) {
     return { kind: 'none', reason: 'thread has no user turn yet' };
   }

@@ -166,9 +166,6 @@ cut in one commit.
   `ToolNotImplementedError` if the model calls it under the new
   path; the orchestrator turns that into a tool-error row the model
   sees on the next round and adapts. Skipped:
-  - `memory_recall`, `conversation_recall`, `wiki_recall`,
-    `context` (sub-agents driving `runHeadlessToolLoop` - port
-    that driver separately).
   - `wiki_librarian` (multi-round sub-agent).
   - `recipe_photos_attach`, `recipe_photos_remove`,
     `recipe_photos_reorder`, `recipe_photo_label_set` (cascading
@@ -190,7 +187,8 @@ Always-on (read-side):
 `wiki_search`, `wiki_list`, `wiki_get`, `recipe_list`, `recipe_get`,
 `doc_list`, `doc_get`, `doc_grep`, `doc_read`, `web_search`,
 `analyze_image`, `update_title`, `toggle_toolbox`, `ask_user`,
-`research_docs`.
+`research_docs`, `memory_recall`, `conversation_recall`,
+`wiki_recall`, `context`.
 
 Gated:
 `memory_create`, `memory_update`, `memory_delete`,
@@ -207,7 +205,7 @@ auto-generated TS module produced by
 all depend on `mise run bundle-docs` so the file is fresh whenever
 the function gets served or deployed.
 
-Total: 33 tools. The function's `performToolCall` registry now
+Total: 37 tools. The function's `performToolCall` registry now
 covers the dominant main-chat tool surface; the deferred set above
 takes the function path off-line for those operations.
 
