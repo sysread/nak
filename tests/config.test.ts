@@ -11,8 +11,14 @@ import {
 const VALID = {
   supabaseUrl: 'https://example.supabase.co',
   supabasePublishableKey: 'sb_publishable_xxx',
-  veniceApiKey: 'venice-yyy',
 };
+
+// Legacy field name retained in some tests to exercise the
+// backward-compatible read path (the streaming-root migration retired
+// the per-user Venice API key, but older saved blobs and exported files
+// still carry it). validateConfig + parseExportedConfig drop it
+// silently; consumers see the trimmed AppConfig shape.
+const LEGACY_VENICE_KEY = 'venice-yyy';
 
 describe('config', () => {
   beforeEach(() => {
@@ -67,7 +73,6 @@ describe('config', () => {
     await saveConfig(VALID, 'pw');
     const blob = localStorage.getItem('nak:config:v1') ?? '';
     expect(blob).not.toContain(VALID.supabasePublishableKey);
-    expect(blob).not.toContain(VALID.veniceApiKey);
     expect(blob).not.toContain('supabase.co');
   });
 
@@ -81,14 +86,16 @@ describe('config', () => {
   it('parseExportedConfig accepts a legacy v1 file (supabaseAnonKey)', async () => {
     // Files exported before the anon->publishable rename are v1 and carry the
     // key under `supabaseAnonKey`. They must still import, mapped onto the
-    // current `supabasePublishableKey` field.
+    // current `supabasePublishableKey` field. The legacy `veniceApiKey`
+    // field on the file is dropped silently - the streaming-root
+    // migration retired the per-user key.
     const { parseExportedConfig } = await import('../src/lib/config');
     const legacy = JSON.stringify({
       kind: 'nak-config',
       version: 1,
       supabaseUrl: VALID.supabaseUrl,
       supabaseAnonKey: VALID.supabasePublishableKey,
-      veniceApiKey: VALID.veniceApiKey,
+      veniceApiKey: LEGACY_VENICE_KEY,
     });
     expect(parseExportedConfig(legacy)).toEqual(VALID);
   });
@@ -112,7 +119,7 @@ describe('config', () => {
 
   it('parseExportedConfig rejects a missing supabaseUrl', async () => {
     const { parseExportedConfig } = await import('../src/lib/config');
-    const bad = JSON.stringify({ kind: 'nak-config', version: 1, supabaseAnonKey: 'a', veniceApiKey: 'b' });
+    const bad = JSON.stringify({ kind: 'nak-config', version: 1, supabaseAnonKey: 'a' });
     expect(() => parseExportedConfig(bad)).toThrow(/supabaseUrl/i);
   });
 

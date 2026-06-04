@@ -1,29 +1,33 @@
 /**
- * Persistent configuration blob for the three keys the app needs to talk
- * to its external services. Encrypted with the user's master password
- * (via `./crypto`) and kept in localStorage.
+ * Persistent configuration blob for the keys the app needs to talk to
+ * its external services. Encrypted with the user's master password (via
+ * `./crypto`) and kept in localStorage.
  *
- * The three keys here are the *only* things we persist to disk in
- * encrypted form. Per-user preferences (default model tier, theme) live
- * in Supabase `profiles.settings` once the user signs in — see
+ * What's persisted to disk is the *only* thing we persist in encrypted
+ * form. Per-user preferences (default model tier, theme) live in
+ * Supabase `profiles.settings` once the user signs in - see
  * `./supabase.ts`. In-memory app state, including the decrypted config
  * while the app is unlocked, is owned by `./state.svelte.ts`.
  *
- * Also defines the plaintext export/import format (kind="nak-config",
- * version=2) used by the Setup → Import flow and the Settings → Export
- * panel. v2 renamed the client-key field supabaseAnonKey ->
- * supabasePublishableKey to match Supabase's modern API-key nomenclature;
- * both the import parser and the stored-blob validator still read the
- * legacy field, so older exported files and saved configs keep working.
- * Export is plaintext by design — users should store the file like any
- * other secret (password manager, etc.).
+ * The streaming-root migration dropped the per-user Venice API key:
+ * every Venice consumer in the browser now routes through an edge
+ * function that reads the shared key from `app_config` server-side.
+ * Older saved configs still carry a `veniceApiKey` field; the
+ * validator silently drops it on read so existing users keep working
+ * without re-entering anything. Same for imported config files.
+ *
+ * Export/import format: kind="nak-config", version=2. v2 renamed the
+ * client-key field supabaseAnonKey -> supabasePublishableKey to match
+ * Supabase's modern API-key nomenclature; both the import parser and
+ * the stored-blob validator still read the legacy field, so older
+ * exported files and saved configs keep working. Export is plaintext
+ * by design - users should store the file like any other secret.
  */
 import { encrypt, decrypt } from './crypto';
 
 export interface AppConfig {
   supabaseUrl: string;
   supabasePublishableKey: string;
-  veniceApiKey: string;
 }
 
 // The `:v1` suffix is a migration escape hatch: if we ever change the
@@ -78,16 +82,17 @@ function validateConfig(candidate: unknown): AppConfig {
   // it under the new name. The value is the Supabase client key either way
   // (a publishable key now, a legacy anon JWT on older/local projects).
   const pub = c.supabasePublishableKey ?? c.supabaseAnonKey;
-  const venice = c.veniceApiKey;
-  if (typeof url !== 'string' || typeof pub !== 'string' || typeof venice !== 'string') {
+  if (typeof url !== 'string' || typeof pub !== 'string') {
     throw new ConfigError('Stored config is missing required fields.');
   }
   if (!/^https?:\/\//.test(url)) {
     throw new ConfigError('supabaseUrl must start with http(s)://');
   }
   // Any unknown fields (including the legacy `defaultModel` from before
-  // settings moved to Supabase) are dropped silently on read.
-  return { supabaseUrl: url, supabasePublishableKey: pub, veniceApiKey: venice };
+  // settings moved to Supabase, and the legacy `veniceApiKey` from before
+  // the streaming-root migration moved every Venice consumer behind an
+  // edge function) are dropped silently on read.
+  return { supabaseUrl: url, supabasePublishableKey: pub };
 }
 
 /**
@@ -157,7 +162,6 @@ export interface ExportedConfig {
   version: typeof EXPORT_VERSION;
   supabaseUrl: string;
   supabasePublishableKey: string;
-  veniceApiKey: string;
 }
 
 export function toExportedConfig(config: AppConfig): ExportedConfig {
@@ -166,7 +170,6 @@ export function toExportedConfig(config: AppConfig): ExportedConfig {
     version: EXPORT_VERSION,
     supabaseUrl: config.supabaseUrl,
     supabasePublishableKey: config.supabasePublishableKey,
-    veniceApiKey: config.veniceApiKey,
   };
 }
 
@@ -194,11 +197,13 @@ export function parseExportedConfig(raw: string): AppConfig {
   // New field first, legacy `supabaseAnonKey` as the v1 fallback.
   const rawPub = r.supabasePublishableKey ?? r.supabaseAnonKey;
   const supabasePublishableKey = typeof rawPub === 'string' ? rawPub.trim() : '';
-  const veniceApiKey = typeof r.veniceApiKey === 'string' ? r.veniceApiKey.trim() : '';
   if (!/^https?:\/\//.test(supabaseUrl)) {
     throw new ConfigError('Missing or invalid supabaseUrl.');
   }
   if (!supabasePublishableKey) throw new ConfigError('Missing Supabase publishable key.');
-  if (!veniceApiKey) throw new ConfigError('Missing veniceApiKey.');
-  return { supabaseUrl, supabasePublishableKey, veniceApiKey };
+  // Older exported files included a `veniceApiKey` field; that's
+  // dropped silently here - the streaming-root migration moved every
+  // Venice consumer behind an edge function that reads a shared key
+  // from app_config, so the per-user key is no longer needed.
+  return { supabaseUrl, supabasePublishableKey };
 }

@@ -21,7 +21,6 @@
   // (below) because that's the KDF input — we don't hold it in memory.
   let supabaseUrl = $state(app.config?.supabaseUrl ?? '');
   let supabasePublishableKey = $state(app.config?.supabasePublishableKey ?? '');
-  let veniceApiKey = $state(app.config?.veniceApiKey ?? '');
   let password = $state('');
   let error = $state<string | null>(null);
   let busy = $state(false);
@@ -38,7 +37,6 @@
       const next: AppConfig = {
         supabaseUrl: supabaseUrl.trim(),
         supabasePublishableKey: supabasePublishableKey.trim(),
-        veniceApiKey: veniceApiKey.trim(),
       };
       await saveConfig(next, password);
       activate(next);
@@ -75,10 +73,6 @@
     <div class="form-row">
       <label for="sa">Supabase publishable key</label>
       <SecretInput id="sa" bind:value={supabasePublishableKey} required />
-    </div>
-    <div class="form-row">
-      <label for="vk">Venice API key</label>
-      <SecretInput id="vk" bind:value={veniceApiKey} required />
     </div>
     <div class="form-row">
       <label for="pw">Master password</label>

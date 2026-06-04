@@ -332,19 +332,24 @@ function pgLiteral(s) {
 // time - it never touches this file, which is plaintext by the same design
 // as the app's own export.
 // ---------------------------------------------------------------------------
-function writeConfig(apiUrl, appClientKey, veniceKey) {
+function writeConfig(apiUrl, appClientKey) {
   step(5, 'Write importable config');
   // The field is named `supabasePublishableKey` to match the app's config
   // contract (src/lib/config.ts), but the app treats it as an opaque Supabase
   // client key and never inspects the format. Locally that value is the anon
   // JWT, not an sb_publishable_ key - see readStatus for why (local realtime
   // can't authenticate the publishable key; supabase/cli#4219).
+  //
+  // The Venice API key intentionally does NOT appear here - the
+  // streaming-root migration retired the per-user key; the edge
+  // function reads the shared key from app_config server-side. The
+  // key is still seeded into app_config above so the function can
+  // read it; the client just doesn't ship it.
   const config = {
     kind: 'nak-config',
     version: 2,
     supabaseUrl: apiUrl,
     supabasePublishableKey: appClientKey,
-    veniceApiKey: veniceKey,
   };
   writeFileSync(CONFIG_OUT, `${JSON.stringify(config, null, 2)}\n`);
   ok(`wrote ${style.bold('nak-local-config.json')}`);
@@ -466,7 +471,7 @@ async function main() {
   await seedUser(apiUrl, secretKey);
   const veniceKey = await collectVeniceKey();
   await seedAppConfig(dbUrl, veniceKey);
-  writeConfig(apiUrl, appClientKey, veniceKey);
+  writeConfig(apiUrl, appClientKey);
   await serveFunctions();
   serveBackfillShim();
   watchSchema(dbUrl);

@@ -80,15 +80,6 @@ export interface StreamGuard {
 }
 
 /**
- * Maximum number of guard-driven retries (re-rolls) before the wrapper
- * gives up and throws GuardExhaustedError. Two re-rolls (three attempts
- * total) is enough to clear a stochastic glitch like the special-token
- * leak without spinning the user's turn indefinitely when a model is
- * stuck in a degenerate mode.
- */
-export const MAX_STREAM_GUARD_RETRIES = 2;
-
-/**
  * Temperature to force on each retry, indexed by attempt-1 (first retry
  * uses index 0). A re-roll only helps if the sample actually differs -
  * at a fixed low temperature the model re-emits the identical glitch -

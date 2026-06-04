@@ -91,15 +91,6 @@ import {
   type ContextRecallPayload,
 } from './context-recall';
 
-/**
- * Round-cap backstop. The browser-side loop ran with this bound
- * before streaming-root collapsed it server-side; the actual cap now
- * lives in `getStreamingResponse` (MAX_ROUNDS=24) and the model only
- * sees one `streamChat` call from here. The constant stays exported
- * for the few callers and tests that key off it as a sentinel.
- */
-export const MAX_ROUNDS = 20;
-
 const log = createLogger('chat-loop');
 
 /**
@@ -1787,11 +1778,3 @@ export async function runReconnectLoop(
   };
 }
 
-// Test hook: the formatter is otherwise integration-tested via the
-// `<datetime>` tag's since_last_response attribute, but the bucket
-// thresholds (just-now / few-minutes / hour / day / week / month /
-// year boundaries) are easier to verify directly than via a
-// runChatLoop fixture per bucket.
-export const __test = {
-  formatRelativeDuration,
-};

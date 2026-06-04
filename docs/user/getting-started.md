@@ -2,8 +2,8 @@
 
 The fastest path from "I just opened Nak" to "I'm chatting with a
 model." This page walks you through the one-time setup: creating your
-Supabase project, getting a Venice API key, and unlocking the app with
-a master password.
+Supabase project, seeding the Venice API key into it, and unlocking
+the app with a master password.
 
 ## What you'll need
 

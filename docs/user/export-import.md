@@ -1,7 +1,10 @@
 # Export & import
 
-Moving your Supabase and Venice keys to another browser, another
-device, or a reinstalled browser profile.
+Moving your Supabase keys to another browser, another device, or
+a reinstalled browser profile. The Venice API key is no longer
+client-stored - it lives in your Supabase project's `app_config`
+and the edge function reads it server-side, so there's nothing to
+export on that front.
 
 ## Exporting keys
 

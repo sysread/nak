@@ -75,9 +75,11 @@ looking elsewhere), and the system-prompt library.
 
 ### Usage
 
-A date-ranged snapshot of what your Venice API key has been
-spending. Pick a **From** and **To** date, hit **Refresh**, and the
-pane pulls your billing ledger from Venice and groups it by model.
+A date-ranged snapshot of what your project's Venice API key has
+been spending. Pick a **From** and **To** date, hit **Refresh**, and
+the pane pulls the billing ledger from Venice (via the edge function
+that reads the shared key from your Supabase `app_config`) and groups
+it by model.
 Each row shows a horizontal bar scaled by total tokens
 (prompt + completion), the token count as a compact label (e.g.
 `72k`, `1.2M`), and a pill with the raw billed amount.

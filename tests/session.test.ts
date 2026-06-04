@@ -15,7 +15,6 @@ import type { AppConfig } from '../src/lib/config';
 const CONFIG: AppConfig = {
   supabaseUrl: 'https://example.supabase.co',
   supabasePublishableKey: 'anon-xyz',
-  veniceApiKey: 'venice-abc',
 };
 
 describe('session', () => {

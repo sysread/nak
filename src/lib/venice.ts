@@ -521,15 +521,23 @@ function parseRetryAfterMs(headers: Headers): number | null {
 const DEFAULT_BASE_URL = 'https://api.venice.ai/api/v1';
 
 export interface VeniceClientOptions {
-  apiKey: string;
+  /**
+   * Optional Venice API key. Production callers leave this unset -
+   * `streamChat` routes through the venice edge function which reads
+   * the shared key from `app_config` server-side, so no key needs to
+   * live in the browser bundle. Tests still pass an apiKey to
+   * exercise the direct-Venice path (`streamChatDirect`); that path
+   * stays in place as a compatibility seam until the test rewrite
+   * (task #92) sits the streaming tests at the new transport seam.
+   */
+  apiKey?: string;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   /**
    * Supabase client used to route streaming chat through the venice
-   * edge function (POST /venice/stream + Broadcast subscription). When
-   * absent, streamChat falls back to the direct-Venice path - kept as
-   * a compatibility seam for tests and for any caller that constructs
-   * a venice client before the supabase client is ready.
+   * edge function (POST /venice/stream + Broadcast subscription).
+   * Production callers always supply this; tests that drive the
+   * direct-Venice path omit it.
    */
   supabase?: SupabaseClient;
 }
@@ -684,14 +692,19 @@ export function buildChatBody(req: ChatRequest, streaming: boolean): Record<stri
 }
 
 export class VeniceClient {
-  private readonly apiKey: string;
+  /**
+   * Direct-Venice key. Null in production - the streaming-root
+   * function reads the shared key from app_config server-side, so the
+   * browser never sees it. Non-null only when tests construct the
+   * client to exercise streamChatDirect against a stubbed fetch.
+   */
+  private readonly apiKey: string | null;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private supabase: SupabaseClient | null;
 
-  constructor(opts: VeniceClientOptions) {
-    if (!opts.apiKey) throw new VeniceError('API key is required', 'auth');
-    this.apiKey = opts.apiKey;
+  constructor(opts: VeniceClientOptions = {}) {
+    this.apiKey = opts.apiKey ?? null;
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
     this.fetchImpl = opts.fetchImpl ?? fetch.bind(globalThis);
     this.supabase = opts.supabase ?? null;
@@ -708,6 +721,12 @@ export class VeniceClient {
   }
 
   private headers(): Record<string, string> {
+    if (this.apiKey === null) {
+      throw new VeniceError(
+        'VeniceClient has no apiKey - direct-Venice path is unavailable. Use streamChat with streamCtx + supabase instead.',
+        'auth',
+      );
+    }
     return {
       Authorization: `Bearer ${this.apiKey}`,
       'Content-Type': 'application/json',

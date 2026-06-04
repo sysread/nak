@@ -24,7 +24,6 @@
 
   let supabaseUrl = $state('');
   let supabasePublishableKey = $state('');
-  let veniceApiKey = $state('');
   let password = $state('');
   let confirmPassword = $state('');
   let error = $state<string | null>(null);
@@ -52,7 +51,10 @@
       // the publishable-key rename.
       const pub = obj.supabasePublishableKey ?? obj.supabaseAnonKey;
       if (typeof pub === 'string') supabasePublishableKey = pub;
-      if (typeof obj.veniceApiKey === 'string') veniceApiKey = obj.veniceApiKey;
+      // Legacy `veniceApiKey` field on the setup-link payload is
+      // ignored: the streaming-root migration moved every Venice
+      // consumer behind an edge function that reads the shared key
+      // from app_config server-side.
       prefilled = true;
     } catch {
       // Ignore malformed hash — user will just fill in manually.
@@ -74,7 +76,6 @@
       const cfg = parseExportedConfig(text);
       supabaseUrl = cfg.supabaseUrl;
       supabasePublishableKey = cfg.supabasePublishableKey;
-      veniceApiKey = cfg.veniceApiKey;
       prefilled = true;
       importInfo = `Imported from ${file.name}. Pick a master password below to continue.`;
     } catch (err) {
@@ -99,7 +100,6 @@
     const config: AppConfig = {
       supabaseUrl: supabaseUrl.trim(),
       supabasePublishableKey: supabasePublishableKey.trim(),
-      veniceApiKey: veniceApiKey.trim(),
     };
     busy = true;
     try {
@@ -151,10 +151,6 @@
     <div class="form-row">
       <label for="supabase-publishable">Supabase publishable key</label>
       <SecretInput id="supabase-publishable" bind:value={supabasePublishableKey} required />
-    </div>
-    <div class="form-row">
-      <label for="venice-key">Venice API key</label>
-      <SecretInput id="venice-key" bind:value={veniceApiKey} required />
     </div>
     <div class="form-row">
       <label for="password">Master password</label>

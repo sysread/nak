@@ -23,7 +23,6 @@
 import type { AppConfig } from './config';
 import {
   SupabaseService,
-  type ServerConfig,
   type SystemPrompt,
   type UserSettings,
 } from './supabase';
@@ -147,16 +146,6 @@ export type AppPhase = 'loading' | 'setup' | 'locked' | 'unlocked' | 'edit-confi
 interface AppState {
   phase: AppPhase;
   config: AppConfig | null;
-  /**
-   * Project-global shared config fetched from the `app_config` table after
-   * unlock (see {@link ServerConfig}). Distinct from `config`, the local
-   * encrypted blob: this is the shared Venice key the project owner seeds
-   * via `mise run supabase-init`, readable by every project member. Null
-   * until the post-unlock fetch in `loadSettingsThenStartWorkers` resolves,
-   * and null if that fetch fails. Consumers migrating off the local key
-   * read this; see docs/dev/in-progress/venice-edge-functions/.
-   */
-  serverConfig: ServerConfig | null;
   supabase: SupabaseService | null;
   venice: VeniceClient | null;
   /**
@@ -274,7 +263,6 @@ const cachedTheme = readCachedTheme();
 export const app = $state<AppState>({
   phase: 'loading',
   config: null,
-  serverConfig: null,
   supabase: null,
   venice: null,
   defaultModel: DEFAULT_TIER,
@@ -809,13 +797,15 @@ function startBackgroundWorkers(config: AppConfig): void {
 export function activate(config: AppConfig, opts: { persist?: boolean } = {}): void {
   app.config = config;
   app.supabase = new SupabaseService(config);
-  app.venice = new VeniceClient({ apiKey: config.veniceApiKey });
   // Streaming-root path: the venice client routes streamChat through
   // the /stream edge function + Realtime Broadcast subscription, which
   // requires the supabase client to mint the function call and the
-  // channel. Wired here once both objects exist; setSupabase is
-  // idempotent so re-activating with a fresh config stays safe.
-  app.venice.setSupabase(app.supabase.client);
+  // channel. The per-user Venice API key has been retired - the
+  // function reads the shared key from app_config server-side - so
+  // construct without an apiKey here and pass the supabase client
+  // immediately. Tests still pass an apiKey when they want to drive
+  // the direct-Venice path.
+  app.venice = new VeniceClient({ supabase: app.supabase.client });
   // Seed defaults synchronously so any code reading `app.*` before the
   // settings fetch resolves sees sane values. `applyServerSettings`
   // overwrites these from the blob if the fetch succeeds.
@@ -855,21 +845,6 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
       // boot with default values in this branch - same as the legacy
       // behaviour pre-race-fix, so a Supabase outage doesn't gate the
       // entire bootstrap.
-    }
-    // Fetch the project-global shared config post-auth into app.serverConfig.
-    // This is the shared-key spine the venice edge function migration is built
-    // on (see docs/dev/in-progress/venice-edge-functions/). The edge function
-    // reads app_config server-side for backfill; the browser copy here has no
-    // consumer yet - it is staged for the remaining veniceApiKey consumers
-    // (the agent workers and query-time embeds) to migrate onto in later
-    // milestones. Kept warm so that migration is a one-line swap, not a
-    // re-introduction of the whole fetch/sequencing dance.
-    try {
-      app.serverConfig = await app.supabase.getAppConfig();
-    } catch {
-      // Best-effort: leave serverConfig null. Consumers fall back to the
-      // local config.veniceApiKey until a later unlock's fetch succeeds, so
-      // a degraded Supabase doesn't gate worker boot.
     }
   }
   startBackgroundWorkers(config);
@@ -935,9 +910,6 @@ export function notifyBiasActiveConvIds(ids: readonly string[]): void {
 export function lock(): void {
   stopBackgroundWorkers();
   app.config = null;
-  // Drop the shared config so a subsequent unlock as a different account
-  // re-fetches it rather than inheriting the previous project's key.
-  app.serverConfig = null;
   app.supabase = null;
   app.venice = null;
   app.defaultModel = DEFAULT_TIER;

@@ -133,11 +133,20 @@ cut in one commit.
    rows and reconnects.
 3. **Smoke test on the dev env.** A1 (mobile-PWA backgrounding),
    A3 (cancel), A4 (reconnect), A5 (ape mode). Fix what breaks.
-4. **Cleanup.** Run knip to surface now-unused browser-side tool
-   implementations; delete them (schemas stay for the system-
-   prompt catalog). Delete Venice key handling from
-   `src/lib/config.ts` + `state.svelte.ts` + the unlock flow.
-   Driver B finale.
+4. **Cleanup.** Knip surfaces zero unused browser tool
+   implementations - every tool's `execute()` is still reached by
+   one or more agent worker fleets (wiki_librarian, recall agents,
+   etc.) that drive their own `runHeadlessToolLoop`, so deleting
+   them would break those paths. Three small dead exports got
+   dropped instead (`MAX_ROUNDS`, `__test`, `MAX_STREAM_GUARD_RETRIES`).
+   Venice key removal landed: `AppConfig.veniceApiKey` dropped from
+   `src/lib/config.ts` (validator + parseExportedConfig still
+   silently ignore the legacy field so older saved blobs and
+   exported files keep loading), the unlock + setup + settings
+   panes no longer ask for the key, `state.svelte.ts` constructs
+   `VeniceClient` without an apiKey (and drops the stale
+   `serverConfig` fetch), and `SupabaseService.getAppConfig` +
+   `ServerConfig` are removed (newly dead).  Driver B finale.
 5. **Test rewrite.** Rewrite `tests/venice.test.ts` streaming
    describe around `functions.invoke` + Broadcast channel mocks.
    Shrink `tests/chat-loop.test.ts` as the round-loop / dispatch /
