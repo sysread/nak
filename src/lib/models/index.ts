@@ -225,18 +225,6 @@ export const MODELS = {
     // See ModelSpec.leaksSpecialTokens.
     leaksSpecialTokens: true,
   },
-  'minimax-m3': {
-    id: 'minimax-m3',
-    contextWindow: 500_000,
-    supportsReasoning: true,
-    // Native vision: image_url parts inline directly, no analyze_image
-    // round-trip.
-    supportsVision: true,
-    // Function-calling + structured-output capable. The earlier minimax
-    // generation (minimax-m25) 4xx'd on response_format, which is the
-    // bug ModelSpec.supportsResponseFormat documents; m3 accepts it.
-    supportsResponseFormat: true,
-  },
   'mistral-small-3-2-24b-instruct': {
     id: 'mistral-small-3-2-24b-instruct',
     contextWindow: 256_000,
@@ -325,7 +313,7 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     defaultThinking: 'medium',
   },
   balanced: {
-    ...MODELS['minimax-m3'],
+    ...MODELS['deepseek-v4-flash'],
     tier: 'balanced',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
@@ -334,13 +322,12 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     // in both themes; yin-yang is a solid bi-tonal disc that reads at
     // any size.
     icon: '\u262F\uFE0F',
-    description: 'MiniMax M3 with light thinking. 500k context, native vision. Good default for most turns.',
+    description: 'DeepSeek V4 Flash with light thinking. Good default for most turns.',
     // Light thinking by default - 'low' keeps a short CoT pass that
     // helps on most turns without the latency of medium/high. Balanced
-    // fronts minimax-m3 (native vision, 500k window) while Fast fronts
-    // deepseek-v4-flash, so the two differ by underlying model as well
-    // as default thinking budget (low vs off); the composer picker lets
-    // a user override the thinking level per thread.
+    // and Fast front the same DeepSeek model and differ only in default
+    // thinking budget (low vs off); the composer picker lets a user
+    // override either per thread.
     defaultThinking: 'low',
   },
   fast: {
@@ -406,8 +393,8 @@ export type AgentRole =
  *     judgments, call the memory tools. Big-window model is the win -
  *     the entire conversation is the context.
  *
- *     NOTE on capacity: the Fast foreground tier ALSO fronts this id
- *     (Smart fronts qwen-3-6-plus, Balanced fronts minimax-m3). The
+ *     NOTE on capacity: the Balanced and Fast foreground tiers ALSO
+ *     front this id (Smart was moved off to qwen-3-6-plus). The
  *     earlier policy of "background agents must not share capacity
  *     with foreground tiers" has been deliberately relaxed. If
  *     overload errors return under the shared-capacity shape, the
@@ -507,7 +494,7 @@ export type AgentRole =
  *     plausible-shaped notes rather than emit the empty signal. A
  *     dense reasoning model with the large window is the cheapest
  *     fix; the cost is that recall now shares capacity with the
- *     foreground Fast tier. Distinct constant from
+ *     foreground Balanced/Fast tiers. Distinct constant from
  *     conversationRecall so the two recall surfaces can be retuned
  *     independently if one regresses.
  *
