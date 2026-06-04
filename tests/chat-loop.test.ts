@@ -57,6 +57,27 @@ function mkThread(overrides: Partial<Thread> = {}): Thread {
   };
 }
 
+/**
+ * Content of the per-turn metadata system message. It is pinned as the
+ * FINAL row of the request (after the conversation, for prompt-cache
+ * stability - see the assembly comment in chat-loop.ts), so scanning
+ * from the end for the first `role: 'system'` row identifies it
+ * regardless of how many user-configured system prompts lead the
+ * preamble.
+ */
+function metaContent(req: ChatRequest): string {
+  const msgs = req.messages;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role !== 'system') continue;
+    const c = msgs[i].content;
+    if (typeof c !== 'string') {
+      throw new Error('metadata system message content must be a string');
+    }
+    return c;
+  }
+  throw new Error('expected a metadata system message in the request');
+}
+
 function mkCall(name: string, args: object = {}, id = `call_${name}`): OpenAIToolCall {
   return {
     id,
@@ -624,9 +645,9 @@ describe('runChatLoop', () => {
     // wording tweak surfaces here and gets a deliberate review
     // rather than silently changing user-visible model behaviour.
     //
-    // The metadata message is the second system message in the wire
-    // (baseline at [0], metadata at [1] when no user-configured
-    // system prompts are active).
+    // The metadata message is the final row in the wire (pinned after
+    // the conversation for prompt-cache stability), so `metaContent`
+    // locates it as the last role:system message.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -645,10 +666,7 @@ describe('runChatLoop', () => {
       signal: new AbortController().signal,
       emphasisMarkdown: true,
     });
-    const meta = seenRequests[0].messages[1];
-    expect(meta.role).toBe('system');
-    expect(typeof meta.content).toBe('string');
-    expect(meta.content as string).toContain('scan-points');
+    expect(metaContent(seenRequests[0])).toContain('scan-points');
     // The baseline at messages[0] must stay free of the nudge so
     // users without the toggle never see it.
     expect(seenRequests[0].messages[0].content as string).not.toContain('scan-points');
@@ -724,9 +742,7 @@ describe('runChatLoop', () => {
       signal: new AbortController().signal,
       currentTurnHasAttachments: true,
     });
-    const meta = seenRequests[0].messages[1];
-    expect(meta.role).toBe('system');
-    expect(meta.content as string).toContain('you have actually inspected this turn');
+    expect(metaContent(seenRequests[0])).toContain('you have actually inspected this turn');
   });
 
   it('omits the attachment-inspection reinforcement when no file was attached this turn', async () => {
@@ -794,10 +810,7 @@ describe('runChatLoop', () => {
       userName: 'Ada',
       userLocation: 'Lisbon',
     });
-    const meta = seenRequests[0].messages[1];
-    expect(meta.role).toBe('system');
-    expect(typeof meta.content).toBe('string');
-    const content = meta.content as string;
+    const content = metaContent(seenRequests[0]);
     expect(content).toContain("User's name: Ada");
     expect(content).toContain("User's location: Lisbon");
   });
@@ -826,7 +839,7 @@ describe('runChatLoop', () => {
       userName: 'Ada',
       userLocation: '',
     });
-    const content = seenRequests[0].messages[1].content as string;
+    const content = metaContent(seenRequests[0]);
     expect(content).toContain("User's name: Ada");
     expect(content).not.toContain("User's location");
   });
@@ -868,7 +881,7 @@ describe('runChatLoop', () => {
     });
     expect(seenRequests).toHaveLength(2);
     for (const req of seenRequests) {
-      const meta = req.messages[1].content as string;
+      const meta = metaContent(req);
       expect(meta).not.toContain("User's name");
       expect(meta).not.toContain("User's location");
     }
@@ -885,7 +898,7 @@ describe('runChatLoop', () => {
     // `web_search` tool and the scraping flag is gated, so the fence
     // came off: the user message rides bare, the role:user boundary
     // is the signal, and platform context lives in a dedicated
-    // metadata system message at messages[1].
+    // metadata system message pinned at the tail of the request.
     const seenRequests: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {
@@ -1041,12 +1054,15 @@ describe('runChatLoop', () => {
       displayTimezone: 'America/Los_Angeles',
       signal: new AbortController().signal,
     });
-    const meta = seenRequests[0].messages[1].content as string;
-    // Local ISO 8601 with offset (e.g. '2026-04-24T15:30:00-07:00' or
-    // -08:00 depending on DST), the IANA zone label verbatim, and
-    // the UTC Z form all sit in one sentence.
+    const meta = metaContent(seenRequests[0]);
+    // Local ISO 8601 with offset at minute granularity (e.g.
+    // '2026-04-24T15:30-07:00' or -08:00 depending on DST), the IANA
+    // zone label verbatim, and the UTC Z form all sit in one sentence.
+    // Seconds are intentionally dropped so the metadata block stays
+    // byte-stable across tool rounds inside the same minute (prompt-
+    // cache stability - see buildDatetimeParagraph).
     expect(meta).toMatch(
-      /Current local time: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2} \(zone America\/Los_Angeles; UTC \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\)\./,
+      /Current local time: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}[+-]\d{2}:\d{2} \(zone America\/Los_Angeles; UTC \d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\)\./,
     );
   });
 
@@ -1072,12 +1088,12 @@ describe('runChatLoop', () => {
       history: [{ role: 'user', content: 'hi' }],
       signal: new AbortController().signal,
     });
-    const meta = seenRequests[0].messages[1].content as string;
+    const meta = metaContent(seenRequests[0]);
     const m = /Current local time: ([^ ]+) \(zone ([^;]+); UTC ([^)]+)\)\./.exec(meta);
     expect(m).not.toBeNull();
     const [, local, zone, utc] = m!;
-    expect(local).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}([+-]\d{2}:\d{2}|Z)$/);
-    expect(utc).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    expect(local).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}([+-]\d{2}:\d{2}|Z)$/);
+    expect(utc).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z$/);
     expect(zone.length).toBeGreaterThan(0);
   });
 
@@ -1104,7 +1120,7 @@ describe('runChatLoop', () => {
       lastAssistantTimestamp: null,
       signal: new AbortController().signal,
     });
-    const meta = seenRequests[0].messages[1].content as string;
+    const meta = metaContent(seenRequests[0]);
     expect(meta).toContain('Current local time:');
     expect(meta).not.toContain('since your last reply');
   });
@@ -1135,7 +1151,7 @@ describe('runChatLoop', () => {
       lastAssistantTimestamp: anchor,
       signal: new AbortController().signal,
     });
-    const meta = seenRequests[0].messages[1].content as string;
+    const meta = metaContent(seenRequests[0]);
     expect(meta).toContain('Your last reply on this thread was about 22 hours ago.');
   });
 
@@ -1162,7 +1178,7 @@ describe('runChatLoop', () => {
       lastAssistantTimestamp: 'not-a-date',
       signal: new AbortController().signal,
     });
-    const meta = seenRequests[0].messages[1].content as string;
+    const meta = metaContent(seenRequests[0]);
     expect(meta).toContain('Current local time:');
     expect(meta).not.toContain('since your last reply');
   });
@@ -1856,8 +1872,8 @@ describe('runChatLoop', () => {
   // Title-rename directives.
   //
   // The chat loop nudges the model to call `update_title` through the
-  // per-turn metadata system message (the second system row in the
-  // wire shape, immediately before the user turn). Two shapes:
+  // per-turn metadata system message (the final row in the wire shape,
+  // pinned after the conversation). Two shapes:
   //
   //   - Placeholder ("New conversation"): a paragraph telling the
   //     model to call `update_title` with a 3-6 word topic title
@@ -1879,23 +1895,10 @@ describe('runChatLoop', () => {
   // ---------------------------------------------------------------
 
   function metadataMessage(seen: ChatRequest[]): string {
-    // The per-turn metadata system message is the LAST system row
-    // before any user/assistant message. With no user-configured
-    // system prompts in the test fixtures, that's messages[1].
-    const msgs = seen[0].messages;
-    let lastSystemIdx = -1;
-    for (let i = 0; i < msgs.length; i++) {
-      if (msgs[i].role === 'system') lastSystemIdx = i;
-      else break;
-    }
-    if (lastSystemIdx < 1) {
-      throw new Error('expected a metadata system message after the baseline');
-    }
-    const content = msgs[lastSystemIdx].content;
-    if (typeof content !== 'string') {
-      throw new Error('metadata system message content must be a string');
-    }
-    return content;
+    // The per-turn metadata system message is pinned as the final row
+    // of the request (after the conversation); `metaContent` finds it
+    // as the last role:system message.
+    return metaContent(seen[0]);
   }
 
   /**
@@ -1954,8 +1957,8 @@ describe('runChatLoop', () => {
     // pipeline didn't land a title (network blip, model timeout,
     // user manually reset to the placeholder), so the chat-loop's
     // metadata nudge fires the loud nag. The directive lives in the
-    // metadata system message at messages[1] (last system row before
-    // the user turn); the user message itself stays bare.
+    // metadata system message (the final row, pinned after the
+    // conversation); the user message itself stays bare.
     const seen: ChatRequest[] = [];
     const venice = {
       async *streamChat(req: ChatRequest): AsyncGenerator<StreamEvent, void, void> {

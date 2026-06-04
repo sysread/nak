@@ -388,10 +388,19 @@ A chat turn goes:
      in Settings -> Prompts for this thread, in order.
      `Chat.svelte` ships them at the head of `history`; the
      chat-loop walks the preamble in `splitSystemPreamble`
-     and re-emits them between the baseline and the metadata
-     message.
-  3. **Per-turn metadata system message** (`buildMetadataSystemMessage`) -
-     a single system row composed fresh each round carrying
+     and re-emits them right after the baseline.
+  3. **Conversation** - the user/assistant/tool rows the chat
+     loop is responding to, plus synthetic ephemeral
+     `<think>` blocks pushed after the user turn in the
+     priming chain: context-recall (stitched four-layer
+     note), samskara compound prose, samskara situational
+     fire (with parenthetical confidence hedges keyed off
+     the score), and intuition synthesis. Each push is
+     skipped when its source has nothing to say so we never
+     burn tokens on empty `<think>` blocks.
+  4. **Per-turn metadata system message** (`buildMetadataSystemMessage`) -
+     a single system row composed fresh each round, pinned at
+     the TAIL of the request (after the conversation), carrying
      identity facts (user name + location when set), a
      wall-clock prose paragraph (local ISO 8601 + IANA zone +
      UTC + a "since your last reply" sentence on mid-thread
@@ -404,18 +413,28 @@ A chat turn goes:
      worker owns naming there. With a reliable worker the
      loud nag rarely fires; it's the safety net for the
      case where the worker hasn't polled the row yet.
-  4. **Conversation** - the user/assistant/tool rows the chat
-     loop is responding to, plus synthetic ephemeral
-     `<think>` blocks pushed after the user turn in the
-     priming chain: context-recall (stitched four-layer
-     note), samskara compound prose, samskara situational
-     fire (with parenthetical confidence hedges keyed off
-     the score), and intuition synthesis. Each push is
-     skipped when its source has nothing to say so we never
-     burn tokens on empty `<think>` blocks.
+
+  **Why metadata rides at the tail, not before the conversation.**
+  Venice (like every OpenAI-compatible backend) can only reuse a
+  cached prompt prefix that is byte-identical from token 0. The
+  metadata block carries a wall-clock timestamp that changes every
+  turn, so positioned ahead of the conversation it shifted the
+  first-differing byte to the top of the transcript and forced the
+  entire history to be re-encoded on every turn and every tool round -
+  the conversation never cached. Pinned after the conversation, the
+  stable baseline + user-system + growing history form a cacheable
+  prefix; only this small trailing block (plus the regenerated
+  `<think>` priming, volatile turn-to-turn regardless) falls outside
+  the cache. The tradeoff: the model reads ambient context after its
+  `<think>` chain rather than just before the user turn, and the final
+  wire row is `role:system` rather than the intuition `<think>`.
 
   `buildDatetimeParagraph` formats the wall-clock paragraph in
-  ISO 8601 (local with offset, UTC Z form, IANA zone label).
+  ISO 8601 at **minute granularity** (local with offset, UTC Z form,
+  IANA zone label). Seconds are dropped deliberately so the trailing
+  metadata block stays byte-stable across tool rounds inside the same
+  minute - a seconds-precision clock would defeat the prefix cache on
+  the very block the tail-pinning is meant to keep cacheable.
   The "Your last reply on this thread was ..." sentence rides
   only on mid-thread turns where `lastAssistantTimestamp` is
   set - `Chat.svelte` walks its `messages` array for the
