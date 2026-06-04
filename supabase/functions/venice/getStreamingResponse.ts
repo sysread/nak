@@ -57,6 +57,12 @@ import {
   ToolNotImplementedError,
   type ToolContext,
 } from './performToolCall.ts';
+import {
+  base64ToBytes,
+  extractGeneratedImage,
+  stripGeneratedImage,
+  type GeneratedImagePayload,
+} from './tools/_generated_image.ts';
 
 // Magic flag the ask_user tool returns to suspend the round chain
 // pending a user answer. Mirrors src/lib/tools/ask_user.ts'
@@ -96,7 +102,14 @@ type EncodedToolResult =
 function encodeToolContent(result: EncodedToolResult): string {
   if (result.ok) {
     try {
-      return JSON.stringify(result.value ?? null);
+      // Strip the generate_image heavy payload before encoding. The
+      // ~700KB base64 blob lives on the tool outcome only long enough
+      // for the orchestrator to harvest it for the end-of-turn
+      // attachment write; the model-visible tool row carries only the
+      // compact descriptor so it does not replay into context every
+      // round. stripGeneratedImage is a no-op for non-image results.
+      const stripped = stripGeneratedImage(result.value);
+      return JSON.stringify(stripped ?? null);
     } catch {
       return JSON.stringify({ error: 'result not serializable' });
     }
@@ -192,6 +205,15 @@ export async function getStreamingResponse(
   let assistantRowId: string | null = null;
   let rowUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   let lastUpdateContent = '';
+
+  // Images harvested off generate_image tool results this turn,
+  // waiting for the terminal assistant row to attach them to. Each
+  // entry was lifted from the tool outcome via extractGeneratedImage
+  // before persistRoundToolResults wrote the (now-stripped) row, so
+  // the model-visible tool result row carries only the compact
+  // descriptor and the heavy payload sits here until terminal commit
+  // uploads it to storage + inserts the message_attachments row.
+  const generatedImages: GeneratedImagePayload[] = [];
 
   const accum = {
     content: '',
@@ -431,6 +453,19 @@ export async function getStreamingResponse(
         `[orchestrator ${runId}] round ${round} outcomes: ${outcomes.map((o) => `${o.request.name}=${o.ok ? 'ok' : 'err'}`).join(', ')}`,
       );
 
+      // Harvest generated-image payloads off any tool result before
+      // persistRoundToolResults strips them at encode time. The
+      // payloads sit on `generatedImages` until the terminal commit
+      // attaches them to the assistant row as message_attachments
+      // rows. Failed outcomes carry the error shape, not a generated
+      // image, so we skip them; the structural extractor handles
+      // tool results that simply don't have an image (most calls).
+      for (const o of outcomes) {
+        if (!o.ok) continue;
+        const img = extractGeneratedImage(o.result);
+        if (img) generatedImages.push(img);
+      }
+
       // Detect ask_user suspend: any pending sentinel halts the round
       // chain.
       const suspendIdx = outcomes.findIndex((o) =>
@@ -647,6 +682,28 @@ export async function getStreamingResponse(
       }
     }
 
+    // Attach any generate_image payloads harvested during the turn to
+    // the persisted assistant row as message_attachments. Best-effort:
+    // a storage upload or insert failure leaves the tool result's
+    // descriptor in place but the image off the message (the model's
+    // prose still references the filename so the user knows what was
+    // produced; analyze_image would miss the row, which is the worst-
+    // case UX). Skipped when terminalKind isn't 'completed' - aborted
+    // / error / suspended turns don't get attachments, mirroring the
+    // browser-side path.
+    if (
+      generatedImages.length > 0 &&
+      assistantRowId !== null &&
+      terminalKind === 'completed'
+    ) {
+      await attachGeneratedImages(
+        opts.adminClient,
+        opts.userId,
+        assistantRowId,
+        generatedImages,
+      );
+    }
+
     const endEvent: OrchestratorEvent = {
       type: 'END',
       persistedAssistantId: persistedId,
@@ -842,6 +899,88 @@ async function persistRoundToolResults(
     });
   }
   return rows;
+}
+
+/**
+ * Upload one or more harvested generate_image payloads into the
+ * `attachments` Storage bucket and insert message_attachments rows
+ * pointing at the persisted assistant row. Mirrors
+ * SupabaseService.addAttachments on the browser side: each
+ * attachment gets its own UUID; the bucket path is
+ * `<userId>/<attachmentId>/<filename>`; storage_path lands on the row
+ * so the renderer can mint a signed URL on read.
+ *
+ * Best-effort end-to-end: per-image failures get logged but don't
+ * abort the whole turn. The assistant row is already committed by
+ * the time this runs, so partial attachment is preferable to backing
+ * out the whole reply.
+ */
+async function attachGeneratedImages(
+  admin: SupabaseClient,
+  userId: string,
+  messageId: string,
+  images: readonly GeneratedImagePayload[],
+): Promise<void> {
+  interface InsertRow {
+    id: string;
+    message_id: string;
+    position: number;
+    filename: string;
+    mime_type: string;
+    size_bytes: number;
+    storage_path: string;
+    extracted_text: string | null;
+  }
+  const prepared: InsertRow[] = [];
+  for (let i = 0; i < images.length; i += 1) {
+    const img = images[i];
+    const id = crypto.randomUUID();
+    const path = `${userId}/${id}/${img.filename}`;
+    try {
+      const { error: upErr } = await admin.storage
+        .from('attachments')
+        .upload(path, base64ToBytes(img.data_base64), {
+          contentType: img.mime_type,
+          upsert: true,
+        });
+      if (upErr) {
+        console.error(
+          `[attachGeneratedImages] upload failed for ${img.filename}: ${upErr.message}`,
+        );
+        continue;
+      }
+    } catch (err) {
+      console.error(
+        `[attachGeneratedImages] upload threw for ${img.filename}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+      continue;
+    }
+    prepared.push({
+      id,
+      message_id: messageId,
+      position: i,
+      filename: img.filename,
+      mime_type: img.mime_type,
+      size_bytes: img.size_bytes,
+      storage_path: path,
+      // Generated images have no extracted text - analyze_image reads
+      // pixels directly when the user wants the image inspected.
+      extracted_text: null,
+    });
+  }
+  if (prepared.length === 0) return;
+  // RLS OFF: thread ownership already verified upstream; the explicit
+  // message_id ties the attachment to a row whose authority has
+  // already been checked.
+  const { error: insErr } = await admin
+    .from('message_attachments')
+    .insert(prepared);
+  if (insErr) {
+    console.error(
+      `[attachGeneratedImages] insert failed: ${insErr.message}`,
+    );
+  }
 }
 
 /**

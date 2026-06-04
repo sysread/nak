@@ -27,6 +27,7 @@ import './doc_grep.ts';
 import './doc_list.ts';
 import './doc_read.ts';
 import './doc_update.ts';
+import './generate_image.ts';
 import './memory_create.ts';
 import './memory_delete.ts';
 import './memory_doubt.ts';

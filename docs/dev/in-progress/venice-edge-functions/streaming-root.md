@@ -166,8 +166,6 @@ cut in one commit.
   `ToolNotImplementedError` if the model calls it under the new
   path; the orchestrator turns that into a tool-error row the model
   sees on the next round and adapts. Skipped:
-  - `generate_image` (storage + base64 attachment harvest needs
-    server-side reproduction of the chat-loop end-of-turn attach).
   - `memory_recall`, `conversation_recall`, `wiki_recall`,
     `context` (sub-agents driving `runHeadlessToolLoop` - port
     that driver separately).
@@ -198,7 +196,7 @@ Gated:
 `memory_create`, `memory_update`, `memory_delete`,
 `memory_reaffirm`, `memory_doubt`, `memory_relate`,
 `memory_unrelate`, `recipe_save`, `recipe_update`, `recipe_delete`,
-`doc_create`, `doc_update`, `doc_delete`.
+`doc_create`, `doc_update`, `doc_delete`, `generate_image`.
 
 `research_docs` consumes
 `supabase/functions/venice/_generated/research-docs-corpus.ts`, an
@@ -209,7 +207,7 @@ auto-generated TS module produced by
 all depend on `mise run bundle-docs` so the file is fresh whenever
 the function gets served or deployed.
 
-Total: 32 tools. The function's `performToolCall` registry now
+Total: 33 tools. The function's `performToolCall` registry now
 covers the dominant main-chat tool surface; the deferred set above
 takes the function path off-line for those operations.
 
