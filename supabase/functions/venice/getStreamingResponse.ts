@@ -371,6 +371,22 @@ export async function getStreamingResponse(
         break;
       }
 
+      // Persist the assistant-with-tool-calls row BEFORE dispatching
+      // the tools, so the realtime INSERT lands while the dispatch is
+      // still running. The browser's ToolCalls component renders off
+      // `message.tool_calls`, so persisting after dispatch + after the
+      // tool_call_response broadcast would make the card materialize
+      // all at once with the result already incorporated - no visible
+      // live spinner during execution. Persisting first lets the card
+      // paint with the timing pill already ticking (driven by the
+      // `tool_call_request` broadcast event that already fired during
+      // the for-await above and stamped `slot.toolTimings[id].startedAt`).
+      const assistantRoundRow = await persistRoundAssistantRow(
+        opts,
+        roundText,
+        roundToolCalls,
+      );
+
       // Tool dispatch. Run them in parallel; collect outcomes.
       const ctx: ToolContext = {
         adminClient: opts.adminClient,
@@ -437,13 +453,13 @@ export async function getStreamingResponse(
         });
       }
 
-      // Persist the assistant-with-tool-calls row for this round, then
-      // one tool-result row per call. Order matters for replay.
-      const assistantRoundRow = await persistRoundAssistantRow(
-        opts,
-        roundText,
-        roundToolCalls,
-      );
+      // Tool-result rows persist after dispatch + the
+      // tool_call_response broadcast. The result rows feed the model
+      // on the next round's history and also drive the expanded
+      // detail view in ToolCalls; the live status pill keys off
+      // slot.toolTimings (set by tool_call_request/response) so the
+      // card stays live independent of the result row's INSERT
+      // latency.
       const toolResultRows = await persistRoundToolResults(
         opts,
         outcomes,
