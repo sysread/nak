@@ -50,12 +50,11 @@ describe('MODELS (active registry)', () => {
     expect(MODELS['mistral-small-3-2-24b-instruct'].supportsReasoning).toBe(false);
   });
   it('marks the vision-capable ids as supportsVision=true', () => {
-    // Three vision-capable entries today: the analyze_image sub-call
-    // (e2ee-qwen3-vl-30b-a3b-p), the Smart tier's foreground model
-    // (qwen-3-6-plus), and the Balanced tier's foreground model
-    // (minimax-m3). All inline image_url parts directly rather than
-    // routing through analyze_image.
-    const visionIds = new Set(['e2ee-qwen3-vl-30b-a3b-p', 'qwen-3-6-plus', 'minimax-m3']);
+    // Two vision-capable entries today: the analyze_image sub-call
+    // (e2ee-qwen3-vl-30b-a3b-p) and the Smart tier's foreground model
+    // (qwen-3-6-plus, which inlines image_url parts directly rather
+    // than routing through analyze_image).
+    const visionIds = new Set(['e2ee-qwen3-vl-30b-a3b-p', 'qwen-3-6-plus']);
     for (const [id, spec] of Object.entries(MODELS)) {
       expect(spec.supportsVision).toBe(visionIds.has(id));
     }
@@ -64,12 +63,11 @@ describe('MODELS (active registry)', () => {
 
 describe('TIERS (user-facing wrappers)', () => {
   it('has the three tiers with the expected Venice model ids', () => {
-    // Smart fronts qwen-3-6-plus (1M context, native vision), Balanced
-    // fronts minimax-m3 (500k context, native vision), and Fast fronts
-    // deepseek-v4-flash. Balanced and Fast both default to light/no
-    // thinking but differ by underlying model.
+    // Smart fronts qwen-3-6-plus (1M context, native vision); Balanced
+    // and Fast both front deepseek-v4-flash, differing only in their
+    // default thinking level (low vs off).
     expect(TIERS.smart.id).toBe('qwen-3-6-plus');
-    expect(TIERS.balanced.id).toBe('minimax-m3');
+    expect(TIERS.balanced.id).toBe('deepseek-v4-flash');
     expect(TIERS.fast.id).toBe('deepseek-v4-flash');
   });
   it('each tier wraps its corresponding MODELS entry', () => {
