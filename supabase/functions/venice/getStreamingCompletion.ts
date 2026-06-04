@@ -393,6 +393,18 @@ async function* streamFromVenice(
         if (parsed.toolCallFragments) {
           assembler.ingest(parsed.toolCallFragments);
         }
+        // Dev diagnostic: when finish_reason=tool_calls but we yielded
+        // no tool_call_request events, the failure is in this loop's
+        // path - either parseSseFrame stripped them (delta.tool_calls
+        // missing index or other expected shape) or the assembler
+        // dropped them at flush time. Log every frame whose raw text
+        // mentions tool_calls so we can diff frame -> parsed and see
+        // which side dropped them.
+        if (frame.includes('tool_calls') || frame.includes('tool_call')) {
+          console.log(
+            `[streamFromVenice] tool-call-bearing frame: rawLen=${frame.length} parsed=${JSON.stringify(parsed)}`,
+          );
+        }
         if (parsed.usage) usage = parsed.usage;
         if (parsed.finishReason) finishReason = parsed.finishReason;
       }
@@ -419,7 +431,12 @@ async function* streamFromVenice(
   // missing id or name are dropped silently - the assembler logs the
   // reason but the consumer cannot execute a tool whose identity is
   // partial.
-  const { requests } = assembler.flush();
+  const { requests, dropped } = assembler.flush();
+  if (dropped.length > 0 || (finishReason === 'tool_calls' && requests.length === 0)) {
+    console.log(
+      `[streamFromVenice] flush: requests=${requests.length} dropped=${JSON.stringify(dropped)} finishReason=${finishReason}`,
+    );
+  }
   for (const r of requests) {
     yield { type: 'tool_call_request', request: r };
   }
