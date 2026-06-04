@@ -175,8 +175,6 @@ cut in one commit.
     `context` (sub-agents driving `runHeadlessToolLoop` - port
     that driver separately).
   - `wiki_librarian` (multi-round sub-agent).
-  - `doc_create` (cross-bucket storage copy from attachments ->
-    documents).
   - `recipe_photos_attach`, `recipe_photos_remove`,
     `recipe_photos_reorder`, `recipe_photo_label_set` (cascading
     RPC helper chain through `recipe_new_photo_version` needs the
@@ -202,9 +200,9 @@ Gated:
 `memory_create`, `memory_update`, `memory_delete`,
 `memory_reaffirm`, `memory_doubt`, `memory_relate`,
 `memory_unrelate`, `recipe_save`, `recipe_update`, `recipe_delete`,
-`doc_update`, `doc_delete`.
+`doc_create`, `doc_update`, `doc_delete`.
 
-Total: 30 tools. The function's `performToolCall` registry now
+Total: 31 tools. The function's `performToolCall` registry now
 covers the dominant main-chat tool surface; the deferred set above
 takes the function path off-line for those operations.
 

@@ -20,6 +20,7 @@ import './analyze_image.ts';
 import './ask_user.ts';
 import './conversation_get.ts';
 import './conversation_search.ts';
+import './doc_create.ts';
 import './doc_delete.ts';
 import './doc_get.ts';
 import './doc_grep.ts';
