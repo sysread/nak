@@ -2042,15 +2042,17 @@ $cron$;
 -- application code.
 drop function if exists public.recipe_image_upsert(text, text, int, text);
 drop function if exists public.recipe_image_upsert(text, text, int, text, text);
+drop function if exists public.recipe_image_upsert(text, text, int, text, uuid);
 create or replace function public.recipe_image_upsert(
   p_sha256 text,
   p_mime_type text,
   p_size_bytes int,
-  p_storage_path text
+  p_storage_path text,
+  p_user_id uuid default null
 ) returns uuid
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_id uuid;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
@@ -2442,13 +2444,15 @@ end $$;
 -- inserts that follow vary per RPC, but the "snapshot the recipe
 -- columns under a new version id" boilerplate is shared.
 drop function if exists public.recipe_new_photo_version(uuid, text);
+drop function if exists public.recipe_new_photo_version(uuid, text, uuid);
 create or replace function public.recipe_new_photo_version(
   p_id uuid,
-  p_change_message text
+  p_change_message text,
+  p_user_id uuid default null
 ) returns uuid
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_now timestamptz := now();
   v_title text;
   v_cooklang text;
@@ -2490,15 +2494,17 @@ end $$;
 -- the post-mutation link list as `(image_id, position)` rows.
 drop function if exists public.recipe_attach_photos(uuid, uuid[], text);
 drop function if exists public.recipe_attach_photos(uuid, uuid[], text[], text);
+drop function if exists public.recipe_attach_photos(uuid, uuid[], text[], text, uuid);
 create or replace function public.recipe_attach_photos(
   p_recipe_id uuid,
   p_image_ids uuid[],
   p_image_labels text[],
-  p_change_message text
+  p_change_message text,
+  p_user_id uuid default null
 ) returns table (image_id uuid, "position" int, label text)
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_new_version_id uuid;
   v_prev_version_id uuid;
   v_image_id uuid;
@@ -2516,7 +2522,7 @@ begin
     raise exception 'image_labels length must match image_ids length';
   end if;
 
-  v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message);
+  v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message, v_uid);
 
   -- Carry forward the previous version's links (and their labels)
   -- so this version reads as "previous + appended". Dropping labels
@@ -2599,14 +2605,16 @@ end $$;
 -- when an id isn't currently linked, so the LLM can see "I asked for
 -- something stale" rather than a silent no-op.
 drop function if exists public.recipe_remove_photos(uuid, uuid[], text);
+drop function if exists public.recipe_remove_photos(uuid, uuid[], text, uuid);
 create or replace function public.recipe_remove_photos(
   p_recipe_id uuid,
   p_image_ids uuid[],
-  p_change_message text
+  p_change_message text,
+  p_user_id uuid default null
 ) returns table (image_id uuid, "position" int, label text)
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_new_version_id uuid;
   v_prev_version_id uuid;
   v_pos int := 0;
@@ -2644,7 +2652,7 @@ begin
     raise exception 'photos not on recipe: %', v_missing;
   end if;
 
-  v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message);
+  v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message, v_uid);
 
   -- Insert survivors in their original relative order, renumbered
   -- from 0 so positions stay dense. Labels travel with the link so
@@ -2671,14 +2679,16 @@ end $$;
 -- any ID missing or any extra ID is a hard error. This forecloses the
 -- "I forgot to enumerate" footgun the LLM would otherwise fall into.
 drop function if exists public.recipe_reorder_photos(uuid, uuid[], text);
+drop function if exists public.recipe_reorder_photos(uuid, uuid[], text, uuid);
 create or replace function public.recipe_reorder_photos(
   p_recipe_id uuid,
   p_image_ids uuid[],
-  p_change_message text
+  p_change_message text,
+  p_user_id uuid default null
 ) returns table (image_id uuid, "position" int, label text)
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_new_version_id uuid;
   v_prev_version_id uuid;
   v_current uuid[];
@@ -2730,7 +2740,7 @@ begin
     raise exception 'photos contains duplicate ids';
   end if;
 
-  v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message);
+  v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message, v_uid);
 
   -- Pull each photo's label from the previous version's link so the
   -- reorder preserves captions. Reorder is "change order, nothing
@@ -2764,15 +2774,17 @@ end $$;
 -- Like the other photo RPCs, this creates a new recipe_versions row so
 -- a label change shows in the History panel like any other edit.
 drop function if exists public.recipe_set_photo_labels(uuid, uuid[], text[], text);
+drop function if exists public.recipe_set_photo_labels(uuid, uuid[], text[], text, uuid);
 create or replace function public.recipe_set_photo_labels(
   p_recipe_id uuid,
   p_image_ids uuid[],
   p_image_labels text[],
-  p_change_message text
+  p_change_message text,
+  p_user_id uuid default null
 ) returns table (image_id uuid, "position" int, label text)
 language plpgsql security invoker as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid uuid := coalesce(p_user_id, auth.uid());
   v_new_version_id uuid;
   v_prev_version_id uuid;
   v_image_id uuid;
@@ -2817,7 +2829,7 @@ begin
     raise exception 'photos not on recipe: %', v_missing;
   end if;
 
-  v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message);
+  v_new_version_id := public.recipe_new_photo_version(p_recipe_id, p_change_message, v_uid);
 
   -- Carry forward all of the previous version's links (positions and
   -- labels) verbatim. Photos whose labels we're not changing inherit

@@ -44,6 +44,7 @@ import './memory_update.ts';
 import './recipe_delete.ts';
 import './recipe_get.ts';
 import './recipe_list.ts';
+import './recipe_photos.ts';
 import './recipe_save.ts';
 import './recipe_update.ts';
 import './research_docs.ts';
