@@ -5022,7 +5022,7 @@
   // (and ship on the wire on the resumed round) - this is purely a
   // display filter so the question doesn't render as both a faceless
   // tool row and a question card.
-  const HIDDEN_TOOL_NAMES = new Set(['toggle_tools', 'update_title', 'ask_user']);
+  const HIDDEN_TOOL_NAMES = new Set(['toggle_toolbox', 'update_title', 'ask_user']);
 
   /**
    * Pull the sanitised title out of an update_title call + its
