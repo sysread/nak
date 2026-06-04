@@ -66,10 +66,16 @@ jobs:
         # supabase CLI comes from mise; auth is the access token, the project is
         # pinned via --project-ref (no `supabase link` in CI), and verify_jwt
         # stays as configured in supabase/config.toml (on).
+        #
+        # bundle-research-docs emits supabase/functions/venice/_generated/
+        # research-docs-corpus.ts from docs/user + docs/dev. The file is
+        # gitignored, so CI has to regenerate it before the supabase
+        # functions deploy bundles the venice tree.
         if: vars.SUPABASE_PROJECT_REF != ''
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
+          node scripts/bundle-research-docs.mjs
           supabase functions deploy venice --project-ref ${{ vars.SUPABASE_PROJECT_REF }}
           supabase functions deploy expire-attachments --project-ref ${{ vars.SUPABASE_PROJECT_REF }}
           supabase functions deploy recipe-image-gc --project-ref ${{ vars.SUPABASE_PROJECT_REF }}

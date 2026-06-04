@@ -168,9 +168,6 @@ cut in one commit.
   sees on the next round and adapts. Skipped:
   - `generate_image` (storage + base64 attachment harvest needs
     server-side reproduction of the chat-loop end-of-turn attach).
-  - `research_docs` (would need ~250 KB of docs/user + docs/dev
-    bundled into the function; model can fall back to general
-    knowledge or wiki recall).
   - `memory_recall`, `conversation_recall`, `wiki_recall`,
     `context` (sub-agents driving `runHeadlessToolLoop` - port
     that driver separately).
@@ -194,7 +191,8 @@ Always-on (read-side):
 `memory_search`, `conversation_search`, `conversation_get`,
 `wiki_search`, `wiki_list`, `wiki_get`, `recipe_list`, `recipe_get`,
 `doc_list`, `doc_get`, `doc_grep`, `doc_read`, `web_search`,
-`analyze_image`, `update_title`, `toggle_toolbox`, `ask_user`.
+`analyze_image`, `update_title`, `toggle_toolbox`, `ask_user`,
+`research_docs`.
 
 Gated:
 `memory_create`, `memory_update`, `memory_delete`,
@@ -202,7 +200,16 @@ Gated:
 `memory_unrelate`, `recipe_save`, `recipe_update`, `recipe_delete`,
 `doc_create`, `doc_update`, `doc_delete`.
 
-Total: 31 tools. The function's `performToolCall` registry now
+`research_docs` consumes
+`supabase/functions/venice/_generated/research-docs-corpus.ts`, an
+auto-generated TS module produced by
+`scripts/bundle-research-docs.mjs` from the live `docs/user/` and
+`docs/dev/` trees. The output is gitignored; `mise run dev-start`,
+`mise run functions-serve`, and the CI `Deploy edge functions` step
+all depend on `mise run bundle-docs` so the file is fresh whenever
+the function gets served or deployed.
+
+Total: 32 tools. The function's `performToolCall` registry now
 covers the dominant main-chat tool surface; the deferred set above
 takes the function path off-line for those operations.
 

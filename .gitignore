@@ -84,3 +84,8 @@ yarn-error.log*
 # scratch docs
 .scratch/
 scratch/
+
+# Generated function-side bundles. research-docs-corpus.ts is emitted by
+# scripts/bundle-research-docs.mjs from docs/user + docs/dev; regenerated
+# by `mise run bundle-docs`, by dev-start, and by the CI deploy step.
+supabase/functions/venice/_generated/

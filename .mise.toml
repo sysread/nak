@@ -179,7 +179,9 @@ description = "Isolated local dev: bring up a local Supabase stack (Docker), pro
 # deps so a fresh worktree has Vite/etc; raw = true so the foreground Vite
 # server, the slow `supabase start` image pull, and the optional Venice-key
 # prompt all have direct TTY access and Ctrl-C reaches the script.
-depends = ["deps"]
+# bundle-docs writes the research_docs corpus the function imports at load
+# time; running it here means a fresh worktree boots without manual steps.
+depends = ["deps", "bundle-docs"]
 run = "node scripts/dev-local.mjs"
 raw = true
 
@@ -204,12 +206,18 @@ description = "Deno unit tests for the edge functions (offline - fake fetch, no 
 # the pure offline tests, so this stays network-free after deno caches std.
 run = "deno test --config supabase/functions/deno.json supabase/functions/tests/"
 
+[tasks.bundle-docs]
+description = "Bundle docs/user + docs/dev into the function-side research_docs corpus (supabase/functions/venice/_generated/research-docs-corpus.ts). Gitignored output; dev-start, functions-serve, and functions-deploy all depend on it."
+run = "node scripts/bundle-research-docs.mjs"
+
 [tasks.functions-serve]
 description = "Serve edge functions locally (supabase functions serve). dev-start already runs this alongside Vite; use standalone to serve against an already-running stack."
+depends = ["bundle-docs"]
 run = "supabase functions serve"
 raw = true
 
 [tasks.functions-deploy]
 description = "Deploy the venice edge function to the linked Supabase project."
+depends = ["bundle-docs"]
 run = "supabase functions deploy venice"
 raw = true
