@@ -157,6 +157,14 @@ export interface OrchestratorOpts {
 export async function getStreamingResponse(
   opts: OrchestratorOpts,
 ): Promise<void> {
+  // Local-dev liveness markers. Pair every start with an end so a
+  // dev-start terminal scan reveals whether the orchestrator
+  // completed or got killed mid-flight (the supabase-edge-runtime
+  // "early termination has been triggered" warning lands between
+  // them when the local isolate gets recycled out from under
+  // EdgeRuntime.waitUntil).
+  const runId = `${opts.threadId.slice(0, 8)}/${Date.now().toString(36)}`;
+  console.log(`[orchestrator ${runId}] start`);
   const ctl = new AbortController();
   const wallTimeoutMs = opts.wallDeadlineMs ?? WALL_DEADLINE_MS;
   const wallTimer = setTimeout(() => ctl.abort(), wallTimeoutMs);
@@ -257,6 +265,9 @@ export async function getStreamingResponse(
         break;
       }
       body = { ...body, messages: history };
+      console.log(
+        `[orchestrator ${runId}] round ${round} historyLen=${history.length}`,
+      );
 
       let roundHadToolCalls = false;
       const roundToolCalls: ToolCallRequest[] = [];
@@ -335,8 +346,14 @@ export async function getStreamingResponse(
         depth: 0,
       };
 
+      console.log(
+        `[orchestrator ${runId}] round ${round} dispatching ${roundToolCalls.length} tool call(s): ${roundToolCalls.map((tc) => tc.name).join(', ')}`,
+      );
       const outcomes = await Promise.all(
         roundToolCalls.map((tc) => runOneToolCall(tc, ctx)),
+      );
+      console.log(
+        `[orchestrator ${runId}] round ${round} outcomes: ${outcomes.map((o) => `${o.request.name}=${o.ok ? 'ok' : 'err'}`).join(', ')}`,
       );
 
       // Detect ask_user suspend: any pending sentinel halts the round
@@ -455,6 +472,15 @@ export async function getStreamingResponse(
   } catch (err) {
     terminalKind = 'error';
     terminalDetail = err instanceof Error ? err.message : String(err);
+    // Local-dev diagnostic. Production telemetry already routes this
+    // through the END event's terminalKind, but local supabase
+    // functions serve has no other surface to see what failed - the
+    // orchestrator's catch is otherwise silent.
+    console.error(
+      '[getStreamingResponse] caught:',
+      terminalDetail,
+      err instanceof Error ? err.stack : undefined,
+    );
   } finally {
     clearTimeout(wallTimer);
     if (rowUpdateTimer !== null) clearTimeout(rowUpdateTimer);
@@ -575,6 +601,9 @@ export async function getStreamingResponse(
     // terminalDetail is captured in terminalKind + the END event;
     // referenced for future telemetry hookup.
     void terminalDetail;
+    console.log(
+      `[orchestrator ${runId}] end terminalKind=${terminalKind} persistedId=${persistedId || 'none'}`,
+    );
   }
 }
 
@@ -607,6 +636,15 @@ async function runOneToolCall(
       err instanceof ToolNotImplementedError
         ? `${message} (function-side tool dispatch is in migration)`
         : message;
+    // Local-dev diagnostic. The tool result row carries the error
+    // message back to the model on the next round, but the runtime
+    // log is where a human watching the dev-start terminal will
+    // notice "ah, that's why nothing's coming back."
+    console.error(
+      `[performToolCall] ${request.name} threw:`,
+      reason,
+      err instanceof Error ? err.stack : undefined,
+    );
     return {
       request,
       ok: false,
