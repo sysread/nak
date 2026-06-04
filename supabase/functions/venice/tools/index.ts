@@ -9,8 +9,12 @@
 // is independent and the dispatcher's REGISTRY map is order-agnostic.
 // Tools are listed alphabetically for the next reader's benefit.
 //
-// When a new tool ports, add one `import './name.ts'` line here. The
-// barrel itself stays mechanical; no export surface, no logic.
+// When a new tool ports, add one side-effect import line below
+// (./your_tool_name.ts). The barrel itself stays mechanical; no
+// export surface, no logic. Phrased without the literal import
+// keyword inside the comment because supabase functions serve's
+// hot-reload scans source naively and would try to resolve a
+// fictitious module path from the example.
 
 import './analyze_image.ts';
 import './ask_user.ts';
