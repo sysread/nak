@@ -1286,28 +1286,47 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     history.push(buildIntuitionThinkMessage(intuitionCache));
   }
 
-  // Three-layer system-prompt assembly. The baseline prompt
-  // (identity, voice, recall framing, toolbox catalog) leads;
-  // user-configured system prompts from Settings ride next so a
-  // custom "you are a pirate" prompt still wins on voice while the
-  // baseline tool framing stays in force; the per-turn metadata
-  // system message comes last among the system rows so the model
-  // reads ambient context (datetime, attachments inventory, title
-  // and emphasis nudges) immediately before the user turn. The
-  // user message itself rides bare - no `<user_message>` fence,
-  // no `<datetime>` tag, no `<system_reminder>` directive folded
-  // in. The role:user / role:system boundary is the structural
-  // signal now; the in-content tags were a workaround for the
-  // URL-scraping auto-injection that's no longer in play.
+  // System-prompt assembly with the per-turn metadata pinned LAST.
+  // The baseline prompt (identity, voice, recall framing, toolbox
+  // catalog) leads; user-configured system prompts from Settings
+  // ride next so a custom "you are a pirate" prompt still wins on
+  // voice while the baseline tool framing stays in force; then the
+  // whole conversation; then the per-turn metadata system message as
+  // the final row, immediately before the model generates.
   //
-  // The metadata message is built once per turn now. Multi-round
+  // Metadata rides at the tail for prompt-cache economics, not
+  // reading order. Venice - like every OpenAI-compatible backend -
+  // can only reuse a cached prefix that is byte-identical from token
+  // 0, and this block carries a wall-clock timestamp that changes
+  // every turn. Positioned ahead of the conversation (where it used
+  // to sit) it pushed the first-differing byte to the top of the
+  // transcript, so the entire history had to be re-encoded on every
+  // turn and every tool round - the conversation never cached.
+  // Pinned after the conversation, the stable baseline + user-system
+  // + growing history form a cacheable prefix; only this small
+  // trailing block falls outside the cache (along with the
+  // regenerated <think> priming, which is volatile turn-to-turn
+  // regardless). The timestamp is minute-granular (see
+  // buildDatetimeParagraph) so multiple tool rounds inside the same
+  // minute keep even this trailing block byte-stable.
+  //
+  // Tradeoff accepted deliberately: the model reads ambient context
+  // (datetime, attachments inventory, title and emphasis nudges)
+  // AFTER its <think> priming chain rather than just before the user
+  // turn, and the final wire row is role:system rather than the
+  // intuition <think>. The user message still rides bare - no
+  // `<user_message>` fence, no `<datetime>` tag, no
+  // `<system_reminder>` directive; the role:user / role:system
+  // boundary is the structural signal.
+  //
+  // The metadata message is built once per turn here. Multi-round
   // tool chains live entirely server-side, so the browser-side
-  // wall-clock refresh between rounds the previous loop did is
-  // gone (the server's getStreamingResponse round chain reuses the
-  // same baton it was handed in the envelope POST). The title
-  // nudge captures the title at turn entry; a mid-turn
-  // update_title call lands in DB but doesn't re-render here -
-  // any next-turn priming picks it up on its next user message.
+  // wall-clock refresh between rounds the previous loop did is gone
+  // (the server's getStreamingResponse round chain reuses the same
+  // baton it was handed in the envelope POST). The title nudge
+  // captures the title at turn entry; a mid-turn update_title call
+  // lands in DB but doesn't re-render here - any next-turn priming
+  // picks it up on its next user message.
   const { userSystem, conversation } = splitSystemPreamble(history);
   const metadataMessage = buildMetadataSystemMessage({
     userName,
@@ -1336,8 +1355,8 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       }),
     },
     ...userSystem,
-    metadataMessage,
     ...conversation,
+    metadataMessage,
   ];
 
   const consumed = await consumeStreamEvents({
