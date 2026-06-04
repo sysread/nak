@@ -202,9 +202,10 @@ auto-generated TS module produced by
 all depend on `mise run bundle-docs` so the file is fresh whenever
 the function gets served or deployed.
 
-Total: 42 tools. The function's `performToolCall` registry now
-covers the full main-chat tool surface; the deferred set above
-takes the function path off-line for those operations.
+Total: 41 tools (22 always-on + 19 gated). The function's
+`performToolCall` registry now covers the full main-chat tool
+surface; the deferred set above takes the function path off-line
+for those operations.
 
 ### What stays exactly as built
 

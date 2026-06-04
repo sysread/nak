@@ -8,16 +8,18 @@ This file is the concrete punch list: call sites, workers, and processes, with
 status.
 
 **Iteratively audited - not exhaustive or final.** Each milestone re-audits and
-updates this. Last full audit: **2026-06-02**, after the orphan-deletion
-cleanup that followed the wiki-librarian + supervisor sweep. Every
-`VeniceClient.completeChat` consumer now routes through
-`SupabaseService.complete`; the method is gone, the
-`COMPLETE_CHAT_RATE_LIMIT_*` exports are gone, and the rate-limit plumbing
-moved private into `src/lib/supabase.ts` next to its only consumer. The
-only Venice endpoint still browser-direct is `streamChat`, used by the live
-chat loop. Audit walks `src/lib/venice.ts` callers (`grep`), the
-`src/lib/agents/` worker fleet, and the `supabase/functions/` directory.
-Line numbers drift; re-grep before relying on one.
+updates this. Last full audit: **2026-06-04**, after the streaming-root
+cut landed (see [streaming-root.md](./streaming-root.md)). The live chat
+loop's `streamChat` was the last browser-direct Venice consumer; it now
+goes through the `/stream` edge function (envelope POST + Broadcast
+channel subscription), the Venice API key was removed from the client
+bundle, and the per-turn round loop + tool dispatch live entirely on the
+function side. **The migration's two drivers are met:** every Venice
+endpoint goes through an edge function, and the function is the single
+source of truth for the key. Audit walks `src/lib/venice.ts` callers
+(`grep`), the `src/lib/agents/` worker fleet, and the
+`supabase/functions/` directory. Line numbers drift; re-grep before
+relying on one.
 
 Status key:
 
@@ -31,7 +33,7 @@ Status key:
 | Endpoint | `VeniceClient` method | Status |
 | --- | --- | --- |
 | `POST /embeddings` | `embed` (deleted from `VeniceClient`) | DONE - backfill (milestone 1, cron) + query-time (milestone 3, `/embed` route from the browser via `SupabaseService.embed`) |
-| `POST /chat/completions` | `completeChat` (deleted from `VeniceClient`), `streamChat` (TODO - the attractor) | DONE for the non-streaming half - milestone 6 (`claude/complete-edge-function`) + the worker-fleet sweeps that followed (`claude/headless-tool-loop-complete`, `claude/recall-family-complete`, `claude/deep-sleep-rem-complete`, `claude/bias-agent-complete`, `claude/samskara-agent-complete`, `claude/wiki-agent-complete`, `claude/wiki-librarian-agent-complete`, `claude/venice-migration-cleanup`). |
+| `POST /chat/completions` | `completeChat` (deleted from `VeniceClient`), `streamChat` (rewritten as a thin envelope-POST + Broadcast subscriber) | DONE for both halves - milestone 6 (`claude/complete-edge-function`) + the worker-fleet sweeps that followed (`claude/headless-tool-loop-complete`, `claude/recall-family-complete`, `claude/deep-sleep-rem-complete`, `claude/bias-agent-complete`, `claude/samskara-agent-complete`, `claude/wiki-agent-complete`, `claude/wiki-librarian-agent-complete`, `claude/venice-migration-cleanup`), then the streaming half (`claude/streaming-root-edge-function`, see [streaming-root.md](./streaming-root.md)). |
 | `GET /billing/usage` | (was `fetchUsage`, now `SupabaseService.fetchUsage`) | DONE - milestone 2, `/usage` route |
 | `POST /augment/text-parser` | `extractText` (deleted from `VeniceClient`) | DONE - milestone 4, `/text-parser` route. Fixed the CORS-broken browser path (every non-image upload had been "Failed to fetch"). Empirical: Venice caps at ~25 MB; the Supabase edge-function gateway is transparent at that scale (no escape hatch needed). `MAX_DOCUMENT_FILE_BYTES` clamped to 24 MiB to fail at the form guard instead of mid-upload. |
 | `POST /image/generate` | `generateImage` (deleted from `VeniceClient`) | DONE - milestone 5, `/image-generate` route. Single browser caller (the `generate_image` tool) routes through `SupabaseService.generateImage`; the content-policy header check + variants=1/return_binary=false defaults moved into the Deno helper. |
@@ -184,9 +186,20 @@ deleted (it exercised the deleted method).
 
 ### `streamChat` (`/chat/completions` streaming)
 
-TODO - the attractor, the live chat turn.
+DONE - `claude/streaming-root-edge-function`. The browser's
+`streamChat` is now a thin POST to the `/stream` edge function
+that subscribes to a Supabase Realtime Broadcast channel for the
+event stream; `src/lib/venice.ts` no longer owns the SSE
+parser, the round loop, the rate-limit retry, or the tool
+dispatch - all moved to `supabase/functions/venice/`
+(`getStreamingResponse.ts` round loop, `getStreamingCompletion.ts`
+SSE consumer, `performToolCall.ts` dispatch). The Venice API
+key is gone from the client bundle. Full architectural rationale
+in [streaming-root.md](./streaming-root.md).
 
-- `src/lib/chat-loop.ts:614` - the sole caller.
+- Browser caller (`src/lib/chat-loop.ts`) still calls
+  `venice.streamChat(...)`, but the implementation is now an
+  envelope POST + channel subscriber, not a direct Venice fetch.
 
 ### `extractText` (`/augment/text-parser`)
 

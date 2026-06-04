@@ -97,27 +97,24 @@ doc research, image analysis) and the intuition pipeline migrate
 onto this; then those callers themselves move into edge functions
 composed of it.
 
-**Streaming `/complete` (the root, moves last).** The streaming
-turn runs server-side: the function reads Venice SSE, persists the
-assistant message to the database itself, and the client collects
-the live output. The load-bearing invariant is that message
-persistence lives in the function, not the browser - that is what
-makes a backgrounded page recoverable. *How* the client collects
-the stream is the one open fork:
+**Streaming `/stream` (the root, moved last).** Resolved by
+[streaming-root.md](./streaming-root.md). The streaming turn runs
+server-side: the function reads Venice SSE, persists the assistant
+message to the database itself, and the client collects the live
+output. The load-bearing invariant is that message persistence
+lives in the function, not the browser - that is what makes a
+backgrounded page recoverable.
 
-- **dual-sink** - the function tees: live SSE direct to the browser
-  *and* a durable write to the DB on completion. Minimize kills the
-  SSE; the DB write still lands; the browser reconciles the
-  finished message on return. Smallest delta from today's streaming
-  path.
-- **single-sink** - the function writes incremental chunks to a DB
-  row; the browser subscribes via realtime. One channel is both
-  live and durable, at the cost of a debounced write cadence and
-  realtime fan-out latency (laggier than direct SSE).
-
-The fork stays open until this milestone goes active - naming the
-destination lets future tactical choices climb toward it without
-committing the channel mechanism prematurely.
+The dual-sink / single-sink fork named here resolved into a
+**three-sink architecture**: HTTP envelope (one-shot response
+carrying the channel name and any completed-so-far buffer) +
+Supabase Realtime Broadcast channel (live SSE-equivalent events) +
+in-flight DB row (the resume state, `status='streaming'` ->
+`'complete' | 'error' | 'aborted' | 'suspended_for_ask_user'`).
+The full rationale - why Broadcast over direct SSE, how reconnect
+works, what stays browser-side, what moved server-side - lives in
+streaming-root.md. This section's job is to mark the destination
+reached; the active per-feature detail lives there.
 
 ## Migration history
 
