@@ -1488,11 +1488,24 @@ export function parseSseFrame(frame: string): SseDelta | '[DONE]' | null {
       const frag: { index: number; id?: string; name?: string; argumentsAppend?: string } = {
         index: c.index,
       };
-      if (typeof c.id === 'string') frag.id = c.id;
+      // Skip empty-string id and name. Venice's continuation
+      // fragments carry `id: ""` and `function.name: ""` alongside
+      // the real argumentsAppend payload; passing them through would
+      // overwrite the assembler's real id/name (set by the opening
+      // fragment), which then fails the !entry.id check at flush and
+      // drops the call as "missing id".
+      if (typeof c.id === 'string' && c.id.length > 0) frag.id = c.id;
       const fname = c.function?.name;
-      if (typeof fname === 'string') frag.name = fname;
+      if (typeof fname === 'string' && fname.length > 0) frag.name = fname;
+      // argumentsAppend can legitimately be an empty string on the
+      // opening fragment; the assembler initialises argumentsBuf=''
+      // and only concatenates non-empty appends, so dropping the
+      // empty case at the parse layer keeps the shape consistent
+      // with continuation frames that omit the field entirely.
       const fargs = c.function?.arguments;
-      if (typeof fargs === 'string') frag.argumentsAppend = fargs;
+      if (typeof fargs === 'string' && fargs.length > 0) {
+        frag.argumentsAppend = fargs;
+      }
       frags.push(frag);
     }
     if (frags.length > 0) out.toolCallFragments = frags;

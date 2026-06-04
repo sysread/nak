@@ -42,9 +42,15 @@ describe('parseSseFrame', () => {
     const frame =
       'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x",' +
       '"type":"function","function":{"name":"memory_search","arguments":""}}]}}]}';
+    // Empty argumentsAppend is dropped at parse time. The assembler
+    // initialises argumentsBuf='' and only concatenates non-empty
+    // appends, so emitting `argumentsAppend: ''` would be a no-op
+    // either way - dropping at the parse layer keeps the shape
+    // consistent with continuation frames that omit the field
+    // entirely.
     expect(parseSseFrame(frame)).toEqual({
       toolCallFragments: [
-        { index: 0, id: 'call_x', name: 'memory_search', argumentsAppend: '' },
+        { index: 0, id: 'call_x', name: 'memory_search' },
       ],
     });
   });
@@ -55,6 +61,24 @@ describe('parseSseFrame', () => {
     expect(parseSseFrame(frame)).toEqual({
       toolCallFragments: [
         { index: 0, argumentsAppend: '{"q":' },
+      ],
+    });
+  });
+
+  it('drops empty-string id and name on continuation fragments (Venice quirk)', () => {
+    // Venice on at least deepseek-v4-flash emits continuation fragments
+    // with `id: ""` and `function.name: ""` alongside the real
+    // `argumentsAppend`. Forwarding the empty strings overwrites the
+    // assembler's real id/name (set by the opening fragment), which
+    // then gets dropped as "missing id" at flush time. The parser
+    // strips empty id/name so the assembler only ever sees real
+    // values.
+    const frame =
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"",' +
+      '"function":{"name":"","arguments":"{\\"q\\":1}"}}]}}]}';
+    expect(parseSseFrame(frame)).toEqual({
+      toolCallFragments: [
+        { index: 0, argumentsAppend: '{"q":1}' },
       ],
     });
   });

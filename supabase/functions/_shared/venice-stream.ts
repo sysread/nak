@@ -377,11 +377,22 @@ export function parseSseFrame(frame: string): SseDelta | '[DONE]' | null {
     for (const c of rawCalls) {
       if (typeof c.index !== 'number') continue;
       const frag: ToolCallFragment = { index: c.index };
-      if (typeof c.id === 'string') frag.id = c.id;
+      // Skip empty-string id and name. Venice's continuation
+      // fragments carry `id: ""` and `function.name: ""` alongside
+      // the real argumentsAppend payload; passing them through would
+      // overwrite the real id/name the first fragment set, which the
+      // assembler then drops as "missing id" at flush.
+      if (typeof c.id === 'string' && c.id.length > 0) frag.id = c.id;
       const fname = c.function?.name;
-      if (typeof fname === 'string') frag.name = fname;
+      if (typeof fname === 'string' && fname.length > 0) frag.name = fname;
+      // argumentsAppend can legitimately be an empty string on the
+      // opening fragment (the model declared the call but hasn't
+      // started streaming args yet); only forward it when there's
+      // something to append.
       const fargs = c.function?.arguments;
-      if (typeof fargs === 'string') frag.argumentsAppend = fargs;
+      if (typeof fargs === 'string' && fargs.length > 0) {
+        frag.argumentsAppend = fargs;
+      }
       frags.push(frag);
     }
     if (frags.length > 0) out.toolCallFragments = frags;

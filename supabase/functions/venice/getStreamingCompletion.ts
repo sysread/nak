@@ -393,18 +393,6 @@ async function* streamFromVenice(
         if (parsed.toolCallFragments) {
           assembler.ingest(parsed.toolCallFragments);
         }
-        // Dev diagnostic: when finish_reason=tool_calls but we yielded
-        // no tool_call_request events, the failure is in this loop's
-        // path - either parseSseFrame stripped them (delta.tool_calls
-        // missing index or other expected shape) or the assembler
-        // dropped them at flush time. Log every frame whose raw text
-        // mentions tool_calls so we can diff frame -> parsed and see
-        // which side dropped them.
-        if (frame.includes('tool_calls') || frame.includes('tool_call')) {
-          console.log(
-            `[streamFromVenice] tool-call-bearing frame: rawLen=${frame.length} parsed=${JSON.stringify(parsed)}`,
-          );
-        }
         if (parsed.usage) usage = parsed.usage;
         if (parsed.finishReason) finishReason = parsed.finishReason;
       }
