@@ -22,6 +22,21 @@ export interface ToolCompletionResult {
   citations: ToolCitation[];
   finishReason: string | null;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
+  /**
+   * Tool-calls the model emitted on this turn. Empty for completions
+   * that didn't request a tools array (the default sub-completion
+   * shape - research_docs, analyze_image, etc.). Populated when the
+   * caller is driving an agent (runHeadlessAgent in
+   * supabase/functions/venice/agents/_run.ts), which feeds them back
+   * through the agent's toolbox dispatcher.
+   */
+  toolCalls: ToolCompletionCall[];
+}
+
+export interface ToolCompletionCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
 }
 
 export interface ToolCitation {
@@ -51,6 +66,18 @@ export interface ToolCompletionOptions {
   disableThinking?: boolean;
   maxTokens?: number;
   temperature?: number;
+  /**
+   * OpenAI-format tools the model can call this turn. Forwarded as
+   * the request body's `tools` field; the parsed response surfaces
+   * any tool_calls the model emitted on `toolCalls`. Omitted by
+   * default since most sub-completions don't dispatch tools.
+   */
+  tools?: readonly Record<string, unknown>[];
+  /**
+   * Optional reasoning_effort knob. Forwarded verbatim to Venice on
+   * reasoning-capable models; non-reasoning tiers silently ignore.
+   */
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }
 
 export async function toolComplete(opts: ToolCompletionOptions): Promise<ToolCompletionResult> {
@@ -80,6 +107,12 @@ export async function toolComplete(opts: ToolCompletionOptions): Promise<ToolCom
   }
   if (opts.temperature !== undefined) {
     body.temperature = opts.temperature;
+  }
+  if (opts.tools && opts.tools.length > 0) {
+    body.tools = opts.tools;
+  }
+  if (opts.reasoningEffort !== undefined) {
+    body.reasoning_effort = opts.reasoningEffort;
   }
 
   const raw = await veniceComplete({ apiKey: opts.apiKey, body });
@@ -135,5 +168,28 @@ function parseCompletion(payload: unknown): ToolCompletionResult {
     });
   }
 
-  return { text, reasoning, citations, finishReason, usage };
+  // Parse any tool_calls the model emitted. OpenAI shape is
+  // [{id, type:'function', function:{name, arguments}}]; we drop
+  // entries missing id or function.name (no callable identity) and
+  // coerce missing arguments to "{}" so the downstream agent driver
+  // can parseToolArguments(...) without a separate null check.
+  const toolCalls: ToolCompletionCall[] = [];
+  const rawCalls = message.tool_calls;
+  if (Array.isArray(rawCalls)) {
+    for (const c of rawCalls as Array<Record<string, unknown>>) {
+      if (typeof c?.id !== 'string') continue;
+      const fn = c.function as Record<string, unknown> | undefined;
+      if (typeof fn?.name !== 'string') continue;
+      toolCalls.push({
+        id: c.id,
+        type: 'function',
+        function: {
+          name: fn.name,
+          arguments: typeof fn.arguments === 'string' ? fn.arguments : '{}',
+        },
+      });
+    }
+  }
+
+  return { text, reasoning, citations, finishReason, usage, toolCalls };
 }
