@@ -1863,6 +1863,7 @@
               name="usage-start"
               bind:value={usageStart}
               max={usageEnd}
+              disabled={usageLoading}
             />
           </label>
           <label class="usage-date">
@@ -1873,6 +1874,7 @@
               bind:value={usageEnd}
               min={usageStart}
               max={todayYmd()}
+              disabled={usageLoading}
             />
           </label>
           <button
