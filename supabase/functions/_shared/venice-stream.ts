@@ -639,3 +639,30 @@ export class GuardExhaustedError extends Error {
     this.attempts = attempts;
   }
 }
+
+/**
+ * Trailing line appended to an assistant row's content when the user
+ * cancels mid-stream. The marker turns a truncated bubble into a
+ * legible "this got stopped" affordance instead of leaving the reader
+ * to wonder whether the model just wrote a short answer. ASCII only
+ * and placed on its own line so a markdown renderer treats it as
+ * paragraph text rather than a setext heading (three hyphens alone
+ * become an <hr> / H2; three hyphens followed by more text on the
+ * same line parses as paragraph).
+ *
+ * Lives in the shared module because both the browser and the
+ * orchestrator need the same string - the orchestrator appends it
+ * on terminal abort writes, and the browser's chat-loop history
+ * projection treats it as a recognised closer.
+ */
+export const INTERRUPTED_MARKER = '--- user interrupted response';
+
+/**
+ * Append the interrupted marker to a partial assistant content
+ * buffer in the canonical way: two newlines for paragraph spacing
+ * when the model produced any text; otherwise the marker alone.
+ */
+export function withInterruptedMarker(partial: string): string {
+  if (partial.length === 0) return INTERRUPTED_MARKER;
+  return `${partial}\n\n${INTERRUPTED_MARKER}`;
+}

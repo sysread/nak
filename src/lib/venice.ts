@@ -994,14 +994,81 @@ async function* streamChatViaFunction(
     throw new VeniceError('/stream returned no envelope', 'parse');
   }
 
+  yield* subscribeStreamChannel(supabase, data, req.signal);
+}
+
+/**
+ * Observe an in-flight assistant turn from a fresh tab or peer
+ * device. POSTs `/stream` with `reconnectOnly: true`; on a match the
+ * server returns the existing envelope without starting a new
+ * completion, and we subscribe to the Broadcast channel as a passive
+ * consumer. On no match we yield a terminal `end` so the caller
+ * unwinds cleanly without waiting for events that aren't coming.
+ *
+ * Used by:
+ * - selectThread when a thread's tail carries a `status='streaming'`
+ *   assistant row (same-device reload, fresh tab on the same device).
+ * - cross-device ape mode: device B opens a thread that device A is
+ *   currently driving and joins the live stream.
+ *
+ * The caller is responsible for the UI state seeding - this generator
+ * only yields the live deltas the function publishes after envelope
+ * time; the `completedSoFar` snapshot the envelope returned for the
+ * row up to that moment is yielded as the first `text` event so a
+ * downstream consumer that mirrors deltas into a streaming buffer
+ * lands on the same content the row has.
+ */
+export async function* streamReconnect(
+  supabase: SupabaseClient,
+  ctx: { threadId: string },
+  signal?: AbortSignal,
+): AsyncGenerator<StreamEvent, void, void> {
+  const { data, error } = await supabase.functions.invoke<StreamEnvelope>(
+    'venice/stream',
+    {
+      body: {
+        threadId: ctx.threadId,
+        reconnectOnly: true,
+      },
+    },
+  );
+  if (error) {
+    throw new VeniceError(
+      `/stream reconnect invoke failed: ${error.message}`,
+      'http',
+    );
+  }
+  if (!data) {
+    throw new VeniceError('/stream reconnect returned no envelope', 'parse');
+  }
+
+  yield* subscribeStreamChannel(supabase, data, signal);
+}
+
+/**
+ * Channel-subscribe + replay loop shared by streamChatViaFunction
+ * and streamReconnect. Given an envelope from the /stream route,
+ * subscribes to the Broadcast channel, maps each wire event onto the
+ * legacy StreamEvent shape the chat-loop already understands, and
+ * yields them in order. Honours the noStreamInFlight short-circuit
+ * (caller already raised a fresh completion or learned the turn is
+ * already over) and the AbortSignal (locally close-and-unsubscribe;
+ * the FUNCTION continues - cancel is a separate control-channel
+ * publish via cancelStream below).
+ */
+async function* subscribeStreamChannel(
+  supabase: SupabaseClient,
+  envelope: StreamEnvelope,
+  signal: AbortSignal | undefined,
+): AsyncGenerator<StreamEvent, void, void> {
   // Reconnect-only short-circuit: when the envelope reports no
   // in-flight stream, the caller asked us to observe rather than
   // start. Emit a terminal end so the chat-loop's consumer wraps up
   // cleanly without waiting for events that aren't coming.
-  if (data.noStreamInFlight) {
+  if (envelope.noStreamInFlight) {
     yield {
       type: 'end',
-      persistedAssistantId: data.assistantRowId ?? '',
+      persistedAssistantId: envelope.assistantRowId ?? '',
       terminalKind: 'completed',
     };
     return;
@@ -1011,7 +1078,7 @@ async function* streamChatViaFunction(
   // policies in supabase/schema.sql that gate this topic to the
   // thread owner. The function (service_role) is what publishes on
   // the other side.
-  const channel = supabase.channel(data.channelName, {
+  const channel = supabase.channel(envelope.channelName, {
     config: { private: true },
   });
 
@@ -1168,15 +1235,14 @@ async function* streamChatViaFunction(
     });
   });
 
-  if (data.completedSoFar.length > 0) {
-    yield { type: 'text', delta: data.completedSoFar };
+  if (envelope.completedSoFar.length > 0) {
+    yield { type: 'text', delta: envelope.completedSoFar };
   }
 
-  // Wire the request's AbortSignal to local close-and-unsubscribe.
+  // Wire the caller's AbortSignal to local close-and-unsubscribe.
   // The signal fires when the chat-loop's stop button or a foreign
   // claim's abort propagates here; the FUNCTION continues regardless
   // (cancel is the control-channel publish path, not this signal).
-  const signal = req.signal;
   const onAbort = (): void => close();
   signal?.addEventListener('abort', onAbort, { once: true });
 

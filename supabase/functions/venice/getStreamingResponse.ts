@@ -48,6 +48,7 @@ import {
   type ToolCallRequest,
   type TokenUsage,
   type VeniceCitation,
+  withInterruptedMarker,
 } from '../_shared/venice-stream.ts';
 import { createBroadcastPublisher } from './broadcast.ts';
 import { getStreamingCompletion } from './getStreamingCompletion.ts';
@@ -175,6 +176,16 @@ export async function getStreamingResponse(
     usage: null as TokenUsage | null,
     citations: [] as VeniceCitation[],
   };
+
+  // Citations harvested from successful tool results across every
+  // round of the turn. web_search's `{answer, citations}` result is
+  // the main contributor; any other tool that returns a
+  // `{citations: [...]}` field also flows in here. Used as the
+  // fallback citations source at terminal commit when Venice-native
+  // citations (accum.citations) didn't fire - the chat-loop sends
+  // requests without enable_web_search, so accum.citations is empty
+  // in practice and tool citations are the only source.
+  const toolCitations: VeniceCitation[] = [];
 
   let terminalKind: TerminalKind = 'completed';
   let terminalDetail: string | undefined;
@@ -334,6 +345,23 @@ export async function getStreamingResponse(
         isAskUserPending(o.result),
       );
 
+      // Harvest citations off any tool result that carries them
+      // (web_search, research_docs, etc.). Each gets a running 1-based
+      // index continuing from prior rounds so the assistant row's
+      // ^N^ superscripts can resolve to a contiguous citation list.
+      // Skipped for failed outcomes - their result is the error
+      // shape, not a citation-bearing payload.
+      for (const o of outcomes) {
+        if (!o.ok) continue;
+        const extracted = extractToolCitations(o.result);
+        for (const cite of extracted) {
+          toolCitations.push({
+            ...cite,
+            index: toolCitations.length + 1,
+          });
+        }
+      }
+
       // Publish tool_call_response events on the channel so the UI
       // can update its tool-call panel as each lands. Summary only;
       // the full payload lives on the persisted tool-result row.
@@ -439,6 +467,19 @@ export async function getStreamingResponse(
     // matching terminal status directly via UPDATE.
     let persistedId = assistantRowId ?? '';
     let conflict: string | undefined;
+    // Citations priority: Venice-native (accum.citations, emitted by
+    // the streaming completion when enable_web_search is on) outrank
+    // tool-harvested citations because they pair directly to ^N^
+    // superscripts the model emitted inline. Tool citations are the
+    // fallback for the request shapes that DON'T enable web_search
+    // (the chat-loop's default - the model reaches for web_search
+    // via the tool path instead). Null when neither source fired.
+    const finalCitations: VeniceCitation[] | null =
+      accum.citations.length > 0
+        ? accum.citations
+        : toolCitations.length > 0
+          ? toolCitations
+          : null;
     if (assistantRowId !== null) {
       if (terminalKind === 'completed') {
         const { data, error } = await opts.adminClient.rpc(
@@ -451,8 +492,7 @@ export async function getStreamingResponse(
             p_model: opts.bodyTemplate.model ?? null,
             p_usage: accum.usage,
             p_reasoning: accum.reasoning,
-            p_citations:
-              accum.citations.length > 0 ? accum.citations : null,
+            p_citations: finalCitations,
           },
         );
         if (error) {
@@ -481,16 +521,26 @@ export async function getStreamingResponse(
         // row to the matching status with whatever content we
         // accumulated. No conflict check; the row already exists in
         // a status that no replay path would touch.
+        //
+        // On 'aborted' we append the interrupted marker so a stopped
+        // reply reads as a deliberate stop instead of a model that
+        // just happened to write a short answer. The shared helper
+        // handles the empty-content case by emitting the marker
+        // alone. 'error' and 'suspended_for_ask_user' rows render
+        // through other affordances and don't carry the marker.
+        const terminalContent =
+          terminalKind === 'aborted'
+            ? withInterruptedMarker(accum.content)
+            : accum.content;
         await transitionRowTo(
           opts.adminClient,
           assistantRowId,
           terminalKind,
           {
-            content: accum.content,
+            content: terminalContent,
             reasoning: accum.reasoning,
             usage: accum.usage,
-            citations:
-              accum.citations.length > 0 ? accum.citations : null,
+            citations: finalCitations,
           },
         );
       }
@@ -679,6 +729,36 @@ async function persistRoundToolResults(
     });
   }
   return rows;
+}
+
+/**
+ * Pull `{citations: [...]}` off a tool result payload and normalise
+ * each entry to `VeniceCitation` shape. Tool results that don't
+ * carry citations - the common case - return [] cheaply. Entries
+ * without a usable `url` are dropped because the UI renders them
+ * as dead refs.
+ *
+ * The returned `index` is a placeholder (0); callers stamp a
+ * running 1-based index as they append into the running list so
+ * the inline `^N^` superscripts stay contiguous across multiple
+ * tool calls.
+ */
+function extractToolCitations(value: unknown): VeniceCitation[] {
+  if (!value || typeof value !== 'object') return [];
+  const raw = (value as { citations?: unknown }).citations;
+  if (!Array.isArray(raw)) return [];
+  const out: VeniceCitation[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.url !== 'string' || e.url.length === 0) continue;
+    const cite: VeniceCitation = { index: 0, url: e.url };
+    if (typeof e.title === 'string') cite.title = e.title;
+    if (typeof e.content === 'string') cite.content = e.content;
+    if (typeof e.date === 'string') cite.date = e.date;
+    out.push(cite);
+  }
+  return out;
 }
 
 async function transitionRowTo(

@@ -586,9 +586,16 @@ async function handleStream(req: Request): Promise<Response> {
   if (typeof body.threadId !== 'string' || body.threadId.length === 0) {
     return json({ error: 'body.threadId is required' }, 400);
   }
+  // userMessageId anchors the terminal commit's conflict check, so a
+  // fresh stream must carry it. A reconnect-only request observes
+  // someone else's in-flight turn (same tab after refresh, another
+  // device opening the thread) and the caller can't be expected to
+  // know which user message the original sender anchored on - so the
+  // requirement only applies to fresh streams.
   if (
-    typeof body.userMessageId !== 'string' ||
-    body.userMessageId.length === 0
+    body.reconnectOnly !== true &&
+    (typeof body.userMessageId !== 'string' ||
+      body.userMessageId.length === 0)
   ) {
     return json({ error: 'body.userMessageId is required' }, 400);
   }
@@ -667,6 +674,11 @@ async function handleStream(req: Request): Promise<Response> {
   // wall deadline + the control channel cancel) - the request signal
   // is NOT passed in because the request returns immediately after
   // this envelope and the orchestrator must survive that disconnect.
+  // The validation above guarantees userMessageId is a non-empty string
+  // when reconnectOnly is not set; assert here so TS narrows below.
+  if (typeof body.userMessageId !== 'string') {
+    return json({ error: 'body.userMessageId is required' }, 400);
+  }
   const promise = getStreamingResponse({
     apiKey,
     threadId: body.threadId,

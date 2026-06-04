@@ -44,26 +44,34 @@ falls through and `appendMessage` adds the row.
 
 **v1 gaps to address before merge to `main`:**
 
-- **Reconnect-on-thread-open** (section 2.9) is not wired yet. The
-  streaming-row INSERT filter means a thread reopened mid-stream
-  shows nothing until the terminal UPDATE arrives - no live
-  progress, no cross-device ape mode. Implementation outline:
-  `selectThread` checks `listMessages` tail for a `status='streaming'`
-  assistant row, finds its anchor user message id, allocates a slot,
-  and POSTs `/stream` with `reconnectOnly: true` via a new
-  `streamReconnect` helper in `venice.ts`.
-- **INTERRUPTED_MARKER** is no longer appended on abort. The
-  server persists the partial row with `status='aborted'` and the
-  browser renders it from realtime. UI keys off the row's content
-  alone today, so a stopped reply just looks short. Either render
-  an "interrupted" affordance from `status='aborted'` in the message
-  component or have the orchestrator append the marker before
-  committing the terminal write.
-- **Tool citations** (web_search returns `{answer, citations}`) are
-  not harvested onto the assistant row server-side. The browser
-  used to do this in `extractToolCitations`; the function-side path
-  has no equivalent yet. Citation panel will be empty for web_search
-  results until `getStreamingResponse` harvests them.
+- **Reconnect-on-thread-open** wired. `streamReconnect` (free
+  function in `venice.ts`) POSTs `/stream` with `reconnectOnly:
+  true` and replays the Broadcast channel through the shared
+  channel-subscribe loop. `runReconnectLoop` in `chat-loop.ts`
+  drives the same event consumer as a live turn, minus the priming
+  layers. `Chat.svelte`'s `selectThread` pulls the
+  `status='streaming'` tail row off the `listMessages` snapshot,
+  seeds `slot.streamingText` with its content so the bubble paints
+  immediately, and fires `runReconnectExchange` to subscribe. The
+  `userMessageId` body field on `/stream` is now optional when
+  `reconnectOnly:true` since a fresh tab can't know the original
+  anchor. Same code path serves cross-device ape mode (device B
+  opens a thread device A is streaming on) without further work.
+- **INTERRUPTED_MARKER** wired. The orchestrator appends the marker
+  to `accum.content` on the terminal abort write so a stopped reply
+  renders as a deliberate stop rather than a model that just wrote a
+  short answer. Lives in `_shared/venice-stream.ts` (and the
+  `withInterruptedMarker` helper that handles the empty-content
+  case), so any future browser code that needs to match or strip the
+  marker imports from the same shared truth.
+- **Tool citations** wired. `getStreamingResponse` walks each round's
+  tool outcomes, pulls `{citations: [...]}` off any success result
+  via an `extractToolCitations` helper, and stamps a running 1-based
+  index continuing from prior rounds. At terminal commit Venice-
+  native citations (`accum.citations`) outrank tool citations -
+  same priority the browser path used when both could fire. In
+  practice the chat-loop sends requests without `enable_web_search`,
+  so the tool path is the only citation source.
 - **roundsRun / stoppedByLimit** report coarse values (1 / false) -
   the server doesn't surface a round counter. Callers don't branch
   on these meaningfully, so this is a metric-only regression.

@@ -43,8 +43,9 @@ import type {
   VeniceMessage,
   TokenUsage,
   Citation,
+  StreamEvent,
 } from './venice';
-import { VeniceError } from './venice';
+import { VeniceError, streamReconnect } from './venice';
 import { buildUserVeniceContent } from './attachments';
 import {
   buildToolList,
@@ -871,17 +872,6 @@ export interface ChatLoopResult {
 }
 
 /**
- * Marker appended to the content field of an assistant row whose stream
- * the user cut short mid-response. Rendered verbatim in the message
- * bubble so the reader can tell a truncated reply from a naturally
- * short one. ASCII only and placed on its own line so a markdown
- * renderer treats it as paragraph text rather than a setext heading
- * (three hyphens alone would become an &lt;hr&gt; / H2; three hyphens
- * followed by more text on the same line parses as paragraph).
- */
-export const INTERRUPTED_MARKER = '--- user interrupted response';
-
-/**
  * Project a stored Message row onto the OpenAI wire format. Handles the
  * three shapes we emit: plain text (system/user/assistant-text), an
  * assistant row that invoked tools (`tool_calls` attached, content may
@@ -1359,21 +1349,122 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     ...conversation,
   ];
 
+  const consumed = await consumeStreamEvents({
+    events: venice.streamChat({
+      model: modelId,
+      messages: requestMessages,
+      signal,
+      tools: buildToolList(toolboxesEnabled),
+      reasoningEffort,
+      disableThinking,
+      verbosity,
+      streamCtx: { threadId: thread.id, userMessageId },
+    }),
+    signal,
+    supabase,
+    handlers,
+  });
+  interrupted = consumed.interrupted;
+  conflictDetected = consumed.conflictDetected;
+  awaitingUserAnswer = consumed.awaitingUserAnswer;
+  lastAssistantId = consumed.lastAssistantId;
+  finalText = consumed.finalText;
+  roundsRun = consumed.roundsRun;
+
+  // Samskara substrate stub. Written once per turn after the loop
+  // settles, paired with whichever assistant row closed the turn.
+  // Fire-and-forget: a substrate write failure is logged inside
+  // `recordSubstrateStub` but not surfaced — the formation pipeline
+  // simply has fewer rows to work from until the next round writes
+  // successfully. Skipped when the caller didn't supply
+  // userMessageId (older callers, tests) or when no assistant row
+  // landed at all (early abort, error path). Also skipped when the
+  // loop is suspended on an ask_user pending answer - the turn is
+  // not logically complete, the formation pipeline shouldn't see a
+  // half-finished round, and the next runChatLoop call (post-answer)
+  // will re-enter this path with the same userMessageId and write
+  // the stub then.
+  if (
+    userMessageId &&
+    lastAssistantId !== null &&
+    awaitingUserAnswer === null
+  ) {
+    void recordSubstrateStub(supabase, thread.id, userMessageId, lastAssistantId);
+  }
+
+  return {
+    finalText,
+    roundsRun,
+    stoppedByLimit,
+    interrupted,
+    conflictDetected,
+    toolboxesEnabled,
+    awaitingUserAnswer,
+  };
+}
+
+/**
+ * What `consumeStreamEvents` carries back to its caller. Mirrors the
+ * tail half of `ChatLoopResult` - the bits that key off the END event
+ * and the streaming accumulators. Both `runChatLoop` (live turn) and
+ * `runReconnectLoop` (observing an in-flight or stale turn) project
+ * this into their own return shape.
+ */
+interface ConsumedStreamResult {
+  finalText: string;
+  roundsRun: number;
+  interrupted: boolean;
+  conflictDetected: boolean;
+  awaitingUserAnswer: ChatLoopResult['awaitingUserAnswer'];
+  lastAssistantId: string | null;
+  terminalKind:
+    | 'completed'
+    | 'aborted'
+    | 'error'
+    | 'suspended_for_ask_user'
+    | null;
+}
+
+/**
+ * Drive the live UI off a `streamChat`-shaped event iterator. Owns
+ * the streaming-bubble accumulators, the per-call ask_user capture,
+ * the rate-limit / guard-retry liveness pairs, and the END routing
+ * that maps the server's terminalKind back onto the legacy
+ * interrupted / conflict / awaitingUserAnswer flags the caller's UI
+ * still keys off.
+ *
+ * Two entry points feed this:
+ * - `runChatLoop` (live turn, originating user message + priming +
+ *   `venice.streamChat`).
+ * - `runReconnectLoop` (passive observation of an in-flight turn,
+ *   `streamReconnect` envelope + Broadcast channel).
+ *
+ * The function throws on a terminal 'error' END with no conflict
+ * reason - the caller's outer try/catch surfaces the error banner.
+ * Conflict-tagged errors translate into `conflictDetected = true`
+ * and resolve normally.
+ */
+async function consumeStreamEvents(opts: {
+  events: AsyncIterable<StreamEvent>;
+  signal: AbortSignal;
+  supabase: SupabaseService;
+  handlers?: ChatLoopHandlers;
+}): Promise<ConsumedStreamResult> {
+  const { events, signal, supabase, handlers } = opts;
+
   // ask_user request capture. The model emits a tool_call_request for
   // ask_user with the question + options as its args; we parse them
   // here so an END {terminalKind: 'suspended_for_ask_user'} can return
   // the question/options to the caller without a separate fetch. Only
   // the FIRST ask_user call captures - sibling ask_user calls are
-  // marked cancelled server-side. Cleared if a subsequent event
-  // supersedes (e.g. the suspend never materializes because the model
-  // changed its mind).
+  // marked cancelled server-side.
   let pendingAskUser: ChatLoopResult['awaitingUserAnswer'] = null;
 
   // Server-driven END marker. Populated by the END event and consumed
   // after the loop closes; null when the stream never reached an END
   // (caught error / aborted-before-end).
   let endPersistedId: string | null = null;
-  let endTerminalKind: 'completed' | 'aborted' | 'error' | 'suspended_for_ask_user' | null = null;
+  let endTerminalKind: ConsumedStreamResult['terminalKind'] = null;
   let endConflict: string | undefined;
 
   // Track the in-flight calls keyed by id so a tool_call_response can
@@ -1399,17 +1490,11 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   let streamingCitations: Citation[] | null = null;
   let streamingUsage: TokenUsage | null = null;
 
+  let interrupted = false;
+  let conflictDetected = false;
+
   try {
-    for await (const ev of venice.streamChat({
-      model: modelId,
-      messages: requestMessages,
-      signal,
-      tools: buildToolList(toolboxesEnabled),
-      reasoningEffort,
-      disableThinking,
-      verbosity,
-      streamCtx: { threadId: thread.id, userMessageId },
-    })) {
+    for await (const ev of events) {
       switch (ev.type) {
         case 'text':
           streamingText += ev.delta;
@@ -1563,16 +1648,16 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       );
     }
   }
-  if (endTerminalKind === 'suspended_for_ask_user' && pendingAskUser) {
-    awaitingUserAnswer = pendingAskUser;
-  }
-  lastAssistantId = endPersistedId;
-  finalText = streamingText;
+  const awaitingUserAnswer =
+    endTerminalKind === 'suspended_for_ask_user' && pendingAskUser
+      ? pendingAskUser
+      : null;
+  const lastAssistantId = endPersistedId;
   // The server-side round chain ran one or more rounds; we don't have
   // a precise count here. Report 1 as a coarse signal - callers only
   // distinguish "did anything run" vs "did MAX_ROUNDS hit", and the
   // server-side cap is its own concern.
-  roundsRun = endTerminalKind !== null ? 1 : 0;
+  const roundsRun = endTerminalKind !== null ? 1 : 0;
 
   // Hydrate the persisted assistant row so the slot's persistedRows
   // replay buffer carries a canonical record. The realtime UPDATE
@@ -1601,35 +1686,89 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   void streamingCitations;
   void streamingUsage;
 
-  // Samskara substrate stub. Written once per turn after the loop
-  // settles, paired with whichever assistant row closed the turn.
-  // Fire-and-forget: a substrate write failure is logged inside
-  // `recordSubstrateStub` but not surfaced — the formation pipeline
-  // simply has fewer rows to work from until the next round writes
-  // successfully. Skipped when the caller didn't supply
-  // userMessageId (older callers, tests) or when no assistant row
-  // landed at all (early abort, error path). Also skipped when the
-  // loop is suspended on an ask_user pending answer - the turn is
-  // not logically complete, the formation pipeline shouldn't see a
-  // half-finished round, and the next runChatLoop call (post-answer)
-  // will re-enter this path with the same userMessageId and write
-  // the stub then.
-  if (
-    userMessageId &&
-    lastAssistantId !== null &&
-    awaitingUserAnswer === null
-  ) {
-    void recordSubstrateStub(supabase, thread.id, userMessageId, lastAssistantId);
-  }
-
   return {
-    finalText,
+    finalText: streamingText,
     roundsRun,
-    stoppedByLimit,
     interrupted,
     conflictDetected,
-    toolboxesEnabled,
     awaitingUserAnswer,
+    lastAssistantId,
+    terminalKind: endTerminalKind,
+  };
+}
+
+/**
+ * What `runReconnectLoop` carries back. A narrower shape than
+ * `ChatLoopResult` because the priming layers, toolboxes-enabled
+ * snapshot, and stoppedByLimit flag are inapplicable: priming never
+ * fired (the live turn ran on the other side of the
+ * background/reload), the toolboxes set lives on the thread row, and
+ * the round-cap stop only matters to live-turn callers that branch on
+ * it.
+ */
+export interface ReconnectLoopResult {
+  finalText: string;
+  interrupted: boolean;
+  conflictDetected: boolean;
+  awaitingUserAnswer: ChatLoopResult['awaitingUserAnswer'];
+  noStreamInFlight: boolean;
+}
+
+export interface ReconnectLoopOptions {
+  supabase: SupabaseService;
+  threadId: string;
+  signal: AbortSignal;
+  handlers?: ChatLoopHandlers;
+}
+
+/**
+ * Join an in-flight assistant turn the user is observing from a
+ * fresh tab or peer device. Posts `/stream` with `reconnectOnly:
+ * true` via `streamReconnect`, subscribes to the Broadcast channel,
+ * and dispatches the wire events through the same handler surface as
+ * a live turn so the streaming bubble, tool timings, and END
+ * accounting work identically.
+ *
+ * When the server reports no in-flight stream the helper unwinds
+ * cleanly with `noStreamInFlight: true`. The caller distinguishes
+ * "stream is already done, render the terminal row" from "stream
+ * died mid-flight, surface a retry affordance" off the row's status
+ * column.
+ */
+export async function runReconnectLoop(
+  opts: ReconnectLoopOptions,
+): Promise<ReconnectLoopResult> {
+  const { supabase, threadId, signal, handlers } = opts;
+
+  // Reuse the same event consumer as runChatLoop so the streaming-
+  // bubble accumulators, ask_user capture, rate-limit / guard
+  // liveness pairs, END routing, and persisted-row hydration all
+  // behave identically. The only divergence from a live turn is the
+  // event source (streamReconnect rather than venice.streamChat) and
+  // the lack of a substrate stub at the tail (the anchor user message
+  // id isn't known on reconnect).
+  const consumed = await consumeStreamEvents({
+    events: streamReconnect(supabase.client, { threadId }, signal),
+    signal,
+    supabase,
+    handlers,
+  });
+
+  // noStreamInFlight surfaces as a single END {terminalKind:
+  // 'completed', persistedAssistantId: ''} in the consumer - the
+  // envelope's noStreamInFlight branch in venice.ts yields exactly
+  // that synthetic terminal event. Detect by the absence of a
+  // persisted row id; a real completion always carries one.
+  const noStreamInFlight =
+    consumed.terminalKind === 'completed' &&
+    consumed.lastAssistantId === null;
+
+  return {
+    finalText: consumed.finalText,
+    interrupted: consumed.interrupted,
+    conflictDetected: consumed.conflictDetected,
+    awaitingUserAnswer: consumed.awaitingUserAnswer,
+    noStreamInFlight,
   };
 }
 
