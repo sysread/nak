@@ -87,6 +87,18 @@ export interface StreamingCompletionOpts {
    * via streamGuardsForModel().
    */
   guardsOverride?: StreamGuard[];
+  /**
+   * When set, the raw SSE stream from Venice is mirrored to a file at
+   * this path - one JSONL line per frame, each carrying both the raw
+   * `data: ...` payload and the parsed delta the shared parser
+   * produced. Off in production; the orchestrator sets it (under
+   * `/tmp/nak-venice-<runId>.log`) when the `NAK_DUMP_STREAM` env var
+   * is truthy, so a dev-start session can replay exactly what the
+   * model emitted - useful when tool calls land inside reasoning
+   * text instead of structured `delta.tool_calls` and we need to see
+   * which shape Venice actually sent.
+   */
+  rawFrameDumpPath?: string;
 }
 
 /**
@@ -328,6 +340,21 @@ async function* streamFromVenice(
   const decoder = new TextDecoder();
   let buffer = '';
   const assembler = new ToolCallAssembler();
+  // Optional raw-frame dump. Opened lazily on the first frame so the
+  // file appears in /tmp only when frames actually arrive. Append
+  // mode so a long round shares one file. Best-effort: any write
+  // error stops further dumping but doesn't affect streaming.
+  const dumpPath = opts.rawFrameDumpPath;
+  let dumpDisabled = false;
+  const dumpFrame = async (raw: string, parsed: unknown): Promise<void> => {
+    if (!dumpPath || dumpDisabled) return;
+    try {
+      const line = JSON.stringify({ raw, parsed }) + '\n';
+      await Deno.writeTextFile(dumpPath, line, { append: true });
+    } catch {
+      dumpDisabled = true;
+    }
+  };
   // Captured but only emitted at end. The shared SseDelta carries a
   // usage frame distinct from content frames; we hold it until DONE so
   // consumers can pair it with the round that produced it.
@@ -345,6 +372,7 @@ async function* streamFromVenice(
         const frame = buffer.slice(0, idx);
         buffer = buffer.slice(idx + 2);
         const parsed = parseSseFrame(frame);
+        await dumpFrame(frame, parsed);
         if (parsed === null) continue;
         if (parsed === '[DONE]') break outer;
 

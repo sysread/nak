@@ -167,6 +167,19 @@ export async function getStreamingResponse(
   console.log(
     `[orchestrator ${runId}] start model=${opts.bodyTemplate.model ?? 'unknown'} toolsLen=${Array.isArray(opts.bodyTemplate.tools) ? opts.bodyTemplate.tools.length : 0}`,
   );
+  // Optional raw-SSE-frame dump for dev. When NAK_DUMP_STREAM is set,
+  // each round's frames + parsed deltas land at /tmp/nak-venice-
+  // <runId>.log so we can see what Venice actually sent when the
+  // round produces nothing structured the orchestrator can act on.
+  // Off in production: a missing env var leaves dumpPath null and
+  // streamFromVenice skips every dump write.
+  const dumpPath =
+    Deno.env.get('NAK_DUMP_STREAM') === '1'
+      ? `/tmp/nak-venice-${runId.replace('/', '-')}.log`
+      : null;
+  if (dumpPath !== null) {
+    console.log(`[orchestrator ${runId}] dumping raw SSE to ${dumpPath}`);
+  }
   const ctl = new AbortController();
   const wallTimeoutMs = opts.wallDeadlineMs ?? WALL_DEADLINE_MS;
   const wallTimer = setTimeout(() => ctl.abort(), wallTimeoutMs);
@@ -283,11 +296,13 @@ export async function getStreamingResponse(
       // produces no usable output. Cheap; bounded by the number of
       // distinct event types.
       const eventTally: Record<string, number> = {};
+      let roundFinishReason: string | null = null;
 
       for await (const ev of getStreamingCompletion({
         apiKey: opts.apiKey,
         body,
         signal: ctl.signal,
+        ...(dumpPath !== null ? { rawFrameDumpPath: dumpPath } : {}),
       })) {
         eventTally[ev.type] = (eventTally[ev.type] ?? 0) + 1;
         // Republish content + signal events to the Broadcast channel
@@ -330,13 +345,20 @@ export async function getStreamingResponse(
           }
           default:
             // BEGIN / DONE / rate_limit_* / guard_retry pass-through;
-            // no orchestrator state to update.
+            // no orchestrator state to update. DONE carries the
+            // finish_reason from the SSE stream; capture it for the
+            // round summary log below.
+            if (ev.type === 'DONE') roundFinishReason = ev.finishReason;
             break;
         }
       }
 
+      const reasoningPreview =
+        accum.reasoning.length > 0
+          ? ` reasoningHead=${JSON.stringify(accum.reasoning.slice(0, 200))}`
+          : '';
       console.log(
-        `[orchestrator ${runId}] round ${round} events: ${Object.entries(eventTally).map(([k, v]) => `${k}=${v}`).join(' ')} contentLen=${accum.content.length} reasoningLen=${accum.reasoning.length}`,
+        `[orchestrator ${runId}] round ${round} events: ${Object.entries(eventTally).map(([k, v]) => `${k}=${v}`).join(' ')} contentLen=${accum.content.length} reasoningLen=${accum.reasoning.length} finishReason=${roundFinishReason ?? 'null'}${reasoningPreview}`,
       );
 
       if (ctl.signal.aborted) {
