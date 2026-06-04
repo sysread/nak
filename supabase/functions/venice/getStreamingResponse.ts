@@ -164,7 +164,9 @@ export async function getStreamingResponse(
   // them when the local isolate gets recycled out from under
   // EdgeRuntime.waitUntil).
   const runId = `${opts.threadId.slice(0, 8)}/${Date.now().toString(36)}`;
-  console.log(`[orchestrator ${runId}] start`);
+  console.log(
+    `[orchestrator ${runId}] start model=${opts.bodyTemplate.model ?? 'unknown'} toolsLen=${Array.isArray(opts.bodyTemplate.tools) ? opts.bodyTemplate.tools.length : 0}`,
+  );
   const ctl = new AbortController();
   const wallTimeoutMs = opts.wallDeadlineMs ?? WALL_DEADLINE_MS;
   const wallTimer = setTimeout(() => ctl.abort(), wallTimeoutMs);
@@ -276,12 +278,18 @@ export async function getStreamingResponse(
       // resets between rounds; this var preserves only the just-
       // finished round's text.
       let roundText = '';
+      // Per-round event tally for the dev-start terminal so we can
+      // see what the stream actually delivered when the round
+      // produces no usable output. Cheap; bounded by the number of
+      // distinct event types.
+      const eventTally: Record<string, number> = {};
 
       for await (const ev of getStreamingCompletion({
         apiKey: opts.apiKey,
         body,
         signal: ctl.signal,
       })) {
+        eventTally[ev.type] = (eventTally[ev.type] ?? 0) + 1;
         // Republish content + signal events to the Broadcast channel
         // verbatim. Orchestrator-added events (tool_call_response /
         // END) are emitted later; everything else flows through.
@@ -326,6 +334,10 @@ export async function getStreamingResponse(
             break;
         }
       }
+
+      console.log(
+        `[orchestrator ${runId}] round ${round} events: ${Object.entries(eventTally).map(([k, v]) => `${k}=${v}`).join(' ')} contentLen=${accum.content.length} reasoningLen=${accum.reasoning.length}`,
+      );
 
       if (ctl.signal.aborted) {
         terminalKind = 'aborted';
