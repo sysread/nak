@@ -1376,6 +1376,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   });
   interrupted = consumed.interrupted;
   conflictDetected = consumed.conflictDetected;
+  stoppedByLimit = consumed.stoppedByLimit;
   awaitingUserAnswer = consumed.awaitingUserAnswer;
   lastAssistantId = consumed.lastAssistantId;
   finalText = consumed.finalText;
@@ -1425,6 +1426,16 @@ interface ConsumedStreamResult {
   roundsRun: number;
   interrupted: boolean;
   conflictDetected: boolean;
+  /**
+   * Set when the server-side round loop exhausted MAX_ROUNDS without
+   * the model ever producing a terminal text round. The END event
+   * carries `terminalKind: 'error', conflict: 'round_limit'`; the
+   * caller branches off this flag rather than digging through the raw
+   * terminal kind + conflict tuple. Mutually exclusive with
+   * `conflictDetected` (the other 'error' terminal source - a
+   * commit_assistant_message race - flips that flag instead).
+   */
+  stoppedByLimit: boolean;
   awaitingUserAnswer: ChatLoopResult['awaitingUserAnswer'];
   lastAssistantId: string | null;
   terminalKind:
@@ -1472,10 +1483,14 @@ async function consumeStreamEvents(opts: {
 
   // Server-driven END marker. Populated by the END event and consumed
   // after the loop closes; null when the stream never reached an END
-  // (caught error / aborted-before-end).
+  // (caught error / aborted-before-end). roundsRun is the
+  // orchestrator's per-turn counter; we default to null and fall back
+  // to a coarse 0/1 signal if the END event predates the field (older
+  // server vs newer browser).
   let endPersistedId: string | null = null;
   let endTerminalKind: ConsumedStreamResult['terminalKind'] = null;
   let endConflict: string | undefined;
+  let endRoundsRun: number | null = null;
 
   // Track the in-flight calls keyed by id so a tool_call_response can
   // pair to the originating tool_call request for the UI's per-tool
@@ -1634,6 +1649,7 @@ async function consumeStreamEvents(opts: {
               : null;
           endTerminalKind = ev.terminalKind;
           endConflict = ev.conflict;
+          endRoundsRun = typeof ev.roundsRun === 'number' ? ev.roundsRun : null;
           break;
       }
     }
@@ -1657,16 +1673,28 @@ async function consumeStreamEvents(opts: {
   if (endTerminalKind === 'aborted') {
     interrupted = true;
   }
+  // Default state - flipped below if the END routing puts us into a
+  // round-limit terminal.
+  let stoppedByLimit = false;
   if (endTerminalKind === 'error') {
-    // Server-side conflict shows up here with the reason on
-    // ev.conflict. Treat as the legacy "conflictDetected" path so the
-    // caller's "conversation changed on another device" UI fires.
-    if (endConflict) {
+    // Server-side END error routing. Three sources today:
+    //   - conflict='round_limit' - the orchestrator's round loop
+    //     exhausted MAX_ROUNDS without the model ever producing a
+    //     terminal text round. Map onto stoppedByLimit so the caller
+    //     can render the "Stopped: hit the 20-round limit" banner.
+    //   - conflict=<commit_assistant_message reason> - the assistant
+    //     commit RPC saw a newer user message land underneath us, or
+    //     another conversation-level race. Map onto the legacy
+    //     conflictDetected path so the "conversation changed on
+    //     another device" UI fires.
+    //   - no conflict - generic stream error that already published
+    //     an END (vs the mid-stream 'error' event which throws).
+    //     Surface as a thrown error so the caller's error banner shows.
+    if (endConflict === 'round_limit') {
+      stoppedByLimit = true;
+    } else if (endConflict) {
       conflictDetected = true;
     } else {
-      // Generic stream error that already published an END (vs the
-      // mid-stream 'error' event which throws). Surface as a thrown
-      // error so the caller's error banner shows.
       throw new VeniceError(
         `stream ended in error state${endConflict ? `: ${endConflict}` : ''}`,
         'http',
@@ -1678,11 +1706,10 @@ async function consumeStreamEvents(opts: {
       ? pendingAskUser
       : null;
   const lastAssistantId = endPersistedId;
-  // The server-side round chain ran one or more rounds; we don't have
-  // a precise count here. Report 1 as a coarse signal - callers only
-  // distinguish "did anything run" vs "did MAX_ROUNDS hit", and the
-  // server-side cap is its own concern.
-  const roundsRun = endTerminalKind !== null ? 1 : 0;
+  // Server-driven roundsRun when the END event carried it; coarse
+  // fallback ("did anything run" vs nothing) for older server builds
+  // that don't publish the field.
+  const roundsRun = endRoundsRun ?? (endTerminalKind !== null ? 1 : 0);
 
   // Hydrate the persisted assistant row so the slot's persistedRows
   // replay buffer carries a canonical record. The realtime UPDATE
@@ -1716,6 +1743,7 @@ async function consumeStreamEvents(opts: {
     roundsRun,
     interrupted,
     conflictDetected,
+    stoppedByLimit,
     awaitingUserAnswer,
     lastAssistantId,
     terminalKind: endTerminalKind,

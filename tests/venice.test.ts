@@ -998,7 +998,7 @@ describe('streamChat (streaming-root transport)', () => {
       { type: 'reasoning', delta: 'thinking…' },
       { type: 'text', delta: 'hello ' },
       { type: 'text', delta: 'world' },
-      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed' },
+      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed', roundsRun: 0 },
     ]);
   });
 
@@ -1035,7 +1035,7 @@ describe('streamChat (streaming-root transport)', () => {
     await drained;
     expect(collected).toEqual([
       { type: 'text', delta: 'real' },
-      { type: 'end', persistedAssistantId: 'A', terminalKind: 'completed' },
+      { type: 'end', persistedAssistantId: 'A', terminalKind: 'completed', roundsRun: 0 },
     ]);
   });
 
@@ -1071,7 +1071,7 @@ describe('streamChat (streaming-root transport)', () => {
     expect(collected).toEqual([
       { type: 'text', delta: 'partial answer so far' },
       { type: 'text', delta: ' more' },
-      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed' },
+      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed', roundsRun: 0 },
     ]);
   });
 
@@ -1126,7 +1126,7 @@ describe('streamChat (streaming-root transport)', () => {
         name: 'memory_search',
         resultSummary: '[3 results]',
       },
-      { type: 'end', persistedAssistantId: 'A', terminalKind: 'completed' },
+      { type: 'end', persistedAssistantId: 'A', terminalKind: 'completed', roundsRun: 0 },
     ]);
   });
 
@@ -1161,7 +1161,7 @@ describe('streamChat (streaming-root transport)', () => {
     });
     await drained;
     expect(collected).toEqual([
-      { type: 'end', persistedAssistantId: 'A', terminalKind: 'completed' },
+      { type: 'end', persistedAssistantId: 'A', terminalKind: 'completed', roundsRun: 0 },
     ]);
   });
 
@@ -1199,6 +1199,7 @@ describe('streamChat (streaming-root transport)', () => {
         type: 'end',
         persistedAssistantId: '',
         terminalKind: 'error',
+        roundsRun: 0,
         conflict: 'a newer user message landed first',
       },
     ]);
@@ -1264,7 +1265,7 @@ describe('streamReconnect', () => {
       collected.push(ev);
     }
     expect(collected).toEqual([
-      { type: 'end', persistedAssistantId: '', terminalKind: 'completed' },
+      { type: 'end', persistedAssistantId: '', terminalKind: 'completed', roundsRun: 0 },
     ]);
   });
 
@@ -1296,7 +1297,7 @@ describe('streamReconnect', () => {
     expect(collected).toEqual([
       { type: 'text', delta: 'partial' },
       { type: 'text', delta: ' more' },
-      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed' },
+      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed', roundsRun: 0 },
     ]);
   });
 

@@ -70,8 +70,15 @@ import {
 // have to drag the browser's tool module in.
 const ASK_USER_PENDING_FLAG = '__ask_user_pending__';
 
-// Hard cap on rounds before we treat the turn as runaway. Mirrors
-// the browser-side MAX_ROUNDS guardrail.
+// Hard cap on rounds before we treat the turn as runaway. Single-
+// source guardrail now - the browser-side round loop is collapsed
+// onto this orchestrator, so there's no second copy of the constant
+// to keep in sync. The terminal-round model response counts as a
+// round, so the wire-budget is `MAX_ROUNDS - 1` tool-using rounds
+// followed by one text-only round. Hitting MAX_ROUNDS with every
+// round still calling tools is the "runaway" terminal: the loop
+// exits naturally, the END event carries conflict='round_limit',
+// and the browser surfaces the "Stopped: hit 20-round limit" banner.
 const MAX_ROUNDS = 24;
 
 // How often (ms) we UPDATE the streaming row's content with the
@@ -193,9 +200,23 @@ export async function getStreamingResponse(
   if (dumpPath !== null) {
     console.log(`[orchestrator ${runId}] dumping raw SSE to ${dumpPath}`);
   }
+  // Shared abort controller. Two sources can fire it: the wall-deadline
+  // timer (this turn ran out of wall-clock budget) and the control
+  // channel's 'cancel' event (the user clicked stop). The reason
+  // string differentiates: 'wall_timeout' routes the terminal to
+  // status='error' with the matching detail, anything else (today,
+  // the literal 'user_cancel' string the control-channel handler
+  // passes) routes to status='aborted' with the INTERRUPTED_MARKER
+  // appended. Without the differentiation a wall timeout looked
+  // exactly like a user cancel - same terminal, same UI affordance -
+  // and the row carried a marker that read as a deliberate stop.
+  const WALL_TIMEOUT_REASON = 'wall_timeout';
   const ctl = new AbortController();
   const wallTimeoutMs = opts.wallDeadlineMs ?? WALL_DEADLINE_MS;
-  const wallTimer = setTimeout(() => ctl.abort(), wallTimeoutMs);
+  const wallTimer = setTimeout(
+    () => ctl.abort(WALL_TIMEOUT_REASON),
+    wallTimeoutMs,
+  );
 
   const channels = await setupChannels(opts, ctl);
   const publisher = createBroadcastPublisher({
@@ -234,6 +255,26 @@ export async function getStreamingResponse(
 
   let terminalKind: TerminalKind = 'completed';
   let terminalDetail: string | undefined;
+  // Per-turn round counter. Set at the top of each iteration so it
+  // reflects the count of rounds the orchestrator started, regardless
+  // of how the loop exited (break vs natural terminus). Reported on
+  // the END event so the browser can render round-aware affordances
+  // (the "Stopped: hit the 20-round limit" banner is keyed off the
+  // round-limit terminal, but consumers also use the count for
+  // exchange-level metrics).
+  let roundsRun = 0;
+  // Distinguishes "natural for-loop exhaustion" (round_limit hit)
+  // from "broke out via tools-done / suspend / abort / error" (every
+  // other exit). The for-loop's counter is hoisted to function scope
+  // so this comparison survives the loop exit.
+  let round = 0;
+  // Set when the END event needs to carry an additional reason: the
+  // commit_assistant_message RPC's conflict reason ('newer_user_message',
+  // 'anchor_missing', ...), or the synthetic 'round_limit' the
+  // orchestrator emits on natural for-loop exhaustion. The browser
+  // dispatches off this to pick between "stopped at round limit" and
+  // "conversation changed under us".
+  let conflict: string | undefined;
 
   // RLS OFF: filter by userId. Lazily create the assistant row on
   // the first content event; subsequent events UPDATE it via the
@@ -296,9 +337,29 @@ export async function getStreamingResponse(
   try {
     await publisher.publish({ type: 'BEGIN' });
 
-    roundLoop: for (let round = 0; round < MAX_ROUNDS; round += 1) {
+    roundLoop: for (round = 0; round < MAX_ROUNDS; round += 1) {
+      // Count this round as run the instant we enter it. A break
+      // inside the body short-circuits the for-loop's increment, so
+      // the post-loop "did we exit naturally?" check uses `round`,
+      // not `roundsRun` - roundsRun is the metric, `round` is the
+      // sentinel.
+      roundsRun = round + 1;
       if (ctl.signal.aborted) {
-        terminalKind = 'aborted';
+        // Wall-deadline aborts route to 'error' so the row's terminal
+        // status carries the timeout cause; user cancels route to
+        // 'aborted' (which appends INTERRUPTED_MARKER in the terminal
+        // write block, the expected UX for a deliberate stop). The
+        // same two-line decision appears at the post-stream abort
+        // check below - kept inline because the helper-extracted
+        // shape doesn't earn its keep for ten lines used twice, and
+        // TS narrowing on `let terminalKind` doesn't track assignments
+        // through nested closures.
+        if (ctl.signal.reason === WALL_TIMEOUT_REASON) {
+          terminalKind = 'error';
+          terminalDetail = 'wall timeout';
+        } else {
+          terminalKind = 'aborted';
+        }
         break;
       }
       body = { ...body, messages: history };
@@ -409,7 +470,16 @@ export async function getStreamingResponse(
       );
 
       if (ctl.signal.aborted) {
-        terminalKind = 'aborted';
+        // Same wall-timeout-vs-cancel split as the top-of-iteration
+        // check above; the stream consumer's for-await ended either
+        // because the SSE source completed or because the abort tore
+        // the fetch reader down. Either way, the abort reason wins.
+        if (ctl.signal.reason === WALL_TIMEOUT_REASON) {
+          terminalKind = 'error';
+          terminalDetail = 'wall timeout';
+        } else {
+          terminalKind = 'aborted';
+        }
         break;
       }
 
@@ -579,16 +649,44 @@ export async function getStreamingResponse(
       // but the orchestrator's streaming row is separate.
       void assistantRoundRow;
     }
+
+    // Round-limit terminal. If `round === MAX_ROUNDS` the for-loop
+    // exhausted its counter without any break statement firing - which
+    // only happens when every round (including the last) called tools
+    // and the model was about to call more. The accumulator at this
+    // point is whatever the last terminal-eligible round produced
+    // (empty when the model only emits tool_calls + reasoning in
+    // every round). Without this branch, terminalKind stays at its
+    // 'completed' default and the commit_assistant_message RPC happily
+    // writes an empty assistant bubble - the model never got the
+    // round to write a real response. We flag the terminal as 'error'
+    // with conflict='round_limit' so the END routing browser-side
+    // surfaces the 20-round-limit banner instead of silently shipping
+    // an empty reply.
+    if (round === MAX_ROUNDS && terminalKind === 'completed') {
+      terminalKind = 'error';
+      terminalDetail = 'round_limit';
+      conflict = 'round_limit';
+    }
   } catch (err) {
-    terminalKind = 'error';
-    terminalDetail = err instanceof Error ? err.message : String(err);
+    // Abort-driven catches (wall timeout, user cancel) already set
+    // terminalKind + detail at the inline check sites; the catch only
+    // fires here because the fetch / SSE consumer surfaced the abort
+    // as a thrown AbortError. Don't overwrite the pre-set terminal -
+    // 'wall timeout' would otherwise lose to 'The signal has been
+    // aborted' (or whatever the underlying error library spells the
+    // abort message as) and the row would carry a confusing detail.
+    if (!ctl.signal.aborted) {
+      terminalKind = 'error';
+      terminalDetail = err instanceof Error ? err.message : String(err);
+    }
     // Local-dev diagnostic. Production telemetry already routes this
     // through the END event's terminalKind, but local supabase
     // functions serve has no other surface to see what failed - the
     // orchestrator's catch is otherwise silent.
     console.error(
       '[getStreamingResponse] caught:',
-      terminalDetail,
+      err instanceof Error ? err.message : String(err),
       err instanceof Error ? err.stack : undefined,
     );
   } finally {
@@ -602,7 +700,9 @@ export async function getStreamingResponse(
     // RPC on the happy path; otherwise transition the row to the
     // matching terminal status directly via UPDATE.
     let persistedId = assistantRowId ?? '';
-    let conflict: string | undefined;
+    // `conflict` is function-scoped (declared up top). The round-limit
+    // case sets it before the catch path runs; the commit RPC's
+    // conflict-row response sets it below.
     // Citations priority: Venice-native (accum.citations, emitted by
     // the streaming completion when enable_web_search is on) outrank
     // tool-harvested citations because they pair directly to ^N^
@@ -708,6 +808,7 @@ export async function getStreamingResponse(
       type: 'END',
       persistedAssistantId: persistedId,
       terminalKind,
+      roundsRun,
       ...(conflict ? { conflict } : {}),
     };
     // Publish END directly; flush already drained pending text.
@@ -1066,7 +1167,13 @@ async function setupChannels(
       config: { private: true },
     })
     .on('broadcast', { event: 'cancel' }, () => {
-      ctl.abort();
+      // Pass a literal reason rather than relying on a closure constant
+      // here - this handler is set up by setupChannels(), one layer
+      // removed from the run() caller that owns WALL_TIMEOUT_REASON /
+      // USER_CANCEL_REASON. The string is matched verbatim at the
+      // abort-check sites in run(); keeping the values in sync is on
+      // the reader.
+      ctl.abort('user_cancel');
     });
   await waitForJoin(controlChannel);
 

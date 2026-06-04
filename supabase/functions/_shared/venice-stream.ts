@@ -204,10 +204,22 @@ export type OrchestratorEvent =
       persistedAssistantId: string;
       terminalKind: TerminalKind;
       /**
-       * Set when commit_assistant_message returned `conflict: true` -
-       * carries the conflict reason ('newer_user_message',
-       * 'anchor_missing', etc.). Only meaningful when terminalKind ===
-       * 'error' due to the conflict path; absent on the happy commit.
+       * Number of rounds the orchestrator started this turn. Counted
+       * at the top of each round body so the value reflects "rounds
+       * entered" regardless of how that round exited (tool dispatch,
+       * suspend, abort, terminal text). Browser uses this to drive
+       * exchange-level metrics and to confirm a round-limit terminal
+       * actually ran the full MAX_ROUNDS budget.
+       */
+      roundsRun: number;
+      /**
+       * Set when the END event needs to carry an additional reason.
+       * Two sources today: the commit_assistant_message RPC's conflict
+       * column ('newer_user_message', 'anchor_missing', ...), and the
+       * synthetic 'round_limit' the orchestrator emits when the round
+       * loop exhausts naturally (every round called tools, model never
+       * got a terminal text round). Only meaningful when
+       * terminalKind === 'error'; absent on the happy commit.
        */
       conflict?: string;
     };

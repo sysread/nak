@@ -363,6 +363,13 @@ export type StreamEvent =
       /** assistant row id the server committed to a terminal state. */
       persistedAssistantId: string;
       terminalKind: TerminalKind;
+      /**
+       * Rounds the orchestrator entered this turn. Mirrors the field
+       * on the server-side END event; consumers drive exchange-level
+       * metrics off it and use it to confirm the round-limit terminal
+       * actually ran the full MAX_ROUNDS budget.
+       */
+      roundsRun: number;
       conflict?: string;
     };
 
@@ -1099,6 +1106,10 @@ async function* subscribeStreamChannel(
       type: 'end',
       persistedAssistantId: envelope.assistantRowId ?? '',
       terminalKind: 'completed',
+      // The function side already returned; we never observed any
+      // rounds and don't know the count it ran. 0 is the safe stand-in
+      // for reconnect callers that don't branch on the metric.
+      roundsRun: 0,
     };
     return;
   }
@@ -1246,6 +1257,7 @@ async function* subscribeStreamChannel(
     const p = payload as {
       persistedAssistantId?: string;
       terminalKind?: TerminalKind;
+      roundsRun?: number;
       conflict?: string;
     };
     push({
@@ -1253,6 +1265,10 @@ async function* subscribeStreamChannel(
       persistedAssistantId:
         typeof p.persistedAssistantId === 'string' ? p.persistedAssistantId : '',
       terminalKind: p.terminalKind ?? 'completed',
+      // Defaults to 0 when an older server (pre-roundsRun field) reaches
+      // a newer browser. consumeStreamEvents falls back to the legacy
+      // "did anything run" heuristic in that case.
+      roundsRun: typeof p.roundsRun === 'number' ? p.roundsRun : 0,
       ...(p.conflict ? { conflict: p.conflict } : {}),
     });
     close();
