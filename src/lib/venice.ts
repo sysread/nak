@@ -342,6 +342,16 @@ export type StreamEvent =
     }
   | { type: 'rate_limit_resolved' }
   | { type: 'guard_retry'; reason: string }
+  /**
+   * Transport-layer retry signal. The function's withRateLimitRetry
+   * caught a truncated SSE stream (reader closed without `[DONE]`,
+   * no actionable tool calls) and is re-issuing the same body.
+   * Browser handlers reset their accumulators (streamingText,
+   * streamingReasoning) so the new attempt's content lands clean.
+   * Distinct from `guard_retry` because no output guard fired and
+   * no slop-notice card should surface - this is a silent recovery.
+   */
+  | { type: 'stream_retry'; reason: 'truncated'; attempt: number }
   | {
       type: 'error';
       kind: SharedVeniceErrorKind;
@@ -1189,6 +1199,15 @@ async function* subscribeStreamChannel(
   channel.on('broadcast', { event: 'guard_retry' }, ({ payload }) => {
     const p = payload as { reason?: string };
     push({ type: 'guard_retry', reason: typeof p.reason === 'string' ? p.reason : '' });
+  });
+  channel.on('broadcast', { event: 'stream_retry' }, ({ payload }) => {
+    const p = payload as { reason?: string; attempt?: number };
+    // Only one reason in v1 (`truncated`); the server enforces it.
+    // Drop the event if the wire shape skews so we don't surface a
+    // bogus reset to the consumer.
+    if (p.reason !== 'truncated') return;
+    const attempt = typeof p.attempt === 'number' ? p.attempt : 1;
+    push({ type: 'stream_retry', reason: 'truncated', attempt });
   });
   channel.on('broadcast', { event: 'error' }, ({ payload }) => {
     const p = payload as {

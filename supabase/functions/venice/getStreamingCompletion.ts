@@ -69,6 +69,15 @@ const RATE_LIMIT_MAX_ATTEMPTS = 3;
 const RATE_LIMIT_FALLBACK_WAIT_MS: readonly number[] = [2_000, 4_000];
 const RATE_LIMIT_WAIT_CAP_MS = 60_000;
 
+// Truncation retry: when the SSE stream from Venice ends without a
+// `[DONE]` sentinel AND the assembler had nothing actionable, the
+// downstream layer re-issues the body. Capped low - a persistent
+// truncation is more likely a wire-format change or an upstream
+// regression than a transient blip - and backed off briefly to ride
+// out infrastructure hiccups without burning input tokens.
+const TRUNCATED_MAX_ATTEMPTS = 2;
+const TRUNCATED_BACKOFF_MS = 500;
+
 export interface StreamingCompletionOpts {
   apiKey: string;
   /**
@@ -244,19 +253,37 @@ async function* withGuards(
 }
 
 // ---------------------------------------------------------------------------
-// Layer 1: rate-limit retry wrapper.
+// Layer 1: rate-limit + truncation retry wrapper.
 //
-// 429 BEFORE any event yields -> wait per Venice's hint (or fallback
-// schedule), emit rate_limit_wait / rate_limit_resolved signals,
-// retry. 429 AFTER the first event has yielded is treated as a fatal
-// mid-stream error - we cannot un-yield events to the consumer.
-// Caps at RATE_LIMIT_MAX_ATTEMPTS and re-throws the final 429.
+// Two re-issue paths share this wrapper because both rebuild the same
+// request body and both are bounded retries:
+//
+//   - 429 BEFORE any event yields -> wait per Venice's hint (or
+//     fallback schedule), emit rate_limit_wait / rate_limit_resolved
+//     signals, retry. 429 AFTER the first event has yielded is fatal
+//     (we cannot un-yield events for the rate-limit case - the
+//     contract there is "this attempt is over, the next is fresh"
+//     but rate_limit doesn't get a chance to come back as content).
+//   - Stream truncation (reader closed without `[DONE]` AND no tool
+//     calls assembled). Even when events HAVE yielded - typically
+//     response_text deltas the consumer accumulated against the
+//     streaming row - we still retry, because the downstream
+//     consumers (orchestrator + browser) cooperate to reset their
+//     accumulators on the `stream_retry` signal emitted before each
+//     retry attempt. Earlier persisted rows (tool_call_request
+//     rounds) are untouched; only the in-flight terminal round's
+//     partial content gets discarded and re-rolled.
+//
+// Caps and backoff differ per kind: rate-limit follows Venice's
+// retry-after schedule with up to RATE_LIMIT_MAX_ATTEMPTS, truncation
+// retries up to TRUNCATED_MAX_ATTEMPTS with a small fixed backoff.
 // ---------------------------------------------------------------------------
 
 async function* withRateLimitRetry(
   opts: StreamingCompletionOpts,
 ): AsyncGenerator<CompletionEvent | StreamSignal, void, void> {
-  let attempt = 0;
+  let rateLimitAttempt = 0;
+  let truncatedAttempt = 0;
   for (;;) {
     let emitted = false;
     try {
@@ -268,14 +295,51 @@ async function* withRateLimitRetry(
     } catch (err) {
       const isRateLimit =
         err instanceof VeniceError && err.kind === 'rate_limit';
-      const retriesExhausted = attempt >= RATE_LIMIT_MAX_ATTEMPTS - 1;
+      const isTruncated =
+        err instanceof VeniceError && err.kind === 'truncated';
+      if (isTruncated) {
+        if (
+          truncatedAttempt >= TRUNCATED_MAX_ATTEMPTS - 1 ||
+          opts.signal.aborted
+        ) {
+          throw err;
+        }
+        truncatedAttempt += 1;
+        // Emit the retry signal BEFORE sleeping so downstream
+        // consumers can reset their accumulators (streaming row
+        // content, slot.streamingText, slot.streamingReasoning) and
+        // the new attempt's stream lands into a clean slate. Skipped
+        // when no events emitted yet - there's nothing to reset, and
+        // an unsolicited stream_retry on a fresh round would surprise
+        // a consumer reading the signal as "discard prior partial".
+        if (emitted) {
+          yield {
+            type: 'stream_retry',
+            reason: 'truncated',
+            attempt: truncatedAttempt,
+          };
+        }
+        const interrupted = await sleepCancellable(
+          TRUNCATED_BACKOFF_MS,
+          opts.signal,
+        );
+        if (interrupted || opts.signal.aborted) {
+          const abortErr = new Error('Aborted');
+          abortErr.name = 'AbortError';
+          throw abortErr;
+        }
+        // Loop back into the streamFromVenice attempt fresh.
+        continue;
+      }
+      const retriesExhausted =
+        rateLimitAttempt >= RATE_LIMIT_MAX_ATTEMPTS - 1;
       if (!isRateLimit || emitted || retriesExhausted || opts.signal.aborted) {
         throw err;
       }
-      attempt += 1;
+      rateLimitAttempt += 1;
       const hint = (err as VeniceError).retryAfterMs;
       const fallbackIdx = Math.min(
-        attempt - 1,
+        rateLimitAttempt - 1,
         RATE_LIMIT_FALLBACK_WAIT_MS.length - 1,
       );
       const baseMs = hint ?? RATE_LIMIT_FALLBACK_WAIT_MS[fallbackIdx];
@@ -284,7 +348,7 @@ async function* withRateLimitRetry(
       yield {
         type: 'rate_limit_wait',
         retryAfterMs: waitMs,
-        attempt,
+        attempt: rateLimitAttempt,
         until,
       };
       const interrupted = await sleepCancellable(waitMs, opts.signal);
@@ -340,6 +404,16 @@ async function* streamFromVenice(
   const decoder = new TextDecoder();
   let buffer = '';
   const assembler = new ToolCallAssembler();
+  // The completion's natural end is the `[DONE]` sentinel after the
+  // last data frame. The reader returning `done:true` without us
+  // having seen the sentinel means Venice closed the socket early -
+  // either a clean cut at the transport layer, or upstream
+  // infrastructure dropped the connection mid-stream. The retry layer
+  // above this one uses sawDoneSentinel + assembler.hasPending() to
+  // distinguish a recoverable cut (no terminal sequence, no tool
+  // fragments assembled) from a partial-but-actionable round (got
+  // some tool fragments before the cut - dispatch what we have).
+  let sawDoneSentinel = false;
   // Optional raw-frame dump. Opened lazily on the first frame so the
   // file appears in /tmp only when frames actually arrive. Append
   // mode so a long round shares one file. Best-effort: any write
@@ -374,7 +448,10 @@ async function* streamFromVenice(
         const parsed = parseSseFrame(frame);
         await dumpFrame(frame, parsed);
         if (parsed === null) continue;
-        if (parsed === '[DONE]') break outer;
+        if (parsed === '[DONE]') {
+          sawDoneSentinel = true;
+          break outer;
+        }
 
         if (parsed.text !== undefined && parsed.text.length > 0) {
           yield { type: 'response_text', content: parsed.text };
@@ -425,6 +502,24 @@ async function* streamFromVenice(
       `[streamFromVenice] flush: requests=${requests.length} dropped=${JSON.stringify(dropped)} finishReason=${finishReason}`,
     );
   }
+
+  // Truncation detection. If the reader returned `done:true` without
+  // us having seen the `[DONE]` sentinel AND we have no actionable
+  // tool calls to dispatch, the upstream stream cut early and the
+  // round should be retried. We throw a VeniceError with
+  // kind='truncated' so withRateLimitRetry (which already owns the
+  // re-issue mechanic) can catch it, emit the retry signal, and
+  // re-run the body. When tool calls DID land before the cut, we
+  // forward them and let the round dispatch - the model gave us
+  // something actionable, the cut happened on the tail and isn't
+  // recoverable cleanly anyway.
+  if (!sawDoneSentinel && requests.length === 0) {
+    throw new VeniceError(
+      'Venice SSE stream ended without [DONE] sentinel',
+      'truncated',
+    );
+  }
+
   for (const r of requests) {
     yield { type: 'tool_call_request', request: r };
   }

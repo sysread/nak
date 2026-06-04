@@ -343,6 +343,31 @@ export async function getStreamingResponse(
             terminalDetail = ev.message;
             break roundLoop;
           }
+          case 'stream_retry': {
+            // Transport-layer retry from withRateLimitRetry's
+            // truncation branch: the upstream SSE cut without a
+            // [DONE] sentinel and the wrapper is re-issuing. Reset
+            // this round's accumulators so the new attempt's stream
+            // doesn't append to the cut-off prefix - the assembler
+            // is fresh per attempt, the consumer's accum needs to
+            // match. Tool citations from earlier rounds stay; this
+            // only discards what THIS attempt of THIS round produced.
+            accum.content = '';
+            accum.reasoning = '';
+            roundText = '';
+            // Schedule a row UPDATE so reconnecting clients don't
+            // see a partial buffer that's about to be replaced.
+            // No-op when assistantRowId is still null (we hadn't
+            // started writing yet).
+            if (assistantRowId !== null) {
+              lastUpdateContent = '';
+              await opts.adminClient
+                .from('messages')
+                .update({ content: '' })
+                .eq('id', assistantRowId);
+            }
+            break;
+          }
           default:
             // BEGIN / DONE / rate_limit_* / guard_retry pass-through;
             // no orchestrator state to update. DONE carries the

@@ -1594,6 +1594,21 @@ async function consumeStreamEvents(opts: {
           streamingReasoning = '';
           break;
         }
+        case 'stream_retry': {
+          // Transport-layer retry. Server's withRateLimitRetry caught
+          // a truncated SSE stream and is re-issuing the same body;
+          // the consumer's accumulated content/reasoning belong to
+          // the cut-off prefix and must be discarded so the new
+          // attempt's stream renders cleanly. No UI affordance fires
+          // (this is a silent recovery, unlike guard_retry which
+          // raises a slop-notice card); the streaming bubble just
+          // resets to empty and starts collecting again.
+          streamingText = '';
+          streamingReasoning = '';
+          handlers?.onTextUpdate?.('');
+          handlers?.onReasoningUpdate?.('');
+          break;
+        }
         case 'error':
           // The server reported a terminal stream failure. Throw with
           // a kind matching the original VeniceError categorization so

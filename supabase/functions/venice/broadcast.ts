@@ -27,9 +27,12 @@
 //     model calls a tool, not 250ms later because text was being
 //     coalesced.
 //   - END {terminalKind} - terminal marker.
-//   - rate_limit_wait / rate_limit_resolved / guard_retry - the UI
-//     needs to swap the streaming spinner for the "waiting on Venice"
-//     indicator immediately when a 429 hits.
+//   - rate_limit_wait / rate_limit_resolved / guard_retry / stream_retry
+//     - retry-lifecycle signals. The browser needs to swap the
+//     streaming spinner for the "waiting on Venice" indicator
+//     immediately when a 429 hits, and stream_retry's accumulator-
+//     reset must reach the consumer before any new content events do
+//     so the discarded prefix doesn't double up.
 //   - error - terminal.
 //   - usage / citations - rare; arrive at end of stream anyway.
 //   - BEGIN / DONE - per-completion markers.

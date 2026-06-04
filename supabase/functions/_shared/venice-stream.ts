@@ -110,6 +110,7 @@ export type VeniceErrorKind =
   | 'http'
   | 'network'
   | 'parse'
+  | 'truncated'
   | 'internal';
 
 // ---------------------------------------------------------------------------
@@ -154,7 +155,20 @@ export type StreamSignal =
       until: string;
     }
   | { type: 'rate_limit_resolved' }
-  | { type: 'guard_retry'; reason: string };
+  | { type: 'guard_retry'; reason: string }
+  /**
+   * The completion's SSE stream ended without a proper terminal
+   * sequence (no `[DONE]` sentinel, reader closed early) AND the
+   * tool-call assembler had nothing actionable, so we couldn't tell
+   * whether the model intended to keep going. The retry layer is
+   * re-issuing the same body; downstream consumers (orchestrator,
+   * browser) reset accumulators (content, reasoning, streaming-row
+   * UPDATE target) so the new attempt's stream replaces the partial
+   * one cleanly. Distinct from `guard_retry` because no output guard
+   * fired and no UI affordance (slop-notice card) should surface -
+   * this is a silent recovery for a transport-layer cut.
+   */
+  | { type: 'stream_retry'; reason: 'truncated'; attempt: number };
 
 // ---------------------------------------------------------------------------
 // Orchestrator-added events.
