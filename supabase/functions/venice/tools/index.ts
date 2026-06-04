@@ -31,6 +31,7 @@ import './generate_image.ts';
 import '../agents/context.ts';
 import '../agents/conversation_recall.ts';
 import '../agents/recall.ts';
+import '../agents/wiki_librarian.ts';
 import '../agents/wiki_recall.ts';
 import './memory_create.ts';
 import './memory_delete.ts';
