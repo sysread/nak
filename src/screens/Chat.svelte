@@ -42,7 +42,12 @@
   import { onMount, tick } from 'svelte';
   import { fade } from 'svelte/transition';
   import type { Session } from '@supabase/supabase-js';
-  import { app, applyServerSettings, notifyBiasActiveConvIds } from '$lib/state.svelte';
+  import {
+    app,
+    applyServerSettings,
+    notifyBiasActiveConvIds,
+    resetForSignOut,
+  } from '$lib/state.svelte';
   import {
     notifications,
     notifyTurnComplete,
@@ -4546,6 +4551,12 @@
     // from. The localStorage config stays - signing back in re-uses
     // it without going through Setup.
     clearSessionThreadId();
+    // Reset config defaults (model tier, profile, system prompts,
+    // wiki/memory toggles) so the previous account's preferences
+    // don't bleed into a subsequent sign-in-as-someone-else before
+    // refreshSettings re-seeds them from the new account's Supabase
+    // settings.
+    resetForSignOut();
     await app.supabase?.signOut();
   }
 
