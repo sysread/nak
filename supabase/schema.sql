@@ -3579,6 +3579,71 @@ begin
      and response_holder_id = p_holder_id;
 end $$;
 
+-- Stream-claim janitor (server-side sweep) -------------------------------
+--
+-- The b-strict acquire/heartbeat/release contract above covers the normal
+-- terminal cases (success, abort, error inside the round-loop try/catch).
+-- It does NOT cover the function being killed externally - Edge Runtime
+-- CPU/memory caps, gateway 502s mid-round, EdgeRuntime.waitUntil being
+-- yanked before the finally block could run. In that case the claim sits
+-- expired-but-set: response_holder_id is non-null, response_claim_expires_at
+-- is in the past, last_error is still null because no terminal path ever
+-- wrote it.
+--
+-- The /stream reconnect probe (supabase/functions/venice/index.ts) catches
+-- this on the NEXT user-driven /stream call, but only if the orphan
+-- message row has status='streaming'. Intermediate tool-call assistant
+-- rows are written with status=NULL (no streaming text deltas, just an
+-- instant tool_calls write), so a function death mid-tool-round leaves a
+-- thread orphan-claimed that the reconnect probe ignores.
+--
+-- This sweep keys off the thread-level claim instead of the message-row
+-- status. Any thread whose claim expired more than 60 seconds ago, whose
+-- claim is still set, AND whose last_error is still null is treated as
+-- "function died, never wrote a terminal error." We clear the claim and
+-- write a last_error so the UI's error card renders on the next
+-- threads-realtime update.
+--
+-- The 60-second grace exists because the function's own writes can land
+-- a few seconds past its claim expiry (race between the row UPDATE and
+-- the claim TTL check). 60s is comfortably past any legitimate late
+-- write.
+--
+-- SECURITY DEFINER + revoke-from-non-service: this sweep crosses user
+-- boundaries (a service role sweeping all threads), which makes the
+-- EXECUTE grant the security boundary. Cron is the only legitimate
+-- caller; the function exists as an RPC purely so cron can invoke it
+-- via SQL.
+create or replace function public.nak_sweep_stale_streams()
+returns int
+language plpgsql security definer as $$
+declare
+  affected int;
+begin
+  with swept as (
+    update public.threads
+    set
+      last_error = jsonb_build_object(
+        'kind', 'internal',
+        'message',
+          'The previous response was lost mid-stream (the function ended before it could finalise the reply). Try again.',
+        'retryable', true,
+        'occurred_at', to_jsonb(now())
+      ),
+      response_holder_id = null,
+      response_claim_expires_at = null
+    where response_holder_id is not null
+      and response_claim_expires_at < now() - interval '60 seconds'
+      and last_error is null
+    returning 1
+  )
+  select count(*) into affected from swept;
+  return affected;
+end $$;
+
+revoke all on function public.nak_sweep_stale_streams() from public, anon, authenticated;
+grant execute on function public.nak_sweep_stale_streams() to service_role;
+
 -- Reflection pipeline RPCs -----------------------------------------------
 --
 -- The reflection agent's worker runs on the same claim/lease pattern as
@@ -8357,6 +8422,41 @@ begin
   end if;
 exception when others then
   raise notice 'embedding backfill cron setup skipped: %', sqlerrm;
+end
+$cron$;
+
+-- ---------------------------------------------------------------------------
+-- Scheduled stream-claim janitor (pg_cron -> SQL)
+--
+-- Every minute, call nak_sweep_stale_streams() to terminate threads whose
+-- streaming claim has been expired more than 60s without being released
+-- by the function's own terminal path. Catches function deaths the
+-- /stream reconnect probe misses - the probe only runs on user-driven
+-- /stream calls and only inspects the message row's status, so a
+-- function death on a tool-call round (which leaves a thread orphan-
+-- claimed with no streaming-status message row) sits stuck until this
+-- sweep catches it.
+--
+-- Pure SQL (no pg_net): the sweep only touches the threads table, so
+-- there's no network call to make. Gated on pg_cron availability the
+-- same way as embed-backfill above; the outer handler swallows the
+-- "shared_preload_libraries" failure so a local image without pg_cron
+-- still applies schema.sql cleanly.
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
+    create extension if not exists pg_cron;
+    if exists (select 1 from cron.job where jobname = 'nak-stream-janitor') then
+      perform cron.unschedule('nak-stream-janitor');
+    end if;
+    perform cron.schedule(
+      'nak-stream-janitor',
+      '* * * * *',
+      $job$ select public.nak_sweep_stale_streams(); $job$
+    );
+  end if;
+exception when others then
+  raise notice 'stream-janitor cron setup skipped: %', sqlerrm;
 end
 $cron$;
 
