@@ -30,7 +30,16 @@ import type {
  * whatever the caller set - a healthy turn pays no temperature
  * distortion; only the salvage re-rolls do. Mirrors the browser values.
  */
-const RETRY_TEMPERATURE_SCHEDULE: readonly number[] = [0.8, 1.0];
+// One temperature per planned retry. With MAX_STREAM_GUARD_RETRIES=4
+// the wrapper makes up to 5 attempts (initial + 4 retries); the 4
+// re-rolls walk through these temperatures in order. Each step is
+// large enough that the sampler picks a meaningfully different token
+// distribution - small bumps (e.g. 0.8 -> 0.85) tend to produce
+// identical first-token outputs on deepseek-v4-flash, defeating the
+// re-roll's point. The clamp in prepareRetry caps to the last entry
+// if MAX_STREAM_GUARD_RETRIES grows past the schedule length without
+// a paired schedule update.
+const RETRY_TEMPERATURE_SCHEDULE: readonly number[] = [0.8, 1.0, 1.2, 1.4];
 
 /**
  * Leading delimiters of leaked model special tokens. DeepSeek tokens

@@ -651,13 +651,17 @@ export interface StreamGuard {
 
 /**
  * Maximum number of guard-driven re-rolls before the wrapper gives up
- * and surfaces a GuardExhaustedError. Two re-rolls (three attempts
- * total) clears a stochastic glitch like the special-token leak without
- * spinning the user's turn forever when a model is stuck in a
- * degenerate mode. Matches the browser-side value so the same model
- * gets the same retry budget on either path during the migration.
+ * and surfaces a GuardExhaustedError. Four re-rolls (five attempts
+ * total) - bumped from two after the deepseek-v4-flash family's
+ * special-token leak proved more sticky than initial calibration
+ * suggested. Five rolls at four distinct temperatures (see the
+ * RETRY_TEMPERATURE_SCHEDULE in stream-guards.ts) gives the sampler
+ * enough variance to clear a stochastic glitch in nearly every
+ * observed case; past five we accept that the model is in a
+ * degenerate mode for this prompt and surface the error so the user
+ * can rephrase rather than spinning the turn forever.
  */
-export const MAX_STREAM_GUARD_RETRIES = 2;
+export const MAX_STREAM_GUARD_RETRIES = 4;
 
 /**
  * Compose per-guard verdicts into the driver's decision. Any 'retry'
