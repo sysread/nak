@@ -3111,6 +3111,27 @@
     // showing anyway and the assignment is a no-op.
     interruptedDraft = null;
 
+    // Clear the persistent error card optimistically at the start of
+    // a new exchange against THIS thread. The displayed error
+    // represents the most recent unresolved failure; sending a new
+    // message - whether via Retry on the error card, a fresh user
+    // prompt, or any other entry into runExchange - is the user
+    // implicitly trying to resolve it, so the card should disappear
+    // immediately rather than lingering through the in-flight period.
+    // commit_assistant_message clears threads.last_error server-side
+    // on the happy path, and any new terminal-error path writes a
+    // fresh payload that overwrites; this optimistic patch just
+    // closes the visual gap between "user clicked retry" and "server
+    // confirmed it cleared." Scoped to the active thread because
+    // background re-runs against a non-active thread shouldn't reach
+    // into the in-memory row for a thread the user isn't looking at.
+    if (ctx.threadId === activeThreadId) {
+      const t = findThread(ctx.threadId);
+      if (t?.last_error) {
+        void clearThreadLastError();
+      }
+    }
+
     // Rebuild at call time so a retry after mid-exchange persists
     // (assistant row + tool result from a prior round) sees them.
     // Same closure is invoked again on the in-loop auto-retry below
