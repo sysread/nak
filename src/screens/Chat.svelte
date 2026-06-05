@@ -192,6 +192,7 @@
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import { isReasoningOnlyStall } from '$lib/ui/incomplete-turn';
   import { headingFor, parseLastError } from '$lib/ui/last-error';
+  import { computeRegenerateRangeIds } from '$lib/ui/regenerate';
   import {
     orderedSubconsciousRows,
     subconsciousLabel,
@@ -716,6 +717,33 @@
    */
   let pendingDeleteIds = $state<string[]>([]);
   const pendingDeleteSet = $derived(new Set(pendingDeleteIds));
+  /**
+   * Hover-preview of the regenerate range. Populated while the user
+   * hovers (or focuses) a message's Regenerate button; cleared on
+   * leave. Mirrors `pendingDeleteIds` semantically - same id list, same
+   * Set lookup, same .regen-target class - but is purely transient
+   * UI affordance: never persists across a click, never affects the
+   * disabled-button gating, never reaches the chat-loop. The render
+   * sites OR this set with pendingDeleteSet so the user sees the red
+   * border on every row that would be replaced before committing.
+   */
+  let hoverRegenerateIds = $state<string[]>([]);
+  const hoverRegenerateSet = $derived(new Set(hoverRegenerateIds));
+
+  /**
+   * Set the hover-preview range for a given assistant message id.
+   * Wired to the Regenerate button's mouseenter + focus handlers.
+   * Skipped while a turn is sending - the button is already disabled
+   * in that state and painting the preview would be misleading.
+   */
+  function previewRegenerateFrom(assistantMessageId: string): void {
+    if (activeSlot?.sending) return;
+    hoverRegenerateIds = computeRegenerateRangeIds(messages, assistantMessageId);
+  }
+
+  function clearRegeneratePreview(): void {
+    if (hoverRegenerateIds.length > 0) hoverRegenerateIds = [];
+  }
   /**
    * Per-message animation-delay for the fade-out that plays after a
    * regenerate lands. Keyed by message id, value is the delay in ms
@@ -4216,27 +4244,29 @@
     if (!active || active.isDraft || active.archived) return;
     const clickedIdx = messages.findIndex((m) => m.id === assistantMessageId);
     if (clickedIdx === -1) return;
-    // Walk back to the user message that opened this turn. Skip
-    // assistant + tool rows from the same and earlier rounds. We stop
-    // at the first user row we see - everything after it (inclusive
-    // of intermediate tool/assistant rows AND any later turns) is the
-    // replace range.
+    const rangeIds = computeRegenerateRangeIds(messages, assistantMessageId);
+    // computeRegenerateRangeIds returns [] when the input is malformed
+    // (no preceding user message, the clicked id isn't in the array,
+    // or no rows follow the user message). Bail rather than send an
+    // empty turn.
+    if (rangeIds.length === 0) return;
+    // Walk back to the user message that opened this turn. Same logic
+    // computeRegenerateRangeIds uses, repeated here because we need
+    // the user message ROW for the runExchange call below.
     let userIdx = -1;
-    for (let i = clickedIdx; i >= 0; i--) {
+    for (let i = clickedIdx; i >= 0; i -= 1) {
       if (messages[i].role === 'user') {
         userIdx = i;
         break;
       }
     }
-    // Defensive: an assistant row without a preceding user message
-    // shouldn't exist (every assistant turn requires a user trigger),
-    // but bail rather than send an empty turn if the data is somehow
-    // shaped that way.
     if (userIdx === -1) return;
     const userMessage = messages[userIdx];
-    const replaceRange = messages.slice(userIdx + 1);
-    if (replaceRange.length === 0) return;
-    pendingDeleteIds = replaceRange.map((m) => m.id);
+    pendingDeleteIds = rangeIds;
+    // Hover preview gets cleared on click so the click-committed
+    // pendingDeleteSet is the only source of the .regen-target class
+    // from here on - no double-source flicker on the way to fade-out.
+    hoverRegenerateIds = [];
 
     // Resolve send-time context the same way send() does. The
     // toggles the user has set RIGHT NOW apply to the regenerate -
@@ -6647,7 +6677,7 @@
                    stays focused on per-message body concerns. -->
               <div
                 class="msg assistant"
-                class:regen-target={pendingDeleteSet.has(block.assistant.id)}
+                class:regen-target={pendingDeleteSet.has(block.assistant.id) || hoverRegenerateSet.has(block.assistant.id)}
                 class:fading-out={fadeOutDelays[block.assistant.id] !== undefined}
                 style:animation-delay={`${fadeOutDelays[block.assistant.id] ?? 0}ms`}
               >
@@ -6661,6 +6691,8 @@
                   attachments={block.assistant.attachments}
                   disabled={pendingDeleteSet.has(block.assistant.id) || (activeSlot?.sending ?? false)}
                   onRegenerate={() => { void regenerateFrom(block.assistant.id); }}
+                  onRegeneratePreviewEnter={() => previewRegenerateFrom(block.assistant.id)}
+                  onRegeneratePreviewLeave={clearRegeneratePreview}
                 >
                   <ToolCalls
                     calls={block.assistant.tool_calls ?? []}
@@ -6709,7 +6741,7 @@
             {:else if block.message.role === 'assistant'}
               <div
                 class="msg assistant"
-                class:regen-target={pendingDeleteSet.has(block.message.id)}
+                class:regen-target={pendingDeleteSet.has(block.message.id) || hoverRegenerateSet.has(block.message.id)}
                 class:fading-out={fadeOutDelays[block.message.id] !== undefined}
                 style:animation-delay={`${fadeOutDelays[block.message.id] ?? 0}ms`}
               >
@@ -6723,6 +6755,8 @@
                   attachments={block.message.attachments}
                   disabled={pendingDeleteSet.has(block.message.id) || activeSlot?.sending}
                   onRegenerate={() => { void regenerateFrom(block.message.id); }}
+                  onRegeneratePreviewEnter={() => previewRegenerateFrom(block.message.id)}
+                  onRegeneratePreviewLeave={clearRegeneratePreview}
                 />
               </div>
             {:else}
@@ -6746,7 +6780,7 @@
                 : null}
               <div
                 class="msg {block.message.role}"
-                class:regen-target={pendingDeleteSet.has(block.message.id)}
+                class:regen-target={pendingDeleteSet.has(block.message.id) || hoverRegenerateSet.has(block.message.id)}
                 class:fading-out={fadeOutDelays[block.message.id] !== undefined}
                 style:animation-delay={`${fadeOutDelays[block.message.id] ?? 0}ms`}
               >

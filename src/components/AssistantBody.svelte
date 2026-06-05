@@ -93,6 +93,16 @@
      * target (e.g. a future preview pane) just don't pass one.
      */
     onRegenerate?: () => void;
+    /**
+     * Fired when the user hovers or focuses the Regenerate button.
+     * The caller paints a .regen-target preview on every row that
+     * would be replaced if the click landed. Pure UI affordance:
+     * never commits state, never reaches the chat loop. When omitted
+     * the preview just doesn't render. Paired with
+     * `onRegeneratePreviewLeave` which clears the preview.
+     */
+    onRegeneratePreviewEnter?: () => void;
+    onRegeneratePreviewLeave?: () => void;
   }
 
   const {
@@ -106,6 +116,8 @@
     attachments = null,
     disabled = false,
     onRegenerate,
+    onRegeneratePreviewEnter,
+    onRegeneratePreviewLeave,
   }: Props = $props();
 
   let citationsOpen = $state(false);
@@ -271,6 +283,10 @@
         class="copy-btn regenerate-btn"
         {disabled}
         onclick={onRegenerate}
+        onmouseenter={onRegeneratePreviewEnter}
+        onmouseleave={onRegeneratePreviewLeave}
+        onfocus={onRegeneratePreviewEnter}
+        onblur={onRegeneratePreviewLeave}
         title="Regenerate this response (replaces this and any following messages)"
         aria-label="Regenerate response"
       >
