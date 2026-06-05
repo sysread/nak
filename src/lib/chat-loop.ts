@@ -22,6 +22,21 @@
  *     the samskara substrate stub anchoring the (user message, last
  *     assistant) pair.
  *
+ * Browser vs function ownership during a turn. The browser writes the
+ * `role='user'` message row from the composer-send click before
+ * `runChatLoop` runs - that row is browser-owned because its production
+ * path is a single user click and "tab crash means user retypes." Once
+ * `runChatLoop` calls `venice.streamChat`, the function takes over as
+ * writer-of-record for everything that follows: assistant rows
+ * (`commit_assistant_message`), `role='tool'` rows, `tool_calls`,
+ * `threads.status` transitions, per-round generated-image attachments,
+ * and `threads.last_error` on the terminal-error path. This module
+ * persists nothing during the turn - it consumes events and updates the
+ * UI. The full ownership frame (production-path-per-row, not
+ * per-table) is in docs/dev/architecture.md under "Production-path
+ * ownership"; the function-side perspective is in
+ * supabase/functions/README.md.
+ *
  * Cancellation: the caller's AbortSignal aborts the local stream
  * consumer (so the UI stops collecting events). The function-side
  * round chain is cancelled separately via a control-channel publish

@@ -36,6 +36,11 @@ const TARGETS = [
   // rendering surface as the root CLAUDE.md, so they need the same
   // lint guardrail.
   'src/**/CLAUDE.md',
+  // README files outside the docs tree (e.g.
+  // supabase/functions/README.md, which describes the edge-function
+  // half of the app and is rendered on GitHub when browsing the
+  // subdirectory). Same lint coverage as the root README.
+  'supabase/**/README.md',
 ];
 
 const REPO_ROOT = join(__dirname, '..');

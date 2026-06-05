@@ -286,6 +286,80 @@ common case (two tabs in the same browser, two browsers on the
 same account); the combination handles the edge case (the lapsed-
 Web-Lock-while-holding-the-Supabase-lease race).
 
+## Production-path ownership (browser vs edge function)
+
+Both halves of nak are first-class writers to Supabase - the browser
+calls `addMessage`, the venice edge function calls
+`commit_assistant_message` and the tool-result inserts. The split
+between them is **not** "which side touches the database." It's
+**which side owns the lifecycle of the work that produces the row**.
+
+Three categories of work:
+
+1. **User-triggered single-action work — browser owns.** Composer
+   send, thread rename, recipe edit, settings change, manual
+   attachment upload. The production path is one click → one
+   INSERT/UPDATE. A tab crash mid-click is "user retypes"; there
+   is no state machine to recover, so the work doesn't need a
+   runtime that outlives the trigger.
+
+2. **Work that must survive the tab closing — function owns.** A
+   streamed turn that may take 30+ seconds while the user closes
+   the tab or background-suspends the PWA. The embedding
+   backfill chewing through thousands of rows. Image generation.
+   The whole motivation for the streaming-root migration was
+   `EdgeRuntime.waitUntil` — runtime outlives the trigger.
+
+3. **Background derivation the user controls in-session — browser
+   owns today.** Reflection, wiki, intuition, samskara, memory
+   librarian, journaling, auto-title. Run while the app is
+   unlocked; the user toggles them via settings. Losing them on
+   tab close isn't a correctness problem, just a "work resumes
+   next session." Long-term candidates for the function side as
+   the cron + waitUntil pattern matures.
+
+Each row in the database has exactly **one writer-of-record**, set
+by which production path birthed it. The shared table is fine
+because the granularity at which ownership is unambiguous is the
+*row*, not the table. Inventory of who writes what during a chat
+turn:
+
+| Row | Writer | Production path |
+| --- | --- | --- |
+| `messages` (role=`user`) | Browser | Composer send |
+| `messages` (role=`assistant`) | Function | Venice stream completion via `commit_assistant_message` |
+| `messages` (role=`tool`) | Function | Tool dispatch in `performToolCall` |
+| `messages` (role=`system`, recovery rows) | Function | Wire-shape repair during a turn |
+| `tool_calls` | Function | Round loop in `getStreamingResponse` |
+| `attachments` (user upload) | Browser | File picker / paste / drag |
+| `attachments` (generated image) | Function | Per-round `attachGeneratedImages` |
+| `threads` (insert) | Browser | New-thread button |
+| `threads.title` (manual rename) | Browser | Inline-rename UI |
+| `threads.title` (auto-title) | Browser (auto-title worker) | Background derivation, will likely migrate function-side |
+| `threads.status` / streaming row state | Function | Round loop terminal kinds |
+| `threads.last_error` | Function | Terminal-error path in `getStreamingResponse` |
+| `topics`, recipe edits, memory rows, settings | Browser | Direct user action UIs |
+| `topic_*` derivations | Function (cron) | Background pipelines |
+| Embedding rows | Function | `pg_cron` + venice `/embed-backfill` |
+| Worker-lease rows | Browser | Background agent managers |
+
+The auto-title case is the test of the frame: the same
+`threads.title` column has two writers, but they write for
+different reasons in different production paths. The function
+would write auto-title if it owned the streamed-turn lifecycle
+end-to-end (the auto-title worker is the lingering browser-side
+piece). The browser writes manual-rename because it owns the
+inline-rename UI. Writer-of-record is a property of the
+production event, not the column.
+
+**Heuristic for new work.** Ask "could a tab close lose this and
+that be a correctness problem?" If yes, it belongs function-side.
+If no, browser is fine.
+
+See `supabase/functions/README.md` for the function-side
+perspective (which functions exist, what each one owns, the
+"Deno island" pattern with respect to `src/lib`).
+
 ## Where state lives
 
 | Scope | Where | What |

@@ -12,7 +12,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "lint": "eslint . --ext .ts,.svelte",
     "knip": "knip",
-    "markdownlint": "markdownlint-cli2 'docs/**/*.md' README.md CLAUDE.md 'src/**/CLAUDE.md'",
+    "markdownlint": "markdownlint-cli2 'docs/**/*.md' README.md CLAUDE.md 'src/**/CLAUDE.md' 'supabase/**/README.md'",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test"

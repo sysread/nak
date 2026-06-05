@@ -129,7 +129,7 @@ depends = ["deps"]
 # behavior on fish / zsh / bash. Keep this invocation in sync with
 # tests/markdownlint.test.ts; the two run the same tool against the
 # same targets, one for dev iteration and one as the CI gate.
-run = "pnpm exec markdownlint-cli2 'docs/**/*.md' README.md CLAUDE.md 'src/**/CLAUDE.md'"
+run = "pnpm exec markdownlint-cli2 'docs/**/*.md' README.md CLAUDE.md 'src/**/CLAUDE.md' 'supabase/**/README.md'"
 
 [tasks.knip]
 description = "Scan for dead code: unused files, exports, and dependencies"
