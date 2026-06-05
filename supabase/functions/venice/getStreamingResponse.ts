@@ -234,15 +234,6 @@ export async function getStreamingResponse(
   let rowUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   let lastUpdateContent = '';
 
-  // Images harvested off generate_image tool results this turn,
-  // waiting for the terminal assistant row to attach them to. Each
-  // entry was lifted from the tool outcome via extractGeneratedImage
-  // before persistRoundToolResults wrote the (now-stripped) row, so
-  // the model-visible tool result row carries only the compact
-  // descriptor and the heavy payload sits here until terminal commit
-  // uploads it to storage + inserts the message_attachments row.
-  const generatedImages: GeneratedImagePayload[] = [];
-
   const accum = {
     content: '',
     reasoning: '',
@@ -549,17 +540,50 @@ export async function getStreamingResponse(
       );
 
       // Harvest generated-image payloads off any tool result before
-      // persistRoundToolResults strips them at encode time. The
-      // payloads sit on `generatedImages` until the terminal commit
-      // attaches them to the assistant row as message_attachments
-      // rows. Failed outcomes carry the error shape, not a generated
-      // image, so we skip them; the structural extractor handles
-      // tool results that simply don't have an image (most calls).
+      // persistRoundToolResults strips them at encode time. Failed
+      // outcomes carry the error shape, not a generated image, so we
+      // skip them; the structural extractor handles tool results that
+      // simply don't have an image (most calls).
+      //
+      // Persist mid-round: attach the images to THIS round's
+      // assistant-with-tool-calls row immediately so a subsequent
+      // round's tool that resolves by filename (recipe_photos_attach,
+      // analyze_image) can find the row in message_attachments. The
+      // earlier shape deferred attachment to the terminal commit at
+      // end-of-turn, which broke same-turn referential lookups - a
+      // generate_image -> recipe_photos_attach sequence in a single
+      // turn would error "not in this thread" because the
+      // message_attachments row didn't exist yet when the second
+      // tool's filename lookup ran. Per-round attachment fixes that
+      // without changing browser-side behaviour: AssistantBody's
+      // MessageAttachments renders from message.attachments either
+      // way, and the realtime UPDATE on the assistant row already
+      // triggers a listAttachmentsByMessageIds re-hydration so the
+      // images land in the bubble at commit time. Best-effort: a
+      // failure inside attachGeneratedImages logs but doesn't abort
+      // the round - the model's prose still references the filename,
+      // so the user knows what was produced even when storage is
+      // misbehaving.
+      const roundImages: GeneratedImagePayload[] = [];
       for (const o of outcomes) {
         if (!o.ok) continue;
         const img = extractGeneratedImage(o.result);
-        if (img) generatedImages.push(img);
+        if (img) roundImages.push(img);
       }
+      if (roundImages.length > 0) {
+        await attachGeneratedImages(
+          opts.adminClient,
+          opts.userId,
+          assistantRoundRow.id,
+          roundImages,
+        );
+      }
+      // The terminal-commit path's attachGeneratedImages call has been
+      // retired in favour of this per-round attachment. generate_image
+      // can only fire in a round that issued tool_calls (a terminal
+      // round has none by definition), so every harvested image
+      // belongs to a non-terminal round and gets its message-row
+      // anchor here.
 
       // Detect ask_user suspend: any pending sentinel halts the round
       // chain.
@@ -762,33 +786,11 @@ export async function getStreamingResponse(
           ? toolCitations
           : null;
     if (assistantRowId !== null) {
-      // Insert any generated images BEFORE the terminal write so the
-      // realtime UPDATE on the assistant row fires AFTER the
-      // message_attachments rows exist. Without this ordering, the
-      // browser's onUpdate handler fires `listAttachmentsByMessageIds`
-      // at a moment when the function hasn't inserted the rows yet,
-      // returns an empty array, and never re-fetches - generated
-      // images then live on in storage but never render under the
-      // assistant bubble, leaving the user no way to download the
-      // image when the model's prose doesn't reference it.
-      //
-      // Only fires when terminalKind STARTS as 'completed'. If
-      // commit_assistant_message below flips it to 'error' (RPC
-      // failure, newer-user-message conflict), the attachments stay
-      // bound to the resulting 'error' row - the browser will render
-      // the error card AND the image, which is the right tradeoff:
-      // the user can still save the image they paid Venice for, even
-      // if the conversation context moved on. Failed attachments
-      // (upload threw, insert failed) are logged inside the helper
-      // and don't block the commit.
-      if (generatedImages.length > 0 && terminalKind === 'completed') {
-        await attachGeneratedImages(
-          opts.adminClient,
-          opts.userId,
-          assistantRowId,
-          generatedImages,
-        );
-      }
+      // Generated images get attached mid-round to the round's
+      // assistant-with-tool-calls row immediately after dispatch (see
+      // the per-round attachGeneratedImages call above) so a same-turn
+      // follow-up tool that resolves by filename can find the row.
+      // No end-of-turn bulk attach remains.
 
       if (terminalKind === 'completed') {
         const { data, error } = await opts.adminClient.rpc(
