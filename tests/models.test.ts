@@ -50,16 +50,21 @@ describe('MODELS (active registry)', () => {
     expect(MODELS['mistral-small-3-2-24b-instruct'].supportsReasoning).toBe(false);
   });
   it('marks the vision-capable ids as supportsVision=true', () => {
-    // Three vision-capable entries today: the analyze_image sub-call
-    // (venice-uncensored-1-2) and the Smart tier's foreground model
-    // (qwen-3-6-plus, which inlines image_url parts directly rather
-    // than routing through analyze_image), plus the legacy
-    // e2ee-qwen3-vl entry still in the registry for thread rows that
-    // pinned it explicitly via per-thread model override.
+    // Vision-capable entries today: the analyze_image sub-call
+    // (venice-uncensored-1-2), the Smart tier's foreground model
+    // (qwen-3-7-plus, which inlines image_url parts directly rather
+    // than routing through analyze_image), the Balanced tier's
+    // foreground model (mistral-small-2603), plus two legacy entries
+    // still in the registry for thread rows that pinned them
+    // explicitly via per-thread model override (e2ee-qwen3-vl-30b-a3b-p
+    // from before the visionAnalysis switch and qwen-3-6-plus from
+    // before the Smart tier swapped to 3.7).
     const visionIds = new Set([
       'venice-uncensored-1-2',
       'e2ee-qwen3-vl-30b-a3b-p',
+      'qwen-3-7-plus',
       'qwen-3-6-plus',
+      'mistral-small-2603',
     ]);
     for (const [id, spec] of Object.entries(MODELS)) {
       expect(spec.supportsVision).toBe(visionIds.has(id));
@@ -69,11 +74,14 @@ describe('MODELS (active registry)', () => {
 
 describe('TIERS (user-facing wrappers)', () => {
   it('has the three tiers with the expected Venice model ids', () => {
-    // Smart fronts qwen-3-6-plus (1M context, native vision); Balanced
-    // and Fast both front deepseek-v4-flash, differing only in their
-    // default thinking level (low vs off).
-    expect(TIERS.smart.id).toBe('qwen-3-6-plus');
-    expect(TIERS.balanced.id).toBe('deepseek-v4-flash');
+    // Smart fronts qwen-3-7-plus (1M context, native vision); Balanced
+    // fronts mistral-small-2603 (256k context, native vision, light
+    // reasoning by default); Fast fronts deepseek-v4-flash with
+    // thinking off. Balanced moved off deepseek mid-2026 when its
+    // special-token leak became too sticky for the stream-guard's
+    // retry budget to recover.
+    expect(TIERS.smart.id).toBe('qwen-3-7-plus');
+    expect(TIERS.balanced.id).toBe('mistral-small-2603');
     expect(TIERS.fast.id).toBe('deepseek-v4-flash');
   });
   it('each tier wraps its corresponding MODELS entry', () => {

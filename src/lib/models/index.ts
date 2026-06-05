@@ -205,12 +205,24 @@ export interface ModelSpec {
  * agent-table check becomes a no-op.
  */
 export const MODELS = {
-  'qwen-3-6-plus': {
-    id: 'qwen-3-6-plus',
+  'qwen-3-7-plus': {
+    id: 'qwen-3-7-plus',
     contextWindow: 1_000_000,
     supportsReasoning: true,
     // Native vision: image_url parts can be inlined directly without
     // routing through the analyze_image tool.
+    supportsVision: true,
+    supportsResponseFormat: true,
+  },
+  // Retained after the Smart tier swapped to qwen-3-7-plus so threads
+  // that pinned this id via per-thread model override still resolve to
+  // a valid spec on read. Identical capability surface to the new
+  // qwen-3-7-plus; reasoning_effort is ignored by both, vision is
+  // native on both.
+  'qwen-3-6-plus': {
+    id: 'qwen-3-6-plus',
+    contextWindow: 1_000_000,
+    supportsReasoning: true,
     supportsVision: true,
     supportsResponseFormat: true,
   },
@@ -233,6 +245,21 @@ export const MODELS = {
     // (intuition, summary, samskara) all omit it on the wire.
     supportsReasoning: false,
     supportsVision: false,
+    supportsResponseFormat: true,
+  },
+  'mistral-small-2603': {
+    id: 'mistral-small-2603',
+    contextWindow: 256_000,
+    // Newer mistral-small revision. Reasoning + native vision + tool
+    // calling + reasoning_effort all supported per Venice's model
+    // catalog (capabilities.supportsReasoningEffort=true). Used as
+    // the Balanced tier's foreground model since the deepseek
+    // special-token leak made deepseek-v4-flash unreliable for the
+    // user-facing chat surface. Light reasoning ('low') is the tier
+    // default - keeps a short CoT pass that helps on most turns
+    // without medium/high's latency.
+    supportsReasoning: true,
+    supportsVision: true,
     supportsResponseFormat: true,
   },
   'e2ee-qwen3-vl-30b-a3b-p': {
@@ -316,15 +343,15 @@ export interface TierSpec extends ModelSpec {
 
 export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
   smart: {
-    ...MODELS['qwen-3-6-plus'],
+    ...MODELS['qwen-3-7-plus'],
     tier: 'smart',
     label: 'Smart',
     icon: '🧠',
-    description: 'Qwen 3.6 Plus with medium thinking. 1M context, native vision. Best for hard problems.',
+    description: 'Qwen 3.7 Plus with medium thinking. 1M context, native vision. Best for hard problems.',
     defaultThinking: 'medium',
   },
   balanced: {
-    ...MODELS['deepseek-v4-flash'],
+    ...MODELS['mistral-small-2603'],
     tier: 'balanced',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
@@ -333,12 +360,10 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     // in both themes; yin-yang is a solid bi-tonal disc that reads at
     // any size.
     icon: '\u262F\uFE0F',
-    description: 'DeepSeek V4 Flash with light thinking. Good default for most turns.',
+    description: 'Mistral Small with light thinking. 256k context, native vision. Good default for most turns.',
     // Light thinking by default - 'low' keeps a short CoT pass that
-    // helps on most turns without the latency of medium/high. Balanced
-    // and Fast front the same DeepSeek model and differ only in default
-    // thinking budget (low vs off); the composer picker lets a user
-    // override either per thread.
+    // helps on most turns without the latency of medium/high. The
+    // composer picker lets a user override per thread.
     defaultThinking: 'low',
   },
   fast: {
