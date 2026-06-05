@@ -762,6 +762,34 @@ export async function getStreamingResponse(
           ? toolCitations
           : null;
     if (assistantRowId !== null) {
+      // Insert any generated images BEFORE the terminal write so the
+      // realtime UPDATE on the assistant row fires AFTER the
+      // message_attachments rows exist. Without this ordering, the
+      // browser's onUpdate handler fires `listAttachmentsByMessageIds`
+      // at a moment when the function hasn't inserted the rows yet,
+      // returns an empty array, and never re-fetches - generated
+      // images then live on in storage but never render under the
+      // assistant bubble, leaving the user no way to download the
+      // image when the model's prose doesn't reference it.
+      //
+      // Only fires when terminalKind STARTS as 'completed'. If
+      // commit_assistant_message below flips it to 'error' (RPC
+      // failure, newer-user-message conflict), the attachments stay
+      // bound to the resulting 'error' row - the browser will render
+      // the error card AND the image, which is the right tradeoff:
+      // the user can still save the image they paid Venice for, even
+      // if the conversation context moved on. Failed attachments
+      // (upload threw, insert failed) are logged inside the helper
+      // and don't block the commit.
+      if (generatedImages.length > 0 && terminalKind === 'completed') {
+        await attachGeneratedImages(
+          opts.adminClient,
+          opts.userId,
+          assistantRowId,
+          generatedImages,
+        );
+      }
+
       if (terminalKind === 'completed') {
         const { data, error } = await opts.adminClient.rpc(
           'commit_assistant_message',
@@ -835,15 +863,6 @@ export async function getStreamingResponse(
       }
     }
 
-    // Attach any generate_image payloads harvested during the turn to
-    // the persisted assistant row as message_attachments. Best-effort:
-    // a storage upload or insert failure leaves the tool result's
-    // descriptor in place but the image off the message (the model's
-    // prose still references the filename so the user knows what was
-    // produced; analyze_image would miss the row, which is the worst-
-    // case UX). Skipped when terminalKind isn't 'completed' - aborted
-    // / error / suspended turns don't get attachments, mirroring the
-    // browser-side path.
     // Persistent error surface. threads.last_error is the column the
     // browser keys its error card off; commit_assistant_message clears
     // it on the happy path (see the RPC's threads update in schema.sql),
@@ -882,18 +901,6 @@ export async function getStreamingResponse(
       }
     }
 
-    if (
-      generatedImages.length > 0 &&
-      assistantRowId !== null &&
-      terminalKind === 'completed'
-    ) {
-      await attachGeneratedImages(
-        opts.adminClient,
-        opts.userId,
-        assistantRowId,
-        generatedImages,
-      );
-    }
 
     const endEvent: OrchestratorEvent = {
       type: 'END',
