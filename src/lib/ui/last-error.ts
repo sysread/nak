@@ -28,7 +28,8 @@ export type LastErrorKind =
   | 'round_limit'
   | 'wall_timeout'
   | 'tool_dispatch'
-  | 'commit_conflict';
+  | 'commit_conflict'
+  | 'guard_exhausted';
 
 export interface LastError {
   kind: LastErrorKind;
@@ -50,6 +51,7 @@ const KNOWN_KINDS: ReadonlyArray<LastErrorKind> = [
   'wall_timeout',
   'tool_dispatch',
   'commit_conflict',
+  'guard_exhausted',
 ];
 
 function isKnownKind(value: unknown): value is LastErrorKind {
@@ -114,5 +116,7 @@ export function headingFor(kind: LastErrorKind): string {
       return 'Tool failed';
     case 'commit_conflict':
       return 'Commit conflict';
+    case 'guard_exhausted':
+      return 'Malformed response';
   }
 }

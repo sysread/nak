@@ -6903,7 +6903,7 @@
               </div>
             </div>
           {/if}
-          {#if interruptedDraft && !respondingElsewhere && !activeSlot?.sending}
+          {#if interruptedDraft && !respondingElsewhere && !activeSlot?.sending && !displayedError}
             <!-- Orphaned-draft recovery banner. Shown when thread load
                  finds an IndexedDB streaming draft whose user message
                  has no committed assistant response - meaning the prior

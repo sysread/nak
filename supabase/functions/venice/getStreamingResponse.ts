@@ -434,9 +434,19 @@ export async function getStreamingResponse(
             // The StreamSignal carries the typed VeniceErrorKind that
             // the completion consumer mapped from the response. Pass
             // through as the translate kind - the 'truncated' kind is
-            // shared by both unions; the others are subsets.
+            // shared by both unions; the others are subsets. Special-
+            // case GuardExhaustedError: it surfaces from the completion
+            // path as kind='internal' with a "Stream guard ..." prefix
+            // (see errorEventFor in getStreamingCompletion.ts). The
+            // translator's 'internal' bucket folds the raw jargon
+            // into the user-facing prose, which leaks "special-token-
+            // leak" diagnostics. Detect the prefix here and route to
+            // the dedicated 'guard_exhausted' kind instead so the
+            // translator can produce a humane sentence without naming
+            // the guard.
+            const isGuardExhausted = ev.message.startsWith('Stream guard "');
             lastErrorInput = {
-              kind: ev.kind as TranslatedErrorKind,
+              kind: isGuardExhausted ? 'guard_exhausted' : (ev.kind as TranslatedErrorKind),
               rawMessage: ev.message,
             };
             break roundLoop;

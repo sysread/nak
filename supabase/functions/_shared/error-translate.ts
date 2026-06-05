@@ -44,7 +44,8 @@ export type TranslatedErrorKind =
   | 'round_limit'
   | 'wall_timeout'
   | 'tool_dispatch'
-  | 'commit_conflict';
+  | 'commit_conflict'
+  | 'guard_exhausted';
 
 /**
  * What the translation produces. Mirrors the columns the function will
@@ -182,6 +183,19 @@ export function translateError(input: TranslateInput): TranslatedError {
         retryable: true,
       };
     }
+    case 'guard_exhausted':
+      // The stream guard (special-token leak detector, etc.) re-rolled
+      // its retry budget without ever getting a clean response from
+      // the model. Tactical advice for the user: try again. The cause
+      // is stochastic at the provider end - a fresh request usually
+      // recovers. We deliberately don't name the guard or the attempt
+      // count - those are internal diagnostics.
+      return {
+        kind: 'guard_exhausted',
+        message:
+          'The model kept emitting malformed output. A fresh attempt usually clears it - try again.',
+        retryable: true,
+      };
     case 'commit_conflict': {
       const reason = input.conflictReason ?? 'unknown';
       // Reasons come from commit_assistant_message in schema.sql.
