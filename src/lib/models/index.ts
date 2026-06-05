@@ -191,6 +191,31 @@ export interface ModelSpec {
    * fires on the actual failure mode.
    */
   readonly leaksSpecialTokens?: boolean;
+  /**
+   * True when the model's chat template refuses to generate a new
+   * assistant turn if the last non-system wire message is an
+   * assistant. Mistral-small-2603 surfaces this as:
+   *
+   *   Cannot set `add_generation_prompt` to True when the last
+   *   message is from the assistant. Consider using
+   *   `continue_final_message` instead.
+   *
+   * Nak's priming chain pushes 1-4 synthetic assistant `<think>`
+   * blocks after the user turn (context-recall, samskara compound,
+   * samskara fire, intuition synthesis - see runChatLoop's priming
+   * push site). For models that accept that pattern (deepseek, qwen,
+   * etc.), the model continues from the last `<think>` block. For
+   * models that reject it, the chat-loop appends a single empty
+   * `{role: 'user', content: ''}` after the conversation block to
+   * give the chat template a user-tail to anchor to. The empty user
+   * doesn't burn meaningful tokens (verified ~1 token of context on
+   * mistral) and the model reads it as a continuation cue.
+   *
+   * Detect via Venice's `/api/v1/models` catalog when adding a new
+   * model - the failure mode reproduces on a one-shot request with
+   * any assistant-tail wire shape.
+   */
+  readonly chatTemplateRequiresUserTail?: boolean;
 }
 
 /**
@@ -269,6 +294,12 @@ export const MODELS = {
     supportsReasoning: true,
     supportsVision: true,
     supportsResponseFormat: true,
+    // Mistral's chat template strips trailing system messages and
+    // rejects an assistant-tail wire shape (see the
+    // chatTemplateRequiresUserTail comment on ModelSpec). The
+    // chat-loop appends an empty user message after the priming
+    // chain so the template has a user-tail to anchor on.
+    chatTemplateRequiresUserTail: true,
   },
   'e2ee-qwen3-vl-30b-a3b-p': {
     id: 'e2ee-qwen3-vl-30b-a3b-p',

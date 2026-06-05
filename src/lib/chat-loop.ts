@@ -31,6 +31,7 @@
  */
 
 import type { ReasoningEffort, Verbosity } from './models';
+import { MODELS } from './models';
 import type {
   SupabaseService,
   Message,
@@ -1340,6 +1341,24 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     titleManuallySet: thread.title_manually_set,
     currentUserRound,
   });
+  // Per-model chat-template quirk: some models (mistral-small-2603
+  // today) reject an assistant-tail wire shape with "Cannot set
+  // add_generation_prompt to True when the last message is from the
+  // assistant." Nak's priming chain ends in assistant <think> blocks
+  // (recall / samskara / intuition), which trips the rejection on
+  // those models. When the model is flagged, append a single empty
+  // user message after the conversation block so the template has
+  // a user-tail to anchor on. The empty user adds ~1 token of
+  // context and the model reads it as a continuation cue. Models
+  // without the flag (deepseek, qwen, etc.) skip this entirely and
+  // their wire shape stays unchanged.
+  const modelSpec = (MODELS as Record<string, { chatTemplateRequiresUserTail?: boolean }>)[modelId];
+  const conversationEndsInAssistant =
+    conversation.length > 0 &&
+    conversation[conversation.length - 1].role === 'assistant';
+  const needsUserTailMarker =
+    modelSpec?.chatTemplateRequiresUserTail === true &&
+    conversationEndsInAssistant;
   const requestMessages: VeniceMessage[] = [
     {
       role: 'system',
@@ -1356,6 +1375,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     },
     ...userSystem,
     ...conversation,
+    ...(needsUserTailMarker ? [{ role: 'user' as const, content: '' }] : []),
     metadataMessage,
   ];
 
