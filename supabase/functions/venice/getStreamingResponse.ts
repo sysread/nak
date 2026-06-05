@@ -579,6 +579,7 @@ export async function getStreamingResponse(
           type: 'tool_call_response',
           id: o.request.id,
           name: o.request.name,
+          ok: o.ok,
           result_summary: summary,
         });
       }

@@ -1104,6 +1104,7 @@ describe('streamChat (streaming-root transport)', () => {
     channel.emit('tool_call_response', {
       id: 'call_abc',
       name: 'memory_search',
+      ok: true,
       result_summary: '[3 results]',
     });
     channel.emit('END', {
@@ -1124,6 +1125,7 @@ describe('streamChat (streaming-root transport)', () => {
         type: 'tool_call_response',
         id: 'call_abc',
         name: 'memory_search',
+        ok: true,
         resultSummary: '[3 results]',
       },
       { type: 'end', persistedAssistantId: 'A', terminalKind: 'completed', roundsRun: 0 },

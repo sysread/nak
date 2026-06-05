@@ -330,6 +330,17 @@ export type StreamEvent =
       type: 'tool_call_response';
       id: string;
       name: string;
+      /**
+       * True when the dispatcher returned a non-error outcome. The
+       * persisted tool-result row carries the same signal in its
+       * content shape, but it travels via the separate messages
+       * subscription with its own propagation latency - this flag
+       * lets the chat-loop set per-call timing state (success vs
+       * error) the instant the wire event arrives, so the in-card
+       * status icon stays correct while the row catches up. Default
+       * `true` for older server builds that don't publish the field.
+       */
+      ok: boolean;
       /** ~200-char preview of the tool result; the full payload is on the tool-result row. */
       resultSummary: string;
     }
@@ -1185,12 +1196,17 @@ async function* subscribeStreamChannel(
     });
   });
   channel.on('broadcast', { event: 'tool_call_response' }, ({ payload }) => {
-    const p = payload as { id?: string; name?: string; result_summary?: string };
+    const p = payload as { id?: string; name?: string; ok?: boolean; result_summary?: string };
     if (typeof p.id !== 'string' || typeof p.name !== 'string') return;
     push({
       type: 'tool_call_response',
       id: p.id,
       name: p.name,
+      // Default true when an older server omitted the field: the
+      // wire shape stays backwards compatible and the consumer
+      // falls back to "trust the persisted row" semantics for
+      // pre-ok-field builds.
+      ok: typeof p.ok === 'boolean' ? p.ok : true,
       resultSummary: typeof p.result_summary === 'string' ? p.result_summary : '',
     });
   });

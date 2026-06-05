@@ -29,7 +29,7 @@ export interface CallTiming {
 }
 
 /**
- * Status decision tree for one call. Four sources, in
+ * Status decision tree for one call. Five sources, in
  * precedence:
  *
  *   - Session-local timing with no end: in flight while the
@@ -37,6 +37,14 @@ export interface CallTiming {
  *     cutoff once `sending` flips false (error).
  *   - Session-local timing with `error` set: definitively
  *     errored.
+ *   - Session-local timing with `endedAt` set and no error:
+ *     the wire tool_call_response event already confirmed the
+ *     dispatcher returned a non-error outcome. Treat as ok
+ *     even if the persisted tool-result row hasn't propagated
+ *     via the messages realtime subscription yet. Without this
+ *     branch, the post-END window (sending=false, result row
+ *     still in flight) renders the card with a red X on a tool
+ *     that actually worked.
  *   - Replayed history (no timings): parse the result content.
  *     A JSON `error` key means failure; anything else (including
  *     non-JSON) is success.
@@ -56,6 +64,7 @@ export function statusFor(
   const result = resultsByCallId[callId];
   if (t && !t.endedAt) return sending ? 'pending' : 'error';
   if (t?.error) return 'error';
+  if (t?.endedAt) return 'ok';
   if (result) {
     try {
       const parsed = JSON.parse(result.content) as unknown;

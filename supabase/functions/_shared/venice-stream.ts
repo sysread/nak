@@ -191,6 +191,19 @@ export type OrchestratorEvent =
       id: string;
       name: string;
       /**
+       * True when the dispatcher returned a non-error outcome, false on
+       * a thrown / errored tool. The persisted tool-result row carries
+       * the same signal in its content shape (an error key means
+       * failure), but the row arrives via the separate messages
+       * realtime subscription with its own propagation latency - a
+       * tool that succeeded on the function side can have its
+       * tool_call_response land on the stream channel well before the
+       * row's INSERT propagates. Browsers branch off this flag to
+       * drive the per-call timing state (success vs error path) so
+       * the in-card status icon stays correct in the gap.
+       */
+      ok: boolean;
+      /**
        * Truncated tool result for the streaming UI - the full tool-result
        * row carries the complete payload and the messages subscription
        * delivers it for callers that need more than the summary. Cap

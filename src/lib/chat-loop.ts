@@ -1574,13 +1574,27 @@ async function consumeStreamEvents(opts: {
         }
         case 'tool_call_response': {
           // The server-side dispatcher finished executing the tool and
-          // wrote its result row. Surface to the existing onToolDone
-          // handler for timing animations and tool-state UI; the full
-          // payload travels on the tool-result row via the messages
-          // subscription, the wire ev.resultSummary is a preview only.
+          // wrote its result row. Route to onToolDone (success) or
+          // onToolError (failure) based on the wire ev.ok flag - the
+          // tool-result row travels via the separate messages
+          // realtime subscription with its own propagation latency,
+          // and the in-card status icon (statusFor) consults the
+          // per-call timing's `error` flag to render success vs
+          // failure during the window where the row hasn't arrived
+          // yet. ev.resultSummary is a preview the UI doesn't read
+          // today but is wired through for forward compatibility.
           const call = pendingCallsById.get(ev.id);
           if (call) {
-            handlers?.onToolDone?.(call, ev.resultSummary);
+            if (ev.ok) {
+              handlers?.onToolDone?.(call, ev.resultSummary);
+            } else {
+              // The error shape on the wire is the truncated summary
+              // string ('{"ok":false,"error":{"message":"..."}}' from
+              // the orchestrator). The full payload lives on the
+              // tool-result row; this Error is a synthetic wrapper so
+              // the handler's signature stays Error-typed.
+              handlers?.onToolError?.(call, new Error(ev.resultSummary));
+            }
           }
           break;
         }

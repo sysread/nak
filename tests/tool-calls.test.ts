@@ -56,6 +56,23 @@ describe('statusFor', () => {
     expect(statusFor('c1', t, {}, true)).toBe('error');
   });
 
+  it('is ok when the timing has endedAt and no error, even with no result row yet', () => {
+    // The wire tool_call_response landed (endedAt is set) and the
+    // dispatcher returned a non-error outcome (error flag is unset).
+    // The persisted tool-result row hasn't propagated through the
+    // messages realtime subscription yet. Without trusting the
+    // timing here, statusFor would fall through to the
+    // sending ? 'pending' : 'error' tail and render a red X on a
+    // tool that actually worked - the post-END propagation gap
+    // for a non-terminal-round tool call.
+    const t: Record<string, CallTiming> = {
+      c1: { startedAt: 100, endedAt: 200 },
+    };
+    expect(statusFor('c1', t, {}, false)).toBe('ok');
+    // Same answer mid-stream - the wire event is authoritative.
+    expect(statusFor('c1', t, {}, true)).toBe('ok');
+  });
+
   it('parses the result content for an error key when no timing is present', () => {
     // Replayed history path - the in-memory timings are gone but
     // the persisted tool-result row still carries the verdict.
