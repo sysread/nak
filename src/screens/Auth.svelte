@@ -1,19 +1,26 @@
 <script lang="ts">
   /*
-   * Supabase auth screen — email + password sign-in and sign-up.
-   * Distinct from the Unlock screen: Unlock gates the encrypted local
-   * config blob; this screen gates access to the user's Supabase
-   * project. A user always passes through Unlock first (or auto-unlock
-   * via sessionStorage), then sees this form only if Supabase doesn't
-   * already have a live session for them.
+   * Supabase auth screen - email + password sign-in and sign-up.
+   * Mounted by Chat.svelte when the app is unlocked (config loaded,
+   * services constructed) but the supabase-js client has no live
+   * session. The user always passes through Setup first to populate
+   * the localStorage config; this screen is the second gate.
+   *
+   * Edit-config escape hatch: a wrong Supabase URL or publishable key
+   * lets the user clear the Setup form successfully (the values are
+   * just stored as JSON) but trips a 401 from the Supabase REST
+   * gateway when supabase-js tries to sign in or read any table. The
+   * "Edit Supabase config" button flips the phase back to Setup with
+   * the stored values pre-filled so the user can correct the wrong
+   * field rather than having to clear localStorage manually.
    *
    * Sign-up is conditional on the Supabase project's auth settings.
    * When `mise run setup` disabled public sign-ups (the default), the
-   * signUp call comes back with a server-side error — which we just
+   * signUp call comes back with a server-side error - which we just
    * render as the error message. The form still shows the toggle; we
    * don't try to probe whether sign-ups are allowed client-side.
    */
-  import { app } from '$lib/state.svelte';
+  import { app, enterSetup } from '$lib/state.svelte';
 
   let email = $state('');
   let password = $state('');
@@ -47,8 +54,7 @@
   <form class="card" onsubmit={onSubmit}>
     <h1>{mode === 'sign-in' ? 'Sign in' : 'Create account'}</h1>
     <p class="subtle">
-      Authenticate against your Supabase project. This is separate from your master
-      password, which only unlocks local config.
+      Authenticate against your Supabase project.
     </p>
     <div class="form-row">
       <label for="email">Email</label>
@@ -75,5 +81,31 @@
             onclick={() => (mode = mode === 'sign-in' ? 'sign-up' : 'sign-in')}>
       {mode === 'sign-in' ? 'Need an account? Sign up.' : 'Have an account? Sign in.'}
     </button>
+    <!--
+      Escape hatch for "wrong Supabase URL / publishable key landed in
+      Setup and now sign-in 401s because the REST gateway rejects the
+      apikey header." enterSetup() flips the phase back to Setup with
+      the stored config left in place so Setup.svelte can pre-fill and
+      the user fixes one field rather than retyping both.
+    -->
+    <button type="button" class="link" style="margin-top:0.75rem;width:100%"
+            onclick={enterSetup}>
+      Edit Supabase config
+    </button>
   </form>
 </div>
+
+<style>
+  .link {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 0.9rem;
+    padding: 0.25rem 0;
+    text-decoration: underline;
+  }
+  .link:hover {
+    opacity: 0.8;
+  }
+</style>

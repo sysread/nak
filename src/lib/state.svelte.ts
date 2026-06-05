@@ -780,20 +780,19 @@ function startBackgroundWorkers(config: AppConfig): void {
 }
 
 /**
- * Transition to the unlocked state. By default, also persists the config
- * into sessionStorage so a subsequent refresh within the inactivity TTL
- * can skip the master-password prompt. Pass `{ persist: false }` to skip
- * that (e.g. when we're restoring from an existing session).
+ * Transition to the unlocked state. News up `SupabaseService` and
+ * `VeniceClient` against the supplied config, seeds default user
+ * preferences synchronously so any reader of `app.*` before the
+ * settings fetch resolves sees sane values, then kicks the
+ * settings-fetch-then-workers chain.
  *
- * Settings load + worker startup happen in a fire-and-forget chain after
- * activate returns: settings fetch first, then workers boot with those
- * values applied. On settings-fetch failure the workers still start, just
- * with the seed values set synchronously below - same posture as before
- * this race fix landed, so a degraded Supabase doesn't gate worker boot.
- * The race that was open before: workers were started immediately with
- * seed values (browser timezone, generic profile, default-on toggle),
- * and could write a wiki article with the wrong values during the few
- * hundred ms before Chat.svelte's settings fetch corrected them.
+ * Workers don't start until the settings fetch has either succeeded
+ * or failed. This closes a race where a worker would briefly run on
+ * seed values (browser timezone, generic profile, default-on
+ * toggles) and could write a wiki article with the wrong values
+ * during the few hundred ms before the user's real settings landed.
+ * On settings-fetch failure the workers still start with the seeds,
+ * so a degraded Supabase doesn't gate the entire bootstrap.
  */
 export function activate(config: AppConfig): void {
   app.config = config;
@@ -909,15 +908,40 @@ export function notifyBiasActiveConvIds(ids: readonly string[]): void {
 }
 
 /**
+ * Drop services + in-memory config and flip the phase back to
+ * `setup`. Called from the Auth screen's "Edit Supabase config"
+ * affordance, which is the escape hatch for "I pasted the wrong
+ * Supabase URL / publishable key and now sign-in 401s because the
+ * REST gateway rejects the apikey header." Setup pre-fills from the
+ * still-present localStorage entry so the fix is a single-field edit
+ * rather than retyping both values.
+ *
+ * Background workers are stopped because the services they were
+ * pinned to are about to be torn down. Profile defaults are NOT
+ * reset (unlike `resetForSignOut`) since the user is going to
+ * re-activate against the same account once they fix the config -
+ * keeping the seeds avoids a visible flash of generic timezone +
+ * empty profile while settings re-load.
+ */
+export function enterSetup(): void {
+  stopBackgroundWorkers();
+  app.supabase = null;
+  app.venice = null;
+  app.config = null;
+  app.phase = 'setup';
+  app.error = null;
+}
+
+/**
  * Stop every background worker and reset the in-memory user state.
  * Called by the Sign-out path in Settings - sign-out is the only
- * "tear everything down" affordance the app has now that the
- * master-password lock state is gone (see the phase-state-machine
- * docblock at the top of this file). The stored config in
- * localStorage stays untouched; a subsequent sign-in re-uses it
- * without going through Setup. Use clearStoredConfig() (config.ts)
- * for the heavier "this device should forget the project entirely"
- * affordance.
+ * "tear everything down" affordance the app has for an authenticated
+ * session (see the phase-state-machine docblock at the top of this
+ * file). The stored config in localStorage stays untouched; a
+ * subsequent sign-in re-uses it without going through Setup. Use
+ * `clearStoredConfig()` (config.ts) for the heavier "this device
+ * should forget the project entirely" affordance, or `enterSetup()`
+ * above for the "fix mistyped Supabase keys" affordance.
  */
 export function resetForSignOut(): void {
   stopBackgroundWorkers();
