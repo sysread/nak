@@ -38,10 +38,10 @@ A chat turn goes:
    substrate stub.
 6. The auto-title worker (background, not driven from
    `Chat.svelte`) polls for threads still on the `'New
-   conversation'` placeholder and titles them. Survives page
-   closes / refreshes that the old in-Chat fire-and-forget
-   trigger lost work to. Realtime subscriptions keep the
-   sidebar in sync across tabs and devices. See
+   conversation'` placeholder and titles them. The worker shape
+   exists so naming survives a tab close before the title call
+   resolves. Realtime subscriptions keep the sidebar in sync
+   across tabs and devices. See
    [./auto-title.md](./auto-title.md).
 
 ## Files
@@ -352,15 +352,15 @@ A chat turn goes:
 - **Auto-titling runs in a background worker, not from
   `Chat.svelte`.** The worker (`src/lib/agents/auto_title/`)
   polls the threads table for rows still on the `'New
-  conversation'` placeholder and titles them via the same
-  small fast model the in-Chat trigger used to call. Surviving
-  page closes / refreshes is the whole point - the old in-Chat
-  fire-and-forget call lost work whenever the user closed the
-  tab before the single Venice call resolved. The seed is
-  always the *opening* user message (fetched in the same RPC
-  that claims the row), so a retry titles the conversation's
-  original topic rather than whatever follow-up triggered the
-  retry. See [./auto-title.md](./auto-title.md).
+  conversation'` placeholder and titles them via the fast
+  agent model. Surviving page closes / refreshes is the whole
+  point - a fire-and-forget call from `Chat.svelte` would lose
+  work whenever the user closed the tab before the title call
+  resolved. The seed is always the *opening* user message
+  (fetched in the same RPC that claims the row), so a retry
+  titles the conversation's original topic rather than
+  whatever follow-up triggered the retry. See
+  [./auto-title.md](./auto-title.md).
 - **`toggle_toolbox` is the only tool that mutates the round
   loop's gated-toolbox set in-flight.** The function-side round
   loop inspects each tool's name and, when it sees
@@ -374,19 +374,19 @@ A chat turn goes:
   before being materialized, the realtime `INSERT` handler sees a
   thread it doesn't have, and the list gets out of order. The
   `isDraft` flag gates this; don't remove it.
-- **The main chat loop no longer asks Venice to auto-inject
+- **The main chat loop does not ask Venice to auto-inject
   reference material into the user turn.** Both
   `enable_web_scraping` and `enable_web_search` are caller-gated
   in `venice.ts` and neither is set on the main loop's request.
   Live web search flows through the `web_search` tool (see
   `./tools.md`), which runs its own one-shot sub-completion with
-  `enable_web_search: 'on'` + `enable_web_citations: true` +
+  `enable_web_search: 'on'`, `enable_web_citations: true`, and
   `enable_web_scraping: true` (so a research query that quotes
-  a URL can still pull the page content) and returns
+  a URL can pull the page content), and returns
   `{answer, citations}`. The chat loop harvests those citations
   into a turn-scoped list and persists them on the terminal
-  assistant row so the `CitationsPanel` + `^N^` superscript
-  rendering the old always-on path fed keeps working.
+  assistant row so the `CitationsPanel` and `^N^` superscript
+  rendering have data to draw against.
 
   Historical context: scraping was unconditional on every
   completion, which auto-inlined any URL the user pasted into

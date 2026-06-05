@@ -266,10 +266,10 @@ search costs.
 
 ## Worker model
 
-Background Web Workers run while the app is unlocked. Embedding
-backfill used to be one of them; it now runs server-side (`pg_cron`
-plus the `venice` edge function - see `./embeddings.md`), so the
-browser-side workers are the agent fleet. Two representative ones:
+Background Web Workers run while the app is unlocked. The
+browser-side workers are the agent fleet (embedding backfill is
+server-side via `pg_cron` and the `venice` edge function - see
+`./embeddings.md`). Two representative ones:
 
 - `src/lib/agents/summary/worker.ts` — finds threads with a
   terminal assistant message newer than `last_summarised_msg_id`,
@@ -325,8 +325,9 @@ Three categories of work:
    streamed turn that may take 30+ seconds while the user closes
    the tab or background-suspends the PWA. The embedding
    backfill chewing through thousands of rows. Image generation.
-   The whole motivation for the streaming-root migration was
-   `EdgeRuntime.waitUntil` — runtime outlives the trigger.
+   `EdgeRuntime.waitUntil` is the runtime contract these depend
+   on - work registered with it survives the request that
+   triggered it.
 
 3. **Background derivation the user controls in-session — browser
    owns today.** Reflection, wiki, intuition, samskara, memory

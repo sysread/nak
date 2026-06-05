@@ -200,8 +200,8 @@ export interface ChatRequest {
    * so callers that opted into web search but haven't opinionated on
    * citations get the enabled-by-default behavior. Set `false` to
    * keep grounding but suppress the `[1]` / `[2]` markers from the
-   * answer body. Like `webSearch`, only the `web_search` tool sets
-   * this now.
+   * answer body. Like `webSearch`, only the `web_search` tool's
+   * sub-completion sets this.
    */
   webCitations?: boolean;
   /**
@@ -212,14 +212,14 @@ export interface ChatRequest {
    * `webSearch` per Venice's docs.
    *
    * Caller scoping: the main chat loop deliberately leaves this
-   * unset. Auto-inlining scraped content into the user turn made it
-   * harder for the model to tell its own anchor (the user's actual
-   * words) from platform-injected reference material, and made URL
-   * handling implicit rather than tool-driven. The sole caller that
-   * sets this now is the `web_search` tool's sub-completion - if the
-   * caller passes a URL through as part of a research query, the
-   * sub-agent can still read it. The main turn routes URL handling
-   * through the `web_search` tool explicitly instead.
+   * unset. Auto-inlining scraped content into the user turn would
+   * make it hard for the model to tell its own anchor (the user's
+   * actual words) from platform-injected reference material, and
+   * would make URL handling implicit rather than tool-driven. The
+   * sole caller that sets this is the `web_search` tool's
+   * sub-completion - a research query that passes a URL through
+   * lets the sub-agent read the page. The main turn routes URL
+   * handling through the `web_search` tool explicitly instead.
    */
   webScraping?: boolean;
   /**
@@ -272,15 +272,15 @@ export interface ChatRequest {
    */
   disableThinking?: boolean;
   /**
-   * Routing context for the streaming-root migration. When set,
-   * streamChat POSTs to the venice/stream edge function with these
-   * identifiers and consumes the round chain via a Realtime Broadcast
-   * subscription instead of opening a Venice SSE connection from the
-   * browser. The fields together identify the thread + anchor user
-   * message the function should respond to. Required for the main
-   * chat path; absent on sub-completion callers that go through the
-   * non-streaming /complete edge function (these never hit
-   * streamChat).
+   * Routing context for `streamChat`. When set, the call POSTs to
+   * the venice/stream edge function with these identifiers and
+   * consumes the round chain via a Realtime Broadcast subscription
+   * (the function-owned streaming path). The fields together
+   * identify the thread + anchor user message the function should
+   * respond to. Required for the main chat path; absent on
+   * sub-completion callers that go through the non-streaming
+   * /complete route via `SupabaseService.complete` (these never
+   * hit streamChat).
    */
   streamCtx?: {
     threadId: string;
@@ -325,8 +325,8 @@ export type StreamEvent =
   | { type: 'tool_call'; toolCall: OpenAIToolCall }
   | { type: 'usage'; usage: TokenUsage }
   | { type: 'citations'; citations: Citation[] }
-  // Server-driven events introduced by the streaming-root migration.
-  // The Broadcast channel publishes the wire shape from
+  // Server-driven events from the function-side round chain. The
+  // Broadcast channel publishes the wire shape from
   // $shared/venice-stream and we translate to these for the browser
   // chat-loop's consumer. tool_call_response is the server-emitted
   // pairing for each tool_call_request - chat-loop fires its
@@ -549,11 +549,11 @@ export interface VeniceClientOptions {
   /**
    * Optional Venice API key. Production callers leave this unset -
    * `streamChat` routes through the venice edge function which reads
-   * the shared key from `app_config` server-side, so no key needs to
-   * live in the browser bundle. Tests still pass an apiKey to
-   * exercise the direct-Venice path (`streamChatDirect`); that path
-   * stays in place as a compatibility seam until the test rewrite
-   * (task #92) sits the streaming tests at the new transport seam.
+   * the shared key from `app_config` server-side, so no key lives
+   * in the browser bundle. The test-only `streamChatDirect` path
+   * is the only consumer that pairs with a set `apiKey`; it
+   * exists so streaming tests can drive a fake fetch without
+   * standing up a full function harness.
    */
   apiKey?: string;
   baseUrl?: string;
@@ -671,14 +671,14 @@ export function buildChatBody(req: ChatRequest, streaming: boolean): Record<stri
   // Independent of `enable_web_search` per Venice's docs - search
   // augments the turn with results from a query, scraping reads
   // URLs the user explicitly provided. The main chat loop leaves
-  // this unset: implicit URL-inlining made it hard for the model
+  // this unset: implicit URL-inlining makes it hard for the model
   // to tell its own anchor (the user's actual typed words) apart
-  // from platform-injected reference material, and required
+  // from platform-injected reference material, and forces
   // structural workarounds (`<user_message>` fences, attribution
   // guards in the system prompt) just to keep the boundary
-  // legible. URL handling goes through the `web_search` tool now,
-  // which still sets `webScraping: true` on its sub-completion so
-  // a research query that quotes a URL can pull the page content
+  // legible. URL handling routes through the `web_search` tool,
+  // which sets `webScraping: true` on its sub-completion so a
+  // research query that quotes a URL can pull the page content
   // as part of resolving the query.
   const veniceParams: Record<string, unknown> = {
     include_venice_system_prompt: false,
@@ -945,7 +945,7 @@ export class VeniceClient {
           // `[DONE]`. Capture it so we can emit a trailing `usage`
           // event below.
           if (parsed.usage) usage = parsed.usage;
-          // `finish_reason` is informational now: the usage epilogue
+          // `finish_reason` is informational: the usage epilogue
           // arrives *after* it, so we can't short-circuit here. We
           // flag the round as finished and keep reading until `[DONE]`
           // or the socket closes.
