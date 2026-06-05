@@ -53,18 +53,18 @@ describe('MODELS (active registry)', () => {
     // Vision-capable entries today: the analyze_image sub-call
     // (venice-uncensored-1-2), the Smart tier's foreground model
     // (qwen-3-7-plus, which inlines image_url parts directly rather
-    // than routing through analyze_image), the Balanced tier's
-    // foreground model (mistral-small-2603), plus two legacy entries
+    // than routing through analyze_image), plus two legacy entries
     // still in the registry for thread rows that pinned them
     // explicitly via per-thread model override (e2ee-qwen3-vl-30b-a3b-p
     // from before the visionAnalysis switch and qwen-3-6-plus from
-    // before the Smart tier swapped to 3.7).
+    // before the Smart tier swapped to 3.7). Balanced and Fast both
+    // front deepseek-v4-flash, which is text-only - vision goes
+    // through analyze_image.
     const visionIds = new Set([
       'venice-uncensored-1-2',
       'e2ee-qwen3-vl-30b-a3b-p',
       'qwen-3-7-plus',
       'qwen-3-6-plus',
-      'mistral-small-2603',
     ]);
     for (const [id, spec] of Object.entries(MODELS)) {
       expect(spec.supportsVision).toBe(visionIds.has(id));
@@ -74,14 +74,11 @@ describe('MODELS (active registry)', () => {
 
 describe('TIERS (user-facing wrappers)', () => {
   it('has the three tiers with the expected Venice model ids', () => {
-    // Smart fronts qwen-3-7-plus (1M context, native vision); Balanced
-    // fronts mistral-small-2603 (256k context, native vision, light
-    // reasoning by default); Fast fronts deepseek-v4-flash with
-    // thinking off. Balanced moved off deepseek mid-2026 when its
-    // special-token leak became too sticky for the stream-guard's
-    // retry budget to recover.
+    // Smart fronts qwen-3-7-plus (1M context, native vision);
+    // Balanced and Fast both front deepseek-v4-flash and differ only
+    // in default thinking budget ('low' vs 'off').
     expect(TIERS.smart.id).toBe('qwen-3-7-plus');
-    expect(TIERS.balanced.id).toBe('mistral-small-2603');
+    expect(TIERS.balanced.id).toBe('deepseek-v4-flash');
     expect(TIERS.fast.id).toBe('deepseek-v4-flash');
   });
   it('each tier wraps its corresponding MODELS entry', () => {
@@ -95,15 +92,13 @@ describe('TIERS (user-facing wrappers)', () => {
     }
   });
   it('differentiates the tiers by default thinking level', () => {
-    // Smart defaults to 'medium' thinking, Balanced to 'high'
-    // (mistral-small-2603 quirk: it only accepts reasoning_effort
-    // 'high' or 'none', so the closest "with reasoning by default"
-    // option is 'high'), Fast to 'off' (none). These are defaults,
-    // not locks - the composer picker stays available on all three
-    // so a user can override per thread (see thinkingWireForTier
-    // tests below).
+    // Smart defaults to 'medium' thinking, Balanced to 'low' (light
+    // CoT pass to catch obvious slips without long-think latency),
+    // Fast to 'off'. These are defaults, not locks - the composer
+    // picker stays available on all three so a user can override
+    // per thread (see thinkingWireForTier tests below).
     expect(TIERS.smart.defaultThinking).toBe('medium');
-    expect(TIERS.balanced.defaultThinking).toBe('high');
+    expect(TIERS.balanced.defaultThinking).toBe('low');
     expect(TIERS.fast.defaultThinking).toBe('off');
   });
   it('has matching tier/label and sensible context windows', () => {
@@ -245,15 +240,14 @@ describe('thinking level (composer picker domain)', () => {
     expect(isThinkingLevel(undefined)).toBe(false);
   });
   it('thinkingWireForTier maps off -> disable_thinking and levels -> reasoning_effort', () => {
-    // Smart defaults to 'medium', Balanced to 'high' (mistral
-    // accepts only 'high'/'none' for reasoning_effort) - both
+    // Smart defaults to 'medium', Balanced to 'low' - both
     // thinking-on, so they forward reasoning_effort.
     expect(thinkingWireForTier(TIERS.smart, null, 'medium')).toEqual({
       reasoningEffort: 'medium',
       disableThinking: false,
     });
     expect(thinkingWireForTier(TIERS.balanced, null, 'medium')).toEqual({
-      reasoningEffort: 'high',
+      reasoningEffort: 'low',
       disableThinking: false,
     });
     // Fast defaults to 'off' -> the off-switch, no reasoning_effort.

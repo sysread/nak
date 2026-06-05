@@ -66,10 +66,9 @@ Concretely:
   documents this stance: *"Sharing the browser client is a
   consolidation-phase decision, not a step-5 one."*
 - Drift management is manual. When a browser-side capability
-  flag (`leaksSpecialTokens`, `chatTemplateRequiresUserTail`,
-  etc.) changes, the function-side mirror needs the same edit.
-  Cite the browser source-of-truth in the comment so the next
-  session knows where to look.
+  flag (`leaksSpecialTokens`, etc.) changes, the function-side
+  mirror needs the same edit. Cite the browser source-of-truth
+  in the comment so the next session knows where to look.
 
 The consolidation move - extracting
 `src/lib/models/wire-config.ts` as a pure types + capability

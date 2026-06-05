@@ -191,31 +191,6 @@ export interface ModelSpec {
    * fires on the actual failure mode.
    */
   readonly leaksSpecialTokens?: boolean;
-  /**
-   * True when the model's chat template refuses to generate a new
-   * assistant turn if the last non-system wire message is an
-   * assistant. Mistral-small-2603 surfaces this as:
-   *
-   *   Cannot set `add_generation_prompt` to True when the last
-   *   message is from the assistant. Consider using
-   *   `continue_final_message` instead.
-   *
-   * Nak's priming chain pushes 1-4 synthetic assistant `<think>`
-   * blocks after the user turn (context-recall, samskara compound,
-   * samskara fire, intuition synthesis - see runChatLoop's priming
-   * push site). For models that accept that pattern (deepseek, qwen,
-   * etc.), the model continues from the last `<think>` block. For
-   * models that reject it, the chat-loop appends a single empty
-   * `{role: 'user', content: ''}` after the conversation block to
-   * give the chat template a user-tail to anchor to. The empty user
-   * doesn't burn meaningful tokens (verified ~1 token of context on
-   * mistral) and the model reads it as a continuation cue.
-   *
-   * Detect via Venice's `/api/v1/models` catalog when adding a new
-   * model - the failure mode reproduces on a one-shot request with
-   * any assistant-tail wire shape.
-   */
-  readonly chatTemplateRequiresUserTail?: boolean;
 }
 
 /**
@@ -271,35 +246,6 @@ export const MODELS = {
     supportsReasoning: false,
     supportsVision: false,
     supportsResponseFormat: true,
-  },
-  'mistral-small-2603': {
-    id: 'mistral-small-2603',
-    contextWindow: 256_000,
-    // Newer mistral-small revision. Reasoning + native vision + tool
-    // calling supported. Used as the Balanced tier's foreground model
-    // since the deepseek special-token leak made deepseek-v4-flash
-    // unreliable for the user-facing chat surface.
-    //
-    // Mistral quirk: this model accepts reasoning_effort only as
-    // 'high' or 'none' (Venice catalog reports
-    // reasoningEffortOptions=['none','high'], default 'high'). The
-    // standard ThinkingLevel ladder ('off' | 'low' | 'medium' | 'high')
-    // surfaces 'low' and 'medium' in the composer picker which would
-    // 4xx on the wire for this model. The Balanced tier default is
-    // 'high' so the out-of-box experience picks a working option; a
-    // user who manually selects 'low' or 'medium' on a thread pinned
-    // to this id gets a Venice 4xx surfaced through the error card.
-    // Per-model picker filtering is the cleaner long-term shape - on
-    // the TODO until a second model lands with the same constraint.
-    supportsReasoning: true,
-    supportsVision: true,
-    supportsResponseFormat: true,
-    // Mistral's chat template strips trailing system messages and
-    // rejects an assistant-tail wire shape (see the
-    // chatTemplateRequiresUserTail comment on ModelSpec). The
-    // chat-loop appends an empty user message after the priming
-    // chain so the template has a user-tail to anchor on.
-    chatTemplateRequiresUserTail: true,
   },
   'e2ee-qwen3-vl-30b-a3b-p': {
     id: 'e2ee-qwen3-vl-30b-a3b-p',
@@ -390,7 +336,7 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     defaultThinking: 'medium',
   },
   balanced: {
-    ...MODELS['mistral-small-2603'],
+    ...MODELS['deepseek-v4-flash'],
     tier: 'balanced',
     label: 'Balanced',
     // U+262F YIN YANG + U+FE0F emoji presentation. Chosen over U+2696
@@ -399,16 +345,13 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     // in both themes; yin-yang is a solid bi-tonal disc that reads at
     // any size.
     icon: '\u262F\uFE0F',
-    description: 'Mistral Small with reasoning. 256k context, native vision. Good default for most turns.',
-    // Mistral-small-2603 only accepts reasoning_effort 'high' or
-    // 'none' (Venice rejects 'low' and 'medium' on the wire). The
-    // intent for Balanced is "thinking on by default," so 'high' is
-    // the closest available match - composer picker lets a user
-    // override to 'off' per thread; 'low'/'medium' selections would
-    // 4xx on this model and surface through the error card. See the
-    // MODELS['mistral-small-2603'] comment for the picker-filtering
-    // followup.
-    defaultThinking: 'high',
+    description: 'DeepSeek V4 Flash with light thinking. Good default for most turns.',
+    // Light thinking by default - 'low' keeps a short CoT pass that
+    // catches obvious slips without paying a long-think latency tax
+    // on every turn. Balanced and Fast both front deepseek-v4-flash;
+    // the only difference is this default ('low' vs 'off'). A user
+    // can bump per thread via the composer picker either way.
+    defaultThinking: 'low',
   },
   fast: {
     ...MODELS['deepseek-v4-flash'],

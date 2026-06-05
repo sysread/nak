@@ -47,6 +47,32 @@ export const LEGACY_MODELS: Readonly<Record<string, LegacyModelSpec>> = {
   'minimax-m27':                       { id: 'minimax-m27', contextWindow: 198_000 },
   'zai-org-glm-5':                     { id: 'zai-org-glm-5', contextWindow: 198_000 },
 
+  // Briefly fronted Balanced (2026-06). Removed because in practice
+  // it produced low-effort replies regardless of the reasoning_effort
+  // setting - the model would acknowledge the request, gesture at the
+  // shape of an answer, and stop. Three quirks worth flagging if this
+  // id ever resurfaces:
+  //
+  //   - reasoning_effort accepts only 'high' or 'none' (Venice 4xxs
+  //     on 'low' / 'medium'), so the standard ThinkingLevel ladder
+  //     can't be exposed through the composer picker without per-
+  //     model option filtering.
+  //   - chat template strips trailing system messages, then refuses
+  //     an assistant-tail wire shape with "Cannot set
+  //     add_generation_prompt to True when the last message is from
+  //     the assistant." Breaks nak's priming chain (recall / samskara
+  //     / intuition synthetic <think> blocks land last). The
+  //     workaround was an empty {role:'user', content:''} marker
+  //     between the conversation and the trailing metadata system;
+  //     git log around the swap-out commit has the implementation.
+  //   - native vision + tool calling + response_format work fine -
+  //     the quirks are wire-shape, not capability.
+  //
+  // Net: a model that takes effort to use AND takes no effort to
+  // answer is a poor trade. Leaving the row here so per-thread
+  // pinned overrides still resolve to a valid contextWindow.
+  'mistral-small-2603':                { id: 'mistral-small-2603', contextWindow: 256_000 },
+
   // Retired Fast-tier ids.
   'grok-41-fast':                      { id: 'grok-41-fast', contextWindow: 1_000_000 },
   'zai-org-glm-4.7':                   { id: 'zai-org-glm-4.7', contextWindow: 198_000 },
