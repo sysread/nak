@@ -5048,7 +5048,24 @@
   // (and ship on the wire on the resumed round) - this is purely a
   // display filter so the question doesn't render as both a faceless
   // tool row and a question card.
-  const HIDDEN_TOOL_NAMES = new Set(['toggle_toolbox', 'update_title', 'ask_user']);
+  // `update_title` and `ask_user` are filtered from the standard
+  // tool-group card because each has its own dedicated rendering
+  // surface ("Renamed to X" line, AskUserCard respectively). The
+  // underlying tool_calls and tool-result rows still live in the
+  // message store and go out on the wire on replay; this is purely
+  // a display filter.
+  // `toggle_toolbox` is NOT hidden anymore: it used to be, because
+  // the persisted tool-result row's realtime INSERT could land after
+  // END and the missing result then rendered as a red X via
+  // statusFor's post-END logic. Under streaming-root the toggle
+  // almost always happens in a non-terminal round (model toggles,
+  // then calls the gated write tool, then writes a terminal response),
+  // so the tool-result row has multiple rounds of realtime
+  // propagation budget before END fires - the timing-race window
+  // closed in practice. Rendering as a tool card again gives the
+  // user a persistent chat-thread artifact of the toggle, which the
+  // 600ms composer-toolbox flash alone doesn't.
+  const HIDDEN_TOOL_NAMES = new Set(['update_title', 'ask_user']);
 
   /**
    * Pull the sanitised title out of an update_title call + its
