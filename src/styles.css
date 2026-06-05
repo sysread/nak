@@ -2285,6 +2285,16 @@ h1 {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.msg-error-heading {
+  /* Optional kind-label on persistent thread.last_error cards (auth,
+     rate_limit, etc.). Renders as a block above the prose so the visual
+     scan reads "what kind of problem" first, "what to do" second. The
+     session-level streamingError path renders no heading - the text
+     itself is concise enough. */
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.15rem;
+}
 .msg-error-retry,
 .msg-error-dismiss {
   flex: 0 0 auto;

@@ -50,6 +50,7 @@ function mkThread(payload: unknown): Thread {
     topics: [],
     response_holder_id: null,
     response_claim_expires_at: null,
+    last_error: null,
     created_at: 'now',
     updated_at: 'now',
   };

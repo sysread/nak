@@ -191,6 +191,7 @@
   } from '$lib/ui/recall';
   import { formatMessageStamp } from '$lib/ui/message-timestamp';
   import { isReasoningOnlyStall } from '$lib/ui/incomplete-turn';
+  import { headingFor, parseLastError } from '$lib/ui/last-error';
   import {
     orderedSubconsciousRows,
     subconsciousLabel,
@@ -2581,6 +2582,7 @@
       topics: [],
       response_holder_id: null,
       response_claim_expires_at: null,
+      last_error: null,
       created_at: now,
       updated_at: now,
       isDraft: true,
@@ -5516,6 +5518,93 @@
   });
 
   /**
+   * Single error surface for the bottom of the message list. Combines
+   * three sources, in precedence:
+   *
+   *   1. `activeSlot.streamingError` - session-local, set by the
+   *      live-turn catch sites. Freshest signal; the user just hit it.
+   *   2. `currentThread.last_error` - persistent, written by the
+   *      streaming function on any terminalKind='error' path and
+   *      cleared by commit_assistant_message on the happy path.
+   *      Survives reload, so the user sees it on next visit.
+   *   3. nothing - card stays hidden.
+   *
+   * The `incompleteTurnTail` cut-off banner only fires when
+   * displayedError is null, so an orphan tail with no explained cause
+   * (typically: user closed the tab mid-stream before END could fire)
+   * still gets a generic retry affordance, but an orphan tail WITH a
+   * thread.last_error explanation collapses to the single error card
+   * (the explanation + retry button live together, see option-A
+   * design decision from the 2026-06-05 session).
+   *
+   * `dismiss` clears the source state. For session errors that's just
+   * the slot field; for persisted errors that's an UPDATE on the
+   * thread row (best-effort - the realtime echo re-syncs whichever
+   * way the write went). `retry` is wired only when the underlying
+   * error is recoverable (rate_limit, network, 5xx, timeout, etc.);
+   * non-retryable kinds (auth, certain commit conflicts) render the
+   * card without a Retry button so the user is steered toward the
+   * actual fix instead of re-hitting the same wall.
+   */
+  const displayedError = $derived.by<{
+    heading?: string;
+    text: string;
+    retry?: () => void;
+    dismiss: () => void;
+  } | null>(() => {
+    if (activeSlot?.streamingError) {
+      const slot = activeSlot;
+      return {
+        text: slot.streamingError!.text,
+        retry: slot.streamingError!.retry,
+        dismiss: () => {
+          slot.streamingError = null;
+        },
+      };
+    }
+    const persisted = parseLastError(currentThread?.last_error);
+    if (persisted) {
+      return {
+        heading: headingFor(persisted.kind),
+        text: persisted.message,
+        retry: persisted.retryable
+          ? () => {
+              void retryIncompleteTurn();
+            }
+          : undefined,
+        dismiss: () => {
+          void clearThreadLastError();
+        },
+      };
+    }
+    return null;
+  });
+
+  /**
+   * Best-effort clear of `threads.last_error` when the user dismisses
+   * the persistent error card. Optimistic local patch fires first so
+   * the card vanishes immediately; the DB UPDATE follows. If the write
+   * fails (network, auth lapsed), the realtime echo never lands and
+   * the column stays - next thread reopen rehydrates the error. The
+   * inverse case (write succeeds, echo updates the row) is the
+   * canonical happy path and produces the same UI as the optimistic
+   * patch did.
+   */
+  async function clearThreadLastError(): Promise<void> {
+    if (!currentThread || !app.supabase) return;
+    const threadId = currentThread.id;
+    patchThread(threadId, { last_error: null });
+    try {
+      await app.supabase.client
+        .from('threads')
+        .update({ last_error: null })
+        .eq('id', threadId);
+    } catch {
+      // Swallowed by design; see jsdoc above.
+    }
+  }
+
+  /**
    * User-driven toolbox toggle - parallel to the `toggle_toolbox`
    * meta-tool's LLM path. Flips the named gated toolbox on or off in
    * the current thread's `toolboxes_enabled` array, writes through
@@ -6725,17 +6814,19 @@
               </div>
             {/if}
           {/each}
-          {#if incompleteTurnTail}
-            <!-- Post-refresh resume banner. The in-session rate-limit
-                 retry lives only on `activeSlot?.streamingError.retry` and doesn't
-                 survive a page reload, so when a user refreshes after
-                 an overload-mid-turn failure the orphaned tool rows
-                 sit at the tail with no way to continue the turn short
-                 of typing a new prompt. This banner reattaches a retry
-                 affordance to that tail (see `incompleteTurnTail` for
-                 the exact shapes we treat as incomplete). Rendered as
-                 an informational bubble, not an error alert - the
-                 failure itself is already in the past. -->
+          {#if !displayedError && incompleteTurnTail}
+            <!-- Generic "tail looks abandoned" banner. Fires only when
+                 we have an orphan tail (assistant row with tool_calls
+                 but no follow-up, reasoning-only stall, etc.) AND no
+                 explained error from the function (thread.last_error
+                 is null) AND no session-level error on the slot. This
+                 is the case for a user who closed the tab mid-turn
+                 before the function's END could fire - we have no
+                 record of why; we just offer a retry. When a
+                 function-side error DID land, `displayedError` carries
+                 the explanation + retry button together, so this
+                 banner stays hidden to avoid two near-identical retry
+                 surfaces stacked. -->
             <div class="msg assistant msg-incomplete" role="note">
               <div class="msg-incomplete-body">
                 <div class="msg-incomplete-text">
@@ -6814,27 +6905,35 @@
               </div>
             </div>
           {/if}
-          {#if activeSlot?.streamingError}
-            <!-- Canonical error surface for chat send-path failures.
-                 Rendered in the transcript where the streaming output
-                 was, so it follows the conversation flow regardless
-                 of what the composer or keyboard are doing. Carries
-                 the retry button when `activeSlot?.streamingError.retry` is set
-                 (rate-limit errors, currently). The `.error-bar`
-                 banner above the composer is reserved for non-
-                 exchange errors (attachment upload, thread rename,
-                 pre-send guards) that don't have a transcript anchor.
-                 Dismissed by the next successful send (or manually
-                 via the X). -->
+          {#if displayedError}
+            <!-- Canonical error surface for the transcript tail. Driven
+                 by `displayedError`, which combines:
+                   - activeSlot.streamingError (session-local, the live
+                     turn just hit something)
+                   - currentThread.last_error (persistent, written by
+                     the streaming function on the terminal error path;
+                     cleared by commit_assistant_message on success).
+                 The .error-bar banner above the composer is still
+                 reserved for non-exchange errors (attachment upload,
+                 thread rename, pre-send guards) that don't have a
+                 transcript anchor. Retry button only fires when the
+                 source flagged the error as recoverable; auth and
+                 certain commit conflicts render dismiss-only so the
+                 user is steered toward the real fix. -->
             <div class="msg assistant msg-error" role="alert">
               <div class="msg-error-body">
                 <span class="msg-error-icon" aria-hidden="true">!</span>
-                <div class="msg-error-text">{activeSlot?.streamingError.text}</div>
-                {#if activeSlot?.streamingError.retry}
+                <div class="msg-error-text">
+                  {#if displayedError.heading}
+                    <strong class="msg-error-heading">{displayedError.heading}</strong>
+                  {/if}
+                  {displayedError.text}
+                </div>
+                {#if displayedError.retry}
                   <button
                     type="button"
                     class="secondary icon-btn msg-error-retry"
-                    onclick={activeSlot?.streamingError.retry}
+                    onclick={displayedError.retry}
                     disabled={activeSlot?.sending}
                     aria-label="Retry"
                     title="Retry"
@@ -6853,7 +6952,7 @@
                 <button
                   type="button"
                   class="secondary icon-btn msg-error-dismiss"
-                  onclick={() => { if (activeSlot) activeSlot.streamingError = null; }}
+                  onclick={displayedError.dismiss}
                   aria-label="Dismiss error"
                   title="Dismiss"
                 >×</button>

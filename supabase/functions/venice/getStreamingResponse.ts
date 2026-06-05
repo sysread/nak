@@ -50,6 +50,12 @@ import {
   type VeniceCitation,
   withInterruptedMarker,
 } from '../_shared/venice-stream.ts';
+import {
+  packLastError,
+  translateError,
+  type TranslateInput,
+  type TranslatedErrorKind,
+} from '../_shared/error-translate.ts';
 import { createBroadcastPublisher } from './broadcast.ts';
 import { getStreamingCompletion } from './getStreamingCompletion.ts';
 import {
@@ -57,6 +63,7 @@ import {
   ToolNotImplementedError,
   type ToolContext,
 } from './performToolCall.ts';
+import { VeniceError } from '../_shared/venice.ts';
 import {
   base64ToBytes,
   extractGeneratedImage,
@@ -275,6 +282,14 @@ export async function getStreamingResponse(
   // dispatches off this to pick between "stopped at round limit" and
   // "conversation changed under us".
   let conflict: string | undefined;
+  // Structured input for translateError() at the terminal-write block.
+  // Each error source (VeniceError throw, wall_timeout abort, round-limit
+  // detection, commit conflict, RPC error) populates this before
+  // breaking / returning so the terminal-write block can build the
+  // user-facing payload in one place. Null when the turn completed
+  // successfully - the terminal write skips threads.last_error in that
+  // case and commit_assistant_message clears any prior error column.
+  let lastErrorInput: TranslateInput | null = null;
 
   // RLS OFF: filter by userId. Lazily create the assistant row on
   // the first content event; subsequent events UPDATE it via the
@@ -357,6 +372,7 @@ export async function getStreamingResponse(
         if (ctl.signal.reason === WALL_TIMEOUT_REASON) {
           terminalKind = 'error';
           terminalDetail = 'wall timeout';
+          lastErrorInput = { kind: 'wall_timeout' };
         } else {
           terminalKind = 'aborted';
         }
@@ -424,6 +440,14 @@ export async function getStreamingResponse(
           case 'error': {
             terminalKind = 'error';
             terminalDetail = ev.message;
+            // The StreamSignal carries the typed VeniceErrorKind that
+            // the completion consumer mapped from the response. Pass
+            // through as the translate kind - the 'truncated' kind is
+            // shared by both unions; the others are subsets.
+            lastErrorInput = {
+              kind: ev.kind as TranslatedErrorKind,
+              rawMessage: ev.message,
+            };
             break roundLoop;
           }
           case 'stream_retry': {
@@ -477,6 +501,7 @@ export async function getStreamingResponse(
         if (ctl.signal.reason === WALL_TIMEOUT_REASON) {
           terminalKind = 'error';
           terminalDetail = 'wall timeout';
+          lastErrorInput = { kind: 'wall_timeout' };
         } else {
           terminalKind = 'aborted';
         }
@@ -668,6 +693,7 @@ export async function getStreamingResponse(
       terminalKind = 'error';
       terminalDetail = 'round_limit';
       conflict = 'round_limit';
+      lastErrorInput = { kind: 'round_limit' };
     }
   } catch (err) {
     // Abort-driven catches (wall timeout, user cancel) already set
@@ -680,6 +706,24 @@ export async function getStreamingResponse(
     if (!ctl.signal.aborted) {
       terminalKind = 'error';
       terminalDetail = err instanceof Error ? err.message : String(err);
+      // Capture the structured cause when it's a typed VeniceError;
+      // 'internal' fallback for everything else (unhandled throw is
+      // almost certainly a code bug). The translator's 'internal' kind
+      // folds the raw message into the user-facing prose so it's not
+      // lost.
+      if (err instanceof VeniceError) {
+        lastErrorInput = {
+          kind: err.kind as TranslatedErrorKind,
+          status: err.status,
+          retryAfterMs: err.retryAfterMs,
+          rawMessage: err.message,
+        };
+      } else {
+        lastErrorInput = {
+          kind: 'internal',
+          rawMessage: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
     // Local-dev diagnostic. Production telemetry already routes this
     // through the END event's terminalKind, but local supabase
@@ -735,6 +779,10 @@ export async function getStreamingResponse(
         if (error) {
           terminalKind = 'error';
           terminalDetail = error.message;
+          lastErrorInput = {
+            kind: 'internal',
+            rawMessage: `commit_assistant_message RPC failed: ${error.message}`,
+          };
           await transitionRowTo(
             opts.adminClient,
             assistantRowId,
@@ -746,6 +794,10 @@ export async function getStreamingResponse(
             terminalKind = 'error';
             conflict = c.reason ?? 'unknown';
             terminalDetail = `commit_assistant_message conflict: ${conflict}`;
+            lastErrorInput = {
+              kind: 'commit_conflict',
+              conflictReason: conflict,
+            };
             await transitionRowTo(
               opts.adminClient,
               assistantRowId,
@@ -792,6 +844,44 @@ export async function getStreamingResponse(
     // case UX). Skipped when terminalKind isn't 'completed' - aborted
     // / error / suspended turns don't get attachments, mirroring the
     // browser-side path.
+    // Persistent error surface. threads.last_error is the column the
+    // browser keys its error card off; commit_assistant_message clears
+    // it on the happy path (see the RPC's threads update in schema.sql),
+    // so we only write it on terminalKind='error'. The structured
+    // lastErrorInput captured at each error source above is passed
+    // through the shared translator to land a user-facing prose string
+    // alongside the machine-readable kind. Best-effort: an UPDATE
+    // failure here doesn't change the END event (the row's terminal
+    // status is still the authoritative record), it just means the
+    // error card won't render on next thread open.
+    if (terminalKind === 'error') {
+      // Safety net: a code path that flipped terminalKind without
+      // populating lastErrorInput would otherwise skip the error card
+      // entirely. Fall back to the 'internal' kind with terminalDetail
+      // as the prose - the user sees "Internal error: <detail>"
+      // instead of nothing, which is the right tradeoff while we
+      // catch up on missed sources.
+      if (!lastErrorInput) {
+        lastErrorInput = {
+          kind: 'internal',
+          rawMessage: terminalDetail ?? 'Unknown error',
+        };
+      }
+      const translated = translateError(lastErrorInput);
+      const payload = packLastError(translated, new Date().toISOString());
+      try {
+        await opts.adminClient
+          .from('threads')
+          .update({ last_error: payload })
+          .eq('id', opts.threadId);
+      } catch (err) {
+        console.error(
+          `[orchestrator ${runId}] failed to write threads.last_error:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
     if (
       generatedImages.length > 0 &&
       assistantRowId !== null &&

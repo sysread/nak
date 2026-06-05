@@ -7286,9 +7286,15 @@ begin
   returning * into v_msg;
 
   -- Bump updated_at so the thread jumps to the top of the sidebar,
-  -- matching add_assistant_message's behavior.
+  -- matching add_assistant_message's behavior. Also clear last_error -
+  -- a successful commit is the explicit signal that any prior
+  -- transient failure has been resolved (next user message + completed
+  -- turn = the thread is healthy again). The browser's error card is
+  -- driven off this column going non-null, so clearing here is what
+  -- removes the card on the realtime echo.
   update public.threads
-    set updated_at = now()
+    set updated_at = now(),
+        last_error = null
     where id = v_thread_id;
 
   return jsonb_build_object(
@@ -7358,6 +7364,23 @@ alter table public.threads
 -- reactor pass for this conversation produces no rows.
 alter table public.threads
   add column if not exists bias_active_at_turn text[] not null default '{}';
+
+-- Most recent unrecoverable error against this thread. Set by the
+-- streaming function on any terminalKind='error' path (Venice 4xx/5xx,
+-- network, truncated, round-limit, wall-timeout, tool dispatch, commit
+-- conflict); cleared by commit_assistant_message on the happy path.
+-- Shape is `{kind, message, occurred_at}` - the message is the user-
+-- facing translated string (see error-translate.ts), kind is the
+-- machine-readable source for UI branching (retry-able vs not), and
+-- occurred_at is the function-side wall clock for ordering / staleness
+-- checks. jsonb lets us evolve the shape (add retry_after_ms, request_id,
+-- etc.) without another migration. NULL means "no outstanding error" -
+-- the browser keys the error card off non-null, so a happy completion
+-- naturally removes the card. Realtime delivers the column update via
+-- the existing threads channel, so the browser doesn't need a separate
+-- subscription.
+alter table public.threads
+  add column if not exists last_error jsonb;
 
 create table if not exists public.bias_observations (
   id uuid primary key default gen_random_uuid(),

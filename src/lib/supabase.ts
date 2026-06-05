@@ -168,6 +168,19 @@ export interface Thread {
   response_holder_id: string | null;
   response_claim_expires_at: string | null;
   /**
+   * Most recent unrecoverable error against this thread. Written by
+   * the streaming function on any terminalKind='error' path; cleared
+   * by commit_assistant_message on the happy commit. Browser keys the
+   * error card off this column being non-null. Shape is the
+   * LastErrorPayload from `_shared/error-translate.ts`:
+   * `{kind, message, retryable, occurred_at}`. Loosely typed here so
+   * the renderer owns the parse - a row predating the column reads
+   * as null, and a drifting jsonb shape that doesn't match the
+   * expected envelope falls through to a generic "Error" card rather
+   * than crashing the screen.
+   */
+  last_error: unknown;
+  /**
    * App-local flag: true when this thread exists only in memory (the user
    * clicked "new thread" but hasn't sent a message or renamed it yet).
    * Drafts are never sent to Supabase — they materialize on first save.
@@ -238,6 +251,12 @@ function coerceThread(row: Record<string, unknown>): Thread {
           ? row.response_claim_expires_at
           : null
         : null,
+    // Pass jsonb through unchanged. The error-card renderer owns the
+    // parse - a row predating the column reads as null, and a drifted
+    // shape that doesn't match the expected `{kind, message, ...}`
+    // envelope falls through to a generic "Error" card. Same posture
+    // as intuition_payload / context_recall_payload above.
+    last_error: row.last_error ?? null,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
@@ -2219,6 +2238,7 @@ export class SupabaseService {
           topics: [],
           response_holder_id: null,
           response_claim_expires_at: null,
+          last_error: null,
           created_at: row.updated_at,
           updated_at: row.updated_at,
         },
