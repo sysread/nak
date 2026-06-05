@@ -95,12 +95,15 @@ describe('TIERS (user-facing wrappers)', () => {
     }
   });
   it('differentiates the tiers by default thinking level', () => {
-    // Smart defaults to 'medium' thinking, Balanced to 'low' (light
-    // CoT), Fast to 'off' (none). These are defaults, not locks - the
-    // composer picker stays available on all three so a user can
-    // override per thread (see thinkingWireForTier tests below).
+    // Smart defaults to 'medium' thinking, Balanced to 'high'
+    // (mistral-small-2603 quirk: it only accepts reasoning_effort
+    // 'high' or 'none', so the closest "with reasoning by default"
+    // option is 'high'), Fast to 'off' (none). These are defaults,
+    // not locks - the composer picker stays available on all three
+    // so a user can override per thread (see thinkingWireForTier
+    // tests below).
     expect(TIERS.smart.defaultThinking).toBe('medium');
-    expect(TIERS.balanced.defaultThinking).toBe('low');
+    expect(TIERS.balanced.defaultThinking).toBe('high');
     expect(TIERS.fast.defaultThinking).toBe('off');
   });
   it('has matching tier/label and sensible context windows', () => {
@@ -242,14 +245,15 @@ describe('thinking level (composer picker domain)', () => {
     expect(isThinkingLevel(undefined)).toBe(false);
   });
   it('thinkingWireForTier maps off -> disable_thinking and levels -> reasoning_effort', () => {
-    // Smart defaults to 'medium', Balanced to 'low' - both thinking-on,
-    // so they forward reasoning_effort.
+    // Smart defaults to 'medium', Balanced to 'high' (mistral
+    // accepts only 'high'/'none' for reasoning_effort) - both
+    // thinking-on, so they forward reasoning_effort.
     expect(thinkingWireForTier(TIERS.smart, null, 'medium')).toEqual({
       reasoningEffort: 'medium',
       disableThinking: false,
     });
     expect(thinkingWireForTier(TIERS.balanced, null, 'medium')).toEqual({
-      reasoningEffort: 'low',
+      reasoningEffort: 'high',
       disableThinking: false,
     });
     // Fast defaults to 'off' -> the off-switch, no reasoning_effort.

@@ -251,13 +251,21 @@ export const MODELS = {
     id: 'mistral-small-2603',
     contextWindow: 256_000,
     // Newer mistral-small revision. Reasoning + native vision + tool
-    // calling + reasoning_effort all supported per Venice's model
-    // catalog (capabilities.supportsReasoningEffort=true). Used as
-    // the Balanced tier's foreground model since the deepseek
-    // special-token leak made deepseek-v4-flash unreliable for the
-    // user-facing chat surface. Light reasoning ('low') is the tier
-    // default - keeps a short CoT pass that helps on most turns
-    // without medium/high's latency.
+    // calling supported. Used as the Balanced tier's foreground model
+    // since the deepseek special-token leak made deepseek-v4-flash
+    // unreliable for the user-facing chat surface.
+    //
+    // Mistral quirk: this model accepts reasoning_effort only as
+    // 'high' or 'none' (Venice catalog reports
+    // reasoningEffortOptions=['none','high'], default 'high'). The
+    // standard ThinkingLevel ladder ('off' | 'low' | 'medium' | 'high')
+    // surfaces 'low' and 'medium' in the composer picker which would
+    // 4xx on the wire for this model. The Balanced tier default is
+    // 'high' so the out-of-box experience picks a working option; a
+    // user who manually selects 'low' or 'medium' on a thread pinned
+    // to this id gets a Venice 4xx surfaced through the error card.
+    // Per-model picker filtering is the cleaner long-term shape - on
+    // the TODO until a second model lands with the same constraint.
     supportsReasoning: true,
     supportsVision: true,
     supportsResponseFormat: true,
@@ -360,11 +368,16 @@ export const TIERS: Readonly<Record<ModelTier, TierSpec>> = {
     // in both themes; yin-yang is a solid bi-tonal disc that reads at
     // any size.
     icon: '\u262F\uFE0F',
-    description: 'Mistral Small with light thinking. 256k context, native vision. Good default for most turns.',
-    // Light thinking by default - 'low' keeps a short CoT pass that
-    // helps on most turns without the latency of medium/high. The
-    // composer picker lets a user override per thread.
-    defaultThinking: 'low',
+    description: 'Mistral Small with reasoning. 256k context, native vision. Good default for most turns.',
+    // Mistral-small-2603 only accepts reasoning_effort 'high' or
+    // 'none' (Venice rejects 'low' and 'medium' on the wire). The
+    // intent for Balanced is "thinking on by default," so 'high' is
+    // the closest available match - composer picker lets a user
+    // override to 'off' per thread; 'low'/'medium' selections would
+    // 4xx on this model and surface through the error card. See the
+    // MODELS['mistral-small-2603'] comment for the picker-filtering
+    // followup.
+    defaultThinking: 'high',
   },
   fast: {
     ...MODELS['deepseek-v4-flash'],
