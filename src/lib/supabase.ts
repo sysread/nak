@@ -5785,6 +5785,15 @@ export class SupabaseService {
       reasoning?: string | null;
       /** Venice web-search citations for this turn. */
       citations?: Citation[] | null;
+      /**
+       * Override created_at. The column defaults to now() on the
+       * server; almost every caller wants that. The exception is
+       * the synthetic-recovery persistence path, which heals a
+       * wire-shape gap mid-conversation and needs the new row to
+       * land at the gap's position in created_at order rather than
+       * piling up at the tail.
+       */
+      created_at?: string;
     } = {}
   ): Promise<Message> {
     // Trim outer whitespace at the write boundary. LLM responses
@@ -5805,6 +5814,7 @@ export class SupabaseService {
     if (opts.usage !== undefined) row.usage = opts.usage;
     if (opts.reasoning !== undefined) row.reasoning = opts.reasoning;
     if (opts.citations !== undefined) row.citations = opts.citations;
+    if (opts.created_at !== undefined) row.created_at = opts.created_at;
     const { data, error } = await this.client
       .from('messages')
       .insert(row)

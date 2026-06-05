@@ -1546,17 +1546,28 @@
 
   /**
    * Persist any in-memory recovery rows (added by listMessages when
-   * the thread tail was wire-format-invalid) to the DB ahead of the
-   * next user turn. After this runs, the DB tail is healed and
-   * subsequent reads no longer need synthesis - the synthesizer's
-   * idempotency check sees the persisted recovery row and no-ops.
+   * the thread had wire-format-invalid gaps) to the DB ahead of the
+   * next user turn. After this runs, those DB gaps are healed and
+   * subsequent reads no longer need synthesis at those positions -
+   * the synthesizer's idempotency check sees the persisted recovery
+   * row sitting in the gap and no-ops.
    *
-   * Race guard: another device may have already healed the same
-   * thread between our read and this send. listMessages always runs
-   * the synthesizer, so we look for a non-synthetic recovery row at
-   * the tail (synthetic=false means it's actually in the DB). When
-   * one exists, adopt the DB view wholesale rather than stacking a
-   * second copy of the recovery rows on top.
+   * Position-preserving: synthesizeRecoveryMessages places each
+   * synthetic at its correct array index (right after the broken
+   * tool block that needs healing). The DB stores message order by
+   * `created_at`, so persisting needs to anchor each synthetic's
+   * `created_at` to land in the same slot. Strategy: walk the
+   * freshly-fetched + synthesized list, and for each synthetic, set
+   * its created_at to the preceding non-synthetic row's created_at
+   * plus 1ms (bump per consecutive synthetic). This puts the row
+   * exactly after its anchor in the ordering, fixing the previous
+   * bug where every recovery row got `default now()` and piled up
+   * at the tail regardless of which gap it was supposed to heal.
+   *
+   * Re-fetching as input: the local `messages` array may be stale
+   * (another tab could have already healed some gaps). Using the
+   * DB's current state as the input - then synthesizing - avoids
+   * writing recovery rows that are no longer needed.
    *
    * After persisting, we re-fetch and assign messages from scratch
    * rather than swapping in the persisted rows by id. The realtime
@@ -1567,22 +1578,37 @@
    */
   async function persistSyntheticRecovery(threadId: string): Promise<void> {
     if (!app.supabase) return;
-    const synthetics = messages.filter((m) => m.synthetic);
-    if (synthetics.length === 0) return;
     const beforeWrite = await app.supabase.listMessages(threadId);
-    const persistedRecoveryAtTail = beforeWrite
-      .slice()
-      .reverse()
-      .find((m) => !m.synthetic && isRecoveryMessage(m));
-    if (persistedRecoveryAtTail) {
+    const synthetics = beforeWrite.filter((m) => m.synthetic);
+    if (synthetics.length === 0) {
+      // Either nothing to heal, or another tab already healed it.
+      // Adopt the DB view wholesale.
       messages = beforeWrite;
       return;
     }
-    for (const synth of synthetics) {
-      await app.supabase.addMessage(threadId, synth.role, synth.content, {
-        tool_call_id: synth.tool_call_id ?? undefined,
-        name: synth.name ?? undefined,
-      });
+    // Walk the synthesized list and persist each synthetic at the
+    // created_at of its preceding non-synthetic neighbor + 1ms.
+    // Consecutive synthetics (a recovery tool block + recovery
+    // assistant for one gap) bump by an additional ms each so they
+    // stay in array order at the same anchor.
+    let prevReal: { created_at: string } | null = null;
+    let bumpMs = 1;
+    for (const m of beforeWrite) {
+      if (m.synthetic) {
+        const anchorAt = prevReal?.created_at ?? m.created_at;
+        const insertAt = new Date(
+          new Date(anchorAt).getTime() + bumpMs
+        ).toISOString();
+        await app.supabase.addMessage(threadId, m.role, m.content, {
+          tool_call_id: m.tool_call_id ?? undefined,
+          name: m.name ?? undefined,
+          created_at: insertAt,
+        });
+        bumpMs += 1;
+      } else {
+        prevReal = m;
+        bumpMs = 1;
+      }
     }
     if (activeThreadId !== threadId) return;
     messages = await app.supabase.listMessages(threadId);

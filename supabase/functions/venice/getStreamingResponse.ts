@@ -527,6 +527,7 @@ export async function getStreamingResponse(
       const assistantRoundRow = await persistRoundAssistantRow(
         opts,
         roundText,
+        accum.reasoning,
         roundToolCalls,
       );
 
@@ -1009,10 +1010,20 @@ function isAskUserPending(value: unknown): boolean {
  * terminal round that emitted tool_calls). The streaming row stays
  * separate; this is the persistent record the next round's history
  * baton replays from.
+ *
+ * Carries the same `model` and `reasoning` fields the terminal
+ * commit_assistant_message path writes. Both are nullable in the
+ * column shape but landed empty on intermediate rounds historically -
+ * the per-message context ring in AssistantBody.svelte falls back to
+ * "no badge" when model is null, and reasoning text emitted during a
+ * tool-call round (the model's narration of what it's about to do)
+ * would silently disappear. Writing both keeps tool-call rounds
+ * symmetric with terminal text rounds.
  */
 async function persistRoundAssistantRow(
   opts: OrchestratorOpts,
   text: string,
+  reasoning: string,
   calls: ToolCallRequest[],
 ): Promise<{ id: string }> {
   // RLS OFF: filter by userId via the thread relationship enforced
@@ -1024,6 +1035,8 @@ async function persistRoundAssistantRow(
       thread_id: opts.threadId,
       role: 'assistant',
       content: text,
+      model: opts.bodyTemplate.model ?? null,
+      reasoning: reasoning.length > 0 ? reasoning : null,
       tool_calls: calls.map((c) => ({
         id: c.id,
         type: 'function',
