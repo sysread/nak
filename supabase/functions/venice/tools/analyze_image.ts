@@ -25,6 +25,37 @@ import { toolComplete } from './_venice_complete.ts';
 const VISION_MODEL = 'e2ee-qwen3-vl-30b-a3b-p';
 const SIGNED_URL_TTL_SECONDS = 300;
 
+/**
+ * True when the URL's host is unreachable from the public internet,
+ * meaning Venice's vision API cannot fetch it. Covers localhost, the
+ * IPv4 loopback range, IPv6 loopback, the IPv4 private ranges, and
+ * the .local mDNS suffix. The tool's caller falls back to inlining
+ * base64 in that case so the request still reaches Venice with usable
+ * bytes; production deployments against a hosted Supabase URL stay on
+ * the cheaper signed-URL path.
+ */
+function isLocalHost(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  if (host === 'localhost' || host.endsWith('.local')) return true;
+  if (host === '::1' || host === '0.0.0.0') return true;
+  if (host.startsWith('127.')) return true;
+  if (host.startsWith('10.')) return true;
+  if (host.startsWith('192.168.')) return true;
+  // RFC 1918 172.16.0.0/12 - 172.16.x.x through 172.31.x.x. Split out so
+  // the cidr math stays readable as a Number range check rather than a
+  // regex on the second octet.
+  if (host.startsWith('172.')) {
+    const second = Number(host.split('.')[1]);
+    if (Number.isFinite(second) && second >= 16 && second <= 31) return true;
+  }
+  return false;
+}
+
 interface AttachmentRow {
   id: string;
   filename: string;
@@ -63,14 +94,38 @@ export const analyzeImage: ToolDef = {
       throw new Error(`Image "${filename}" has expired and its data is no longer available.`);
     }
 
-    // Sign a short-lived URL for Venice's vision input - Venice
-    // fetches the image server-side from the URL, so we never pull
-    // bytes through the function.
+    // Resolve a URL Venice can read. In production this is a signed
+    // public URL from Supabase Storage: Venice fetches it server-side
+    // and we never pull bytes through the function. In local dev the
+    // signed URL points at 127.0.0.1:54321 which Venice cannot reach
+    // from the public internet - the vision API returns "Supplied
+    // image did not pass validation checks." On localhost-ish hosts
+    // we download the bytes and inline as a data URL instead. Costs
+    // ~33% payload bloat (base64 encoding) but works everywhere; the
+    // signed-URL path stays the default in production for that
+    // bandwidth savings.
     const { data: signed, error: signErr } = await ctx.adminClient.storage
       .from('attachments')
       .createSignedUrl(data.storage_path, SIGNED_URL_TTL_SECONDS);
     if (signErr || !signed?.signedUrl) {
       throw new Error(`Image "${filename}" could not be signed for analysis. Try again.`);
+    }
+
+    let imageUrl = signed.signedUrl;
+    if (isLocalHost(imageUrl)) {
+      const { data: blob, error: dlErr } = await ctx.adminClient.storage
+        .from('attachments')
+        .download(data.storage_path);
+      if (dlErr || !blob) {
+        throw new Error(`Image "${filename}" could not be downloaded for analysis. Try again.`);
+      }
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 1) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
+      imageUrl = `data:${data.mime_type};base64,${base64}`;
     }
 
     const apiKey = await readVeniceKey(ctx.adminClient);
@@ -84,7 +139,7 @@ export const analyzeImage: ToolDef = {
           role: 'user',
           content: [
             { type: 'text', text: query },
-            { type: 'image_url', image_url: { url: signed.signedUrl } },
+            { type: 'image_url', image_url: { url: imageUrl } },
           ] as unknown as string,
         },
       ],
