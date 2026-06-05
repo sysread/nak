@@ -1666,8 +1666,34 @@
         const topicsChanged =
           prevTopics.length !== nextTopics.length ||
           prevTopics.some((p, i) => p !== nextTopics[i]);
+        // If the toolboxes_enabled column changed on the active
+        // thread, drive the composer's brief flash so a human eye
+        // notices the LLM-initiated state flip. Under streaming-root
+        // the in-process onToolboxesEnabledChange handler is dead
+        // (tools execute server-side), so the realtime UPDATE echo is
+        // the only signal we have here. User-initiated flips path
+        // through setToolboxEnabled, which patches the local thread
+        // row optimistically before the realtime UPDATE arrives - so
+        // by the time this handler fires, existing.toolboxes_enabled
+        // already matches t.toolboxes_enabled and the set comparison
+        // skips the flash (the click itself was the feedback). Only
+        // LLM-driven flips - where local state never patched - reach
+        // here with a real delta to surface. ~200ms later than the
+        // old in-process patch, but a perceptible flash beats none.
+        const prevToolboxes = existing?.toolboxes_enabled ?? [];
+        const nextToolboxes = t.toolboxes_enabled;
+        const toolboxesChangedOnActive =
+          t.id === activeThreadId &&
+          (prevToolboxes.length !== nextToolboxes.length ||
+            prevToolboxes.some((p, i) => p !== nextToolboxes[i]));
         rebucketThread(t);
         if (topicsChanged) void refreshTopicsVocabulary();
+        if (toolboxesChangedOnActive) {
+          toolboxFlash = true;
+          setTimeout(() => {
+            toolboxFlash = false;
+          }, 600);
+        }
       },
       onDelete: (id) => {
         removeThread(id);
