@@ -634,7 +634,7 @@ async function handleStream(req: Request): Promise<Response> {
   // existing envelope short-circuits a duplicate completion.
   const { data: streamingRow } = await admin
     .from('messages')
-    .select('id, content')
+    .select('id, content, created_at')
     .eq('thread_id', body.threadId)
     .eq('status', 'streaming')
     .order('created_at', { ascending: false })
@@ -642,11 +642,71 @@ async function handleStream(req: Request): Promise<Response> {
     .maybeSingle();
 
   if (streamingRow) {
+    const row = streamingRow as {
+      id: string;
+      content?: string | null;
+      created_at: string;
+    };
+    // Stale-row janitor. The orchestrator's WALL_DEADLINE_MS is 380s
+    // and its finally block transitions the row to 'error' on
+    // wall-timeout, so a healthy stream lives at most ~7 minutes. A
+    // row still in 'streaming' status well past that ceiling is
+    // orphaned: the function died ungracefully (container kill,
+    // EdgeRuntime.waitUntil terminated by tab close before terminal
+    // commit, hard crash) without finalising the row. Returning its
+    // channel envelope would have the browser subscribe to a topic
+    // no publisher feeds - the throbber stays up forever, the Stop
+    // button shows on a stream that isn't running. Transition the
+    // row to 'error', write a user-facing explanation onto
+    // threads.last_error, and return noStreamInFlight so the
+    // browser's reconnect path treats it as "nothing to observe."
+    // STALE_THRESHOLD is twice the wall deadline to leave headroom
+    // for a long generation that legitimately stretches past the
+    // soft ceiling - false positives waste a turn; false negatives
+    // hang the UI, and we'd rather take the wasted turn.
+    const STALE_THRESHOLD_MS = 2 * 380_000; // 760 seconds (~12.7 min)
+    const ageMs = Date.now() - new Date(row.created_at).getTime();
+    if (ageMs > STALE_THRESHOLD_MS) {
+      // Best-effort cleanup. If either UPDATE fails we still return
+      // noStreamInFlight - leaving the row in 'streaming' is the
+      // worst case but the next reconnect will retry the same
+      // janitor pass.
+      try {
+        await admin
+          .from('messages')
+          .update({ status: 'error' })
+          .eq('id', row.id);
+      } catch {
+        // Swallowed by design - see jsdoc.
+      }
+      try {
+        await admin
+          .from('threads')
+          .update({
+            last_error: {
+              kind: 'internal',
+              message:
+                "The previous response was lost mid-stream (the function ended before it could finalise the reply). Try again.",
+              retryable: true,
+              occurred_at: new Date().toISOString(),
+            },
+          })
+          .eq('id', body.threadId);
+      } catch {
+        // Swallowed by design - see jsdoc.
+      }
+      const envelope: StreamEnvelope = {
+        channelName,
+        assistantRowId: null,
+        completedSoFar: '',
+        noStreamInFlight: true,
+      };
+      return json(envelope);
+    }
     const envelope: StreamEnvelope = {
       channelName,
-      assistantRowId: (streamingRow as { id: string }).id,
-      completedSoFar:
-        (streamingRow as { content?: string | null }).content ?? '',
+      assistantRowId: row.id,
+      completedSoFar: row.content ?? '',
     };
     return json(envelope);
   }
