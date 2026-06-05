@@ -1,36 +1,43 @@
 /**
- * Venice.ai API client. Calls the Venice REST API directly from the browser
- * using a user-supplied API key. Venice implements the OpenAI-compatible
- * /chat/completions and /embeddings endpoints.
+ * Venice.ai API client - the browser-side Venice wire-shape facade.
  *
- * Docs: https://docs.venice.ai/api-reference
+ * The Venice API key is project-global and held server-side in
+ * `app_config`; browsers never see it. Every chat and embedding call
+ * is routed through the venice edge function, which reads the shared
+ * key, talks to Venice, and relays the response. This file's job
+ * shrinks to:
  *
- * Why we parse SSE manually instead of using the browser's EventSource:
- * EventSource is GET-only and cannot set custom headers (no way to send
- * `Authorization: Bearer …`). A POST fetch() with `stream: true` and
- * a hand-rolled frame splitter on `\n\n` is the standard workaround —
- * this is the same pattern OpenAI's own JS SDK uses in the browser.
+ *   - Owning the wire-shape types (`VeniceMessage`, `ChatRequest`,
+ *     `StreamEvent`, `Citation`, `TokenUsage`, etc.) that both the
+ *     browser and the function-side `_shared/venice-stream.ts` agree
+ *     on.
+ *   - Building Venice request bodies via {@link buildChatBody}, used
+ *     by `streamChat` AND by `SupabaseService.complete` (so the
+ *     streaming and one-shot paths can't drift on what they send to
+ *     the function).
+ *   - {@link VeniceClient.streamChat} - the streaming entry point.
+ *     POSTs to the venice edge function's `/stream` route with a
+ *     thread + anchor-message context, subscribes to the
+ *     `thread:<id>:stream` Broadcast channel, and yields a typed
+ *     `StreamEvent` union. The function owns the round chain, tool
+ *     dispatch, persistence, retry/output-guard logic - this client
+ *     just translates events into UI handler calls. See
+ *     `docs/dev/architecture.md` and `supabase/functions/README.md`
+ *     for the full split.
  *
- * The API key is passed on every request as an Authorization header.
- * It lives in memory while the app is unlocked (state.svelte.ts holds
- * the VeniceClient instance) and never touches storage except as part
- * of the encrypted config blob.
+ * Non-streaming callers (background agents, sub-agents, headless
+ * tool loops, web_search / research_docs / analyze_image sub-calls)
+ * go through `SupabaseService.complete` which posts the same wire
+ * body to the venice/complete route. The 429 retry loop for that
+ * path lives in `SupabaseService.complete` itself; this file owns
+ * only the streaming surface.
  *
- * The one remaining chat-completion entry point is
- * {@link VeniceClient.streamChat} - SSE-streaming. Yields a
- * discriminated union of StreamEvent values; text deltas appear as
- * they arrive, tool_call events appear *once* per call after the
- * accumulator has assembled a complete `arguments` JSON string from
- * the fragments OpenAI streams across many deltas. Used ONLY by the
- * main user-facing chat (`chat-loop.ts`) where incremental rendering
- * is what makes the app feel alive. Background and non-streaming
- * callers go through `SupabaseService.complete` (the venice/complete
- * edge function) - see `docs/dev/in-progress/venice-edge-functions/`
- * for the migration history.
- *
- * Body building is shared via {@link buildChatBody}; the two methods
- * differ only in the `stream` / `stream_options` flags they layer on
- * and how they consume the wire response.
+ * Test-only escape hatch: `streamChatDirect` is retained as a
+ * compatibility seam for streaming tests that want to drive a fake
+ * `fetch` directly without standing up a full function harness.
+ * Production callers never reach it - the public `streamChat` always
+ * goes through the function when `supabase` is supplied (which the
+ * VeniceClient constructor in `state.svelte.ts` always does).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -571,10 +578,9 @@ export interface VeniceClientOptions {
  *
  * Exported as a free function so SupabaseService.complete can build the
  * same Venice wire shape and send it through the function as a thin
- * proxy - sidesteps the wire-shape duplication question
- * docs/dev/in-progress/venice-edge-functions/chat-completions.md flagged,
- * since the body-shaping stays on the browser side rather than being
- * copied to the Deno helper.
+ * proxy - the body-shaping stays on the browser side rather than being
+ * duplicated into a Deno helper, so the streaming and one-shot paths
+ * keep using the same wire-shape builder.
  */
 export function buildChatBody(req: ChatRequest, streaming: boolean): Record<string, unknown> {
   const body: Record<string, unknown> = {

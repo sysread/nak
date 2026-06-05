@@ -197,8 +197,7 @@ run = "node scripts/dev-backfill-cron.mjs"
 raw = true
 
 # Edge functions (supabase/functions) are a Deno island - own toolchain, run
-# via deno / the supabase CLI, not pnpm. See
-# docs/dev/in-progress/venice-edge-functions/.
+# via deno / the supabase CLI, not pnpm. See supabase/functions/README.md.
 
 [tasks.functions-test]
 description = "Deno unit tests for the edge functions (offline - fake fetch, no network or Supabase). Pure logic in _shared; the handler glue is exercised via dev-start's functions serve."

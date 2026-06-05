@@ -201,13 +201,14 @@ trade a net win.
 
 ## Interactions
 
-- **`docs/dev/in-progress/venice-edge-functions/streaming-root.md`** -
-  the migration plan that introduced this model. Sections 2.4 and
-  2.8 trace the lifecycle the model serves.
-- **`docs/dev/in-progress/venice-edge-functions/cross-device-race-ui.md`** -
-  v1+ polish where competing user sends become an explicit
-  conflict. Same b-strict shape; the `commit_assistant_message`
-  RPC's conflict-reason payload is what the loser-UI keys off.
+- **`docs/dev/chat.md`** - the user-facing chat turn that the
+  `/stream` route runs end-to-end. The lifecycle the b-strict
+  model serves (reconnect probes, cancel/control fan-out,
+  commit_assistant_message conflict reasons) is documented there.
+- **`supabase/functions/README.md`** - the function-side
+  perspective, including the Deno-island stance and the layout
+  of `_shared/` (where `commit_assistant_message` wrappers
+  live).
 - **`docs/dev/architecture.md`** - the top-level architectural
   overview. b-strict is a per-function decision, not a project-wide
   one; sibling functions stay on the request-scoped pattern unless

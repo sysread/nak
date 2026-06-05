@@ -154,29 +154,27 @@ layer to the same immediacy.
   the Management API. This stack is additive isolation, not a
   replacement.
 
-## Forward compatibility
+## Edge functions in the local stack
 
-The script anticipates the in-progress Venice edge-functions
-work (`docs/dev/in-progress/venice-edge-functions/`):
+The script wires the edge functions into the local stack:
 
-- **`app_config` seeding.** When that branch's project-global
-  `app_config` table exists, `dev-start` mirrors the Venice key
-  into it so the shared-key path is exercised locally. Guarded
-  in SQL via `to_regclass`, so on a branch without the table it
-  silently skips - and the app's local-key fallback covers it
-  either way.
-- **Edge functions.** When `supabase/functions/*/index.ts`
-  exist, `dev-start` runs `supabase functions serve` as a second
-  supervised child, torn down with everything else on exit.
-  `serve` hot-reloads the Deno code on edit, so functions need no
-  watcher of their own - unlike the schema, they are served, not
-  applied. The serve child is a supporting service, not the
-  lifecycle driver: if it dies on its own the session keeps
-  running (the frontend is unaffected) and a warning prints;
-  restart `dev-start` to resume functions. Gated on a function
-  being present, so it is a no-op on a branch without any.
-  Per-function `verify_jwt` and import maps come from
-  `config.toml`; `dev-start` passes no overriding flags.
+- **`app_config` seeding.** `dev-start` mirrors the Venice key
+  into the `app_config` table so the shared-key path the
+  function reads at request time works against the local stack.
+  Guarded in SQL via `to_regclass`, so the seed is a no-op on a
+  branch without the table.
+- **`supabase functions serve`.** When `supabase/functions/*/`
+  files exist, `dev-start` runs `supabase functions serve` as a
+  second supervised child, torn down with everything else on
+  exit. `serve` hot-reloads the Deno code on edit, so functions
+  need no watcher of their own - unlike the schema, they are
+  served, not applied. The serve child is a supporting service,
+  not the lifecycle driver: if it dies on its own the session
+  keeps running (the frontend is unaffected) and a warning
+  prints; restart `dev-start` to resume functions. Per-function
+  `verify_jwt` and import maps come from `config.toml`;
+  `dev-start` passes no overriding flags. See
+  `supabase/functions/README.md` for the function-side layout.
 
 ## Interactions
 

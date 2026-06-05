@@ -1,82 +1,98 @@
 # Chat
 
-The main user-facing surface plus the orchestration code behind a
-single turn. `Chat.svelte` renders the drawer, composer, and message
-list; `chat-loop.ts` runs the streaming + tool-call + persistence
-round-trip. Model tiers and per-thread overrides also live here —
-they're trivial standalone but always accessed through the chat
-flow.
+The main user-facing surface plus the browser-side orchestration
+that drives a single turn. `Chat.svelte` renders the drawer,
+composer, and message list; `chat-loop.ts` builds the per-turn
+priming chain and the system-prompt preamble, then issues one
+`venice.streamChat` call that routes through the venice edge
+function's `/stream` route. The function owns the streaming round
+chain, tool dispatch, persistence, and error handling end-to-end.
+Model tiers and per-thread overrides also live here.
 
 ## Role in the app
 
 A chat turn goes:
 
-1. User types in the composer and clicks send.
+1. User types in the composer and clicks send. `Chat.svelte`
+   `addMessage`s the user row (browser-owned: see
+   [Production-path ownership](./architecture.md#production-path-ownership-browser-vs-edge-function)).
 2. `Chat.svelte` resolves the effective model (per-thread override
-   → user default), builds the history in OpenAI shape, and calls
-   `runChatLoop`.
-3. `chat-loop.ts` streams the response from Venice, executing any
-   tool calls in parallel and persisting each round (assistant row
-   first, then one `role='tool'` row per call) before looping.
-4. Terminal assistant message (no tool_calls) ends the loop; the
-   composer re-enables.
-5. The auto-title worker (separate background loop, not driven
-   from `Chat.svelte` any more) polls for threads still on the
-   `'New conversation'` placeholder and fills them in. Survives
-   page closes / refreshes that the old in-Chat fire-and-forget
-   trigger lost work to. Realtime subscriptions keep the sidebar
-   in sync across tabs and devices. See [./auto-title.md](./auto-title.md).
+   -> tier default -> account default), builds the history in
+   OpenAI shape, and calls `runChatLoop`.
+3. `chat-loop.ts` runs the per-turn priming layers (samskara
+   fire-and-compound, intuition, context recall), stitches their
+   synthetic `<think>` blocks into the history, assembles the
+   three-layer system-prompt preamble (baseline, user-configured,
+   per-turn metadata), and issues a single `venice.streamChat` call.
+4. The venice edge function takes over. Its round loop streams
+   from Venice, dispatches tool calls server-side, persists each
+   round (assistant row via `commit_assistant_message`, then one
+   `role='tool'` row per call) before looping, and broadcasts
+   typed events on `thread:<id>:stream` so the browser's UI stays
+   live.
+5. `chat-loop.ts` consumes those events and routes them to the
+   UI handler surface (streaming bubble, reasoning panel, tool
+   timings, rate-limit indicator, slop-notice cards). At the END
+   event it captures the persisted assistant row id + terminal
+   kind, fires `onAssistantPersisted`, and writes the samskara
+   substrate stub.
+6. The auto-title worker (background, not driven from
+   `Chat.svelte`) polls for threads still on the `'New
+   conversation'` placeholder and titles them. Survives page
+   closes / refreshes that the old in-Chat fire-and-forget
+   trigger lost work to. Realtime subscriptions keep the
+   sidebar in sync across tabs and devices. See
+   [./auto-title.md](./auto-title.md).
 
 ## Files
 
-- `src/screens/Chat.svelte` — the screen itself. Drawer,
-  composer, message list, thread lifecycle, plus the call
-  sites for every other feature that hooks into chat.
-- `src/lib/chat-loop.ts` — `runChatLoop`, `toVeniceMessage`, and
-  the round-by-round orchestration. Split from the screen so the
+- `src/screens/Chat.svelte` - the screen itself. Drawer,
+  composer, message list, thread lifecycle, plus the call sites
+  for every other feature that hooks into chat.
+- `src/lib/chat-loop.ts` - `runChatLoop`, `toVeniceMessage`, and
+  the per-turn priming + event-routing orchestration. Issues one
+  `venice.streamChat` call per turn; the function-side round
+  chain takes over from there. Split from the screen so the
   loop is unit-testable without a Svelte runtime.
-- `src/lib/models.ts` — `ModelTier`, `MODELS`, `UTILITY_TIER`, and
-  the `VENICE_*_MODEL` constants that every agent also imports.
-- `src/lib/venice.ts` — the Venice REST client. Two chat-completion
-  entry points: `streamChat` (SSE-streaming, used only by this
-  chat loop) returns an async generator of `StreamEvent`;
-  `completeChat` (one-shot non-streaming POST, used by every
-  background path - sub-agents, headless tool loop, web_search /
-  research_docs / analyze_image, the intuition / context-recall /
-  samskara / summary pipelines) returns a flat `ChatCompletion`
-  record. `embed` is a synchronous fetch.
-- `src/lib/supabase.ts` — thread CRUD, `addMessage`, message and
-  thread realtime subscriptions.
+- `src/lib/models/index.ts` - `ModelTier`, `MODELS`, `TIERS`,
+  `AGENT_MODELS`, and the cascade helpers (`resolveTier`,
+  `resolveThinking`, `thinkingWireForTier`, `resolveVerbosity`)
+  that every agent also imports.
+- `src/lib/venice.ts` - the Venice wire-shape facade.
+  `VeniceClient.streamChat` posts to the venice edge function's
+  `/stream` route, subscribes to the per-thread Broadcast
+  channel, and yields a typed `StreamEvent` union. Background
+  callers go through `SupabaseService.complete` instead. See
+  [Venice adapter](./architecture.md#venice-adapter) for the
+  full split.
+- `src/lib/supabase.ts` - thread CRUD, user-message inserts,
+  message and thread realtime subscriptions, and the
+  function-routing chat methods (`complete`, `embed`,
+  `extractText`).
+- `supabase/functions/venice/` - the function-side round chain,
+  tool dispatch, persistence, broadcast fan-out. See
+  [`../../supabase/functions/README.md`](../../supabase/functions/README.md).
 
 ## Entry points
 
 - **Send button / Enter** — `Chat.svelte`'s `send()` builds the
   history, creates an `AbortController`, and calls
   `runChatLoop(opts)`.
-- **Stop button** — the send button's dual mode. While `sending`
+- **Stop button** - the send button's dual mode. While `sending`
   is true the paper-plane icon swaps for a filled square; the
-  click handler routes to `stopStreaming()` (which fires the
-  outer `AbortController`) instead of `send()`. Same for the
-  submit-modifier Enter shortcut. Two phases:
-  - *Mid-stream:* `runChatLoop` catches the `AbortError` inside
-    its round loop, persists the accumulated `roundText` /
-    `roundReasoning` / `roundCitations` with the
-    `INTERRUPTED_MARKER` (`--- user interrupted response`)
-    appended to content, and returns `{ interrupted: true }`.
-    Tool-call fragments still being assembled in `venice.ts`
-    are discarded; so are any fully-assembled-but-unexecuted
-    `tool_call` events from the current round.
-  - *Mid-tool-execution:* the outer abort cascades through every
-    `childController`, in-flight tool fetches reject with
-    `AbortError`, the tool executor's per-call catch maps those
-    to error `role='tool'` rows, and `Promise.all(executions)`
-    resolves normally. The next round's top-of-loop
-    `signal.aborted` guard exits the loop and sets
-    `interrupted: true` on the result. No marker - the error
-    tool rows already record the cancellation.
-  The `ChatLoopResult.interrupted` flag lets the UI suppress the
-  "something went wrong" banner a generic catch would raise - the
-  user asked for the stop, it's not a failure to report.
+  click handler calls `cancelStream` (`venice.ts`), which
+  publishes a control message on `thread:<id>:control` to tear
+  down the function-side round chain, and fires the outer
+  `AbortController` to stop the local event consumer. The
+  function persists whatever it had accumulated this round with
+  the `INTERRUPTED_MARKER` (`--- user interrupted response`)
+  appended; a mid-tool-execution stop persists the in-flight
+  tool's row with an error envelope (no marker on the assistant
+  row in that case - the tool row already records the
+  cancellation). The function emits an `END` event with
+  `terminalKind: 'aborted'` so the browser knows the stop
+  landed; `ChatLoopResult.interrupted` lets the UI suppress the
+  "something went wrong" banner.
 - **Draft creation** — "New thread" button creates an in-memory-
   only `Thread` row (`isDraft: true`). It materializes to
   Supabase on first send; never written as an empty shell. This
@@ -148,90 +164,101 @@ A chat turn goes:
   shapes: plain text, assistant-with-tool-calls, and tool-result.
   Every feature that replays history should use this rather than
   building wire messages by hand; the shape is subtle.
-- `streamChat(req): AsyncGenerator<StreamEvent>` — five event
-  types: `{type:'text', delta}`, `{type:'reasoning', delta}`,
-  `{type:'tool_call', toolCall}` (fires once per call, after the
-  accumulator has assembled the arguments JSON from its
-  fragments), `{type:'usage', usage}` (fires once after the
-  terminal event), `{type:'citations', citations}`. Used only by
-  this main user-facing chat loop - background callers use
-  `completeChat`.
-- `completeChat(req): Promise<ChatCompletion>` - non-streaming
-  one-shot. Returns the same fields the streaming path would
-  produce (`text`, `reasoning`, `toolCalls`, `usage`, `citations`,
-  `finishReason`) as a flat record. Lower latency than streaming
-  for headless callers (no SSE flush-per-token serialisation), and
-  immune to provider-specific stream-only failure modes (e.g. the
-  silent "stream completed with no text" condition the web_search
-  tool kept hitting on Venice). The two methods share their wire
-  body builder so behaviour stays in lockstep. 429 responses are
-  retried transparently inside `completeChat` (up to 5 attempts,
-  honoring Retry-After / x-ratelimit-reset-* when present, falling
-  back to a log10-spaced 1s -> 5s schedule otherwise, cancellable
+- `VeniceClient.streamChat(req): AsyncGenerator<StreamEvent>` -
+  the browser-side handle. POSTs to the venice edge function's
+  `/stream` route and subscribes to the per-thread Broadcast
+  channel; yields the function-published event union. Event
+  kinds include text/reasoning deltas, tool_call (fires once
+  per call after the function has assembled fragments), usage
+  (final), citations, guard_retry, tool_call_response (carries
+  ok/error per dispatched tool), END (carries `terminalKind`
+  and any conflict reason from `commit_assistant_message`), and
+  control-channel events. Used only by this main user-facing
+  chat loop - background callers use `SupabaseService.complete`.
+- `SupabaseService.complete(req): Promise<ChatCompletion>` -
+  non-streaming one-shot routed through venice/complete.
+  Returns the same fields the streaming path would produce
+  (`text`, `reasoning`, `toolCalls`, `usage`, `citations`,
+  `finishReason`) as a flat record. Lower latency for headless
+  callers (no SSE flush-per-token serialisation), and immune to
+  provider-specific stream-only failure modes (e.g. the silent
+  "stream completed with no text" condition the web_search tool
+  kept hitting on Venice). 429 responses are retried
+  transparently in this method (up to 5 attempts, honoring
+  Retry-After / x-ratelimit-reset-* when present, falling back
+  to a log10-spaced 1s -> 5s schedule otherwise, cancellable
   via `req.signal`); a stuck quota still surfaces as a
-  `VeniceError(kind='rate_limit')` after retries exhaust. Streaming
-  chat has its own retry loop in `chat-loop.ts`
-  (`streamChatWithRateLimitRetry`) because that path emits UI
-  lifecycle events around the sleep; `completeChat` sits behind
-  tool sub-calls and background agents with no UI surface, so the
-  retry is silent except for a log entry.
+  `VeniceError(kind='rate_limit')` after retries exhaust. The
+  streaming path has its own retry surface server-side - the
+  function emits a `rate_limit_retry` event around the sleep so
+  the UI can pulse a banner.
 - `ChatLoopHandlers` - the event surface the UI uses: text
   updates, tool start/done/error, persistence events,
-  `onToolboxesEnabledChange` (for the composer toolbox flash when
-  `toggle_toolbox` fires), `onAssistantAttachments` (generate_image
-  output attached to the terminal assistant row at end of turn, so
-  the UI patches the in-memory row without a refetch),
-  `onGuardRetry` (an output guard discarded a junk attempt and is
-  re-rolling - see below). Every handler is optional; the loop runs
-  cleanly with none of them.
-- **Output guards** (`src/lib/stream-guards.ts` +
-  `streamChatWithGuards` in `chat-loop.ts`) - generic "the
-  completion came back wrong, re-roll it" machinery wrapping the
-  rate-limit retry. Each round's stream runs through a list of
-  `StreamGuard`s; the wrapper buffers the opening events of an
-  attempt until the guards collectively `keep` it (then flushes and
-  passes the rest through live) or `retry` it (drops the buffer,
-  tears down that attempt's child-controller stream, and re-issues
-  with the guard's request mutation). A discarded attempt's events
-  never reach the round consumer, so junk can't corrupt `roundText`.
-  Cap `MAX_STREAM_GUARD_RETRIES` (2); exhaustion throws
-  `GuardExhaustedError` for the UI to surface with a manual-retry
-  button. First consumer: the **special-token-leak** guard, armed on
-  models flagged `ModelSpec.leaksSpecialTokens` (`deepseek-v4-flash`
-  today). Detection is client-side and **anchored to the opening** of
-  the reply: it re-rolls when the response STARTS with a `<｜` / `<|`
-  delimiter, bumping temperature each time so the re-roll samples
-  differently. We deliberately do NOT send a server-side `stop` for
-  this - `stop` matches anywhere in the output, so it would truncate a
-  legitimate reply that mentions one of these sequences mid-stream (a
-  real case for nak, whose users discuss these tokens); anchoring to
-  the opening confines the guard to the actual failure mode. Models
-  with no configured gotchas get an empty guard list and the wrapper
-  is a transparent pass-through. UI side: `onGuardRetry` drops a
-  transient "oops, all slop!" notice card (`ExchangeSlot.slopNotices`,
-  copy from `src/lib/ui/slop-notice.ts`) that CRT-powers-off once the
+  `onToolboxesEnabledChange` (for the composer toolbox flash
+  when `toggle_toolbox` fires), `onAssistantAttachments`
+  (generate_image output attached per-round, so the UI patches
+  the in-memory row without a refetch), `onGuardRetry` (a
+  function-side output guard discarded a junk attempt and is
+  re-rolling). Every handler is optional; the loop runs cleanly
+  with none of them.
+- **Output guards** (`supabase/functions/venice/stream-guards.ts`)
+  - generic "the completion came back wrong, re-roll it"
+  machinery armed inside the function's streaming round. The
+  function's SSE consumer (`getStreamingCompletion`) buffers
+  the opening events of an attempt until the guards collectively
+  `keep` it (then flushes and passes the rest through live) or
+  `retry` it (drops the buffer, tears down that attempt, and
+  re-issues with the guard's request mutation - typically a
+  bumped temperature). A discarded attempt's events never reach
+  the broadcast channel, so junk can't reach the browser. Cap
+  `MAX_STREAM_GUARD_RETRIES` (4 retries plus the initial
+  attempt); exhaustion routes to a terminal `error` END event
+  with `kind: 'guard_exhausted'` for the UI to surface with a
+  manual-retry button. First consumer: the **special-token-leak**
+  guard, armed on models flagged `ModelSpec.leaksSpecialTokens`
+  (`deepseek-v4-flash`, `deepseek-v4` today; the flag is also
+  mirrored in `LEAKY_MODEL_IDS` function-side). Detection is
+  function-side and **anchored to the opening** of the reply:
+  it re-rolls when the response STARTS with a `<｜` / `<|`
+  delimiter, walking the `RETRY_TEMPERATURE_SCHEDULE`
+  (`[0.8, 1.0, 1.2, 1.4]`) so the re-roll samples differently.
+  Server-side `stop` would match anywhere in the output and
+  truncate a legitimate reply that mentions one of these
+  sequences mid-stream (a real case for nak, whose users
+  discuss these tokens); anchoring to the opening confines the
+  guard to the actual failure mode. Models with no configured
+  gotchas get an empty guard list and the wrapper is a
+  transparent pass-through. UI side: `onGuardRetry` drops a
+  transient "oops, all slop!" notice card
+  (`ExchangeSlot.slopNotices`, copy from
+  `src/lib/ui/slop-notice.ts`) that CRT-powers-off once the
   replacement persists.
-- `MAX_ROUNDS = 5` — guardrail on runaway tool loops. Exits with
-  `stoppedByLimit: true`; the UI shows a "tool-use round cap
-  reached" banner.
-- `ChatLoopResult.awaitingUserAnswer` — non-null when the loop
-  suspended on an `ask_user` tool call. The pending tool row is
-  already persisted (carrying the `{__ask_user_pending__: true,
-  question, options}` sentinel as content) so the wire shape stays
-  valid; the caller surfaces the question via `AskUserCard` and on
-  submit `UPDATE`s the same row's content to an
+- `MAX_ROUNDS = 5` - guardrail on runaway tool loops, enforced
+  function-side in `getStreamingResponse`. The function commits
+  the assistant row and emits an END event with
+  `terminalKind: 'completed'` and a `round_limit` reason; the
+  browser surfaces a "tool-use round cap reached" banner via
+  `ChatLoopResult.stoppedByLimit`.
+- `ChatLoopResult.awaitingUserAnswer` - non-null when the
+  function-side round suspended on an `ask_user` tool call. The
+  pending tool row is already persisted (carrying the
+  `{__ask_user_pending__: true, question, options}` sentinel as
+  content) so the wire shape stays valid; the function emits an
+  END event with `terminalKind: 'suspended_for_ask_user'`, the
+  browser surfaces the question via `AskUserCard`, and on submit
+  `Chat.svelte` `UPDATE`s the same row's content to an
   `{__ask_user_answered__: true, answer, via, option_index?}`
   envelope, then re-invokes `runChatLoop` against the post-answer
-  history. The substrate stub is skipped on suspend - it fires on
-  whichever resumed run actually terminates the turn. The
+  history. The substrate stub is skipped on suspend - it fires
+  on whichever resumed run actually terminates the turn. The
   `cancelPendingAskUser` helper in `Chat.svelte` writes an
   `abandoned_on_*` answer envelope when the user reloads (mount-
   time scan in `selectThread`) or sends a new message instead of
   picking an option, keeping the wire shape valid in both cases.
   See `src/lib/tools/ask_user.ts` for the sentinel/answer shapes
   and `src/lib/notifications.svelte.ts` for the foreground OS
-  notification that fires when the suspension lands while the tab
-  is backgrounded.
+  notification that fires when the suspension lands while the
+  tab is backgrounded.
 
 ## Interactions with other features
 
@@ -244,12 +271,12 @@ A chat turn goes:
   `runExchange` resolved from `ctx.threadId`. See
   `./exchange.md` for the full lifecycle and the
   `respondingElsewhere` / observer-side wiring.
-- **Tools** - every main-chat round's `streamChat` call passes `tools:
-  buildToolList(thread.toolboxes_enabled)`. Tool calls arrive as
-  `StreamEvent` of type `tool_call`; `executeToolCall` dispatches
-  them against the registry; results are persisted as
-  `role='tool'` rows and echoed back in the next round's
-  `history`. See `./tools.md`.
+- **Tools** - every main-chat round's `/stream` request body
+  carries `tools: buildToolList(thread.toolboxes_enabled)` assembled
+  on the browser side. The function-side `performToolCall`
+  dispatches each call against its own (ported) tool registry,
+  persists results as `role='tool'` rows, and echoes them back into
+  the next round's request. See `./tools.md`.
 - **Memory (recall)** — `memory_recall` is a tool; the main model
   calls it whenever it judges prior memory context would help. The
   chat loop dispatches it like any other tool. See `./memory.md`.
@@ -297,13 +324,15 @@ A chat turn goes:
 
 ## Gotchas
 
-- **System prompts are re-assembled every round.** The baseline
-  tool-framing system message is NOT persisted — it's built from
-  the tool registry at request-time by `buildSystemPrompt`. User-
-  configured prompts from Settings ride AFTER the baseline so a
-  custom "you are a pirate" prompt still wins on voice while the
-  tool framing stays in force. If you add a new tool, the model
-  learns about it on the next turn automatically.
+- **System prompts are re-assembled every round, browser-side.**
+  The baseline tool-framing system message is NOT persisted - it's
+  built from the tool registry at request-time by
+  `buildSystemPrompt` in `chat-loop.ts`. User-configured prompts
+  from Settings ride AFTER the baseline so a custom "you are a
+  pirate" prompt still wins on voice while the tool framing stays
+  in force. If you add a new tool, the model learns about it on
+  the next turn automatically. (The function never edits the
+  system preamble; it forwards what the browser sent.)
 - **Concrete vs. abstract model ids.** `messages.model` stores
   the *concrete* Venice id (`'kimi-k2-5'`) captured at send-time,
   not the abstract tier. Retargeting a tier later doesn't rewrite
@@ -332,14 +361,14 @@ A chat turn goes:
   that claims the row), so a retry titles the conversation's
   original topic rather than whatever follow-up triggered the
   retry. See [./auto-title.md](./auto-title.md).
-- **`toggle_toolbox` is the only tool that mutates the loop's
-  gated-toolbox set in-flight.** Its return value is inspected
-  specifically (`call.function.name === toggleToolbox.name`) to
-  avoid a DB re-read. The loop compares the new array to the
-  previous one (order-insensitive) and only fires the UI
-  notification on a real change. If you add another tool that
-  also flips thread state, it needs similar special-casing or a
-  refetch.
+- **`toggle_toolbox` is the only tool that mutates the round
+  loop's gated-toolbox set in-flight.** The function-side round
+  loop inspects each tool's name and, when it sees
+  `toggle_toolbox`, applies the new toolbox-enabled set in
+  memory (no DB re-read) and emits a `toolboxes_enabled_change`
+  broadcast event so the browser can flash the composer
+  toolbox button. If you add another tool that also flips
+  thread state, it needs similar special-casing or a refetch.
 - **Drafts must not enter realtime state.** The draft's in-memory
   id is a freshly-minted UUID; if a draft leaks into `addMessage`
   before being materialized, the realtime `INSERT` handler sees a
@@ -373,8 +402,14 @@ A chat turn goes:
   title nudges moved into a dedicated per-turn metadata system
   message (see "Wire shape" below).
 
-- **Wire shape (rounds inside `runChatLoop`).** Every round
-  rebuilds the request from four layers:
+- **Wire shape (the request the browser ships to `/stream`).**
+  `runChatLoop` assembles all four layers once per user turn
+  and ships them as the initial request body. The function-side
+  round loop appends new assistant / tool rows to the history
+  between rounds but does not rebuild the layers; the trailing
+  metadata block's wall-clock paragraph is therefore captured
+  at send-time and stays static across tool rounds within the
+  same turn. Four layers:
 
   1. **Baseline system prompt** (`buildSystemPrompt`) -
      identity, voice, the uncertainty / anti-fabrication
@@ -399,20 +434,20 @@ A chat turn goes:
      skipped when its source has nothing to say so we never
      burn tokens on empty `<think>` blocks.
   4. **Per-turn metadata system message** (`buildMetadataSystemMessage`) -
-     a single system row composed fresh each round, pinned at
-     the TAIL of the request (after the conversation), carrying
+     a single system row composed once per turn, pinned at the
+     TAIL of the request (after the conversation), carrying
      identity facts (user name + location when set), a
      wall-clock prose paragraph (local ISO 8601 + IANA zone +
      UTC + a "since your last reply" sentence on mid-thread
      turns), the thread-attachments inventory, the
      emphasis-markdown nudge when the toggle is on, and the
-     title nudge from round 2 onward (loud nag when the
-     title is still the schema placeholder, soft drift hint
-     when a model-set title might need refreshing). The
-     opening turn is silent on the title - the auto-title
-     worker owns naming there. With a reliable worker the
-     loud nag rarely fires; it's the safety net for the
-     case where the worker hasn't polled the row yet.
+     title nudge (loud nag when the title is still the schema
+     placeholder, soft drift hint when a model-set title might
+     need refreshing). The opening turn is silent on the
+     title - the auto-title worker owns naming there. With a
+     reliable worker the loud nag rarely fires; it's the
+     safety net for the case where the worker hasn't polled
+     the row yet.
 
   **Why metadata rides at the tail, not before the conversation.**
   Venice (like every OpenAI-compatible backend) can only reuse a

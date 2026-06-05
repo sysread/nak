@@ -41,8 +41,8 @@
  * consumer (so the UI stops collecting events). The function-side
  * round chain is cancelled separately via a control-channel publish
  * (see `cancelStream` in venice.ts). Both fire from the stop button
- * so the in-flight Venice fetch and the local UI tear down in lock
- * step.
+ * so the function-side Venice call and the local UI tear down in
+ * lock step.
  */
 
 import type { ReasoningEffort, Verbosity } from './models';

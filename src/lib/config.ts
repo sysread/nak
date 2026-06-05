@@ -1,28 +1,26 @@
 /**
- * Persistent configuration blob for the keys the app needs to talk to
- * its external services. Stored as PLAINTEXT JSON in localStorage.
+ * Persistent configuration blob for the values the browser needs to
+ * reach the user's Supabase project. Stored as PLAINTEXT JSON in
+ * localStorage under `nak:config:v2`.
  *
- * Why plaintext: the remaining values (supabaseUrl + supabasePublishableKey)
- * are not secrets by design. Per Supabase nomenclature, the
- * publishable key IS meant to ship in client bundles - security comes
- * from RLS on the tables plus the email/password auth flow, not from
- * the key's confidentiality. The streaming-root migration dropped the
- * per-user Venice API key (every Venice consumer routes through an
- * edge function reading a shared key from `app_config` server-side),
- * which was the last value that materially benefited from at-rest
- * encryption. With that gone, the master-password ceremony was paying
- * a UX cost (every fresh session = an Unlock screen, occasional
- * cross-browser foot-shooting on password changes) for essentially
- * zero security gain. Hard-reset migration: legacy v1 entries are
- * orphaned on first load (validateConfig fails on the encrypted
- * string, hasStoredConfig returns false, the user goes through
- * setup again).
+ * Two fields: `supabaseUrl` and `supabasePublishableKey`. Neither is
+ * a secret in the RLS-key sense - the publishable key is meant to
+ * ship in client bundles and every table policy is
+ * `auth.uid() = user_id`, so an attacker with the key still has to
+ * sign in through Supabase auth to read any row. The Venice API key
+ * is held server-side in the project's `app_config` table; browsers
+ * never see it.
  *
- * What's persisted to disk is the *only* thing we persist locally for
- * config. Per-user preferences (default model tier, theme) live in
- * Supabase `profiles.settings` once the user signs in - see
- * `./supabase.ts`. In-memory app state, including the active config,
- * is owned by `./state.svelte.ts`.
+ * Per-user preferences (default model tier, theme, system prompts,
+ * profile) live in Supabase `profiles.settings` once the user signs
+ * in - see `./supabase.ts`. In-memory app state, including the
+ * active config, is owned by `./state.svelte.ts`.
+ *
+ * Older browsers may carry a stale `nak:config:v1` entry that held an
+ * AES-GCM ciphertext keyed by a per-device master password; that
+ * envelope is no longer read by any path. `loadConfig` ignores it and
+ * `saveConfig` / `clearStoredConfig` remove it on the next write so
+ * the dead bytes don't accumulate.
  *
  * Export/import format: kind="nak-config", version=2. v2 renamed the
  * client-key field supabaseAnonKey -> supabasePublishableKey to match
@@ -36,12 +34,11 @@ export interface AppConfig {
   supabasePublishableKey: string;
 }
 
-// `nak:config:v2` is the post-master-password key. The legacy
-// `nak:config:v1` entry held an AES-GCM ciphertext keyed by the user's
-// master password; that key is orphaned by saveConfig() / cleared by
-// clearStoredConfig() and never read again. Bumping to v2 also means a
-// browser that updates from a legacy build naturally goes through
-// setup again instead of crashing on a parse of the old ciphertext.
+// `nak:config:v2` is the plaintext key. The legacy `nak:config:v1`
+// entry held an AES-GCM ciphertext keyed by a per-device master
+// password; no path reads it any more. saveConfig() and
+// clearStoredConfig() remove it on touch so a browser carrying the
+// stale entry doesn't keep it around indefinitely.
 const STORAGE_KEY = 'nak:config:v2';
 const LEGACY_STORAGE_KEY = 'nak:config:v1';
 
@@ -97,20 +94,17 @@ function validateConfig(candidate: unknown): AppConfig {
   if (!/^https?:\/\//.test(url)) {
     throw new ConfigError('supabaseUrl must start with http(s)://');
   }
-  // Drop any unknown fields silently. The legacy `defaultModel` (before
-  // settings moved to Supabase) and `veniceApiKey` (before the
-  // streaming-root migration retired the per-user key) are the two
-  // expected stragglers; anything else newer builds carry forward into
-  // their own column.
+  // Drop any unknown fields silently. Older blobs may carry leftover
+  // keys (`defaultModel`, `veniceApiKey`); only the two strings the
+  // current shape declares survive the projection.
   return { supabaseUrl: url, supabasePublishableKey: pub };
 }
 
 /**
  * Read the persisted config from localStorage. Returns null on any
- * problem (no entry, not valid JSON - which is the legacy encrypted
- * blob case, validateConfig rejection). The legacy v1 entry stays
- * untouched here; saveConfig / clearStoredConfig is responsible for
- * the lazy cleanup.
+ * problem (no entry, not valid JSON, validateConfig rejection). The
+ * legacy v1 entry stays untouched on read; saveConfig and
+ * clearStoredConfig are responsible for the lazy cleanup.
  */
 export function loadConfig(): AppConfig | null {
   let raw: string | null;
@@ -134,9 +128,9 @@ export function loadConfig(): AppConfig | null {
 }
 
 /**
- * Persist the config to localStorage as plaintext JSON. Overwrites any
- * existing entry. Also drops the legacy encrypted entry so it doesn't
- * accumulate after a successful migration through Setup.
+ * Persist the config to localStorage as plaintext JSON. Overwrites
+ * any existing entry. Also drops the legacy encrypted entry so a
+ * browser carrying a stale v1 blob doesn't keep it around forever.
  */
 export function saveConfig(config: AppConfig): void {
   const clean = validateConfig(config);
@@ -145,10 +139,9 @@ export function saveConfig(config: AppConfig): void {
 }
 
 // ---------------------------------------------------------------------------
-// Export / import of the local config. Used so users can move credentials to
-// a new browser without re-typing. Same shape as before the master-password
-// rip - the export was always plaintext, no migration needed for users who
-// kept an exported file around.
+// Export / import of the local config. Lets the user move credentials to
+// a new browser without re-typing them. The export is plaintext JSON -
+// none of the values are secrets in the RLS-key sense.
 // ---------------------------------------------------------------------------
 
 const EXPORT_KIND = 'nak-config';

@@ -75,11 +75,12 @@ looking elsewhere), and the system-prompt library.
 
 ### Usage
 
-A date-ranged snapshot of what your project's Venice API key has
-been spending. Pick a **From** and **To** date, hit **Refresh**, and
-the pane pulls the billing ledger from Venice (via the edge function
-that reads the shared key from your Supabase `app_config`) and groups
-it by model.
+A date-ranged snapshot of what the project's Venice API key has
+been spending. The key is held in your Supabase project's
+`app_config` table - all browser callers reach Venice through an
+edge function that holds the key server-side. Pick a **From** and
+**To** date, hit **Refresh**, and the pane pulls the billing
+ledger from Venice via that function and groups it by model.
 Each row shows a horizontal bar scaled by total tokens
 (prompt + completion), the token count as a compact label (e.g.
 `72k`, `1.2M`), and a pill with the raw billed amount.
@@ -122,26 +123,23 @@ Each row shows a horizontal bar scaled by total tokens
 
 ### Security
 
-Two rotations live here:
-
-- **Master password** - the passphrase that unlocks your encrypted
-  config blob in this browser. Re-encrypts locally; does not touch
-  Supabase.
-- **Account password** - the password you use to sign in to your
-  Supabase account. Nak re-verifies your current password before
-  updating, then calls Supabase to set the new one.
-
-Both require the current password and enforce an 8-character
-minimum on the new one. Covered in more detail on
-[Security model](./security.md).
+Rotates the password you use to sign in to your Supabase account.
+Nak re-verifies your current password before updating, then calls
+Supabase to set the new one. The form requires the current
+password and enforces an 8-character minimum on the new one.
+Covered in more detail on [Security model](./security.md).
 
 ### API keys
 
-Update your Supabase and Venice credentials, and download a JSON
-copy of those credentials for re-import on another browser. Saving
-re-encrypts your local config, so the pane asks for your current
-master password. See [Security model](./security.md) for how keys
-are stored locally, and [Export & import](./export-import.md) for
+Update the **Supabase URL** and **Supabase publishable key** that
+Nak uses to talk to your project. There's also an **Export**
+subsection that downloads the two values as a JSON file for
+re-import on another browser. The Venice API key isn't shown
+here - it lives in your Supabase project's `app_config` table
+and the edge function reads it server-side, so there's nothing
+to enter or rotate from the browser. See
+[Security model](./security.md) for how the Supabase keys are
+stored locally, and [Export & import](./export-import.md) for
 the export/import workflow itself.
 
 ## Where to go next

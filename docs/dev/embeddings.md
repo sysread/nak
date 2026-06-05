@@ -8,11 +8,6 @@ function; the browser still embeds *search queries* synchronously at
 each call site. This doc covers both halves plus the per-row claim
 protocol the backfill drains through.
 
-> Backfill moved off the browser in the venice-edge-functions
-> milestone (step 7). See
-> [the milestone plan](./in-progress/venice-edge-functions/embeddings.md)
-> for the why and the migration story.
-
 ## Role in the app
 
 A memory that's just been written is `embedding is null`; so is a
@@ -30,11 +25,13 @@ written memory is never invisible - just semantically under-ranked
 until the next sweep catches up (at most ~5 minutes).
 
 The other direction - embedding a *search query* to run cosine
-search - stays in the browser at each of the ~10 query-time call
-sites (`memory_search`, `conversation_search`, the drawers, context
-recall). Those are latency-sensitive and still call Venice directly
-with the local config key; moving them behind the function is a
-later milestone (phase 4).
+search - also goes through the function. `SupabaseService.embed`
+calls `venice/embed`, which holds the shared key and relays a single
+vector synchronously. Browser callers (`memory_search`,
+`conversation_search`, the drawers, context recall) keep the same
+`{ model, input } -> { data: [{ embedding }] }` request/response
+shape they had against `VeniceClient.embed`; the only change at the
+call site is which client handle they hold.
 
 ## Files
 
@@ -184,10 +181,8 @@ under the supervisor) still does, importing `LeaseCoordinator` from
   sources; the substrate claim skips unassimilated rows
   (`situation is null`). See `./wiki.md`, `./samskara.md`.
 - **Shared config** - the function reads the project-global Venice
-  key from `app_config` server-side (service role). The browser's
-  `app.serverConfig` copy is the same row, fetched post-auth, staged
-  for the query-time consumers to migrate onto later. See
-  [the milestone plan](./in-progress/venice-edge-functions/embeddings.md).
+  key from `app_config` server-side (service role). Browser callers
+  never see the key.
 - **Build & deploy** - the `pg_cron`/`pg_net` block and the converted
   RPCs ship in `schema.sql`, and the `venice` function is deployed,
   both by the deploy's `sync-supabase` job (the function via a
@@ -196,7 +191,7 @@ under the supervisor) still does, importing `LeaseCoordinator` from
   supabase-init`. See `./build-deploy.md`.
 - **Edge functions** - `/backfill` is one route on the fat `venice`
   function; `/embed` is its sibling. See
-  [the milestone plan](./in-progress/venice-edge-functions/README.md).
+  [`../../supabase/functions/README.md`](../../supabase/functions/README.md).
 
 ## Gotchas
 
@@ -239,7 +234,5 @@ under the supervisor) still does, importing `LeaseCoordinator` from
 - `./summaries.md` - the sibling worker that produces the
   `threads.summary` field this feature then embeds.
 - `./conversation-recall.md` - second consumer: thread search.
-- [`./in-progress/venice-edge-functions/embeddings.md`](./in-progress/venice-edge-functions/embeddings.md)
-  - the milestone that moved backfill server-side.
 - `./architecture.md` - the worker model (still used by the agent
   fleet) in context.

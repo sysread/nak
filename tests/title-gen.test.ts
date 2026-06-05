@@ -20,11 +20,11 @@ function mkCompletion(text: string): ChatCompletion {
   };
 }
 
-// The auto-title pipeline goes through SupabaseService.complete now (the
-// venice edge function holds the key); pre-milestone-6 these tests stubbed
-// VeniceClient.completeChat instead. Mirror that contract on a
-// SupabaseService cast - the function we exercise only touches
-// `.complete()`, so the rest of the shape stays absent.
+// The auto-title pipeline calls SupabaseService.complete (the one-shot
+// chat path that routes through the venice edge function). The fixture
+// implements only that one method; casting through `unknown` keeps the
+// type system honest about the rest of the SupabaseService shape being
+// absent.
 function mkSupabase(impl: (req: ChatRequest) => Promise<ChatCompletion>) {
   const seen: ChatRequest[] = [];
   const supabase = {

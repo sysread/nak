@@ -32,10 +32,11 @@ covers the attachment-specific pieces.
   attachments for user AND assistant rows (assistant rows can carry
   generate_image output).
 - `src/lib/venice.ts` - `VeniceMessage.content` widened to
-  `string | ContentPart[]`; `VeniceClient.extractText(blob, filename)`
-  (`POST /augment/text-parser`, multipart). NOTE: extractText is still a
-  direct browser call and currently CORS-blocked - see
-  [`./in-progress/venice-edge-functions/text-parser.md`](./in-progress/venice-edge-functions/text-parser.md).
+  `string | ContentPart[]`.
+- `src/lib/supabase.ts` - `SupabaseService.extractText(blob, filename)`
+  routes the multipart upload through the venice edge function's
+  `/text-parser` route; the function holds the shared key and relays
+  the response.
 - `src/lib/chat-loop.ts` - `toVeniceMessage` accepts `visionSpec` +
   `imageUrls` (the pre-resolved signed URLs) and routes user rows through
   `buildUserVeniceContent` when they carry attachments.
@@ -70,7 +71,7 @@ covers the attachment-specific pieces.
 - **User picks a file** - `addAttachment(file)` in `Chat.svelte`.
   Validates size, downscales images via `maybeDownscaleImage`,
   base64-encodes into the in-memory `pendingAttachments` (a
-  `LocalAttachment`), calls `app.venice.extractText` for non-image files.
+  `LocalAttachment`), calls `app.supabase.extractText` for non-image files.
 - **User sends** - `send()`: pre-send guard, `addMessage` for the user
   row, then `addAttachments` which uploads each file's bytes to the
   `attachments` bucket (client-minted id -> `<uid>/<id>/<filename>`) and
@@ -160,9 +161,14 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
 - **Chat** ([`./chat.md`](./chat.md)) - composer paste/drag-drop UX +
   the `send()` path that materialises attachments and pre-resolves the
   vision URLs.
-- **Venice adapter** - `extractText`, `generateImage`
-  (`POST /image/generate`), widened `VeniceMessage.content`. See
+- **Venice adapter** - widened `VeniceMessage.content`. Vision URLs and
+  generated-image bytes ride the wire through this type. See
   [`./architecture.md`](./architecture.md).
+- **SupabaseService** - `extractText` (multipart upload routed through
+  the venice edge function's `/text-parser` route) and `generateImage`
+  (the `generate_image` tool runs server-side inside `/stream`'s tool
+  dispatch). See
+  [`../../supabase/functions/README.md`](../../supabase/functions/README.md).
 - **Tools** ([`./tools.md`](./tools.md)) - `generate_image` (images
   toolbox) flows output through the attachment path; `analyze_image`,
   `doc_create`, `recipe_photos_attach` all read attachment bytes via the
@@ -179,10 +185,11 @@ parent - `messages.thread_id -> threads.user_id = auth.uid()`.
 - **Liveness is `storage_path`, not bytes.** Reads project `storage_path`
   and mint signed URLs; a thread full of images no longer ships base64 on
   every open. See [`./file-storage.md`](./file-storage.md).
-- **Multipart boundary on text-parser**: don't set a Content-Type header
-  on the `extractText` fetch - the browser emits the correct
-  `multipart/form-data; boundary=...` from the `FormData`. (This call is
-  also the CORS-blocked one pending the edge-function route.)
+- **Multipart boundary on text-parser**: `SupabaseService.extractText`
+  passes a `FormData` body through `functions.invoke`, which leaves
+  Content-Type unset so the runtime writes the multipart boundary
+  itself. Don't add a Content-Type override; doing so trashes the
+  boundary parameter and Venice rejects the upload.
 - **Canvas downscale is main-thread**: `maybeDownscaleImage` blocks while
   painting to a canvas. One-off on user action; acceptable.
 - **Extracted text outlives the object by design**: a year-old

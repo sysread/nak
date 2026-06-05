@@ -1,19 +1,26 @@
 # Architecture
 
-Nak is a single-page PWA. Everything runs in the browser: the model
-calls go directly to Venice, the persistence goes directly to the
-user's Supabase project, and the app ships no server of its own. This
-page frames the top-level pieces — the boot flow, the phase state
-machine, the data layer, the Venice adapter, and the background
-worker model — so individual feature docs have a shared vocabulary
-to refer back to.
+Nak is a Supabase-powered PWA. The browser shell renders the UI and
+owns user-triggered single-action work (composer send, rename,
+settings change, attachment upload). Long-lived correctness-critical
+work - streamed chat turns, tool dispatch, embedding backfill,
+attachment expiry - runs server-side in Supabase edge functions, which
+hold the project-global Venice key and persist their own writes. Both
+halves write to the same Supabase tables; the split is by
+production-path ownership, not by which table each side touches (see
+"Production-path ownership" below).
+
+This page frames the top-level pieces - the boot flow, the phase
+state machine, the data layer, the Venice adapter, the worker model,
+and the row-ownership split - so individual feature docs have a
+shared vocabulary to refer back to.
 
 ## Framework and build
 
 - **Svelte 5 + Vite.** Runes-based reactivity (`$state`, `$derived`,
-  `$effect`). Build is Vite 5; there is no SvelteKit router — the
+  `$effect`). Build is Vite 5; there is no SvelteKit router - the
   single-page shell is `src/App.svelte`, which phase-routes to one
-  of five screens.
+  of three screens.
 - **vite-plugin-pwa.** Generates the service worker and Web App
   Manifest. Offline caching is automatic for every bundled asset,
   including the user-facing docs imported via `import.meta.glob`.
@@ -25,58 +32,51 @@ to refer back to.
 ## Phase state machine
 
 `src/lib/state.svelte.ts` owns the single reactive `app` object that
-every screen reads. Phase transitions:
+every screen reads. Three phases:
 
 ```text
- loading --------- setup            (no stored config)
-          \------- locked           (stored config, no live session)
-                     |
-                     +--> unlocked  (activate(): master password accepted)
-                     +--> edit-config (enterEditConfig(): fix mistyped keys)
- unlocked -------> locked           (lock(): user-initiated or TTL expired)
+ loading -------- setup       (no stored config)
+          \----- unlocked    (config present + Supabase session live)
 ```
 
-- `loading` — initial paint only, while `App.svelte` runs its
+- `loading` - initial paint only, while `App.svelte` runs its
   session-restore check.
-- `setup` — no `nak:config:v1` key in localStorage. Renders
-  `Setup.svelte`.
-- `locked` — encrypted config exists but no live session. Renders
-  `Unlock.svelte`.
-- `unlocked` — decrypted config is in memory, services are
-  instantiated, workers are running. Renders `Chat.svelte`.
-- `edit-config` — decrypted config in memory but services not
-  instantiated. Renders `EditConfig.svelte`. Used when the user
-  wants to fix a mistyped key without going through the chat UI
-  first.
+- `setup` - no `nak:config:v2` key in localStorage. Renders
+  `Setup.svelte` to collect the Supabase URL + publishable key.
+- `unlocked` - config is in memory, `SupabaseService` and
+  `VeniceClient` are instantiated, background workers are running.
+  Renders `Chat.svelte` which gates an internal `<Auth />` screen
+  until the Supabase session lands.
 
 `activate(config)` is the load-bearing transition: it stores the
-config, news up `SupabaseService` and `VeniceClient`, flips phase to
-`unlocked`, persists a session blob, and fires three background
-workers. On a session-restore path, `App.svelte` calls
-`activate(config, { persist: false })` so the TTL isn’t bumped on
-refresh. `lock()` tears all of that down and clears the session. Both
-functions live in `state.svelte.ts`.
+config, news up the services, flips phase to `unlocked`, and starts
+the background-worker fleet. Sign-out doesn't leave `unlocked` -
+the screen renders `<Auth />` until the next sign-in - so there's
+no separate "locked" phase any more. `resetForSignOut()` clears the
+in-memory profile/system-prompt state so the previous account's
+preferences don't bleed into a sign-in-as-someone-else.
 
 ## Session lifecycle
 
-Three pieces cooperate to keep the user's secrets where they belong:
+`src/lib/config.ts` owns the `nak:config:v2` localStorage blob -
+plaintext JSON with the Supabase URL + publishable key. There is no
+master password and no encrypted-at-rest envelope: the publishable
+key is RLS-safe (every policy is `auth.uid() = user_id`), the
+project URL is not a secret, and the Venice API key is project-
+global and held server-side in `app_config`. The browser never
+holds the Venice key.
 
-1. **Encrypted at rest** — `src/lib/config.ts` owns the
-   `nak:config:v1` localStorage blob. Contents are the three API
-   keys (Supabase URL + publishable key + Venice API key), AES-256-GCM
-   encrypted under a PBKDF2-SHA256 key derived from the master
-   password. Envelope format is versioned (`src/lib/crypto.ts`);
-   primitives are Web Crypto, no external libraries.
-2. **Decrypted in memory** — while unlocked, `app.config` holds the
-   plaintext. No other decrypted copy exists except…
-3. **Refresh bridge** — `src/lib/session.ts` mirrors the plaintext
-   config to `sessionStorage` (`nak:session:v1`) along with an
-   `expiresAt` timestamp. On refresh within the TTL (7d default),
-   `App.svelte` skips the master-password prompt and calls
-   `activate()` directly. sessionStorage clears when the tab closes;
-   `App.svelte` also throttles activity events (keydown / pointerdown
-   / scroll / focus) to `touchSession()` and runs a 30-second idle
-   check that calls `lock()` on expiry.
+The Supabase auth session itself (the JWT) is owned by
+`supabase-js`'s own auth client and persists via its own storage
+(`localStorage['sb-<project>-auth-token']`). The browser is signed
+in until the user explicitly signs out or the refresh token
+expires.
+
+`src/lib/session.ts` keeps a tab-scoped pointer to the
+last-active thread in `sessionStorage` so a refresh re-opens the
+same conversation. Cleared on sign-out by the `signOut()` handler
+in Chat.svelte; the localStorage config stays so signing back in
+re-uses it without going through Setup.
 
 The full writeup lives in `./auth-session.md`.
 
@@ -202,46 +202,64 @@ Load-bearing patterns the schema uses repeatedly:
 
 ## Venice adapter
 
-`src/lib/venice.ts` is the browser-side REST client for Venice's
-OpenAI-compatible endpoints. Three chat methods matter:
+The Venice API key is project-global and held server-side in the
+`app_config` table. Every Venice call (streaming chat, one-shot
+chat, embeddings, text extraction, image generation, billing usage)
+routes through the `venice` edge function, which reads the shared
+key, talks to Venice, and relays the response. The browser never
+holds the key. The split between the browser-side wire shape and
+the function-side wire shape:
 
-- `streamChat(req)` — async generator yielding `StreamEvent`s
-  (`text`, `reasoning`, `tool_call`, `usage`, `citations`).
-  Implemented as a POST with SSE framing; we parse frames by
-  splitting on `\n\n` because the browser's `EventSource` API is
-  GET-only and can't set the `Authorization` header. Used ONLY by
-  the main user-facing chat loop, where token-by-token rendering
-  makes the app feel alive.
-- `completeChat(req)` — non-streaming POST returning a single
-  `ChatCompletion` record with the same fields as the streaming
-  events would produce. Used by every background path: the
-  intuition / samskara / summary / reflection / journal agents,
-  the four recall agents (memory, conversation, wiki, journal),
-  and the headless tool loop they share, plus the web_search /
-  research_docs / analyze_image sub-tools.
-  Background callers don't have a UI surface to render
-  token-by-token into, and SSE costs measurable per-chunk latency
-  the user can't see; non-streaming also sidesteps provider-
-  specific stream-only failure modes (e.g. the silent
-  "stream completed with no text" condition Venice's web-search
-  flow used to throw on).
-- `embed(req)` — synchronous `fetch` against `/embeddings`.
+**Browser side** (`src/lib/venice.ts` and `src/lib/supabase.ts`):
 
-Both chat methods share their wire body builder via a private
-`buildChatBody(req, streaming)` helper — toggling the `stream`
-flag is the only difference, so a wire-shape change can't drift
-between them.
+- `VeniceClient.streamChat(req)` - async generator yielding
+  `StreamEvent`s (`text`, `reasoning`, `tool_call`, `usage`,
+  `citations`, `guard_retry`, `tool_call_response`, `END`,
+  control events). Internally posts to the venice edge function's
+  `/stream` route with a thread + anchor-message context,
+  subscribes to the `thread:<id>:stream` Broadcast channel, and
+  yields the function-published event union. Used only by the
+  main user-facing chat (`chat-loop.ts`).
+- `SupabaseService.complete(req)` - non-streaming one-shot,
+  routed through the venice/complete route. Used by every
+  background path: the intuition / samskara / summary / reflection
+  / journal agents, the four recall agents (memory, conversation,
+  wiki, journal), and the headless tool loop they share, plus the
+  web_search / research_docs / analyze_image sub-tools.
+- `SupabaseService.embed(req)` - per-query vector. Routes through
+  venice/embed.
+- `SupabaseService.extractText(file, filename)` - multipart upload
+  to venice/text-parser for the per-attachment text extraction.
 
-Token-usage reporting requires `stream_options:
-{ include_usage: true }` on the request; Venice emits a final SSE
-frame with an empty `choices` array and a populated `usage` block
-once the stream is done. The main chat loop stores that verbatim on
-the assistant message row (`messages.usage`); the context-ring
-indicator reads it back.
+All four browser entry points share Venice's wire-body builder via
+`buildChatBody(req, streaming)` exported from `venice.ts` - one
+source of truth for tools, reasoning_effort, verbosity, web search,
+response_format, and the model id. Browser code never sees the
+Venice base URL; the function does.
+
+**Function side** (`supabase/functions/venice/`):
+
+- `/stream` - the streaming round chain. Owns tool dispatch, output
+  guards, persistence, retry/control-channel fan-out. See
+  [Streaming and tool dispatch in the venice edge function](./chat.md).
+- `/complete`, `/embed`, `/text-parser`, `/usage`, `/image/generate`
+  - one-shot relays.
+- `/backfill` - service-role-only, the embedding backfill cron
+  target.
+
+See [`../../supabase/functions/README.md`](../../supabase/functions/README.md)
+for the function-side layout and the Deno-island duplication stance.
+
+Token-usage reporting still requires `stream_options:
+{ include_usage: true }` on the request; the function forwards
+Venice's trailing `usage` SSE frame as a typed `usage` event and
+stores it on the assistant message row at terminal-commit time. The
+browser's context-ring indicator reads it back from
+`messages.usage`.
 
 Web-search is configured via `venice_parameters.enable_web_search`.
 The main chat loop maps the user's `webSearchEnabled` boolean to
-`'on'` or `'off'` (not `'auto'` — `'auto'` leaves too many "I can't
+`'on'` or `'off'` (not `'auto'` - `'auto'` leaves too many "I can't
 access the internet" refusals on the table). Background agents
 hardcode `undefined` on their requests so recall never inflates
 search costs.
@@ -365,11 +383,13 @@ perspective (which functions exist, what each one owns, the
 | Scope | Where | What |
 | --- | --- | --- |
 | Reactive, in-memory | `app` rune in `state.svelte.ts` | Phase, services, user defaults, theme, system prompts, web-search toggle |
-| Ephemeral per-tab | `sessionStorage['nak:session:v1']` | Decrypted config + TTL + last active thread id |
-| Persistent per-origin | `localStorage['nak:config:v1']` | Encrypted config blob |
+| Ephemeral per-tab | `sessionStorage` (last-active thread id) | The id the next refresh re-opens; cleared on sign-out |
+| Auth session | `localStorage['sb-<project>-auth-token']` | Supabase JWT + refresh token; owned by supabase-js |
+| Persistent per-origin | `localStorage['nak:config:v2']` | Plaintext Supabase URL + publishable key (no Venice key) |
 | Persistent per-origin | `localStorage['nak:theme:v1']` | Cached theme (non-secret; used by the pre-paint boot script in `index.html`) |
-| Per-account, remote | Supabase tables | Everything else (threads, messages, memories, profile settings, worker leases) |
+| Per-account, remote | Supabase tables | Threads, messages, memories, profile settings, worker leases, embeddings - the data plane |
 | Per-account, remote | Supabase Storage buckets | User file bytes - chat attachments, Library documents, recipe photos. Tables hold only a `storage_path` pointer; see [File storage](./file-storage.md). |
+| Project-global, remote | `app_config` table | Venice API key, read server-side by the venice edge function. Browser never reads it. |
 
 A new per-user setting lands in `profiles.settings` (JSONB) without
 a schema change. A new per-thread flag lands via `alter table

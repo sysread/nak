@@ -124,18 +124,6 @@ changing a contract that other features depend on.
   Supabase backend (`mise run dev-start`) isolated from the
   linked cloud project, for schema work without touching prod.
 
-### In progress
-
-- [Venice edge functions](./in-progress/venice-edge-functions/README.md)
-  — multi-milestone effort to move our Venice.ai API calls
-  behind a Supabase edge function with a project-global key and
-  scheduled background generation. Embeddings is the first
-  milestone; the other endpoints are skeleton sub-plans.
-
-(The attachments and recipe-images base64→bucket migrations have
-shipped; their mechanics live in [File storage](./file-storage.md)
-and the per-feature docs.)
-
 ### Future work
 
 - [Planned changes](./planned-changes.md) — deferred features

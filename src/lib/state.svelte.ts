@@ -1,28 +1,27 @@
 /**
- * Central reactive app state. This is the single source of truth that
- * every screen reads from — the `$state` rune makes updates here
- * automatically propagate to any Svelte component that reads `app.*`.
+ * Central reactive app state. Single source of truth that every
+ * screen reads from - the `$state` rune makes updates here propagate
+ * automatically to any component that touches `app.*`.
  *
  * Phase state machine (driven by App.svelte's boot flow):
  *
- *   loading ──► setup          (no stored config found)
- *           └─► unlocked       (stored config loaded; activate() seeds defaults)
+ *   loading --> setup     (no stored config found in localStorage)
+ *           \-> unlocked  (stored config loaded; activate() instantiates
+ *                          services and seeds defaults)
  *
  * The setup / unlocked branches are decided by `hasStoredConfig()` in
- * App.svelte. The master-password / Unlock screen / EditConfig screen
- * and the lock() lifecycle were retired with the streaming-root
- * cleanup - the per-user Venice API key (the last value that
- * meaningfully benefited from encryption at rest) moved server-side
- * to app_config, leaving only supabaseUrl + the Supabase publishable
- * key in local storage. Both are publishable by design, so the
- * encryption ceremony bought zero security and cost real UX. The
- * `loading ──► unlocked` transition is now synchronous on the
- * App.svelte mount path; the legacy `locked` / `edit-config` phases
- * are gone.
+ * App.svelte. There is no `locked` phase: localStorage holds only the
+ * Supabase URL + publishable key, both RLS-safe by design, so the
+ * config blob carries no secrets worth gating behind a password
+ * ceremony. The Supabase auth session is what makes a session
+ * meaningful; sign-out tears that down via `resetForSignOut()` +
+ * `supabase.signOut()`, and `Chat.svelte` re-shows the `<Auth />`
+ * screen until the next sign-in.
  *
- * Why a single $state object instead of per-concern stores: every screen
- * needs phase + config + the service instances, so a single rune is
- * easier to read than a constellation of stores with the same lifetime.
+ * Why a single $state object instead of per-concern stores: every
+ * screen needs phase + config + the service instances, so a single
+ * rune is easier to read than a constellation of stores with the
+ * same lifetime.
  */
 import type { AppConfig } from './config';
 import {
@@ -66,9 +65,8 @@ import { DEFAULT_LOG_LEVEL, type LogLevel } from './logger.svelte';
  *
  * `whenLoaded(fn)` is the escape hatch for live-update calls (e.g.
  * the wiki worker's `setProfile` / `setTimezone`). It's a no-op
- * if start() never fired - which matches the old direct-call
- * semantics, since the manager's own setProfile was a no-op when
- * the worker hadn't spawned.
+ * if start() never fired - a manager whose worker hasn't spawned
+ * has nothing to push the update at.
  */
 function lazyManager<
   M extends { start: (opts: never) => unknown; stop: () => void },
@@ -108,9 +106,9 @@ function lazyManager<
 //
 // Embedding backfill is no longer a worker here: it runs server-side on a
 // pg_cron schedule against the venice edge function (see
-// docs/dev/in-progress/venice-edge-functions/embeddings.md). The browser still
-// embeds search *queries* synchronously at the call sites, but nothing in the
-// tab drives backfill anymore.
+// docs/dev/embeddings.md). Search-query embeds go through the function too
+// (SupabaseService.embed), so nothing in the browser holds a Venice key for
+// the embeddings path.
 // Six formerly-standalone workers (auto_title, summary, reflection,
 // topics, memory_topics, recipe_topics) are
 // consolidated under one supervisor worker. The supervisor owns one
@@ -735,7 +733,7 @@ function startBackgroundWorkers(config: AppConfig): void {
   // lease simultaneously without contention. The summary worker feeds
   // the drawer's search feature - it writes `threads.summary`, which the
   // server-side cron backfill then picks up to build the searchable
-  // vector (see docs/dev/in-progress/venice-edge-functions/embeddings.md).
+  // vector (see docs/dev/embeddings.md).
   // The topics worker writes `threads.topics` which the drawer reads
   // to populate the topic-filter dropdown; see docs/dev/topics.md.
   // The memory-topics and recipe-topics workers are siblings that
@@ -860,11 +858,12 @@ async function loadSettingsThenStartWorkers(config: AppConfig): Promise<void> {
  * still runs when the chunk lands. Order doesn't matter; the locks are
  * independent.
  *
- * Used by `lock()` (sign-out releases each Web Lock so a queued tab
- * can take over) and by `haltBackgroundWork()` (newer build detected,
- * stop processing on the old code until the user reloads). The
- * `resetUsage()` call here is what keeps billing rows from leaking
- * across an unlock-lock-unlock to a different API key.
+ * Used by `resetForSignOut()` (sign-out releases each Web Lock so a
+ * queued tab can take over) and by `haltBackgroundWork()` (a newer
+ * build is waiting and processing must stop on stale code until the
+ * user reloads). The `resetUsage()` call keeps billing rows from
+ * leaking across a sign-out / sign-in-as-someone-else into the
+ * Usage pane's cache.
  */
 function stopBackgroundWorkers(): void {
   supervisor.stop();

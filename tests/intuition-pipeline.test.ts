@@ -1,7 +1,8 @@
 /**
- * Coverage for the intuition pipeline assembly. Mocks Venice's
- * completeChat so the test stays offline and deterministic; verifies
- * the perception -> 5 drives -> synthesis fan-out, the
+ * Coverage for the intuition pipeline assembly. Mocks
+ * SupabaseService.complete (the venice/complete edge function seam
+ * the pipeline calls) so the test stays offline and deterministic;
+ * verifies the perception -> 5 drives -> synthesis fan-out, the
  * Classification: prefix normalisation, and the partial-failure
  * tolerance (a single-drive failure does not abort the pipeline).
  */
@@ -23,7 +24,7 @@ import type {
 import type { SupabaseService } from '../src/lib/supabase';
 
 /**
- * Build a fake VeniceClient whose completeChat returns a canned
+ * Build a fake SupabaseService whose `complete` returns a canned
  * response keyed off the system prompt. Tests pass a map of "system
  * prompt substring -> response text" so a single mock can serve
  * perception, every drive, and synthesis.

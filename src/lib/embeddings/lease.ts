@@ -15,9 +15,10 @@
  *
  * Lives under `src/lib/embeddings/` for historical reasons - it was the
  * embeddings worker's coordinator first and got generalised when the agent
- * workers arrived. The embeddings worker itself is gone (backfill moved
- * server-side - see docs/dev/in-progress/venice-edge-functions/), but this
- * coordinator is now shared infrastructure: every worker under
+ * workers arrived. The embeddings worker itself is gone (backfill runs
+ * server-side via pg_cron + the venice edge function - see
+ * docs/dev/embeddings.md), but this coordinator is now shared
+ * infrastructure: every worker under
  * `src/lib/agents/` (supervisor, samskara, bias, wiki, wiki-librarian,
  * deep-sleep, rem) constructs one, partitioned by `workerKind`. The
  * directory name is a vestige; the code is fleet-wide.

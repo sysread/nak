@@ -94,16 +94,15 @@ The pure drain loops are unit-tested offline in
 `supabase/functions/_shared/*` (`expire-attachments.ts`,
 `recipe-image-gc.ts`); the edge handlers are glue.
 
-## Text extraction (the one direct-to-Venice exception)
+## Text extraction
 
 Non-image uploads (attachments + Library docs) are run through Venice's
-`/augment/text-parser` to populate `extracted_text`. That call is still
-made **directly from the browser** (`VeniceClient.extractText`), and is
-currently CORS-blocked - the fix (route it through the venice edge
-function) is tracked in
-[`./in-progress/venice-edge-functions/text-parser.md`](./in-progress/venice-edge-functions/text-parser.md).
-It's orthogonal to byte storage: extraction produces the searchable text,
-the bucket holds the bytes.
+`/augment/text-parser` to populate `extracted_text`. The browser calls
+`SupabaseService.extractText(file, filename)`, which routes the
+multipart upload through the venice edge function's `/text-parser`
+route - the function holds the shared key server-side and relays the
+response. Orthogonal to byte storage: extraction produces the
+searchable text, the bucket holds the bytes.
 
 ## Gotchas
 
