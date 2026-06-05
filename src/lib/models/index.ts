@@ -263,6 +263,17 @@ export const MODELS = {
     // text completion with no tools.
     supportsResponseFormat: true,
   },
+  'venice-uncensored-1-2': {
+    id: 'venice-uncensored-1-2',
+    contextWindow: 128_000,
+    // Non-reasoning vision model used by the analyze_image tool (see
+    // AGENT_MODELS.visionAnalysis below). The analyze_image call site
+    // never sends reasoning_effort, so the missing CoT pass costs
+    // nothing on the wire.
+    supportsReasoning: false,
+    supportsVision: true,
+    supportsResponseFormat: true,
+  },
 } as const satisfies Record<string, ModelSpec>;
 
 export type ModelId = keyof typeof MODELS;
@@ -508,12 +519,16 @@ export type AgentRole =
  *     distinct slot so the three recall surfaces can be retuned
  *     independently if one regresses.
  *
- *   visionAnalysis - e2ee-qwen3-vl-30b-a3b-p. Vision sub-completion
+ *   visionAnalysis - venice-uncensored-1-2. Vision sub-completion
  *     for the analyze_image tool. Decoupled from any user-facing
  *     tier so a tier retarget doesn't silently break image
- *     analysis. A cheap non-reasoning vision model; the call site
- *     never sends reasoning_effort, so the missing CoT pass costs
- *     nothing on the wire.
+ *     analysis. 128k context, native vision, supports tool calling,
+ *     non-reasoning; the call site never sends reasoning_effort, so
+ *     the missing CoT pass costs nothing on the wire. Swapped in
+ *     over the prior e2ee-qwen3 vision model because uncensored
+ *     gives the model latitude on prompts that the original was
+ *     reluctant on, without any change to the wire shape this tool
+ *     uses.
  *
  *   autoTitle - e2ee-gpt-oss-20b-p. Background title-generation
  *     completion that fires from Chat.svelte in parallel with the
@@ -546,7 +561,7 @@ export const AGENT_MODELS = {
   recall:             'deepseek-v4-flash',
   conversationRecall: 'deepseek-v4-flash',
   wikiRecall:         'deepseek-v4-flash',
-  visionAnalysis:     'e2ee-qwen3-vl-30b-a3b-p',
+  visionAnalysis:     'venice-uncensored-1-2',
   autoTitle:          'e2ee-gpt-oss-20b-p',
 } as const satisfies Record<AgentRole, ModelId>;
 

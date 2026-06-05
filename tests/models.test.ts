@@ -50,11 +50,17 @@ describe('MODELS (active registry)', () => {
     expect(MODELS['mistral-small-3-2-24b-instruct'].supportsReasoning).toBe(false);
   });
   it('marks the vision-capable ids as supportsVision=true', () => {
-    // Two vision-capable entries today: the analyze_image sub-call
-    // (e2ee-qwen3-vl-30b-a3b-p) and the Smart tier's foreground model
+    // Three vision-capable entries today: the analyze_image sub-call
+    // (venice-uncensored-1-2) and the Smart tier's foreground model
     // (qwen-3-6-plus, which inlines image_url parts directly rather
-    // than routing through analyze_image).
-    const visionIds = new Set(['e2ee-qwen3-vl-30b-a3b-p', 'qwen-3-6-plus']);
+    // than routing through analyze_image), plus the legacy
+    // e2ee-qwen3-vl entry still in the registry for thread rows that
+    // pinned it explicitly via per-thread model override.
+    const visionIds = new Set([
+      'venice-uncensored-1-2',
+      'e2ee-qwen3-vl-30b-a3b-p',
+      'qwen-3-6-plus',
+    ]);
     for (const [id, spec] of Object.entries(MODELS)) {
       expect(spec.supportsVision).toBe(visionIds.has(id));
     }
@@ -125,7 +131,7 @@ describe('AGENT_MODELS (background agents)', () => {
     expect(AGENT_MODELS.summary).toBe('mistral-small-3-2-24b-instruct');
     expect(AGENT_MODELS.samskara).toBe('mistral-small-3-2-24b-instruct');
     // Vision sub-call.
-    expect(AGENT_MODELS.visionAnalysis).toBe('e2ee-qwen3-vl-30b-a3b-p');
+    expect(AGENT_MODELS.visionAnalysis).toBe('venice-uncensored-1-2');
     // Auto-title: Chat.svelte's parallel background completion that
     // names a fresh thread before the main reply finishes streaming.
     expect(AGENT_MODELS.autoTitle).toBe('e2ee-gpt-oss-20b-p');

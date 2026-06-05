@@ -22,39 +22,13 @@ import { readVeniceKey } from './_venice_key.ts';
 import { toolComplete } from './_venice_complete.ts';
 
 // Mirror of agentModel('visionAnalysis') in src/lib/models/index.ts.
-const VISION_MODEL = 'e2ee-qwen3-vl-30b-a3b-p';
-const SIGNED_URL_TTL_SECONDS = 300;
-
-/**
- * True when the URL's host is unreachable from the public internet,
- * meaning Venice's vision API cannot fetch it. Covers localhost, the
- * IPv4 loopback range, IPv6 loopback, the IPv4 private ranges, and
- * the .local mDNS suffix. The tool's caller falls back to inlining
- * base64 in that case so the request still reaches Venice with usable
- * bytes; production deployments against a hosted Supabase URL stay on
- * the cheaper signed-URL path.
- */
-function isLocalHost(url: string): boolean {
-  let host: string;
-  try {
-    host = new URL(url).hostname;
-  } catch {
-    return false;
-  }
-  if (host === 'localhost' || host.endsWith('.local')) return true;
-  if (host === '::1' || host === '0.0.0.0') return true;
-  if (host.startsWith('127.')) return true;
-  if (host.startsWith('10.')) return true;
-  if (host.startsWith('192.168.')) return true;
-  // RFC 1918 172.16.0.0/12 - 172.16.x.x through 172.31.x.x. Split out so
-  // the cidr math stays readable as a Number range check rather than a
-  // regex on the second octet.
-  if (host.startsWith('172.')) {
-    const second = Number(host.split('.')[1]);
-    if (Number.isFinite(second) && second >= 16 && second <= 31) return true;
-  }
-  return false;
-}
+// venice-uncensored-1-2: 128k context, native vision, supports tool
+// calling, no reasoning. Swapped in over the prior e2ee-qwen3 vision
+// model because the qwen variant returned more compact text but
+// behaved identically on the vision contract; uncensored gives the
+// model latitude on prompts that the original was reluctant on,
+// without any change to the wire shape this tool uses.
+const VISION_MODEL = 'venice-uncensored-1-2';
 
 interface AttachmentRow {
   id: string;
@@ -94,39 +68,38 @@ export const analyzeImage: ToolDef = {
       throw new Error(`Image "${filename}" has expired and its data is no longer available.`);
     }
 
-    // Resolve a URL Venice can read. In production this is a signed
-    // public URL from Supabase Storage: Venice fetches it server-side
-    // and we never pull bytes through the function. In local dev the
-    // signed URL points at 127.0.0.1:54321 which Venice cannot reach
-    // from the public internet - the vision API returns "Supplied
-    // image did not pass validation checks." On localhost-ish hosts
-    // we download the bytes and inline as a data URL instead. Costs
-    // ~33% payload bloat (base64 encoding) but works everywhere; the
-    // signed-URL path stays the default in production for that
-    // bandwidth savings.
-    const { data: signed, error: signErr } = await ctx.adminClient.storage
+    // Download the bytes and inline them as a base64 data URL. Earlier
+    // shape signed a public URL and let Venice fetch it server-side
+    // (cheaper bandwidth, parallel fetch). Two failure modes drove the
+    // unconditional inline:
+    //   - Local dev: the signed URL points at 127.0.0.1:54321 (or
+    //     internal Docker hostnames like kong:8000 inside the edge
+    //     runtime container) which Venice cannot reach from the public
+    //     internet. The vision API returns "Supplied image did not
+    //     pass validation checks."
+    //   - "Is this URL public?" turns out to be hard to answer
+    //     reliably from inside the function - SUPABASE_URL reflects
+    //     the container's view, not the public endpoint - and that's
+    //     the wrong thing to base a "fall back to inline" decision on
+    //     anyway. Always inlining removes the environment-detection
+    //     class of bugs entirely.
+    // Cost: ~33% payload bloat from base64 encoding (well under the
+    // 25 MB Venice cap for any image the user is likely to generate
+    // or upload) plus the function downloading-then-forwarding instead
+    // of Venice fetching directly. Worth it for the reliability.
+    const { data: blob, error: dlErr } = await ctx.adminClient.storage
       .from('attachments')
-      .createSignedUrl(data.storage_path, SIGNED_URL_TTL_SECONDS);
-    if (signErr || !signed?.signedUrl) {
-      throw new Error(`Image "${filename}" could not be signed for analysis. Try again.`);
+      .download(data.storage_path);
+    if (dlErr || !blob) {
+      throw new Error(`Image "${filename}" could not be downloaded for analysis. Try again.`);
     }
-
-    let imageUrl = signed.signedUrl;
-    if (isLocalHost(imageUrl)) {
-      const { data: blob, error: dlErr } = await ctx.adminClient.storage
-        .from('attachments')
-        .download(data.storage_path);
-      if (dlErr || !blob) {
-        throw new Error(`Image "${filename}" could not be downloaded for analysis. Try again.`);
-      }
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      let binary = '';
-      for (let i = 0; i < bytes.length; i += 1) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      const base64 = btoa(binary);
-      imageUrl = `data:${data.mime_type};base64,${base64}`;
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]);
     }
+    const base64 = btoa(binary);
+    const imageUrl = `data:${data.mime_type};base64,${base64}`;
 
     const apiKey = await readVeniceKey(ctx.adminClient);
     if (!apiKey) throw new Error('no Venice key configured (app_config unseeded)');
