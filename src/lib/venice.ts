@@ -50,6 +50,7 @@ export type { OpenAIToolCall };
 import { createLogger } from './logger.svelte';
 import {
   controlChannelName,
+  streamChannelName,
   type TerminalKind,
   type ToolCallRequest,
   type VeniceErrorKind as SharedVeniceErrorKind,
@@ -1024,30 +1025,58 @@ async function* streamChatViaFunction(
   // rides untouched.
   const body = buildChatBody(req, true);
 
-  // Envelope POST. functions.invoke wraps the bearer token from the
-  // signed-in session so the edge function's verify_jwt accepts the
-  // call and the userIdFromJwt helper can read the sub claim.
-  const { data, error } = await supabase.functions.invoke<StreamEnvelope>(
-    'venice/stream',
-    {
-      body: {
-        threadId: ctx.threadId,
-        userMessageId: ctx.userMessageId,
-        body,
-      },
-    },
-  );
-  if (error) {
-    throw new VeniceError(
-      `/stream invoke failed: ${error.message}`,
-      'http',
-    );
-  }
-  if (!data) {
-    throw new VeniceError('/stream returned no envelope', 'parse');
-  }
+  // Pre-subscribe to the stream channel BEFORE POSTing /stream. The
+  // function publishes the first broadcasts (typically reasoning_text
+  // for reasoning models, which often arrives within ~100ms of the
+  // Venice connection opening) as soon as the waitUntil-anchored
+  // orchestrator gets its first SSE delta. If we subscribed AFTER the
+  // POST returned, the Realtime subscribe round-trip (~200-500ms) and
+  // the function's startup could race, and the first reasoning
+  // chunks would broadcast into nothing because no subscriber was
+  // listening yet. Text events have a replay buffer via
+  // `envelope.completedSoFar` (the function persists content
+  // progressively to the streaming row); reasoning has no such
+  // buffer, so the leading reasoning fragment would silently
+  // disappear from the user's screen and from any device that
+  // observed only the live stream. The deterministic channel name
+  // (streamChannelName(threadId)) lets us subscribe before the
+  // envelope is in hand. The post-subscribe completedSoFar drain
+  // still fires below for text - which is correct: any text that
+  // landed before we subscribed is already in the row, and the
+  // envelope returns it.
+  const channelName = streamChannelName(ctx.threadId);
+  const subscription = setupStreamSubscription(supabase, channelName);
+  await subscription.subscribed;
 
-  yield* subscribeStreamChannel(supabase, data, req.signal);
+  try {
+    // Envelope POST. functions.invoke wraps the bearer token from
+    // the signed-in session so the edge function's verify_jwt
+    // accepts the call and the userIdFromJwt helper can read the
+    // sub claim.
+    const { data, error } = await supabase.functions.invoke<StreamEnvelope>(
+      'venice/stream',
+      {
+        body: {
+          threadId: ctx.threadId,
+          userMessageId: ctx.userMessageId,
+          body,
+        },
+      },
+    );
+    if (error) {
+      throw new VeniceError(
+        `/stream invoke failed: ${error.message}`,
+        'http',
+      );
+    }
+    if (!data) {
+      throw new VeniceError('/stream returned no envelope', 'parse');
+    }
+
+    yield* subscription.drain(data, req.signal);
+  } finally {
+    await subscription.unsubscribe();
+  }
 }
 
 /**
@@ -1109,33 +1138,43 @@ export async function* streamReconnect(
  * the FUNCTION continues - cancel is a separate control-channel
  * publish via cancelStream below).
  */
-async function* subscribeStreamChannel(
-  supabase: SupabaseClient,
-  envelope: StreamEnvelope,
-  signal: AbortSignal | undefined,
-): AsyncGenerator<StreamEvent, void, void> {
-  // Reconnect-only short-circuit: when the envelope reports no
-  // in-flight stream, the caller asked us to observe rather than
-  // start. Emit a terminal end so the chat-loop's consumer wraps up
-  // cleanly without waiting for events that aren't coming.
-  if (envelope.noStreamInFlight) {
-    yield {
-      type: 'end',
-      persistedAssistantId: envelope.assistantRowId ?? '',
-      terminalKind: 'completed',
-      // The function side already returned; we never observed any
-      // rounds and don't know the count it ran. 0 is the safe stand-in
-      // for reconnect callers that don't branch on the metric.
-      roundsRun: 0,
-    };
-    return;
-  }
+/**
+ * Per-channel handle owned by a single stream consumer. Use
+ * `setupStreamSubscription` to construct one. The shape lets the
+ * subscribe step happen BEFORE any POST that might trigger
+ * broadcasts (used by streamChatViaFunction) while still letting
+ * legacy callers (streamReconnect) keep the post-then-subscribe
+ * ordering through the subscribeStreamChannel wrapper below.
+ *
+ *   - `subscribed`: resolves once the channel has reached SUBSCRIBED.
+ *     Reject on CHANNEL_ERROR / TIMED_OUT. The subscribe() call has
+ *     already been made by setupStreamSubscription; this is just an
+ *     awaitable for the status.
+ *   - `drain(envelope, signal)`: yields the StreamEvent stream the
+ *     channel produces, drained from the internal queue. Yields the
+ *     envelope's noStreamInFlight short-circuit first when set, or
+ *     the completedSoFar text replay otherwise. Honours the abort
+ *     signal by closing the queue.
+ *   - `unsubscribe()`: best-effort channel teardown. Idempotent.
+ */
+interface StreamSubscription {
+  readonly subscribed: Promise<void>;
+  drain(
+    envelope: StreamEnvelope,
+    signal: AbortSignal | undefined,
+  ): AsyncGenerator<StreamEvent, void, void>;
+  unsubscribe(): Promise<void>;
+}
 
+function setupStreamSubscription(
+  supabase: SupabaseClient,
+  channelName: string,
+): StreamSubscription {
   // Channel subscribe. private:true engages the realtime.messages RLS
   // policies in supabase/schema.sql that gate this topic to the
   // thread owner. The function (service_role) is what publishes on
   // the other side.
-  const channel = supabase.channel(envelope.channelName, {
+  const channel = supabase.channel(channelName, {
     config: { private: true },
   });
 
@@ -1296,13 +1335,9 @@ async function* subscribeStreamChannel(
     close();
   });
 
-  // Subscribe, then drain any completedSoFar buffer the envelope
-  // surfaced. The subscribe-then-read pattern guards against the race
-  // where an UPDATE lands between the envelope read and the subscribe
-  // callback firing: anything in completedSoFar is what the row had
-  // at envelope time, and any new deltas after that point arrive
-  // through the Broadcast channel we just subscribed to.
-  await new Promise<void>((resolve, reject) => {
+  // Kick subscribe immediately so callers waiting on `subscribed`
+  // get an awaitable that resolves once Realtime confirms.
+  const subscribed = new Promise<void>((resolve, reject) => {
     channel.subscribe((status, err) => {
       if (status === 'SUBSCRIBED') resolve();
       else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -1311,38 +1346,97 @@ async function* subscribeStreamChannel(
     });
   });
 
-  if (envelope.completedSoFar.length > 0) {
-    yield { type: 'text', delta: envelope.completedSoFar };
+  async function* drain(
+    envelope: StreamEnvelope,
+    signal: AbortSignal | undefined,
+  ): AsyncGenerator<StreamEvent, void, void> {
+    // Reconnect-only short-circuit: when the envelope reports no
+    // in-flight stream, the caller asked us to observe rather than
+    // start. Emit a terminal end so the chat-loop's consumer wraps
+    // up cleanly without waiting for events that aren't coming.
+    if (envelope.noStreamInFlight) {
+      yield {
+        type: 'end',
+        persistedAssistantId: envelope.assistantRowId ?? '',
+        terminalKind: 'completed',
+        // The function side already returned; we never observed any
+        // rounds and don't know the count it ran. 0 is the safe
+        // stand-in for reconnect callers that don't branch on the
+        // metric.
+        roundsRun: 0,
+      };
+      return;
+    }
+
+    // Drain any completedSoFar buffer the envelope surfaced. Text
+    // events have this replay path (the function persists content
+    // progressively to the streaming row); reasoning does not, which
+    // is why streamChatViaFunction now subscribes BEFORE POSTing
+    // /stream rather than after, so the function's first reasoning
+    // broadcasts land in our queue instead of dropping into the
+    // pre-subscribe void.
+    if (envelope.completedSoFar.length > 0) {
+      yield { type: 'text', delta: envelope.completedSoFar };
+    }
+
+    // Wire the caller's AbortSignal to local close.
+    // The signal fires when the chat-loop's stop button or a foreign
+    // claim's abort propagates here; the FUNCTION continues regardless
+    // (cancel is the control-channel publish path, not this signal).
+    const onAbort = (): void => close();
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      while (true) {
+        if (queue.length > 0) {
+          const ev = queue.shift();
+          if (ev) yield ev;
+          continue;
+        }
+        if (closed) break;
+        const next = await new Promise<StreamEvent | null>((r) => {
+          resolveNext = r;
+        });
+        if (next === null) break;
+        yield next;
+      }
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
   }
 
-  // Wire the caller's AbortSignal to local close-and-unsubscribe.
-  // The signal fires when the chat-loop's stop button or a foreign
-  // claim's abort propagates here; the FUNCTION continues regardless
-  // (cancel is the control-channel publish path, not this signal).
-  const onAbort = (): void => close();
-  signal?.addEventListener('abort', onAbort, { once: true });
-
-  try {
-    while (true) {
-      if (queue.length > 0) {
-        const ev = queue.shift();
-        if (ev) yield ev;
-        continue;
-      }
-      if (closed) break;
-      const next = await new Promise<StreamEvent | null>((r) => {
-        resolveNext = r;
-      });
-      if (next === null) break;
-      yield next;
-    }
-  } finally {
-    signal?.removeEventListener('abort', onAbort);
+  async function unsubscribe(): Promise<void> {
+    close();
     try {
       await channel.unsubscribe();
     } catch {
       /* best-effort */
     }
+  }
+
+  return { subscribed, drain, unsubscribe };
+}
+
+/**
+ * Legacy post-then-subscribe path retained for streamReconnect. The
+ * reconnect-only POST doesn't start new function work, so there is no
+ * pre-subscribe race for it - the function returns the envelope
+ * synchronously without kicking off a new orchestrator. New callers
+ * that DO trigger work (streamChatViaFunction) use
+ * setupStreamSubscription directly so the subscribe happens before
+ * the POST.
+ */
+async function* subscribeStreamChannel(
+  supabase: SupabaseClient,
+  envelope: StreamEnvelope,
+  signal: AbortSignal | undefined,
+): AsyncGenerator<StreamEvent, void, void> {
+  const sub = setupStreamSubscription(supabase, envelope.channelName);
+  await sub.subscribed;
+  try {
+    yield* sub.drain(envelope, signal);
+  } finally {
+    await sub.unsubscribe();
   }
 }
 
