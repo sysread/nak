@@ -5,11 +5,13 @@
    *   1. Phase routing. Which screen renders is decided by `app.phase`
    *      in $lib/state.svelte.ts. This file just dispatches.
    *
-   *   2. Session lifecycle. On mount we decide whether to auto-unlock
-   *      from a prior sessionStorage blob, jump to setup (no stored
-   *      config), or show the Unlock screen. While unlocked we listen
-   *      for user activity to extend the TTL, and a wall-clock timer
-   *      drops the session back to `locked` when it expires.
+   *   2. Boot lifecycle. On mount we either find a stored config in
+   *      localStorage and call activate() to bring the app online, or
+   *      we jump to Setup. There's no longer a separate Unlock /
+   *      Locked phase - the master-password ceremony got retired with
+   *      the streaming-root cleanup (only public-by-design values left
+   *      in local config, so encryption bought zero security and cost
+   *      real UX).
    *
    * The inline boot script in index.html already applied cached theme
    * attributes to <html> before first paint; applyTheme() in onMount
@@ -17,30 +19,14 @@
    * working.
    */
   import { onMount } from 'svelte';
-  import { app, activate, lock, setTheme } from '$lib/state.svelte';
-  import { hasStoredConfig } from '$lib/config';
-  import {
-    loadSession,
-    touchSession,
-    sessionRemainingMs,
-    DEFAULT_TTL_MS,
-  } from '$lib/session';
+  import { app, activate, setTheme } from '$lib/state.svelte';
+  import { hasStoredConfig, loadConfig } from '$lib/config';
   import { applyTheme } from '$lib/theme';
   import { initUpdateWatcher } from '$lib/update.svelte';
   import { initRouting } from '$lib/routing.svelte';
   import Setup from './screens/Setup.svelte';
-  import Unlock from './screens/Unlock.svelte';
   import Chat from './screens/Chat.svelte';
-  import EditConfig from './screens/EditConfig.svelte';
   import UpdateBanner from './components/UpdateBanner.svelte';
-
-  // Throttle activity writes to sessionStorage — sessionStorage.setItem is
-  // synchronous and we don't want to hammer it on every keystroke.
-  const TOUCH_THROTTLE_MS = 30_000;
-  // How often to check whether the session has expired. Low enough that
-  // the auto-lock feels responsive (a user walking away for > 1hr sees
-  // the lock screen within 30s of expiry) without burning CPU.
-  const IDLE_CHECK_MS = 30_000;
 
   onMount(() => {
     // Make sure the inline boot script's attributes reflect the current
@@ -61,56 +47,32 @@
     };
     media.addEventListener('change', onSystemChange);
 
-    // Prefer an existing sessionStorage unlock over reprompting for the
-    // master password. The session blob carries the plaintext config; the
-    // check happens entirely client-side.
-    const restored = loadSession();
-    if (restored) {
-      activate(restored, { persist: false });
+    // Phase decision. With master password retired, the in-memory
+    // activate happens synchronously here: there's no encrypted blob
+    // to unlock, no separate sessionStorage cache to consult, just a
+    // plain localStorage JSON we trust on read. A stored config that
+    // failed validateConfig reads back as null and falls through to
+    // Setup - the same outcome as a fresh browser - which doubles as
+    // the hard-reset path for users coming from the old encrypted
+    // v1 blob.
+    if (hasStoredConfig()) {
+      const cfg = loadConfig();
+      if (cfg) activate(cfg);
+      else app.phase = 'setup';
     } else {
-      app.phase = hasStoredConfig() ? 'locked' : 'setup';
+      app.phase = 'setup';
     }
-
-    let lastTouch = 0;
-    const onActivity = (): void => {
-      if (app.phase !== 'unlocked') return;
-      const now = Date.now();
-      if (now - lastTouch < TOUCH_THROTTLE_MS) return;
-      lastTouch = now;
-      touchSession(DEFAULT_TTL_MS);
-    };
-
-    // These are all "coarse" activity signals — keypress, pointer, scroll,
-    // and tab-focus. mousemove intentionally omitted to avoid hyperactive
-    // writes while the user is just moving the cursor.
-    const events = ['keydown', 'pointerdown', 'scroll', 'focus'] as const;
-    for (const ev of events) {
-      window.addEventListener(ev, onActivity, { passive: true });
-    }
-
-    const idleTimer = window.setInterval(() => {
-      if (app.phase !== 'unlocked') return;
-      const remaining = sessionRemainingMs();
-      if (remaining === null || remaining === 0) {
-        lock();
-      }
-    }, IDLE_CHECK_MS);
 
     return () => {
-      for (const ev of events) {
-        window.removeEventListener(ev, onActivity);
-      }
-      window.clearInterval(idleTimer);
       media.removeEventListener('change', onSystemChange);
     };
   });
 
-  // Install URL routing as soon as the app is unlocked. The setup /
-  // locked / edit-config phases stay URL-inert on purpose - they're
-  // gated by stored-config presence and session state, not by the
-  // address bar, so a stray ?modal=settings while locked would open
-  // nothing. initRouting is idempotent so re-running on every
-  // unlock->lock->unlock cycle is a no-op after the first.
+  // Install URL routing as soon as the app is unlocked. The setup
+  // phase stays URL-inert on purpose - it's gated by stored-config
+  // presence, not by the address bar, so a stray ?modal=settings
+  // during setup would open nothing. initRouting is idempotent so
+  // re-running on every mount cycle is a no-op after the first.
   $effect(() => {
     if (app.phase === 'unlocked') initRouting();
   });
@@ -125,10 +87,6 @@
   <div class="center"><p class="subtle">Loading…</p></div>
 {:else if app.phase === 'setup'}
   <Setup />
-{:else if app.phase === 'locked'}
-  <Unlock />
-{:else if app.phase === 'edit-config'}
-  <EditConfig />
 {:else}
   <Chat />
 {/if}

@@ -42,14 +42,14 @@
   import { onMount, tick } from 'svelte';
   import { fade } from 'svelte/transition';
   import type { Session } from '@supabase/supabase-js';
-  import { app, lock, applyServerSettings, notifyBiasActiveConvIds } from '$lib/state.svelte';
+  import { app, applyServerSettings, notifyBiasActiveConvIds } from '$lib/state.svelte';
   import {
     notifications,
     notifyTurnComplete,
     notifyAskUser,
     markThreadRead,
   } from '$lib/notifications.svelte';
-  import { clearSession, getSessionThreadId, setSessionThreadId } from '$lib/session';
+  import { clearSessionThreadId, getSessionThreadId, setSessionThreadId } from '$lib/session';
   import { route, navigate, buildSearch } from '$lib/routing.svelte';
   import {
     DEFAULT_THREAD_PAGE_SIZE,
@@ -4520,9 +4520,11 @@
   const sendHint = $derived(isMac ? '\u2318-enter sends' : 'ctrl-enter sends');
 
   async function signOut(): Promise<void> {
-    // Clear the cached master-password session too — an explicit sign-out
-    // should reset auto-unlock so a refresh goes back to the Unlock screen.
-    clearSession();
+    // Drop the tab-local last-active-thread id so a post-sign-in
+    // session doesn't reopen a thread the user has just signed away
+    // from. The localStorage config stays - signing back in re-uses
+    // it without going through Setup.
+    clearSessionThreadId();
     await app.supabase?.signOut();
   }
 
@@ -6330,25 +6332,6 @@
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <circle cx="12" cy="12" r="3" />
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
-          <button
-            class="secondary icon-btn lock-btn"
-            onclick={lock}
-            title="Lock (session is unlocked)"
-            aria-label="Lock"
-          >
-            <svg class="lock-open" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                 stroke-linejoin="round" aria-hidden="true">
-              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-              <path d="M7 11V7a5 5 0 0 1 9.9-1" />
-            </svg>
-            <svg class="lock-closed" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                 stroke-linejoin="round" aria-hidden="true">
-              <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
             </svg>
           </button>
           <button

@@ -1,40 +1,49 @@
 /**
  * Persistent configuration blob for the keys the app needs to talk to
- * its external services. Encrypted with the user's master password (via
- * `./crypto`) and kept in localStorage.
+ * its external services. Stored as PLAINTEXT JSON in localStorage.
  *
- * What's persisted to disk is the *only* thing we persist in encrypted
- * form. Per-user preferences (default model tier, theme) live in
+ * Why plaintext: the remaining values (supabaseUrl + supabasePublishableKey)
+ * are not secrets by design. Per Supabase nomenclature, the
+ * publishable key IS meant to ship in client bundles - security comes
+ * from RLS on the tables plus the email/password auth flow, not from
+ * the key's confidentiality. The streaming-root migration dropped the
+ * per-user Venice API key (every Venice consumer routes through an
+ * edge function reading a shared key from `app_config` server-side),
+ * which was the last value that materially benefited from at-rest
+ * encryption. With that gone, the master-password ceremony was paying
+ * a UX cost (every fresh session = an Unlock screen, occasional
+ * cross-browser foot-shooting on password changes) for essentially
+ * zero security gain. Hard-reset migration: legacy v1 entries are
+ * orphaned on first load (validateConfig fails on the encrypted
+ * string, hasStoredConfig returns false, the user goes through
+ * setup again).
+ *
+ * What's persisted to disk is the *only* thing we persist locally for
+ * config. Per-user preferences (default model tier, theme) live in
  * Supabase `profiles.settings` once the user signs in - see
- * `./supabase.ts`. In-memory app state, including the decrypted config
- * while the app is unlocked, is owned by `./state.svelte.ts`.
- *
- * The streaming-root migration dropped the per-user Venice API key:
- * every Venice consumer in the browser now routes through an edge
- * function that reads the shared key from `app_config` server-side.
- * Older saved configs still carry a `veniceApiKey` field; the
- * validator silently drops it on read so existing users keep working
- * without re-entering anything. Same for imported config files.
+ * `./supabase.ts`. In-memory app state, including the active config,
+ * is owned by `./state.svelte.ts`.
  *
  * Export/import format: kind="nak-config", version=2. v2 renamed the
  * client-key field supabaseAnonKey -> supabasePublishableKey to match
  * Supabase's modern API-key nomenclature; both the import parser and
  * the stored-blob validator still read the legacy field, so older
- * exported files and saved configs keep working. Export is plaintext
- * by design - users should store the file like any other secret.
+ * exported files keep working.
  */
-import { encrypt, decrypt } from './crypto';
 
 export interface AppConfig {
   supabaseUrl: string;
   supabasePublishableKey: string;
 }
 
-// The `:v1` suffix is a migration escape hatch: if we ever change the
-// on-disk shape in a non-backward-compatible way, a new `nak:config:v2`
-// key lets old and new clients coexist on the same origin long enough
-// to migrate.
-const STORAGE_KEY = 'nak:config:v1';
+// `nak:config:v2` is the post-master-password key. The legacy
+// `nak:config:v1` entry held an AES-GCM ciphertext keyed by the user's
+// master password; that key is orphaned by saveConfig() / cleared by
+// clearStoredConfig() and never read again. Bumping to v2 also means a
+// browser that updates from a legacy build naturally goes through
+// setup again instead of crashing on a parse of the old ciphertext.
+const STORAGE_KEY = 'nak:config:v2';
+const LEGACY_STORAGE_KEY = 'nak:config:v1';
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -50,25 +59,30 @@ function getStorage(): Storage {
   return localStorage;
 }
 
-export function hasStoredConfig(): boolean {
+function dropLegacyEntry(): void {
   try {
-    return getStorage().getItem(STORAGE_KEY) !== null;
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
   } catch {
-    return false;
+    // Storage unavailable / tabs racing on quota. Worst case the
+    // legacy entry stays around forever - it's just dead bytes, no
+    // path reads it.
   }
+}
+
+export function hasStoredConfig(): boolean {
+  return loadConfig() !== null;
 }
 
 export function clearStoredConfig(): void {
   getStorage().removeItem(STORAGE_KEY);
+  dropLegacyEntry();
 }
 
 /**
- * Defense-in-depth validator run on every load. If an older build wrote
- * extra fields, or a malicious script managed to tamper with the JSON
- * after decrypt, we drop unknown keys and reject anything that doesn't
- * look like the three required strings. The HTTPS check is a sanity
- * guard rather than a security boundary — the real URL is ultimately
- * whatever the user typed into Setup.
+ * Defense-in-depth validator run on every load. Drops unknown fields
+ * and rejects anything that doesn't carry the two required strings.
+ * Reads both the new and legacy publishable-key field names so an
+ * older v1-shaped JSON paste still imports.
  */
 function validateConfig(candidate: unknown): AppConfig {
   if (typeof candidate !== 'object' || candidate === null) {
@@ -76,11 +90,6 @@ function validateConfig(candidate: unknown): AppConfig {
   }
   const c = candidate as Record<string, unknown>;
   const url = c.supabaseUrl;
-  // Blobs saved before the anon->publishable rename stored the client key
-  // under `supabaseAnonKey`. Read the new field, fall back to the legacy
-  // one, so an older saved config still loads; the next saveConfig rewrites
-  // it under the new name. The value is the Supabase client key either way
-  // (a publishable key now, a legacy anon JWT on older/local projects).
   const pub = c.supabasePublishableKey ?? c.supabaseAnonKey;
   if (typeof url !== 'string' || typeof pub !== 'string') {
     throw new ConfigError('Stored config is missing required fields.');
@@ -88,73 +97,61 @@ function validateConfig(candidate: unknown): AppConfig {
   if (!/^https?:\/\//.test(url)) {
     throw new ConfigError('supabaseUrl must start with http(s)://');
   }
-  // Any unknown fields (including the legacy `defaultModel` from before
-  // settings moved to Supabase, and the legacy `veniceApiKey` from before
-  // the streaming-root migration moved every Venice consumer behind an
-  // edge function) are dropped silently on read.
+  // Drop any unknown fields silently. The legacy `defaultModel` (before
+  // settings moved to Supabase) and `veniceApiKey` (before the
+  // streaming-root migration retired the per-user key) are the two
+  // expected stragglers; anything else newer builds carry forward into
+  // their own column.
   return { supabaseUrl: url, supabasePublishableKey: pub };
 }
 
 /**
- * Decrypts the stored config using the password. Returns null when no config
- * is stored. Throws ConfigError on wrong password or corrupted data.
+ * Read the persisted config from localStorage. Returns null on any
+ * problem (no entry, not valid JSON - which is the legacy encrypted
+ * blob case, validateConfig rejection). The legacy v1 entry stays
+ * untouched here; saveConfig / clearStoredConfig is responsible for
+ * the lazy cleanup.
  */
-export async function loadConfig(password: string): Promise<AppConfig | null> {
-  const blob = getStorage().getItem(STORAGE_KEY);
-  if (blob === null) return null;
-  let json: string;
+export function loadConfig(): AppConfig | null {
+  let raw: string | null;
   try {
-    json = await decrypt(blob, password);
-  } catch (err) {
-    throw new ConfigError(
-      err instanceof Error ? err.message : 'Failed to decrypt stored config.'
-    );
+    raw = getStorage().getItem(STORAGE_KEY);
+  } catch {
+    return null;
   }
+  if (raw === null) return null;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(json);
+    parsed = JSON.parse(raw);
   } catch {
-    throw new ConfigError('Decrypted config is not valid JSON.');
+    return null;
   }
-  return validateConfig(parsed);
+  try {
+    return validateConfig(parsed);
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Encrypts the config with the given password and persists it. Overwrites
- * any existing blob.
+ * Persist the config to localStorage as plaintext JSON. Overwrites any
+ * existing entry. Also drops the legacy encrypted entry so it doesn't
+ * accumulate after a successful migration through Setup.
  */
-export async function saveConfig(config: AppConfig, password: string): Promise<void> {
+export function saveConfig(config: AppConfig): void {
   const clean = validateConfig(config);
-  const payload = JSON.stringify(clean);
-  const blob = await encrypt(payload, password);
-  getStorage().setItem(STORAGE_KEY, blob);
-}
-
-/**
- * Re-encrypts the stored config under a new password. Requires the old
- * password to decrypt first, so callers prove knowledge of the secret.
- */
-export async function changePassword(
-  oldPassword: string,
-  newPassword: string
-): Promise<void> {
-  const existing = await loadConfig(oldPassword);
-  if (existing === null) throw new ConfigError('No stored config to re-encrypt.');
-  if (newPassword.length < 8) {
-    throw new ConfigError('New password must be at least 8 characters.');
-  }
-  await saveConfig(existing, newPassword);
+  getStorage().setItem(STORAGE_KEY, JSON.stringify(clean));
+  dropLegacyEntry();
 }
 
 // ---------------------------------------------------------------------------
-// Export / import of the PLAINTEXT local config — the three keys only.
-// Used so users can move credentials to a new browser without re-typing.
-// The produced file contains secrets; callers should warn the user.
+// Export / import of the local config. Used so users can move credentials to
+// a new browser without re-typing. Same shape as before the master-password
+// rip - the export was always plaintext, no migration needed for users who
+// kept an exported file around.
 // ---------------------------------------------------------------------------
 
 const EXPORT_KIND = 'nak-config';
-// v2 renamed supabaseAnonKey -> supabasePublishableKey. We write v2; the
-// parser still accepts v1 (legacy field) so old exported files import.
 const EXPORT_VERSION = 2;
 
 export interface ExportedConfig {
@@ -187,23 +184,17 @@ export function parseExportedConfig(raw: string): AppConfig {
   if (r.kind !== EXPORT_KIND) {
     throw new ConfigError('Not a Nak config file (wrong `kind`).');
   }
-  // Accept v1 (legacy `supabaseAnonKey`) and v2 (`supabasePublishableKey`).
   if (r.version !== 1 && r.version !== 2) {
     throw new ConfigError(
       `Unsupported config file version: ${String(r.version)}. Expected 1 or 2.`
     );
   }
   const supabaseUrl = typeof r.supabaseUrl === 'string' ? r.supabaseUrl.trim() : '';
-  // New field first, legacy `supabaseAnonKey` as the v1 fallback.
   const rawPub = r.supabasePublishableKey ?? r.supabaseAnonKey;
   const supabasePublishableKey = typeof rawPub === 'string' ? rawPub.trim() : '';
   if (!/^https?:\/\//.test(supabaseUrl)) {
     throw new ConfigError('Missing or invalid supabaseUrl.');
   }
   if (!supabasePublishableKey) throw new ConfigError('Missing Supabase publishable key.');
-  // Older exported files included a `veniceApiKey` field; that's
-  // dropped silently here - the streaming-root migration moved every
-  // Venice consumer behind an edge function that reads a shared key
-  // from app_config, so the per-user key is no longer needed.
   return { supabaseUrl, supabasePublishableKey };
 }

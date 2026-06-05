@@ -6,15 +6,19 @@
  * Phase state machine (driven by App.svelte's boot flow):
  *
  *   loading ──► setup          (no stored config found)
- *           └─► locked         (stored config exists, no live session)
- *               ├─► unlocked   (activate(): master password accepted)
- *               └─► edit-config (enterEditConfig(): fix mistyped keys)
- *   unlocked ──► locked        (lock(): user clicked Lock, or TTL expired)
+ *           └─► unlocked       (stored config loaded; activate() seeds defaults)
  *
- * The setup / locked branches are decided by `hasStoredConfig()` in
- * App.svelte. The loading ──► unlocked shortcut happens when
- * `loadSession()` finds a valid sessionStorage blob from a previous
- * tab-local unlock.
+ * The setup / unlocked branches are decided by `hasStoredConfig()` in
+ * App.svelte. The master-password / Unlock screen / EditConfig screen
+ * and the lock() lifecycle were retired with the streaming-root
+ * cleanup - the per-user Venice API key (the last value that
+ * meaningfully benefited from encryption at rest) moved server-side
+ * to app_config, leaving only supabaseUrl + the Supabase publishable
+ * key in local storage. Both are publishable by design, so the
+ * encryption ceremony bought zero security and cost real UX. The
+ * `loading ──► unlocked` transition is now synchronous on the
+ * App.svelte mount path; the legacy `locked` / `edit-config` phases
+ * are gone.
  *
  * Why a single $state object instead of per-concern stores: every screen
  * needs phase + config + the service instances, so a single rune is
@@ -27,7 +31,6 @@ import {
   type UserSettings,
 } from './supabase';
 import { VeniceClient } from './venice';
-import { saveSession, clearSession } from './session';
 import { resetUsage } from './usage-store.svelte';
 import { detectTimezone } from './timezone';
 import {
@@ -141,7 +144,7 @@ const rem = lazyManager(() =>
   import('./agents/rem/manager').then((m) => m.remManager)
 );
 
-export type AppPhase = 'loading' | 'setup' | 'locked' | 'unlocked' | 'edit-config';
+export type AppPhase = 'loading' | 'setup' | 'unlocked';
 
 interface AppState {
   phase: AppPhase;
@@ -794,7 +797,7 @@ function startBackgroundWorkers(config: AppConfig): void {
  * and could write a wiki article with the wrong values during the few
  * hundred ms before Chat.svelte's settings fetch corrected them.
  */
-export function activate(config: AppConfig, opts: { persist?: boolean } = {}): void {
+export function activate(config: AppConfig): void {
   app.config = config;
   app.supabase = new SupabaseService(config);
   // Streaming-root path: the venice client routes streamChat through
@@ -823,7 +826,6 @@ export function activate(config: AppConfig, opts: { persist?: boolean } = {}): v
   app.userLocation = '';
   app.phase = 'unlocked';
   app.error = null;
-  if (opts.persist !== false) saveSession(config);
   // Fire-and-forget settings-then-workers chain. Workers don't start
   // until settings have either loaded successfully or failed, which
   // closes the race where a worker would briefly run on seeds before
@@ -907,18 +909,26 @@ export function notifyBiasActiveConvIds(ids: readonly string[]): void {
   bias.whenLoaded((m) => m.setActiveConvIds(ids));
 }
 
-export function lock(): void {
+/**
+ * Stop every background worker and reset the in-memory user state.
+ * Called by the Sign-out path in Settings - sign-out is the only
+ * "tear everything down" affordance the app has now that the
+ * master-password lock state is gone (see the phase-state-machine
+ * docblock at the top of this file). The stored config in
+ * localStorage stays untouched; a subsequent sign-in re-uses it
+ * without going through Setup. Use clearStoredConfig() (config.ts)
+ * for the heavier "this device should forget the project entirely"
+ * affordance.
+ */
+export function resetForSignOut(): void {
   stopBackgroundWorkers();
-  app.config = null;
-  app.supabase = null;
-  app.venice = null;
   app.defaultModel = DEFAULT_TIER;
   app.defaultReasoningEffort = DEFAULT_REASONING_EFFORT;
   app.defaultVerbosity = DEFAULT_VERBOSITY;
   app.defaultLogLevel = DEFAULT_LOG_LEVEL;
   app.emphasisMarkdown = false;
   app.notifyOnComplete = false;
-  // Wiki + display TZ: reset so a subsequent unlock re-seeds them
+  // Wiki + display TZ: reset so a subsequent sign-in re-seeds them
   // from the new account's Supabase settings rather than inheriting
   // the previous account's choices.
   app.wikiAutomaticEnabled = true;
@@ -926,25 +936,8 @@ export function lock(): void {
   app.memoryLibrarianEnabled = true;
   app.displayTimezone = detectTimezone();
   // Profile: same rationale - never leak the previous account's
-  // name/location across a lock-then-unlock-as-someone-else flow.
+  // name/location across a sign-out / sign-in-as-someone-else flow.
   app.userName = '';
   app.userLocation = '';
   app.systemPrompts = [];
-  app.phase = 'locked';
-  clearSession();
-}
-
-/**
- * Enter the "edit keys" flow with a decrypted config. Used by the Unlock
- * screen when the user wants to fix a mistyped key without first having to
- * get past the chat auth flow. The config is held in app.config but no
- * Supabase / Venice service is instantiated yet — those spin up via
- * activate() once the user commits.
- */
-export function enterEditConfig(config: AppConfig): void {
-  app.config = config;
-  app.supabase = null;
-  app.venice = null;
-  app.phase = 'edit-config';
-  app.error = null;
 }

@@ -1,43 +1,19 @@
-import type { AppConfig } from './config';
-
 /**
- * Ephemeral "remember me" store for the decrypted config. Persists through
- * page refreshes within the same tab, but clears when the tab is closed
- * (sessionStorage semantics) and after an inactivity timeout.
+ * Tab-local active-thread persistence. Survives a refresh within the
+ * same tab; evaporates when the tab closes (sessionStorage semantics).
+ * Chat.svelte reads this at mount time so a refresh lands on the same
+ * conversation the user was looking at.
  *
- * Storing plaintext here is no worse than the runtime memory exposure that
- * already exists while the app is unlocked — any script running in this
- * origin can read either. The incremental tradeoff is that a refresh
- * within the inactivity window will auto-unlock instead of reprompting
- * for the master password.
- *
- * Why sessionStorage specifically (rather than localStorage or a
- * cookie): we want the plaintext copy to evaporate when the tab
- * closes, without us having to listen for `beforeunload` or run a
- * shutdown hook. sessionStorage gives us that scope for free.
- *
- * Adjacent responsibility split:
- *   - `config.ts` owns the encrypted-at-rest blob.
- *   - `state.svelte.ts` owns the in-memory decrypted copy and drives
- *     the unlock / lock lifecycle.
- *   - this module owns the refresh-bridging copy and the activity TTL.
- *   - `App.svelte` owns the activity listeners that call touchSession().
+ * Earlier this module also held a master-password session-bridge blob
+ * (a TTL-gated copy of the decrypted config so a refresh didn't
+ * reprompt for the password). That ceremony was retired with the
+ * streaming-root cleanup - the local config is plaintext JSON now and
+ * `App.svelte` loads it synchronously on mount, no bridge needed.
+ * What's left is just the thread-id helper used by Chat.svelte's
+ * "reopen the last active thread" path.
  */
 
-const KEY = 'nak:session:v1';
-
-// Default 7 days of inactivity before auto-lock. Long enough that a
-// working week rarely re-prompts for the master password, while still
-// expiring a tab left abandoned on a shared machine.
-export const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-interface SessionBlob {
-  config: AppConfig;
-  /** Epoch ms at which this session is no longer valid. */
-  expiresAt: number;
-  /** UUID of the thread the user last had open. Restored on reload. */
-  activeThreadId?: string;
-}
+const KEY = 'nak:session:thread:v1';
 
 function storage(): Storage | null {
   try {
@@ -48,115 +24,43 @@ function storage(): Storage | null {
   }
 }
 
-export function saveSession(config: AppConfig, ttlMs: number = DEFAULT_TTL_MS): void {
-  const s = storage();
-  if (!s) return;
-  const blob: SessionBlob = {
-    config,
-    expiresAt: Date.now() + ttlMs,
-  };
-  try {
-    s.setItem(KEY, JSON.stringify(blob));
-  } catch {
-    // Quota or private-mode failure — treat as no-op.
-  }
-}
-
-export function loadSession(): AppConfig | null {
-  const s = storage();
-  if (!s) return null;
-  const raw = s.getItem(KEY);
-  if (!raw) return null;
-  try {
-    const blob = JSON.parse(raw) as SessionBlob;
-    if (typeof blob.expiresAt !== 'number' || Date.now() >= blob.expiresAt) {
-      s.removeItem(KEY);
-      return null;
-    }
-    return blob.config;
-  } catch {
-    s.removeItem(KEY);
-    return null;
-  }
-}
-
-export function touchSession(ttlMs: number = DEFAULT_TTL_MS): void {
-  const s = storage();
-  if (!s) return;
-  const raw = s.getItem(KEY);
-  if (!raw) return;
-  try {
-    const blob = JSON.parse(raw) as SessionBlob;
-    blob.expiresAt = Date.now() + ttlMs;
-    s.setItem(KEY, JSON.stringify(blob));
-  } catch {
-    // Malformed blob — drop it.
-    s.removeItem(KEY);
-  }
-}
-
-export function clearSession(): void {
-  const s = storage();
-  if (!s) return;
-  s.removeItem(KEY);
-}
-
 /**
- * Read the persisted active-thread id, if any. Returns null when there's
- * no session, no saved id, or the session has expired (matches loadSession).
+ * Read the active-thread id saved for this tab, or null if there isn't
+ * one (fresh tab, the user signed out, or the value isn't a string).
  */
 export function getSessionThreadId(): string | null {
   const s = storage();
   if (!s) return null;
-  const raw = s.getItem(KEY);
-  if (!raw) return null;
   try {
-    const blob = JSON.parse(raw) as SessionBlob;
-    if (typeof blob.expiresAt !== 'number' || Date.now() >= blob.expiresAt) {
-      return null;
-    }
-    return typeof blob.activeThreadId === 'string' ? blob.activeThreadId : null;
+    const raw = s.getItem(KEY);
+    return typeof raw === 'string' && raw.length > 0 ? raw : null;
   } catch {
     return null;
   }
 }
 
 /**
- * Persist the active-thread id onto the existing session blob. No-op if
- * there's no session (nothing to attach it to). Passing null clears the
- * stored id without touching the rest of the session.
+ * Save (or clear with `null`) the active-thread id for this tab.
+ * Best-effort: a storage failure (quota, private mode) drops silently.
  */
 export function setSessionThreadId(id: string | null): void {
   const s = storage();
   if (!s) return;
-  const raw = s.getItem(KEY);
-  if (!raw) return;
   try {
-    const blob = JSON.parse(raw) as SessionBlob;
-    if (id === null) delete blob.activeThreadId;
-    else blob.activeThreadId = id;
-    s.setItem(KEY, JSON.stringify(blob));
+    if (id === null) s.removeItem(KEY);
+    else s.setItem(KEY, id);
   } catch {
-    // Malformed — leave it alone so session.ts's other paths can clean up.
+    // Quota / private mode - treat as no-op.
   }
 }
 
 /**
- * Returns the time-to-expiry in ms, or null if there's no session. Useful
- * for scheduling the next auto-lock check.
+ * Drop the saved thread id. Called by the Sign-out path so the
+ * post-sign-in session doesn't reopen a thread the user has just
+ * signed away from.
  */
-export function sessionRemainingMs(): number | null {
-  const s = storage();
-  if (!s) return null;
-  const raw = s.getItem(KEY);
-  if (!raw) return null;
-  try {
-    const blob = JSON.parse(raw) as SessionBlob;
-    const remaining = blob.expiresAt - Date.now();
-    return remaining > 0 ? remaining : 0;
-  } catch {
-    return null;
-  }
+export function clearSessionThreadId(): void {
+  setSessionThreadId(null);
 }
 
 export const __test = { KEY };

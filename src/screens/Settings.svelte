@@ -3,8 +3,11 @@
    * Settings modal. Reached from the chat sidebar's gear icon. Seven
    * panes, each with its own persistence target:
    *
-   *   keys        — the three API keys. Re-encrypts + re-activates, so
-   *                 requires the current master password.
+   *   keys        — the Supabase URL + publishable key. Persists to
+   *                 localStorage as plaintext JSON (no encryption: the
+   *                 publishable key is safe to expose by design) and
+   *                 re-activates the in-memory services with the new
+   *                 values.
    *   ai          — AI-adjacent subsections sharing one pane: default
    *                 model tier, default reasoning effort, the
    *                 system-prompt library, and the Venice web-search
@@ -24,8 +27,10 @@
    *   export      — download the three keys as a plaintext JSON file
    *                 for import on another browser. See config.ts for
    *                 the file format.
-   *   security    — rotate the master password. Re-encrypts the stored
-   *                 blob under the new password; doesn't touch Supabase.
+   *   security    — Supabase account-password rotation. The local
+   *                 config has no master password to rotate anymore
+   *                 (retired with the streaming-root cleanup); this
+   *                 pane is reduced to the auth password form.
    *   about       — build fingerprint + update-checker. Read-only.
    *
    * The `busy` flag is shared across forms so double-submits during an
@@ -38,9 +43,9 @@
    * and selects fire on `change`, checkboxes on `change`, free-form
    * text inputs on the input's `change` event (blur or Enter, only
    * when the value differs) so a half-typed value doesn't fire a
-   * roundtrip per keystroke. The Keys and Security panes are
-   * deliberate exceptions - they re-encrypt the config blob and need
-   * a deliberate Save gesture so a typo can't lock the user out.
+   * roundtrip per keystroke. The Keys pane is a deliberate exception -
+   * it re-activates services with new endpoints, so a deliberate Save
+   * gesture is the right shape for "I really mean to change this."
    * The Timezone field inside About you is also deliberate:
    * IANA-zone validation needs a commit gesture so a half-typed zone
    * (e.g. "America/") doesn't keep erroring on every keystroke.
@@ -49,7 +54,7 @@
    * want auto-apply with rollback instead.
    */
   import { onDestroy } from 'svelte';
-  import { changePassword, saveConfig, toExportedConfig } from '$lib/config';
+  import { saveConfig, toExportedConfig } from '$lib/config';
   import {
     app,
     activate,
@@ -144,7 +149,6 @@
   // --- Keys pane ---
   let supabaseUrl = $state(app.config?.supabaseUrl ?? '');
   let supabasePublishableKey = $state(app.config?.supabasePublishableKey ?? '');
-  let keysPassword = $state('');
   let keysError = $state<string | null>(null);
   let keysInfo = $state<string | null>(null);
 
@@ -812,16 +816,10 @@
   }
 
   // --- Security pane ---
-  // Two independent rotations live here:
-  //   - master password: unlocks the local encrypted config blob
-  //   - Supabase login password: signs in to the user's Supabase project
-  // Each has its own current/new/error/info pair so a failure in one
-  // form doesn't blow away feedback from the other.
-  let pwCurrent = $state('');
-  let pwNew = $state('');
-  let pwConfirm = $state('');
-  let pwError = $state<string | null>(null);
-  let pwInfo = $state<string | null>(null);
+  // Supabase login password rotation. The master-password ceremony
+  // was retired with the streaming-root cleanup (the local config
+  // carries only public-by-design values); the form below covers the
+  // remaining password the user might rotate: their Supabase login.
 
   let authPwCurrent = $state('');
   let authPwNew = $state('');
@@ -884,24 +882,19 @@
     }
   }
 
-  async function onSaveKeys(e: SubmitEvent): Promise<void> {
+  function onSaveKeys(e: SubmitEvent): void {
     e.preventDefault();
     keysError = null;
     keysInfo = null;
-    if (!keysPassword) {
-      keysError = 'Enter your current master password to re-encrypt.';
-      return;
-    }
     busy = true;
     try {
       const config = {
         supabaseUrl: supabaseUrl.trim(),
         supabasePublishableKey: supabasePublishableKey.trim(),
       };
-      await saveConfig(config, keysPassword);
+      saveConfig(config);
       activate(config);
       keysInfo = 'Keys updated.';
-      keysPassword = '';
     } catch (err) {
       keysError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -1186,35 +1179,6 @@
     }
   }
 
-  async function onChangePassword(e: SubmitEvent): Promise<void> {
-    e.preventDefault();
-    pwError = null;
-    pwInfo = null;
-    if (!pwCurrent) {
-      pwError = 'Enter your current master password.';
-      return;
-    }
-    if (pwNew.length < 8) {
-      pwError = 'New password must be at least 8 characters.';
-      return;
-    }
-    if (pwNew !== pwConfirm) {
-      pwError = 'New password and confirmation do not match.';
-      return;
-    }
-    busy = true;
-    try {
-      await changePassword(pwCurrent, pwNew);
-      pwInfo = 'Master password changed.';
-      pwCurrent = '';
-      pwNew = '';
-      pwConfirm = '';
-    } catch (err) {
-      pwError = err instanceof Error ? err.message : String(err);
-    } finally {
-      busy = false;
-    }
-  }
 
   async function onChangeAuthPassword(e: SubmitEvent): Promise<void> {
     e.preventDefault();
@@ -1307,11 +1271,6 @@
           <div class="form-row">
             <label for="sa">Supabase publishable key</label>
             <SecretInput id="sa" bind:value={supabasePublishableKey} required />
-          </div>
-          <div class="form-row">
-            <label for="cp">Current master password</label>
-            <SecretInput id="cp" bind:value={keysPassword} required
-                         autocomplete="current-password" />
           </div>
           {#if keysError}<p class="error">{keysError}</p>{/if}
           {#if keysInfo}<p class="subtle">{keysInfo}</p>{/if}
@@ -2030,33 +1989,6 @@
         </p>
       {:else if group === 'security'}
         <h2>Security</h2>
-
-        <h3 class="pane-section">Change master password</h3>
-        <p class="subtle">
-          Rotate the passphrase that unlocks your encrypted config blob.
-          Local-only - this re-encrypts the blob in your browser and does
-          not touch Supabase.
-        </p>
-        <form onsubmit={onChangePassword}>
-          <div class="form-row">
-            <label for="pw-current">Current master password</label>
-            <SecretInput id="pw-current" bind:value={pwCurrent} required
-                         autocomplete="current-password" />
-          </div>
-          <div class="form-row">
-            <label for="pw-new">New master password</label>
-            <SecretInput id="pw-new" bind:value={pwNew} minlength={8} required
-                         autocomplete="new-password" />
-          </div>
-          <div class="form-row">
-            <label for="pw-confirm">Confirm new master password</label>
-            <SecretInput id="pw-confirm" bind:value={pwConfirm} minlength={8} required
-                         autocomplete="new-password" />
-          </div>
-          {#if pwError}<p class="error">{pwError}</p>{/if}
-          {#if pwInfo}<p class="subtle">{pwInfo}</p>{/if}
-          <button type="submit" disabled={busy}>Change password</button>
-        </form>
 
         <h3 class="pane-section">Change account password</h3>
         <p class="subtle">

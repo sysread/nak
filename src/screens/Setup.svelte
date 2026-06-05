@@ -1,21 +1,23 @@
 <script lang="ts">
   /*
-   * Initial-setup screen. Shown when there's no encrypted config in
-   * localStorage (first visit, or after Reset). Collects the three API
-   * keys plus a fresh master password, writes the encrypted blob, and
-   * activates into the unlocked phase.
+   * Initial-setup screen. Shown when there's no stored config in
+   * localStorage (first visit, or after Reset). Collects the two
+   * Supabase values and writes them to localStorage as plaintext JSON.
    *
    * Three entry paths into this screen:
-   *   1. Clean first visit — empty form.
+   *   1. Clean first visit - empty form.
    *   2. `#setup=<base64>` fragment left by `mise run setup`. We decode
    *      it in onMount, strip the fragment from the address bar (so a
    *      later refresh or accidental share doesn't re-leak the keys),
    *      and prefill the form.
-   *   3. Import from JSON — user picks a previously-exported config
+   *   3. Import from JSON - user picks a previously-exported config
    *      file. See parseExportedConfig in $lib/config.
    *
-   * The master password never reaches the network — it's the PBKDF2
-   * input for the local envelope crypto in $lib/crypto.
+   * The master-password ceremony was retired with the streaming-root
+   * cleanup - the only values stored locally now are public-by-design
+   * (Supabase publishable key + URL) so at-rest encryption was paying
+   * a UX cost for zero security gain. saveConfig writes plaintext JSON
+   * directly.
    */
   import { onMount } from 'svelte';
   import { saveConfig, parseExportedConfig, type AppConfig } from '$lib/config';
@@ -24,8 +26,6 @@
 
   let supabaseUrl = $state('');
   let supabasePublishableKey = $state('');
-  let password = $state('');
-  let confirmPassword = $state('');
   let error = $state<string | null>(null);
   let busy = $state(false);
   let prefilled = $state(false);
@@ -57,7 +57,7 @@
       // from app_config server-side.
       prefilled = true;
     } catch {
-      // Ignore malformed hash — user will just fill in manually.
+      // Ignore malformed hash - user will just fill in manually.
     } finally {
       // Strip the fragment from the address bar + history so a later refresh
       // or sharing the tab doesn't re-expose secrets.
@@ -77,7 +77,7 @@
       supabaseUrl = cfg.supabaseUrl;
       supabasePublishableKey = cfg.supabasePublishableKey;
       prefilled = true;
-      importInfo = `Imported from ${file.name}. Pick a master password below to continue.`;
+      importInfo = `Imported from ${file.name}. Click Save and continue.`;
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -86,24 +86,16 @@
     }
   }
 
-  async function onSubmit(e: SubmitEvent): Promise<void> {
+  function onSubmit(e: SubmitEvent): void {
     e.preventDefault();
     error = null;
-    if (password.length < 8) {
-      error = 'Master password must be at least 8 characters.';
-      return;
-    }
-    if (password !== confirmPassword) {
-      error = 'Passwords do not match.';
-      return;
-    }
     const config: AppConfig = {
       supabaseUrl: supabaseUrl.trim(),
       supabasePublishableKey: supabasePublishableKey.trim(),
     };
     busy = true;
     try {
-      await saveConfig(config, password);
+      saveConfig(config);
       activate(config);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
@@ -118,13 +110,14 @@
     <h1>Initial setup</h1>
     {#if prefilled}
       <p class="subtle">
-        Keys were pre-filled. Pick a master password to encrypt them locally,
-        then continue.
+        Keys were pre-filled. Click Save and continue to start using Nak.
       </p>
     {:else}
       <p class="subtle">
-        Paste your Supabase and Venice credentials. They will be encrypted with your master
-        password and stored only in this browser's localStorage.
+        Paste your Supabase URL and publishable key. They are stored as
+        plaintext JSON in this browser's localStorage - the publishable
+        key is safe to ship in client bundles (see Supabase docs); the
+        security boundary is the sign-in flow, not key secrecy.
       </p>
     {/if}
 
@@ -152,19 +145,9 @@
       <label for="supabase-publishable">Supabase publishable key</label>
       <SecretInput id="supabase-publishable" bind:value={supabasePublishableKey} required />
     </div>
-    <div class="form-row">
-      <label for="password">Master password</label>
-      <SecretInput id="password" bind:value={password} required minlength={8}
-                   autocomplete="new-password" />
-    </div>
-    <div class="form-row">
-      <label for="password-confirm">Confirm master password</label>
-      <SecretInput id="password-confirm" bind:value={confirmPassword} required
-                   autocomplete="new-password" />
-    </div>
     {#if error}<p class="error">{error}</p>{/if}
     <button type="submit" disabled={busy}>
-      {busy ? 'Encrypting…' : 'Save and continue'}
+      {busy ? 'Saving…' : 'Save and continue'}
     </button>
   </form>
 </div>
