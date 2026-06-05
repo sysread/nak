@@ -5370,6 +5370,17 @@
     const blocks: MessageBlock[] = [];
     for (const m of messages) {
       if (m.role === 'tool') continue; // folded under their assistant parent
+      // Filter synthetic and persisted recovery rows from the UI.
+      // synthesizeRecoveryMessages adds them so the wire shape stays
+      // valid for the next provider call (tool -> user without an
+      // intervening assistant is a provider 400), but they read as
+      // noise to the user - the failure is already conveyed by the
+      // failed tool card and the incomplete-turn banner above. Hiding
+      // them here keeps the wire fix while sparing the user the meta-
+      // note. Catches both shapes via the RECOVERY_MARKER substring
+      // test: synthetic rows (created in memory by the recovery walk)
+      // and persisted rows (saved to the DB on the next user send).
+      if (isRecoveryMessage(m)) continue;
       if (m.role === 'user') {
         blocks.push({ kind: 'plain', message: m });
         continue;
@@ -6871,7 +6882,7 @@
               </div>
             </div>
           {/if}
-          {#if interruptedDraft && !respondingElsewhere}
+          {#if interruptedDraft && !respondingElsewhere && !activeSlot?.sending}
             <!-- Orphaned-draft recovery banner. Shown when thread load
                  finds an IndexedDB streaming draft whose user message
                  has no committed assistant response - meaning the prior
@@ -6886,7 +6897,18 @@
                  different device holds a live claim and is producing the
                  reply right now, so this isn't an orphan to recover -
                  the observer Scanner below covers the wait, and the
-                 assistant row will arrive over realtime. -->
+                 assistant row will arrive over realtime.
+
+                 Suppressed while `activeSlot.sending` is true: a local
+                 exchange is currently producing the reply, which
+                 dominates whatever interruptedDraft was captured at
+                 thread-load time. runExchange clears the field at its
+                 start (see "Clear any orphaned-draft recovery banner"
+                 comment in runExchange) but a race - e.g. a thread
+                 reload between the slot allocation and the
+                 sending=true flip - could re-set it; the render-level
+                 guard keeps the throbber + banner from ever showing
+                 simultaneously regardless. -->
             <div class="msg assistant msg-incomplete" role="note">
               <div class="msg-incomplete-body">
                 <div class="msg-incomplete-text">
