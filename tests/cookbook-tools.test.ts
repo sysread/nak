@@ -134,26 +134,25 @@ describe('recipe_save', () => {
     expect(createRecipe).not.toHaveBeenCalled();
   });
 
-  it('rejects when change_message is missing', async () => {
-    const createRecipe = vi.fn();
-    await expect(
-      recipeSave.execute(
-        { title: 'T', cooklang: 'X' },
-        ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
-      )
-    ).rejects.toThrow(/change_message is required/);
-    expect(createRecipe).not.toHaveBeenCalled();
+  it('defaults change_message to "Initial version" when missing', async () => {
+    // A save is always the first version, so an omitted note has an
+    // obvious default rather than an error - the model routinely forgets
+    // the field on a brand-new recipe.
+    const createRecipe = vi.fn().mockResolvedValue(sampleRecipe());
+    await recipeSave.execute(
+      { title: 'T', cooklang: 'X' },
+      ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
+    );
+    expect(createRecipe).toHaveBeenCalledWith('T', 'X', null, null, null, 'Initial version');
   });
 
-  it('rejects when change_message is whitespace', async () => {
-    const createRecipe = vi.fn();
-    await expect(
-      recipeSave.execute(
-        { title: 'T', cooklang: 'X', change_message: '   ' },
-        ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
-      )
-    ).rejects.toThrow(/change_message is required/);
-    expect(createRecipe).not.toHaveBeenCalled();
+  it('defaults change_message to "Initial version" when whitespace-only', async () => {
+    const createRecipe = vi.fn().mockResolvedValue(sampleRecipe());
+    await recipeSave.execute(
+      { title: 'T', cooklang: 'X', change_message: '   ' },
+      ctxFor({ createRecipe } as unknown as Partial<SupabaseService>)
+    );
+    expect(createRecipe).toHaveBeenCalledWith('T', 'X', null, null, null, 'Initial version');
   });
 
   it('accepts inline emphasis (`**bold**`) since the renderer styles it', async () => {
