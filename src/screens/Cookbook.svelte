@@ -38,12 +38,15 @@
   import {
     cooklangToHtml,
     parseCooklang,
+    recipeToHtml,
+    recipeToc,
     recipeToMarkdown,
     recipeToPlainText,
   } from '$lib/cooklang';
   import { MAX_RECIPE_COOKLANG_CHARS, MAX_RECIPE_TITLE_CHARS } from '$lib/recipe-limits';
   import {
     recipeSourceLine,
+    recipeTocTargetCount,
     wrapIndex,
     swipeNavStep,
     lightboxTrackStyle,
@@ -953,10 +956,30 @@
     }
   }
 
-  const detailHtml = $derived.by(() => {
+  // Parse the live recipe once and feed both projections off it - the
+  // rendered HTML and the table of contents walk the same AST, and
+  // recipeToc's link ids are produced by the same `tocHeadingId` the
+  // renderer stamps on its headings, so the two stay in lockstep.
+  const parsedDetail = $derived.by(() => {
     const r = activeRecipe;
-    return r ? cooklangToHtml(r.cooklang) : '';
+    return r ? parseCooklang(r.cooklang) : null;
   });
+  const detailHtml = $derived(parsedDetail ? recipeToHtml(parsedDetail) : '');
+  const detailToc = $derived(parsedDetail ? recipeToc(parsedDetail) : []);
+  // Hide the TOC below two jump targets - a lone "Instructions" link
+  // with nothing to skip past is noise, not navigation.
+  const showDetailToc = $derived(recipeTocTargetCount(detailToc) >= 2);
+
+  // The rendered-recipe container, bound so a TOC click can resolve its
+  // target id within this pane's output. Scoping the lookup here keeps it
+  // from matching the same ids in the edit-pane preview or a past-version
+  // render, which carry the identical anchor scheme.
+  let detailRenderEl = $state<HTMLDivElement | null>(null);
+
+  function scrollToHeading(id: string): void {
+    const el = detailRenderEl?.querySelector(`#${CSS.escape(id)}`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
   // The version row currently being viewed read-only, or null when the
   // detail pane is showing the live recipe.
@@ -1340,8 +1363,42 @@
                 {/each}
               </div>
             {/if}
+            <!-- Table of contents. A jump menu over the rendered body:
+                 top-level Ingredients / Instructions plus a sub-entry per
+                 section heading. Each link scrolls to the matching `<h3>`
+                 / `<h4>` by id (shared with the renderer via
+                 `tocHeadingId`). Hidden below two targets, where a single
+                 link has nothing to jump past. -->
+            {#if showDetailToc}
+              <nav class="cookbook-toc" aria-label="Recipe contents">
+                <ul class="cookbook-toc-list">
+                  {#each detailToc as entry (entry.id)}
+                    <li>
+                      <button
+                        type="button"
+                        class="cookbook-toc-link"
+                        onclick={() => scrollToHeading(entry.id)}
+                      >{entry.label}</button>
+                      {#if entry.sections.length > 0}
+                        <ul class="cookbook-toc-sublist">
+                          {#each entry.sections as sec (sec.id)}
+                            <li>
+                              <button
+                                type="button"
+                                class="cookbook-toc-link cookbook-toc-sublink"
+                                onclick={() => scrollToHeading(sec.id)}
+                              >{sec.label}</button>
+                            </li>
+                          {/each}
+                        </ul>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </nav>
+            {/if}
             <!-- The parsed HTML is produced from trusted source (the
-                 user's own Cooklang text, escaped in cooklangToHtml via
+                 user's own Cooklang text, escaped in recipeToHtml via
                  `esc()`), so rendering with `{@html}` is safe. We still
                  wrap in a scoped container so any future style leak
                  stays contained to `.cookbook-render`. -->
@@ -1352,10 +1409,12 @@
                  metadata, etc. stay inert. Highlight state is kept as
                  a class on the DOM node — no Svelte state — which means
                  switching recipes (a full `{@html}` re-render) naturally
-                 resets the highlights, and there's nothing to persist. -->
+                 resets the highlights, and there's nothing to persist.
+                 The same container is bound to `detailRenderEl` so a TOC
+                 click can resolve its target id within this render. -->
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div class="cookbook-render" onclick={onRenderClick}>
+            <div class="cookbook-render" bind:this={detailRenderEl} onclick={onRenderClick}>
               {@html detailHtml}
             </div>
             {/if}
@@ -1857,6 +1916,61 @@
     font-size: 0.85rem;
     min-width: 6rem;
     min-height: 1.1em;
+  }
+
+  /* Table of contents. A compact inset card above the rendered recipe;
+     its links scroll the body below to the matching section heading. The
+     accent-weak left rule on the sublist gives the per-section entries
+     hierarchy under their Ingredients / Instructions parent without a
+     second indent level competing with the recipe content. Lives in the
+     scroll flow (not sticky) so it reads as "contents of what follows". */
+  .cookbook-toc {
+    margin: 0.25rem 0 1rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-2);
+  }
+  .cookbook-toc-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+  .cookbook-toc-sublist {
+    list-style: none;
+    margin: 0.1rem 0 0.3rem;
+    padding: 0 0 0 0.7rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
+    border-left: 2px solid var(--accent-weak);
+  }
+  /* Override the global filled-button base: these are text links wearing
+     a button for the click semantics, so background / padding / radius /
+     font-size all get pulled back to a link's weight. */
+  .cookbook-toc :global(button.cookbook-toc-link) {
+    background: transparent;
+    border: 0;
+    padding: 0.15rem 0.3rem;
+    border-radius: 4px;
+    color: var(--accent);
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+  .cookbook-toc :global(button.cookbook-toc-link:hover),
+  .cookbook-toc :global(button.cookbook-toc-link:focus-visible) {
+    background: var(--accent-weak);
+    color: var(--text);
+  }
+  .cookbook-toc :global(button.cookbook-toc-sublink) {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text);
   }
   /* Rendered-recipe typography. Shared by the detail pane and the
      edit-time preview column — both wrap the {@html} output in

@@ -727,19 +727,66 @@ function ingredientsListItems(ings: Ingredient[]): string {
   return out.join('');
 }
 
+// Two blocks carry a navigable table-of-contents entry: Ingredients and
+// Instructions. Cookware is a flat aside, not a TOC target.
+type TocBlock = 'ingredients' | 'instructions';
+
+/**
+ * Anchor id for a recipe heading. Shared by `recipeToHtml` (which stamps
+ * it on the `<h3>` / `<h4>`) and `recipeToc` (which points the jump link
+ * at it), so the link target can never drift from the heading it scrolls
+ * to - change the scheme here and both projections move together.
+ *
+ * Section sub-headings are keyed by their INDEX in `recipe.sections`, not
+ * by a name slug: two section names that would slugify the same can't
+ * collide, and the same section name appearing under BOTH Ingredients and
+ * Instructions gets a distinct id per block (`cook-ingredients-s0` vs
+ * `cook-instructions-s0`), so a duplicate id never lands in the document.
+ */
+function tocHeadingId(block: TocBlock, sectionIndex: number | null): string {
+  return sectionIndex === null ? `cook-${block}` : `cook-${block}-s${sectionIndex}`;
+}
+
+/**
+ * Whether a section bucket emits its own ingredient sub-list in the
+ * Ingredients block. Mirrors the flat-level declaration rule: when the
+ * recipe uses declarations anywhere, only buckets that themselves hold
+ * declarations contribute (an instruction-only head bucket would
+ * otherwise duplicate the declared rows under an un-named group); a
+ * bucket whose deduped ingredient list is empty renders nothing.
+ *
+ * Shared by `recipeToHtml` and `recipeToc` so the rendered `<h4>` set and
+ * the TOC sub-entries stay in lockstep.
+ */
+function ingredientBucketRenders(steps: Step[], hasDeclarations: boolean): boolean {
+  const bucketHasDeclarations = steps.some((s) => s.kind === 'declaration');
+  if (hasDeclarations && !bucketHasDeclarations) return false;
+  return dedupeFromSteps(steps).length > 0;
+}
+
+/**
+ * Whether a section bucket emits an instruction `<ol>` (and thus an
+ * `<h4>`) in the Instructions block: it does when the bucket holds at
+ * least one instruction-kind step. Shared by `recipeToHtml` and
+ * `recipeToc`.
+ */
+function instructionBucketRenders(steps: Step[]): boolean {
+  return steps.some((s) => s.kind === 'instruction');
+}
+
 /**
  * Render a parsed recipe as a self-contained HTML fragment. Class names
  * scoped with `cook-` prefix so a host page's stylesheet can reach in
  * without a wrapping selector. Structure:
  *
  *   <dl class="cook-metadata">…</dl>
- *   <h3>Ingredients</h3>
- *   [ <h4>Section</h4> ]?
+ *   <h3 id="cook-ingredients">Ingredients</h3>
+ *   [ <h4 id="cook-ingredients-sN">Section</h4> ]?
  *   <ul class="cook-ingredients">…</ul>
  *   <h3>Cookware</h3>
  *   <ul class="cook-cookware">…</ul>
- *   <h3>Instructions</h3>
- *   [ <h4>Section</h4> ]?
+ *   <h3 id="cook-instructions">Instructions</h3>
+ *   [ <h4 id="cook-instructions-sN">Section</h4> ]?
  *   <ol class="cook-steps">…</ol>
  *
  * Sub-headings (`<h4>`) appear under both Ingredients and Instructions
@@ -749,8 +796,11 @@ function ingredientsListItems(ings: Ingredient[]): string {
  * behaviour. Cookware stays flat regardless — the global dedupe is
  * what a cook wants, splitting pans across sections helps nobody.
  *
- * A block is omitted entirely when its list is empty, so a
- * freshly-typed metadata-only recipe doesn't render empty headers.
+ * The Ingredients / Instructions headings carry `id`s (via `tocHeadingId`)
+ * so the detail pane's table of contents can scroll to them; Cookware is
+ * not a TOC target and stays id-less. A block is omitted entirely when
+ * its list is empty, so a freshly-typed metadata-only recipe doesn't
+ * render empty headers.
  */
 export function recipeToHtml(recipe: Recipe): string {
   const out: string[] = [];
@@ -781,19 +831,18 @@ export function recipeToHtml(recipe: Recipe): string {
   const hasDeclarations = recipe.steps.some((s) => s.kind === 'declaration');
 
   if (recipe.ingredients.length > 0) {
-    out.push('<h3>Ingredients</h3>');
+    out.push(`<h3 id="${tocHeadingId('ingredients', null)}">Ingredients</h3>`);
     if (!hasSections) {
       out.push('<ul class="cook-ingredients">');
       out.push(ingredientsListItems(recipe.ingredients));
       out.push('</ul>');
     } else {
       for (const bucket of buckets) {
-        const bucketHasDeclarations = bucket.steps.some((s) => s.kind === 'declaration');
-        if (hasDeclarations && !bucketHasDeclarations) continue;
+        if (!ingredientBucketRenders(bucket.steps, hasDeclarations)) continue;
         const ings = dedupeFromSteps(bucket.steps);
-        if (ings.length === 0) continue;
         if (bucket.name !== null) {
-          out.push(`<h4 class="cook-section">${esc(bucket.name)}</h4>`);
+          const id = tocHeadingId('ingredients', recipe.sections.indexOf(bucket.name));
+          out.push(`<h4 class="cook-section" id="${id}">${esc(bucket.name)}</h4>`);
         }
         out.push('<ul class="cook-ingredients">');
         out.push(ingredientsListItems(ings));
@@ -817,7 +866,7 @@ export function recipeToHtml(recipe: Recipe): string {
   // the numbered instruction list is zero.
   const instructionSteps = recipe.steps.filter((s) => s.kind === 'instruction');
   if (instructionSteps.length > 0) {
-    out.push('<h3>Instructions</h3>');
+    out.push(`<h3 id="${tocHeadingId('instructions', null)}">Instructions</h3>`);
     if (!hasSections) {
       out.push('<ol class="cook-steps">');
       for (const step of instructionSteps) {
@@ -829,7 +878,8 @@ export function recipeToHtml(recipe: Recipe): string {
         const bucketInstructions = bucket.steps.filter((s) => s.kind === 'instruction');
         if (bucketInstructions.length === 0) continue;
         if (bucket.name !== null) {
-          out.push(`<h4 class="cook-section">${esc(bucket.name)}</h4>`);
+          const id = tocHeadingId('instructions', recipe.sections.indexOf(bucket.name));
+          out.push(`<h4 class="cook-section" id="${id}">${esc(bucket.name)}</h4>`);
         }
         // Each section gets its own `<ol>` so numbering restarts at 1
         // per section — that's how printed cookbooks lay out multi-part
@@ -849,6 +899,80 @@ export function recipeToHtml(recipe: Recipe): string {
 /** Convenience wrapper: parse + render in one call. */
 export function cooklangToHtml(src: string): string {
   return recipeToHtml(parseCooklang(src));
+}
+
+// ---------------------------------------------------------------------------
+// Table of contents
+// ---------------------------------------------------------------------------
+
+/** A section sub-entry inside a top-level TOC block. `id` matches the
+ *  `<h4>` anchor `recipeToHtml` stamps; `label` is the section name. */
+export interface RecipeTocSection {
+  id: string;
+  label: string;
+}
+
+/** A top-level TOC entry (Ingredients or Instructions). `id` matches the
+ *  block's `<h3>` anchor; `sections` are the per-section sub-entries, in
+ *  source order, empty when the recipe has no sections in this block. */
+export interface RecipeTocEntry {
+  id: string;
+  label: string;
+  sections: RecipeTocSection[];
+}
+
+/**
+ * Project a parsed recipe into a navigable table of contents: the
+ * Ingredients and Instructions blocks as top-level entries, each with a
+ * sub-entry per section heading the renderer emits. A third projection
+ * of the same AST as `recipeToHtml`, kept in lockstep with it by sharing
+ * `tocHeadingId` (the link targets) and the `ingredientBucketRenders` /
+ * `instructionBucketRenders` predicates (which sections actually render).
+ *
+ * Cookware is deliberately absent - it renders as a flat aside between
+ * the two blocks, not as a place a reader navigates to. A block is
+ * omitted entirely when it has no content, matching the renderer's
+ * "skip empty blocks" rule, so a metadata-only draft produces an empty
+ * TOC.
+ */
+export function recipeToc(recipe: Recipe): RecipeTocEntry[] {
+  const entries: RecipeTocEntry[] = [];
+  const buckets = groupStepsBySection(recipe);
+  const hasSections = recipe.sections.length > 0;
+  const hasDeclarations = recipe.steps.some((s) => s.kind === 'declaration');
+
+  if (recipe.ingredients.length > 0) {
+    const sections: RecipeTocSection[] = [];
+    if (hasSections) {
+      for (const bucket of buckets) {
+        if (bucket.name === null) continue;
+        if (!ingredientBucketRenders(bucket.steps, hasDeclarations)) continue;
+        sections.push({
+          id: tocHeadingId('ingredients', recipe.sections.indexOf(bucket.name)),
+          label: bucket.name,
+        });
+      }
+    }
+    entries.push({ id: tocHeadingId('ingredients', null), label: 'Ingredients', sections });
+  }
+
+  const instructionSteps = recipe.steps.filter((s) => s.kind === 'instruction');
+  if (instructionSteps.length > 0) {
+    const sections: RecipeTocSection[] = [];
+    if (hasSections) {
+      for (const bucket of buckets) {
+        if (bucket.name === null) continue;
+        if (!instructionBucketRenders(bucket.steps)) continue;
+        sections.push({
+          id: tocHeadingId('instructions', recipe.sections.indexOf(bucket.name)),
+          label: bucket.name,
+        });
+      }
+    }
+    entries.push({ id: tocHeadingId('instructions', null), label: 'Instructions', sections });
+  }
+
+  return entries;
 }
 
 // ---------------------------------------------------------------------------
