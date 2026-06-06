@@ -66,7 +66,7 @@ import {
   buildToolList,
   type OpenAIToolCall,
 } from './tools';
-import { buildSystemPrompt } from './chat-prompt';
+import { buildSystemPrompt, buildToolboxStateBlock } from './chat-prompt';
 import { askUser, type AskUserOption } from './tools/ask_user';
 import {
   parseToolArguments,
@@ -340,6 +340,14 @@ interface MetadataSystemMessageOptions {
   userLocation?: string | null;
   displayTimezone?: string | null;
   lastAssistantTimestamp?: string | null;
+  /**
+   * The thread's enabled gated-toolbox set for this turn. Rendered as
+   * the (on)/(off) state block right after the datetime paragraph. Lives
+   * here rather than in the baseline catalog so a mid-conversation
+   * toggle only re-encodes this trailing block instead of busting the
+   * prompt-prefix cache for the whole conversation.
+   */
+  enabledToolboxes: readonly string[];
   attachmentSummaries: ThreadAttachmentSummary[];
   /**
    * True when the user message that opened this turn carries one or
@@ -369,12 +377,17 @@ interface MetadataSystemMessageOptions {
  *
  *   1. User profile (name / location), when either is set.
  *   2. Datetime paragraph (always present).
- *   3. Thread attachments inventory, when there are any.
- *   4. Attachment-inspection reinforcement, when the current turn
+ *   3. Gated-toolbox on/off state (always present). Sits right after
+ *      the datetime so the volatile state that a toggle_toolbox call
+ *      flips rides in this trailing block - the baseline catalog is
+ *      state-free, so a toggle re-encodes only this block instead of
+ *      busting the prompt-prefix cache for the whole conversation.
+ *   4. Thread attachments inventory, when there are any.
+ *   5. Attachment-inspection reinforcement, when the current turn
  *      brought a file. Anti-fabrication: pins any claim about a
  *      file's contents to material actually read this turn.
- *   5. Emphasis-markdown formatting nudge, when the toggle is on.
- *   6. Title nudge, from round 2 onward: the loud placeholder nag
+ *   6. Emphasis-markdown formatting nudge, when the toggle is on.
+ *   7. Title nudge, from round 2 onward: the loud placeholder nag
  *      when the title is still the schema default, the soft
  *      topic-drift hint when the title is model-set and not pinned
  *      by the user. Round 1 is silent here - the auto-title worker
@@ -405,6 +418,13 @@ function buildMetadataSystemMessage(
   sections.push(
     buildDatetimeParagraph(opts.displayTimezone, opts.lastAssistantTimestamp),
   );
+
+  // Gated-toolbox on/off state, pinned right after the datetime. The
+  // baseline system prompt's catalog lists what exists; this carries
+  // the current enabled set. Kept out of the baseline so a
+  // toggle_toolbox flip mid-conversation only re-encodes this trailing
+  // block, not the whole cached prefix.
+  sections.push(buildToolboxStateBlock(opts.enabledToolboxes));
 
   const attachments = buildThreadAttachmentsBlock(opts.attachmentSummaries);
   if (attachments !== null) sections.push(attachments);
@@ -1325,11 +1345,21 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   // buildDatetimeParagraph) so multiple tool rounds inside the same
   // minute keep even this trailing block byte-stable.
   //
+  // The gated-toolbox on/off state rides in this trailing metadata
+  // block too (right after the datetime), NOT in the baseline catalog.
+  // The catalog is state-free - it lists what toolboxes exist, not
+  // which are enabled - so a toggle_toolbox flip mid-conversation
+  // leaves the baseline byte-identical and only churns this trailing
+  // block. Carried in the catalog (where it used to live) a toggle
+  // shifted the first-differing byte back to the top of the baseline
+  // and busted the whole prefix, the same failure the datetime move
+  // fixed.
+  //
   // Tradeoff accepted deliberately: the model reads ambient context
-  // (datetime, attachments inventory, title and emphasis nudges)
-  // AFTER its <think> priming chain rather than just before the user
-  // turn, and the final wire row is role:system rather than the
-  // intuition <think>. The user message still rides bare - no
+  // (datetime, toolbox state, attachments inventory, title and
+  // emphasis nudges) AFTER its <think> priming chain rather than just
+  // before the user turn, and the final wire row is role:system rather
+  // than the intuition <think>. The user message still rides bare - no
   // `<user_message>` fence, no `<datetime>` tag, no
   // `<system_reminder>` directive; the role:user / role:system
   // boundary is the structural signal.
@@ -1348,6 +1378,13 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     userLocation,
     displayTimezone,
     lastAssistantTimestamp,
+    // Turn-entry snapshot of the gated-toolbox set. Rendered as the
+    // on/off state block in the trailing metadata message rather than
+    // in the baseline catalog, so a mid-conversation toggle_toolbox
+    // flip only churns this block. Server-side tools may flip the set
+    // mid-turn; the realtime echo updates the thread row asynchronously,
+    // so this is the turn-entry value.
+    enabledToolboxes: toolboxesEnabled,
     attachmentSummaries,
     currentTurnHasAttachments: currentTurnHasAttachments ?? false,
     emphasisMarkdown,
@@ -1359,13 +1396,6 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     {
       role: 'system',
       content: buildSystemPrompt({
-        // Pass the thread's current gated-toolbox set so the catalog
-        // block renders [x]/[ ] marks that match what the model will
-        // actually see on the wire this turn. Server-side tools may
-        // flip the set via toggle_toolbox mid-turn; the realtime echo
-        // updates the thread row asynchronously, so this is the
-        // turn-entry snapshot.
-        enabledToolboxes: toolboxesEnabled,
         biasProfile: biasProfileBlock,
       }),
     },
