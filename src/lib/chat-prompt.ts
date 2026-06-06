@@ -11,17 +11,19 @@
  * sub-agents) live next to their callers; the "chat" in the name is
  * literal - this is the prompt for the user-facing chat loop only.
  *
- * The single export `buildSystemPrompt` is called from
- * `src/lib/chat-loop.ts` once per round, and from the test suite. The
- * dynamic catalog section is built live from `TOOLBOXES` +
- * `alwaysOnToolbox` so adding a tool or toolbox extends the prompt
- * with no second list to keep in sync.
+ * Two exports, both called from `src/lib/chat-loop.ts` once per turn
+ * and from the test suite: `buildSystemPrompt` builds the stable
+ * baseline, and `buildToolboxStateBlock` builds the volatile
+ * gated-toolbox on/off block that rides in the per-turn metadata
+ * system message instead of the baseline (so a toggle doesn't bust the
+ * prompt-prefix cache). The toolbox catalog is built live from
+ * `TOOLBOXES` + `alwaysOnToolbox` so adding a tool or toolbox extends
+ * the prompt with no second list to keep in sync.
  *
  * The static prose blocks below are pulled out as module-level
  * template literals so each one reads as a single chunk in the
  * source. The blocks join with blank lines between them at the bottom
- * of `buildSystemPrompt`, alongside the per-call catalog and the
- * per-turn appendix.
+ * of `buildSystemPrompt`, alongside the catalog.
  */
 import { TOOLBOXES, alwaysOnToolbox, toggleToolbox } from './tools';
 import type { Toolbox } from './tools';
@@ -36,28 +38,27 @@ const GATED_TOOLBOXES: readonly Toolbox[] = TOOLBOXES.filter(
 );
 
 /**
- * Inputs to the catalog renderer.
+ * Inputs to the baseline system prompt.
  *
- * `enabledToolboxes` drives the (on) / (off) marks on the gated catalog
- * lines so the model can see at a glance which toolboxes will accept
- * tool calls this turn. Names not present in the registry are
- * tolerated silently; a stale name should not poison the prompt.
+ * The toolbox catalog this prompt renders is state-free - it lists what
+ * gated toolboxes exist, not which are enabled. The volatile
+ * enabled/disabled state rides in the per-turn metadata system message
+ * (see `buildToolboxStateBlock`), so the baseline stays byte-stable
+ * across a toggle_toolbox flip and the prompt-prefix cache survives it.
  *
  * The per-turn ambient-context channel that used to live here as
- * `promptAppendix` has moved out. Identity facts, datetime, attachments
- * inventory, formatting and title nudges now ride as a dedicated
- * metadata system message that the chat-loop assembles per round and
- * pins at the TAIL of the request, after the conversation (for prompt-
- * cache stability - see `buildMetadataSystemMessage` and the request
- * assembly in `chat-loop.ts`). The
+ * `promptAppendix` has moved out. Identity facts, datetime, the toolbox
+ * state, attachments inventory, formatting and title nudges now ride as
+ * a dedicated metadata system message that the chat-loop assembles per
+ * round and pins at the TAIL of the request, after the conversation
+ * (for prompt-cache stability - see `buildMetadataSystemMessage` and the
+ * request assembly in `chat-loop.ts`). The
  * samskara/intuition/context-recall priming projections ride as
  * assistant `<think>` messages after the user turn, not as appendix
  * text. Keeping this module's surface to "baseline only" lets the
  * recall/think layers evolve independently of the prompt copy.
  */
 export interface SystemPromptOptions {
-  /** The gated toolbox names active for this turn. Omit for "none". */
-  enabledToolboxes?: readonly string[];
   /**
    * Pre-rendered "User profile - observed cognitive patterns" block
    * from the bias-profile feature. When non-null it rides at the
@@ -277,20 +278,24 @@ Examples:
 
 /**
  * Render the dynamic tool catalog: always-on tools first, then each
- * gated toolbox with its current (on) / (off) state and its tools
- * indented below. Built live from the registry so adding a toolbox
- * or a tool extends the prompt automatically. The meta-tool
- * `toggle_toolbox` is intentionally omitted from the always-on
- * listing - it's framed in the dedicated toolbox-framing paragraph
- * above and listing it again in the catalog would invite the model
- * to call it without first reading the toggle policy.
+ * gated toolbox and its tools indented below. Built live from the
+ * registry so adding a toolbox or a tool extends the prompt
+ * automatically. The meta-tool `toggle_toolbox` is intentionally
+ * omitted from the always-on listing - it's framed in the dedicated
+ * toolbox-framing paragraph above and listing it again in the catalog
+ * would invite the model to call it without first reading the toggle
+ * policy.
  *
- * Why (on) / (off) marks rather than [x] / [ ] checkboxes: the
- * checkbox shape was misread as "unchecked = unavailable" and the
- * model was passing over gated tools rather than enabling their
- * toolboxes. Plain English state words don't have that ambiguity.
+ * The catalog carries NO per-turn (on)/(off) state - it lists what
+ * exists, not what is currently enabled. The volatile enabled/disabled
+ * state rides in the per-turn metadata system message instead (see
+ * `buildToolboxStateBlock` and the request assembly in chat-loop.ts).
+ * Keeping the catalog state-free is what makes the baseline system
+ * prompt byte-stable across a mid-conversation toggle_toolbox flip, so
+ * a toggle re-encodes only the small trailing metadata block rather
+ * than busting the prompt-prefix cache for the whole conversation.
  */
-function buildCatalog(enabled: ReadonlySet<string>): string {
+function buildCatalog(): string {
   const alwaysOnLines: string[] = [];
   for (const tool of alwaysOnToolbox.tools) {
     if (tool.name === toggleToolbox.name) continue;
@@ -299,8 +304,7 @@ function buildCatalog(enabled: ReadonlySet<string>): string {
 
   const gatedLines: string[] = [];
   for (const tb of GATED_TOOLBOXES) {
-    const mark = enabled.has(tb.name) ? '(on)' : '(off)';
-    gatedLines.push(`  ${mark} ${tb.name} : ${tb.description}`);
+    gatedLines.push(`  ${tb.name} : ${tb.description}`);
     for (const tool of tb.tools) {
       gatedLines.push(`      - ${tool.name} : ${tool.shortDescription}`);
     }
@@ -310,8 +314,37 @@ function buildCatalog(enabled: ReadonlySet<string>): string {
     'Always available (no toggle needed):',
     ...alwaysOnLines,
     '',
-    'Toolboxes you can enable via toggle_toolbox (call it BEFORE invoking a tool from an (off) toolbox):',
+    'Toolboxes you can enable via toggle_toolbox (each starts disabled; enable one BEFORE invoking a tool inside it - the metadata block below shows which are currently on):',
     ...gatedLines,
+  ].join('\n');
+}
+
+/**
+ * Render the current gated-toolbox on/off state as a compact block for
+ * the per-turn metadata system message. The catalog in the baseline
+ * system prompt (see `buildCatalog`) lists which gated toolboxes exist
+ * and what tools they hold; this block carries the volatile "which are
+ * enabled right now" half of that picture.
+ *
+ * It rides in the trailing metadata message (right after the datetime
+ * paragraph), not the baseline, for prompt-cache economics: a
+ * mid-conversation toggle_toolbox flip changes only this small trailing
+ * block instead of shifting the first-differing byte to the top of the
+ * baseline and forcing the entire conversation to be re-encoded.
+ *
+ * Why (on) / (off) words rather than [x] / [ ] checkboxes: the checkbox
+ * shape was misread as "unchecked = unavailable" and the model passed
+ * over gated tools rather than enabling their toolboxes. Plain English
+ * state words don't have that ambiguity.
+ */
+export function buildToolboxStateBlock(enabled: readonly string[]): string {
+  const enabledSet = new Set(enabled);
+  const lines = GATED_TOOLBOXES.map(
+    (tb) => `  ${enabledSet.has(tb.name) ? '(on)' : '(off)'} ${tb.name}`,
+  );
+  return [
+    'Gated toolbox state this turn (enable a toolbox with toggle_toolbox before calling its tools):',
+    ...lines,
   ].join('\n');
 }
 
@@ -348,22 +381,24 @@ function buildCatalog(enabled: ReadonlySet<string>): string {
  * **Tool surface.** The toggle_toolbox gating policy lifted out of
  * the tool's own description, the activity-parameter narration rule
  * (see ./tools/dispatch.ts for the schema injection that adds the
- * parameter to every tool), and the live toolbox catalog with
- * (on) / (off) state marks. The catalog is built from `TOOLBOXES` and
- * `alwaysOnToolbox` so adding a tool or a toolbox extends the prompt
- * with no second list to keep in sync.
+ * parameter to every tool), and the toolbox catalog. The catalog is
+ * built from `TOOLBOXES` and `alwaysOnToolbox` so adding a tool or a
+ * toolbox extends the prompt with no second list to keep in sync. It
+ * is state-free: which gated toolboxes are currently (on) / (off)
+ * lives in the per-turn metadata system message (see
+ * `buildToolboxStateBlock`), not here.
  *
- * Per-turn ambient context (datetime, attachments inventory,
- * formatting and title nudges, identity facts) is NOT carried here.
- * It rides as a separate metadata system message that chat-loop.ts
- * builds per round and inserts AFTER the user-configured system
- * prompts. Recall and intuition projections ride as assistant
- * `<think>` messages after the user turn. The baseline this function
- * returns is stable across rounds; only its dynamic catalog reflects
- * the current toolbox state.
+ * Per-turn ambient context (datetime, toolbox state, attachments
+ * inventory, formatting and title nudges, identity facts) is NOT
+ * carried here. It rides as a separate metadata system message that
+ * chat-loop.ts builds per round and pins at the TAIL of the request.
+ * Recall and intuition projections ride as assistant `<think>`
+ * messages after the user turn. The baseline this function returns is
+ * fully stable across rounds and across toolbox toggles - nothing in
+ * it varies per turn, which is what lets it anchor the prompt-prefix
+ * cache.
  */
 export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
-  const enabled = new Set(opts.enabledToolboxes ?? []);
   const sections = [
     IDENTITY_BLOCK,
     VOICE_BLOCK,
@@ -374,7 +409,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions = {}): string {
     ASK_USER_BLOCK,
     TOOLBOX_FRAMING_BLOCK,
     ACTIVITY_BLOCK,
-    buildCatalog(enabled),
+    buildCatalog(),
   ];
   // Bias profile rides at the end of the baseline. Conditional so a
   // cold-start user (no row in bias_summary clears soft/strong)

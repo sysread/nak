@@ -222,13 +222,17 @@ The gated `images` toolbox carries:
   with its own toolbox. The loop extends an in-memory
   `VeniceMessage[]` each round and returns the final text + a few
   counters. No persistence happens inside.
-- **System prompt assembly** - `buildSystemPrompt({
-  enabledToolboxes, promptAppendix })` composes the baseline
-  system message the chat loop prepends each round. The catalog
-  section lists always-on tools first, then each gated toolbox
-  with a `[x]` or `[ ]` mark showing its current enabled state,
-  so the model sees the same picture the user does in the
-  composer popover.
+- **System prompt assembly** - `buildSystemPrompt({ biasProfile })`
+  composes the baseline system message the chat loop prepends each
+  turn. The catalog section lists always-on tools first, then each
+  gated toolbox and its tools. The catalog is state-free: it lists
+  what toolboxes exist, not which are enabled, so the baseline stays
+  byte-identical across a `toggle_toolbox` flip and the prompt-prefix
+  cache survives it. The volatile `(on)`/`(off)` state is rendered by
+  `buildToolboxStateBlock` and folded into the per-turn metadata
+  system message (right after the datetime), so the model still sees
+  the same enabled picture the user does in the composer popover -
+  just from the trailing block, not the catalog.
 
 ## Data model
 
@@ -301,10 +305,16 @@ The gated `images` toolbox carries:
   ignored; duplicates across toolboxes are deduped by tool name
   (first-seen wins). Callers should never construct this array
   by hand.
-- `buildSystemPrompt(opts?)` - `{ enabledToolboxes?,
-  promptAppendix? }`. The enabled toolbox list drives the
-  `[x]`/`[ ]` marks in the catalog; an absent `enabledToolboxes`
-  is treated as "none enabled."
+- `buildSystemPrompt(opts?)` - `{ biasProfile? }`. Builds the
+  stable, state-free baseline (catalog included). No per-turn or
+  per-toolbox inputs - the volatile toolbox state lives in
+  `buildToolboxStateBlock`.
+- `buildToolboxStateBlock(enabled: readonly string[]): string` -
+  renders the gated toolboxes as `(on)`/`(off)` lines. The chat
+  loop folds this into the per-turn metadata system message (right
+  after the datetime) rather than the baseline, so a `toggle_toolbox`
+  flip churns only that trailing block. Unknown names in `enabled`
+  are ignored; toolboxes absent from `enabled` render `(off)`.
 - `executeToolCall(name, args, ctx): Promise<ToolResult>` - the
   main chat dispatcher. Throws on unknown tool name. Looks up the
   tool across every toolbox in `TOOLBOXES` in order.

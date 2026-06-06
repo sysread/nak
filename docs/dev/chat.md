@@ -466,8 +466,13 @@ A chat turn goes:
      answering; never invent citations or specifics to sound
      authoritative), recall framing, journal/wiki framing,
      toolbox framing, activity-narration rule, dynamic
-     catalog. Stable across rounds except for the catalog's
-     `(on)`/`(off)` marks tracking the current toolbox state.
+     catalog. Fully stable across rounds *and across toolbox
+     toggles* - the catalog is state-free (it lists what
+     toolboxes exist, not which are enabled). The volatile
+     `(on)`/`(off)` state moved into the trailing metadata
+     message (layer 4) so a `toggle_toolbox` flip doesn't
+     re-encode the whole prefix; nothing in this layer varies
+     per turn.
   2. **User-configured system prompts** - whatever's enabled
      in Settings -> Prompts for this thread, in order.
      `Chat.svelte` ships them at the head of `history`; the
@@ -488,15 +493,16 @@ A chat turn goes:
      identity facts (user name + location when set), a
      wall-clock prose paragraph (local ISO 8601 + IANA zone +
      UTC + a "since your last reply" sentence on mid-thread
-     turns), the thread-attachments inventory, the
-     emphasis-markdown nudge when the toggle is on, and the
-     title nudge (loud nag when the title is still the schema
-     placeholder, soft drift hint when a model-set title might
-     need refreshing). The opening turn is silent on the
-     title - the auto-title worker owns naming there. With a
-     reliable worker the loud nag rarely fires; it's the
-     safety net for the case where the worker hasn't polled
-     the row yet.
+     turns), the gated-toolbox `(on)`/`(off)` state block
+     (right after the datetime; `buildToolboxStateBlock`), the
+     thread-attachments inventory, the emphasis-markdown nudge
+     when the toggle is on, and the title nudge (loud nag when
+     the title is still the schema placeholder, soft drift hint
+     when a model-set title might need refreshing). The opening
+     turn is silent on the title - the auto-title worker owns
+     naming there. With a reliable worker the loud nag rarely
+     fires; it's the safety net for the case where the worker
+     hasn't polled the row yet.
 
   **Why metadata rides at the tail, not before the conversation.**
   Venice (like every OpenAI-compatible backend) can only reuse a
@@ -512,6 +518,16 @@ A chat turn goes:
   the cache. The tradeoff: the model reads ambient context after its
   `<think>` chain rather than just before the user turn, and the final
   wire row is `role:system` rather than the intuition `<think>`.
+
+  The gated-toolbox `(on)`/`(off)` state rides in this trailing block
+  for the same reason. It used to live in the baseline catalog, where a
+  mid-conversation `toggle_toolbox` flip shifted the first-differing
+  byte back to the top of the baseline and busted the whole prefix -
+  the same failure the datetime move fixed, re-introduced by a
+  different volatile field. Moving it to the trailing metadata block
+  (right after the datetime) and leaving the baseline catalog
+  state-free keeps the baseline byte-identical across toggles, so a
+  toggle re-encodes only this small block.
 
   `buildDatetimeParagraph` formats the wall-clock paragraph in
   ISO 8601 at **minute granularity** (local with offset, UTC Z form,
