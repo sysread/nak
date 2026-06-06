@@ -3579,35 +3579,39 @@ begin
      and response_holder_id = p_holder_id;
 end $$;
 
--- Stream-claim janitor (server-side sweep) -------------------------------
+-- Stream-row janitor (server-side sweep) ---------------------------------
 --
--- The b-strict acquire/heartbeat/release contract above covers the normal
--- terminal cases (success, abort, error inside the round-loop try/catch).
--- It does NOT cover the function being killed externally - Edge Runtime
--- CPU/memory caps, gateway 502s mid-round, EdgeRuntime.waitUntil being
--- yanked before the finally block could run. In that case the claim sits
--- expired-but-set: response_holder_id is non-null, response_claim_expires_at
--- is in the past, last_error is still null because no terminal path ever
--- wrote it.
+-- The function's normal terminal paths (commit_assistant_message on
+-- success; the catch/finally block on error/abort/wall-timeout) flip
+-- the streaming row's status away from 'streaming'. A row left in
+-- status='streaming' past the wall-deadline ceiling means the function
+-- was killed externally - Edge Runtime CPU/memory cap, gateway 502
+-- mid-round, EdgeRuntime.waitUntil yanked before the finally block
+-- could run - and no terminal path executed to write last_error.
 --
--- The /stream reconnect probe (supabase/functions/venice/index.ts) catches
--- this on the NEXT user-driven /stream call, but only if the orphan
--- message row has status='streaming'. Intermediate tool-call assistant
--- rows are written with status=NULL (no streaming text deltas, just an
--- instant tool_calls write), so a function death mid-tool-round leaves a
--- thread orphan-claimed that the reconnect probe ignores.
+-- The /stream reconnect probe in supabase/functions/venice/index.ts
+-- catches this on the NEXT user-driven /stream call. This cron sweep
+-- catches the same shape unconditionally, so a thread the user never
+-- reopens still gets its error surfaced.
 --
--- This sweep keys off the thread-level claim instead of the message-row
--- status. Any thread whose claim expired more than 60 seconds ago, whose
--- claim is still set, AND whose last_error is still null is treated as
--- "function died, never wrote a terminal error." We clear the claim and
--- write a last_error so the UI's error card renders on the next
--- threads-realtime update.
+-- IMPORTANT: keys off the messages row's `status='streaming'`, NOT
+-- threads.response_holder_id. The thread-level claim
+-- (response_holder_id + response_claim_expires_at) is browser-managed:
+-- the chat-loop acquires it at turn start and heartbeats it from the
+-- producer device. A backgrounded tab, a refresh, or a Chrome pause
+-- stops the browser's heartbeat without affecting the function's own
+-- streaming work (the function lives in waitUntil and keeps going).
+-- An earlier shape of this sweep keyed off the thread claim and would
+-- write last_error on healthy long-running streams whose browser
+-- happened to be paused - the reconnecting browser would then see the
+-- error card instead of the live stream resuming. The messages-row
+-- status is the right signal because it's function-owned end to end:
+-- ensureAssistantRow inserts with status='streaming',
+-- commit_assistant_message and transitionRowTo flip it on terminal.
 --
--- The 60-second grace exists because the function's own writes can land
--- a few seconds past its claim expiry (race between the row UPDATE and
--- the claim TTL check). 60s is comfortably past any legitimate late
--- write.
+-- Threshold: 2 * WALL_DEADLINE_MS (760 seconds). A healthy stream
+-- can't exceed WALL_DEADLINE_MS (the orchestrator's own ceiling); the
+-- 2x buffer is the same one the in-function reconnect probe uses.
 --
 -- SECURITY DEFINER + revoke-from-non-service: this sweep crosses user
 -- boundaries (a service role sweeping all threads), which makes the
@@ -3620,24 +3624,33 @@ language plpgsql security definer as $$
 declare
   affected int;
 begin
-  with swept as (
-    update public.threads
-    set
-      last_error = jsonb_build_object(
-        'kind', 'internal',
-        'message',
-          'The previous response was lost mid-stream (the function ended before it could finalise the reply). Try again.',
-        'retryable', true,
-        'occurred_at', to_jsonb(now())
-      ),
-      response_holder_id = null,
-      response_claim_expires_at = null
-    where response_holder_id is not null
-      and response_claim_expires_at < now() - interval '60 seconds'
-      and last_error is null
-    returning 1
+  with stale as (
+    select m.id, m.thread_id
+    from public.messages m
+    where m.role = 'assistant'
+      and m.status = 'streaming'
+      and m.created_at < now() - interval '760 seconds'
+    for update of m skip locked
+  ),
+  updated_msgs as (
+    update public.messages m
+    set status = 'error'
+    from stale s
+    where m.id = s.id
+    returning m.thread_id
   )
-  select count(*) into affected from swept;
+  update public.threads t
+  set last_error = jsonb_build_object(
+    'kind', 'internal',
+    'message',
+      'The previous response was lost mid-stream (the function ended before it could finalise the reply). Try again.',
+    'retryable', true,
+    'occurred_at', to_jsonb(now())
+  )
+  from updated_msgs um
+  where t.id = um.thread_id
+    and t.last_error is null;
+  get diagnostics affected = row_count;
   return affected;
 end $$;
 
