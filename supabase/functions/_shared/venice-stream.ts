@@ -187,6 +187,25 @@ export type TerminalKind =
 
 export type OrchestratorEvent =
   | {
+      /**
+       * A non-terminal round's assistant-with-tool-calls row has been
+       * committed server-side; `id` is that row's id. This is the
+       * round-boundary signal the browser cannot derive on its own: the
+       * round loop runs inside the function, so without an explicit
+       * marker the browser has no way to tell when one completion ended
+       * and the next began. Lacking it, the live streaming buffers
+       * (slot.streamingText / streamingReasoning) accumulate every
+       * round's deltas into a single bubble that duplicates the
+       * per-round persisted cards arriving over the messages realtime
+       * subscription, and interleaves reasoning across rounds out of
+       * order. On this event the browser resets those buffers and hands
+       * off to the persisted row. Fires once per non-terminal round; the
+       * terminal round is signaled by END instead.
+       */
+      type: 'assistant_round_committed';
+      id: string;
+    }
+  | {
       type: 'tool_call_response';
       id: string;
       name: string;

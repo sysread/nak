@@ -85,7 +85,7 @@ const ASK_USER_PENDING_FLAG = '__ask_user_pending__';
 // followed by one text-only round. Hitting MAX_ROUNDS with every
 // round still calling tools is the "runaway" terminal: the loop
 // exits naturally, the END event carries conflict='round_limit',
-// and the browser surfaces the "Stopped: hit 20-round limit" banner.
+// and the browser surfaces the round-limit banner.
 const MAX_ROUNDS = 24;
 
 // How often (ms) we UPDATE the streaming row's content with the
@@ -257,8 +257,8 @@ export async function getStreamingResponse(
   // reflects the count of rounds the orchestrator started, regardless
   // of how the loop exited (break vs natural terminus). Reported on
   // the END event so the browser can render round-aware affordances
-  // (the "Stopped: hit the 20-round limit" banner is keyed off the
-  // round-limit terminal, but consumers also use the count for
+  // (the round-limit banner is keyed off the round-limit terminal,
+  // but consumers also use the count for
   // exchange-level metrics).
   let roundsRun = 0;
   // Distinguishes "natural for-loop exhaustion" (round_limit hit)
@@ -531,6 +531,22 @@ export async function getStreamingResponse(
         roundToolCalls,
       );
 
+      // Round-boundary signal. The round's assistant content (text +
+      // reasoning) is final the moment its completion stream ends and the
+      // row is persisted, so tell the browser now - before tool dispatch,
+      // which can run for seconds - so it resets its live streaming
+      // buffers and hands off to this persisted row instead of carrying
+      // this round's text into the next round's bubble. The browser no
+      // longer owns the round loop and has no other way to detect the
+      // boundary. Published through the publisher's prompt path (a
+      // non-text event), so any text still buffered for this round
+      // flushes ahead of it and the reset never races the deltas it
+      // follows.
+      await publisher.publish({
+        type: 'assistant_round_committed',
+        id: assistantRoundRow.id,
+      });
+
       // Tool dispatch. Run them in parallel; collect outcomes.
       const ctx: ToolContext = {
         adminClient: opts.adminClient,
@@ -704,11 +720,6 @@ export async function getStreamingResponse(
         terminalKind = 'suspended_for_ask_user';
         break;
       }
-
-      // Suppress unused warning for the assistant-row-of-this-round
-      // reference - we capture it for the side-effect persistence,
-      // but the orchestrator's streaming row is separate.
-      void assistantRoundRow;
     }
 
     // Round-limit terminal. If `round === MAX_ROUNDS` the for-loop
@@ -722,7 +733,7 @@ export async function getStreamingResponse(
     // writes an empty assistant bubble - the model never got the
     // round to write a real response. We flag the terminal as 'error'
     // with conflict='round_limit' so the END routing browser-side
-    // surfaces the 20-round-limit banner instead of silently shipping
+    // surfaces the round-limit banner instead of silently shipping
     // an empty reply.
     if (round === MAX_ROUNDS && terminalKind === 'completed') {
       terminalKind = 'error';

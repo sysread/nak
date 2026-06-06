@@ -1663,6 +1663,36 @@ async function consumeStreamEvents(opts: {
           handlers?.onReasoningUpdate?.('');
           break;
         }
+        case 'round_committed': {
+          // Round boundary. The function committed this non-terminal
+          // round's assistant-with-tool-calls row and is moving on to
+          // the next completion. Reset the local accumulators so the
+          // next round's deltas don't append onto this round's
+          // text/reasoning, and route the persisted row through the same
+          // onAssistantPersisted hand-off the terminal round gets at END
+          // - it resets the slot's streaming buffers, cancels any
+          // pending flush, and renders the row as its own card. Without
+          // this the live bubble carries every round's content
+          // concatenated and duplicates the per-round cards (the round
+          // loop runs server-side now, so the browser has no other way
+          // to see the boundary). Best-effort fetch: on failure the
+          // messages realtime subscription still delivers the row, we
+          // just miss the proactive buffer reset for this round (the
+          // next round_committed or END recovers it).
+          streamingText = '';
+          streamingReasoning = '';
+          try {
+            const msg = await supabase.getMessage(ev.id);
+            if (msg) handlers?.onAssistantPersisted?.(msg);
+          } catch (err) {
+            log.warn(
+              `getMessage(${ev.id}) failed on round boundary; relying on realtime INSERT: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+          break;
+        }
         case 'error':
           // The server reported a terminal stream failure. Throw with
           // a kind matching the original VeniceError categorization so
@@ -1710,7 +1740,7 @@ async function consumeStreamEvents(opts: {
     //   - conflict='round_limit' - the orchestrator's round loop
     //     exhausted MAX_ROUNDS without the model ever producing a
     //     terminal text round. Map onto stoppedByLimit so the caller
-    //     can render the "Stopped: hit the 20-round limit" banner.
+    //     can render the round-limit banner.
     //   - conflict=<commit_assistant_message reason> - the assistant
     //     commit RPC saw a newer user message land underneath us, or
     //     another conversation-level race. Map onto the legacy

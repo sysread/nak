@@ -3767,7 +3767,7 @@
         fadeOutDelays = {};
       }
       if (loopResult.stoppedByLimit && !loopResult.finalText) {
-        error = { text: 'Stopped: tool-call loop hit the 20-round limit.' };
+        error = { text: 'Stopped: the tool-call loop hit its round limit.' };
       }
       // Conflict: another device inserted a user message while we were
       // streaming. The generated assistant row was discarded server-side.

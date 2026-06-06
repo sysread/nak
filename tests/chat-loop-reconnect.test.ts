@@ -291,6 +291,77 @@ describe('runReconnectLoop', () => {
     expect(onReasoningUpdate).toHaveBeenCalledWith('');
   });
 
+  it('resets accumulators and hands off the row on a round boundary (round_committed)', async () => {
+    const roundRow: Message = {
+      id: 'ROUND0',
+      thread_id: 'T1',
+      role: 'assistant',
+      content: 'round-0 text',
+      created_at: '2026-06-04T00:00:00Z',
+    };
+    const terminalRow: Message = {
+      id: 'A1',
+      thread_id: 'T1',
+      role: 'assistant',
+      content: 'final answer',
+      created_at: '2026-06-04T00:00:01Z',
+    };
+    const { channel, supabase, getMessageMock } = makeHarness({
+      channelName: 'thread:T1:stream',
+      envelope: {
+        channelName: 'thread:T1:stream',
+        assistantRowId: 'A1',
+        completedSoFar: '',
+      },
+    });
+    // Id-aware so the two onAssistantPersisted hand-offs (round boundary
+    // vs terminal END) can be told apart.
+    getMessageMock.mockImplementation(async (id: string) =>
+      id === 'ROUND0' ? roundRow : id === 'A1' ? terminalRow : null,
+    );
+    const onTextUpdate = vi.fn();
+    const onReasoningUpdate = vi.fn();
+    const onAssistantPersisted = vi.fn();
+    const promise = runReconnectLoop({
+      supabase,
+      threadId: 'T1',
+      signal: ctl().signal,
+      handlers: { onTextUpdate, onReasoningUpdate, onAssistantPersisted },
+    });
+    await microtaskFlush();
+    // Round 0 (tool-calling): some reasoning + narration text, then the
+    // round's assistant row commits - the boundary.
+    channel.emit('reasoning_text', { content: 'round-0 reasoning' });
+    channel.emit('response_text', { content: 'round-0 text' });
+    channel.emit('assistant_round_committed', { id: 'ROUND0' });
+    // Round 1 (terminal): the answer. Its deltas must NOT concatenate
+    // onto round 0's - that was the bug. The boundary reset the
+    // accumulators, so finalText and the live onTextUpdate carry only
+    // the terminal round's text.
+    channel.emit('response_text', { content: 'final answer' });
+    channel.emit('END', {
+      persistedAssistantId: 'A1',
+      terminalKind: 'completed',
+    });
+    const result = await promise;
+    expect(result.finalText).toBe('final answer');
+    // The boundary fetched ROUND0 and handed it to onAssistantPersisted
+    // (per-round card hand-off); the terminal END hydration fires it
+    // again for the terminal row A1. Two distinct rows, in order.
+    expect(getMessageMock).toHaveBeenCalledWith('ROUND0');
+    expect(onAssistantPersisted.mock.calls.map((c) => c[0].id)).toEqual([
+      'ROUND0',
+      'A1',
+    ]);
+    // The post-boundary text delta carries only round 1's text. Before
+    // the fix this read 'round-0 textfinal answer' - round 0's content
+    // bleeding into the live bubble alongside round 1's.
+    expect(onTextUpdate.mock.calls.map((c) => c[0])).toEqual([
+      'round-0 text',
+      'final answer',
+    ]);
+  });
+
   it('forwards tool_call_response broadcasts to onToolDone (paired by id)', async () => {
     const { channel, supabase } = makeHarness({
       channelName: 'thread:T1:stream',
