@@ -5,7 +5,7 @@ import {
   cancelStream,
   parseSseFrame,
   parseChatCompletion,
-  streamReconnect,
+  awaitStreamSettled,
   type StreamEvent,
 } from '../src/lib/venice';
 import type {
@@ -801,7 +801,7 @@ describe('VeniceClient.streamChat', () => {
 // completedSoFar}), and subscribes to a Supabase Realtime Broadcast
 // channel for live events. The unit tests below stub both halves of
 // that transport - functions.invoke for the envelope POST and channel
-// for the Broadcast subscription - so the streamChat / streamReconnect /
+// for the Broadcast subscription - so the streamChat / awaitStreamSettled /
 // cancelStream paths can be exercised without a real Supabase client.
 //
 // MockChannel exposes an `emit(event, payload)` helper that fires
@@ -1303,94 +1303,78 @@ describe('streamChat (streaming-root transport)', () => {
   });
 });
 
-describe('streamReconnect', () => {
-  it('POSTs reconnectOnly:true with the threadId only (no userMessageId required)', async () => {
-    const channel = makeChannel('thread:T1:stream');
-    const channels = new Map([[channel.name, channel]]);
-    const { client, invokeCalls } = makeSupabase({
-      envelope: {
-        channelName: channel.name,
-        assistantRowId: 'A1',
-        completedSoFar: 'hi',
-      },
-      channels,
+describe('awaitStreamSettled (reconnect poll)', () => {
+  // A client whose functions.invoke returns a programmed sequence of
+  // {data,error} results, one per call (the last entry repeats).
+  function sequencedClient(
+    sequence: Array<{ data: unknown; error: Error | null }>,
+  ): { client: SupabaseClient; bodies: unknown[]; invoke: ReturnType<typeof vi.fn> } {
+    const bodies: unknown[] = [];
+    let i = 0;
+    const invoke = vi.fn(async (_name: string, args: { body: unknown }) => {
+      bodies.push(args.body);
+      return sequence[Math.min(i++, sequence.length - 1)];
     });
-    const gen = streamReconnect(client, { threadId: 'T1' });
-    const collected: StreamEvent[] = [];
-    const drained = (async () => {
-      for await (const ev of gen) collected.push(ev);
-    })();
-    await Promise.resolve();
-    await Promise.resolve();
-    channel.emit('END', {
-      persistedAssistantId: 'A1',
-      terminalKind: 'completed',
-    });
-    await drained;
-    expect(invokeCalls).toHaveLength(1);
-    expect(invokeCalls[0].body).toEqual({
-      threadId: 'T1',
-      reconnectOnly: true,
-    });
-  });
+    const client = { functions: { invoke } } as unknown as SupabaseClient;
+    return { client, bodies, invoke };
+  }
 
-  it('yields a synthetic terminal end when the envelope reports noStreamInFlight', async () => {
-    const { client } = makeSupabase({
-      envelope: {
-        channelName: 'thread:T1:stream',
-        assistantRowId: null,
-        completedSoFar: '',
-        noStreamInFlight: true,
-      },
-    });
-    const collected: StreamEvent[] = [];
-    for await (const ev of streamReconnect(client, { threadId: 'T1' })) {
-      collected.push(ev);
-    }
-    expect(collected).toEqual([
-      { type: 'end', persistedAssistantId: '', terminalKind: 'completed', roundsRun: 0 },
+  const inflight = (completedSoFar: string) => ({
+    data: { channelName: 'thread:T1:stream', assistantRowId: 'A1', completedSoFar },
+    error: null,
+  });
+  const settled = {
+    data: {
+      channelName: 'thread:T1:stream',
+      assistantRowId: null,
+      completedSoFar: '',
+      noStreamInFlight: true,
+    },
+    error: null,
+  };
+
+  it('polls reconnectOnly until noStreamInFlight, surfacing each partial', async () => {
+    const { client, bodies, invoke } = sequencedClient([
+      inflight('hel'),
+      inflight('hello'),
+      settled,
     ]);
+    const progress: string[] = [];
+    await awaitStreamSettled(
+      client,
+      { threadId: 'T1' },
+      { intervalMs: 0, onProgress: (c) => progress.push(c) },
+    );
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(bodies[0]).toEqual({ threadId: 'T1', reconnectOnly: true });
+    // onProgress fires for the in-flight probes only, not the settle.
+    expect(progress).toEqual(['hel', 'hello']);
   });
 
-  it('subscribes the channel and replays live events when the envelope reports an in-flight stream', async () => {
-    const channel = makeChannel('thread:T1:stream');
-    const channels = new Map([[channel.name, channel]]);
-    const { client } = makeSupabase({
-      envelope: {
-        channelName: channel.name,
-        assistantRowId: 'A1',
-        completedSoFar: 'partial',
-      },
-      channels,
+  it('stops as soon as the signal aborts', async () => {
+    const ctl = new AbortController();
+    const invoke = vi.fn(async () => {
+      // Abort during the first probe; the post-probe aborted-check bails
+      // before scheduling another poll.
+      ctl.abort();
+      return inflight('x');
     });
-    const collected: StreamEvent[] = [];
-    const drained = (async () => {
-      for await (const ev of streamReconnect(client, { threadId: 'T1' })) {
-        collected.push(ev);
-      }
-    })();
-    await Promise.resolve();
-    await Promise.resolve();
-    channel.emit('response_text', { content: ' more' });
-    channel.emit('END', {
-      persistedAssistantId: 'A1',
-      terminalKind: 'completed',
-    });
-    await drained;
-    expect(collected).toEqual([
-      { type: 'text', delta: 'partial' },
-      { type: 'text', delta: ' more' },
-      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed', roundsRun: 0 },
+    const client = { functions: { invoke } } as unknown as SupabaseClient;
+    await awaitStreamSettled(
+      client,
+      { threadId: 'T1' },
+      { intervalMs: 50, signal: ctl.signal },
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('swallows a transient invoke error and keeps polling', async () => {
+    const { client, invoke } = sequencedClient([
+      { data: null, error: new Error('network blip') },
+      settled,
     ]);
-  });
-
-  it('throws VeniceError when the /stream reconnect invoke fails', async () => {
-    const { client } = makeSupabase({ invokeError: new Error('timeout') });
-    await expect(async () => {
-      for await (const _ of streamReconnect(client, { threadId: 'T1' })) {
-        void _;
-      }
-    }).rejects.toBeInstanceOf(VeniceError);
+    await awaitStreamSettled(client, { threadId: 'T1' }, { intervalMs: 0 });
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 });
 

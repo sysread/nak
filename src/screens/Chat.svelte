@@ -68,7 +68,7 @@
     type SamskaraSubstrateDiagnosticRow,
     type TopicVocabulary,
   } from '$lib/supabase';
-  import { runChatLoop, runReconnectLoop, toVeniceMessage } from '$lib/chat-loop';
+  import { runChatLoop, toVeniceMessage } from '$lib/chat-loop';
   import { GuardExhaustedError } from '$lib/stream-guards';
   import { slopNoticeCopy } from '$lib/ui/slop-notice';
   import { ExchangeStore, mergeMessagesById } from '$lib/exchange/exchange-store.svelte';
@@ -244,7 +244,7 @@
   import { logsDrawer, createLogger } from '$lib/logger.svelte';
 
   const log = createLogger('chat');
-  import { VeniceError, cancelStream, type VeniceMessage } from '$lib/venice';
+  import { VeniceError, cancelStream, awaitStreamSettled, type VeniceMessage } from '$lib/venice';
 
   const DEFAULT_TITLE = 'New conversation';
 
@@ -2264,7 +2264,7 @@
       // (sending flag, throttled buffers, terminal handling). A
       // failure surfaces on the slot's streamingError banner.
       if (streamingTail && !exchangeStore.peek(id)?.sending) {
-        void runReconnectExchange(id, streamingTail);
+        void reconnectInflightTurn(id, streamingTail);
       }
       // Land on the latest exchange. The auto-scroll effect is gated on
       // an active completion (so a realtime echo can't hijack the view
@@ -3973,243 +3973,96 @@
   }
 
   /**
-   * Join an in-flight assistant turn the user is observing from this
-   * tab. Called from selectThread when the loaded transcript tail
-   * carries a `status='streaming'` assistant row AND no slot on this
-   * device is already producing the response.
+   * Re-attach to an assistant turn that was already in flight when this
+   * tab last had the thread - a backgrounded mobile PWA that got
+   * discarded, a fresh tab, a hard reload. Called from selectThread when
+   * the loaded transcript tail carries a `status='streaming'` assistant
+   * row AND no slot on this device is already producing the response.
    *
-   * Two arrival paths:
-   *   1. Same device, fresh tab / hard reload - the slot's prior
-   *      lifetime ended (close/reload) but the function kept running.
-   *   2. Cross-device "ape mode" - device A is producing, device B
-   *      opens the same thread.
+   * The turn runs entirely inside the edge function and survives the
+   * disconnect. We do NOT try to resume the live Broadcast stream: its
+   * events are ephemeral, so whatever fired while this tab was gone -
+   * including the single END that signals completion - is unrecoverable,
+   * and re-subscribing only ever caught events from that point on. That
+   * is exactly what produced the two failure cards: a re-subscribe that
+   * timed out on a not-yet-recovered mobile socket (the "disconnected"
+   * banner), or a wait for an END that already fired / a stale-row
+   * janitor write (the persistent red error).
    *
-   * Mechanically a stripped-down runExchange: allocate a slot, set up
-   * the streaming-bubble throttle, run `runReconnectLoop` instead of
-   * runChatLoop, and skip everything that only applies to a live turn
-   * (cross-device claim acquire, priming layers, intuition/recall
-   * patches, ask_user pending-cancel-on-refresh sweep, regenerate-
-   * from-here delete chain, draft persistence).
+   * Instead we POLL the row to a terminal state via awaitStreamSettled
+   * (which re-probes /stream reconnectOnly), show a "Reconnecting"
+   * throbber over the partial-so-far, then re-fetch the thread and render
+   * the committed rows from the DB. In effect this behaves exactly as if
+   * the user reopened the thread after the turn finished in the
+   * background - the only thing we can honestly show, and robust to the
+   * mobile realtime socket dropping.
    *
-   * If the server reports no in-flight stream, the row was a stale
-   * mid-flight crash artifact - we don't surface a separate retry
-   * affordance for it in v1; the row stays in the transcript as the
-   * caller's listMessages snapshot rendered it, and the user can
-   * retry by sending again.
+   * `sending` gates the throbber + composer the same as a live turn;
+   * `reconnecting` only re-labels the throbber. Skips everything a live
+   * turn needs (claim acquire, priming, draft persistence) - the function
+   * already owns all of that on the producing side.
    */
-  async function runReconnectExchange(
+  async function reconnectInflightTurn(
     threadId: string,
     streamingRow: Message,
   ): Promise<void> {
-    if (!app.supabase || !app.venice) return;
+    if (!app.supabase) return;
     const slot = exchangeStore.slotFor(threadId);
     if (slot.sending) return;
     const supabase = app.supabase;
 
     slot.reset();
     slot.sending = true;
+    slot.reconnecting = true;
     slot.abortCtl = new AbortController();
-    // Seed the streaming bubble with the row's completed-so-far
-    // content the listMessages snapshot saw, so the bubble paints
-    // immediately on thread open instead of waiting for the envelope
-    // + first throttle flush (~150-300ms). streamReconnect re-yields
-    // the same content from the envelope; if any UPDATEs landed
-    // between listMessages and the reconnect probe, the bubble grows
-    // to the longer version on the first flush.
+    // Paint the partial the streaming row already holds so the user sees
+    // where the reply got to, not a bare spinner. onProgress grows it as
+    // the function persists more content while we poll.
     slot.streamingText = streamingRow.content;
-    slot.streamingContentStarted = streamingRow.content.length > 0;
-    // Wake-lock parity with runExchange: an active reconnect is also a
-    // visible streaming bubble; the device should stay awake until
-    // settle.
+    slot.subconsciousDismissed = true;
+    // Wake-lock parity with a live turn: a reconnecting turn is still
+    // producing, so keep the device awake until it settles.
     void acquireWakeLock();
 
-    let reasoningCloseTimer = 0;
-    const FLUSH_MS = 50;
-    let pendingText: string | null = null;
-    let pendingReasoning: string | null = null;
-    let flushTimer = 0;
-    const flushPending = (): void => {
-      flushTimer = 0;
-      if (pendingText !== null) {
-        slot.streamingText = pendingText;
-        pendingText = null;
-        slot.subconsciousDismissed = true;
-      }
-      if (pendingReasoning !== null) {
-        slot.streamingReasoning = pendingReasoning;
-        pendingReasoning = null;
-        slot.subconsciousDismissed = true;
-      }
-    };
-    const armFlush = (): void => {
-      if (flushTimer !== 0) return;
-      flushTimer = window.setTimeout(flushPending, FLUSH_MS);
-    };
-    const cancelPending = (): void => {
-      if (flushTimer !== 0) {
-        window.clearTimeout(flushTimer);
-        flushTimer = 0;
-      }
-    };
-
     try {
-      const result = await runReconnectLoop({
-        supabase,
-        threadId,
-        signal: slot.abortCtl.signal,
-        handlers: {
-          onTextUpdate: (t) => {
-            pendingText = t;
-            armFlush();
-            if (!slot.streamingContentStarted) {
-              slot.streamingContentStarted = true;
-              if (
-                slot.streamingReasoningOpen &&
-                (slot.streamingReasoning.length > 0 || pendingReasoning !== null)
-              ) {
-                reasoningCloseTimer = window.setTimeout(() => {
-                  slot.streamingReasoningOpen = false;
-                  reasoningCloseTimer = 0;
-                }, 600);
-              }
-            }
-          },
-          onReasoningUpdate: (t) => {
-            pendingReasoning = t;
-            armFlush();
-            if (!slot.streamingReasoningOpen && !slot.streamingContentStarted) {
-              slot.streamingReasoningOpen = true;
-            }
-          },
-          onAssistantPersisted: (msg) => {
-            cancelPending();
-            pendingText = null;
-            pendingReasoning = null;
-            slot.recordPersistedRow(msg);
-            if (threadId === activeThreadId) appendMessage(msg);
-            slot.streamingText = '';
-            slot.streamingReasoning = '';
-            slot.streamingReasoningOpen = false;
-            slot.streamingContentStarted = false;
-            if (reasoningCloseTimer !== 0) {
-              window.clearTimeout(reasoningCloseTimer);
-              reasoningCloseTimer = 0;
-            }
-            dismissSlopNotices(slot);
-          },
-          onToolResultPersisted: (msg) => {
-            slot.recordPersistedRow(msg);
-            if (threadId === activeThreadId) appendMessage(msg);
-          },
-          onToolStart: (call) => {
-            // Tool-call requests arrive only when a NEW request fires
-            // after we joined. Tools already in flight when we
-            // reconnected won't surface a start event, just an end
-            // when the server publishes tool_call_response. The UI
-            // tolerates a missing start - statusFor() reads the
-            // present-but-no-endedAt state as still-in-flight only
-            // when startedAt exists.
-            slot.toolTimings[call.id] = { startedAt: performance.now() };
-          },
-          onToolDone: (call) => {
-            const t = slot.toolTimings[call.id];
-            if (t) {
-              t.endedAt = performance.now();
-            } else {
-              // The tool started before we joined. Stamp a synthetic
-              // zero-duration entry so the row still renders with a
-              // completed glyph instead of vanishing.
-              const now = performance.now();
-              slot.toolTimings[call.id] = { startedAt: now, endedAt: now };
-            }
-          },
-          onToolError: (call) => {
-            const t = slot.toolTimings[call.id];
-            const now = performance.now();
-            if (t) {
-              t.endedAt = now;
-              t.error = true;
-            } else {
-              slot.toolTimings[call.id] = { startedAt: now, endedAt: now, error: true };
-            }
-          },
-          onRateLimitWait: ({ until, attempt }) => {
-            slot.rateLimitWaitUntil = until;
-            slot.rateLimitAttempt = attempt;
-          },
-          onRateLimitResolved: () => {
-            slot.rateLimitWaitUntil = null;
-            slot.rateLimitAttempt = 0;
-          },
-          onGuardRetry: ({ guard }) => {
-            cancelPending();
-            pendingText = null;
-            pendingReasoning = null;
-            slot.slopNotices.push({
-              id:
-                globalThis.crypto?.randomUUID?.() ??
-                `slop-${Date.now()}-${slot.slopNotices.length}`,
-              guard,
-              dying: false,
-            });
-            slot.streamingText = '';
-            slot.streamingReasoning = '';
-            slot.streamingReasoningOpen = false;
-            slot.streamingContentStarted = false;
+      await awaitStreamSettled(
+        supabase.client,
+        { threadId },
+        {
+          signal: slot.abortCtl.signal,
+          onProgress: (completedSoFar) => {
+            // Full content-so-far, not a delta - assign, don't append.
+            slot.streamingText = completedSoFar;
           },
         },
-      });
-      // Row terminally committed between our listMessages snapshot
-      // and the reconnect probe. The realtime UPDATE will deliver the
-      // canonical row to subscribeToMessages eventually, but fetching
-      // here and appending avoids a transcript gap (no bubble, no row)
-      // between sending=false and the UPDATE landing. Best-effort: if
-      // the fetch fails the realtime path catches up.
-      if (result.noStreamInFlight) {
-        try {
-          const fresh = await supabase.getMessage(streamingRow.id);
-          if (fresh && threadId === activeThreadId) {
-            slot.recordPersistedRow(fresh);
-            appendMessage(fresh);
-            slot.streamingText = '';
-            slot.streamingReasoning = '';
-          }
-        } catch (err) {
-          log.warn(
-            `runReconnectExchange post-noStreamInFlight getMessage failed: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
-        }
+      );
+      // Settled: the row reached a terminal status (or the server's
+      // stale-row janitor swept it). Re-fetch the thread and render the
+      // canonical rows - the committed assistant row, any tool rows, and
+      // any threads.last_error the function wrote all live in the DB now.
+      // Guarded on the active thread: a background reconnect (user
+      // navigated away mid-poll) just clears its slot; the next
+      // selectThread re-fetches when they return.
+      if (threadId === activeThreadId) {
+        const fresh = await supabase.listMessages(threadId);
+        messages = mergeMessagesById(fresh, slot.persistedRows);
       }
     } catch (err) {
-      // Realtime channel errors, network failures, etc. Drop into the
-      // streaming-error banner so the user sees the join failed; the
-      // row remains in the transcript as listMessages rendered it.
-      log.warn('runReconnectExchange failed', err);
-      slot.streamingError = {
-        text: err instanceof Error ? err.message : String(err),
-      };
+      // awaitStreamSettled resolves (never rejects) on abort or the
+      // max-wait ceiling, so a throw here is an unexpected listMessages
+      // failure. Don't paint a banner - the turn's terminal state
+      // (including any last_error the function persisted) renders through
+      // the normal surfaces on the next realtime UPDATE or thread reopen.
+      log.warn('reconnectInflightTurn failed', err);
     } finally {
-      cancelPending();
-      if (pendingText !== null) {
-        slot.streamingText = pendingText;
-        pendingText = null;
-      }
-      if (pendingReasoning !== null) {
-        slot.streamingReasoning = pendingReasoning;
-        pendingReasoning = null;
-      }
-      dismissSlopNotices(slot);
+      slot.streamingText = '';
+      slot.streamingReasoning = '';
       slot.finalizePendingToolTimings();
       slot.sending = false;
+      slot.reconnecting = false;
       slot.abortCtl = null;
       if (!exchangeStore.slots().some((s) => s.sending)) {
         releaseWakeLock();
-      }
-      if (reasoningCloseTimer !== 0) {
-        window.clearTimeout(reasoningCloseTimer);
-        reasoningCloseTimer = 0;
       }
     }
   }
@@ -7244,7 +7097,7 @@
                  wrapper centers the inline-flex Scanner in the pane so it
                  doesn't read as a stranded artifact in the top-left corner. -->
             <div class="thinking streaming-throbber">
-              <Scanner label="Thinking" />
+              <Scanner label={activeSlot?.reconnecting ? 'Reconnecting' : 'Thinking'} />
             </div>
           {/if}
           {#if respondingElsewhere}

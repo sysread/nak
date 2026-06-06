@@ -60,7 +60,7 @@ import type {
   Citation,
   StreamEvent,
 } from './venice';
-import { VeniceError, streamReconnect } from './venice';
+import { VeniceError } from './venice';
 import { buildUserVeniceContent } from './attachments';
 import {
   buildToolList,
@@ -1432,9 +1432,8 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 /**
  * What `consumeStreamEvents` carries back to its caller. Mirrors the
  * tail half of `ChatLoopResult` - the bits that key off the END event
- * and the streaming accumulators. Both `runChatLoop` (live turn) and
- * `runReconnectLoop` (observing an in-flight or stale turn) project
- * this into their own return shape.
+ * and the streaming accumulators. `runChatLoop` (the live turn) projects
+ * this into its own return shape.
  */
 interface ConsumedStreamResult {
   finalText: string;
@@ -1469,11 +1468,12 @@ interface ConsumedStreamResult {
  * interrupted / conflict / awaitingUserAnswer flags the caller's UI
  * still keys off.
  *
- * Two entry points feed this:
- * - `runChatLoop` (live turn, originating user message + priming +
- *   `venice.streamChat`).
- * - `runReconnectLoop` (passive observation of an in-flight turn,
- *   `streamReconnect` envelope + Broadcast channel).
+ * Fed by `runChatLoop` (the live turn: originating user message +
+ * priming + `venice.streamChat`). Reconnect to an already-in-flight
+ * turn does NOT feed this - it polls the row to a terminal state and
+ * renders from the DB rather than consuming a live event stream (see
+ * `reconnectInflightTurn` in Chat.svelte and `awaitStreamSettled` in
+ * venice.ts).
  *
  * The function throws on a terminal 'error' END with no conflict
  * reason - the caller's outer try/catch surfaces the error banner.
@@ -1810,77 +1810,14 @@ async function consumeStreamEvents(opts: {
 }
 
 /**
- * What `runReconnectLoop` carries back. A narrower shape than
- * `ChatLoopResult` because the priming layers, toolboxes-enabled
- * snapshot, and stoppedByLimit flag are inapplicable: priming never
- * fired (the live turn ran on the other side of the
- * background/reload), the toolboxes set lives on the thread row, and
- * the round-cap stop only matters to live-turn callers that branch on
- * it.
+ * Test-only surface. `consumeStreamEvents` is the shared consumer that
+ * turns the function's StreamEvent stream into slot-handler calls plus
+ * the ChatLoopResult fields (END routing, ask_user capture, accumulator
+ * resets on stream_retry / round_committed, persisted-row hydration). It
+ * drives the live turn from runChatLoop, so it stays internal to this
+ * module; the tests exercise it directly with a hand-rolled event
+ * iterable rather than standing up a realtime-channel mock. Test-hook
+ * convention per CLAUDE.md ("Test-only hooks stay internal").
  */
-export interface ReconnectLoopResult {
-  finalText: string;
-  interrupted: boolean;
-  conflictDetected: boolean;
-  awaitingUserAnswer: ChatLoopResult['awaitingUserAnswer'];
-  noStreamInFlight: boolean;
-}
-
-export interface ReconnectLoopOptions {
-  supabase: SupabaseService;
-  threadId: string;
-  signal: AbortSignal;
-  handlers?: ChatLoopHandlers;
-}
-
-/**
- * Join an in-flight assistant turn the user is observing from a
- * fresh tab or peer device. Posts `/stream` with `reconnectOnly:
- * true` via `streamReconnect`, subscribes to the Broadcast channel,
- * and dispatches the wire events through the same handler surface as
- * a live turn so the streaming bubble, tool timings, and END
- * accounting work identically.
- *
- * When the server reports no in-flight stream the helper unwinds
- * cleanly with `noStreamInFlight: true`. The caller distinguishes
- * "stream is already done, render the terminal row" from "stream
- * died mid-flight, surface a retry affordance" off the row's status
- * column.
- */
-export async function runReconnectLoop(
-  opts: ReconnectLoopOptions,
-): Promise<ReconnectLoopResult> {
-  const { supabase, threadId, signal, handlers } = opts;
-
-  // Reuse the same event consumer as runChatLoop so the streaming-
-  // bubble accumulators, ask_user capture, rate-limit / guard
-  // liveness pairs, END routing, and persisted-row hydration all
-  // behave identically. The only divergence from a live turn is the
-  // event source (streamReconnect rather than venice.streamChat) and
-  // the lack of a substrate stub at the tail (the anchor user message
-  // id isn't known on reconnect).
-  const consumed = await consumeStreamEvents({
-    events: streamReconnect(supabase.client, { threadId }, signal),
-    signal,
-    supabase,
-    handlers,
-  });
-
-  // noStreamInFlight surfaces as a single END {terminalKind:
-  // 'completed', persistedAssistantId: ''} in the consumer - the
-  // envelope's noStreamInFlight branch in venice.ts yields exactly
-  // that synthetic terminal event. Detect by the absence of a
-  // persisted row id; a real completion always carries one.
-  const noStreamInFlight =
-    consumed.terminalKind === 'completed' &&
-    consumed.lastAssistantId === null;
-
-  return {
-    finalText: consumed.finalText,
-    interrupted: consumed.interrupted,
-    conflictDetected: consumed.conflictDetected,
-    awaitingUserAnswer: consumed.awaitingUserAnswer,
-    noStreamInFlight,
-  };
-}
+export const __test = { consumeStreamEvents };
 

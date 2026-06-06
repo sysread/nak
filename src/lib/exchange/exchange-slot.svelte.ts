@@ -130,6 +130,18 @@ type AbortReason = 'user' | 'claim' | null;
 
 export class ExchangeSlot {
   sending = $state(false);
+  /**
+   * True while this slot is re-attaching to a turn that was already
+   * in flight when the tab last had it (a backgrounded mobile PWA that
+   * got discarded, a fresh tab, a hard reload). The turn runs entirely
+   * inside the edge function; the browser can't resume the live
+   * Broadcast stream (its events are ephemeral and were missed while we
+   * were gone), so reconnect instead polls the row to a terminal state
+   * and renders from the DB. `sending` is also true throughout, so every
+   * "turn alive" UI surface stays lit; this flag only distinguishes the
+   * throbber's label ("Reconnecting" vs "Thinking"). Reset by reset().
+   */
+  reconnecting = $state(false);
   streamingText = $state('');
   streamingReasoning = $state('');
   streamingReasoningOpen = $state(false);
@@ -214,6 +226,7 @@ export class ExchangeSlot {
    */
   reset(): void {
     this.sending = false;
+    this.reconnecting = false;
     this.streamingText = '';
     this.streamingReasoning = '';
     this.streamingReasoningOpen = false;

@@ -154,6 +154,7 @@ indicator until the claim clears.
 | Field | Reactive | Purpose |
 | --- | --- | --- |
 | `sending` | yes | Gates streaming bubble, composer's stop-mode, autoscroll, orphan-timing finalizer |
+| `reconnecting` | yes | True while re-attaching to a turn that was in flight when the tab last had it (`reconnectInflightTurn` polls the row to a terminal state instead of resuming the live stream). `sending` is also true; this only re-labels the throbber "Reconnecting" vs "Thinking". See `chat.md` reconnect gotcha. |
 | `streamingText` | yes | Throttled `delta.content` buffer (~500ms flush) |
 | `streamingReasoning` | yes | Throttled `delta.reasoning_content` buffer |
 | `streamingReasoningOpen` | yes | Reasoning panel slide-open state |
