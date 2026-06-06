@@ -379,6 +379,124 @@ export const TIER_ORDER: readonly ModelTier[] = ['smart', 'balanced', 'fast'];
 
 export const DEFAULT_TIER: ModelTier = 'balanced';
 
+// --- User-configurable tier overrides --------------------------------------
+
+/**
+ * A user's chosen backing for one tier, persisted in
+ * `profiles.settings.tierModels`. The Settings AI pane lets the user
+ * point a tier at any model the Venice catalog advertises and set that
+ * tier's default reasoning effort; this is the snapshot that records the
+ * choice.
+ *
+ * Why a capability snapshot rather than just `{ modelId, thinking }`:
+ * the live catalog (./catalog.ts) is fetched lazily - only when the
+ * Settings pane opens. Chat resolution runs synchronously on every send
+ * and cannot wait on (or assume the presence of) an async catalog fetch.
+ * So the capability fields the send path needs - context window, whether
+ * to forward `reasoning_effort`, whether images can be inlined - are
+ * captured here at pick time from the catalog and read back without a
+ * network round trip. The trade-off is staleness: if Venice later
+ * changes a model's capabilities the snapshot lags until the user
+ * re-picks. Capabilities for a fixed id rarely change, so this is
+ * acceptable.
+ *
+ * Note the curated safety flags (leaksSpecialTokens) are deliberately
+ * NOT snapshotted - those keep living in MODELS keyed by concrete id, so
+ * `modelLeaksSpecialTokens(snapshot.modelId)` still arms the slop guard
+ * for a user who points a tier at a known-leaky model. The catalog can't
+ * supply that flag, so there's nothing to snapshot.
+ */
+export interface TierModelConfig {
+  readonly modelId: string;
+  /** Tier-level default reasoning level; may be 'off'. */
+  readonly thinking: ThinkingLevel;
+  readonly contextWindow: number;
+  /** Whether to forward `reasoning_effort` on this tier's requests. */
+  readonly supportsReasoning: boolean;
+  readonly supportsVision: boolean;
+  readonly supportsResponseFormat: boolean;
+  /** Catalog display name captured at pick time, for the picker summary. */
+  readonly label: string;
+}
+
+/** Per-tier override map. Absent tiers fall back to the built-in TierSpec. */
+export type TierModels = Partial<Record<ModelTier, TierModelConfig>>;
+
+/**
+ * Validate one persisted tier-config blob. Total + defensive: returns
+ * null on any shape mismatch so a corrupt settings entry degrades to the
+ * built-in tier default rather than poisoning resolution. Used by
+ * coerceSettings in supabase.ts on read.
+ */
+export function coerceTierModelConfig(raw: unknown): TierModelConfig | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.modelId !== 'string' || r.modelId.length === 0) return null;
+  if (!isThinkingLevel(r.thinking)) return null;
+  if (typeof r.contextWindow !== 'number' || !Number.isFinite(r.contextWindow)) {
+    return null;
+  }
+  if (typeof r.supportsReasoning !== 'boolean') return null;
+  if (typeof r.supportsVision !== 'boolean') return null;
+  if (typeof r.supportsResponseFormat !== 'boolean') return null;
+  const label =
+    typeof r.label === 'string' && r.label.length > 0 ? r.label : r.modelId;
+  return {
+    modelId: r.modelId,
+    thinking: r.thinking,
+    contextWindow: r.contextWindow,
+    supportsReasoning: r.supportsReasoning,
+    supportsVision: r.supportsVision,
+    supportsResponseFormat: r.supportsResponseFormat,
+    label,
+  };
+}
+
+/**
+ * Coerce the whole `tierModels` map: keep only well-formed entries under
+ * a real tier key. Returns undefined when nothing survives so the stored
+ * blob and the in-memory state both treat "no overrides" as absence.
+ */
+export function coerceTierModels(raw: unknown): TierModels | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: TierModels = {};
+  for (const tier of TIER_ORDER) {
+    const config = coerceTierModelConfig(r[tier]);
+    if (config) out[tier] = config;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Resolve the effective TierSpec for a tier, folding any user override on
+ * top of the built-in default. The tier's identity (label, icon) is
+ * always the built-in one - Smart stays Smart - but the backing model,
+ * its capabilities, and the default reasoning level come from the
+ * snapshot when the user has configured this tier. Pure and synchronous:
+ * the snapshot carries everything resolution needs, so no catalog lookup
+ * happens here.
+ *
+ * The description is regenerated from the override so a stale built-in
+ * blurb ("Qwen 3.7 Plus with medium thinking") never contradicts the
+ * model the user actually picked.
+ */
+export function effectiveTierSpec(tier: ModelTier, tierModels?: TierModels): TierSpec {
+  const base = TIERS[tier];
+  const override = tierModels?.[tier];
+  if (!override) return base;
+  return {
+    ...base,
+    id: override.modelId,
+    contextWindow: override.contextWindow,
+    supportsReasoning: override.supportsReasoning,
+    supportsVision: override.supportsVision,
+    supportsResponseFormat: override.supportsResponseFormat,
+    defaultThinking: override.thinking,
+    description: `${override.label} - ${THINKING_LEVEL_LABELS[override.thinking].toLowerCase()} thinking.`,
+  };
+}
+
 // --- Background-agent assignments ------------------------------------------
 
 /**

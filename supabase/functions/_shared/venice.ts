@@ -507,3 +507,54 @@ export async function veniceFetchUsagePage(opts: VeniceUsageOptions): Promise<Us
     typeof obj.pagination?.totalPages === 'number' ? obj.pagination.totalPages : 1;
   return { data, totalPages };
 }
+
+export interface VeniceModelsOptions {
+  apiKey: string;
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * GET /models?type=text from Venice with the shared key. Thin passthrough:
+ * returns Venice's JSON body verbatim and lets the browser
+ * (src/lib/models/catalog.ts) flatten and coerce it - the same division
+ * of labour the usage page uses, keeping this handler free of any
+ * CatalogModel knowledge. The `?type=text` filter is pinned here because
+ * the tier/vision pickers only ever offer chat models. Mirrors
+ * veniceFetchUsagePage's error mapping: 429 -> rate_limit, else http.
+ */
+export async function veniceFetchModels(opts: VeniceModelsOptions): Promise<unknown> {
+  const baseUrl = (opts.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+  const fetchImpl = opts.fetchImpl ?? fetch;
+
+  let res: Response;
+  try {
+    res = await fetchImpl(`${baseUrl}/models?type=text`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${opts.apiKey}`,
+        Accept: 'application/json',
+      },
+    });
+  } catch (err) {
+    throw new VeniceError(
+      `Network error contacting Venice: ${(err as Error).message}`,
+      'network'
+    );
+  }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new VeniceError(
+      `Venice models ${res.status}: ${body.slice(0, 200)}`,
+      res.status === 429 ? 'rate_limit' : 'http',
+      res.status
+    );
+  }
+
+  try {
+    return await res.json();
+  } catch {
+    throw new VeniceError('Failed to parse Venice models response.', 'parse');
+  }
+}

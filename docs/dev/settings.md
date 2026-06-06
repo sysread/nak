@@ -40,7 +40,8 @@ landing tab move together.
   `wikiLibrarianEnabled`). **Reset** is a confirmed-irreversible
   wipe of every wiki article plus the per-thread wiki pipeline
   state.
-- **AI** — default model tier, default reasoning effort, default
+- **AI** — per-tier model + reasoning configuration, default reasoning
+  effort, default
   verbosity, the "Emphasis markdown" opt-in (a bionic-style scan
   aid - when on, chat-loop folds a short formatting blurb into
   the per-turn system-prompt appendix so the model bolds terms
@@ -52,6 +53,20 @@ landing tab move together.
   into the per-turn appendix's "User profile" block - opt-in, both
   blank skips the block), and the system-prompt library. All
   preferences persist to `profiles.settings`.
+
+  The **Models** subsection is the per-tier configuration UI: each of
+  Smart/Balanced/Fast gets a model dropdown (populated from the live
+  Venice catalog via `models-catalog.svelte.ts`), a reasoning-effort
+  dropdown, a default-tier radio, and a capability/context/price strip.
+  Picking a model or reasoning level writes a `TierModelConfig` snapshot
+  into `profiles.settings.tierModels[tier]` (via `persistTierModels`);
+  the chat send path reads it back through `effectiveTierSpec(tier,
+  app.tierModels)`. The snapshot carries the chosen model's capabilities
+  so resolution stays synchronous - the catalog is only needed while the
+  pane is open, fetched lazily on first AI-pane visit with the same
+  staleness/error-guard shape as the Usage pane. See
+  [Models & tiers in Chat](./chat.md) for the resolution cascade and the
+  `TierModelConfig` snapshot rationale.
 - **Usage** — a date-ranged snapshot of per-model token spend
   against the Venice API key. Read-only: it calls Venice's beta
   `/billing/usage` endpoint and aggregates the rows client-side.
@@ -103,9 +118,24 @@ every update) so it's covered here rather than in its own file.
   version available" pill, driven by `updateState.available`.
   Mounted once in `App.svelte` so it appears across every phase.
 - `src/lib/state.svelte.ts` — setters that Settings calls
-  (`setDefaultModel`, `setDefaultReasoningEffort`,
+  (`setDefaultModel`, `persistTierModels`, `setDefaultReasoningEffort`,
   `setDefaultVerbosity`, `setEmphasisMarkdown`,
   `setSystemPrompts`, `setTheme`, `setWebSearchEnabled`).
+- `src/lib/models/catalog.ts` — `CatalogModel` type + `coerceCatalog`,
+  the defensive flatten of Venice's `GET /models` response. Pure,
+  unit-tested offline.
+- `src/lib/models-catalog.svelte.ts` — reactive cache for the live
+  model catalog backing the AI pane's tier dropdowns. Same shape as
+  `usage-store.svelte.ts` (lazy-on-open, 15-min staleness, lock-reset);
+  exposes `catalog`, `refreshCatalog`, `resetCatalog`,
+  `shouldAutoRefreshCatalog`, `isCatalogStale`, `CATALOG_STALE_MS`.
+- `src/lib/ui/model-picker.ts` — pure UI primitives for the picker:
+  `tierRowView` (row view-model), `buildModelOptions`, `capabilityChips`,
+  `formatContextWindow`, `formatPricing`, `tierConfigFromCatalog`,
+  `tierConfigFromSpec`.
+- `src/lib/models/index.ts` — `TierModelConfig` / `TierModels`,
+  `coerceTierModels`, and `effectiveTierSpec` (folds a user override over
+  the built-in TierSpec).
 - `src/lib/supabase.ts` — `getSettings`, `updateSettings`,
   `updateSystemPrompts`. Read-then-write against the
   `profiles.settings` JSONB column.
@@ -172,6 +202,14 @@ every update) so it's covered here rather than in its own file.
 - **`profiles.settings`** — JSONB column. No per-field schema.
   Known keys today:
   - `defaultModel`: `ModelTier`
+  - `tierModels`: `Partial<Record<ModelTier, TierModelConfig>>` — per-tier
+    model + reasoning overrides. Each `TierModelConfig` is a capability
+    snapshot (`modelId`, `thinking`, `contextWindow`, `supportsReasoning`,
+    `supportsVision`, `supportsResponseFormat`, `label`) so the chat send
+    path resolves a configured tier without the async catalog. Absent
+    tiers fall back to the built-in `TierSpec`. Validated by
+    `coerceTierModels` on read; a malformed entry degrades to the
+    built-in default rather than poisoning resolution.
   - `defaultReasoningEffort`: `ReasoningEffort`
   - `defaultVerbosity`: `Verbosity` (`'low' | 'medium' | 'high'`);
     absent falls back to `DEFAULT_VERBOSITY` (`medium`)
@@ -205,10 +243,10 @@ every update) so it's covered here rather than in its own file.
 - **`localStorage['nak:config:v2']`** — plaintext JSON holding the
   Supabase URL + publishable key (neither is a secret). The Keys
   pane overwrites it on save. See `./auth-session.md`.
-- **Reactive state** — `app.defaultModel`,
+- **Reactive state** — `app.defaultModel`, `app.tierModels`,
   `app.defaultReasoningEffort`, `app.defaultVerbosity`,
   `app.colorMode`, `app.accent`, `app.systemPrompts`. Seeded
-  to defaults on `activate()`; overwritten from
+  to defaults on `activate()` (`tierModels` to `{}`); overwritten from
   `profiles.settings` by Chat's `refreshSettings` right after
   the Supabase session lands.
 

@@ -125,7 +125,16 @@ A chat turn goes:
   `tier` is what persists (`threads.model` or
   `profiles.settings.defaultModel`); `id` is the concrete Venice
   model, resolved at send-time. This indirection lets us retune
-  a tier without orphaning stored rows.
+  a tier without orphaning stored rows. The built-in `TierSpec`s in
+  `models/index.ts` are the defaults; a user can repoint a tier's model
+  and reasoning level in Settings -> AI, which persists a
+  `TierModelConfig` snapshot under `profiles.settings.tierModels[tier]`.
+  The send path resolves through `effectiveTierSpec(tier,
+  app.tierModels)`, which folds the override (model id, capabilities,
+  default thinking) over the built-in spec; tiers with no override
+  resolve to the built-in unchanged. The override carries a capability
+  snapshot so resolution never has to wait on the lazily-fetched model
+  catalog (see [Settings](./settings.md)).
 - **Reasoning effort** — same pattern, but the per-thread value is
   a `ThinkingLevel` (`off` | low | medium | high), not a bare
   `ReasoningEffort`. Cascade `threads.reasoning_effort` (override) ->
@@ -310,9 +319,12 @@ A chat turn goes:
   populates `threads.topics`; the chat loop has no direct
   call path to it. See `./topics.md`.
 - **Settings** — `Chat.svelte` reads `app.defaultModel`,
-  `app.defaultReasoningEffort`, `app.defaultVerbosity`,
+  `app.tierModels`, `app.defaultReasoningEffort`,
+  `app.defaultVerbosity`,
   `app.systemPrompts` from the state store. Settings writes
-  those values. System prompts configured as `enabledByDefault`
+  those values; `app.tierModels` feeds `effectiveTierSpec` at
+  send-time so a repointed tier uses the user's model + reasoning.
+  System prompts configured as `enabledByDefault`
   seed the per-thread active set; per-thread toggles aren't
   persisted. See `./settings.md`.
 - **Auth-session** — the screen renders only after `activate()`

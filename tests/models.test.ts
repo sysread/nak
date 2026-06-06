@@ -18,6 +18,9 @@ import {
   VERBOSITIES,
   VERBOSITY_LABELS,
   agentModel,
+  coerceTierModelConfig,
+  coerceTierModels,
+  effectiveTierSpec,
   findContextWindowById,
   findModelById,
   isModelTier,
@@ -30,7 +33,18 @@ import {
   resolveVerbosity,
   thinkingWireForTier,
   type AgentRole,
+  type TierModelConfig,
 } from '../src/lib/models';
+
+const SAMPLE_CONFIG: TierModelConfig = {
+  modelId: 'some-new-model',
+  thinking: 'high',
+  contextWindow: 512_000,
+  supportsReasoning: true,
+  supportsVision: false,
+  supportsResponseFormat: true,
+  label: 'Some New Model',
+};
 
 describe('MODELS (active registry)', () => {
   it('keys every entry by its own id', () => {
@@ -436,5 +450,81 @@ describe('LEGACY_MODELS', () => {
     for (const id of Object.keys(LEGACY_MODELS)) {
       expect(MODELS).not.toHaveProperty(id);
     }
+  });
+});
+
+describe('coerceTierModelConfig', () => {
+  it('accepts a well-formed snapshot', () => {
+    expect(coerceTierModelConfig(SAMPLE_CONFIG)).toEqual(SAMPLE_CONFIG);
+  });
+  it('falls back label to the model id when absent', () => {
+    const noLabel: Record<string, unknown> = { ...SAMPLE_CONFIG };
+    delete noLabel.label;
+    expect(coerceTierModelConfig(noLabel)?.label).toBe(SAMPLE_CONFIG.modelId);
+  });
+  it('rejects a missing modelId', () => {
+    expect(coerceTierModelConfig({ ...SAMPLE_CONFIG, modelId: '' })).toBeNull();
+  });
+  it('rejects an invalid thinking level', () => {
+    expect(coerceTierModelConfig({ ...SAMPLE_CONFIG, thinking: 'extreme' })).toBeNull();
+  });
+  it('rejects a non-numeric context window', () => {
+    expect(
+      coerceTierModelConfig({ ...SAMPLE_CONFIG, contextWindow: 'big' })
+    ).toBeNull();
+  });
+  it('rejects non-boolean capability flags', () => {
+    expect(
+      coerceTierModelConfig({ ...SAMPLE_CONFIG, supportsVision: 'yes' })
+    ).toBeNull();
+  });
+  it('rejects non-objects', () => {
+    expect(coerceTierModelConfig(null)).toBeNull();
+    expect(coerceTierModelConfig('nope')).toBeNull();
+  });
+});
+
+describe('coerceTierModels', () => {
+  it('keeps only well-formed entries under a real tier key', () => {
+    const result = coerceTierModels({
+      smart: SAMPLE_CONFIG,
+      balanced: { ...SAMPLE_CONFIG, thinking: 'bogus' },
+      nonsense: SAMPLE_CONFIG,
+    });
+    expect(result).toEqual({ smart: SAMPLE_CONFIG });
+  });
+  it('returns undefined when nothing survives', () => {
+    expect(coerceTierModels({})).toBeUndefined();
+    expect(coerceTierModels({ smart: { modelId: '' } })).toBeUndefined();
+    expect(coerceTierModels(null)).toBeUndefined();
+  });
+});
+
+describe('effectiveTierSpec', () => {
+  it('returns the built-in spec when no override exists', () => {
+    for (const tier of TIER_ORDER) {
+      expect(effectiveTierSpec(tier, {})).toEqual(TIERS[tier]);
+      expect(effectiveTierSpec(tier, undefined)).toEqual(TIERS[tier]);
+    }
+  });
+  it('folds an override over the built-in spec, keeping tier identity', () => {
+    const spec = effectiveTierSpec('smart', { smart: SAMPLE_CONFIG });
+    // Identity (label/icon/tier) stays built-in.
+    expect(spec.tier).toBe('smart');
+    expect(spec.label).toBe(TIERS.smart.label);
+    expect(spec.icon).toBe(TIERS.smart.icon);
+    // Backing model + capabilities + default thinking come from the override.
+    expect(spec.id).toBe(SAMPLE_CONFIG.modelId);
+    expect(spec.contextWindow).toBe(SAMPLE_CONFIG.contextWindow);
+    expect(spec.supportsReasoning).toBe(SAMPLE_CONFIG.supportsReasoning);
+    expect(spec.supportsVision).toBe(SAMPLE_CONFIG.supportsVision);
+    expect(spec.defaultThinking).toBe(SAMPLE_CONFIG.thinking);
+    // Description is regenerated so it can't contradict the picked model.
+    expect(spec.description).toContain(SAMPLE_CONFIG.label);
+  });
+  it('feeds the thinking cascade so an override default flows through', () => {
+    const spec = effectiveTierSpec('fast', { fast: { ...SAMPLE_CONFIG, thinking: 'medium' } });
+    // No thread override, account default 'low' loses to the tier default.
+    expect(resolveThinking(null, 'low', spec.defaultThinking)).toBe('medium');
   });
 });

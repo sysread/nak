@@ -105,6 +105,7 @@
     TIER_ORDER,
     VENICE_EMBEDDING_MODEL,
     agentModel,
+    effectiveTierSpec,
     padEmbeddingForStorage,
     resolveThinking,
     resolveTier,
@@ -2438,18 +2439,24 @@
   const currentTier = $derived<ModelTier>(
     resolveTier(currentThread?.model ?? null, defaultTier)
   );
+  // Effective spec for the current tier, folding the user's per-tier
+  // model + reasoning override (Settings -> AI) on top of the built-in
+  // TierSpec. Drives every capability read below (default thinking,
+  // reasoning support) so a repointed tier behaves as the user
+  // configured it.
+  const currentTierSpec = $derived(effectiveTierSpec(currentTier, app.tierModels));
   const defaultReasoning = $derived<ReasoningEffort>(
     app.defaultReasoningEffort ?? DEFAULT_REASONING_EFFORT
   );
   // Resolved thinking level for the current thread (override -> tier
   // default -> user default). Drives the picker's displayed value; may
   // be 'off' when the tier defaults off or the user picked Off for this
-  // thread. Only surfaced when `TIERS[currentTier].supportsReasoning`.
+  // thread. Only surfaced when `currentTierSpec.supportsReasoning`.
   const currentReasoning = $derived<ThinkingLevel>(
     resolveThinking(
       currentThread?.reasoning_effort ?? null,
       defaultReasoning,
-      TIERS[currentTier].defaultThinking
+      currentTierSpec.defaultThinking
     )
   );
   // Show the per-thread reasoning picker on any reasoning-capable tier.
@@ -2459,7 +2466,7 @@
   // can't reason at all hides the control - a knob the provider would
   // reject.
   const currentSupportsReasoning = $derived<boolean>(
-    TIERS[currentTier].supportsReasoning
+    currentTierSpec.supportsReasoning
   );
   const defaultVerbosity = $derived<Verbosity>(
     app.defaultVerbosity ?? DEFAULT_VERBOSITY
@@ -2770,8 +2777,8 @@
     // Capture the tier BEFORE materializing, since materialize mutates
     // `threads` and could make `currentThread` briefly null.
     const tier = resolveTier(active?.model ?? null, defaultTier);
-    const modelId = TIERS[tier].id;
-    const tierSpec = TIERS[tier];
+    const tierSpec = effectiveTierSpec(tier, app.tierModels);
+    const modelId = tierSpec.id;
     // Resolve the thread's thinking level against the tier and split it
     // into the two mutually-exclusive wire knobs (reasoning_effort vs
     // disable_thinking). 'off' -> disable_thinking; non-reasoning models
@@ -4114,7 +4121,7 @@
     const active = findThread(draft.threadId);
     if (!active || active.isDraft || active.archived) return;
     const tier = resolveTier(active.model ?? null, defaultTier);
-    const tierSpec = TIERS[tier];
+    const tierSpec = effectiveTierSpec(tier, app.tierModels);
     // Resolve thinking level -> wire knobs; mirror of the send() path.
     const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
       thinkingWireForTier(tierSpec, active.reasoning_effort ?? null, defaultReasoning);
@@ -4180,7 +4187,7 @@
     // turn again" gesture, and the user often wants to re-run with
     // a different model or a tweaked system prompt.
     const tier = resolveTier(active.model ?? null, defaultTier);
-    const tierSpec = TIERS[tier];
+    const tierSpec = effectiveTierSpec(tier, app.tierModels);
     const modelId = tierSpec.id;
     // Resolve thinking level -> wire knobs; mirror of the send() path.
     const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
@@ -4266,7 +4273,7 @@
     }
 
     const tier = resolveTier(active.model ?? null, defaultTier);
-    const tierSpec = TIERS[tier];
+    const tierSpec = effectiveTierSpec(tier, app.tierModels);
     const modelId = tierSpec.id;
     // Resolve thinking level -> wire knobs; mirror of the send() path.
     const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
@@ -5217,8 +5224,8 @@
       const freshThread = findThread(threadId);
       if (!freshThread) return;
       const tier = resolveTier(freshThread.model ?? null, defaultTier);
-      const tierSpec = TIERS[tier];
-      const modelId = TIERS[tier].id;
+      const tierSpec = effectiveTierSpec(tier, app.tierModels);
+      const modelId = tierSpec.id;
       const { reasoningEffort: sendReasoning, disableThinking: sendDisableThinking } =
         thinkingWireForTier(tierSpec, freshThread.reasoning_effort ?? null, defaultReasoning);
       const sendVerbosity: Verbosity = resolveVerbosity(
@@ -7593,7 +7600,7 @@
                 }}
                 aria-haspopup="true"
                 aria-expanded={modelMenuOpen}
-                title={`Model: ${TIERS[currentTier].label} (${TIERS[currentTier].id})`}
+                title={`Model: ${currentTierSpec.label} (${currentTierSpec.id})`}
               >
                 <!-- Generic "model selection" glyph for the collapsed
                      icon-only trigger. A CPU outline rather than the
@@ -7779,7 +7786,9 @@
                     <span class="menu-item-icon" aria-hidden="true">{TIERS[tier].icon}</span>
                     <span class="menu-item-label">
                       <strong>{TIERS[tier].label}</strong>
-                      <span class="subtle" style="display:block;font-size:0.75rem">{TIERS[tier].id}</span>
+                      <span class="subtle" style="display:block;font-size:0.75rem"
+                        >{effectiveTierSpec(tier, app.tierModels).id}</span
+                      >
                     </span>
                     {#if tier === defaultTier}<span class="menu-item-badge">default</span>{/if}
                   </button>
