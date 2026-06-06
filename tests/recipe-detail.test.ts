@@ -8,11 +8,13 @@ import { describe, it, expect } from 'vitest';
 import type { Recipe } from '../src/lib/supabase';
 import {
   recipeSourceLine,
+  recipeTocTargetCount,
   wrapIndex,
   swipeNavStep,
   lightboxTrackStyle,
   LIGHTBOX_SLIDE_MS,
 } from '../src/lib/ui/recipe-detail';
+import { recipeToc, parseCooklang } from '../src/lib/cooklang';
 
 function makeRecipe(overrides: Partial<Recipe> = {}): Recipe {
   return {
@@ -152,5 +154,30 @@ describe('lightboxTrackStyle', () => {
     expect(s).toContain('translateX(-100%)');
     expect(s).not.toContain('80px');
     expect(s).toContain(`${LIGHTBOX_SLIDE_MS}ms`);
+  });
+});
+
+describe('recipeTocTargetCount', () => {
+  it('counts a flat recipe as two targets (Ingredients + Instructions)', () => {
+    const toc = recipeToc(parseCooklang('Stir in @flour{200%g}.'));
+    expect(recipeTocTargetCount(toc)).toBe(2);
+  });
+
+  it('counts each top-level entry plus its section sub-entries', () => {
+    const src = `== Soup ==
+Simmer @lentils{200%g}.
+
+# Finishing
+Stir in @butter{2%tbsp}.`;
+    const toc = recipeToc(parseCooklang(src));
+    // 2 blocks + 2 sub-sections each = 6 jump targets.
+    expect(recipeTocTargetCount(toc)).toBe(6);
+  });
+
+  it('drops below the detail pane`s show-threshold for a one-block recipe', () => {
+    // Declarations only - just an Ingredients entry, no Instructions.
+    const toc = recipeToc(parseCooklang('@flour{200%g}'));
+    expect(recipeTocTargetCount(toc)).toBe(1);
+    expect(recipeTocTargetCount([])).toBe(0);
   });
 });

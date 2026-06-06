@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseCooklang,
   recipeToHtml,
+  recipeToc,
   cooklangToHtml,
   recipeToMarkdown,
   recipeToPlainText,
@@ -135,19 +136,19 @@ describe('parseCooklang — empty and edge cases', () => {
 describe('recipeToHtml', () => {
   it('emits an ingredients list with qty and name spans', () => {
     const html = cooklangToHtml('Stir in @flour{200%g}.');
-    expect(html).toContain('<h3>Ingredients</h3>');
+    expect(html).toContain('Ingredients</h3>');
     expect(html).toContain('<span class="cook-qty">200 g</span>');
     expect(html).toContain('<span class="cook-name">flour</span>');
-    expect(html).toContain('<h3>Instructions</h3>');
+    expect(html).toContain('Instructions</h3>');
   });
 
   it('omits sections whose list is empty', () => {
     // Only metadata — no ingredients, cookware, timers, or steps.
     const html = cooklangToHtml('>> servings: 4');
     expect(html).toContain('<dl class="cook-metadata">');
-    expect(html).not.toContain('<h3>Ingredients</h3>');
+    expect(html).not.toContain('Ingredients</h3>');
     expect(html).not.toContain('<h3>Cookware</h3>');
-    expect(html).not.toContain('<h3>Instructions</h3>');
+    expect(html).not.toContain('Instructions</h3>');
   });
 
   it('escapes HTML in user text', () => {
@@ -333,26 +334,26 @@ Simmer @lentils{200%g} in @water{1%L}.
 Stir in @butter{2%tbsp} and serve.`;
     const html = cooklangToHtml(src);
     // Ingredients block uses <h4> markers per section.
-    const ingredientsIdx = html.indexOf('<h3>Ingredients</h3>');
-    const instructionsIdx = html.indexOf('<h3>Instructions</h3>');
+    const ingredientsIdx = html.indexOf('Ingredients</h3>');
+    const instructionsIdx = html.indexOf('Instructions</h3>');
     const ingredientsBlock = html.slice(ingredientsIdx, instructionsIdx);
-    expect(ingredientsBlock).toContain('<h4 class="cook-section">Soup</h4>');
-    expect(ingredientsBlock).toContain('<h4 class="cook-section">Finishing</h4>');
+    expect(ingredientsBlock).toContain('>Soup</h4>');
+    expect(ingredientsBlock).toContain('>Finishing</h4>');
     expect(ingredientsBlock).toContain('lentils');
     expect(ingredientsBlock).toContain('butter');
     // Instructions block uses the same markers and starts a fresh <ol>
     // per section so numbering restarts at 1.
     const instructionsBlock = html.slice(instructionsIdx);
-    expect(instructionsBlock).toContain('<h4 class="cook-section">Soup</h4>');
-    expect(instructionsBlock).toContain('<h4 class="cook-section">Finishing</h4>');
+    expect(instructionsBlock).toContain('>Soup</h4>');
+    expect(instructionsBlock).toContain('>Finishing</h4>');
     const olMatches = instructionsBlock.match(/<ol class="cook-steps">/g) ?? [];
     expect(olMatches.length).toBe(2);
   });
 
   it('falls back to flat output when the source has no sections', () => {
     const html = cooklangToHtml('Stir in @flour{200%g}.');
-    expect(html).toContain('<h3>Ingredients</h3>');
-    expect(html).not.toContain('<h4 class="cook-section">');
+    expect(html).toContain('Ingredients</h3>');
+    expect(html).not.toContain('<h4 class="cook-section"');
     // Single <ol> for the single flat steps list.
     expect((html.match(/<ol class="cook-steps">/g) ?? []).length).toBe(1);
   });
@@ -377,8 +378,8 @@ Stir in @butter{2%tbsp} and @salt.`;
       'Add lentils and onion. Simmer until tender, about 30 minutes.'
     );
     const html = recipeToHtml(r);
-    expect(html).toContain('<h4 class="cook-section">Soup</h4>');
-    expect(html).toContain('<h4 class="cook-section">Finishing</h4>');
+    expect(html).toContain('>Soup</h4>');
+    expect(html).toContain('>Finishing</h4>');
   });
 });
 
@@ -452,8 +453,8 @@ Sear @chicken{1%lb} for ~{5%minutes}.`;
 
   it('drops declarations from the HTML Instructions block', () => {
     const html = cooklangToHtml('@flour{200%g}\n--\nStir in water.');
-    expect(html).toContain('<h3>Ingredients</h3>');
-    expect(html).toContain('<h3>Instructions</h3>');
+    expect(html).toContain('Ingredients</h3>');
+    expect(html).toContain('Instructions</h3>');
     // One <li>, containing the prose step, never the empty declaration text.
     const stepMatches = html.match(/<ol class="cook-steps">.*?<\/ol>/s)?.[0] ?? '';
     expect(stepMatches).toContain('Stir in water.');
@@ -541,28 +542,28 @@ Warm the @French bread{1%loaf} before serving.`;
     // Each section's declared ingredients live in their own sub-list.
     const html = recipeToHtml(recipe);
     const ingredientsBlock = html.slice(
-      html.indexOf('<h3>Ingredients</h3>'),
+      html.indexOf('Ingredients</h3>'),
       html.indexOf('<h3>Cookware</h3>') > -1
         ? html.indexOf('<h3>Cookware</h3>')
-        : html.indexOf('<h3>Instructions</h3>')
+        : html.indexOf('Instructions</h3>')
     );
-    expect(ingredientsBlock).toContain('<h4 class="cook-section">Soup</h4>');
-    expect(ingredientsBlock).toContain('<h4 class="cook-section">Finishing</h4>');
-    expect(ingredientsBlock).toContain('<h4 class="cook-section">For serving</h4>');
+    expect(ingredientsBlock).toContain('>Soup</h4>');
+    expect(ingredientsBlock).toContain('>Finishing</h4>');
+    expect(ingredientsBlock).toContain('>For serving</h4>');
     // Head bucket (post-reset instruction bucket) must NOT emit its own
     // un-labelled ingredient sub-list — those ingredients are already
     // captured by the declared rows above.
     const beforeFirstH4 = ingredientsBlock.slice(
       0,
-      ingredientsBlock.indexOf('<h4 class="cook-section">')
+      ingredientsBlock.indexOf('<h4 class="cook-section"')
     );
     expect(beforeFirstH4).not.toContain('<ul class="cook-ingredients">');
 
     // Instructions render flat (no `For serving` heading leaked into
     // them), with the `>` continuation merged into step 1.
-    const instructionsBlock = html.slice(html.indexOf('<h3>Instructions</h3>'));
-    expect(instructionsBlock).not.toContain('<h4 class="cook-section">For serving</h4>');
-    expect(instructionsBlock).not.toContain('<h4 class="cook-section">Soup</h4>');
+    const instructionsBlock = html.slice(html.indexOf('Instructions</h3>'));
+    expect(instructionsBlock).not.toContain('>For serving</h4>');
+    expect(instructionsBlock).not.toContain('>Soup</h4>');
     // Exactly one <ol> — the flat numbered list.
     expect((instructionsBlock.match(/<ol class="cook-steps">/g) ?? []).length).toBe(1);
     // Step 1 merged its continuation.
@@ -717,20 +718,20 @@ describe('recipeToHtml — inline emphasis in step text', () => {
   // LLM's `**bold**`-style emphasis renders the way a cook expects.
   it('renders **bold** as <strong>', () => {
     const html = cooklangToHtml('Cook on low for **5 hours**.');
-    const instr = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    const instr = html.slice(html.indexOf('Instructions</h3>'));
     expect(instr).toContain('<strong>5 hours</strong>');
     expect(instr).not.toContain('**');
   });
 
   it('renders *italic* as <em>', () => {
     const html = cooklangToHtml('Stir *gently*.');
-    const instr = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    const instr = html.slice(html.indexOf('Instructions</h3>'));
     expect(instr).toContain('<em>gently</em>');
   });
 
   it('renders _italic_ as <em> with word boundaries', () => {
     const html = cooklangToHtml('Stir _gently_ into the pot.');
-    const instr = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    const instr = html.slice(html.indexOf('Instructions</h3>'));
     expect(instr).toContain('<em>gently</em>');
   });
 
@@ -738,7 +739,7 @@ describe('recipeToHtml — inline emphasis in step text', () => {
     // The word-boundary guards on `_..._` are what prevent this -
     // CommonMark behaves the same way for the same reason.
     const html = cooklangToHtml('Use pre_minced_garlic for speed.');
-    const instr = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    const instr = html.slice(html.indexOf('Instructions</h3>'));
     expect(instr).not.toContain('<em>');
     expect(instr).toContain('pre_minced_garlic');
   });
@@ -749,7 +750,7 @@ describe('recipeToHtml — inline emphasis in step text', () => {
     // timer list, replaces the braces with the duration text), and
     // the surrounding `**` wrap the resulting text in <strong>.
     const html = cooklangToHtml('Cook for **~{4-5%hours}** on low.');
-    const instr = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    const instr = html.slice(html.indexOf('Instructions</h3>'));
     expect(instr).toContain('<strong>4-5 hours</strong>');
   });
 
@@ -758,7 +759,7 @@ describe('recipeToHtml — inline emphasis in step text', () => {
     // by the time we see it. A user trying to inject `<script>` gets
     // it escaped first; emphasis only wraps already-safe text.
     const html = cooklangToHtml('Add **<script>**.');
-    const instr = html.slice(html.indexOf('<h3>Instructions</h3>'));
+    const instr = html.slice(html.indexOf('Instructions</h3>'));
     expect(instr).toContain('<strong>&lt;script&gt;</strong>');
     expect(instr).not.toContain('<script>');
   });
@@ -771,9 +772,122 @@ describe('recipeToHtml — inline emphasis in step text', () => {
     const html = cooklangToHtml('>> note: see **page 5**\nMix.');
     const metaBlock = html.slice(
       html.indexOf('<dl class="cook-metadata">'),
-      html.indexOf('<h3>'),
+      html.indexOf('<h3'),
     );
     expect(metaBlock).toContain('**page 5**');
     expect(metaBlock).not.toContain('<strong>');
+  });
+});
+
+describe('recipeToHtml — heading anchor ids', () => {
+  // The detail pane's table of contents scrolls to these ids, so the
+  // renderer must stamp them. recipeToc produces the matching link
+  // targets; the lockstep test below guards the two against drift.
+  it('stamps ids on the Ingredients and Instructions h3s', () => {
+    const html = cooklangToHtml('Stir in @flour{200%g}.');
+    expect(html).toContain('<h3 id="cook-ingredients">Ingredients</h3>');
+    expect(html).toContain('<h3 id="cook-instructions">Instructions</h3>');
+  });
+
+  it('leaves the Cookware h3 id-less (not a TOC target)', () => {
+    const html = cooklangToHtml('Stir @flour{200%g} in a #bowl{}.');
+    expect(html).toContain('<h3>Cookware</h3>');
+    expect(html).not.toContain('id="cook-cookware"');
+  });
+
+  it('gives the same section name distinct ids per block', () => {
+    // "Soup" appears as an h4 under both Ingredients and Instructions;
+    // a shared id would be a duplicate in the document and break the
+    // jump target. The block-prefixed, index-keyed scheme keeps them
+    // distinct.
+    const html = cooklangToHtml('== Soup ==\nSimmer @lentils{200%g} in @water{1%L}.');
+    expect(html).toContain('<h4 class="cook-section" id="cook-ingredients-s0">Soup</h4>');
+    expect(html).toContain('<h4 class="cook-section" id="cook-instructions-s0">Soup</h4>');
+  });
+});
+
+describe('recipeToc', () => {
+  it('returns Ingredients + Instructions with no sub-sections for a flat recipe', () => {
+    const toc = recipeToc(parseCooklang('Stir in @flour{200%g}.'));
+    expect(toc).toEqual([
+      { id: 'cook-ingredients', label: 'Ingredients', sections: [] },
+      { id: 'cook-instructions', label: 'Instructions', sections: [] },
+    ]);
+  });
+
+  it('nests one sub-entry per rendered section under each block', () => {
+    const src = `== Soup ==
+Simmer @lentils{200%g} in @water{1%L}.
+
+# Finishing
+Stir in @butter{2%tbsp} and serve.`;
+    const toc = recipeToc(parseCooklang(src));
+    expect(toc).toEqual([
+      {
+        id: 'cook-ingredients',
+        label: 'Ingredients',
+        sections: [
+          { id: 'cook-ingredients-s0', label: 'Soup' },
+          { id: 'cook-ingredients-s1', label: 'Finishing' },
+        ],
+      },
+      {
+        id: 'cook-instructions',
+        label: 'Instructions',
+        sections: [
+          { id: 'cook-instructions-s0', label: 'Soup' },
+          { id: 'cook-instructions-s1', label: 'Finishing' },
+        ],
+      },
+    ]);
+  });
+
+  it('omits a block with no content', () => {
+    // Declarations only - ingredients exist, but no instruction steps,
+    // so the Instructions block (and its TOC entry) never appears.
+    const toc = recipeToc(parseCooklang('@flour{200%g}'));
+    expect(toc.map((e) => e.label)).toEqual(['Ingredients']);
+    // Metadata-only draft: nothing to navigate at all.
+    expect(recipeToc(parseCooklang('>> servings: 4'))).toEqual([]);
+  });
+
+  it('only lists sections that actually render in each block', () => {
+    // Cookbook-style: declared ingredients grouped by section, then a
+    // dash reset and flat instruction prose. Each section gets an
+    // ingredient sub-entry; the instructions are section-less, so the
+    // Instructions entry carries no sub-sections - matching the
+    // renderer, which emits no instruction h4s here.
+    const src = `# Soup
+@chicken{1%lb}
+
+# For serving
+@bread{1%loaf}
+
+--
+
+Add the @chicken{1%lb} to the pot and simmer.`;
+    const toc = recipeToc(parseCooklang(src));
+    const ingredients = toc.find((e) => e.label === 'Ingredients');
+    const instructions = toc.find((e) => e.label === 'Instructions');
+    expect(ingredients?.sections.map((s) => s.label)).toEqual(['Soup', 'For serving']);
+    expect(instructions?.sections).toEqual([]);
+  });
+
+  it('every TOC id resolves to a heading anchor in the rendered HTML', () => {
+    // The lockstep guard: recipeToc and recipeToHtml must agree on ids,
+    // since the detail pane looks the target up by id after render.
+    const src = `== Soup ==
+Simmer @lentils{200%g}.
+
+# Finishing
+Stir in @butter{2%tbsp}.`;
+    const recipe = parseCooklang(src);
+    const html = recipeToHtml(recipe);
+    for (const entry of recipeToc(recipe)) {
+      expect(html).toContain(`id="${entry.id}"`);
+      for (const section of entry.sections) {
+        expect(html).toContain(`id="${section.id}"`);
+      }
+    }
   });
 });

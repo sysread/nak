@@ -9,6 +9,18 @@
  * with a port.
  */
 import type { Recipe } from '../supabase';
+import type { RecipeTocEntry } from '../cooklang';
+
+/**
+ * Total number of jump targets in a recipe's table of contents: each
+ * top-level entry (Ingredients / Instructions) plus each of its section
+ * sub-entries. The detail pane uses this to decide whether the TOC is
+ * worth showing - below two targets it's a single link with nothing to
+ * jump past, which is clutter rather than navigation.
+ */
+export function recipeTocTargetCount(toc: RecipeTocEntry[]): number {
+  return toc.reduce((total, entry) => total + 1 + entry.sections.length, 0);
+}
 
 /**
  * Tagged union for the recipe's "source" line under the title.

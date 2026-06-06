@@ -25,9 +25,14 @@ unaffected.
 
 - `src/lib/cooklang.ts` — inline Cooklang parser + HTML / plain-text / markdown
   renderers. Deliberately no upstream dep. Exports `parseCooklang`,
-  `recipeToHtml`, `cooklangToHtml`, `recipeToPlainText`,
+  `recipeToHtml`, `cooklangToHtml`, `recipeToc`, `recipeToPlainText`,
   `recipeToMarkdown`, and the size constants the tools and the modal
-  share.
+  share. `recipeToc` is a third projection of the parsed AST (alongside
+  the HTML and the export renderers): it returns the detail pane's table
+  of contents (Ingredients + Instructions, each with a sub-entry per
+  rendered section). Its link ids and the `<h3>` / `<h4>` ids
+  `recipeToHtml` stamps both come from one private `tocHeadingId` helper,
+  so a jump link can never point at a heading the renderer didn't emit.
 - `src/lib/cookbook-store.svelte.ts` — module-level `$state` for the
   recipe list. Holds the paginated "All recipes" window (`recipes`,
   `offset`, `hasMore`, `loadingMore`, `sort`), the complete `upcoming`
@@ -65,7 +70,18 @@ unaffected.
 - `src/screens/Cookbook.svelte` — three-pane modal (list, detail,
   edit). Mirrors `Settings.svelte`'s shell / escape / click-outside-
   to-close conventions; styles scoped locally rather than added to
-  `styles.css` because the modal is an island.
+  `styles.css` because the modal is an island. The detail pane parses
+  the recipe once and feeds both `recipeToHtml` and `recipeToc` off the
+  result; the TOC renders as a `<nav class="cookbook-toc">` above the
+  rendered body, and a click resolves the target heading by id within
+  the bound render container (`detailRenderEl`) and `scrollIntoView`s it.
+  The TOC is gated on `recipeTocTargetCount(...) >= 2` so a one-block
+  recipe doesn't show a lone link.
+- `src/lib/ui/recipe-detail.ts` — pure UI-behavior primitives for the
+  detail pane (`recipeSourceLine`, the lightbox carousel helpers, and
+  `recipeTocTargetCount` - the "is the TOC worth showing" policy, kept
+  out of the renderer because it's a presentation threshold, not part
+  of the document structure). Unit-tested at `tests/recipe-detail.test.ts`.
 - `src/screens/Chat.svelte` — drawer tab switcher (`drawerTab`),
   Recipes list rendering, footer book icon, Cookbook modal mount,
   `COOKBOOK_CHANGE_EVENT` listener in `onMount`.
@@ -224,7 +240,17 @@ unaffected.
   `steps.length === 0`.
 - `cooklangToHtml(src: string): string` — parses + renders a scoped
   HTML fragment (no root wrapper). Classes prefixed `cook-` so host
-  CSS can style without nesting selectors.
+  CSS can style without nesting selectors. The Ingredients /
+  Instructions `<h3>`s and their section `<h4>`s carry `id`s
+  (`cook-ingredients`, `cook-instructions`, `cook-<block>-sN`) so the
+  TOC can scroll to them; Cookware is not a TOC target and stays
+  id-less.
+- `recipeToc(recipe: Recipe): RecipeTocEntry[]` — the detail pane's
+  table of contents: `[{ id, label, sections }]` for Ingredients and
+  Instructions (whichever have content), each `sections` entry one
+  rendered section heading. Ids match the renderer's heading anchors
+  by construction (shared `tocHeadingId`). Cookware is omitted on
+  purpose - it's a flat aside, not a navigation destination.
 - `recipeToPlainText(title: string, recipe: Recipe): string` —
   AnyList-friendly export. Title + ingredients list + numbered
   instructions. Cookware omitted by design (shopping-list apps don't
@@ -467,3 +493,19 @@ keystrokes; the LLM tool path keeps using `listRecipes`.
   collapse to empty and be indistinguishable from a blank line). This
   is an additive extension — a dash-only line used to be a no-op
   comment, so no existing recipe parses differently.
+- **TOC ids must stay in lockstep with the renderer.** `recipeToc` and
+  `recipeToHtml` are two projections of the same parsed recipe, and the
+  detail pane looks the jump target up by id AFTER `recipeToHtml`'s
+  output mounts - so a TOC entry whose id doesn't match a rendered
+  heading is a silent dead link, not a crash. They are kept honest by
+  sharing the private `tocHeadingId` helper (id scheme) and the
+  `ingredientBucketRenders` / `instructionBucketRenders` predicates
+  (which sections actually emit an `<h4>`). If you change which
+  sections the renderer emits, change those predicates rather than
+  branching the renderer alone, or the TOC will list a section the body
+  doesn't show. Section ids are keyed by index in `recipe.sections`,
+  not by a name slug, so the same section name appearing under both
+  blocks (`Ingredients > Soup` and `Instructions > Soup`) gets distinct
+  ids and a name with odd characters can't collide. `tests/cooklang.test.ts`
+  has a lockstep test that asserts every `recipeToc` id resolves to an
+  `id="..."` in the rendered HTML - keep it green.

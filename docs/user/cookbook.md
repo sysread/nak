@@ -137,6 +137,22 @@ The Cookbook tools live inside the `cooking` toolbox. If Nak tells
 you it can't save a recipe, open the composer's toolbox popover and
 enable Cooking, then try again.
 
+## Jumping around a recipe
+
+The detail pane shows a small **contents** box above the recipe with
+links to **Ingredients** and **Instructions**. Click one to scroll
+straight to that part - handy on a long recipe where the instructions
+sit well below the ingredient list.
+
+If the recipe uses sections (see "Sections and long steps" above), each
+section shows as a sub-link under both Ingredients and Instructions, so
+you can jump directly to "Finishing" or "For serving" without
+scrolling past the rest.
+
+The box only appears when there's more than one place to jump to - a
+short recipe with just an ingredient list and a few steps doesn't get
+one, since there's nothing to navigate.
+
 ## Following along while you cook
 
 On the detail pane, click (or tap) any instruction step to highlight
