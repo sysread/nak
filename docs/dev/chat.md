@@ -395,6 +395,29 @@ A chat turn goes:
   how rounds persist, keep the boundary event paired with the
   non-terminal row insert or the live view silently regresses to
   the concatenation bug.
+- **Reconnect POLLS the DB row; it does NOT resume the live stream.**
+  When `selectThread` finds the transcript tail is a
+  `status='streaming'` assistant row and no local slot is producing it
+  (fresh tab, hard reload, a backgrounded mobile PWA that got
+  discarded), `reconnectInflightTurn` (`Chat.svelte`) re-attaches by
+  POLLING `/stream reconnectOnly` via `awaitStreamSettled`
+  (`venice.ts`) until the probe reports `noStreamInFlight`, showing a
+  "Reconnecting" throbber (the `ExchangeSlot.reconnecting` flag) over
+  the partial-so-far, then re-fetches the thread with `listMessages`
+  and renders the committed rows. It deliberately does NOT re-subscribe
+  to the Broadcast channel: those events are ephemeral with no replay,
+  so a tab that was away missed whatever fired meanwhile - including the
+  single END that signals completion. Re-subscribing only ever caught
+  events from that point on, which is why the old broadcast-based
+  reconnect surfaced a spurious "disconnected" banner (re-subscribe
+  timing out on a not-yet-recovered mobile socket) or a wait for an END
+  that already fired. The DB row's terminal status is the canonical
+  "done" signal; the server-side stale-row janitor guarantees the poll
+  always terminates even for a function that died ungracefully. Known
+  gap: this covers reload / fresh-tab return. A tab whose JS context
+  SURVIVED a background cycle keeps its original (now hung) live drain
+  and is not re-driven by `selectThread`; recovering that case wants a
+  visibility-triggered hand-off, not yet wired.
 - **Drafts must not enter realtime state.** The draft's in-memory
   id is a freshly-minted UUID; if a draft leaks into `addMessage`
   before being materialized, the realtime `INSERT` handler sees a

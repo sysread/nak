@@ -1089,72 +1089,112 @@ async function* streamChatViaFunction(
   }
 }
 
-/**
- * Observe an in-flight assistant turn from a fresh tab or peer
- * device. POSTs `/stream` with `reconnectOnly: true`; on a match the
- * server returns the existing envelope without starting a new
- * completion, and we subscribe to the Broadcast channel as a passive
- * consumer. On no match we yield a terminal `end` so the caller
- * unwinds cleanly without waiting for events that aren't coming.
- *
- * Used by:
- * - selectThread when a thread's tail carries a `status='streaming'`
- *   assistant row (same-device reload, fresh tab on the same device).
- * - cross-device ape mode: device B opens a thread that device A is
- *   currently driving and joins the live stream.
- *
- * The caller is responsible for the UI state seeding - this generator
- * only yields the live deltas the function publishes after envelope
- * time; the `completedSoFar` snapshot the envelope returned for the
- * row up to that moment is yielded as the first `text` event so a
- * downstream consumer that mirrors deltas into a streaming buffer
- * lands on the same content the row has.
- */
-export async function* streamReconnect(
-  supabase: SupabaseClient,
-  ctx: { threadId: string },
-  signal?: AbortSignal,
-): AsyncGenerator<StreamEvent, void, void> {
-  const { data, error } = await supabase.functions.invoke<StreamEnvelope>(
-    'venice/stream',
-    {
-      body: {
-        threadId: ctx.threadId,
-        reconnectOnly: true,
-      },
-    },
-  );
-  if (error) {
-    throw new VeniceError(
-      `/stream reconnect invoke failed: ${error.message}`,
-      'http',
-    );
-  }
-  if (!data) {
-    throw new VeniceError('/stream reconnect returned no envelope', 'parse');
-  }
+// Reconnect poll cadence. We re-probe /stream reconnectOnly on this
+// interval while a turn we re-attached to is still in flight. Snappy
+// enough that a turn finishing feels responsive; slow enough that a
+// long generation costs only a handful of probes.
+const RECONNECT_POLL_INTERVAL_MS = 2_500;
 
-  yield* subscribeStreamChannel(supabase, data, signal);
+// Hard ceiling on the reconnect poll. The server-side stale-row janitor
+// (in the /stream handler) flips an orphaned streaming row to 'error'
+// once it ages past ~760s, after which the probe reports
+// noStreamInFlight, so the poll terminates on its own in every normal
+// case. This ceiling is the backstop for the pathological case where
+// the probe ITSELF keeps failing (persistent offline): past it we stop
+// polling and let the caller render whatever the row currently holds.
+const RECONNECT_POLL_MAX_WAIT_MS = 800_000;
+
+export interface AwaitStreamSettledOpts {
+  signal?: AbortSignal;
+  /** Poll cadence override (tests). Defaults to RECONNECT_POLL_INTERVAL_MS. */
+  intervalMs?: number;
+  /** Ceiling override (tests). Defaults to RECONNECT_POLL_MAX_WAIT_MS. */
+  maxWaitMs?: number;
+  /**
+   * Called after each still-in-flight probe with the row's
+   * completed-so-far content (the function persists it progressively to
+   * the streaming row). Lets a caller paint the partial reply under the
+   * reconnecting throbber. Not called once the turn has settled.
+   */
+  onProgress?(completedSoFar: string): void;
 }
 
 /**
- * Channel-subscribe + replay loop shared by streamChatViaFunction
- * and streamReconnect. Given an envelope from the /stream route,
- * subscribes to the Broadcast channel, maps each wire event onto the
- * legacy StreamEvent shape the chat-loop already understands, and
- * yields them in order. Honours the noStreamInFlight short-circuit
- * (caller already raised a fresh completion or learned the turn is
- * already over) and the AbortSignal (locally close-and-unsubscribe;
- * the FUNCTION continues - cancel is a separate control-channel
- * publish via cancelStream below).
+ * Re-attach to a turn that was already in flight when this tab last had
+ * it, by POLLING the row to a terminal state rather than resuming the
+ * live Broadcast stream.
+ *
+ * Why poll, not re-subscribe: Broadcast events are ephemeral - there is
+ * no replay. A tab that was backgrounded (mobile PWA, often discarded)
+ * or reloaded missed whatever the function published while it was gone,
+ * INCLUDING the single END event that signals completion. Re-subscribing
+ * only catches events published from that point on, so if the turn
+ * finished (or finishes) during the realtime gap the consumer either
+ * waits forever for an END that already fired or surfaces a spurious
+ * channel error - the two failure cards this path used to produce. The
+ * DB row is the canonical record; its status reaching a terminal value
+ * is the reliable "done" signal, and incremental content UPDATEs mean we
+ * can still show the partial.
+ *
+ * Mechanic: POST /stream reconnectOnly on an interval. The handler
+ * returns an in-flight envelope while a status='streaming' row exists,
+ * or noStreamInFlight once the row has committed to a terminal status
+ * (or the stale janitor swept it). Resolve when noStreamInFlight; the
+ * caller then re-fetches the thread and renders the terminal rows.
+ * Resolves (never rejects) on abort or the max-wait ceiling so the
+ * caller's cleanup always runs. Transient invoke failures are swallowed
+ * and retried - resilience to a flaky connection is the entire point.
  */
+export async function awaitStreamSettled(
+  supabase: SupabaseClient,
+  ctx: { threadId: string },
+  opts: AwaitStreamSettledOpts = {},
+): Promise<void> {
+  const interval = opts.intervalMs ?? RECONNECT_POLL_INTERVAL_MS;
+  const deadline = Date.now() + (opts.maxWaitMs ?? RECONNECT_POLL_MAX_WAIT_MS);
+  const { signal, onProgress } = opts;
+
+  for (;;) {
+    if (signal?.aborted) return;
+    let envelope: StreamEnvelope | null = null;
+    try {
+      const { data, error } = await supabase.functions.invoke<StreamEnvelope>(
+        'venice/stream',
+        { body: { threadId: ctx.threadId, reconnectOnly: true } },
+      );
+      if (!error && data) envelope = data;
+    } catch {
+      // Transient invoke failure (mobile radio waking on foreground,
+      // edge cold start). Swallow and retry on the next tick; the
+      // deadline below guarantees we don't spin forever.
+    }
+    if (signal?.aborted) return;
+    if (envelope?.noStreamInFlight) return;
+    if (envelope) onProgress?.(envelope.completedSoFar);
+    if (Date.now() >= deadline) return;
+
+    const aborted = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve(false);
+      }, interval);
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
+    if (aborted) return;
+  }
+}
+
 /**
  * Per-channel handle owned by a single stream consumer. Use
  * `setupStreamSubscription` to construct one. The shape lets the
- * subscribe step happen BEFORE any POST that might trigger
- * broadcasts (used by streamChatViaFunction) while still letting
- * legacy callers (streamReconnect) keep the post-then-subscribe
- * ordering through the subscribeStreamChannel wrapper below.
+ * subscribe step happen BEFORE the POST that triggers broadcasts
+ * (`streamChatViaFunction` subscribes first so the function's opening
+ * reasoning frames - which have no replay buffer - aren't published
+ * into a void).
  *
  *   - `subscribed`: resolves once the channel has reached SUBSCRIBED.
  *     Reject on CHANNEL_ERROR / TIMED_OUT. The subscribe() call has
@@ -1431,29 +1471,6 @@ function setupStreamSubscription(
   }
 
   return { subscribed, drain, unsubscribe };
-}
-
-/**
- * Legacy post-then-subscribe path retained for streamReconnect. The
- * reconnect-only POST doesn't start new function work, so there is no
- * pre-subscribe race for it - the function returns the envelope
- * synchronously without kicking off a new orchestrator. New callers
- * that DO trigger work (streamChatViaFunction) use
- * setupStreamSubscription directly so the subscribe happens before
- * the POST.
- */
-async function* subscribeStreamChannel(
-  supabase: SupabaseClient,
-  envelope: StreamEnvelope,
-  signal: AbortSignal | undefined,
-): AsyncGenerator<StreamEvent, void, void> {
-  const sub = setupStreamSubscription(supabase, envelope.channelName);
-  await sub.subscribed;
-  try {
-    yield* sub.drain(envelope, signal);
-  } finally {
-    await sub.unsubscribe();
-  }
 }
 
 /**
