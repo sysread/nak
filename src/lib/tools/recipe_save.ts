@@ -63,11 +63,17 @@ export const recipeSave: ToolDef = {
         `title exceeds ${MAX_RECIPE_TITLE_CHARS}-char limit (got ${title.length})`
       );
     }
+    // A save is always a recipe's first version, so an omitted
+    // change_message has an obvious default - there is no prior state to
+    // describe a delta against. The model routinely forgets to pass one
+    // on a brand-new recipe; rather than bounce it with an error, fill in
+    // a history note that matches the backfill seed ("Initial version
+    // (backfilled)") so the History panel reads consistently. recipe_update
+    // still requires the field, where a meaningful delta description exists.
     const changeMessage =
-      typeof args.change_message === 'string' ? args.change_message.trim() : '';
-    if (!changeMessage) {
-      throw new Error('change_message is required');
-    }
+      typeof args.change_message === 'string' && args.change_message.trim().length > 0
+        ? args.change_message.trim()
+        : 'Initial version';
     const row = await ctx.supabase.createRecipe(
       title,
       cooklang,

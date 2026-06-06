@@ -72,9 +72,15 @@ export const recipeSave: ToolDef = {
     if (title.length > MAX_RECIPE_TITLE_CHARS) {
       throw new Error(`title exceeds ${MAX_RECIPE_TITLE_CHARS}-char limit (got ${title.length})`);
     }
+    // A save is always a recipe's first version, so an omitted
+    // change_message defaults rather than erroring - there is no prior
+    // state to describe a delta against, and the model routinely forgets
+    // the field on a brand-new recipe. Matches the backfill seed naming
+    // and the client-side recipe_save executor.
     const changeMessage =
-      typeof args.change_message === 'string' ? args.change_message.trim() : '';
-    if (!changeMessage) throw new Error('change_message is required');
+      typeof args.change_message === 'string' && args.change_message.trim().length > 0
+        ? args.change_message.trim()
+        : 'Initial version';
 
     const { data, error } = await ctx.adminClient.rpc('recipe_create_with_version', {
       p_title: title,

@@ -71,8 +71,9 @@ export const recipeSaveSchema = {
     '`@pre-minced @garlic{1%tbsp}` (which creates two separate ' +
     'ingredient entries). For alternatives ("use X or Y"), only the ' +
     'primary ingredient gets `@`; write the substitute as plain prose. ' +
-    'change_message is REQUIRED and lands in the recipe history. ' +
-    'Returns {id, title, updated_at}.',
+    'change_message lands in the recipe history; it is optional here ' +
+    'and defaults to "Initial version" since a save is always the ' +
+    'first version. Returns {id, title, updated_at}.',
   shortDescription: 'save a recipe to the cookbook',
   parameters: {
     type: 'object',
@@ -114,11 +115,13 @@ export const recipeSaveSchema = {
         minLength: 1,
         maxLength: 500,
         description:
-          "One-line history note. Examples: \"Imported from NYT " +
-          'Cooking", "Captured from prose the user pasted".',
+          'Optional one-line history note. Defaults to "Initial ' +
+          'version" when omitted - only set it when you have something ' +
+          'more specific than "first save" to record (e.g. "Imported ' +
+          'from NYT Cooking", "Captured from prose the user pasted").',
       },
     },
-    required: ['title', 'cooklang', 'change_message'],
+    required: ['title', 'cooklang'],
     additionalProperties: false,
   },
   formatArgs: formatRecipeSaveArgs,

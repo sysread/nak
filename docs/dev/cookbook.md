@@ -273,10 +273,20 @@ unaffected.
 ## Versioning
 
 Every create and every update writes one immutable snapshot into
-`recipe_versions` along with a required `change_message` describing
-the edit. Two writes per mutation, one transaction: both
+`recipe_versions` along with a `change_message` describing the edit.
+Two writes per mutation, one transaction: both
 `recipe_create_with_version` and `recipe_update_with_version` are
 plpgsql RPCs, so either both rows land or neither does.
+
+`change_message` is required at the `SupabaseService.createRecipe` /
+`updateRecipe` layer (and on `recipe_update`, where a meaningful delta
+description exists). The `recipe_save` tool is the one exception: a
+save is always a recipe's first version, so an omitted message has no
+delta to describe and the tool defaults it to `"Initial version"`
+(matching the backfill seed's naming) rather than bouncing the model
+with an error - the model routinely forgets the field on a brand-new
+recipe. The default lives in the tool, not the service method, so
+non-LLM callers (revert, the modal edit form) stay strict.
 
 The shape is **denormalized cache + immutable log**: the `recipes`
 row stays the canonical-current state, and `recipe_versions` is the
