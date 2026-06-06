@@ -171,10 +171,12 @@ A chat turn goes:
   kinds include text/reasoning deltas, tool_call (fires once
   per call after the function has assembled fragments), usage
   (final), citations, guard_retry, tool_call_response (carries
-  ok/error per dispatched tool), END (carries `terminalKind`
-  and any conflict reason from `commit_assistant_message`), and
-  control-channel events. Used only by this main user-facing
-  chat loop - background callers use `SupabaseService.complete`.
+  ok/error per dispatched tool), `round_committed` (a non-terminal
+  round's assistant row was persisted - the round-boundary signal;
+  see Gotchas), END (carries `terminalKind` and any conflict reason
+  from `commit_assistant_message`), and control-channel events. Used
+  only by this main user-facing chat loop - background callers use
+  `SupabaseService.complete`.
 - `SupabaseService.complete(req): Promise<ChatCompletion>` -
   non-streaming one-shot routed through venice/complete.
   Returns the same fields the streaming path would produce
@@ -371,6 +373,28 @@ A chat turn goes:
   broadcast event so the browser can flash the composer
   toolbox button. If you add another tool that also flips
   thread state, it needs similar special-casing or a refetch.
+- **The round boundary needs an explicit signal; the browser
+  can't derive it.** The round loop runs inside the edge function
+  now, so the browser sees only a flat stream of deltas. The live
+  streaming buffers (`slot.streamingText` / `streamingReasoning`)
+  accumulate `response_text` / `reasoning_text` deltas and reset
+  ONLY on `onAssistantPersisted` (plus `stream_retry` / abort).
+  The function fires that reset between rounds by publishing an
+  `assistant_round_committed` event (carrying the just-persisted
+  non-terminal round's row id) right after `persistRoundAssistantRow`;
+  `venice.ts` maps it to a `round_committed` `StreamEvent` and the
+  chat-loop consumer routes it through the same `onAssistantPersisted`
+  hand-off the terminal round gets at END - reset the buffers, hand
+  off to the persisted row's card. Without this event the buffers
+  never clear between rounds: every round's text/reasoning
+  concatenates into one live bubble that duplicates the per-round
+  cards arriving over the messages realtime subscription, and
+  reasoning interleaves across rounds out of order. The terminal
+  round is NOT covered by this event - it commits via
+  `commit_assistant_message` and is signaled by END. If you change
+  how rounds persist, keep the boundary event paired with the
+  non-terminal row insert or the live view silently regresses to
+  the concatenation bug.
 - **Drafts must not enter realtime state.** The draft's in-memory
   id is a freshly-minted UUID; if a draft leaks into `addMessage`
   before being materialized, the realtime `INSERT` handler sees a

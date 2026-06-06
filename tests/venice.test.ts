@@ -1002,6 +1002,87 @@ describe('streamChat (streaming-root transport)', () => {
     ]);
   });
 
+  it('translates an assistant_round_committed broadcast into a round_committed StreamEvent', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: null,
+        completedSoFar: '',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const gen = venice.streamChat({
+      model: 'm',
+      messages: [],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    const collected: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const ev of gen) collected.push(ev);
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    // A tool-calling round narrates, commits its assistant row (the
+    // round boundary), then the terminal round answers. The boundary
+    // marker must reach the consumer as a round_committed carrying the
+    // persisted row id so the chat-loop can reset its live buffers and
+    // hand off to that row's card.
+    channel.emit('reasoning_text', { content: 'let me search' });
+    channel.emit('assistant_round_committed', { id: 'ROUND0' });
+    channel.emit('response_text', { content: 'the answer' });
+    channel.emit('END', {
+      persistedAssistantId: 'A1',
+      terminalKind: 'completed',
+    });
+    await drained;
+    expect(collected).toEqual([
+      { type: 'reasoning', delta: 'let me search' },
+      { type: 'round_committed', id: 'ROUND0' },
+      { type: 'text', delta: 'the answer' },
+      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed', roundsRun: 0 },
+    ]);
+  });
+
+  it('drops an assistant_round_committed broadcast carrying no id', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: {
+        channelName: channel.name,
+        assistantRowId: null,
+        completedSoFar: '',
+      },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const gen = venice.streamChat({
+      model: 'm',
+      messages: [],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    const collected: StreamEvent[] = [];
+    const drained = (async () => {
+      for await (const ev of gen) collected.push(ev);
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    // A malformed marker with no usable id can't drive a row hand-off;
+    // drop it rather than emit a round_committed the consumer would
+    // getMessage(undefined) on.
+    channel.emit('assistant_round_committed', {});
+    channel.emit('END', {
+      persistedAssistantId: 'A1',
+      terminalKind: 'completed',
+    });
+    await drained;
+    expect(collected).toEqual([
+      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed', roundsRun: 0 },
+    ]);
+  });
+
   it('drops empty-content response_text / reasoning_text broadcasts', async () => {
     const channel = makeChannel('thread:T1:stream');
     const channels = new Map([[channel.name, channel]]);

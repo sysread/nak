@@ -531,6 +531,22 @@ export async function getStreamingResponse(
         roundToolCalls,
       );
 
+      // Round-boundary signal. The round's assistant content (text +
+      // reasoning) is final the moment its completion stream ends and the
+      // row is persisted, so tell the browser now - before tool dispatch,
+      // which can run for seconds - so it resets its live streaming
+      // buffers and hands off to this persisted row instead of carrying
+      // this round's text into the next round's bubble. The browser no
+      // longer owns the round loop and has no other way to detect the
+      // boundary. Published through the publisher's prompt path (a
+      // non-text event), so any text still buffered for this round
+      // flushes ahead of it and the reset never races the deltas it
+      // follows.
+      await publisher.publish({
+        type: 'assistant_round_committed',
+        id: assistantRoundRow.id,
+      });
+
       // Tool dispatch. Run them in parallel; collect outcomes.
       const ctx: ToolContext = {
         adminClient: opts.adminClient,
@@ -704,11 +720,6 @@ export async function getStreamingResponse(
         terminalKind = 'suspended_for_ask_user';
         break;
       }
-
-      // Suppress unused warning for the assistant-row-of-this-round
-      // reference - we capture it for the side-effect persistence,
-      // but the orchestrator's streaming row is separate.
-      void assistantRoundRow;
     }
 
     // Round-limit terminal. If `round === MAX_ROUNDS` the for-loop

@@ -326,6 +326,16 @@ export type StreamEvent =
   | { type: 'tool_call'; toolCall: OpenAIToolCall }
   | { type: 'usage'; usage: TokenUsage }
   | { type: 'citations'; citations: Citation[] }
+  /**
+   * Round-boundary marker: the function committed a non-terminal
+   * round's assistant-with-tool-calls row (`id`). The chat-loop treats
+   * this as a per-round onAssistantPersisted - reset the live streaming
+   * buffers so the next round starts clean and hand off rendering to the
+   * persisted row. Without it the buffers accumulate every round's
+   * deltas into one bubble that duplicates the per-round cards. The
+   * terminal round is signaled by `end`, not this event.
+   */
+  | { type: 'round_committed'; id: string }
   // Server-driven events from the function-side round chain. The
   // Broadcast channel publishes the wire shape from
   // $shared/venice-stream and we translate to these for the browser
@@ -1313,6 +1323,12 @@ function setupStreamSubscription(
       retryable: p.retryable === true,
     });
     close();
+  });
+  channel.on('broadcast', { event: 'assistant_round_committed' }, ({ payload }) => {
+    const p = payload as { id?: string };
+    if (typeof p.id === 'string' && p.id.length > 0) {
+      push({ type: 'round_committed', id: p.id });
+    }
   });
   channel.on('broadcast', { event: 'END' }, ({ payload }) => {
     const p = payload as {
