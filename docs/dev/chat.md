@@ -233,12 +233,14 @@ A chat turn goes:
   (`ExchangeSlot.slopNotices`, copy from
   `src/lib/ui/slop-notice.ts`) that CRT-powers-off once the
   replacement persists.
-- `MAX_ROUNDS = 5` - guardrail on runaway tool loops, enforced
-  function-side in `getStreamingResponse`. The function commits
-  the assistant row and emits an END event with
-  `terminalKind: 'completed'` and a `round_limit` reason; the
-  browser surfaces a "tool-use round cap reached" banner via
-  `ChatLoopResult.stoppedByLimit`.
+- `MAX_ROUNDS = 24` - guardrail on runaway tool loops, enforced
+  function-side in `getStreamingResponse`. When the round loop
+  exhausts the budget without the model ever producing a terminal
+  text round, the function transitions the assistant row to
+  `'error'` and emits an END event with `terminalKind: 'error'`
+  and `conflict: 'round_limit'`; the browser maps that onto
+  `ChatLoopResult.stoppedByLimit` and surfaces the round-limit
+  banner.
 - `ChatLoopResult.awaitingUserAnswer` - non-null when the
   function-side round suspended on an `ask_user` tool call. The
   pending tool row is already persisted (carrying the

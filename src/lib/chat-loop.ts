@@ -1710,7 +1710,7 @@ async function consumeStreamEvents(opts: {
     //   - conflict='round_limit' - the orchestrator's round loop
     //     exhausted MAX_ROUNDS without the model ever producing a
     //     terminal text round. Map onto stoppedByLimit so the caller
-    //     can render the "Stopped: hit the 20-round limit" banner.
+    //     can render the round-limit banner.
     //   - conflict=<commit_assistant_message reason> - the assistant
     //     commit RPC saw a newer user message land underneath us, or
     //     another conversation-level race. Map onto the legacy

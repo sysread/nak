@@ -85,7 +85,7 @@ const ASK_USER_PENDING_FLAG = '__ask_user_pending__';
 // followed by one text-only round. Hitting MAX_ROUNDS with every
 // round still calling tools is the "runaway" terminal: the loop
 // exits naturally, the END event carries conflict='round_limit',
-// and the browser surfaces the "Stopped: hit 20-round limit" banner.
+// and the browser surfaces the round-limit banner.
 const MAX_ROUNDS = 24;
 
 // How often (ms) we UPDATE the streaming row's content with the
@@ -257,8 +257,8 @@ export async function getStreamingResponse(
   // reflects the count of rounds the orchestrator started, regardless
   // of how the loop exited (break vs natural terminus). Reported on
   // the END event so the browser can render round-aware affordances
-  // (the "Stopped: hit the 20-round limit" banner is keyed off the
-  // round-limit terminal, but consumers also use the count for
+  // (the round-limit banner is keyed off the round-limit terminal,
+  // but consumers also use the count for
   // exchange-level metrics).
   let roundsRun = 0;
   // Distinguishes "natural for-loop exhaustion" (round_limit hit)
@@ -722,7 +722,7 @@ export async function getStreamingResponse(
     // writes an empty assistant bubble - the model never got the
     // round to write a real response. We flag the terminal as 'error'
     // with conflict='round_limit' so the END routing browser-side
-    // surfaces the 20-round-limit banner instead of silently shipping
+    // surfaces the round-limit banner instead of silently shipping
     // an empty reply.
     if (round === MAX_ROUNDS && terminalKind === 'completed') {
       terminalKind = 'error';
