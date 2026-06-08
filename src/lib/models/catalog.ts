@@ -37,11 +37,18 @@ export interface CatalogModel {
   /** Accepts OpenAI-compatible multimodal image_url parts. */
   readonly supportsVision: boolean;
   /**
-   * Honors the `reasoning_effort` body field. Mapped from Venice's
-   * `supportsReasoningEffort` (the knob nak actually sends), falling back
-   * to `supportsReasoning` when the more specific flag is absent. This is
-   * the flag that gates whether the chat loop forwards reasoning_effort -
-   * some providers 4xx on the field they do not recognise.
+   * Reasoning-capable: the model emits a thinking pass and/or accepts the
+   * `reasoning_effort` knob. Venice splits this into two capability flags -
+   * `supportsReasoning` (emits a thinking pass) and `supportsReasoningEffort`
+   * (honors the granular effort knob) - and a model can have the first
+   * without the second (qwen-3-7-plus is one: it reasons but Venice reports
+   * `supportsReasoningEffort: false`). nak collapses both into this single
+   * flag because the reasoning picker's "Off" position maps to
+   * `disable_thinking` (meaningful for any thinking model) and the
+   * low/medium/high positions map to `reasoning_effort`, which Venice
+   * accepts on reasoning models even when it doesn't honor the granular
+   * level. Gating on `supportsReasoningEffort` alone wrongly disabled the
+   * picker for reason-but-no-effort models.
    */
   readonly supportsReasoning: boolean;
   /** Tools are allowed (`supportsFunctionCalling`). */
@@ -100,11 +107,15 @@ function coerceModel(raw: unknown): CatalogModel | null {
     name,
     contextWindow: context,
     supportsVision: caps.supportsVision === true,
-    // Prefer the effort-specific flag (what we gate the wire field on);
-    // fall back to the generic reasoning flag when Venice omits it.
+    // Reasoning-capable if Venice reports EITHER flag. supportsReasoning
+    // means the model emits a thinking pass; supportsReasoningEffort means
+    // it also honors the granular effort knob. A model can have the first
+    // without the second (qwen-3-7-plus), and the picker is still useful
+    // for it (Off -> disable_thinking; the effort levels are accepted on
+    // the wire). Requiring supportsReasoningEffort alone wrongly disabled
+    // the reasoning picker for those models. See the CatalogModel docblock.
     supportsReasoning:
-      caps.supportsReasoningEffort === true ||
-      (caps.supportsReasoningEffort === undefined && caps.supportsReasoning === true),
+      caps.supportsReasoning === true || caps.supportsReasoningEffort === true,
     supportsFunctionCalling: caps.supportsFunctionCalling === true,
     supportsResponseFormat: caps.supportsResponseSchema === true,
     inputUsdPerM: usdFrom(pricing?.input),

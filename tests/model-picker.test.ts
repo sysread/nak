@@ -49,9 +49,20 @@ describe('coerceCatalog', () => {
   it('accepts a bare array as well as the data envelope', () => {
     expect(coerceCatalog([rawEntry()])).toEqual([SAMPLE]);
   });
-  it('maps reasoning support from supportsReasoningEffort, with a fallback', () => {
-    const noEffort = rawEntry({ capabilities: { supportsReasoning: true } });
-    expect(coerceCatalog([noEffort])[0].supportsReasoning).toBe(true);
+  it('treats a model as reasoning-capable if EITHER Venice flag is set', () => {
+    // supportsReasoning alone (emits a thinking pass, no granular effort
+    // knob) - this is the qwen-3-7-plus case that the strict gate broke.
+    const reasonOnly = rawEntry({ capabilities: { supportsReasoning: true } });
+    expect(coerceCatalog([reasonOnly])[0].supportsReasoning).toBe(true);
+    // Explicitly false effort knob must NOT zero out a true reasoning flag.
+    const reasonNoEffort = rawEntry({
+      capabilities: { supportsReasoning: true, supportsReasoningEffort: false },
+    });
+    expect(coerceCatalog([reasonNoEffort])[0].supportsReasoning).toBe(true);
+    // Effort knob alone is also reasoning-capable.
+    const effortOnly = rawEntry({ capabilities: { supportsReasoningEffort: true } });
+    expect(coerceCatalog([effortOnly])[0].supportsReasoning).toBe(true);
+    // Neither flag - not a reasoning model (e.g. gpt-4o).
     const neither = rawEntry({ capabilities: {} });
     expect(coerceCatalog([neither])[0].supportsReasoning).toBe(false);
   });
