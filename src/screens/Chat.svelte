@@ -245,7 +245,7 @@
   import { logsDrawer, createLogger } from '$lib/logger.svelte';
 
   const log = createLogger('chat');
-  import { VeniceError, cancelStream, awaitStreamSettled, type VeniceMessage } from '$lib/venice';
+  import { VeniceError, StreamDisconnectedError, cancelStream, awaitStreamSettled, type VeniceMessage } from '$lib/venice';
 
   const DEFAULT_TITLE = 'New conversation';
 
@@ -2265,7 +2265,7 @@
       // (sending flag, throttled buffers, terminal handling). A
       // failure surfaces on the slot's streamingError banner.
       if (streamingTail && !exchangeStore.peek(id)?.sending) {
-        void reconnectInflightTurn(id, streamingTail);
+        void reconnectInflightTurn(id, streamingTail.content);
       }
       // Land on the latest exchange. The auto-scroll effect is gated on
       // an active completion (so a realtime echo can't hijack the view
@@ -3852,6 +3852,32 @@
         void loadCohortDiagnostics(ctx.threadId);
       }
     } catch (err) {
+      // Live Broadcast stream dropped mid-turn (socket loss while the
+      // tab was backgrounded, or a transient network blip). This is NOT
+      // a turn failure: the edge-function orchestrator runs detached
+      // under EdgeRuntime.waitUntil and is unaffected by the browser
+      // losing its socket - it is still streaming into the row, or has
+      // already committed it. Broadcast events are ephemeral, so the END
+      // that closes the live stream may have fired into the dead socket;
+      // trusting the live path here would either hang forever or surface
+      // a spurious "response was cut off" banner for a turn that the
+      // server actually finished. Hand off to the same poll-the-row
+      // reconnect a fresh tab uses (see reconnectInflightTurn and
+      // docs/dev/chat.md "Reconnect POLLS the DB row"). We release the
+      // dead live turn's hold on the slot first - the claim because the
+      // edge function, not this tab, now owns the response; `sending` so
+      // reconnectInflightTurn's own sending lifecycle isn't blocked by
+      // its guard. The outer finally still runs after this returns
+      // (release is idempotent), tearing down draft + wake lock.
+      if (err instanceof StreamDisconnectedError) {
+        const seedPartial = slot.streamingText;
+        log.info('live stream disconnected mid-turn; handing off to reconnect poll');
+        await claim.release();
+        slot.sending = false;
+        slot.abortCtl = null;
+        await reconnectInflightTurn(ctx.threadId, seedPartial);
+        return;
+      }
       // User-initiated stop: runChatLoop catches mid-stream aborts
       // itself and returns cleanly with `interrupted: true`, so we
       // normally don't land here on a stop click. An AbortError
@@ -3980,11 +4006,17 @@
   }
 
   /**
-   * Re-attach to an assistant turn that was already in flight when this
-   * tab last had the thread - a backgrounded mobile PWA that got
-   * discarded, a fresh tab, a hard reload. Called from selectThread when
-   * the loaded transcript tail carries a `status='streaming'` assistant
-   * row AND no slot on this device is already producing the response.
+   * Re-attach to an assistant turn that runs in the edge function while
+   * this tab can no longer follow it on the live Broadcast stream. Two
+   * callers:
+   *   - selectThread, when the loaded transcript tail carries a
+   *     `status='streaming'` row AND no slot on this device is already
+   *     producing it (a backgrounded mobile PWA that got discarded, a
+   *     fresh tab, a hard reload).
+   *   - runExchange's catch, when the live stream this very tab was
+   *     draining drops mid-turn (StreamDisconnectedError - socket loss
+   *     while backgrounded, a network blip). The dead live turn releases
+   *     the slot first, then hands off here.
    *
    * The turn runs entirely inside the edge function and survives the
    * disconnect. We do NOT try to resume the live Broadcast stream: its
@@ -4011,7 +4043,7 @@
    */
   async function reconnectInflightTurn(
     threadId: string,
-    streamingRow: Message,
+    seedPartial: string,
   ): Promise<void> {
     if (!app.supabase) return;
     const slot = exchangeStore.slotFor(threadId);
@@ -4022,10 +4054,12 @@
     slot.sending = true;
     slot.reconnecting = true;
     slot.abortCtl = new AbortController();
-    // Paint the partial the streaming row already holds so the user sees
-    // where the reply got to, not a bare spinner. onProgress grows it as
-    // the function persists more content while we poll.
-    slot.streamingText = streamingRow.content;
+    // Paint the partial-so-far so the user sees where the reply got to,
+    // not a bare spinner. Two seed sources: selectThread passes the
+    // streaming row's persisted content; the live-disconnect handoff
+    // passes whatever the dropped stream had buffered. onProgress grows
+    // it as the function persists more content while we poll.
+    slot.streamingText = seedPartial;
     slot.subconsciousDismissed = true;
     // Wake-lock parity with a live turn: a reconnecting turn is still
     // producing, so keep the device awake until it settles.

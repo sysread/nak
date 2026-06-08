@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   VeniceClient,
   VeniceError,
+  StreamDisconnectedError,
   cancelStream,
   parseSseFrame,
   parseChatCompletion,
@@ -827,6 +828,8 @@ interface MockChannel {
   }): Promise<RealtimeChannelSendResponse>;
   unsubscribe(): Promise<'ok' | 'error' | 'timed out'>;
   emit(event: string, payload: unknown): void;
+  /** Drive a post-subscribe status transition (e.g. a mid-turn drop). */
+  emitStatus(status: string, err?: Error): void;
   readonly sent: Array<{ event: string; payload: unknown }>;
 }
 
@@ -836,6 +839,10 @@ function makeChannel(
 ): MockChannel {
   const handlers = new Map<string, Array<(msg: { payload: unknown }) => void>>();
   const sent: Array<{ event: string; payload: unknown }> = [];
+  // Captured so a test can drive post-subscribe status transitions
+  // (the real client re-invokes this callback for the channel's whole
+  // lifetime, not just the initial join).
+  let statusCb: ((status: string, err?: Error) => void) | undefined;
   const channel: MockChannel = {
     name,
     on(_type, { event }, cb) {
@@ -845,6 +852,7 @@ function makeChannel(
       return channel;
     },
     subscribe(cb) {
+      statusCb = cb;
       // Defer the status callback to a microtask so the production
       // code's await Promise<void>(...) gets a chance to register the
       // callback before we invoke it.
@@ -863,6 +871,9 @@ function makeChannel(
     emit(event, payload) {
       const arr = handlers.get(event) ?? [];
       for (const cb of arr) cb({ payload });
+    },
+    emitStatus(status, err) {
+      statusCb?.(status, err);
     },
     sent,
   };
@@ -1300,6 +1311,75 @@ describe('streamChat (streaming-root transport)', () => {
         void _;
       }
     }).rejects.toBeInstanceOf(VeniceError);
+  });
+
+  it('throws StreamDisconnectedError when the channel drops after subscribe, flushing buffered events first', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: { channelName: channel.name, assistantRowId: null, completedSoFar: '' },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const gen = venice.streamChat({
+      model: 'm',
+      messages: [],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    const collected: StreamEvent[] = [];
+    let thrown: unknown = null;
+    const drained = (async () => {
+      try {
+        for await (const ev of gen) collected.push(ev);
+      } catch (err) {
+        thrown = err;
+      }
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    // A delta lands, then the socket falls over mid-turn (no END).
+    channel.emit('response_text', { content: 'partial' });
+    channel.emitStatus('CHANNEL_ERROR', new Error('socket dropped'));
+    await drained;
+    // The buffered text delta still surfaces; the drop is the terminal
+    // signal, surfaced as a throw rather than a silent hang.
+    expect(collected).toEqual([{ type: 'text', delta: 'partial' }]);
+    expect(thrown).toBeInstanceOf(StreamDisconnectedError);
+  });
+
+  it('does not throw on the CLOSED that follows a normal END teardown', async () => {
+    const channel = makeChannel('thread:T1:stream');
+    const channels = new Map([[channel.name, channel]]);
+    const { client } = makeSupabase({
+      envelope: { channelName: channel.name, assistantRowId: null, completedSoFar: '' },
+      channels,
+    });
+    const venice = new VeniceClient({ supabase: client });
+    const gen = venice.streamChat({
+      model: 'm',
+      messages: [],
+      streamCtx: { threadId: 'T1', userMessageId: 'U1' },
+    });
+    const collected: StreamEvent[] = [];
+    let thrown: unknown = null;
+    const drained = (async () => {
+      try {
+        for await (const ev of gen) collected.push(ev);
+      } catch (err) {
+        thrown = err;
+      }
+    })();
+    await Promise.resolve();
+    await Promise.resolve();
+    channel.emit('END', { persistedAssistantId: 'A1', terminalKind: 'completed' });
+    await drained;
+    // Our own unsubscribe drives a CLOSED after the drain has already
+    // finished on END; it must not register as a disconnect.
+    channel.emitStatus('CLOSED');
+    expect(thrown).toBeNull();
+    expect(collected).toEqual([
+      { type: 'end', persistedAssistantId: 'A1', terminalKind: 'completed', roundsRun: 0 },
+    ]);
   });
 });
 
