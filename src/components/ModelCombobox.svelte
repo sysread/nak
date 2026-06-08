@@ -113,6 +113,10 @@
       if (opt) pick(opt);
     } else if (e.key === 'Escape') {
       e.preventDefault();
+      // Stop the event reaching Settings' `<svelte:window onkeydown>`
+      // Escape handler, which would otherwise close the whole modal.
+      // Escape on an open dropdown should only close the dropdown.
+      e.stopPropagation();
       closeMenu();
     }
   }
@@ -303,11 +307,14 @@
     outline: none;
   }
 
-  /* The list is the grid; each option spans all four tracks and adopts
-     them via subgrid, so the name / badges / context / price columns line
-     up across every row regardless of content width. Name flexes (col 1
-     is the only non-auto track); badges center in their column; the two
-     pills hug the right. */
+  /* The list is the grid; each option spans all tracks and adopts them
+     via subgrid, so the columns line up across every row. Six tracks:
+     name | flex | badges | flex | context | price. The two equal `1fr`
+     spacers (tracks 2 and 4) center the badges column between the
+     left-aligned name and the right-aligned pills; the cells are placed
+     into tracks 1/3/5/6 explicitly so the spacers stay empty. Name is
+     clamped so a long model id ellipsizes instead of blowing out the
+     popover width. */
   .model-combobox-list {
     list-style: none;
     margin: 0;
@@ -315,7 +322,7 @@
     max-height: 18rem;
     overflow-y: auto;
     display: grid;
-    grid-template-columns: minmax(6rem, 1fr) auto auto auto;
+    grid-template-columns: minmax(6rem, 14rem) 1fr auto 1fr auto auto;
     align-items: center;
   }
 
@@ -339,6 +346,7 @@
   }
 
   .mco-name {
+    grid-column: 1;
     justify-self: start;
     min-width: 0;
     overflow: hidden;
@@ -350,8 +358,13 @@
     font-style: italic;
   }
 
+  /* Badges sit in the centered middle column (the equal 1fr spacers on
+     either side), but their content is right-aligned so a 1-badge row and
+     a 3-badge row share a consistent right edge instead of each centering
+     independently. */
   .mco-badges {
-    justify-self: center;
+    grid-column: 3;
+    justify-self: end;
     display: inline-flex;
     gap: 0.25rem;
   }
@@ -361,7 +374,8 @@
   }
 
   /* Context + price share the pill treatment; right-justified in their
-     own subgrid columns so the numbers stack vertically across rows. */
+     own subgrid columns (5 and 6) so the numbers stack vertically across
+     rows. */
   .mco-pill {
     justify-self: end;
     font-size: 0.72rem;
@@ -370,6 +384,12 @@
     border-radius: 999px;
     padding: 0.1rem 0.45rem;
     white-space: nowrap;
+  }
+  .mco-context {
+    grid-column: 5;
+  }
+  .mco-price {
+    grid-column: 6;
   }
   /* Empty pill cells (the off-catalog "current" row) collapse rather than
      drawing an empty capsule. */
