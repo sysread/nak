@@ -4,7 +4,9 @@
  * thread.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { generateThreadTitle } from '../src/lib/title-gen';
+import { generateThreadTitle, __test } from '../src/lib/title-gen';
+
+const { sanitizeTitle } = __test;
 import { agentModel } from '../src/lib/models';
 import type { ChatRequest, ChatCompletion } from '../src/lib/venice';
 import type { SupabaseService } from '../src/lib/supabase';
@@ -160,6 +162,88 @@ describe('generateThreadTitle', () => {
     expect(typeof sys).toBe('string');
     expect(sys as string).toMatch(/greeting|pleasantr/i);
     expect(sys as string).toMatch(/3-6\s+word|3\s+to\s+6\s+word/i);
+  });
+});
+
+describe('sanitizeTitle', () => {
+  // Observed failure: the model occasionally ignores the "concise 3-6
+  // word title" instruction and stuffs its full response into the
+  // title argument ("Holy Spirit Origins in Christianity\n\nThe
+  // concept of..."). Without the first-line collapse, the embedded
+  // newline survives and an 80-char slice stores a multi-line title
+  // whose second line is a truncated paragraph - the sidebar then
+  // renders it as wrapped garbage.
+  it('takes only the first non-empty line when the model embeds the response', () => {
+    const raw = 'Holy Spirit Origins in Christianity\n\nThe concept of the "Holy Spirit" (Greek: *P';
+    expect(sanitizeTitle(raw)).toBe('Holy Spirit Origins in Christianity');
+  });
+
+  it('skips leading blank lines and uses the first content line', () => {
+    expect(sanitizeTitle('\n\n  Lateral Thinking Definition  \n\nbody...')).toBe(
+      'Lateral Thinking Definition'
+    );
+  });
+
+  it('CRLF line endings split the same as LF', () => {
+    expect(sanitizeTitle('Pancake Recipe Tool Test\r\n\r\nSure, testing tool calls...')).toBe(
+      'Pancake Recipe Tool Test'
+    );
+  });
+
+  it('still trims and strips wrapping quotes on a single-line title', () => {
+    expect(sanitizeTitle('  "Casual Howdy Greeting."  ')).toBe('Casual Howdy Greeting');
+  });
+
+  it('caps a long single line at 80 chars (response-as-title fallback)', () => {
+    const raw =
+      'Hafa adai is a Chamorro greeting from Guam meaning "hello." It is not a band, common';
+    const out = sanitizeTitle(raw);
+    expect(out.length).toBeLessThanOrEqual(80);
+    expect(out).toBe(raw.slice(0, 80));
+  });
+
+  it('returns empty string when the input is only whitespace / newlines', () => {
+    expect(sanitizeTitle('\n\n   \r\n  ')).toBe('');
+  });
+
+  // Smaller / instruction-loose models routinely emit lowercase titles
+  // despite the "title-case is fine" prompt. Without normalization, the
+  // sidebar renders an inconsistent mix of capitalized (manual,
+  // tool-driven) and lowercase (worker-titled by a weaker model)
+  // entries that reads as half-done. Force first-character uppercase so
+  // every model-generated title lands looking the same.
+  it('uppercases the first character on a lowercase title', () => {
+    expect(sanitizeTitle('troubleshooting the refrigerator')).toBe(
+      'Troubleshooting the refrigerator'
+    );
+  });
+
+  it('leaves an already-capitalized title alone', () => {
+    expect(sanitizeTitle('Holy Spirit Origins in Christianity')).toBe(
+      'Holy Spirit Origins in Christianity'
+    );
+  });
+
+  it('only touches the first character - mid-word casing survives', () => {
+    // The model deliberately picked the iOS casing; only char 0 is ours
+    // to normalize.
+    expect(sanitizeTitle('iOS upgrade walkthrough')).toBe('IOS upgrade walkthrough');
+  });
+
+  it('uppercases after stripping a wrapping quote', () => {
+    // Quote stripping runs before capitalization, so the post-strip
+    // first character is what gets normalized - not the quote.
+    expect(sanitizeTitle('"casual howdy greeting"')).toBe('Casual howdy greeting');
+  });
+
+  it('is a no-op on a leading non-letter character', () => {
+    // toLocaleUpperCase on a digit / symbol returns it unchanged, so a
+    // title that opens with "5 reasons ..." stays "5 reasons ...".
+    expect(sanitizeTitle('5 reasons to refactor')).toBe('5 reasons to refactor');
+  });
+
+  it('uppercases unicode letters via toLocaleUpperCase', () => {
+    expect(sanitizeTitle('édition spéciale du livre')).toBe('Édition spéciale du livre');
   });
 });
 

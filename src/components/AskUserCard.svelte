@@ -29,7 +29,7 @@
     AskUserOption,
     AskUserAnsweredContent,
     AskUserVia,
-  } from '$lib/tools/ask_user';
+  } from '$lib/ask-user';
   import { answeredText, abandonedLabel } from '$lib/ui/ask-user-card';
 
   interface Props {

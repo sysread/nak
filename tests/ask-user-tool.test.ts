@@ -19,30 +19,15 @@ import { describe, it, expect } from 'vitest';
 import {
   TOOLS,
   memoryToolbox,
-  recallToolbox,
-  conversationRecallToolbox,
-  wikiRecallToolbox,
-  type ToolContext,
   type ToolDef,
 } from '../src/lib/tools';
 import {
-  askUser,
   parseAskUserContent,
   buildAskUserAnswerContent,
   ASK_USER_PENDING_FLAG,
   ASK_USER_ANSWERED_FLAG,
-} from '../src/lib/tools/ask_user';
+} from '../src/lib/ask-user';
 import { askUserSchema } from '../src/lib/tools/ask_user.schema';
-import type { SupabaseService } from '../src/lib/supabase';
-
-function emptyCtx(): ToolContext {
-  return {
-    supabase: {} as SupabaseService,
-    userId: 'u-1',
-    threadId: 't-1',
-    signal: new AbortController().signal,
-  };
-}
 
 describe('ask_user — registry scoping', () => {
   it('is present in the main chat TOOLS list', () => {
@@ -50,94 +35,14 @@ describe('ask_user — registry scoping', () => {
   });
 
   it('is absent from agent-only toolboxes', () => {
-    // None of the sub-agents have a UI surface to render a clarifying
+    // The memory agent has no UI surface to render a clarifying
     // question to; ask_user must stay scoped to the main chat loop.
     expect(memoryToolbox.tools.map((t) => t.name)).not.toContain('ask_user');
-    expect(recallToolbox.tools.map((t) => t.name)).not.toContain('ask_user');
-    expect(conversationRecallToolbox.tools.map((t) => t.name)).not.toContain(
-      'ask_user'
-    );
-    expect(wikiRecallToolbox.tools.map((t) => t.name)).not.toContain('ask_user');
   });
 
   it('schema declares question and options as required', () => {
     expect(askUserSchema.parameters.required).toContain('question');
     expect(askUserSchema.parameters.required).toContain('options');
-  });
-});
-
-describe('ask_user — execute()', () => {
-  it('returns the pending sentinel for a valid call', async () => {
-    const out = (await askUser.execute(
-      {
-        question: 'philosophical or pop-culture?',
-        options: [
-          { label: 'Philosophical', description: 'A serious answer.' },
-          { label: '42', description: 'The Hitchhiker reference.' },
-        ],
-      },
-      emptyCtx()
-    )) as Record<string, unknown>;
-    expect(out[ASK_USER_PENDING_FLAG]).toBe(true);
-    expect(out.question).toBe('philosophical or pop-culture?');
-    expect(Array.isArray(out.options)).toBe(true);
-    expect((out.options as unknown[]).length).toBe(2);
-  });
-
-  it('trims question and option fields', async () => {
-    const out = (await askUser.execute(
-      {
-        question: '   what next?   ',
-        options: [
-          { label: '  A  ', description: '  first  ' },
-          { label: 'B', description: 'second' },
-        ],
-      },
-      emptyCtx()
-    )) as { question: string; options: { label: string; description: string }[] };
-    expect(out.question).toBe('what next?');
-    expect(out.options[0].label).toBe('A');
-    expect(out.options[0].description).toBe('first');
-  });
-
-  it('rejects an empty question', async () => {
-    await expect(
-      askUser.execute(
-        {
-          question: '   ',
-          options: [
-            { label: 'A', description: 'a' },
-            { label: 'B', description: 'b' },
-          ],
-        },
-        emptyCtx()
-      )
-    ).rejects.toThrow(/question is required/);
-  });
-
-  it('rejects fewer than two valid options', async () => {
-    await expect(
-      askUser.execute(
-        { question: 'q', options: [{ label: 'only', description: 'one' }] },
-        emptyCtx()
-      )
-    ).rejects.toThrow(/at least 2 options/);
-  });
-
-  it('drops options missing label or description before counting', async () => {
-    await expect(
-      askUser.execute(
-        {
-          question: 'q',
-          options: [
-            { label: 'A', description: '' },
-            { label: '', description: 'b' },
-            { label: 'C', description: 'c' },
-          ],
-        },
-        emptyCtx()
-      )
-    ).rejects.toThrow(/at least 2 options/);
   });
 });
 

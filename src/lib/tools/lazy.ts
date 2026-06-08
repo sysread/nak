@@ -2,12 +2,13 @@
  * `lazyTool` - wrap a schema + dynamic-import loader into a ToolDef
  * whose `execute` fetches the impl chunk on first dispatch.
  *
- * Used by both `./index.ts` (main chat's gated tools) and the
- * agent toolbox files (`./memory_toolbox`, `./recall_toolbox`,
- * `./conversation_recall_toolbox`) so the tool impl modules don't
- * end up statically imported by anyone. With every consumer going
- * through the lazy path, Vite emits a single chunk per impl module
- * regardless of which toolbox dispatches into it.
+ * Used by both `./index.ts` (the live-via-agent tools the main-chat
+ * catalog still references) and the agent toolbox files
+ * (`./memory_toolbox`, `./memory_librarian_toolbox`, `./wiki_toolbox`,
+ * `./wiki_librarian_toolbox`) so the tool impl modules don't end up
+ * statically imported by anyone. With every consumer going through the
+ * lazy path, Vite emits a single chunk per impl module regardless of
+ * which toolbox dispatches into it.
  *
  * Vite needs a LITERAL string inside `import('...')` to do its
  * code-splitting analysis; passing a path through a parameter

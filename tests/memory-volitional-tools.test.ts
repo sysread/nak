@@ -8,8 +8,7 @@
  *     duplicate handling)
  *   - memory_unrelate (edge delete)
  *   - registry scoping: all four live in both `memoriesToolbox` (chat)
- *     and `memoryToolbox` (reflection); none in `recallToolbox`
- *     (read-only).
+ *     and `memoryToolbox` (reflection).
  *
  * The Supabase layer is stubbed per-test. RLS is a Supabase concern -
  * the tools' job is wiring the right RPC with the right args and
@@ -19,7 +18,6 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   memoriesToolbox,
   memoryToolbox,
-  recallToolbox,
   type ToolContext,
   type ToolDef,
 } from '../src/lib/tools';
@@ -74,14 +72,6 @@ describe('volitional memory tools — registry scoping', () => {
     expect(names).not.toContain('memory_delete');
   });
 
-  it('recallToolbox (read-only) must not contain any volitional write tools', () => {
-    const names = recallToolbox.tools.map((t: ToolDef) => t.name);
-    expect(names).not.toContain('memory_reaffirm');
-    expect(names).not.toContain('memory_doubt');
-    expect(names).not.toContain('memory_relate');
-    expect(names).not.toContain('memory_unrelate');
-    expect(names).not.toContain('memory_create');
-  });
 });
 
 describe('memory_create — optional confidence parameter', () => {

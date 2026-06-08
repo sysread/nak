@@ -12,9 +12,15 @@ Tools give the model a way to actually do things - store a memory,
 search prior threads, save a recipe, flip which toolboxes are
 active. The main chat loop exposes them to the primary model via
 named toolboxes; background agents expose their own scoped subsets
-to their own models. Both paths share the `ToolDef` shape and the
-`executeToolCall` / `executeToolboxCall` dispatchers, so adding a
-tool is a one-file-plus-toolbox-entry change.
+to their own models. Both paths share the `ToolDef` shape, but they
+dispatch in different places: a streamed chat turn runs its tools
+**server-side** in the venice edge function (`performToolCall`),
+while background agents still run their tool loops **browser-side**
+via `executeToolboxCall`. So a chat tool's browser `ToolDef` is
+schema-only (a `serverSideTool` whose `execute()` throws); only the
+tools an agent fleet still uses keep a live browser impl
+(`lazyTool`). See [`./architecture.md`](./architecture.md)
+"Production-path ownership."
 
 The main chat model sees toolboxes as the unit of enablement:
 
@@ -127,9 +133,13 @@ The gated `images` toolbox carries:
   `TOOLBOXES` list, the derived `GATED_TOOLBOX_NAMES` /
   `GATED_TOOLBOX_META`, the flat `TOOLS` view used by tests, the
   catalog builders (`buildToolList`, `buildSystemPrompt`), and the
-  main dispatcher `executeToolCall`. Also exports the agent-only
-  toolboxes (`memoryToolbox`, `recallToolbox`,
-  `conversationRecallToolbox`, `wikiRecallToolbox`).
+  `serverSideTool` / `lazyTool` wrappers that build each chat
+  `ToolDef`. There is no browser-side main-chat dispatcher - chat
+  tools run in the edge function. Also re-exports the agent-only
+  `memoryToolbox`.
+- `src/lib/tools/server_side.ts` - `serverSideTool(schema)`: wraps a
+  schema into a `ToolDef` whose `execute()` throws. The dual of
+  `lazyTool` - used for every chat tool whose impl moved server-side.
 - `src/lib/tools/run.ts` - `runHeadlessToolLoop`: the agent-side
   executor. Parallel to the chat loop but without persistence or
   streaming callbacks.
@@ -218,10 +228,12 @@ The gated `images` toolbox carries:
 ## Entry points
 
 - **Chat loop** - `chat-loop.ts` calls
-  `buildToolList(thread.toolboxes_enabled)` on every round and
-  `executeToolCall(name, args, ctx)` for each `tool_call` event.
-  The chat loop owns persistence of both the assistant-with-tool-
-  calls row and the per-call `role='tool'` rows.
+  `buildToolList(thread.toolboxes_enabled)` on every round to ship
+  the wire `tools` array, then observes the streamed
+  `tool_call_request` / `tool_call_response` events. It does NOT
+  dispatch tools itself; the edge function's `performToolCall` runs
+  them. The chat loop owns persistence of both the assistant-with-
+  tool-calls row and the per-call `role='tool'` rows.
 - **Background agents** - each agent calls `runHeadlessToolLoop`
   with its own toolbox. The loop extends an in-memory
   `VeniceMessage[]` each round and returns the final text + a few
@@ -319,9 +331,11 @@ The gated `images` toolbox carries:
   after the datetime) rather than the baseline, so a `toggle_toolbox`
   flip churns only that trailing block. Unknown names in `enabled`
   are ignored; toolboxes absent from `enabled` render `(off)`.
-- `executeToolCall(name, args, ctx): Promise<ToolResult>` - the
-  main chat dispatcher. Throws on unknown tool name. Looks up the
-  tool across every toolbox in `TOOLBOXES` in order.
+- `serverSideTool(schema): ToolDef` - wraps a schema into a chat
+  `ToolDef` whose `execute()` throws "moved server-side". The chat
+  catalog (`TOOLS`, `buildToolList`) still carries it by name; the
+  edge function's `performToolCall` is what actually runs it. There
+  is no browser-side main-chat dispatcher.
 - `executeToolboxCall(toolbox, name, args, ctx)` - the agent
   dispatcher. Scoped strictly to the toolbox's tools; throws with
   the toolbox name included so errors from, say, the memory agent
@@ -483,8 +497,8 @@ The gated `images` toolbox carries:
 
 ## Where to go next
 
-- `./chat.md` - the main caller of `executeToolCall` and the
-  owner of persistence around tool rounds.
+- `./chat.md` - ships the wire `tools` array and owns persistence
+  around the tool rounds the edge function dispatches.
 - `./memory.md` - the memory tools + reflection agent + recall
   agent story.
 - `./conversation-recall.md` - recall-agent-specific plumbing.

@@ -220,7 +220,7 @@
     type AskUserVia,
     type AskUserAnsweredContent,
     type AskUserPendingContent,
-  } from '$lib/tools/ask_user';
+  } from '$lib/ask-user';
   import MessageAttachments from '../components/MessageAttachments.svelte';
   import TopBarActions from '../components/TopBarActions.svelte';
   // ExtractedTextDrawer + LogsDrawer are toggled overlays - the

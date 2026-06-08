@@ -22,16 +22,12 @@ import {
   buildToolboxWireList,
   executeToolboxCall,
   memoryToolbox,
-  recallToolbox,
-  conversationRecallToolbox,
   toOpenAIToolDef,
-  executeToolCall,
   toggleToolbox,
   type ToolContext,
   type Toolbox,
   type ToolDef,
 } from '../src/lib/tools';
-import { sanitizeTitle } from '../src/lib/tools/update_title';
 import type { SupabaseService } from '../src/lib/supabase';
 
 /**
@@ -445,102 +441,6 @@ describe('tool registry', () => {
       expect(source.required ?? []).not.toContain('activity');
     }
   });
-
-
-  it('executeToolCall dispatches by name', async () => {
-    const { svc, spies } = mockSupabase();
-    await executeToolCall(
-      'toggle_toolbox',
-      { enabled: ['cooking'] },
-      ctxFor(svc)
-    );
-    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', ['cooking']);
-  });
-
-  it('executeToolCall throws on an unknown tool', async () => {
-    const { svc } = mockSupabase();
-    await expect(executeToolCall('bogus', {}, ctxFor(svc))).rejects.toThrow(
-      /unknown tool/i
-    );
-  });
-});
-
-describe('toggle_toolbox', () => {
-  it('writes the accepted name set through to Supabase', async () => {
-    const { svc, spies } = mockSupabase();
-    const result = await toggleToolbox.execute(
-      { enabled: ['cooking', 'memories'] },
-      ctxFor(svc)
-    );
-    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', [
-      'cooking',
-      'memories',
-    ]);
-    expect(result).toEqual({ enabled: ['cooking', 'memories'] });
-  });
-
-  it('writes an empty array when passed {enabled: []}', async () => {
-    // Explicit "turn everything off" path. The model is supposed to
-    // call this when the current task is done with gated tools - we
-    // must not silently reject it as a no-op.
-    const { svc, spies } = mockSupabase();
-    const result = await toggleToolbox.execute({ enabled: [] }, ctxFor(svc));
-    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', []);
-    expect(result).toEqual({ enabled: [] });
-  });
-
-  it('silently drops unknown toolbox names', async () => {
-    // A typo or rename should not abort the chat turn; the tool
-    // return value tells the model what took effect so it can self-
-    // correct.
-    const { svc, spies } = mockSupabase();
-    const result = await toggleToolbox.execute(
-      { enabled: ['cooking', 'bogus', 'not_a_toolbox'] },
-      ctxFor(svc)
-    );
-    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', ['cooking']);
-    expect(result).toEqual({ enabled: ['cooking'] });
-  });
-
-  it('drops the always_on toolbox if the model tries to list it', async () => {
-    // always_on is implicit - listing it must not round-trip it into
-    // the persisted array, where it would be an unrecognised name on
-    // the next read.
-    const { svc, spies } = mockSupabase();
-    const result = await toggleToolbox.execute(
-      { enabled: ['always_on', 'cooking'] },
-      ctxFor(svc)
-    );
-    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', ['cooking']);
-    expect(result).toEqual({ enabled: ['cooking'] });
-  });
-
-  it('deduplicates repeated names while preserving first-seen order', async () => {
-    const { svc, spies } = mockSupabase();
-    const result = await toggleToolbox.execute(
-      { enabled: ['cooking', 'memories', 'cooking'] },
-      ctxFor(svc)
-    );
-    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', [
-      'cooking',
-      'memories',
-    ]);
-    expect(result).toEqual({ enabled: ['cooking', 'memories'] });
-  });
-
-  it('treats non-array and non-string input as empty', async () => {
-    // Defensive: the model might emit {enabled: null} or {enabled:
-    // "cooking"} on a bad schema pass. Drop silently rather than
-    // throwing - the turn keeps running and the model sees an empty
-    // accepted set.
-    const { svc, spies } = mockSupabase();
-    const result = await toggleToolbox.execute(
-      { enabled: 'cooking' as unknown as string[] },
-      ctxFor(svc)
-    );
-    expect(spies.setThreadToolboxesEnabled).toHaveBeenCalledWith('t-1', []);
-    expect(result).toEqual({ enabled: [] });
-  });
 });
 
 describe('memory_search', () => {
@@ -685,128 +585,6 @@ describe('memory_update', () => {
   });
 });
 
-describe('memory_delete', () => {
-  const tool = TOOLS.find((t: ToolDef) => t.name === 'memory_delete')!;
-
-  it('forwards the id', async () => {
-    const { svc, spies } = mockSupabase();
-    const result = await tool.execute({ id: 'm1', message: 'remove it' }, ctxFor(svc));
-    expect(spies.deleteMemory).toHaveBeenCalledWith('m1');
-    expect(result).toEqual({ deleted: true });
-  });
-
-  it('rejects a missing id', async () => {
-    const { svc } = mockSupabase();
-    await expect(tool.execute({}, ctxFor(svc))).rejects.toThrow(/id/);
-  });
-});
-
-describe('sanitizeTitle', () => {
-  // Observed failure: the model occasionally ignores the "concise 3-6
-  // word title" instruction and stuffs its full response into the
-  // title argument ("Holy Spirit Origins in Christianity\n\nThe
-  // concept of..."). Without the first-line collapse, the embedded
-  // newline survives and an 80-char slice stores a multi-line title
-  // whose second line is a truncated paragraph - the sidebar then
-  // renders it as wrapped garbage.
-  it('takes only the first non-empty line when the model embeds the response', () => {
-    const raw = 'Holy Spirit Origins in Christianity\n\nThe concept of the "Holy Spirit" (Greek: *P';
-    expect(sanitizeTitle(raw)).toBe('Holy Spirit Origins in Christianity');
-  });
-
-  it('skips leading blank lines and uses the first content line', () => {
-    expect(sanitizeTitle('\n\n  Lateral Thinking Definition  \n\nbody...')).toBe(
-      'Lateral Thinking Definition'
-    );
-  });
-
-  it('CRLF line endings split the same as LF', () => {
-    expect(sanitizeTitle('Pancake Recipe Tool Test\r\n\r\nSure, testing tool calls...')).toBe(
-      'Pancake Recipe Tool Test'
-    );
-  });
-
-  it('still trims and strips wrapping quotes on a single-line title', () => {
-    expect(sanitizeTitle('  "Casual Howdy Greeting."  ')).toBe('Casual Howdy Greeting');
-  });
-
-  it('caps a long single line at 80 chars (response-as-title fallback)', () => {
-    const raw =
-      'Hafa adai is a Chamorro greeting from Guam meaning "hello." It is not a band, common';
-    const out = sanitizeTitle(raw);
-    expect(out.length).toBeLessThanOrEqual(80);
-    expect(out).toBe(raw.slice(0, 80));
-  });
-
-  it('returns empty string when the input is only whitespace / newlines', () => {
-    expect(sanitizeTitle('\n\n   \r\n  ')).toBe('');
-  });
-
-  // Smaller / instruction-loose models routinely emit lowercase titles
-  // despite the "title-case is fine" prompt. Without normalization, the
-  // sidebar renders an inconsistent mix of capitalized (manual,
-  // tool-driven) and lowercase (worker-titled by a weaker model)
-  // entries that reads as half-done. Force first-character uppercase so
-  // every model-generated title lands looking the same.
-  it('uppercases the first character on a lowercase title', () => {
-    expect(sanitizeTitle('troubleshooting the refrigerator')).toBe(
-      'Troubleshooting the refrigerator'
-    );
-  });
-
-  it('leaves an already-capitalized title alone', () => {
-    expect(sanitizeTitle('Holy Spirit Origins in Christianity')).toBe(
-      'Holy Spirit Origins in Christianity'
-    );
-  });
-
-  it('only touches the first character - mid-word casing survives', () => {
-    // The model deliberately picked the iOS casing; only char 0 is ours
-    // to normalize.
-    expect(sanitizeTitle('iOS upgrade walkthrough')).toBe('IOS upgrade walkthrough');
-  });
-
-  it('uppercases after stripping a wrapping quote', () => {
-    // Quote stripping runs before capitalization, so the post-strip
-    // first character is what gets normalized - not the quote.
-    expect(sanitizeTitle('"casual howdy greeting"')).toBe('Casual howdy greeting');
-  });
-
-  it('is a no-op on a leading non-letter character', () => {
-    // toLocaleUpperCase on a digit / symbol returns it unchanged, so a
-    // title that opens with "5 reasons ..." stays "5 reasons ...".
-    expect(sanitizeTitle('5 reasons to refactor')).toBe('5 reasons to refactor');
-  });
-
-  it('uppercases unicode letters via toLocaleUpperCase', () => {
-    expect(sanitizeTitle('édition spéciale du livre')).toBe('Édition spéciale du livre');
-  });
-});
-
-describe('update_title', () => {
-  const tool = TOOLS.find((t: ToolDef) => t.name === 'update_title')!;
-
-  it('passes the sanitised first line through to renameThread', async () => {
-    const { svc, spies } = mockSupabase();
-    const result = await tool.execute(
-      { title: 'Holy Spirit Origins in Christianity\n\nThe concept of the Holy Spirit...' },
-      ctxFor(svc)
-    );
-    expect(spies.renameThread).toHaveBeenCalledWith(
-      't-1',
-      'Holy Spirit Origins in Christianity'
-    );
-    expect(result).toEqual({ title: 'Holy Spirit Origins in Christianity' });
-  });
-
-  it('rejects a title that sanitises to empty', async () => {
-    const { svc } = mockSupabase();
-    await expect(
-      tool.execute({ title: '\n\n   \r\n  ' }, ctxFor(svc))
-    ).rejects.toThrow(/title/);
-  });
-});
-
 describe('memoryToolbox', () => {
   it('swaps memory_delete for memory_invalidate — agents get soft-delete only', () => {
     // Soft-delete by design: an autonomous agent shouldn't be hard-
@@ -870,41 +648,6 @@ describe('memory_invalidate', () => {
     const { svc, spies } = mockSupabase();
     spies.decayMemoryConfidence.mockResolvedValueOnce(null);
     await expect(tool.execute({ id: 'gone' }, ctxFor(svc))).rejects.toThrow(/not found/);
-  });
-});
-
-describe('conversationRecallToolbox', () => {
-  it('exposes only conversation_search — no write tools, no recall recursion', () => {
-    // Sibling of recallToolbox but against threads. A bug in the
-    // conversation-recall prompt that routed into a write or a
-    // nested recall call would be a fresh class of mistake; the
-    // registry shape is the tripwire. If someone adds
-    // conversation_recall or a thread-mutation tool here, this test
-    // points at the drift.
-    const names = conversationRecallToolbox.tools.map((t) => t.name);
-    expect(names).toEqual(['conversation_search']);
-    expect(names).not.toContain('conversation_recall');
-    expect(names).not.toContain('memory_search');
-    expect(names).not.toContain('toggle_tools');
-  });
-
-  it('carries a stable name and a non-empty description for downstream prompts', () => {
-    expect(conversationRecallToolbox.name).toBe('conversation-recall');
-    expect(conversationRecallToolbox.description.length).toBeGreaterThan(0);
-  });
-});
-
-describe('recall surface scoping — cross-toolbox', () => {
-  it('memory_recall is absent from every non-main toolbox', () => {
-    for (const tb of [memoryToolbox, recallToolbox, conversationRecallToolbox]) {
-      expect(tb.tools.map((t) => t.name)).not.toContain('memory_recall');
-    }
-  });
-
-  it('conversation_recall is absent from every non-main toolbox', () => {
-    for (const tb of [memoryToolbox, recallToolbox, conversationRecallToolbox]) {
-      expect(tb.tools.map((t) => t.name)).not.toContain('conversation_recall');
-    }
   });
 });
 

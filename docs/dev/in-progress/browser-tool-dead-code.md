@@ -1,9 +1,15 @@
 # Browser tool/agent dead code after the streaming-root migration
 
-**Status:** triage notes for a future cleanup session. Nothing here is
-done except the `analyze_image` worked example (see below). Do NOT treat
-the dead lists as safe-to-delete without running the per-file checklist -
-the live and dead tools are interleaved inside the same toolboxes.
+**Status: EXECUTED.** Phase 1 of
+[`./reorganize-the-workshop.md`](./reorganize-the-workshop.md) landed
+this triage. Every "DEAD" tool below is now a `serverSideTool(schema)`
+in `src/lib/tools/index.ts` (schema kept, impl file deleted); the recall
+agents + recall toolboxes are gone; `executeToolCall` is gone. The
+helper relocations described in the plan landed too: ask_user content
+helpers -> `src/lib/ask-user.ts`, `sanitizeTitle` -> `src/lib/title-gen.ts`.
+This file is retained as the record of *what* was dead and *why* the
+per-file checklist mattered (live and dead tools were interleaved inside
+the same toolboxes) - useful when Phase 2/3 touch the same area.
 
 ## One-paragraph summary
 

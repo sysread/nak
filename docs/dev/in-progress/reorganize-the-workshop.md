@@ -45,7 +45,29 @@ Three phases. **Each phase is independently shippable** - if a phase
 2 migration stalls, phase 1 still leaves the tree cleaner than it
 found it.
 
-### PHASE 1 - drop the already-dead browser dispatch leaf
+### PHASE 1 - drop the already-dead browser dispatch leaf [DONE]
+
+**Landed.** `serverSideTool(schema)` helper added at
+`src/lib/tools/server_side.ts`; all ~33 dead chat-tool impls deleted
+(schemas kept), their `index.ts` entries repointed to
+`serverSideTool`; the 3 recall agents + 3 recall toolboxes dropped;
+`executeToolCall` + its tests removed. Two landmines the triage doc
+had left open got resolved on the way: `sanitizeTitle` (a live
+non-tool export of `update_title.ts`) relocated into
+`src/lib/title-gen.ts`, and the `ask_user` content helpers/types
+relocated into `src/lib/ask-user.ts` (the tool's browser `execute()`
+was dead but `Chat.svelte` / `chat-loop.ts` / `AskUserCard` still use
+the parse/build helpers). Deleting the dead tools transitively
+orphaned 7 helper exports (knip-flagged) - all deleted: the `docs.ts`
+dev-docs corpus loaders, `VENICE_IMAGE_MODEL`, `sha256HexFromBase64`,
+`WIKI_LIST_EXCERPT_CHARS`, and `notifyCookbookChanged`. **One gap
+surfaced** by that last one: the cookbook-change event bus
+(`cookbook-events.ts`) lost its only publisher when the `recipe_*`
+tools went server-side - `onCookbookChange` subscribers (Cookbook
+modal, Recipes tab) remain but nothing browser-side fires the event
+now. Re-driving a cookbook refresh after a chat-driven recipe write
+wants a server-aware trigger (recipes-table Realtime), tracked as
+separate work. Gate + knip green.
 
 **Scope:** the ~33 browser tool impl files whose `execute()` has had
 no caller since the streaming-root migration. The triage doc at

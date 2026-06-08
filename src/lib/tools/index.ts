@@ -4,9 +4,13 @@
  * boxes into wire-shaped payloads.
  *
  * Responsibility split:
- * *   - Each tool file (./toggle_tools.ts, ./memory_*.ts, ./conversation_*.ts,
- *     ...) exports a single ToolDef describing what it does and how to
- *     run it.
+ *   - Each chat tool has a `<tool>.schema.ts` carrying its name +
+ *     description + parameters. The matching ToolDef is either a
+ *     `serverSideTool(schema)` (schema-only; the impl lives in the
+ *     venice edge function and dispatch happens there) or a
+ *     `lazyTool(schema, ...)` (a live browser impl loaded on first
+ *     dispatch, used by the background agent fleets - those still run
+ *     their tool loops browser-side via `executeToolboxCall`).
  *   - This file composes them into named toolboxes (cooking, memories,
  *     always_on), resolves names to defs, and projects them into
  *     the OpenAI / Venice request shape.
@@ -14,9 +18,11 @@
  *     which imports the registry from here to render the dynamic tool
  *     catalog. Prose blocks and the catalog renderer live there, not
  *     here.
- *   - The orchestration loop in `../chat-loop.ts` is the only caller
- *     that invokes executeToolCall() - no other module should reach
- *     directly into a tool's execute() handler.
+ *   - A streamed chat turn does NOT dispatch tools here. The browser
+ *     ships the wire `tools` array (via `buildToolList`) and the edge
+ *     function's `performToolCall` runs the tool; the browser observes
+ *     the result over the stream. The only browser-side dispatch left
+ *     is the agent fleets' `executeToolboxCall` (see `./dispatch.ts`).
  *
  * Toolbox model: the always_on toolbox rides with every request and
  * carries every read-only surface (the recall pair, web search,
@@ -48,7 +54,7 @@
  * "forget X" is user-directed and unambiguous. Don't collapse the
  * two.
  */
-import type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
+import type { ToolDef, OpenAIToolDef, Toolbox } from './types';
 
 // --- Eagerly-imported always-on tools -------------------------------
 // The umbrella `context` tool, the four per-layer recall tools, web
@@ -63,15 +69,22 @@ import type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from '.
 // always-on but lazy-imported via the lazyTool wrappers below - they
 // fire on demand, not on every turn, so the schema rides eagerly
 // while the impl module loads on first dispatch.
-import { toggleToolbox } from './toggle_tools';
-import { memoryRecall } from './memory_recall';
-import { conversationRecall } from './conversation_recall';
-import { wikiRecall } from './wiki_recall';
-import { contextTool } from './context';
-import { webSearch } from './web_search';
-import { updateTitle } from './update_title';
-import { analyzeImage } from './analyze_image';
-import { askUser } from './ask_user';
+// Schema-only registrations for the always-on tools whose browser
+// `execute()` is dead - a streamed chat turn dispatches these in the
+// venice edge function, not the browser (see `./server_side.ts`). The
+// schemas still ride eagerly because the first-message critical path
+// renders the catalog and ships the wire `tools` array; only the impl
+// modules moved server-side, so what stays here is the schema half
+// wrapped by `serverSideTool` below.
+import { toggleToolboxSchema } from './toggle_tools.schema';
+import { memoryRecallSchema } from './memory_recall.schema';
+import { conversationRecallSchema } from './conversation_recall.schema';
+import { wikiRecallSchema } from './wiki_recall.schema';
+import { contextSchema } from './context.schema';
+import { webSearchSchema } from './web_search.schema';
+import { updateTitleSchema } from './update_title.schema';
+import { analyzeImageSchema } from './analyze_image.schema';
+import { askUserSchema } from './ask_user.schema';
 
 // --- Lazy-loaded tool schemas ---------------------------------------
 // The schemas (name + description + shortDescription + parameters)
@@ -129,6 +142,30 @@ import { generateImageSchema } from './generate_image.schema';
 // dispatches into it.
 import { lazyTool } from './lazy';
 
+// `serverSideTool` wraps a schema into a ToolDef whose execute() throws
+// - for chat tools whose browser impl is dead (dispatch moved to the
+// venice edge function). The dual of lazyTool: lazyTool defers a live
+// browser impl, serverSideTool declares there is none. See
+// `./server_side.ts`.
+import { serverSideTool } from './server_side';
+
+// --- Schema-only always-on tools ------------------------------------
+// The eager always-on surfaces whose dispatch is server-side. Each is
+// a serverSideTool: catalog metadata for the wire payload, a throwing
+// execute() that fires only if a regression re-routes dispatch
+// browser-side. `toggleToolbox` is read by chat-prompt.ts for its
+// `.name` (to filter it out of the rendered catalog) and re-exported
+// below; the rest are referenced only by `alwaysOnToolbox`.
+const toggleToolbox = serverSideTool(toggleToolboxSchema);
+const memoryRecall = serverSideTool(memoryRecallSchema);
+const conversationRecall = serverSideTool(conversationRecallSchema);
+const wikiRecall = serverSideTool(wikiRecallSchema);
+const contextTool = serverSideTool(contextSchema);
+const webSearch = serverSideTool(webSearchSchema);
+const updateTitle = serverSideTool(updateTitleSchema);
+const analyzeImage = serverSideTool(analyzeImageSchema);
+const askUser = serverSideTool(askUserSchema);
+
 // --- Gated tool wrappers --------------------------------------------
 // Each is a thin object: schema fields spread in eagerly, execute()
 // resolves the impl chunk on first call. Subsequent calls hit the
@@ -148,11 +185,7 @@ const memoryUpdate = lazyTool(
   () => import('./memory_update'),
   'memoryUpdate'
 );
-const memoryDelete = lazyTool(
-  memoryDeleteSchema,
-  () => import('./memory_delete'),
-  'memoryDelete'
-);
+const memoryDelete = serverSideTool(memoryDeleteSchema);
 const memoryReaffirm = lazyTool(
   memoryReaffirmSchema,
   () => import('./memory_reaffirm'),
@@ -178,93 +211,33 @@ const conversationSearch = lazyTool(
   () => import('./conversation_search'),
   'conversationSearch'
 );
-const conversationGet = lazyTool(
-  conversationGetSchema,
-  () => import('./conversation_get'),
-  'conversationGet'
-);
-const recipeList = lazyTool(
-  recipeListSchema,
-  () => import('./recipe_list'),
-  'recipeList'
-);
-const recipeGet = lazyTool(
-  recipeGetSchema,
-  () => import('./recipe_get'),
-  'recipeGet'
-);
-const recipeSave = lazyTool(
-  recipeSaveSchema,
-  () => import('./recipe_save'),
-  'recipeSave'
-);
-const recipeUpdate = lazyTool(
-  recipeUpdateSchema,
-  () => import('./recipe_update'),
-  'recipeUpdate'
-);
-const recipeDelete = lazyTool(
-  recipeDeleteSchema,
-  () => import('./recipe_delete'),
-  'recipeDelete'
-);
-const recipePhotosAttach = lazyTool(
-  recipePhotosAttachSchema,
-  () => import('./recipe_photos_attach'),
-  'recipePhotosAttach'
-);
-const recipePhotosRemove = lazyTool(
-  recipePhotosRemoveSchema,
-  () => import('./recipe_photos_remove'),
-  'recipePhotosRemove'
-);
-const recipePhotosReorder = lazyTool(
-  recipePhotosReorderSchema,
-  () => import('./recipe_photos_reorder'),
-  'recipePhotosReorder'
-);
-const recipePhotoLabelSet = lazyTool(
-  recipePhotoLabelSetSchema,
-  () => import('./recipe_photo_label_set'),
-  'recipePhotoLabelSet'
-);
-const researchDocs = lazyTool(
-  researchDocsSchema,
-  () => import('./research_docs'),
-  'researchDocs'
-);
+const conversationGet = serverSideTool(conversationGetSchema);
+const recipeList = serverSideTool(recipeListSchema);
+const recipeGet = serverSideTool(recipeGetSchema);
+const recipeSave = serverSideTool(recipeSaveSchema);
+const recipeUpdate = serverSideTool(recipeUpdateSchema);
+const recipeDelete = serverSideTool(recipeDeleteSchema);
+const recipePhotosAttach = serverSideTool(recipePhotosAttachSchema);
+const recipePhotosRemove = serverSideTool(recipePhotosRemoveSchema);
+const recipePhotosReorder = serverSideTool(recipePhotosReorderSchema);
+const recipePhotoLabelSet = serverSideTool(recipePhotoLabelSetSchema);
+const researchDocs = serverSideTool(researchDocsSchema);
 const wikiSearch = lazyTool(
   wikiSearchSchema,
   () => import('./wiki_search'),
   'wikiSearch'
 );
-const wikiList = lazyTool(
-  wikiListSchema,
-  () => import('./wiki_list'),
-  'wikiList'
-);
-const wikiGet = lazyTool(
-  wikiGetSchema,
-  () => import('./wiki_get'),
-  'wikiGet'
-);
-const wikiLibrarian = lazyTool(
-  wikiLibrarianSchema,
-  () => import('./wiki_librarian'),
-  'wikiLibrarian'
-);
-const docList = lazyTool(docListSchema, () => import('./doc_list'), 'docList');
-const docGet = lazyTool(docGetSchema, () => import('./doc_get'), 'docGet');
-const docGrep = lazyTool(docGrepSchema, () => import('./doc_grep'), 'docGrep');
-const docRead = lazyTool(docReadSchema, () => import('./doc_read'), 'docRead');
-const docCreate = lazyTool(docCreateSchema, () => import('./doc_create'), 'docCreate');
-const docUpdate = lazyTool(docUpdateSchema, () => import('./doc_update'), 'docUpdate');
-const docDelete = lazyTool(docDeleteSchema, () => import('./doc_delete'), 'docDelete');
-const generateImage = lazyTool(
-  generateImageSchema,
-  () => import('./generate_image'),
-  'generateImage'
-);
+const wikiList = serverSideTool(wikiListSchema);
+const wikiGet = serverSideTool(wikiGetSchema);
+const wikiLibrarian = serverSideTool(wikiLibrarianSchema);
+const docList = serverSideTool(docListSchema);
+const docGet = serverSideTool(docGetSchema);
+const docGrep = serverSideTool(docGrepSchema);
+const docRead = serverSideTool(docReadSchema);
+const docCreate = serverSideTool(docCreateSchema);
+const docUpdate = serverSideTool(docUpdateSchema);
+const docDelete = serverSideTool(docDeleteSchema);
+const generateImage = serverSideTool(generateImageSchema);
 
 /**
  * Always-on toolbox. Rides with every request regardless of the
@@ -610,20 +583,6 @@ export function buildToolList(enabledToolboxes: readonly string[]): OpenAIToolDe
 }
 
 /**
- * Dispatch a single tool call by name. Unknown tools throw so the caller
- * can surface a clear error back to the model as a tool-result message.
- */
-export async function executeToolCall(
-  name: string,
-  args: Record<string, unknown>,
-  ctx: ToolContext
-): Promise<ToolResult> {
-  const tool = byName(name);
-  if (!tool) throw new Error(`Unknown tool: ${name}`);
-  return tool.execute(args, ctx);
-}
-
-/**
  * Look up the optional pretty-formatter overrides a tool may
  * declare on its schema. Used by the tool-call detail panel
  * (`src/components/ToolCalls.svelte` via `src/lib/ui/tool-calls.ts`)
@@ -645,23 +604,19 @@ export function getToolFormatters(name: string): ToolFormatters | undefined {
   return { formatArgs: tool.formatArgs, formatResult: tool.formatResult };
 }
 
-// Re-export the agent-only toolboxes whose definitions live in their
-// own leaf files (`./memory_toolbox`, `./recall_toolbox`,
-// `./conversation_recall_toolbox`). `memoryToolbox` moved out of this
-// barrel because the reflection worker imports it - see its file
-// header for the IIFE/code-splitting failure mode that keeps it out
-// of `./index.ts`. The recall toolboxes live in their own files to
-// avoid a circular import - see those files' headers for why.
-// Direct `export ... from` re-exports so Rollup can elide the
-// chain when main-chunk consumers don't read these symbols. Worker
-// / agent entry points import the toolboxes directly via their
-// source paths, not through this barrel.
+// Re-export the agent-only `memoryToolbox`, whose definition lives in
+// its own leaf file (`./memory_toolbox`). It moved out of this barrel
+// because the reflection worker imports it - see that file's header
+// for the IIFE/code-splitting failure mode that keeps it out of
+// `./index.ts`. Direct `export ... from` re-export so Rollup can elide
+// the chain when main-chunk consumers don't read the symbol. Worker /
+// agent entry points import the toolbox directly via its source path,
+// not through this barrel.
 export { memoryToolbox } from './memory_toolbox';
-export { recallToolbox } from './recall_toolbox';
-export { conversationRecallToolbox } from './conversation_recall_toolbox';
-export { wikiRecallToolbox } from './wiki_recall_toolbox';
 
 export { toOpenAIToolDef, buildToolboxWireList, executeToolboxCall };
-export { toggleToolbox, updateTitle };
+// `toggleToolbox` is read by chat-prompt.ts for its `.name`; re-exported
+// for that one consumer.
+export { toggleToolbox };
 export type { ToolDef, OpenAIToolDef, ToolContext, ToolResult, Toolbox } from './types';
 export type { OpenAIToolCall } from './types';

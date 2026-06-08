@@ -8,8 +8,8 @@ import { describe, it, expect } from 'vitest';
 import type {
   AskUserAnsweredContent,
   AskUserOption,
-} from '../src/lib/tools/ask_user';
-import { ASK_USER_ANSWERED_FLAG } from '../src/lib/tools/ask_user';
+} from '../src/lib/ask-user';
+import { ASK_USER_ANSWERED_FLAG } from '../src/lib/ask-user';
 import { answeredText, abandonedLabel } from '../src/lib/ui/ask-user-card';
 
 function answered(

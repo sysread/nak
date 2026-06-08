@@ -67,7 +67,8 @@ import {
   type OpenAIToolCall,
 } from './tools';
 import { buildSystemPrompt, buildToolboxStateBlock } from './chat-prompt';
-import { askUser, type AskUserOption } from './tools/ask_user';
+import { askUserSchema } from './tools/ask_user.schema';
+import type { AskUserOption } from './ask-user';
 import {
   parseToolArguments,
   sanitizeToolCallIdForWire,
@@ -1596,7 +1597,7 @@ async function consumeStreamEvents(opts: {
           // rule; we mirror that here by only writing pendingAskUser
           // when the slot is empty.
           if (
-            ev.toolCall.function.name === askUser.name &&
+            ev.toolCall.function.name === askUserSchema.name &&
             pendingAskUser === null
           ) {
             try {

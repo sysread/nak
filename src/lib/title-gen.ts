@@ -40,10 +40,52 @@
  */
 import type { SupabaseService } from './supabase';
 import { agentModel } from './models';
-import { sanitizeTitle } from './tools/update_title';
+import { TITLE_MAX_CHARS } from './tools/update_title.schema';
 import { createLogger } from './logger.svelte';
 
 const log = createLogger('auto-title');
+
+/**
+ * Trim, collapse to the first non-empty line, strip wrapping / trailing
+ * punctuation, cap length, capitalize the first character. The model's
+ * raw output is the only source for an auto-generated title, so this is
+ * where it gets made presentable. The regex matches both ASCII and
+ * Unicode "smart" quotes, plus trailing periods / exclamation / question
+ * marks that the model sometimes adds despite the system prompt saying
+ * not to.
+ *
+ * First-line split: the model sometimes ignores the "concise 3-6 word
+ * title" instruction and stuffs its full response into the argument
+ * ("Holy Spirit Origins in Christianity\n\nThe concept of the ..."). A
+ * straight 80-char slice would then store a multi-line string whose
+ * second line is a truncated paragraph - the sidebar renders that as
+ * wrapped garbage. Taking only the first non-empty line recovers the
+ * intended title in the common case (line 1 is the title, line 2+ is
+ * spillover) and at worst yields a single truncated sentence rather
+ * than a multi-line one.
+ *
+ * First-letter capitalization: the title-gen prompt says title-case is
+ * fine but not required, so smaller / instruction-loose models routinely
+ * emit lowercase ("troubleshooting the refrigerator", "how to bake
+ * sourdough"). Those land in the sidebar looking unfinished and
+ * inconsistent with manually-named threads. We force the first character
+ * to uppercase so every model-generated title lands looking the same.
+ * Only the first character is touched; "iOS upgrade" style mid-word
+ * casing the model deliberately chose stays intact past char 0.
+ */
+function sanitizeTitle(raw: string): string {
+  const firstLine =
+    raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? '';
+  const trimmed = firstLine
+    .replace(/^["'“”‘’]+|["'“”‘’.!?]+$/g, '')
+    .trim()
+    .slice(0, TITLE_MAX_CHARS);
+  if (trimmed.length === 0) return trimmed;
+  return trimmed.charAt(0).toLocaleUpperCase() + trimmed.slice(1);
+}
 
 /**
  * System prompt for the title-gen sub-call. Short on purpose: the
@@ -123,3 +165,5 @@ export async function generateThreadTitle(
     return null;
   }
 }
+
+export const __test = { sanitizeTitle };
