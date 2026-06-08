@@ -450,11 +450,30 @@ A chat turn goes:
   timing out on a not-yet-recovered mobile socket) or a wait for an END
   that already fired. The DB row's terminal status is the canonical
   "done" signal; the server-side stale-row janitor guarantees the poll
-  always terminates even for a function that died ungracefully. Known
-  gap: this covers reload / fresh-tab return. A tab whose JS context
-  SURVIVED a background cycle keeps its original (now hung) live drain
-  and is not re-driven by `selectThread`; recovering that case wants a
-  visibility-triggered hand-off, not yet wired.
+  always terminates even for a function that died ungracefully.
+- **A live stream that drops mid-turn hands off to the same poll.**
+  The case the `selectThread` reconnect could NOT cover: a tab whose JS
+  context SURVIVED a background cycle (or hit a transient network blip)
+  keeps draining its ORIGINAL live subscription, which silently went
+  dead. Broadcast has no replay, so the terminal END may have fired into
+  the dropped socket; the drain would otherwise await it forever (hung
+  spinner) or unwind without it (spurious "cut off" banner) even though
+  the edge function finished the turn and committed the row. The fix is
+  disconnect-driven, not visibility-driven: `setupStreamSubscription`
+  (`venice.ts`) keeps listening to the channel's status callback after
+  the initial SUBSCRIBED, and a later `CHANNEL_ERROR` / `TIMED_OUT` /
+  `CLOSED` that this tab did not initiate flips `disconnected` and closes
+  the drain, which then throws `StreamDisconnectedError`. That propagates
+  through `chat-loop.ts` to `runExchange`'s catch, which releases the
+  slot and calls `reconnectInflightTurn` - the exact poll-the-row path
+  above, seeded with the partial the dropped stream had buffered. So a
+  mid-turn drop degrades gracefully to the reconnect poll instead of
+  lying about the turn's outcome. Tradeoff: a transient blip downgrades
+  the REST of that turn from token-by-token live rendering to the ~2.5s
+  reconnect-poll cadence; correctness over smoothness, since any gap
+  risks a missed END. A caller abort (user Stop) is exempt - the server
+  publishes its own END(aborted) and the abort signal suppresses the
+  disconnect throw.
 - **Drafts must not enter realtime state.** The draft's in-memory
   id is a freshly-minted UUID; if a draft leaks into `addMessage`
   before being materialized, the realtime `INSERT` handler sees a

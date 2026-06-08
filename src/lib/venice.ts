@@ -1017,6 +1017,30 @@ export class VeniceClient {
 // browser is a pure event consumer.
 // ---------------------------------------------------------------------------
 
+/**
+ * The live Broadcast channel dropped AFTER a successful subscribe, mid-
+ * turn. Distinct from a turn failure: the edge-function orchestrator
+ * runs detached (EdgeRuntime.waitUntil) and is unaffected by the
+ * browser losing its socket, so the turn is still running (or already
+ * committed) server-side - its outcome lives on the DB row. Broadcast
+ * events are ephemeral with no replay, so the single END that closes
+ * the stream may have fired into the dead socket; the consumer can no
+ * longer trust the live path and must reconcile against the row.
+ *
+ * Thrown by the drain (not yielded) so the for-await consumer in
+ * chat-loop.ts surfaces it as an exception, and Chat.svelte's
+ * runExchange catch can route it into the poll-the-row reconnect
+ * (`reconnectInflightTurn`) instead of the generic "response was cut
+ * off" banner. NOT a VeniceError subclass on purpose: the existing
+ * `instanceof VeniceError` rate-limit / kind checks must not match it.
+ */
+export class StreamDisconnectedError extends Error {
+  constructor(message = 'live stream channel disconnected mid-turn') {
+    super(message);
+    this.name = 'StreamDisconnectedError';
+  }
+}
+
 interface StreamEnvelope {
   channelName: string;
   assistantRowId: string | null;
@@ -1234,6 +1258,11 @@ function setupStreamSubscription(
   const queue: StreamEvent[] = [];
   let resolveNext: ((ev: StreamEvent | null) => void) | null = null;
   let closed = false;
+  // Set when the channel reports a failure status AFTER a successful
+  // subscribe (socket loss while backgrounded, a transient network
+  // blip). Drives the drain's post-loop throw so a mid-turn drop
+  // surfaces as a StreamDisconnectedError rather than a silent hang.
+  let disconnected = false;
 
   function push(ev: StreamEvent): void {
     if (closed) return;
@@ -1393,11 +1422,40 @@ function setupStreamSubscription(
 
   // Kick subscribe immediately so callers waiting on `subscribed`
   // get an awaitable that resolves once Realtime confirms.
+  //
+  // The status callback fires for the WHOLE channel lifetime, not just
+  // the initial join: Supabase Realtime re-invokes it on every state
+  // transition. We use the first SUBSCRIBED to resolve `subscribed`,
+  // then keep listening so a LATER failure (the socket falling over
+  // mid-turn) flips `disconnected` and closes the drain. Without this
+  // the drain would await an event - including the terminal END - that
+  // can never arrive on a dead channel, hanging the turn forever.
+  let hasSubscribed = false;
   const subscribed = new Promise<void>((resolve, reject) => {
     channel.subscribe((status, err) => {
-      if (status === 'SUBSCRIBED') resolve();
-      else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        reject(err ?? new Error(`Channel ${status}`));
+      if (status === 'SUBSCRIBED') {
+        hasSubscribed = true;
+        resolve();
+        return;
+      }
+      if (
+        status === 'CHANNEL_ERROR' ||
+        status === 'TIMED_OUT' ||
+        status === 'CLOSED'
+      ) {
+        if (!hasSubscribed) {
+          // Initial join never succeeded: reject so the POST path
+          // surfaces a normal stream error rather than a disconnect.
+          reject(err ?? new Error(`Channel ${status}`));
+          return;
+        }
+        // Our own unsubscribe() drove this CLOSED (it calls close()
+        // first, setting `closed`). Not a drop - ignore so a clean
+        // end-of-turn teardown isn't mistaken for a disconnect.
+        if (closed) return;
+        // Post-join drop: hand the turn off to the poll-the-row path.
+        disconnected = true;
+        close();
       }
     });
   });
@@ -1458,6 +1516,14 @@ function setupStreamSubscription(
       }
     } finally {
       signal?.removeEventListener('abort', onAbort);
+    }
+    // Any buffered events have flushed above; only now decide whether
+    // the close was a clean end (END / caller abort) or a mid-turn
+    // socket drop. A caller abort wins - the user stopped on purpose,
+    // and the server publishes its own END(aborted) - so we only throw
+    // for a genuine disconnect.
+    if (disconnected && !signal?.aborted) {
+      throw new StreamDisconnectedError();
     }
   }
 
